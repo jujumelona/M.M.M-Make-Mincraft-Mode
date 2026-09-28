@@ -287,7 +287,7 @@ def _chunk_messages(
     chunk_count: int,
     concerns: tuple[str, ...],
     include_evidence: bool = False,
-    record_counts: Mapping[str, int] | None = None,
+    repair_error: str = "",
 ) -> list[dict[str, str]]:
     statement = _text(requirement.get("statement"))
     acceptance = requirement.get("acceptance")
@@ -308,6 +308,9 @@ def _chunk_messages(
         "Do not invent target API names, symbols, versions, repository paths, "
         "external facts, or evidence identifiers. Use only evidence_refs shown in the grounded context."
     )
+    if repair_error:
+        instruction += f" Previous output failed validation: {repair_error[:800]}. Please repair."
+
     return [
         {
             "role": "system",
@@ -323,7 +326,7 @@ def _chunk_messages(
                 f"{_evidence_context(evidence)}\n\n"
                 "Direct prerequisite worksheet sections:\n"
                 f"{prerequisite_context}\n\n"
-                f"{worksheet_chunk_prompt(section, chunk_index, chunk_count, concerns, include_evidence=include_evidence, record_counts=record_counts)}"
+                f"{worksheet_chunk_prompt(section, chunk_index, chunk_count, concerns, include_evidence=include_evidence)}"
             ),
         },
     ]
@@ -341,16 +344,41 @@ def _generate_chunk(
     tool_name = f"submit_{section}_{index}_chunk"
     description = f"Submit worksheet specifications for {section}: {', '.join(concerns)}."
 
-    raw_decision = router.generate_tool_decision(
+    if hasattr(router, "generate_tool_decision"):
+        try:
+            raw_decision = router.generate_tool_decision(
+                "planner",
+                messages,
+                tool_name=tool_name,
+                parameters=chunk_schema,
+                description=description,
+            )
+            if isinstance(raw_decision, Mapping):
+                return dict(raw_decision)
+        except Exception as exc:
+            from .model_adapters import ModelConfigurationError
+
+            if isinstance(exc, ModelConfigurationError):
+                raise
+            # Fall back to text generation if native tool call fails or is not enabled for role
+
+    raw = generate_fixed_template_text(router,
         "planner",
         messages,
-        tool_name=tool_name,
-        parameters=chunk_schema,
-        description=description,
+        response_schema=chunk_schema,
+        enable_tools=False,
     )
-    if not isinstance(raw_decision, Mapping):
-        raise ValueError("chunk decision must be an object")
-    return dict(raw_decision)
+    from .planning_contract_ssot import is_schema_definition_echo
+
+    decoded = json.loads(raw)
+    if not isinstance(decoded, Mapping):
+        raise ValueError("chunk output must be a JSON object")
+    if is_schema_definition_echo(decoded):
+        raise ValueError(
+            "Model returned JSON Schema definition instead of concrete data records. "
+            "Please output records matching the template skeleton."
+        )
+    return dict(decoded)
 
 
 def _compile_worksheet_section(
@@ -370,17 +398,13 @@ def _compile_worksheet_section(
     chunks_def = pack_section_concerns(section)
     chunk_count = len(chunks_def)
     chunk_results: list[dict[str, Any]] = []
-    record_counts: dict[str, int] = {}
 
     try:
         with planner_operation(operation):
             for index, concerns in enumerate(chunks_def, start=1):
                 is_first = index == 1
                 chunk_schema = worksheet_chunk_schema(
-                    section,
-                    concerns,
-                    include_evidence=is_first,
-                    record_counts=record_counts,
+                    section, concerns, include_evidence=is_first
                 )
                 messages = _chunk_messages(
                     requirement,
@@ -392,39 +416,39 @@ def _compile_worksheet_section(
                     chunk_count=chunk_count,
                     concerns=concerns,
                     include_evidence=is_first,
-                    record_counts=record_counts,
                 )
-                decoded = _generate_chunk(
-                    router,
-                    messages,
-                    section=section,
-                    index=index,
-                    concerns=concerns,
-                    chunk_schema=chunk_schema,
-                )
-                chunk_results.append(decoded)
+                try:
+                    decoded = _generate_chunk(
+                        router,
+                        messages,
+                        section=section,
+                        index=index,
+                        concerns=concerns,
+                        chunk_schema=chunk_schema,
+                    )
+                except (json.JSONDecodeError, ValueError) as parse_err:
+                    repair_messages = _chunk_messages(
+                        requirement,
+                        selected_sections,
+                        section,
+                        evidence,
+                        completed,
+                        chunk_index=index,
+                        chunk_count=chunk_count,
+                        concerns=concerns,
+                        include_evidence=is_first,
+                        repair_error=str(parse_err),
+                    )
+                    decoded = _generate_chunk(
+                        router,
+                        repair_messages,
+                        section=section,
+                        index=index,
+                        concerns=concerns,
+                        chunk_schema=chunk_schema,
+                    )
 
-                data = decoded
-                nested = decoded.get("specification")
-                if isinstance(nested, Mapping):
-                    data = dict(nested)
-                inapplicable = {
-                    str(item.get("concern") or "").strip()
-                    for item in data.get("inapplicable_concerns", [])
-                    if isinstance(item, Mapping)
-                } if isinstance(data.get("inapplicable_concerns"), list) else set()
-                for concern in concerns:
-                    if concern in record_counts:
-                        continue
-                    value = data.get(concern)
-                    if isinstance(value, Mapping):
-                        record_counts[concern] = 1
-                    elif isinstance(value, list):
-                        record_counts[concern] = len(
-                            [item for item in value if isinstance(item, Mapping)]
-                        )
-                    elif concern in inapplicable:
-                        record_counts[concern] = 0
+                chunk_results.append(decoded)
 
             return merge_worksheet_section_chunks(section, chunk_results, allowed)
     except (ValueError, RuntimeError, json.JSONDecodeError) as exc:
