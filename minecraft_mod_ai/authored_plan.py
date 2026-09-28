@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -14,7 +15,17 @@ class AuthoredPlan:
     text: str
     existing_input_sha256: str = ""
     media_paths: tuple[str, ...] = ()
-    schema_version: str = "mmm/authored-plan-v1"
+    structured_sections: dict[str, Any] = field(default_factory=dict)
+    schema_version: str = "mmm/authored-plan-v2"
+
+    def __post_init__(self) -> None:
+        from .authored_structured_design import normalize_structured_sections
+
+        object.__setattr__(
+            self,
+            "structured_sections",
+            normalize_structured_sections(self.structured_sections),
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -23,6 +34,7 @@ class AuthoredPlan:
             "text": self.text,
             "existing_input_sha256": self.existing_input_sha256,
             "media_paths": list(self.media_paths),
+            "structured_sections": deepcopy(self.structured_sections),
         }
 
     @classmethod
@@ -32,6 +44,8 @@ class AuthoredPlan:
             text=data["text"],
             existing_input_sha256=data.get("existing_input_sha256", ""),
             media_paths=tuple(data.get("media_paths", ())),
+            structured_sections=deepcopy(data.get("structured_sections") or {}),
+            schema_version=str(data.get("schema_version") or "mmm/authored-plan-v1"),
         )
 
     def calculate_hash(self) -> str:
