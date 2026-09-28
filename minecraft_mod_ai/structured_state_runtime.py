@@ -376,6 +376,57 @@ def _compile_mutation(
     return " ".join(rows)
 
 
+def validate_structured_state_section(section: Mapping[str, Any]) -> None:
+    """Fail closed on canonical state semantics before any production code is generated."""
+
+    raw_specification = section.get("specification")
+    specification = (
+        raw_specification if isinstance(raw_specification, Mapping) else section
+    )
+    variables = specification.get("variables", [])
+    declared: set[str] = set()
+    if isinstance(variables, Sequence) and not isinstance(
+        variables, (str, bytes, bytearray)
+    ):
+        for record in variables:
+            if not isinstance(record, Mapping):
+                continue
+            name = str(record.get("name") or "").strip()
+            if re.fullmatch(_STATE_IDENTIFIER_PATTERN, name) is None:
+                raise ValueError(
+                    f"STRUCTURED_STATE_VARIABLE_NAME: {name!r} is not a stable identifier"
+                )
+            if name in declared:
+                raise ValueError(
+                    f"STRUCTURED_STATE_VARIABLE_DUPLICATE: {name!r}"
+                )
+            declared.add(name)
+
+    for record in specification.get("transitions", []) or []:
+        if not isinstance(record, Mapping):
+            continue
+        _Expression(str(record.get("guard") or "")).parse()
+        _compile_mutation(
+            str(record.get("mutation") or ""),
+            declared=declared,
+        )
+    for record in specification.get("invariants", []) or []:
+        if isinstance(record, Mapping):
+            _Expression(str(record.get("condition") or "")).parse()
+    for concern, field in (
+        ("initialization", "initial_state"),
+        ("updates", "mutation"),
+        ("cleanup", "action"),
+    ):
+        for record in specification.get(concern, []) or []:
+            if not isinstance(record, Mapping):
+                continue
+            _compile_mutation(
+                str(record.get(field) or ""),
+                declared=declared,
+            )
+
+
 def _obligations(task: Mapping[str, Any]) -> dict[str, list[dict[str, str]]]:
     raw = task.get("implementation_obligations")
     if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes, bytearray)):
