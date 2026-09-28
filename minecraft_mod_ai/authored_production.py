@@ -606,6 +606,7 @@ def _compile_new_authored_modules(
     mod_id: str,
     package_name: str,
     target: Mapping[str, Any],
+    production_state_section: Mapping[str, Any] | None = None,
 ) -> tuple[tuple[ProductionModule, ...], dict[str, Any]]:
     """Reserve graph compilation, not Java files derived from Markdown sections.
 
@@ -620,6 +621,9 @@ def _compile_new_authored_modules(
         "target": dict(target), "entrypoint_path": main_path,
         "entrypoint_symbol": main_symbol,
         "structured_sections": deepcopy(plan.structured_sections),
+        "production_state_section": deepcopy(
+            dict(production_state_section or {})
+        ),
     }
     task = _exact_authored_task(
         task_id=task_id, path=main_path, symbol=main_symbol, target=target,
@@ -1033,13 +1037,14 @@ def compile_authored_design(
     effective_existing = str(
         existing_input_sha256 or implementation_plan.existing_input_sha256 or ""
     ).strip()
+    production_state_section: dict[str, Any] = {}
     if (
         not effective_existing
         and callable(getattr(router, "generate_text", None))
     ):
-        from .production_state_compiler import bind_production_state_contract
+        from .production_state_compiler import compile_production_state_section
 
-        implementation_plan = bind_production_state_contract(
+        production_state_section = compile_production_state_section(
             router,
             implementation_plan,
         )
@@ -1090,6 +1095,7 @@ def compile_authored_design(
             mod_id=base.spec.mod_id,
             package_name=base.spec.package_name,
             target=target,
+            production_state_section=production_state_section,
         )
         design = {**design, "_authored_execution_manifest": manifest}
     else:
