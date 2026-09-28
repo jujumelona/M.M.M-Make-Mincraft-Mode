@@ -53,7 +53,7 @@ def _state_mutation_pattern(target_pattern: str = r"[A-Za-z_][A-Za-z0-9_]*") -> 
         + r"[ \t]*(?:\+=|-=|\*=|/=|=)[ \t]*"
         + expression
     )
-    return r"^" + assignment + r"(?:[ \t]*;[ \t]*" + assignment + r")*$"
+    return r"^(?:" + assignment + r"(?:[ \t]*;[ \t]*" + assignment + r")*)?$"
 
 
 STATE_MUTATION_PATTERN = _state_mutation_pattern()
@@ -89,10 +89,18 @@ def constrain_state_record_schema(
         if not isinstance(target, dict):
             continue
         target["pattern"] = pattern
-        target["description"] = (
-            "Host state-compiler DSL. Use identifiers/literals/operators only; "
-            "never natural-language pseudocode or Java method/member syntax."
-        )
+        if field in {"mutation", "initial_state", "action"}:
+            target["minLength"] = 0
+            target["description"] = (
+                "Host state-mutation DSL. Empty string means no state mutation. "
+                "Non-empty values must contain only assignments to declared state "
+                "variables; external subsystem actions do not belong in this field."
+            )
+        else:
+            target["description"] = (
+                "Host state-compiler DSL. Use identifiers/literals/operators only; "
+                "never natural-language pseudocode or Java method/member syntax."
+            )
     return result
 
 
@@ -384,9 +392,6 @@ def _compile_mutation(
     context: str = "context",
 ) -> str:
     text = str(script or "").strip()
-    if text.casefold() in {"noop", "no-op", "no_op"}:
-        return ""
-
     rows: list[str] = []
     for raw in _split_mutation_statements(text):
         statement = raw.strip()
