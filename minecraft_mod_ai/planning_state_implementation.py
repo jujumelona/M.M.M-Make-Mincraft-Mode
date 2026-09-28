@@ -287,7 +287,6 @@ def _chunk_messages(
     chunk_count: int,
     concerns: tuple[str, ...],
     include_evidence: bool = False,
-    repair_error: str = "",
 ) -> list[dict[str, str]]:
     statement = _text(requirement.get("statement"))
     acceptance = requirement.get("acceptance")
@@ -308,9 +307,6 @@ def _chunk_messages(
         "Do not invent target API names, symbols, versions, repository paths, "
         "external facts, or evidence identifiers. Use only evidence_refs shown in the grounded context."
     )
-    if repair_error:
-        instruction += f" Previous output failed validation: {repair_error[:800]}. Please repair."
-
     return [
         {
             "role": "system",
@@ -344,41 +340,16 @@ def _generate_chunk(
     tool_name = f"submit_{section}_{index}_chunk"
     description = f"Submit worksheet specifications for {section}: {', '.join(concerns)}."
 
-    if hasattr(router, "generate_tool_decision"):
-        try:
-            raw_decision = router.generate_tool_decision(
-                "planner",
-                messages,
-                tool_name=tool_name,
-                parameters=chunk_schema,
-                description=description,
-            )
-            if isinstance(raw_decision, Mapping):
-                return dict(raw_decision)
-        except Exception as exc:
-            from .model_adapters import ModelConfigurationError
-
-            if isinstance(exc, ModelConfigurationError):
-                raise
-            # Fall back to text generation if native tool call fails or is not enabled for role
-
-    raw = generate_fixed_template_text(router,
+    raw_decision = router.generate_tool_decision(
         "planner",
         messages,
-        response_schema=chunk_schema,
-        enable_tools=False,
+        tool_name=tool_name,
+        parameters=chunk_schema,
+        description=description,
     )
-    from .planning_contract_ssot import is_schema_definition_echo
-
-    decoded = json.loads(raw)
-    if not isinstance(decoded, Mapping):
-        raise ValueError("chunk output must be a JSON object")
-    if is_schema_definition_echo(decoded):
-        raise ValueError(
-            "Model returned JSON Schema definition instead of concrete data records. "
-            "Please output records matching the template skeleton."
-        )
-    return dict(decoded)
+    if not isinstance(raw_decision, Mapping):
+        raise ValueError("chunk decision must be an object")
+    return dict(raw_decision)
 
 
 def _compile_worksheet_section(
@@ -417,37 +388,14 @@ def _compile_worksheet_section(
                     concerns=concerns,
                     include_evidence=is_first,
                 )
-                try:
-                    decoded = _generate_chunk(
-                        router,
-                        messages,
-                        section=section,
-                        index=index,
-                        concerns=concerns,
-                        chunk_schema=chunk_schema,
-                    )
-                except (json.JSONDecodeError, ValueError) as parse_err:
-                    repair_messages = _chunk_messages(
-                        requirement,
-                        selected_sections,
-                        section,
-                        evidence,
-                        completed,
-                        chunk_index=index,
-                        chunk_count=chunk_count,
-                        concerns=concerns,
-                        include_evidence=is_first,
-                        repair_error=str(parse_err),
-                    )
-                    decoded = _generate_chunk(
-                        router,
-                        repair_messages,
-                        section=section,
-                        index=index,
-                        concerns=concerns,
-                        chunk_schema=chunk_schema,
-                    )
-
+                decoded = _generate_chunk(
+                    router,
+                    messages,
+                    section=section,
+                    index=index,
+                    concerns=concerns,
+                    chunk_schema=chunk_schema,
+                )
                 chunk_results.append(decoded)
 
             return merge_worksheet_section_chunks(section, chunk_results, allowed)
