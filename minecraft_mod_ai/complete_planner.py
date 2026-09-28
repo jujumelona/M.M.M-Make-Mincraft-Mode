@@ -144,10 +144,7 @@ class CompleteGameDesignPlanner:
         media_paths: Sequence[str | Path] = (),
         existing_input_sha256: str = "",
     ) -> CompleteProposal:
-        from .authored_production import (
-            _contract_shaped_authored_design,
-            compile_authored_design,
-        )
+        from .authored_production import compile_authored_design
         from .authored_structured_design import render_structured_sections
         from .planning_state_implementation import compile_authored_worksheet
 
@@ -158,11 +155,7 @@ class CompleteGameDesignPlanner:
         effective_existing = str(
             existing_input_sha256 or plan.existing_input_sha256 or ""
         ).strip()
-        if (
-            not plan.structured_sections
-            and not effective_existing
-            and _contract_shaped_authored_design(plan.text)
-        ):
+        if not plan.structured_sections and not effective_existing:
             migration_prompt = (
                 plan.requested_prompt
                 + "\n\nApproved authored design to normalize into the canonical "
