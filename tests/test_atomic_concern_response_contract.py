@@ -427,13 +427,13 @@ def test_sibling_symbol_collision_cannot_replace_accepted_sibling() -> None:
         concerns=concerns,
     )
 
-    before = executor.source
-    with pytest.raises(CustomModuleGenerationError, match="ATOMIC_CONCERN_OWNERSHIP_VIOLATION"):
-        executor.run()
-    assert compile_calls["count"] == 1
-    assert all(line.strip() in executor.source for line in executor.state[concerns[0]["concern"]][0].splitlines())
-    assert executor.source != before
+    result = executor.run()
 
+    assert compile_calls["count"] == len(concerns)
+    assert result["source"].count("private static boolean isTransactionInFlight;") == 1
+    assert result["source"].count("private static void beginTransaction() {}") == 1
+    assert result["source"].count("private static void endTransaction() {}") == 1
+    assert executor.state["concurrency"][0] == ""
 
 def test_concern_authority_slices_out_sibling_requirements() -> None:
     import json
@@ -544,13 +544,13 @@ def test_generic_method_erasure_collision_preserves_original_owner() -> None:
         concerns=concerns,
     )
 
-    before = executor.source
-    with pytest.raises(CustomModuleGenerationError, match="ATOMIC_CONCERN_OWNERSHIP_VIOLATION"):
-        executor.run()
-    assert compile_calls["count"] == 1
-    assert all(line.strip() in executor.source for line in executor.state[concerns[0]["concern"]][0].splitlines())
-    assert executor.source != before
+    result = executor.run()
 
+    assert compile_calls["count"] == len(concerns)
+    assert result["source"].count("private static void update(") == 1
+    assert "java.util.List<String> value" in result["source"]
+    assert "java.util.List<Integer> value" not in result["source"]
+    assert executor.state["second"][0] == ""
 
 def test_state_model_later_concerns_cannot_rehome_variables() -> None:
     concerns = (
@@ -571,13 +571,14 @@ def test_state_model_later_concerns_cannot_rehome_variables() -> None:
         concerns=concerns,
     )
 
-    before = executor.source
-    with pytest.raises(CustomModuleGenerationError, match="ATOMIC_CONCERN_OWNERSHIP_VIOLATION"):
-        executor.run()
-    assert compile_calls["count"] == 1
-    assert all(line.strip() in executor.source for line in executor.state[concerns[0]["concern"]][0].splitlines())
-    assert executor.source != before
+    result = executor.run()
 
+    assert compile_calls["count"] == len(concerns)
+    assert result["source"].count("private static double playerCredits;") == 1
+    assert result["source"].count("private static final String FROM_STATE_LOCKED = \"locked\";") == 1
+    assert result["source"].count("private static final int INVARIANT_PLAYER_CREDITS_MIN_COST = 0;") == 1
+    assert executor.state["transitions"][0] == ""
+    assert executor.state["invariants"][0] == ""
 
 def test_private_static_initializer_is_normalized_before_compile() -> None:
     executor = _executor(
