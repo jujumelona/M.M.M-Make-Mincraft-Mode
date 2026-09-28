@@ -286,7 +286,44 @@ class JavaStructureAssembly:
                 }
                 item_required = set(item_schema.get("required", ()))
                 scalar_names = list(item_scalars)
-                if item_scalars and len(scalar_names) <= MAX_MODEL_FIELDS:
+                if (
+                    self.multi_callback is not None
+                    and item_scalars
+                    and len(scalar_names) <= MAX_MODEL_FIELDS
+                ):
+                    reserved: set[str] = set()
+                    if len(item_path) == 2 and "name" in item_scalars:
+                        category = item_path[0]
+                        kinds = {
+                            "fields": "field",
+                            "classes": "type",
+                            "records": "type",
+                            "enums": "type",
+                        }
+                        reserved.update(
+                            row["symbol"]
+                            for row in self.payload.get("available_sibling_api", ())
+                            if isinstance(row, Mapping)
+                            and row.get("kind") == kinds.get(category)
+                            and row.get("symbol")
+                        )
+                        reserved.update(
+                            item["name"]
+                            for item in self.root.get(category, ())
+                            if isinstance(item, Mapping) and item.get("name")
+                            and category != "methods"
+                        )
+                        if category in {"classes", "records", "enums"}:
+                            reserved.add(self.payload.get("host_selected_class", ""))
+                            for other in {"classes", "records", "enums"} - {category}:
+                                reserved.update(
+                                    item["name"]
+                                    for item in self.root.get(other, ())
+                                    if isinstance(item, Mapping) and item.get("name")
+                                )
+                        reserved.discard("")
+                        if reserved:
+                            item_scalars["name"]["not"] = {"enum": sorted(reserved)}
                     seed_schema = _closed(
                         item_scalars,
                         [key for key in scalar_names if key in item_required],
@@ -297,7 +334,17 @@ class JavaStructureAssembly:
                         "Declare one or more sibling components; one native call per sibling.",
                         limit=remaining,
                     )
+                    batch_names: set[str] = set()
                     for seed in seeds:
+                        seed_name = str(seed.get("name") or "").strip()
+                        if seed_name and (seed_name in reserved or seed_name in batch_names):
+                            raise AtomicJavaDecisionError(
+                                f"ATOMIC_JAVA_ASSEMBLY_INVALID: duplicate or reserved "
+                                f"{selected} name {seed_name!r}.",
+                                response=seed,
+                            )
+                        if seed_name:
+                            batch_names.add(seed_name)
                         index = len(values)
                         item = dict(seed)
                         values.append(item)
