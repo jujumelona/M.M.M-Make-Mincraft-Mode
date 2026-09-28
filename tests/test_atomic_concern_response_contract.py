@@ -981,10 +981,14 @@ def test_logged_java_failure_families_repair_through_real_compiler_feedback(monk
     ]
     failures = [payload["repair_failure"] for payload in repair_payloads]
     assert "might not have been initialized" in failures[0]
+    assert "DEFINITE_ASSIGNMENT" in failures[0]
     assert "cannot assign a value to static final variable TRANSFER_CACHE" in failures[1]
+    assert "FINAL_REBINDING" in failures[1]
     assert "Object cannot be converted to Map<String,Object>" in failures[2]
+    assert "OBJECT_TO_MAP" in failures[2]
     assert "class Lock" in failures[3]
     assert "class ReentrantLock" in failures[3]
+    assert "JDK_LOCK_PACKAGE" in failures[3]
     assert all("CURRENT COMPILED SOURCE AROUND THE REPORTED LINES" in item for item in failures)
     assert all(">>" in item for item in failures)
 
@@ -1083,10 +1087,14 @@ def test_logged_java_failure_families_repair_with_actual_javac(tmp_path, monkeyp
         for messages in captured[1:]
     ]
     assert "might not have been initialized" in repair_failures[0]
+    assert "DEFINITE_ASSIGNMENT" in repair_failures[0]
     assert "cannot assign a value to static final variable TRANSFER_CACHE" in repair_failures[1]
+    assert "FINAL_REBINDING" in repair_failures[1]
     assert "Object cannot be converted to Map<String,Object>" in repair_failures[2]
+    assert "OBJECT_TO_MAP" in repair_failures[2]
     assert "class Lock" in repair_failures[3]
     assert "class ReentrantLock" in repair_failures[3]
+    assert "JDK_LOCK_PACKAGE" in repair_failures[3]
     assert all("CURRENT COMPILED SOURCE AROUND THE REPORTED LINES" in item for item in repair_failures)
 
 
