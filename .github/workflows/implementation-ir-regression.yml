@@ -6,6 +6,7 @@ on:
     paths:
       - "minecraft_mod_ai/implementation_ir.py"
       - "minecraft_mod_ai/authored_document_contract.py"
+      - "minecraft_mod_ai/authored_structured_design.py"
       - "minecraft_mod_ai/authored_section_ids.py"
       - "minecraft_mod_ai/complete_planner.py"
       - "minecraft_mod_ai/task_template_catalog.py"
@@ -27,6 +28,9 @@ on:
       - "tests/test_atomic_java_native_http.py"
       - "tests/test_atomic_concern_response_contract.py"
       - "tests/test_authored_state_lowering_regression.py"
+      - "tests/test_planning_structured_worksheet_execution.py"
+      - "tests/test_worksheet_atomic_chunker.py"
+      - "tests/worksheet_fixtures.py"
       - "tests/test_direct_custom_module_generator.py"
       - "tests/test_implementation_contract_ownership.py"
       - "tests/test_authored_heading_contract.py"
