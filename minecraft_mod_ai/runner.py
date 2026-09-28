@@ -116,7 +116,7 @@ class GradleRunner:
         result = self._run(
             name="compile_java",
             executable=prepared.gradle,
-            arguments=("--no-daemon", "compileJava", "--stacktrace"),
+            arguments=("compileJava", "--stacktrace"),
             cwd=prepared.project_root,
             env=prepared.environment,
             log_path=prepared.logs / "gradle-compile-java.log",
@@ -286,7 +286,6 @@ class GradleRunner:
                 name="wrapper",
                 executable=prepared.gradle,
                 arguments=(
-                    "--no-daemon",
                     "wrapper",
                     "--gradle-version",
                     prepared.gradle_version,
@@ -308,9 +307,9 @@ class GradleRunner:
             "on",
         }
         build_arguments = (
-            ["--no-daemon", "clean", "build"]
+            ["clean", "build"]
             if force_clean
-            else ["--no-daemon", "build"]
+            else ["build"]
         )
         gametest_task = self._gametest_task(prepared.project_root) if run_gametest else None
         if gametest_task == "runGameTest":
@@ -333,7 +332,7 @@ class GradleRunner:
             gametest_result = self._run(
                 name="gametest",
                 executable=prepared.gradle,
-                arguments=("--no-daemon", gametest_task, "--stacktrace"),
+                arguments=(gametest_task, "--stacktrace"),
                 cwd=prepared.project_root,
                 env=prepared.environment,
                 log_path=prepared.logs / "gradle-gametest.log",
@@ -447,7 +446,7 @@ class GradleRunner:
         result = self._run(
             name="gametest_capabilities",
             executable=prepared.gradle,
-            arguments=("--no-daemon", "tasks", "--all", "--console=plain"),
+            arguments=("tasks", "--all", "--console=plain"),
             cwd=prepared.project_root,
             env=prepared.environment,
             log_path=prepared.logs / "gradle-gametest-capabilities.log",
