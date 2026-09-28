@@ -137,8 +137,10 @@ def assert_strict_atomicity_bounds(
                 )
             if "items" in value and isinstance(value["items"], Mapping):
                 item_schema = value["items"]
+                item_type = item_schema.get("type")
                 item_is_structural = (
-                    item_schema.get("type") in {"object", "array"}
+                    item_type == "object"
+                    or item_type == "array"
                     or "properties" in item_schema
                 )
                 assert_strict_atomicity_bounds(
