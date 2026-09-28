@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from copy import deepcopy
 from minecraft_mod_ai.planning_detail_template import WORKSHEET_SECTIONS
-from worksheet_fixtures import row as worksheet_row
 
 import pytest
 
@@ -77,19 +76,25 @@ def _fragment(requirement_ref: str, criterion_index: int) -> dict[str, object]:
 
 
 def _real_fragment(*, evidence_ref=None):
+    from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
+
     rows = []
     for section in WORKSHEET_SECTIONS:
-        canonical = worksheet_row(
-            section,
-            refs=(evidence_ref,) if evidence_ref else (),
-        )
+        specification = {
+            concern: [
+                {
+                    field: f"{section}.{concern}.{field}"
+                    for field in columns.split()
+                }
+            ]
+            for concern, columns in DETAIL_RECORDS[section].items()
+        }
+        specification["inapplicable_concerns"] = []
         rows.append(
             {
                 "section": section,
-                "specification": deepcopy(canonical["specification"]),
-                "constraint_evidence_refs": list(
-                    canonical["constraint_evidence_refs"]
-                ),
+                "specification": specification,
+                "constraint_evidence_refs": [evidence_ref] if evidence_ref else [],
             }
         )
     return {"section_updates": rows}
