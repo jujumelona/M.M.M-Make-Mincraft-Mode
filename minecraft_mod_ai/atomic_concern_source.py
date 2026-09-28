@@ -907,7 +907,7 @@ def _compiler_failure_line_numbers(log: str, *, relative: str) -> tuple[int, ...
     filename = re.escape(PurePosixPath(relative).name)
     numbers: list[int] = []
     for match in re.finditer(
-        rf"(?:^|[\\/]){filename}:(\\d+)(?::\\d+)?(?::|\\s)",
+        rf"(?:^|[\\/]){filename}:(\d+)(?::\d+)?(?::|\s)",
         str(log or ""),
         re.MULTILINE,
     ):
