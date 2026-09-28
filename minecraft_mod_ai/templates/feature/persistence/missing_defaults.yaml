@@ -13,8 +13,26 @@ record_schema:
       type: string
       minLength: 1
     default:
-      type: string
-      minLength: 1
+      description: Concrete JSON default value for the persisted field.
+      oneOf:
+      - type: string
+        minLength: 1
+        maxLength: 256
+      - type: number
+      - type: boolean
+      - type: 'null'
+      - type: array
+        maxItems: 4
+        items:
+          type:
+          - string
+          - number
+          - boolean
+          - 'null'
+      - type: object
+        properties: {}
+        maxProperties: 0
+        additionalProperties: false
   required:
   - field
   - default
