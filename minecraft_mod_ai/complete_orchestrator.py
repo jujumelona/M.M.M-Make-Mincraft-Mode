@@ -393,7 +393,15 @@ class CompleteProductionOrchestrator:
         asset_receipt = generation['asset_receipt']
         router = generation['router']
         index = execution_project_index(ProjectIndex, project_root, policy=self.policy)
-        heap_receipt = run_named_checkpoint(ledger, 'tune-resources', stage='prepare:resources', input_value={'graph_hash': work_plan.graph_hash, 'module_count': len(ordered), 'source_file_count': len(index.files), 'gradle_heap_mb': options.gradle_heap_mb}, action=lambda: tune_gradle_resources(project_root, module_count=len(ordered), source_file_count=len(index.files), policy=self._policy_with_heap_override(options.gradle_heap_mb)), encode=lambda value: value, decode=lambda cached: cached, validate_cached=lambda _cached: False)
+        heap_receipt = run_named_checkpoint(ledger, 'tune-resources', stage='prepare:resources', input_value={'graph_hash': work_plan.graph_hash, 'module_count': len(ordered), 'source_file_count': len(index.files), 'gradle_heap_mb': options.gradle_heap_mb}, action=lambda: tune_gradle_resources(project_root, module_count=len(ordered), source_file_count=len(index.files), policy=self._policy_with_heap_override(options.gradle_heap_mb)), encode=lambda value: value, decode=lambda cached: cached, validate_cached=lambda cached: (
+            isinstance(cached, dict)
+            and cached.get('status') in {'TUNED', 'HARDENED', 'UNCHANGED'}
+            and int(cached.get('heap_mb') or 0) > 0
+            and int(cached.get('gradle_workers') or 0) > 0
+            and (project_root / 'gradle.properties').is_file()
+            and f"-Xmx{int(cached.get('heap_mb') or 0)}M" in (project_root / 'gradle.properties').read_text(encoding='utf-8')
+            and f"org.gradle.workers.max={int(cached.get('gradle_workers') or 0)}" in (project_root / 'gradle.properties').read_text(encoding='utf-8')
+        ))
         module_receipts.append({'schema_version': 'mmm/resource-tuning-v1', **heap_receipt})
         execution_project_index(ProjectIndex, project_root, policy=self.policy).write_manifest()
         generated_manifest_hash = self._project_manifest_hash(project_root)
