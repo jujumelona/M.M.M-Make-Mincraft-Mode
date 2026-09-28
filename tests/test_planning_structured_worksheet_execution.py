@@ -116,6 +116,39 @@ def test_ten_section_dag_preserves_objects_through_handoff():
     assert '"success_cases"' in plan["verification_obligations"][0]["check"]
 
 
+def test_invalid_chunk_fails_after_one_generation_without_repair_retry():
+    class Router:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate_text(self, role, messages, **kwargs):
+            self.calls += 1
+            assert role == "planner"
+            assert kwargs["response_format"] == "json"
+            assert kwargs["enable_tools"] is False
+            return "{"
+
+    router = Router()
+    requirement = {
+        "requirement_id": "req_fail_fast",
+        "statement": "Gather a resource.",
+        "acceptance": [],
+    }
+
+    with pytest.raises(RuntimeError, match="structured output is invalid"):
+        planning._compile_worksheet_section(
+            router,
+            requirement=requirement,
+            selected_sections=WORKSHEET_SECTIONS,
+            section="behavior_contract",
+            evidence=[],
+            allowed=set(),
+            completed={},
+        )
+
+    assert router.calls == 1
+
+
 def test_prerequisite_json_preserves_long_tail_and_newlines():
     payload = row("behavior_contract")
     payload["specification"]["actors"][0]["role"] = "x" * 14000 + "\nTAIL_RULE"
