@@ -91,6 +91,7 @@ jobs:
           targeted_source_tests = {
               "minecraft_mod_ai/authored_ir_parser.py": (
                   "tests/test_authored_heading_contract.py",
+                  "tests/test_authored_state_lowering_regression.py",
               ),
               "minecraft_mod_ai/complete_planner.py": (
                   "tests/test_authored_heading_contract.py",
@@ -98,6 +99,7 @@ jobs:
               ),
               "minecraft_mod_ai/atomic_concern_source.py": (
                   "tests/test_atomic_concern_response_contract.py",
+                  "tests/test_authored_state_lowering_regression.py",
               ),
           }
           targeted_sources: set[str] = set()
