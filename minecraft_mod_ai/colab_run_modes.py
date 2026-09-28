@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import subprocess
 import zipfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -545,6 +547,77 @@ def write_debug_example_plan(
     return path
 
 
+def _assert_colab_checkout_current() -> None:
+    """Reject planning from a Colab checkout that fell behind origin/main.
+
+    Setup intentionally pins the running Python process to the commit fetched by cell 2.
+    During active debugging main may advance afterward; without this guard rerunning only
+    the plan cell silently executes the old engine. Fail before any model request instead.
+    """
+
+    raw_receipt = os.environ.get("MMM_COLAB_SETUP_RECEIPT", "").strip()
+    if not raw_receipt:
+        return
+    try:
+        receipt = json.loads(raw_receipt)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            "Colab setup receipt is invalid. Rerun setup cell 2 before planning."
+        ) from exc
+    if not isinstance(receipt, Mapping):
+        raise RuntimeError(
+            "Colab setup receipt is invalid. Rerun setup cell 2 before planning."
+        )
+
+    repo_dir = Path(str(receipt.get("repo_dir") or "")).expanduser()
+    used_commit = str(receipt.get("used_commit") or "").strip()
+    if not used_commit or not (repo_dir / ".git").is_dir():
+        raise RuntimeError(
+            "Colab setup checkout metadata is missing. Rerun setup cell 2 before planning."
+        )
+
+    local_commit = subprocess.check_output(
+        ["git", "-C", str(repo_dir), "rev-parse", "HEAD"],
+        text=True,
+    ).strip()
+    if local_commit != used_commit:
+        raise RuntimeError(
+            "Colab checkout changed after setup. Rerun setup cell 2 before planning."
+        )
+
+    try:
+        remote_line = subprocess.check_output(
+            [
+                "git",
+                "-C",
+                str(repo_dir),
+                "ls-remote",
+                "--exit-code",
+                "origin",
+                "refs/heads/main",
+            ],
+            text=True,
+            stderr=subprocess.STDOUT,
+        ).strip()
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            "Cannot verify the current GitHub main commit before planning. "
+            "Rerun setup cell 2 and verify GitHub connectivity."
+        ) from exc
+
+    remote_commit = remote_line.split(None, 1)[0].strip() if remote_line else ""
+    if not remote_commit:
+        raise RuntimeError(
+            "GitHub origin/main did not return a commit. Rerun setup cell 2 before planning."
+        )
+    if remote_commit != used_commit:
+        raise RuntimeError(
+            "Colab checkout is stale: setup used "
+            f"{used_commit[:12]}, but origin/main is {remote_commit[:12]}. "
+            "Rerun setup cell 2 before planning; no model request was sent."
+        )
+
+
 def run_plan_dialog(
     *,
     session: Any,
@@ -566,6 +639,7 @@ def run_plan_dialog(
 
     del input_fn
     mode = validate_run_mode(run_mode)
+    _assert_colab_checkout_current()
     target = Path(plan_path)
 
     if debug_mode and mode != FULL_MODE:
@@ -616,6 +690,7 @@ __all__ = [
     "PLAN_MODE",
     "RUN_MODES",
     "PlanDialogResult",
+    "_assert_colab_checkout_current",
     "audit_path",
     "build_result_download_target",
     "debug_audit_path",
