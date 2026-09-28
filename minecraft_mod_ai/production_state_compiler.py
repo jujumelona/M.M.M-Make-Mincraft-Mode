@@ -20,8 +20,7 @@ from .planning_detail_slots import DETAIL_RECORDS
 from .structured_state_runtime import validate_structured_state_section
 
 _STATE_CONCERNS = tuple(DETAIL_RECORDS["state_model"])
-_MAX_PAGE_RECORDS = 6
-_MAX_PAGES_PER_CONCERN = 8
+_MAX_CONCERN_RECORDS = 12
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _ASSIGNMENT = re.compile(
     r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(\+=|-=|\*=|/=|=)\s*(.*?)\s*$"
@@ -127,79 +126,85 @@ def _generate_concern_records(
     concern: str,
     declared_names: Sequence[str],
 ) -> list[dict[str, str]]:
+    """Extract one bounded concern snapshot with exactly one model call.
+
+    Production must never depend on the model deciding when pagination is complete.
+    The approved plan is finite and each state concern is lowered once; the host owns
+    the record cap, de-duplication, parsing, normalization, and downstream compilation.
+    """
+
+    fields = tuple(DETAIL_RECORDS["state_model"][concern].split())
+    payload = {
+        "stage": "production_semantic_lowering",
+        "section": "state_model",
+        "concern": concern,
+        "fields": fields,
+        "approved_state_model": source,
+        "declared_state_variables": list(declared_names),
+        "record_limit": _MAX_CONCERN_RECORDS,
+    }
+    system = (
+        "You are a bounded production semantic extractor. Read only the approved "
+        "state_model and extract every concrete record for the selected concern in ONE "
+        "response. Never redesign or extend the approved plan. Never invent extra "
+        "invariants, transitions, variables, lifecycle rules, or repeated variants. "
+        "Do not emit Java, imports, classes, methods, Fabric/Minecraft APIs, JSON, "
+        "JSON Schema, or prose. For guard/condition expressions use identifiers, "
+        "literals, parentheses and operators ! + - * / % == != >= <= > < && ||. "
+        "For mutations/actions/initial_state use semicolon-separated assignments with "
+        "=, +=, -=, *=, /=. Mutation targets should use declared_state_variables. "
+        "String/state literals must be quoted. Never use Java enum/member syntax such "
+        "as ShipStatus.COMPLETE; write a quoted literal such as \"COMPLETE\". "
+        "If this concern has no concrete requirement in the approved plan, output only "
+        "STATUS=EMPTY. Otherwise output at most the host record_limit records. "
+        "Never paginate and never output STATUS=MORE."
+    )
+    protocol = (
+        system
+        + " Output format:\n"
+        + "STATUS=DONE\nRECORD\n"
+        + "\n".join(field + "=<value>" for field in fields)
+        + "\nEND\n"
+        + "Repeat RECORD/END only for additional explicit records."
+    )
+    raw = router.generate_text(
+        "planner",
+        (
+            {"role": "system", "content": protocol},
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+        ),
+        response_format="text",
+        response_schema=None,
+        enable_tools=False,
+        output_token_ceiling=2048,
+        force_non_thinking=True,
+    )
+    rows, _status = _parse_semantic_page(raw, fields=fields)
     accepted: list[dict[str, str]] = []
     seen: set[str] = set()
-    fields = tuple(DETAIL_RECORDS["state_model"][concern].split())
-
-    for page in range(_MAX_PAGES_PER_CONCERN):
-        accepted_tail = accepted[-12:]
-        payload = {
-            "stage": "production_semantic_lowering",
-            "section": "state_model",
-            "concern": concern,
-            "fields": fields,
-            "approved_state_model": source,
-            "declared_state_variables": list(declared_names),
-            "already_accepted_records": accepted_tail,
-            "page": page + 1,
-            "page_capacity": _MAX_PAGE_RECORDS,
+    for row in rows[:_MAX_CONCERN_RECORDS]:
+        if not isinstance(row, Mapping):
+            continue
+        normalized = {
+            field: str(row.get(field) or "").strip()
+            for field in fields
         }
-        system = (
-            "You are a bounded production semantic compiler. Convert only the approved "
-            "state_model design into records for the selected concern. Do not redesign "
-            "the plan. Do not emit Java, imports, classes, methods, Fabric/Minecraft APIs, "
-            "JSON Schema, prose, or fields outside the supplied schema. "
-            "For guard/condition expressions use identifiers, literals, parentheses and "
-            "operators ! + - * / % == != >= <= > < && ||. Never use AND/OR words. "
-            "For mutations/actions/initial_state use semicolon-separated assignments with "
-            "=, +=, -=, *=, /=. Mutation targets should use declared_state_variables. "
-            "String/state literals must be quoted. Never use Java enum/member syntax such "
-            "as ShipStatus.COMPLETE; write a quoted literal such as \"COMPLETE\". "
-            "Return new records not already accepted. Set complete=true once every concrete "
-            "record for this concern in the approved design has been emitted. An empty "
-            "records array with complete=true is valid when the concern is not applicable."
-        )
-        plain_protocol = (
-            system
-            + " Output plain text only. Preferred format:\\n"
-            + "STATUS=COMPLETE or STATUS=MORE\\nRECORD\\n"
-            + "\\n".join(field + "=<value>" for field in fields)
-            + "\\nEND\\nRepeat RECORD/END for additional records. "
-            + "Do not output JSON or JSON Schema."
-        )
-        raw = router.generate_text(
-            "planner",
-            (
-                {"role": "system", "content": plain_protocol},
-                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-            ),
-            response_format="text",
-            response_schema=None,
-            enable_tools=False,
-            output_token_ceiling=2048,
-            force_non_thinking=True,
-        )
-        rows, complete = _parse_semantic_page(raw, fields=fields)
-        added = 0
-        for row in rows:
-            if not isinstance(row, Mapping):
-                continue
-            normalized = {field: str(row.get(field) or "").strip() for field in fields}
-            key = _json_key(normalized)
-            if key in seen:
-                continue
-            seen.add(key)
-            accepted.append(normalized)
-            added += 1
-        if complete:
-            return accepted
-        if added == 0:
-            raise ValueError(
-                f"PRODUCTION_STATE_LOWERING_NO_PROGRESS: state_model.{concern}"
-            )
+        if not any(normalized.values()):
+            continue
+        key = _json_key(normalized)
+        if key in seen:
+            continue
+        seen.add(key)
+        accepted.append(normalized)
 
+    if accepted:
+        return accepted
+    if re.search(r"(?im)^\s*STATUS\s*[:=]?\s*(?:EMPTY|DONE|COMPLETE)\s*$", raw):
+        return []
+    if not str(raw or "").strip():
+        return []
     raise ValueError(
-        f"PRODUCTION_STATE_LOWERING_PAGE_LIMIT: state_model.{concern}"
+        f"PRODUCTION_STATE_LOWERING_UNREADABLE: state_model.{concern}"
     )
 
 
