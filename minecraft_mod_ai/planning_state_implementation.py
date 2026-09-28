@@ -287,6 +287,7 @@ def _chunk_messages(
     chunk_count: int,
     concerns: tuple[str, ...],
     include_evidence: bool = False,
+    prior_chunks: Sequence[Mapping[str, Any]] = (),
     repair_error: str = "",
 ) -> list[dict[str, str]]:
     statement = _text(requirement.get("statement"))
@@ -300,14 +301,30 @@ def _chunk_messages(
     prerequisite_context = _section_dependency_context(
         section, selected_sections, completed
     )
+    prior_chunk_context = (
+        json.dumps(list(prior_chunks), ensure_ascii=False, separators=(",", ":"))
+        if prior_chunks
+        else "[]"
+    )
     instruction = (
         f"Complete atomic concern chunk {chunk_index}/{chunk_count} of engineering worksheet section {section!r}. "
         "Return only the JSON object matching the supplied template skeleton. "
         "Do not output JSON Schema definitions (no 'type', 'properties', 'required', 'additionalProperties'). "
         "Do not emit analysis, reasoning, commentary, markdown, code fences, or undeclared keys. "
         "Do not invent target API names, symbols, versions, repository paths, "
-        "external facts, or evidence identifiers. Use only evidence_refs shown in the grounded context."
+        "external facts, or evidence identifiers. Use only evidence_refs shown in the grounded context. "
+        "Earlier chunks from this same section are authoritative: preserve their record count, "
+        "record order, identifiers, and already-selected field values exactly."
     )
+    if section == "state_model":
+        instruction += (
+            " State-model executable fields use the host DSL, not prose. "
+            "Variable names are ASCII Java identifiers. Guards and conditions use only identifiers, "
+            "numbers, quoted strings, true/false/null, parentheses, !, comparisons, &&/|| and "
+            "basic + - * / % arithmetic. mutation, initial_state, and action are semicolon-separated "
+            "assignments using =, +=, -=, *= or /=. Assignment targets must exactly match variable "
+            "names already declared by the variables concern; do not invent target names."
+        )
     if repair_error:
         instruction += f" Previous output failed validation: {repair_error[:800]}. Please repair."
 
@@ -326,6 +343,8 @@ def _chunk_messages(
                 f"{_evidence_context(evidence)}\n\n"
                 "Direct prerequisite worksheet sections:\n"
                 f"{prerequisite_context}\n\n"
+                "Earlier accepted chunks from this same section (authoritative JSON):\n"
+                f"{prior_chunk_context}\n\n"
                 f"{worksheet_chunk_prompt(section, chunk_index, chunk_count, concerns, include_evidence=include_evidence)}"
             ),
         },
@@ -416,6 +435,7 @@ def _compile_worksheet_section(
                     chunk_count=chunk_count,
                     concerns=concerns,
                     include_evidence=is_first,
+                    prior_chunks=tuple(chunk_results),
                 )
                 try:
                     decoded = _generate_chunk(
@@ -437,6 +457,7 @@ def _compile_worksheet_section(
                         chunk_count=chunk_count,
                         concerns=concerns,
                         include_evidence=is_first,
+                        prior_chunks=tuple(chunk_results),
                         repair_error=str(parse_err),
                     )
                     decoded = _generate_chunk(
