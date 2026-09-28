@@ -525,7 +525,11 @@ _ATOMIC_FIELD_SCHEMA: dict[str, Any] = {
         "name": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
         "initializer": {
             "type": "string",
-            "description": "Initializer expression only, without a trailing semicolon.",
+            "description": (
+                "Initializer expression only, without a trailing semicolon. "
+                "Never instantiate an interface or abstract JDK collection directly; "
+                "use a concrete implementation or a valid factory."
+            ),
         },
     },
     "required": ["type", "name"],
@@ -700,6 +704,7 @@ _COMMON_JAVA_NAMES = {
     "Collections": "java.util.Collections",
     "Comparator": "java.util.Comparator",
     "Deque": "java.util.Deque",
+    "EnumSet": "java.util.EnumSet",
     "HashMap": "java.util.HashMap",
     "HashSet": "java.util.HashSet",
     "LinkedHashMap": "java.util.LinkedHashMap",

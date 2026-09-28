@@ -7,6 +7,7 @@ into an empty source string by the outer concern retry loop.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable, Mapping
 from copy import deepcopy
 from typing import Any
@@ -49,6 +50,48 @@ def _references_name(value: Any, name: str, rewrite: Callable[[Any, Mapping[str,
     if isinstance(value, list):
         return any(_references_name(item, name, rewrite) for item in value)
     return isinstance(value, str) and rewrite(value, {name: "$mmm$renamed"}) != value
+
+
+
+_NON_CONCRETE_COLLECTION_TYPES = frozenset({
+    "Collection", "List", "Set", "Map", "Queue", "Deque",
+    "SortedSet", "NavigableSet", "SortedMap", "NavigableMap", "EnumSet",
+})
+
+
+def _semantic_component_issue(
+    category: str,
+    component: Mapping[str, Any],
+) -> tuple[str, list[str]]:
+    if category != "fields":
+        return "", []
+    initializer = str(component.get("initializer") or "").strip()
+    if not initializer:
+        return "", []
+
+    direct = re.search(
+        r"\bnew\s+(?:java\.util\.)?([A-Za-z_$][A-Za-z0-9_$]*)"
+        r"\s*(?:<[^;(){}]*>)?\s*\(",
+        initializer,
+    )
+    if direct and direct.group(1) in _NON_CONCRETE_COLLECTION_TYPES:
+        return (
+            f"{direct.group(1)} cannot be instantiated directly; use a concrete "
+            "implementation or a valid factory expression.",
+            ["initializer"],
+        )
+
+    if re.search(
+        r"\b(?:java\.util\.)?EnumSet\s*\.\s*noneOf\s*\(\s*"
+        r"(?:java\.lang\.)?Enum\s*\.\s*class\s*\)",
+        initializer,
+    ):
+        return (
+            "EnumSet.noneOf requires a concrete enum class; java.lang.Enum.class "
+            "does not identify an element enum.",
+            ["initializer"],
+        )
+    return "", []
 
 
 def admit_components(
@@ -106,6 +149,8 @@ def admit_components(
                     if name in type_names:
                         reason = f"Nested type {name!r} collides with an existing or host-owned type."
                         path = ["name"]
+                if not reason:
+                    reason, path = _semantic_component_issue(category, component)
                 if not reason:
                     try:
                         render({category: [component]})

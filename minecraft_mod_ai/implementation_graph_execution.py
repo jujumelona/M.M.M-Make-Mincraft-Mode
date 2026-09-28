@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+from copy import deepcopy
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -49,16 +50,102 @@ def _required_atomic_leaf_contract(symbol: str) -> tuple[str, list[dict[str, Any
     return section, concerns
 
 
+def _decode_atomic_obligation(raw: Any) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    if not isinstance(raw, str):
+        return None
+    try:
+        payload = json.loads(raw)
+        instruction = json.loads(str(payload.get("instruction") or ""))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or not isinstance(instruction, dict):
+        return None
+    return payload, instruction
+
+
+def _canonical_atomic_obligations(
+    *,
+    section: str,
+    concerns: list[dict[str, Any]],
+    requirements: Mapping[str, str],
+    raw_obligations: list[str],
+) -> tuple[list[str], list[str]]:
+    """Bind every canonical concern to its exact host-owned source provenance."""
+    from .authored_execution_schema import section_spec
+    from .authored_ir_parser import slice_concern_requirements
+
+    expected = {str(item["concern"]): item for item in concerns}
+    existing: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
+    extras: list[str] = []
+    for raw in raw_obligations:
+        decoded = _decode_atomic_obligation(raw)
+        if decoded is None:
+            extras.append(raw)
+            continue
+        payload, instruction = decoded
+        name = str(instruction.get("concern") or "").strip()
+        if str(instruction.get("section") or "").strip() == section and name in expected:
+            existing.setdefault(name, (payload, instruction))
+            continue
+        extras.append(raw)
+
+    spec = section_spec(section) or {}
+    rebound: list[str] = []
+    drifted: list[str] = []
+    for concern in concerns:
+        name = str(concern["concern"])
+        host_sources = slice_concern_requirements(requirements, concern=name)
+        if name in existing:
+            payload, instruction = deepcopy(existing[name])
+            if payload.get("source_requirements") != host_sources:
+                drifted.append(name)
+        else:
+            payload, instruction = {}, {}
+
+        instruction.update({
+            "concern": name,
+            "concern_template": str(concern["identifier"]),
+            "rules": list(concern.get("rules") or []),
+            "section": section,
+            "section_instruction": str(spec.get("instruction") or ""),
+            "task": str(concern["task"]),
+        })
+        payload["instruction"] = json.dumps(
+            instruction, ensure_ascii=False, sort_keys=True
+        )
+        payload["source_requirements"] = host_sources
+        rebound.append(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+
+    return rebound + extras, drifted
+
+
 def _bind_atomic_leaf_contract(
-    task: dict[str, Any], node: Mapping[str, Any]
+    task: dict[str, Any],
+    node: Mapping[str, Any],
+    requirements: Mapping[str, str],
 ) -> tuple[str, list[dict[str, Any]]]:
     from .authored_production import _task_sha
 
     section, concerns = _required_atomic_leaf_contract(
         str(node.get("symbol") or "")
     )
-    task["implementation_obligations"] = list(node["obligations"])
+    obligations, drifted = _canonical_atomic_obligations(
+        section=section,
+        concerns=concerns,
+        requirements=requirements,
+        raw_obligations=list(node["obligations"]),
+    )
+    task["implementation_obligations"] = obligations
     task["task_sha256"] = _task_sha(task)
+    if drifted:
+        emit_root_cause(
+            "atomic_leaf_source_requirements_rebound",
+            stage="production",
+            operation="compile_authored_production",
+            gate="host_concern_provenance",
+            result="PASS",
+            details={"symbol": node.get("symbol"), "concerns": drifted},
+        )
     return section, concerns
 
 def _leaf_module(node: dict[str, Any], graph: dict[str, Any], request: dict[str, Any]) -> ProductionModule:
@@ -95,7 +182,7 @@ def _leaf_module(node: dict[str, Any], graph: dict[str, Any], request: dict[str,
         worksheet={"implementation_ir_node": node}, required_gates=("target_compile",),
         target_status="host_reserved",
     )
-    section, atomic_concerns = _bind_atomic_leaf_contract(task, node)
+    section, atomic_concerns = _bind_atomic_leaf_contract(task, node, requirements)
     return ProductionModule(
         module_id="ir_" + node["symbol"].lower(), kind="custom_java",
         config={"implementation": "custom", "evidence_task": task,

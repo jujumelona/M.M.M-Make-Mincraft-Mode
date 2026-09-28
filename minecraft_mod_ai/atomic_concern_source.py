@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .authored_ir_parser import slice_concern_requirements
 from .custom_module_errors import AtomicJavaDecisionError, CustomModuleGenerationError
 
 MEMBERS_MARKER = "<<<MMM_CONCERN_MEMBERS>>>"
@@ -903,49 +904,7 @@ def _concern_source_requirements(
     *,
     concern: str,
 ) -> dict[str, str]:
-    ordered = [
-        (str(key), str(value))
-        for key, value in sorted(dict(raw or {}).items(), key=_requirement_sort_key)
-    ]
-    if not ordered:
-        return {}
-
-    target = _slug(concern)
-    anchor = -1
-    for index, (_key, value) in enumerate(ordered):
-        if _requirement_concern_label(value) == target:
-            anchor = index
-            break
-
-    headings = [
-        (key, value)
-        for key, value in ordered[: anchor if anchor >= 0 else len(ordered)]
-        if value.lstrip().startswith("## ")
-    ]
-    selected: list[tuple[str, str]] = headings[-1:] if headings else []
-
-    if anchor < 0:
-        # Never leak the whole sibling section to a small coder when localization
-        # fails. The concern task/rules remain authoritative.
-        target_words = target.replace("_", " ")
-        for key, value in ordered:
-            lowered = value.casefold()
-            if target in lowered or target_words in lowered:
-                selected.append((key, value))
-        return dict(selected)
-
-    selected.append(ordered[anchor])
-    for key, value in ordered[anchor + 1:]:
-        if value.startswith("## "):
-            break
-        sibling_label = _requirement_concern_label(value)
-        if sibling_label:
-            if sibling_label == target:
-                selected.append((key, value))
-                continue
-            break
-        selected.append((key, value))
-    return dict(selected)
+    return slice_concern_requirements(raw, concern=concern)
 
 def _concern_authority(
     task: Mapping[str, Any], concern: Mapping[str, Any]
@@ -1052,6 +1011,109 @@ def _state_default_literal(java_type: str, raw: str) -> str:
     return "null" if lowered == "null" else ""
 
 
+def _state_java_contract(raw_type: str, raw_default: str) -> tuple[str, str]:
+    source_type = str(raw_type or "").strip()
+    base = re.sub(r"<.*>$", "", source_type).strip().rsplit(".", 1)[-1].casefold()
+    primitive = _STATE_JAVA_TYPES.get(base)
+    if primitive:
+        return primitive, _state_default_literal(primitive, raw_default)
+
+    collection_types = {
+        "list": ("java.util.List<Object>", "java.util.ArrayList"),
+        "collection": ("java.util.Collection<Object>", "java.util.ArrayList"),
+        "set": ("java.util.Set<Object>", "java.util.HashSet"),
+        "map": ("java.util.Map<Object, Object>", "java.util.HashMap"),
+        "queue": ("java.util.Queue<Object>", "java.util.ArrayDeque"),
+        "deque": ("java.util.Deque<Object>", "java.util.ArrayDeque"),
+        # A bare EnumSet cannot represent an empty value without a concrete enum
+        # class. Preserve "set of enum values" without inventing an enum type.
+        "enumset": ("java.util.Set<java.lang.Enum<?>>", "java.util.HashSet"),
+    }
+    resolved = collection_types.get(base)
+    if resolved is None:
+        return "", ""
+
+    java_type, implementation = resolved
+    default = str(raw_default or "").strip().casefold()
+    if default == "null":
+        return java_type, "null"
+    if default in {"[]", "{}", "empty", "empty_list", "empty_set", "empty_map"}:
+        return java_type, f"new {implementation}<>()"
+    return java_type, ""
+
+
+def _structured_requirement_records(
+    source_requirements: Mapping[str, Any],
+    concern: Mapping[str, Any],
+) -> tuple[dict[str, str], ...]:
+    """Parse Markdown records by the host-declared record_schema field order."""
+    ordered = [
+        (str(key), str(value))
+        for key, value in sorted(
+            dict(source_requirements or {}).items(), key=_requirement_sort_key
+        )
+    ]
+    target = _slug(concern.get("concern"))
+    anchor = next(
+        (
+            index
+            for index, (_key, value) in enumerate(ordered)
+            if _requirement_concern_label(value) == target
+        ),
+        -1,
+    )
+    if anchor < 0:
+        return ()
+
+    schema = concern.get("record_schema")
+    properties = (
+        list(schema.get("properties") or {})
+        if isinstance(schema, Mapping)
+        else []
+    )
+    required = (
+        list(schema.get("required") or [])
+        if isinstance(schema, Mapping)
+        else []
+    )
+    header_fields = re.findall(
+        r"[A-Za-z_][A-Za-z0-9_]*",
+        ordered[anchor][1].split(":", 1)[1] if ":" in ordered[anchor][1] else "",
+    )
+    fields = [field for field in header_fields if not properties or field in properties]
+    if not fields:
+        fields = properties
+    if not fields or fields[0] != "name":
+        return ()
+
+    records: list[dict[str, str]] = []
+    for _key, value in ordered[anchor + 1:]:
+        if value.startswith("## "):
+            break
+        sibling = _requirement_concern_label(value)
+        if sibling:
+            break
+        stripped = value.lstrip()
+        if not stripped.startswith("- "):
+            continue
+        head, separator, tail = stripped[2:].partition(":")
+        if not separator:
+            continue
+        name = head.strip().strip("*`_ ")
+        values = re.findall(r"`([^`]*)`", tail)
+        if not name or len(values) < len(fields) - 1:
+            continue
+        record = {"name": name}
+        record.update({
+            field: raw.strip()
+            for field, raw in zip(fields[1:], values)
+        })
+        if required and any(not str(record.get(field) or "").strip() for field in required):
+            continue
+        records.append(record)
+    return tuple(records)
+
+
 def _state_variable_contract(
     task: Mapping[str, Any],
     concern: Mapping[str, Any],
@@ -1061,6 +1123,32 @@ def _state_variable_contract(
     if not isinstance(source_requirements, Mapping):
         return ()
 
+    records = _structured_requirement_records(source_requirements, concern)
+    if records:
+        contracts: list[dict[str, str]] = []
+        seen_names: set[str] = set()
+        for attributes in records:
+            name = _host_java_identifier(attributes.get("name"))
+            java_type, default_literal = _state_java_contract(
+                attributes.get("type", ""),
+                attributes.get("default", ""),
+            )
+            # Never partially lower a variables record set. Unknown types fall
+            # back to the structured coder rather than silently dropping state.
+            if not name or not java_type or name in seen_names:
+                return ()
+            seen_names.add(name)
+            contracts.append({
+                "name": name,
+                "java_type": java_type,
+                "default_literal": default_literal,
+                "owner": attributes.get("owner", ""),
+                "unit": attributes.get("unit", ""),
+                "domain": attributes.get("domain", ""),
+            })
+        return tuple(contracts)
+
+    # Backward-compatible support for the older name(...)/type(...) form.
     contracts: list[dict[str, str]] = []
     seen_names: set[str] = set()
     for value in source_requirements.values():
@@ -1071,24 +1159,22 @@ def _state_variable_contract(
         }
         if "name" not in attributes or "type" not in attributes:
             continue
-        java_type = _STATE_JAVA_TYPES.get(attributes["type"].casefold())
         name = _host_java_identifier(attributes["name"])
+        java_type, default_literal = _state_java_contract(
+            attributes["type"],
+            attributes.get("default", ""),
+        )
         if not java_type or not name or name in seen_names:
             continue
         seen_names.add(name)
-        contracts.append(
-            {
-                "name": name,
-                "java_type": java_type,
-                "default_literal": _state_default_literal(
-                    java_type,
-                    attributes.get("default", ""),
-                ),
-                "owner": attributes.get("owner", ""),
-                "unit": attributes.get("unit", ""),
-                "domain": attributes.get("domain", ""),
-            }
-        )
+        contracts.append({
+            "name": name,
+            "java_type": java_type,
+            "default_literal": default_literal,
+            "owner": attributes.get("owner", ""),
+            "unit": attributes.get("unit", ""),
+            "domain": attributes.get("domain", ""),
+        })
     return tuple(contracts)
 
 

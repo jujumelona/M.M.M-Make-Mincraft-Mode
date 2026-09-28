@@ -67,6 +67,71 @@ def parse_markdown_heading(line: str) -> tuple[int, str] | None:
     return len(match.group(1)), title
 
 
+def _requirement_sort_key(item: tuple[str, Any]) -> tuple[int, str]:
+    key = str(item[0] or "")
+    match = re.fullmatch(r"R(\d+)", key)
+    return (int(match.group(1)) if match else 10**9, key)
+
+
+def _requirement_concern_label(value: str) -> str:
+    text = str(value or "")
+    if not text.startswith("- ") or ":" not in text:
+        return ""
+    return section_slug(text[2:].split(":", 1)[0].strip())
+
+
+def slice_concern_requirements(
+    raw: Mapping[str, Any],
+    *,
+    concern: str,
+) -> dict[str, str]:
+    """Return the exact canonical source slice owned by one authored concern."""
+    ordered = [
+        (str(key), str(value))
+        for key, value in sorted(dict(raw or {}).items(), key=_requirement_sort_key)
+    ]
+    if not ordered:
+        return {}
+
+    target = section_slug(concern)
+    anchor = next(
+        (
+            index
+            for index, (_key, value) in enumerate(ordered)
+            if _requirement_concern_label(value) == target
+        ),
+        -1,
+    )
+
+    headings = [
+        (key, value)
+        for key, value in ordered[: anchor if anchor >= 0 else len(ordered)]
+        if value.lstrip().startswith("## ")
+    ]
+    selected: list[tuple[str, str]] = headings[-1:] if headings else []
+
+    if anchor < 0:
+        target_words = target.replace("_", " ")
+        for key, value in ordered:
+            lowered = value.casefold()
+            if target in lowered or target_words in lowered:
+                selected.append((key, value))
+        return dict(selected)
+
+    selected.append(ordered[anchor])
+    for key, value in ordered[anchor + 1:]:
+        if value.startswith("## "):
+            break
+        sibling = _requirement_concern_label(value)
+        if sibling:
+            if sibling == target:
+                selected.append((key, value))
+                continue
+            break
+        selected.append((key, value))
+    return dict(selected)
+
+
 def _legacy_canonical_section_depth(text: str) -> int | None:
     """Recognize only the old planner template shape; never relax generic depth rules."""
 
@@ -237,4 +302,5 @@ __all__ = [
     "authored_section_id",
     "decompose_canonical_authored_units",
     "parse_markdown_heading",
+    "slice_concern_requirements",
 ]
