@@ -185,20 +185,24 @@ def test_compiler_failure_repairs_from_complete_source_and_exact_log(
     assert (root / path).read_text(encoding="utf-8") == second
 
 
-def test_package_import_no_longer_bootstraps_runtime_mutation() -> None:
-    init_text = (
-        Path(__file__).resolve().parents[1]
-        / "minecraft_mod_ai"
-        / "__init__.py"
-    ).read_text(encoding="utf-8")
-    assert "runtime_bootstrap" not in init_text
-    assert "initialize_runtime()" not in init_text
-
-
-def test_removed_runtime_composition_files_do_not_exist() -> None:
+def test_package_import_has_one_live_runtime_bootstrap_owner() -> None:
     package = Path(__file__).resolve().parents[1] / "minecraft_mod_ai"
+    init_text = (package / "__init__.py").read_text(encoding="utf-8")
+    bootstrap = (package / "runtime_bootstrap.py").read_text(encoding="utf-8")
+
+    assert init_text.count(
+        "from .runtime_bootstrap import initialize_runtime as _initialize_runtime"
+    ) == 1
+    assert init_text.count("_initialize_runtime()") == 1
+    assert "def initialize_runtime() -> None:" in bootstrap
+    assert "_INITIALIZED = False" in bootstrap
+    assert "with _LOCK:" in bootstrap
+
+
+def test_retired_runtime_composition_files_stay_absent() -> None:
+    package = Path(__file__).resolve().parents[1] / "minecraft_mod_ai"
+    assert (package / "runtime_bootstrap.py").is_file()
     for name in (
-        "runtime_bootstrap.py",
         "runtime_contract_composer.py",
         "runtime_contract_wrappers.py",
         "runtime_finalization.py",
