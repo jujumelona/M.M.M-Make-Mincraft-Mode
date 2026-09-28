@@ -8,6 +8,7 @@ reassembles field fragments and validates the canonical worksheet section afterw
 """
 
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 import json
 from typing import Any
 
@@ -16,7 +17,7 @@ from .model_output_atomicity_contract import (
     _assert_closed_object_schemas,
     is_atomic_model_schema,
 )
-from .planning_detail_slots import DETAIL_RECORDS
+from .planning_detail_slots import DETAIL_RECORDS, concern_record_schema
 from .planning_detail_template import (
     _PLACEHOLDERS,
     _normalize_section_name,
@@ -185,13 +186,19 @@ def worksheet_chunk_schema(
     authored_signal: list[dict[str, Any]] = []
     for concern in active:
         fields = projection[concern]
+        canonical = concern_record_schema(key, concern)
+        canonical_properties = canonical.get("properties")
+        if not isinstance(canonical_properties, Mapping):
+            raise ValueError(
+                f"DETAILED_PLAN_WORKSHEET_SCHEMA: {key}.{concern} has no properties"
+            )
         properties[concern] = {
             "type": "array",
             "maxItems": 4,
             "items": {
                 "type": "object",
                 "properties": {
-                    field: {"type": "string", "minLength": 1, "maxLength": 256}
+                    field: deepcopy(canonical_properties[field])
                     for field in fields
                 },
                 "required": [],
