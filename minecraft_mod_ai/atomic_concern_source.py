@@ -972,7 +972,15 @@ def _host_java_identifier(raw: Any) -> str:
     text = str(raw or "").strip()
     if not text:
         return ""
-    value = re.sub(r"[^A-Za-z0-9_$]", "_", text)
+    encoded: list[str] = []
+    for char in text:
+        if re.fullmatch(r"[A-Za-z0-9_$]", char):
+            encoded.append(char)
+        elif ord(char) > 127 and (char.isalpha() or char.isdigit()):
+            encoded.append(f"u{ord(char):04X}")
+        else:
+            encoded.append("_")
+    value = "".join(encoded)
     if not value or value[0].isdigit():
         value = "$mmm$" + value
     if value in _JAVA_RESERVED_WORDS:
@@ -1011,74 +1019,195 @@ def _state_default_literal(java_type: str, raw: str) -> str:
     return "null" if lowered == "null" else ""
 
 
+_STATE_BOXED_TYPES = {
+    "boolean": "Boolean", "byte": "Byte", "short": "Short", "int": "Integer",
+    "long": "Long", "float": "Float", "double": "Double", "char": "Character",
+}
+_STATE_COLLECTION_TYPES = {
+    "list": ("java.util.List", "java.util.ArrayList", 1),
+    "collection": ("java.util.Collection", "java.util.ArrayList", 1),
+    "set": ("java.util.Set", "java.util.HashSet", 1),
+    "map": ("java.util.Map", "java.util.HashMap", 2),
+    "queue": ("java.util.Queue", "java.util.ArrayDeque", 1),
+    "deque": ("java.util.Deque", "java.util.ArrayDeque", 1),
+}
+_STATE_REFERENCE_BUILTINS = frozenset({
+    "Object", "String", "Boolean", "Byte", "Short", "Integer", "Long",
+    "Float", "Double", "Character", "Number", "UUID",
+})
+
+
+def _split_balanced_commas(raw: Any) -> tuple[str, ...]:
+    text = str(raw or "")
+    rows: list[str] = []
+    current: list[str] = []
+    depths = {"(": 0, "<": 0, "[": 0, "{": 0}
+    closing = {")": "(", ">": "<", "]": "[", "}": "{"}
+    quote = ""
+    escaped = False
+    for char in text:
+        if quote:
+            current.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = ""
+            continue
+        if char in {'"', "'", "`"}:
+            quote = char
+            current.append(char)
+            continue
+        if char in depths:
+            depths[char] += 1
+            current.append(char)
+            continue
+        opener = closing.get(char)
+        if opener is not None:
+            if depths[opener] > 0:
+                depths[opener] -= 1
+            current.append(char)
+            continue
+        if char == "," and not any(depths.values()):
+            value = "".join(current).strip()
+            if value:
+                rows.append(value)
+            current = []
+            continue
+        current.append(char)
+    value = "".join(current).strip()
+    if value:
+        rows.append(value)
+    return tuple(rows)
+
+
+def _normalize_state_java_type(raw_type: str, *, reference: bool = False) -> str:
+    source_type = str(raw_type or "").strip()
+    if not source_type:
+        return ""
+    generic = re.fullmatch(
+        r"(?P<base>(?:java\.util\.)?[A-Za-z_$][A-Za-z0-9_$.]*)"
+        r"\s*<\s*(?P<args>.+)\s*>",
+        source_type,
+    )
+    if generic:
+        base = generic.group("base").rsplit(".", 1)[-1].casefold()
+        args = _split_balanced_commas(generic.group("args"))
+        if base == "enumset":
+            if len(args) != 1:
+                return ""
+            element = _normalize_state_java_type(args[0], reference=True)
+            return f"java.util.EnumSet<{element}>" if element else ""
+        collection = _STATE_COLLECTION_TYPES.get(base)
+        if collection is None or len(args) != collection[2]:
+            return ""
+        normalized = [_normalize_state_java_type(value, reference=True) for value in args]
+        if any(not value for value in normalized):
+            return ""
+        return f"{collection[0]}<{', '.join(normalized)}>"
+
+    base = source_type.rsplit(".", 1)[-1].casefold()
+    primitive = _STATE_JAVA_TYPES.get(base)
+    if primitive:
+        if reference and primitive in _STATE_BOXED_TYPES:
+            return _STATE_BOXED_TYPES[primitive]
+        return primitive
+    if re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", source_type):
+        return source_type
+    if re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+", source_type):
+        return source_type
+    return ""
+
+
 def _state_java_contract(raw_type: str, raw_default: str) -> tuple[str, str]:
     source_type = str(raw_type or "").strip()
     generic = re.fullmatch(
-        r"(?P<base>(?:java\.util\.)?[A-Za-z_$][A-Za-z0-9_$]*)"
+        r"(?P<base>(?:java\.util\.)?[A-Za-z_$][A-Za-z0-9_$.]*)"
         r"\s*<\s*(?P<args>.+)\s*>",
         source_type,
     )
     base_type = generic.group("base") if generic else source_type
     base = base_type.rsplit(".", 1)[-1].casefold()
-    primitive = _STATE_JAVA_TYPES.get(base)
-    if primitive:
-        return primitive, _state_default_literal(primitive, raw_default)
-
     default = str(raw_default or "").strip().casefold()
     empty = default in {"[]", "{}", "empty", "empty_list", "empty_set", "empty_map"}
 
     if base == "enumset":
         if generic:
-            element_type = generic.group("args").strip()
+            java_type = _normalize_state_java_type(source_type)
+            if not java_type:
+                return "", ""
+            element_type = java_type[java_type.find("<") + 1:-1].strip()
             if (
-                not element_type
-                or "," in element_type
-                or "?" in element_type
-                or re.fullmatch(
-                    r"[A-Za-z_$][A-Za-z0-9_$.]*", element_type
-                ) is None
+                not element_type or "," in element_type or "?" in element_type
+                or re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$.]*", element_type) is None
             ):
                 return "", ""
-            java_type = f"java.util.EnumSet<{element_type}>"
             if default == "null":
                 return java_type, "null"
-            if empty:
+            if empty or not default:
                 return java_type, f"java.util.EnumSet.noneOf({element_type}.class)"
             return java_type, ""
-        # The authored record omitted the element enum, so constructing EnumSet
-        # would require inventing a type. Preserve the set-of-enum contract with
-        # a concrete representation until the design supplies that type.
         java_type = "java.util.Set<java.lang.Enum<?>>"
         if default == "null":
             return java_type, "null"
-        return (
-            (java_type, "new java.util.HashSet<>()")
-            if empty
-            else (java_type, "")
-        )
+        return ((java_type, "new java.util.HashSet<>()") if empty or not default else (java_type, ""))
 
-    collection_types = {
-        "list": ("java.util.List", "java.util.ArrayList", "Object"),
-        "collection": ("java.util.Collection", "java.util.ArrayList", "Object"),
-        "set": ("java.util.Set", "java.util.HashSet", "Object"),
-        "map": ("java.util.Map", "java.util.HashMap", "Object, Object"),
-        "queue": ("java.util.Queue", "java.util.ArrayDeque", "Object"),
-        "deque": ("java.util.Deque", "java.util.ArrayDeque", "Object"),
-    }
-    resolved = collection_types.get(base)
-    if resolved is None:
-        return "", ""
+    collection = _STATE_COLLECTION_TYPES.get(base)
+    if collection is not None:
+        if generic:
+            java_type = _normalize_state_java_type(source_type)
+        else:
+            fallback = "Object, Object" if collection[2] == 2 else "Object"
+            java_type = f"{collection[0]}<{fallback}>"
+        if not java_type:
+            return "", ""
+        if default == "null":
+            return java_type, "null"
+        if empty or not default:
+            return java_type, f"new {collection[1]}<>()"
+        return java_type, ""
 
-    interface, implementation, fallback_args = resolved
-    args = generic.group("args").strip() if generic else fallback_args
-    if not args:
+    java_type = _normalize_state_java_type(source_type)
+    if not java_type:
         return "", ""
-    java_type = f"{interface}<{args}>"
-    if default == "null":
-        return java_type, "null"
-    if empty:
-        return java_type, f"new {implementation}<>()"
-    return java_type, ""
+    primitive = _STATE_JAVA_TYPES.get(base)
+    if primitive:
+        return java_type, _state_default_literal(java_type, raw_default)
+    return java_type, "null" if default == "null" else ""
+
+
+def _state_support_types(raw_type: str) -> tuple[tuple[str, str], ...]:
+    source_type = str(raw_type or "").strip()
+    if not source_type:
+        return ()
+    generic = re.fullmatch(
+        r"(?P<base>(?:java\.util\.)?[A-Za-z_$][A-Za-z0-9_$.]*)"
+        r"\s*<\s*(?P<args>.+)\s*>",
+        source_type,
+    )
+    if generic:
+        base = generic.group("base").rsplit(".", 1)[-1].casefold()
+        rows: list[tuple[str, str]] = []
+        for value in _split_balanced_commas(generic.group("args")):
+            normalized = _normalize_state_java_type(value, reference=True)
+            if not normalized:
+                continue
+            if base == "enumset":
+                if re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", normalized) and normalized not in _STATE_REFERENCE_BUILTINS:
+                    rows.append(("enum", normalized))
+                continue
+            rows.extend(_state_support_types(value))
+        return tuple(rows)
+
+    base = source_type.rsplit(".", 1)[-1].casefold()
+    if base in _STATE_JAVA_TYPES or source_type in _STATE_REFERENCE_BUILTINS:
+        return ()
+    if "." in source_type:
+        return ()
+    if re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", source_type):
+        return (("class", source_type),)
+    return ()
 
 
 def _structured_requirement_records(
@@ -1153,6 +1282,48 @@ def _structured_requirement_records(
     return tuple(records)
 
 
+def _inline_state_variable_records(
+    source_requirements: Mapping[str, Any],
+    concern: Mapping[str, Any],
+) -> tuple[dict[str, str], ...]:
+    """Parse compact 'name (Type, key=value)' state declarations."""
+    target = _slug(concern.get("concern"))
+    ordered = [
+        (str(key), str(value))
+        for key, value in sorted(dict(source_requirements or {}).items(), key=_requirement_sort_key)
+    ]
+    anchor = next((value for _key, value in ordered if _requirement_concern_label(value) == target), "")
+    if not anchor or ":" not in anchor:
+        return ()
+    payload = anchor.split(":", 1)[1].strip()
+    if not payload:
+        return ()
+
+    records: list[dict[str, str]] = []
+    for entry in _split_balanced_commas(payload):
+        match = re.fullmatch(r"\s*(?P<name>.+?)\s*\((?P<body>.*)\)\s*", entry)
+        if match is None:
+            return ()
+        parts = _split_balanced_commas(match.group("body"))
+        if not parts or "=" in parts[0]:
+            return ()
+        record = {
+            "name": match.group("name").strip().strip("*`_ "),
+            "type": parts[0].strip(),
+        }
+        for attribute in parts[1:]:
+            key, separator, value = attribute.partition("=")
+            if not separator:
+                continue
+            normalized_key = key.strip().casefold()
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", normalized_key):
+                record[normalized_key] = value.strip().strip("`")
+        if not record["name"] or not record["type"]:
+            return ()
+        records.append(record)
+    return tuple(records)
+
+
 def _state_variable_contract(
     task: Mapping[str, Any],
     concern: Mapping[str, Any],
@@ -1162,7 +1333,10 @@ def _state_variable_contract(
     if not isinstance(source_requirements, Mapping):
         return ()
 
-    records = _structured_requirement_records(source_requirements, concern)
+    records = (
+        _structured_requirement_records(source_requirements, concern)
+        or _inline_state_variable_records(source_requirements, concern)
+    )
     if records:
         contracts: list[dict[str, str]] = []
         seen_names: set[str] = set()
@@ -1184,6 +1358,7 @@ def _state_variable_contract(
                 "owner": attributes.get("owner", ""),
                 "unit": attributes.get("unit", ""),
                 "domain": attributes.get("domain", ""),
+                "source_type": attributes.get("type", ""),
             })
         return tuple(contracts)
 
@@ -1213,6 +1388,7 @@ def _state_variable_contract(
             "owner": attributes.get("owner", ""),
             "unit": attributes.get("unit", ""),
             "domain": attributes.get("domain", ""),
+            "source_type": attributes.get("type", ""),
         })
     return tuple(contracts)
 
@@ -1224,15 +1400,30 @@ def _deterministic_state_variable_members(
     contracts = _state_variable_contract(task, concern)
     if not contracts:
         return ""
-    rows: list[str] = []
+
+    support_kinds: dict[str, str] = {}
+    support_order: list[str] = []
     for item in contracts:
-        initializer = (
-            f" = {item['default_literal']}" if item["default_literal"] else ""
-        )
+        for kind, name in _state_support_types(item.get("source_type", "")):
+            previous = support_kinds.get(name)
+            if previous is not None and previous != kind:
+                return ""
+            if previous is None:
+                support_kinds[name] = kind
+                support_order.append(name)
+
+    rows: list[str] = []
+    for name in support_order:
         rows.append(
-            f"private static {item['java_type']} {item['name']}{initializer};"
+            f"private enum {name} {{}}"
+            if support_kinds[name] == "enum"
+            else f"private static final class {name} {{}}"
         )
+    for item in contracts:
+        initializer = f" = {item['default_literal']}" if item["default_literal"] else ""
+        rows.append(f"private static {item['java_type']} {item['name']}{initializer};")
     return "\n".join(rows)
+
 
 def _bounded_grounding(grounding: Mapping[str, Any]) -> dict[str, Any]:
     direct = grounding.get("direct_host_context")
@@ -1368,7 +1559,8 @@ def _messages(
             "available_sibling_api, declare the minimal "
             "concern-local backing field instead of referencing an undeclared symbol. "
             "For JDK collection/concurrency types you may use simple names such as List/Map/Set; "
-            "the host qualifies them. Keep each method body short and concern-local."
+            "the host qualifies them. Never emit <init> in the top-level methods array; the existing "
+            "outer class is never model-constructed. Keep each method body short and concern-local."
         )
     elif response_region == "initialize":
         response_contract = (

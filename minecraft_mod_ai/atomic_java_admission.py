@@ -63,6 +63,13 @@ def _semantic_component_issue(
     category: str,
     component: Mapping[str, Any],
 ) -> tuple[str, list[str]]:
+    if category == "methods" and str(component.get("name") or "").strip() == "<init>":
+        return (
+            "<init> is forbidden in the top-level methods array because outer-class "
+            "construction is host-owned; use fields/static initialization or a nested "
+            "record/class constructor instead.",
+            [],
+        )
     if category != "fields":
         return "", []
     initializer = str(component.get("initializer") or "").strip()
@@ -141,16 +148,17 @@ def admit_components(
             component = initial
             seen: set[str] = set()
             for attempt in range(attempt_limit + 1):
+                semantic_reason, semantic_path = _semantic_component_issue(category, component)
                 errors = list(Draft202012Validator(schema).iter_errors(component))
-                reason = errors[0].message if errors else ""
-                path = list(errors[0].absolute_path) if errors else []
+                reason = semantic_reason or (errors[0].message if errors else "")
+                path = semantic_path if semantic_reason else (
+                    list(errors[0].absolute_path) if errors else []
+                )
                 if not reason and category in {"classes", "records", "enums"}:
                     name = canonical_name(component.get("name", ""))
                     if name in type_names:
                         reason = f"Nested type {name!r} collides with an existing or host-owned type."
                         path = ["name"]
-                if not reason:
-                    reason, path = _semantic_component_issue(category, component)
                 if not reason:
                     try:
                         render({category: [component]})
@@ -166,10 +174,21 @@ def admit_components(
 
                 evidence = json.dumps(component, ensure_ascii=False, sort_keys=True)
                 if evidence in seen or attempt == attempt_limit:
+                    response = {
+                        **working,
+                        category: [*values[:index], component, *values[index + 1:]],
+                    }
+                    if category == "methods" and str(component.get("name") or "").strip() == "<init>":
+                        raise AtomicJavaDecisionError(
+                            "ATOMIC_CONCERN_RESPONSE_INVALID: top-level <init> remained "
+                            "after component repair; regenerate this bounded region without "
+                            "an outer-class constructor.",
+                            response=response,
+                        )
                     raise AtomicJavaDecisionError(
                         "ATOMIC_COMPONENT_REPAIR_NO_PROGRESS: "
                         f"{category}[{index}] remained invalid: {reason}",
-                        response={**working, category: [*values[:index], component, *values[index + 1:]]},
+                        response=response,
                     )
                 seen.add(evidence)
                 if (path == ["name"] and category in {"classes", "records", "enums"}

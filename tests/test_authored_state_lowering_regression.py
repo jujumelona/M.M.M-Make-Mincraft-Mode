@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,7 +14,10 @@ from minecraft_mod_ai.atomic_concern_source import (
 )
 from minecraft_mod_ai.atomic_java_admission import _semantic_component_issue
 from minecraft_mod_ai.authored_ir_parser import slice_concern_requirements
-from minecraft_mod_ai.custom_module_generator import _call_atomic_java_region
+from minecraft_mod_ai.custom_module_generator import (
+    _atomic_parameters_for_request,
+    _call_atomic_java_region,
+)
 from minecraft_mod_ai.implementation_graph_execution import _bind_atomic_leaf_contract
 
 
@@ -132,6 +137,85 @@ def test_markdown_variables_lower_without_model_and_never_construct_bare_enumset
     result = executor.run()
     assert result["repair_count"] == 0
     assert "java.util.HashSet" in result["source"]
+
+
+def test_inline_compact_state_variables_are_host_lowered_without_coder(tmp_path) -> None:
+    requirements = {
+        "R12": "## state_model",
+        "R13": (
+            "- variables: 현재 돈 (Int, owner=Player), "
+            "보유 재료 (Map<String, Int>, owner=Inventory), "
+            "우주선 구성 (List<ShipPartConfig>, owner=WorldData), "
+            "위치 좌표 (Vec3Double, owner=Server)"
+        ),
+        "R14": (
+            "- transitions: from_state(준비됨) -> trigger(재료 구매/제작) "
+            "-> to_state(조립중)"
+        ),
+    }
+    task = {"task_id": "inline-state-regression"}
+    node = {"symbol": "AuthoredStateModel", "obligations": [_model_obligation("variables")]}
+    _section, concerns = _bind_atomic_leaf_contract(task, node, requirements)
+    variables = concerns[0]
+    contracts = _state_variable_contract(task, variables)
+    assert [item["java_type"] for item in contracts] == [
+        "int",
+        "java.util.Map<String, Integer>",
+        "java.util.List<ShipPartConfig>",
+        "Vec3Double",
+    ]
+
+    members = _deterministic_state_variable_members(task, variables)
+    assert "private static final class ShipPartConfig {}" in members
+    assert "private static final class Vec3Double {}" in members
+    assert "new java.util.HashMap<>()" in members
+    assert "new java.util.ArrayList<>()" in members
+
+    def forbidden_model_call(_messages):
+        raise AssertionError("inline variables must be host-lowered before coder decode")
+
+    executor = AtomicConcernExecutor(
+        root=tmp_path,
+        target=tmp_path / "AuthoredStateModel.java",
+        relative="AuthoredStateModel.java",
+        symbol="AuthoredStateModel",
+        original=(
+            "public final class AuthoredStateModel {\n"
+            "    // MMM_AUTHORED_FEATURE_BODY\n"
+            "}\n"
+        ),
+        task=task,
+        section="state_model",
+        concerns=(variables,),
+        grounding={},
+        dependency_source="",
+        require_initialize=False,
+        call_coder=forbidden_model_call,
+        compile_java=lambda _root: SimpleNamespace(status="PASS"),
+        compile_log=lambda _report: "",
+        write_source=lambda _path, _source: None,
+    )
+    source = executor.run()["source"]
+    assert "uD604uC7AC_uB3C8" in source
+    assert "<init>" not in source
+
+    javac = shutil.which("javac")
+    if javac:
+        target = tmp_path / "AuthoredStateModel.java"
+        target.write_text(source, encoding="utf-8")
+        compiled = subprocess.run([javac, str(target)], capture_output=True, text=True, check=False)
+        assert compiled.returncode == 0, compiled.stderr
+
+
+def test_top_level_method_schema_structurally_forbids_outer_constructor() -> None:
+    parameters, _shape = _atomic_parameters_for_request(
+        {"host_selected_class": "AuthoredStateModel", "concern": {"name": "variables"}},
+        response_region="members",
+    )
+    top_level_method = parameters["properties"]["methods"]["items"]
+    nested_method = parameters["properties"]["classes"]["items"]["properties"]["methods"]["items"]
+    assert "<init>" not in top_level_method["properties"]["name"]["pattern"]
+    assert "<init>" in nested_method["properties"]["name"]["pattern"]
 
 
 def test_explicit_collection_element_types_are_preserved() -> None:

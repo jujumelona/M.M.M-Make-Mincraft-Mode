@@ -560,6 +560,16 @@ _ATOMIC_METHOD_SCHEMA: dict[str, Any] = {
     "required": ["return_type", "name"],
     "additionalProperties": True,
 }
+_ATOMIC_OUTER_METHOD_SCHEMA: dict[str, Any] = deepcopy(_ATOMIC_METHOD_SCHEMA)
+_ATOMIC_OUTER_METHOD_SCHEMA["properties"]["name"] = {
+    "type": "string",
+    "pattern": _JAVA_IDENTIFIER_PATTERN,
+    "description": (
+        "Ordinary method name in the existing host-selected outer class. "
+        "<init> is forbidden here because outer-class construction is host-owned."
+    ),
+}
+
 _ATOMIC_CONSTRUCTOR_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -615,7 +625,7 @@ _ATOMIC_MEMBERS_PARAMETERS: dict[str, Any] = {
         "enums": {"type": "array", "items": _ATOMIC_ENUM_SCHEMA},
         "classes": {"type": "array", "items": _ATOMIC_CLASS_SCHEMA},
         "fields": {"type": "array", "items": _ATOMIC_FIELD_SCHEMA},
-        "methods": {"type": "array", "items": _ATOMIC_METHOD_SCHEMA},
+        "methods": {"type": "array", "items": _ATOMIC_OUTER_METHOD_SCHEMA},
         "static_initializers": {
             "type": "array",
             "items": {
@@ -633,7 +643,7 @@ _ATOMIC_LOGIC_MEMBERS_PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {
         "fields": {"type": "array", "items": _ATOMIC_FIELD_SCHEMA},
-        "methods": {"type": "array", "items": _ATOMIC_METHOD_SCHEMA},
+        "methods": {"type": "array", "items": _ATOMIC_OUTER_METHOD_SCHEMA},
         "static_initializers": {
             "type": "array",
             "items": {
@@ -1535,8 +1545,10 @@ def _call_atomic_java_region(
             f"Allowed shape: {schema_shape}. The supplied native tool schema is authoritative; "
             "never invent categories that the schema does not expose. "
             "When nested types are allowed, declare every concern-owned helper/domain type in "
-            "this same call before referencing it. For record/class construction, use constructors when available; "
-            "a nested method named <init> is also accepted and normalized by the host. "
+            "this same call before referencing it. For nested record/class construction, use the "
+            "constructors array when available; a nested method named <init> remains accepted only "
+            "inside that record/class object for compatibility. Never emit <init> in the top-level "
+            "methods array because construction of the host-selected outer class is host-owned. "
             "Treat available_sibling_api declarations in the user payload as authoritative: "
             "use exact sibling types/symbols and never mutate final sibling fields. "
             "Omit categories you do not need; do not emit empty arrays just "
