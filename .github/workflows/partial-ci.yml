@@ -102,6 +102,20 @@ jobs:
                   "tests/test_authored_state_lowering_regression.py",
               ),
           }
+          targeted_path_tests = {
+              "minecraft_mod_ai/templates/feature/state_model/": (
+                  "tests/test_worksheet_atomic_chunker.py",
+                  "tests/test_planning_structured_worksheet_execution.py",
+                  "tests/test_authored_state_lowering_regression.py",
+              ),
+          }
+          for prefix, candidates in targeted_path_tests.items():
+              if not any(path.startswith(prefix) for path in changed):
+                  continue
+              for candidate in candidates:
+                  if (root / candidate).is_file():
+                      selected_tests.add(candidate)
+
           targeted_sources: set[str] = set()
           for source_path, candidates in targeted_source_tests.items():
               if source_path not in changed:

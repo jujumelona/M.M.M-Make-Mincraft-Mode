@@ -18,6 +18,11 @@ on:
       - "minecraft_mod_ai/atomic_concern_source.py"
       - "minecraft_mod_ai/custom_module_generator.py"
       - "minecraft_mod_ai/custom_module_errors.py"
+      - "minecraft_mod_ai/structured_state_runtime.py"
+      - "minecraft_mod_ai/planning_state_implementation.py"
+      - "minecraft_mod_ai/planning_detail_slots.py"
+      - "minecraft_mod_ai/worksheet_atomic_chunker.py"
+      - "minecraft_mod_ai/templates/feature/state_model/**"
       - "tests/test_atomic_java_component_admission.py"
       - "tests/test_atomic_java_native_http.py"
       - "tests/test_atomic_concern_response_contract.py"
@@ -58,9 +63,11 @@ jobs:
       - run: python -m pip install --prefer-binary -e '.[dev,ui]'
       - name: Compile implementation IR boundary
         run: python -m py_compile minecraft_mod_ai/implementation_ir.py minecraft_mod_ai/implementation_graph_execution.py
-      - name: Run authored state lowering regression
+      - name: Validate structured state planning and host compiler
         run: >-
           python -m pytest -q --tb=short
+          tests/test_worksheet_atomic_chunker.py
+          tests/test_planning_structured_worksheet_execution.py
           tests/test_authored_state_lowering_regression.py
       - name: Run implementation IR regressions
         run: >-
