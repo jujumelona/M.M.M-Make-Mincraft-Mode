@@ -264,12 +264,27 @@ def test_fresh_authored_document_sections_are_provenance_not_source_units():
     assert "AuthoredFeature" not in json.dumps(manifest)
 
 
-def test_nested_authored_behavior_reaches_ir_without_loss():
-    text = "# Trading\n## Trigger\nTrade for 10 credits.\n## State\nPersist credits.\n# Travel\nSpend 20 credits.\n## Failure\nKeep balance unchanged."
-    proposal = CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(AuthoredPlan("Fabric 1.21.11 mod", text))
-    assert proposal.modules[0].config["implementation_graph_request"]["text"] == text
-    assert proposal.game_design["_authored_execution_manifest"]["source_text_sha256"] == "sha256:" + hashlib.sha256(text.encode()).hexdigest()
+def test_nested_existing_authored_behavior_reaches_localization_without_loss():
+    text = (
+        "# Trading\n## Trigger\nTrade for 10 credits.\n## State\nPersist credits.\n"
+        "# Travel\nSpend 20 credits.\n## Failure\nKeep balance unchanged."
+    )
+    plan = AuthoredPlan(
+        "Modify Fabric 1.21.11 mod",
+        text,
+        existing_input_sha256="sha256:" + "c" * 64,
+    )
+    proposal = CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(plan)
 
+    assert "".join(
+        module.config["authored_plan"]["text"] for module in proposal.modules
+    ) == text
+    assert proposal.game_design["_authored_execution_manifest"]["source_text_sha256"] == (
+        "sha256:" + hashlib.sha256(text.encode()).hexdigest()
+    )
+
+
+@pytest.mark.parametrize("text", [
 @pytest.mark.parametrize("text", [
     "# Trading\n## Trigger\nExchange ore for credits.\n## State\nPersist credits.\n",
     "# Overview\n# Trading\nExchange ore for credits.\n# Appendix\n",
@@ -290,18 +305,44 @@ def test_oversized_semantic_authored_section_is_not_split_by_bytes():
     assert units[0]["text"] == text
     assert units[0]["end_byte"] == len(text.encode("utf-8"))
 
-def test_fresh_authored_work_graph_schedules_ir_execution_after_project_preparation(monkeypatch):
-    monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "2")
-    proposal = CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(
-        AuthoredPlan("space mod", "# Economy\nCredits.\n# Ships\nParts.\n# Planets\nMining."))
-    graph = build_production_work_plan(proposal, policy=ScalePolicy(java_shard_size=48))
-    custom = [n for n in graph.nodes if n.stage == "generate:custom"]
-    assert len(custom) == 1
-    assert custom[0].resource_class == "llm"
-    assert custom[0].dependencies == ("prepare-project",)
-    assert custom[0].payload["members"][0]["module_id"] == "authored_implementation_graph"
+def test_fresh_authored_work_graph_never_schedules_custom_generation(monkeypatch):
+    import minecraft_mod_ai.authored_production as authored_production
+    import minecraft_mod_ai.planning_state_implementation as implementation
+
+    structured = _structured_state_plan().structured_sections
+
+    class CanonicalRouteReached(RuntimeError):
+        pass
+
+    planner = CompleteGameDesignPlanner(SimpleNamespace())
+    monkeypatch.setattr(
+        implementation,
+        "compile_authored_worksheet",
+        lambda _router, _prompt: structured,
+    )
+    monkeypatch.setattr(
+        planner,
+        "_plan_canonical_artifacts",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(CanonicalRouteReached()),
+    )
+    monkeypatch.setattr(
+        authored_production,
+        "compile_authored_design",
+        lambda *_args, **_kwargs: pytest.fail(
+            "fresh authored input reached custom Java generation"
+        ),
+    )
+
+    with pytest.raises(CanonicalRouteReached):
+        planner.compile_for_production(
+            AuthoredPlan(
+                "space mod",
+                "# Economy\nCredits.\n# Ships\nParts.\n# Planets\nMining.",
+            )
+        )
 
 
+def test_authored_scaffold_defers_source_materialization_until_ir(tmp_path):
 def test_authored_scaffold_defers_source_materialization_until_ir(tmp_path):
     modules, manifest = _compile_new_authored_modules(AuthoredPlan("space mod", "Economy, ships, planets"),
         mod_id="authored_test", package_name="example", target={})
