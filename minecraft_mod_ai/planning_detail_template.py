@@ -238,7 +238,7 @@ def worksheet_section_prompt(section: str) -> str:
             f"Purpose: {_section_description(key)}",
             "Return exactly one JSON object containing only specification and constraint_evidence_refs.",
             "specification MUST be an object with the fixed concern arrays below, never a string or an invented object layout.",
-            "Fill record fields with string values. A concern may have an empty array; explain its omission in inapplicable_concerns when useful. Keep the concern keys for storage.",
+            "Fill record fields with values matching their declared field types. A concern may have an empty array; explain its omission in inapplicable_concerns when useful. Keep the concern keys for storage.",
             "Exact response schema: " + json.dumps(worksheet_section_schema(key), ensure_ascii=False, separators=(",", ":")),
             "Resolve one deterministic implementation contract for this section only; do not restate unrelated sections.",
             "Treat supplied prerequisite section results as authoritative continuity constraints.",
