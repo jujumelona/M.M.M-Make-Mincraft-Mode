@@ -365,29 +365,19 @@ def _generate_chunk(
     concerns: Sequence[str],
     chunk_schema: Mapping[str, Any],
 ) -> dict[str, Any]:
-    # Worksheet chunks are pure structured data, not actions. Never route them through
-    # native function calling: local models can produce schema-valid JSON while omitting
-    # a tool envelope, and that transport detail must not make planning fail.
-    from .planner_structured_router import structured_planner_router
+    tool_name = f"submit_{section}_{index}_chunk"
+    description = f"Submit worksheet specifications for {section}: {', '.join(concerns)}."
 
-    raw = generate_fixed_template_text(
-        structured_planner_router(router),
+    raw_decision = router.generate_tool_decision(
         "planner",
         messages,
-        response_schema=chunk_schema,
-        enable_tools=False,
+        tool_name=tool_name,
+        parameters=chunk_schema,
+        description=description,
     )
-    from .planning_contract_ssot import is_schema_definition_echo
-
-    decoded = json.loads(raw)
-    if not isinstance(decoded, Mapping):
-        raise ValueError("chunk output must be a JSON object")
-    if is_schema_definition_echo(decoded):
-        raise ValueError(
-            "Model returned JSON Schema definition instead of concrete data records. "
-            "Please output records matching the template skeleton."
-        )
-    return dict(decoded)
+    if not isinstance(raw_decision, Mapping):
+        raise ValueError("chunk decision must be an object")
+    return dict(raw_decision)
 
 
 def _compile_worksheet_section(
