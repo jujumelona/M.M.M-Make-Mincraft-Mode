@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from worksheet_fixtures import specification
+from worksheet_fixtures import flatten_record, specification
 
 import pytest
 
@@ -63,7 +63,7 @@ class _StructuredRouter:
         schema = kwargs["response_schema"]
         full = _authored_worksheet()[section]
         payload: dict = {}
-        for prop in schema.get("properties", {}):
+        for prop, prop_schema in schema.get("properties", {}).items():
             if prop == "constraint_evidence_refs":
                 payload[prop] = full.get(prop, [])
             elif prop == "inapplicable_concerns":
@@ -73,7 +73,17 @@ class _StructuredRouter:
                     if item["concern"] in schema.get("properties", {})
                 ]
             elif prop in full["specification"]:
-                payload[prop] = full["specification"][prop]
+                allowed_fields = set(
+                    prop_schema.get("items", {}).get("properties", {})
+                )
+                payload[prop] = [
+                    {
+                        key: value
+                        for key, value in flatten_record(item).items()
+                        if key in allowed_fields
+                    }
+                    for item in full["specification"][prop]
+                ]
         import json
 
         return json.dumps(payload)
