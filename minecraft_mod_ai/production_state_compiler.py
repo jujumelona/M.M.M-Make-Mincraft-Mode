@@ -74,10 +74,10 @@ def _decode_scalar_text(value: str) -> str:
 
 def _extract_known_field(record_text: str, field: str) -> str:
     pattern = (
-        r'(?is)(?:^|[,;\n{])\s*["\\']?'
+        r'(?is)(?:^|[,;\n{])\s*"?'
         + re.escape(field)
-        + r'["\\']?\s*[:=]\s*'
-        + r'("(?:\\.|[^"\\])*"|\\'(?:\\.|[^\\'\\])*\\'|[^,;\n}]+)'
+        + r'"?\s*[:=]\s*'
+        + r'("(?:\\.|[^"\\])*"|[^,;\n}]+)'
     )
     match = re.search(pattern, record_text)
     return _decode_scalar_text(match.group(1)) if match is not None else ""
@@ -89,7 +89,7 @@ def _parse_semantic_page(raw: str, *, fields: Sequence[str]) -> tuple[list[dict[
     text = re.sub(r'^```(?:text|json)?\s*', '', text, flags=re.IGNORECASE)
     text = re.sub(r'\s*```$', '', text)
     status = re.search(
-        r'(?im)(?:complete["\\']?\s*[:=]\s*(true|false|yes|no|1|0)|^\s*STATUS\s*[:=]?\s*(COMPLETE|MORE)\s*$)',
+        r'(?im)(?:complete"?\s*[:=]\s*(true|false|yes|no|1|0)|^\s*STATUS\s*[:=]?\s*(COMPLETE|MORE)\s*$)',
         text,
     )
     token = next((part for part in status.groups() if part), '') if status else ''
@@ -103,7 +103,7 @@ def _parse_semantic_page(raw: str, *, fields: Sequence[str]) -> tuple[list[dict[
         blocks = [
             match.group(1)
             for match in re.finditer(r'\{([^{}]*)\}', text, flags=re.DOTALL)
-            if any(re.search(r'["\\']?' + re.escape(field) + r'["\\']?\s*[:=]', match.group(1), re.I) for field in fields)
+            if any(re.search(r'"?' + re.escape(field) + r'"?\s*[:=]', match.group(1), re.I) for field in fields)
         ]
     if not blocks:
         blocks = [text]
