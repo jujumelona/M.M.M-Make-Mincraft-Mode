@@ -72,18 +72,24 @@ def test_ten_section_dag_preserves_objects_through_handoff():
     calls = []
 
     class Router:
-        def generate_text(self, role, messages, **kwargs):
+        def generate_text(self, *_args, **_kwargs):
+            raise AssertionError("worksheet generation must use native structured decisions")
+
+        def generate_tool_decision(
+            self, role, messages, *, tool_name, parameters, description=""
+        ):
+            assert role == "planner"
+            assert tool_name.startswith("submit_")
             section = messages[-1]["content"].split("Section: ", 1)[1].splitlines()[0]
-            schema = kwargs["response_schema"]
             full = row(section)
             payload: dict = {}
-            for prop, prop_schema in schema.get("properties", {}).items():
+            for prop, prop_schema in parameters.get("properties", {}).items():
                 if prop == "constraint_evidence_refs":
                     payload[prop] = full.get(prop, [])
                 elif prop == "inapplicable_concerns":
                     payload[prop] = [
                         item for item in full["specification"].get("inapplicable_concerns", [])
-                        if item["concern"] in schema.get("properties", {})
+                        if item["concern"] in parameters.get("properties", {})
                     ]
                 elif prop in full["specification"]:
                     allowed_fields = set(
@@ -97,10 +103,9 @@ def test_ten_section_dag_preserves_objects_through_handoff():
                         }
                         for item in full["specification"][prop]
                     ]
-            Draft202012Validator(schema).validate(payload)
-            assert kwargs["response_format"] == "json" and kwargs["enable_tools"] is False
+            Draft202012Validator(parameters).validate(payload)
             calls.append(section)
-            return json.dumps(payload)
+            return payload
 
     requirement = {"requirement_id": "req_001", "statement": "Gather a resource."}
     state = {
@@ -121,12 +126,13 @@ def test_invalid_chunk_fails_after_one_generation_without_repair_retry():
         def __init__(self) -> None:
             self.calls = 0
 
-        def generate_text(self, role, messages, **kwargs):
+        def generate_tool_decision(
+            self, role, messages, *, tool_name, parameters, description=""
+        ):
             self.calls += 1
             assert role == "planner"
-            assert kwargs["response_format"] == "json"
-            assert kwargs["enable_tools"] is False
-            return "{"
+            assert tool_name == "submit_behavior_contract_1_chunk"
+            raise ValueError("invalid native structured decision")
 
     router = Router()
     requirement = {
@@ -135,7 +141,7 @@ def test_invalid_chunk_fails_after_one_generation_without_repair_retry():
         "acceptance": [],
     }
 
-    with pytest.raises(RuntimeError, match="structured output is invalid"):
+    with pytest.raises(RuntimeError, match="invalid native structured decision"):
         planning._compile_worksheet_section(
             router,
             requirement=requirement,
