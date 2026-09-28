@@ -126,6 +126,38 @@ def test_small_model_backend_cannot_fall_back_to_unowned_custom_generation() -> 
         build_production_work_plan(strict)
 
 
+def test_small_model_backend_with_canonical_owner_never_creates_custom_stage() -> None:
+    legacy = _proposal(1)
+    module = legacy.modules[0]
+    context_id = legacy.base_proposal.spec.platform.version_context.context_id
+    strict = complete_proposal_from_parts(
+        requested_prompt=legacy.requested_prompt,
+        base_proposal=legacy.base_proposal,
+        game_design={
+            **legacy.game_design,
+            "_small_model_backend": {
+                "mode": "bounded_semantic_ir_to_canonical_artifacts",
+                "free_form_java": False,
+            },
+            "_artifact_jobs": [
+                {
+                    "job_id": module.module_id + ".canonical",
+                    "owner_module": module.module_id,
+                    "canonical_leaf": "minecraft/item/register",
+                    "context_id": context_id,
+                }
+            ],
+        },
+        modules=legacy.modules,
+        acceptance_tests=legacy.acceptance_tests,
+    )
+
+    plan = build_production_work_plan(strict)
+
+    assert any(node.stage == "generate:content" for node in plan.nodes)
+    assert all(node.stage != "generate:custom" for node in plan.nodes)
+
+
 def test_large_proposal_becomes_more_bounded_shards_without_global_cap() -> None:
     proposal = _proposal(20_000)
     policy = ScalePolicy(java_shard_size=37)
