@@ -280,6 +280,35 @@ def test_multiword_state_expression_is_canonicalized_before_host_parser():
     assert '"Ready To Launch"' in java
 
 
+def test_state_variable_spellings_resolve_to_declared_identity():
+    variables = {
+        "fuel_amount": {
+            "name": "fuel_amount",
+            "owner": "player",
+            "type": "double",
+            "unit": "fuel",
+            "default": "100",
+            "domain": "number",
+        }
+    }
+
+    spaced = _normalize_expression(
+        "Fuel Amount >= 10",
+        aliases={},
+        variables=variables,
+        fallback="false",
+    )
+    camel = _normalize_expression(
+        "fuelAmount >= 10",
+        aliases={},
+        variables=variables,
+        fallback="false",
+    )
+
+    assert spaced == "fuel_amount >= 10"
+    assert camel == "fuel_amount >= 10"
+
+
 def test_irreducible_state_condition_fails_closed_instead_of_crashing():
     variables = {
         "fuel_amount": {
