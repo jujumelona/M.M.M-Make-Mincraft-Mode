@@ -800,18 +800,23 @@ class GradleRunner:
                     else:
                         line = _redact_text(raw)
                     log.write(line)
-                    log.flush()
-                    emit_root_cause(
-                        "gradle_command_output",
-                        stage="verify",
-                        operation=name,
-                        result="INFO",
-                        details={
-                            "pid": process.pid,
-                            "log_path": str(log_path),
-                            "line": line.rstrip(),
-                        },
-                    )
+                    if os.environ.get("MMM_GRADLE_TRACE_OUTPUT", "").strip().casefold() in {
+                        "1",
+                        "true",
+                        "yes",
+                        "on",
+                    }:
+                        emit_root_cause(
+                            "gradle_command_output",
+                            stage="verify",
+                            operation=name,
+                            result="INFO",
+                            details={
+                                "pid": process.pid,
+                                "log_path": str(log_path),
+                                "line": line.rstrip(),
+                            },
+                        )
         except Exception as exc:
             reader_errors.append(exc)
             emit_root_cause(
