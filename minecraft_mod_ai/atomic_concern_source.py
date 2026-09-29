@@ -1992,7 +1992,6 @@ def _messages(
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False, sort_keys=True)},
     ]
 
-@dataclass
 def _compile_report_timed_out(report: Any) -> bool:
     if str(getattr(report, "status", "") or "").strip().upper() == "TIMEOUT":
         return True
@@ -2025,6 +2024,7 @@ def _compile_timeout_message(report: Any) -> str:
     )
 
 
+@dataclass
 class AtomicConcernExecutor:
     root: Path
     target: Path
