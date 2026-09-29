@@ -608,15 +608,6 @@ _ATOMIC_MEMBERS_PARAMETERS: dict[str, Any] = {
         "classes": {"type": "array", "items": _ATOMIC_CLASS_SCHEMA},
         "fields": {"type": "array", "items": _ATOMIC_FIELD_SCHEMA},
         "methods": {"type": "array", "items": _ATOMIC_OUTER_METHOD_SCHEMA},
-        "static_initializers": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {"body": {"type": "array", "items": {"type": "string"}}},
-                "required": [],
-                "additionalProperties": True,
-            },
-        },
     },
     "required": [],
     "additionalProperties": True,
@@ -626,19 +617,12 @@ _ATOMIC_LOGIC_MEMBERS_PARAMETERS: dict[str, Any] = {
     "properties": {
         "fields": {"type": "array", "items": _ATOMIC_FIELD_SCHEMA},
         "methods": {"type": "array", "items": _ATOMIC_OUTER_METHOD_SCHEMA},
-        "static_initializers": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {"body": {"type": "array", "items": {"type": "string"}}},
-                "required": [],
-                "additionalProperties": True,
-            },
-        },
     },
     "required": [],
     "additionalProperties": False,
 }
+# Static initializer blocks are host-owned lifecycle structure. Concern models
+# may emit fields/methods/local helper types, but never class initialization blocks.
 _ATOMIC_TYPE_OWNING_CONCERNS = frozenset(
     {"variables", "inputs", "outputs", "stored_state", "payloads"}
 )
