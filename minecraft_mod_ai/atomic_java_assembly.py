@@ -32,14 +32,6 @@ from .model_output_atomicity_contract import (
 
 MAX_ASSEMBLY_CALLS = 128
 MAX_PART_ITEMS = 32
-MAX_NATIVE_TOOL_DECISION_ATTEMPTS = 3
-_MODIFIERS = {
-    "fields": ["public", "protected", "private", "static", "final", "volatile", "transient"],
-    "methods": ["public", "protected", "private", "static", "final", "synchronized"],
-    "classes": ["public", "protected", "private", "static", "final", "abstract"],
-    "records": ["public", "protected", "private", "static"],
-    "enums": ["public", "protected", "private", "static"],
-}
 _TYPE_PATTERN = (
     r"^(?!.*\b(?:public|protected|private|static|final|volatile|transient|"
     r"abstract|synchronized|native)\b)[A-Za-z_$][A-Za-z0-9_$.,<>?\[\] @]*$"
@@ -60,7 +52,10 @@ def _scalar_schema(schema: Mapping[str, Any], key: str) -> dict[str, Any]:
         )
         if key in {"type", "return_type"}:
             result["pattern"] = _TYPE_PATTERN
-            result["description"] = "Java type only; modifiers belong exclusively in modifiers."
+            result["description"] = (
+                "Java type only. Declaration visibility and modifier semantics are separate "
+                "typed scalar fields owned by the structured schema; never include modifiers here."
+            )
         elif key == "initializer":
             # Qwen native tool calls naturally encode literal booleans/numbers/null as
             # JSON scalars. Accept those transport forms and canonicalize them to Java
@@ -103,27 +98,6 @@ def _normalize_java_scalar_arguments(value: Mapping[str, Any]) -> dict[str, Any]
             separators=(",", ":"),
         )
     return result
-
-
-def _native_rejection_feedback(exc: NativeToolDecisionRejected) -> dict[str, Any]:
-    rejections: list[dict[str, str]] = []
-    for item in exc.rejections[:4]:
-        compact: dict[str, str] = {}
-        for key in ("failure_code", "error", "raw_arguments"):
-            raw = item.get(key)
-            if raw is not None and str(raw).strip():
-                compact[key] = str(raw)[:1024]
-        if compact:
-            rejections.append(compact)
-    return {
-        "instruction": (
-            "The previous emit_java_part call failed native schema validation. "
-            "Correct only the current assembly.path and match the supplied JSON schema exactly. "
-            "For enum-valued fields emit exactly one listed enum token per call; never emit "
-            "a Java declaration, type, name, or semicolon in that scalar."
-        ),
-        "rejections": rejections,
-    }
 
 
 def _assembly_context(value: Any, selected_path: list, path: tuple = ()) -> Any:
@@ -232,8 +206,11 @@ class JavaStructureAssembly:
                 "For part selection choose a needed part or done when this enclosing object is complete. "
                 "A body value is one complete Java statement or balanced control-flow block, "
                 "not a fragment of JSON or a partial brace. Split long logic into named helper methods. "
-                "For a declaration, type/return_type contains only a Java type, never modifiers. "
-                "The host adds static to outer fields/methods. Omit unnecessary optional scalar values. "
+                "For a declaration, type/return_type contains only a Java type. "
+                "Visibility and Java modifier intent are separate typed scalar fields such as visibility/is_final/"
+                "is_static/is_synchronized; never serialize a declaration into any of them. "
+                "The host adds static to outer fields/methods and owns nested-type visibility. "
+                "Omit unnecessary optional scalar values. "
                 "A field marked final must have a declaration initializer and generated executable code must never "
                 "rebind a final field. Preserve generic types exactly. If an authoritative API returns Object, "
                 "do not directly return it from a narrower typed method; inspect/narrow the runtime value first. "
@@ -255,55 +232,7 @@ class JavaStructureAssembly:
                 f"OUTPUT_BUDGET_EXHAUSTED: Java assembly context needs decomposition ({size + 2048}>{budget})."
             )
         try:
-            native_rejection: NativeToolDecisionRejected | None = None
-            raw: Any = None
-            for native_attempt in range(1, MAX_NATIVE_TOOL_DECISION_ATTEMPTS + 1):
-                attempt_messages = messages
-                if native_rejection is not None:
-                    if self.calls >= MAX_ASSEMBLY_CALLS:
-                        raise OutputBudgetExhausted(
-                            "OUTPUT_BUDGET_EXHAUSTED: Java assembly call limit requires further decomposition."
-                        )
-                    self.calls += 1
-                    retry_payload = deepcopy(payload)
-                    retry_payload["assembly"] = dict(retry_payload["assembly"])
-                    retry_payload["assembly"]["remaining_calls"] = MAX_ASSEMBLY_CALLS - self.calls
-                    retry_payload["assembly"]["native_validation_failure"] = (
-                        _native_rejection_feedback(native_rejection)
-                    )
-                    attempt_messages = [
-                        messages[0],
-                        {
-                            "role": "user",
-                            "content": json.dumps(
-                                retry_payload,
-                                ensure_ascii=False,
-                                sort_keys=True,
-                            ),
-                        },
-                    ]
-                    retry_size = len(
-                        json.dumps(
-                            attempt_messages,
-                            ensure_ascii=False,
-                            separators=(",", ":"),
-                        ).encode("utf-8")
-                    )
-                    if retry_size + 2048 > budget:
-                        raise OutputBudgetExhausted(
-                            "OUTPUT_BUDGET_EXHAUSTED: Java assembly retry context "
-                            f"needs decomposition ({retry_size + 2048}>{budget})."
-                        )
-                try:
-                    raw = callback("coder", attempt_messages, **kwargs)
-                    break
-                except NativeToolDecisionRejected as exc:
-                    if native_attempt >= MAX_NATIVE_TOOL_DECISION_ATTEMPTS:
-                        raise AtomicJavaDecisionError(
-                            f"ATOMIC_JAVA_ASSEMBLY_INVALID: {path}: {exc}",
-                            response=exc.rejections,
-                        ) from exc
-                    native_rejection = exc
+            raw = callback("coder", messages, **kwargs)
             values = tuple(raw) if use_multi else (raw,)
             if not values:
                 raise AtomicJavaDecisionError(
@@ -321,10 +250,10 @@ class JavaStructureAssembly:
                 Draft202012Validator(schema).validate(normalized)
                 validated.append(normalized)
             return tuple(validated)
-        except ValidationError as exc:
+        except (NativeToolDecisionRejected, ValidationError) as exc:
             raise AtomicJavaDecisionError(
                 f"ATOMIC_JAVA_ASSEMBLY_INVALID: {path}: {exc}",
-                response=exc.instance,
+                response=getattr(exc, "rejections", getattr(exc, "instance", None)),
             ) from exc
         except AtomicJavaDecisionError:
             raise
@@ -500,24 +429,6 @@ class JavaStructureAssembly:
                     self._object(item_schema, item, item_path)
             else:
                 scalar = _scalar_schema(item_schema, selected)
-                if selected == "modifiers":
-                    owner_kind = str(path[-2]) if len(path) >= 2 else ""
-                    allowed_modifiers = list(_MODIFIERS.get(owner_kind, []))
-                    # Blank final fields are a compile-time trap. The structured
-                    # generator may select final only after it has supplied a
-                    # declaration initializer for this exact field.
-                    if (
-                        owner_kind == "fields"
-                        and not str(target.get("initializer") or "").strip()
-                    ):
-                        allowed_modifiers = [
-                            item for item in allowed_modifiers if item != "final"
-                        ]
-                    scalar["enum"] = allowed_modifiers
-                    scalar["description"] = (
-                        "Emit exactly one Java modifier token per native call from this enum; "
-                        "never emit a declaration, type, field name, or semicolon."
-                    )
                 emitted = self._ask_many(
                     _closed({"value": scalar}, ["value"]),
                     [*path, selected],
