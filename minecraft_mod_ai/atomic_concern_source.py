@@ -18,6 +18,7 @@ from .java_region_parser import (
     JavaRegionParseError,
     admit_initialize_region,
     admit_member_region,
+    class_body_chunks,
     strict_initialize_statements,
     strict_member_chunks,
 )
@@ -342,7 +343,7 @@ def _split_top_level(value: str, delimiter: str) -> list[str]:
 def _top_level_member_chunks(value: str) -> tuple[str, ...]:
     """Return Java class-body members from the Tree-sitter Java AST."""
     try:
-        return strict_member_chunks(value)
+        return class_body_chunks(value)
     except JavaRegionParseError as exc:
         raise CustomModuleGenerationError(
             f"ATOMIC_CONCERN_JAVA_PARSE_INVALID: {exc}"
