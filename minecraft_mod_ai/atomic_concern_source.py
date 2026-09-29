@@ -1880,12 +1880,8 @@ def _messages(
         "earlier concerns: use their exact symbol spelling, declared type, signature, "
         "and mutability. Never treat an object/record field as a primitive, never assign "
         "to a field declared final, and never invent a sibling symbol that is not listed. "
-        "When repair_failure is present it comes from the real compiler and is authoritative: "
-        "read every diagnostic and the cited current source lines, then correct every reported "
-        "compile failure in current_selected_region_source before making any unrelated change. "
-        "Re-check definite assignment of final fields, final-field rebinding, Object-to-generic/container "
-        "type narrowing, canonical JDK packages, raw/unchecked collections, and exact sibling signatures. "
-        "Do not implement sibling concerns. "
+        "This is the only production decode for this concern. There is no compiler-repair decode. "
+        "Resolve every supplied semantic/API fact before emitting source, and do not implement sibling concerns. "
         + (
             "This section is pure Java domain logic. Do not reference net.minecraft.*, "
             "net.fabricmc.*, registries, resource identifiers, packets, lifecycle hooks, or "
@@ -2538,42 +2534,37 @@ class AtomicConcernExecutor:
                 "repair_count": 0,
             }
 
-        repair_limit = _compile_repair_limit()
         for concern in self.ordered:
             name = _slug(concern["concern"])
-            self.seen_failures.clear()
             self._apply(concern)
             report = self._compile()
-            concern_repairs = 0
-            while getattr(report, "status", "") != "PASS":
-                if concern_repairs >= repair_limit:
-                    failure = self.compile_log(report) or str(
-                        getattr(report, "error", "") or "Gradle compileJava failed."
-                    )
-                    failing_name = _failure_concern(
-                        self.source,
-                        log=failure,
+            if getattr(report, "status", "") != "PASS":
+                if _compile_report_timed_out(report):
+                    raise CustomModuleGenerationError(_compile_timeout_message(report))
+                failure = self.compile_log(report) or str(
+                    getattr(report, "error", "") or "Gradle compileJava failed."
+                )
+                failing_name = _failure_concern(
+                    self.source,
+                    log=failure,
+                    relative=self.relative,
+                ) or name
+                raise CustomModuleGenerationError(
+                    "ATOMIC_CONCERN_FIRST_PASS_COMPILE_FAILED: "
+                    f"{failing_name} did not compile on its first generated source. "
+                    "Production does not invoke model repair.\n"
+                    + _compact_compiler_failure(
+                        failure,
+                        source=self.source,
                         relative=self.relative,
-                    ) or name
-                    raise CustomModuleGenerationError(
-                        "ATOMIC_CONCERN_COMPILE_RETRY_EXHAUSTED: "
-                        f"{failing_name} remained uncompilable after {repair_limit} "
-                        "bounded compiler-driven repairs.\n"
-                        + _compact_compiler_failure(
-                            failure,
-                            source=self.source,
-                            relative=self.relative,
-                            concern=failing_name,
-                        )
+                        concern=failing_name,
                     )
-                report = self._repair_once(report)
-                concern_repairs += 1
-            self.seen_failures.clear()
+                )
         return {
             "source": self.source,
             "summary": " | ".join(self.summaries),
             "concern_count": len(self.ordered),
-            "repair_count": self.repairs,
+            "repair_count": 0,
         }
 
 __all__ = [
