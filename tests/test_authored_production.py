@@ -19,53 +19,6 @@ from minecraft_mod_ai.scale_policy import ScalePolicy
 from minecraft_mod_ai.work_graph import build_production_work_plan
 
 
-def _structured_authority_fixture() -> dict[str, object]:
-    return {
-        "state_model": {
-            "specification": {
-                "variables": [{
-                    "name": "credits",
-                    "owner": "player",
-                    "type": "integer",
-                    "unit": "credits",
-                    "default": "0",
-                    "domain": "integer >= 0",
-                }],
-                "transitions": [],
-                "invariants": [],
-                "initialization": [],
-                "updates": [],
-                "cleanup": [],
-                "concurrency": [],
-                "inapplicable_concerns": [
-                    {"concern": name, "reason": "not required by fixture"}
-                    for name in (
-                        "transitions", "invariants", "initialization",
-                        "updates", "cleanup", "concurrency"
-                    )
-                ],
-            },
-            "constraint_evidence_refs": [],
-        }
-    }
-
-
-def _structured_plan(
-    prompt: str,
-    text: str,
-    *,
-    existing_input_sha256: str = "",
-    media_paths: tuple[str, ...] = (),
-) -> AuthoredPlan:
-    return AuthoredPlan(
-        prompt,
-        text,
-        existing_input_sha256=existing_input_sha256,
-        media_paths=media_paths,
-        structured_sections=_structured_authority_fixture(),
-    )
-
-
 @pytest.mark.parametrize("version", ["1.21.11", "26.2"])
 def test_existing_design_localization_preserves_target_contract(version):
     from minecraft_mod_ai.custom_generation_research import _target_values
@@ -122,36 +75,9 @@ def test_existing_saved_text_uses_localization_without_replanning(monkeypatch, t
         for member in node.payload["members"]
     )
 
-def test_fresh_structured_authority_reaches_graph_request_losslessly():
-    plan = _structured_plan(
-        "space mod",
-        "# state_model\n- variables: credits\n",
-    )
-
-    proposal = CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(plan)
-
-    request = proposal.modules[0].config["implementation_graph_request"]
-    assert request["structured_sections"] == plan.structured_sections
-    expected = "sha256:" + hashlib.sha256(
-        json.dumps(
-            plan.structured_sections,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        ).encode("utf-8")
-    ).hexdigest()
-    assert request["structured_sections_sha256"] == expected
-
-
 def test_fresh_authored_execution_defers_source_ownership_until_ir():
-    plan = _structured_plan(
-        "space mod",
-        "# Design\n## Wallet\nPersist credits.\n## Purchase\nSpend credits.",
-    )
-    modules, manifest = _compile_new_authored_modules(
-        plan, mod_id="authored_test", package_name="example", target={}
-    )
+    plan = AuthoredPlan("space mod", "# Design\n## Wallet\nPersist credits.\n## Purchase\nSpend credits.")
+    modules, manifest = _compile_new_authored_modules(plan, mod_id="authored_test", package_name="example", target={})
     assert manifest["units"] == []
     assert len(modules) == 1
     task = modules[0].config["evidence_task"]
@@ -332,12 +258,7 @@ def test_single_generic_wrapper_metadata_attaches_to_first_child_feature():
 
 def test_fresh_authored_document_sections_are_provenance_not_source_units():
     text = "# Economy\nCredits and trade.\n# Ships\nParts and upgrades.\n# Verification\nCheck failures."
-    modules, manifest = _compile_new_authored_modules(
-        _structured_plan("space mod", text),
-        mod_id="authored_test",
-        package_name="example",
-        target={},
-    )
+    modules, manifest = _compile_new_authored_modules(AuthoredPlan("space mod", text), mod_id="authored_test", package_name="example", target={})
     assert manifest["unit_count"] == 0
     assert modules[0].config["implementation_graph_request"]["text"] == text
     assert "AuthoredFeature" not in json.dumps(manifest)
@@ -386,10 +307,7 @@ def test_oversized_semantic_authored_section_is_not_split_by_bytes():
 def test_fresh_authored_work_graph_schedules_ir_execution_after_project_preparation(monkeypatch):
     monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "2")
     proposal = CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(
-        _structured_plan(
-            "space mod",
-            "# Economy\nCredits.\n# Ships\nParts.\n# Planets\nMining.",
-        )
+        AuthoredPlan("space mod", "# Economy\nCredits.\n# Ships\nParts.\n# Planets\nMining.")
     )
     graph = build_production_work_plan(
         proposal,
@@ -402,12 +320,8 @@ def test_fresh_authored_work_graph_schedules_ir_execution_after_project_preparat
     assert custom[0].payload["members"][0]["module_id"] == "authored_implementation_graph"
 
 def test_authored_scaffold_defers_source_materialization_until_ir(tmp_path):
-    modules, manifest = _compile_new_authored_modules(
-        _structured_plan("space mod", "Economy, ships, planets"),
-        mod_id="authored_test",
-        package_name="example",
-        target={},
-    )
+    modules, manifest = _compile_new_authored_modules(AuthoredPlan("space mod", "Economy, ships, planets"),
+        mod_id="authored_test", package_name="example", target={})
     proposal = SimpleNamespace(game_design={"_authored_execution_manifest": manifest})
     main = tmp_path / manifest["entrypoint"]["path"]
     main.parent.mkdir(parents=True)
@@ -686,7 +600,6 @@ def test_compiler_projects_reasoning_before_both_production_routes(prefix, desig
         prefix + design,
         existing_input_sha256="sha256:" + "a" * 64 if existing else "",
         media_paths=("reference.png",),
-        structured_sections=_structured_authority_fixture(),
     )
     proposal = CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(plan)
     saved = proposal.game_design["authored_plan"]
@@ -741,7 +654,7 @@ def test_compiler_projects_reasoning_before_both_production_routes(prefix, desig
      "# behavior_contract\nRender the manual unchanged.\n"),
 ])
 def test_compiler_preserves_ambiguous_or_quoted_reasoning_text(text):
-    plan = _structured_plan("Space mod for Fabric 1.21.11", text)
+    plan = AuthoredPlan("Space mod for Fabric 1.21.11", text)
     proposal = CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(plan)
     assert proposal.game_design["authored_plan"] == plan.to_dict()
     assert "_authored_source_projection" not in proposal.game_design
