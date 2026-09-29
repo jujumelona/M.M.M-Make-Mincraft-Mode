@@ -1691,6 +1691,17 @@ def _bounded_grounding(
         # Hiding unrelated API symbols prevents a coder from "helpfully" adding
         # registry/Identifier plumbing that the authored concern never requested.
         host_version_facts.pop("api_symbols", None)
+    implementation_ir = direct_payload.get("implementation_ir_node")
+    implementation_contract = {}
+    if isinstance(implementation_ir, Mapping):
+        implementation_contract = {
+            "symbol": str(implementation_ir.get("symbol") or ""),
+            "public_api": [
+                str(value)
+                for value in implementation_ir.get("public_api") or ()
+                if str(value).strip()
+            ],
+        }
     return {
         "schema_version": grounding.get("schema_version"),
         "artifact_kind": grounding.get("artifact_kind"),
@@ -1698,6 +1709,7 @@ def _bounded_grounding(
         "policy": dict(grounding.get("policy") or {}),
         "platform": dict(direct_payload.get("platform") or {}),
         "host_version_facts": host_version_facts,
+        "implementation_contract": implementation_contract,
     }
 
 
