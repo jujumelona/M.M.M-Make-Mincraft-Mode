@@ -14,6 +14,7 @@ from typing import Any
 
 from .authored_ir_parser import slice_concern_requirements
 from .custom_module_errors import AtomicJavaDecisionError, CustomModuleGenerationError
+from .generation_implementation_grounding import render_generation_implementation_authority_prompt
 from .java_region_parser import (
     JavaRegionParseError,
     admit_initialize_region,
@@ -1919,6 +1920,7 @@ def _messages(
             else []
         ),
         "host_grounding": _bounded_grounding(grounding, section=section),
+        "implementation_authority": render_generation_implementation_authority_prompt(grounding),
         "dependency_api": _dependency_api_context(dependency_source),
         "current_selected_region_source": _region_content(
             current_source,
