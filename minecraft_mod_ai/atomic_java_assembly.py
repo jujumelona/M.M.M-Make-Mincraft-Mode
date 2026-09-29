@@ -38,11 +38,11 @@ _TYPE_PATTERN = (
 )
 
 _EXECUTABLE_SCALAR_PATTERN = (
-    r"^(?![\\s\\S]*\\b(?:package|import)\\s+[A-Za-z_$])"
-    r"(?![\\s\\S]*\\b(?:class|interface|enum|record)\\s+[A-Za-z_$])"
-    r"(?![\\s\\S]*\\b(?:public|protected|private)\\s+(?:static\\s+)?"
-    r"[A-Za-z_$][A-Za-z0-9_$.,<>?\\[\\] ]*\\s+[A-Za-z_$][A-Za-z0-9_$]*\\s*\\()"
-    r"(?!\\s*static\\s*\\{)[\\s\\S]*$"
+    r"^(?![\s\S]*\b(?:package|import)\s+[A-Za-z_$])"
+    r"(?![\s\S]*\b(?:class|interface|enum|record)\s+[A-Za-z_$])"
+    r"(?![\s\S]*\b(?:public|protected|private)\s+(?:static\s+)?"
+    r"[A-Za-z_$][A-Za-z0-9_$.,<>?\[\] ]*\s+[A-Za-z_$][A-Za-z0-9_$]*\s*\()"
+    r"(?!\s*static\s*\{)[\s\S]*$"
 )
 
 
