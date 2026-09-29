@@ -156,6 +156,19 @@ class JavaStructureAssembly:
         self.calls += 1
         payload = {key: value for key, value in self.payload.items()
                    if key not in {"generation_recipe", "scope"}}
+        recipe = self.payload.get("generation_recipe")
+        if isinstance(recipe, Mapping):
+            payload["compiler_contract"] = {
+                "first_pass_goal": recipe.get("first_pass_goal"),
+                "rules": list(recipe.get("compiler_first_rules") or ()),
+                "jdk_package_anchors": dict(recipe.get("jdk_package_anchors") or {}),
+                "sibling_api_is_authoritative": bool(
+                    recipe.get("sibling_api_is_authoritative")
+                ),
+                "never_mutate_final_sibling_fields": bool(
+                    recipe.get("never_mutate_final_sibling_fields")
+                ),
+            }
         payload["assembly"] = {
             "path": path,
             "purpose": purpose,
@@ -185,8 +198,14 @@ class JavaStructureAssembly:
                 "Fill only the current assembly.path using the supplied scalar schema. "
                 "The host constructs objects/arrays; never serialize them into strings. "
                 "When the current path is a sibling batch, emit one function call per sibling item. "
-                "Keep the authored requirements, dependency_api and available_sibling_api authoritative. "
-                "Reuse exact sibling declarations; do not redeclare them or change their types/defaults. "
+                "Keep the authored requirements, dependency_api, available_sibling_api, and "
+                "compiler_contract authoritative. The target is first-pass compilable Java, not code that "
+                "expects a compiler-repair round. Reuse exact sibling declarations; do not redeclare them "
+                "or change their types/defaults. Never reassign a final sibling or concern-local final field. "
+                "If a field is final, initialize it at declaration time. If an authoritative API returns Object "
+                "but this method needs a narrower generic/container type, narrow with an explicit runtime type "
+                "check and a type-compatible fallback; never use a raw/unchecked cast as a shortcut. "
+                "Use canonical JDK packages; Lock/ReentrantLock live in java.util.concurrent.locks. "
                 "Accepted structure and enclosing declarations remain fixed. "
                 "For part selection choose a needed part or done when this enclosing object is complete. "
                 "A body value is one complete Java statement or balanced control-flow block, "
