@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from contextlib import nullcontext
 from itertools import pairwise
@@ -797,3 +798,54 @@ def test_implementation_graph_rejects_structured_authority_hash_drift():
         match="STRUCTURED_AUTHORITY_HASH_MISMATCH",
     ):
         graph_execution._normalize_implementation_graph_request(request)
+
+
+def test_implementation_graph_boundary_canonicalizes_structured_state_authority():
+    from minecraft_mod_ai.authored_structured_design import render_structured_sections
+
+    structured = {
+        "state_model": {
+            "specification": {
+                "variables": [
+                    {
+                        "name": "credits",
+                        "owner": "player",
+                        "type": "double",
+                        "unit": "credits",
+                        "default": "0",
+                        "domain": "number",
+                    }
+                ],
+                "transitions": [],
+                "invariants": [
+                    {
+                        "condition": "credits >= 0 AND ready = true",
+                        "enforcement": "reject",
+                    }
+                ],
+                "initialization": [],
+                "updates": [],
+                "cleanup": [],
+                "concurrency": [],
+                "inapplicable_concerns": [],
+            },
+            "constraint_evidence_refs": [],
+        }
+    }
+    raw = json.dumps(
+        structured,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    request = {
+        "structured_sections": structured,
+        "structured_sections_sha256": "sha256:" + hashlib.sha256(raw).hexdigest(),
+        "text": render_structured_sections(structured),
+    }
+
+    normalized = graph_execution._normalize_implementation_graph_request(request)
+    state = normalized["production_state_section"]["specification"]
+
+    assert state["invariants"][0]["condition"] == "credits >= 0 && ready == true"
+    assert normalized["structured_sections"] == structured
