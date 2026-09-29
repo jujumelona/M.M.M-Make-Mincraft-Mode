@@ -382,6 +382,9 @@ def test_ir_atomic_concerns_are_isolated_and_compiled_as_one_host_file(
 
         def generate_tool_decision(self, role, messages, **kwargs):
             assert role == "coder"
+            part_schema = kwargs["parameters"].get("properties", {}).get("part")
+            if isinstance(part_schema, dict):
+                assert "static_initializers" not in part_schema.get("enum", ())
             payload = json.loads(messages[-1]["content"])
             concern = payload["concern"]["name"]
             calls.append((concern, dict(kwargs)))
@@ -433,7 +436,10 @@ def test_atomic_concern_compile_repair_reopens_only_localized_concern(
             self.responses = iter(responses)
 
         def generate_tool_decision(self, role, messages, **kwargs):
-            del role, kwargs
+            del role
+            part_schema = kwargs["parameters"].get("properties", {}).get("part")
+            if isinstance(part_schema, dict):
+                assert "static_initializers" not in part_schema.get("enum", ())
             payload = json.loads(messages[-1]["content"])
             concern = payload["concern"]["name"]
             calls.append((concern, bool(payload.get("repair_failure"))))
