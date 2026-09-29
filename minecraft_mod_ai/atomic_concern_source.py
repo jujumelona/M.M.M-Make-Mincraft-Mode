@@ -1874,7 +1874,19 @@ def _deterministic_state_variable_members(
 
 
 _PURE_JAVA_DOMAIN_SECTIONS = frozenset(
-    {"behavior_contract", "state_model", "algorithm", "failure_and_limits"}
+    {
+        "behavior_contract",
+        "state_model",
+        "algorithm",
+        "persistence",
+        "failure_and_limits",
+    }
+)
+_PLATFORM_BOUND_SECTIONS = frozenset(
+    {"authority_and_network", "resources_and_ui", "integration"}
+)
+_PLATFORM_FQN = re.compile(
+    r"\b(?:net\.minecraft|net\.fabricmc)(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+"
 )
 
 
@@ -1911,6 +1923,94 @@ def _bounded_grounding(
         "host_version_facts": host_version_facts,
         "implementation_contract": implementation_contract,
     }
+
+
+def _approved_platform_owners(grounding: Mapping[str, Any]) -> tuple[str, ...]:
+    owners: set[str] = set()
+
+    def add_owner(value: Any) -> None:
+        owner = str(value or "").strip().replace("/", ".")
+        if owner.startswith(("net.minecraft.", "net.fabricmc.")):
+            owners.add(owner.split("$", 1)[0])
+
+    for fact in grounding.get("facts") or ():
+        if not isinstance(fact, Mapping):
+            continue
+        for owner in fact.get("required_imports") or ():
+            add_owner(owner)
+        symbols = fact.get("api_symbols")
+        if isinstance(symbols, Mapping):
+            for raw in symbols.values():
+                if isinstance(raw, Mapping):
+                    add_owner(raw.get("owner"))
+
+    direct = grounding.get("direct_host_context")
+    if isinstance(direct, Mapping):
+        host = direct.get("host_version_facts")
+        if isinstance(host, Mapping):
+            symbols = host.get("api_symbols")
+            if isinstance(symbols, Mapping):
+                for raw in symbols.values():
+                    if isinstance(raw, Mapping):
+                        add_owner(raw.get("owner"))
+    return tuple(sorted(owners))
+
+
+def _platform_owner_references(source: str) -> tuple[str, ...]:
+    refs: set[str] = set()
+    for match in _PLATFORM_FQN.finditer(_structure_scan(source)):
+        token = match.group(0)
+        parts = token.split(".")
+        owner_end = -1
+        for index, part in enumerate(parts):
+            if part and (part[0].isupper() or "$" in part):
+                owner_end = index
+        if owner_end >= 0:
+            refs.add(".".join(parts[: owner_end + 1]).split("$", 1)[0])
+    return tuple(sorted(refs))
+
+
+def _validate_platform_api_admission(
+    source: str,
+    *,
+    section: str,
+    grounding: Mapping[str, Any],
+) -> None:
+    refs = _platform_owner_references(source)
+    if not refs:
+        return
+
+    normalized_section = str(section or "").strip()
+    if normalized_section in _PURE_JAVA_DOMAIN_SECTIONS:
+        raise CustomModuleGenerationError(
+            "ATOMIC_CONCERN_PLATFORM_API_FORBIDDEN: "
+            f"{normalized_section} is host-classified pure Java and referenced "
+            f"platform owners {list(refs)!r}."
+        )
+
+    if normalized_section not in _PLATFORM_BOUND_SECTIONS:
+        raise CustomModuleGenerationError(
+            "ATOMIC_CONCERN_PLATFORM_API_FORBIDDEN: "
+            f"{normalized_section or '<unknown>'} does not own platform APIs."
+        )
+
+    approved = _approved_platform_owners(grounding)
+    unauthorized = tuple(
+        owner
+        for owner in refs
+        if not any(
+            owner == allowed
+            or owner.startswith(allowed + ".")
+            or allowed.startswith(owner + ".")
+            for allowed in approved
+        )
+    )
+    if unauthorized:
+        raise CustomModuleGenerationError(
+            "ATOMIC_CONCERN_UNGROUNDED_PLATFORM_API: "
+            f"{normalized_section} referenced unapproved target owners "
+            f"{list(unauthorized)!r}; approved owners={list(approved)!r}."
+        )
 
 
 def _dependency_context_rows(raw: str) -> tuple[dict[str, Any], ...]:
@@ -2075,7 +2175,12 @@ def _messages(
             "net.fabricmc.*, registries, resource identifiers, packets, lifecycle hooks, or "
             "game registration APIs. "
             if section in _PURE_JAVA_DOMAIN_SECTIONS
-            else "Use fully-qualified external API names when needed. "
+            else (
+                "This is a platform-bound section. You may reference net.minecraft.* or "
+                "net.fabricmc.* only when the exact owner is present in implementation_authority "
+                "or host_grounding. If no such owner is supplied, keep this concern platform-neutral "
+                "and use only JDK/dependency APIs. "
+            )
         )
         + "Use only supplied host grounding and dependency_api; never invent a Minecraft/Fabric API."
     )
@@ -2453,17 +2558,11 @@ class AtomicConcernExecutor:
                             f"{name} must contain only fields/private nested data types; "
                             f"found {list(kinds)!r}."
                         )
-                if (
-                    self.section in _PURE_JAVA_DOMAIN_SECTIONS
-                    and re.search(
-                        r"\b(?:net\.minecraft|net\.fabricmc)\.",
-                        _structure_scan(parsed),
-                    )
-                ):
-                    raise CustomModuleGenerationError(
-                        "ATOMIC_CONCERN_SCOPE_ESCAPE: pure Java domain concern "
-                        "referenced Minecraft/Fabric implementation APIs."
-                    )
+                _validate_platform_api_admission(
+                    parsed,
+                    section=self.section,
+                    grounding=self.grounding,
+                )
                 if failure and response_region == "members":
                     previous_region = _region_content(
                         self.source,
@@ -2497,6 +2596,8 @@ class AtomicConcernExecutor:
                         "ATOMIC_CONCERN_SYMBOL_COLLISION:",
                         "ATOMIC_CONCERN_OUTPUT_EXHAUSTED:",
                         "ATOMIC_CONCERN_SEMANTIC_SHAPE_INVALID:",
+                        "ATOMIC_CONCERN_PLATFORM_API_FORBIDDEN:",
+                        "ATOMIC_CONCERN_UNGROUNDED_PLATFORM_API:",
                     )
                 )
                 if not recoverable:
