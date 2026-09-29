@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 
 from minecraft_mod_ai.authored_plan import AuthoredPlan
-from minecraft_mod_ai.authored_structured_design import render_structured_sections
 from minecraft_mod_ai.authored_execution_schema import concern_contracts
 from minecraft_mod_ai.authored_production import _compile_new_authored_modules
 from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner
@@ -18,6 +17,16 @@ from minecraft_mod_ai.structured_state_runtime import (
     render_state_model_concern,
     validate_state_expression,
 )
+
+
+class PlanRouter:
+    def __init__(self, response: str):
+        self.response = response
+        self.calls = []
+
+    def generate_text(self, role, messages, **kwargs):
+        self.calls.append((role, messages, kwargs))
+        return self.response
 
 
 class ProductionStateRouter:
@@ -74,50 +83,20 @@ def _plan_text() -> str:
     )
 
 
-def test_plan_persists_structured_authority_instead_of_free_markdown(monkeypatch):
-    from minecraft_mod_ai import planning_state_implementation
-
-    structured = {
-        "state_model": {
-            "specification": {
-                "variables": [{
-                    "name": "credits",
-                    "owner": "player",
-                    "type": "integer",
-                    "unit": "credits",
-                    "default": "0",
-                    "domain": "integer >= 0",
-                }],
-                "transitions": [],
-                "invariants": [],
-                "initialization": [],
-                "updates": [],
-                "cleanup": [],
-                "concurrency": [],
-                "inapplicable_concerns": [
-                    {"concern": name, "reason": "not required by fixture"}
-                    for name in (
-                        "transitions", "invariants", "initialization",
-                        "updates", "cleanup", "concurrency"
-                    )
-                ],
-            },
-            "constraint_evidence_refs": [],
-        }
-    }
-    monkeypatch.setattr(
-        planning_state_implementation,
-        "compile_authored_worksheet",
-        lambda router, prompt: structured,
-    )
-    planner = CompleteGameDesignPlanner(object())
+def test_plan_remains_free_markdown_generation_without_structured_compiler():
+    router = PlanRouter(_plan_text())
+    planner = CompleteGameDesignPlanner(router)
 
     plan = planner.plan("make a space mod")
 
-    assert plan.structured_sections == structured
-    assert plan.text == render_structured_sections(structured)
-    assert plan.to_dict()["structured_sections"] == structured
-
+    assert plan.text == _plan_text()
+    assert plan.structured_sections == {}
+    assert len(router.calls) == 1
+    role, _messages, kwargs = router.calls[0]
+    assert role == "planner"
+    assert kwargs["response_format"] == "text"
+    assert kwargs["response_schema"] is None
+    assert kwargs["enable_tools"] is False
 
 def test_malformed_json_like_state_output_is_parsed_without_json_validation():
     raw = (
@@ -588,16 +567,10 @@ def test_production_state_sidecar_activates_state_leaf_without_text_anchor():
     assert payload["structured_records"] == section["specification"]["variables"]
 
 
-def test_production_state_is_sidecar_and_preserves_structured_authority():
+def test_production_state_is_sidecar_and_does_not_mutate_authored_plan():
     router = ProductionStateRouter()
-    prose = AuthoredPlan("make a space mod", _plan_text())
-    section = compile_production_state_section(router, prose)
-    structured = {"state_model": section}
-    original = AuthoredPlan(
-        "make a space mod",
-        render_structured_sections(structured),
-        structured_sections=structured,
-    )
+    original = AuthoredPlan("make a space mod", _plan_text())
+    section = compile_production_state_section(router, original)
 
     modules, _manifest = _compile_new_authored_modules(
         original,
@@ -609,10 +582,10 @@ def test_production_state_is_sidecar_and_preserves_structured_authority():
 
     request = modules[0].config["implementation_graph_request"]
     assert request["production_state_section"] == section
-    assert request["structured_sections"] == structured
+    assert request["structured_sections"] == {}
     assert request["structured_sections_sha256"].startswith("sha256:")
-    assert original.structured_sections == structured
-
+    assert original.text == _plan_text()
+    assert original.structured_sections == {}
 
 def test_lark_state_expression_accepts_word_logic_aggregates_and_implication():
     for expression in (
