@@ -1105,3 +1105,76 @@ def test_atomic_concern_cannot_redeclare_type_or_entrypoint() -> None:
     )
     with pytest.raises(direct.CustomModuleGenerationError, match="SCOPE_ESCAPE"):
         parse_concern_content(content, section="state_model")
+
+
+def test_atomic_sibling_map_generics_are_propagated_before_first_compile(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root, path, symbol = _project(tmp_path)
+    responses = iter(
+        [
+            (
+                "private static final java.util.Map<String, "
+                "java.util.Map<String, java.lang.Object>> FAILURE_RULES = "
+                "new java.util.HashMap<>();"
+            ),
+            (
+                "private static boolean failClosed() {\n"
+                "    for (java.util.Map.Entry<String, "
+                "java.util.Map<String, java.lang.Object>> entry "
+                ": FAILURE_RULES.entrySet()) {\n"
+                "        java.util.Map<String, java.lang.String> condition = "
+                "entry.getValue();\n"
+                "        if (condition.isEmpty()) { return false; }\n"
+                "    }\n"
+                "    return true;\n"
+                "}"
+            ),
+        ]
+    )
+    calls: list[str] = []
+    compiles = 0
+
+    class Router:
+        def generate_text(self, role, messages, **kwargs):
+            assert role == "coder"
+            assert kwargs.get("enable_tools") is False
+            payload = json.loads(messages[-1]["content"])
+            calls.append(payload["concern"]["name"])
+            return next(responses)
+
+        def generate_tool_decision(self, *_args, **_kwargs):
+            raise AssertionError("atomic production must use complete Java regions")
+
+    class Runner:
+        def __init__(self, _cache):
+            pass
+
+        def compile_java(self, project_root):
+            nonlocal compiles
+            compiles += 1
+            source = (project_root / path).read_text(encoding="utf-8")
+            if "failClosed()" in source:
+                assert (
+                    "java.util.Map<String, java.lang.Object> condition = "
+                    "entry.getValue();"
+                ) in source
+                assert (
+                    "java.util.Map<String, java.lang.String> condition"
+                    not in source
+                )
+            return SimpleNamespace(status="PASS", commands=(), error=None)
+
+    monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
+    monkeypatch.setattr(direct, "GradleRunner", Runner)
+
+    result = direct.CustomModuleGenerator(Router()).generate(
+        root,
+        module=_atomic_module(path, symbol),
+        minecraft_version="1.21.1",
+        loader="fabric",
+    )
+
+    assert calls == ["steps", "branches"]
+    assert compiles == 2
+    assert result["generation_verification"]["atomic_repair_count"] == 0

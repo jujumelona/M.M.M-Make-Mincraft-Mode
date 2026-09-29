@@ -904,6 +904,8 @@ def _render_canonical_declared_type(target: str, original: str) -> str:
 
 def _canonicalize_generated_jdk_semantics(
     value: str,
+    *,
+    authoritative_field_types: Mapping[str, str] | None = None,
 ) -> tuple[str, tuple[str, ...]]:
     """Canonicalize known JDK runtime types before the first compiler invocation.
 
@@ -1002,6 +1004,11 @@ def _canonicalize_generated_jdk_semantics(
         rendered.append(normalized_chunk)
 
     normalized = "\n\n".join(item.strip() for item in rendered if item.strip()).strip()
+    normalized, projection_changes = _rewrite_map_entry_projection_types(
+        normalized,
+        authoritative_field_types=dict(authoritative_field_types or {}),
+    )
+    changes.extend(projection_changes)
     if normalized != value and not changes:
         changes.append("canonical_jdk_fqcn")
     return normalized, tuple(changes)
@@ -2594,6 +2601,251 @@ def _member_declaration_summary(chunk: str) -> str:
     return re.sub(r"\s+", " ", source).strip()
 
 
+def _field_declared_type(chunk: str, field_name: str) -> str:
+    """Return the exact declared type for one single-field declaration."""
+
+    declaration = str(chunk or "").strip().rstrip(";").strip()
+    if not declaration or not field_name:
+        return ""
+    assignment = _top_level_assignment_index(declaration)
+    left = declaration[:assignment].strip() if assignment >= 0 else declaration
+    match = re.search(rf"\b{re.escape(field_name)}\s*$", left)
+    if match is None:
+        return ""
+    prefix = left[:match.start()].strip()
+    tokens = prefix.split()
+    while tokens and tokens[0] in _JAVA_MODIFIERS:
+        tokens.pop(0)
+    declared = " ".join(tokens).strip()
+    if not declared or "@" in declared:
+        return ""
+    return declared
+
+
+def _canonicalize_jdk_type_expression(value: str) -> str:
+    """Canonicalize known JDK raw types while preserving generic structure."""
+
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    if not text:
+        return ""
+    if text.startswith("?"):
+        for prefix in ("? extends ", "? super "):
+            if text.startswith(prefix):
+                return prefix + _canonicalize_jdk_type_expression(
+                    text[len(prefix):]
+                )
+        return text
+    start = text.find("<")
+    if start < 0:
+        return _canonical_jdk_class_name(text)
+    depth = 0
+    end = -1
+    for index in range(start, len(text)):
+        char = text[index]
+        if char == "<":
+            depth += 1
+        elif char == ">":
+            depth -= 1
+            if depth == 0:
+                end = index
+                break
+    if end < 0:
+        return text
+    raw = _canonical_jdk_class_name(text[:start].strip())
+    args = [
+        _canonicalize_jdk_type_expression(part)
+        for part in _split_top_level(text[start + 1:end], ",")
+        if part.strip()
+    ]
+    suffix = text[end + 1:].strip()
+    rendered = raw + "<" + ", ".join(args) + ">"
+    return rendered + ((" " + suffix) if suffix else "")
+
+
+def _generic_type_parts(value: str) -> tuple[str, tuple[str, ...]]:
+    text = _canonicalize_jdk_type_expression(value)
+    start = text.find("<")
+    if start < 0:
+        return text, ()
+    depth = 0
+    end = -1
+    for index in range(start, len(text)):
+        char = text[index]
+        if char == "<":
+            depth += 1
+        elif char == ">":
+            depth -= 1
+            if depth == 0:
+                end = index
+                break
+    if end < 0:
+        return text, ()
+    raw = text[:start].strip()
+    args = tuple(
+        part.strip()
+        for part in _split_top_level(text[start + 1:end], ",")
+        if part.strip()
+    )
+    return raw, args
+
+
+def _sibling_field_type_contracts(
+    source: str,
+    *,
+    sibling_concerns: Sequence[str],
+) -> dict[str, str]:
+    contracts: dict[str, str] = {}
+    for concern in sibling_concerns:
+        members = _region_content(source, concern=concern, region="MEMBERS")
+        for chunk in _top_level_member_chunks(members):
+            symbols = _member_declaration_symbols(chunk)
+            field_names = [
+                display
+                for key, display in symbols.items()
+                if key.startswith("field:")
+            ]
+            if len(field_names) != 1:
+                continue
+            field_name = field_names[0]
+            declared = _field_declared_type(chunk, field_name)
+            if declared:
+                contracts[field_name] = _canonicalize_jdk_type_expression(
+                    declared
+                )
+    return contracts
+
+
+def _map_type_arguments(value: str) -> tuple[str, str] | None:
+    raw, args = _generic_type_parts(value)
+    if raw not in {
+        "java.util.Map",
+        "java.util.HashMap",
+        "java.util.LinkedHashMap",
+        "java.util.concurrent.ConcurrentHashMap",
+    } or len(args) != 2:
+        return None
+    return args[0], args[1]
+
+
+def _map_entry_type_arguments(value: str) -> tuple[str, str] | None:
+    raw, args = _generic_type_parts(value)
+    if raw not in {"java.util.Map.Entry", "Map.Entry"} or len(args) != 2:
+        return None
+    return args[0], args[1]
+
+
+def _rewrite_map_entry_projection_types(
+    value: str,
+    *,
+    authoritative_field_types: Mapping[str, str],
+) -> tuple[str, tuple[str, ...]]:
+    """Propagate exact Map<K,V> generics through entrySet/getKey/getValue.
+
+    This is intentionally narrow: it changes only local types whose Java type is
+    mechanically determined by Map.entrySet(), Map.Entry.getKey(), or getValue().
+    """
+
+    source = str(value or "")
+    changes: list[str] = []
+    entry_types: dict[str, tuple[str, str]] = {}
+
+    loop_pattern = re.compile(
+        r"for\s*\(\s*(?P<entry_type>(?:java\.util\.)?Map\.Entry\s*<.+>)"
+        r"\s+(?P<entry_var>[A-Za-z_$][A-Za-z0-9_$]*)\s*:\s*"
+        r"(?P<map_var>[A-Za-z_$][A-Za-z0-9_$]*)\s*\.\s*entrySet\s*\(\s*\)\s*\)",
+        re.DOTALL,
+    )
+
+    def replace_loop(match: re.Match[str]) -> str:
+        entry_var = match.group("entry_var")
+        map_var = match.group("map_var")
+        candidate_entry = _map_entry_type_arguments(match.group("entry_type"))
+        authoritative_map = _map_type_arguments(
+            authoritative_field_types.get(map_var, "")
+        )
+        exact = authoritative_map or candidate_entry
+        if exact is None:
+            return match.group(0)
+        key_type, value_type = exact
+        entry_types[entry_var] = (key_type, value_type)
+        expected = (
+            "java.util.Map.Entry<"
+            + key_type
+            + ", "
+            + value_type
+            + ">"
+        )
+        actual = _canonicalize_jdk_type_expression(match.group("entry_type"))
+        if authoritative_map is None or actual == expected:
+            return match.group(0)
+        changes.append(
+            f"{entry_var}:entry_type:{actual}->{expected}"
+        )
+        original = match.group(0)
+        start, end = match.span("entry_type")
+        relative_start = start - match.start()
+        relative_end = end - match.start()
+        return original[:relative_start] + expected + original[relative_end:]
+
+    source = loop_pattern.sub(replace_loop, source)
+
+    for entry_var, (key_type, value_type) in tuple(entry_types.items()):
+        for accessor, expected_type in (
+            ("getKey", key_type),
+            ("getValue", value_type),
+        ):
+            pattern = re.compile(
+                rf"(?P<indent>^[ \t]*)(?P<declared>[^\n;=]+?)\s+"
+                rf"(?P<local>[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
+                rf"{re.escape(entry_var)}\s*\.\s*{accessor}\s*\(\s*\)\s*;",
+                re.MULTILINE,
+            )
+
+            def replace_projection(
+                match: re.Match[str],
+                *,
+                expected_type: str = expected_type,
+                accessor: str = accessor,
+            ) -> str:
+                declared = match.group("declared").strip()
+                modifier_prefix = ""
+                declared_type = declared
+                if declared_type.startswith("final "):
+                    modifier_prefix = "final "
+                    declared_type = declared_type[6:].strip()
+                actual = _canonicalize_jdk_type_expression(declared_type)
+                expected = _canonicalize_jdk_type_expression(expected_type)
+                if not expected or actual == expected:
+                    return match.group(0)
+                actual_raw, _actual_args = _generic_type_parts(actual)
+                expected_raw, _expected_args = _generic_type_parts(expected)
+                if actual_raw != expected_raw and actual not in {
+                    "java.lang.Object",
+                    "Object",
+                }:
+                    return match.group(0)
+                changes.append(
+                    f"{match.group('local')}:{entry_var}.{accessor}:"
+                    f"{actual}->{expected}"
+                )
+                return (
+                    match.group("indent")
+                    + modifier_prefix
+                    + expected
+                    + " "
+                    + match.group("local")
+                    + " = "
+                    + entry_var
+                    + "."
+                    + accessor
+                    + "();"
+                )
+
+            source = pattern.sub(replace_projection, source)
+
+    return source, tuple(changes)
+
+
 def _sibling_symbol_inventory(
     source: str,
     *,
@@ -2617,6 +2869,12 @@ def _sibling_symbol_inventory(
                     row["mutable"] = not bool(
                         re.search(r"\bfinal\b", declaration)
                     )
+                    declared_type = _field_declared_type(chunk, display)
+                    if declared_type:
+                        row["declared_type"] = (
+                            _canonicalize_jdk_type_expression(declared_type)
+                        )
+                        row["generic_type_is_authoritative"] = True
                 rows.append(row)
     return rows
 
@@ -2678,7 +2936,11 @@ def _messages(
         "current_selected_region_source is the only region you may replace. "
         "available_sibling_api contains authoritative compiled Java declarations from "
         "earlier concerns: use their exact symbol spelling, declared type, signature, "
-        "and mutability. Never treat an object/record field as a primitive, never assign "
+        "generic arguments, and mutability. Generic arguments are invariant authority: "
+        "never narrow Map<K,Object> to Map<K,String> or otherwise substitute a different "
+        "generic argument. For Map<K,V>.entrySet(), Map.Entry is exactly Map.Entry<K,V>, "
+        "getKey() is exactly K, and getValue() is exactly V. Never treat an object/record "
+        "field as a primitive, never assign "
         "to a field declared final, and never invent a sibling symbol that is not listed. "
         "Target a correct first production decode for this concern. Host semantic validation may "
         "request only a bounded regeneration of this same concern when the emitted shape is invalid; "
@@ -2766,8 +3028,10 @@ def _messages(
                 "A field declaration type must be assignment-compatible with its initializer, and every receiver method call must exist on that declared type. Never use Map/List/Object as a lock holder merely because the field also guards cached state.",
                 "Every concern-local final field must be definitely assigned before any read. Prefer initialization at the declaration; use a blank final only when the same region performs exactly one unconditional assignment in a static initializer.",
                 "Never reassign a final field. If the binding must change, declare a non-final field; if a final field holds a mutable container, mutate the container rather than rebinding the field.",
-                "Respect available_sibling_api types and mutability exactly; final sibling fields are read-only after declaration.",
-                "Keep generic types exact. When an API returns Object, never return it directly from a method with a narrower generic/container return type and never use an unchecked cast as a shortcut; narrow with instanceof/pattern matching and provide a type-compatible fallback.",
+                "Respect available_sibling_api types, generic arguments, and mutability exactly; final sibling fields are read-only after declaration.",
+                "Java generics are invariant. Never narrow Map<K,Object> to Map<K,String>, List<Object> to List<String>, or any sibling generic declaration to a different type argument.",
+                "For Map<K,V>.entrySet(), declare the iterator element as Map.Entry<K,V>; entry.getKey() has exact type K and entry.getValue() has exact type V. Preserve those exact types in local variables.",
+                "Keep generic types exact. When an API returns Object, never return it directly from a method with a narrower generic/container return type and never use an unchecked cast as a shortcut; narrow the individual Object value with instanceof/pattern matching and provide a type-compatible fallback.",
                 "Avoid raw collections and unchecked operations when a parameterized type or runtime type check can express the contract.",
                 "For java.util.concurrent locks, Lock and ReentrantLock are in java.util.concurrent.locks, not java.util.concurrent.",
             ],
@@ -3077,8 +3341,17 @@ class AtomicConcernExecutor:
                     response_region=response_region,
                 )
                 if response_region == "members":
+                    sibling_names = tuple(
+                        _slug(item["concern"])
+                        for item in self.ordered
+                        if _slug(item["concern"]) != name
+                    )
                     canonical, canonical_changes = _canonicalize_generated_jdk_semantics(
-                        parsed
+                        parsed,
+                        authoritative_field_types=_sibling_field_type_contracts(
+                            self.source,
+                            sibling_concerns=sibling_names,
+                        ),
                     )
                     if canonical_changes:
                         from .root_cause_trace import emit_root_cause

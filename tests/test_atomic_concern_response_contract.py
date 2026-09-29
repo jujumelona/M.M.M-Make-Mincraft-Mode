@@ -2523,3 +2523,66 @@ def test_bold_inline_behavior_actor_source_is_host_lowered_without_structured_pl
         if json.loads(json.loads(raw)["instruction"])["concern"] == "actors"
     )
     assert list(actor_payload["source_requirements"]) == ["R2", "R3"]
+
+
+def test_sibling_inventory_exposes_exact_generic_field_type() -> None:
+    from minecraft_mod_ai.atomic_concern_source import _sibling_symbol_inventory
+
+    source = (
+        "final class Probe {\n"
+        "// MMM_ATOMIC_CONCERN_STEPS_MEMBERS_START\n"
+        "private static final java.util.Map<String, "
+        "java.util.Map<String, java.lang.Object>> FAILURE_RULES = "
+        "new java.util.HashMap<>();\n"
+        "// MMM_ATOMIC_CONCERN_STEPS_MEMBERS_END\n"
+        "// MMM_ATOMIC_CONCERN_STEPS_INIT_START\n"
+        "// MMM_ATOMIC_CONCERN_STEPS_INIT_END\n"
+        "}\n"
+    )
+
+    rows = _sibling_symbol_inventory(
+        source,
+        sibling_concerns=("steps",),
+    )
+
+    field = next(row for row in rows if row["symbol"] == "FAILURE_RULES")
+    assert field["declared_type"] == (
+        "java.util.Map<java.lang.String, "
+        "java.util.Map<java.lang.String, java.lang.Object>>"
+    )
+    assert field["generic_type_is_authoritative"] is True
+
+
+def test_map_entry_value_generic_narrowing_is_canonicalized() -> None:
+    from minecraft_mod_ai.atomic_concern_source import (
+        _canonicalize_generated_jdk_semantics,
+    )
+
+    candidate = (
+        "private static boolean failClosed() {\n"
+        "    for (java.util.Map.Entry<String, "
+        "java.util.Map<String, Object>> entry : "
+        "FAILURE_RULES.entrySet()) {\n"
+        "        java.util.Map<String, String> condition = entry.getValue();\n"
+        "        if (condition.isEmpty()) { return false; }\n"
+        "    }\n"
+        "    return true;\n"
+        "}"
+    )
+
+    normalized, changes = _canonicalize_generated_jdk_semantics(
+        candidate,
+        authoritative_field_types={
+            "FAILURE_RULES": (
+                "java.util.Map<java.lang.String, "
+                "java.util.Map<java.lang.String, java.lang.Object>>"
+            )
+        },
+    )
+
+    assert (
+        "java.util.Map<java.lang.String, java.lang.Object> condition = "
+        "entry.getValue();"
+    ) in normalized
+    assert "java.util.Map<String, String> condition" not in normalized
+    assert any("entry.getValue" in change for change in changes)
