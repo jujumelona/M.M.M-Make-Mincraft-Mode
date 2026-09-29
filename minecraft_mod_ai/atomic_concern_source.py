@@ -14,6 +14,13 @@ from typing import Any
 
 from .authored_ir_parser import slice_concern_requirements
 from .custom_module_errors import AtomicJavaDecisionError, CustomModuleGenerationError
+from .java_region_parser import (
+    JavaRegionParseError,
+    admit_initialize_region,
+    admit_member_region,
+    strict_initialize_statements,
+    strict_member_chunks,
+)
 
 MEMBERS_MARKER = "<<<MMM_CONCERN_MEMBERS>>>"
 INITIALIZE_MARKER = "<<<MMM_CONCERN_INITIALIZE>>>"
@@ -333,39 +340,13 @@ def _split_top_level(value: str, delimiter: str) -> list[str]:
 
 
 def _top_level_member_chunks(value: str) -> tuple[str, ...]:
-    source = str(value or "")
-    scan = _structure_scan(source)
-    chunks: list[str] = []
-    start = 0
-    brace = paren = bracket = 0
-    for index, char in enumerate(scan):
-        if char == "(":
-            paren += 1
-        elif char == ")":
-            paren = max(0, paren - 1)
-        elif char == "[":
-            bracket += 1
-        elif char == "]":
-            bracket = max(0, bracket - 1)
-        elif char == "{":
-            brace += 1
-        elif char == "}":
-            if brace:
-                brace -= 1
-                if brace == 0 and paren == 0 and bracket == 0:
-                    chunk = source[start:index + 1].strip()
-                    if chunk:
-                        chunks.append(chunk)
-                    start = index + 1
-        elif char == ";" and brace == 0 and paren == 0 and bracket == 0:
-            chunk = source[start:index + 1].strip()
-            if chunk:
-                chunks.append(chunk)
-            start = index + 1
-    tail = source[start:].strip()
-    if tail:
-        chunks.append(tail)
-    return tuple(chunks)
+    """Return Java class-body members from the Tree-sitter Java AST."""
+    try:
+        return strict_member_chunks(value)
+    except JavaRegionParseError as exc:
+        raise CustomModuleGenerationError(
+            f"ATOMIC_CONCERN_JAVA_PARSE_INVALID: {exc}"
+        ) from exc
 
 def _top_level_assignment_index(value: str) -> int:
     paren = bracket = brace = angle = 0
@@ -658,17 +639,19 @@ def _validate_region_text(value: str, *, initialize_region: bool) -> None:
         raise CustomModuleGenerationError(
             "ATOMIC_CONCERN_RESPONSE_INVALID: executable region contains host-marker syntax or Markdown fences."
         )
-    if (
-        not _brace_balanced_region(scan)
-        or _contains_non_java_narrative(scan)
-        or _INVALID_VISIBILITY_INITIALIZER.search(scan)
-        or _FORBIDDEN.search(scan)
-        or _INITIALIZE_DECL.search(scan)
-        or _has_forbidden_type_declaration(scan, initialize_region=initialize_region)
-    ):
-        region = "initialize body" if initialize_region else "concern members"
+    region = "initialize body" if initialize_region else "concern members"
+    try:
+        if initialize_region:
+            strict_initialize_statements(value)
+        else:
+            strict_member_chunks(value)
+    except JavaRegionParseError as exc:
         raise CustomModuleGenerationError(
-            f"ATOMIC_CONCERN_SCOPE_ESCAPE: {region} attempted to change host-owned type/lifecycle structure."
+            f"ATOMIC_CONCERN_SCOPE_ESCAPE: {region} is not admissible Java: {exc}"
+        ) from exc
+    if _contains_non_java_narrative(scan) or _FORBIDDEN.search(scan):
+        raise CustomModuleGenerationError(
+            f"ATOMIC_CONCERN_SCOPE_ESCAPE: {region} contains forbidden host/protocol structure."
         )
 
 
@@ -690,7 +673,7 @@ def parse_concern_content(text: str, *, section: str) -> tuple[str, str]:
 
 
 def _parse_region_content(text: str, *, response_region: str) -> str:
-    """Parse one host-selected region without requiring model-authored protocol markers."""
+    """Admit one host-selected region through the Tree-sitter Java grammar."""
     raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
     exact_markers = {
         MEMBERS_MARKER,
@@ -706,6 +689,17 @@ def _parse_region_content(text: str, *, response_region: str) -> str:
         )
     if initialize_region and _is_inert_empty_region(value):
         return ""
+    try:
+        value = (
+            admit_initialize_region(value)
+            if initialize_region
+            else admit_member_region(value)
+        )
+    except JavaRegionParseError as exc:
+        region = "initialize body" if initialize_region else "concern members"
+        raise CustomModuleGenerationError(
+            f"ATOMIC_CONCERN_SCOPE_ESCAPE: {region} could not be admitted by the Java parser: {exc}"
+        ) from exc
     _validate_region_text(value, initialize_region=initialize_region)
     return value
 
