@@ -53,8 +53,8 @@ def _scalar_schema(schema: Mapping[str, Any], key: str) -> dict[str, Any]:
         if key in {"type", "return_type"}:
             result["pattern"] = _TYPE_PATTERN
             result["description"] = (
-                "Java type only. Declaration visibility and modifier semantics are separate "
-                "typed scalar fields owned by the structured schema; never include modifiers here."
+                "Java type only. Declaration visibility and modifiers are host-owned; "
+                "the model must never emit them."
             )
         elif key == "initializer":
             # Qwen native tool calls naturally encode literal booleans/numbers/null as
@@ -207,8 +207,7 @@ class JavaStructureAssembly:
                 "A body value is one complete Java statement or balanced control-flow block, "
                 "not a fragment of JSON or a partial brace. Split long logic into named helper methods. "
                 "For a declaration, type/return_type contains only a Java type. "
-                "Visibility and Java modifier intent are separate typed scalar fields such as visibility/is_final/"
-                "is_static/is_synchronized; never serialize a declaration into any of them. "
+                "All Java declaration modifiers and visibility are host-owned; the model never emits them. "
                 "The host adds static to outer fields/methods and owns nested-type visibility. "
                 "Omit unnecessary optional scalar values. "
                 "A field marked final must have a declaration initializer and generated executable code must never "
