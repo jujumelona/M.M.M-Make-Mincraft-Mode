@@ -19,6 +19,7 @@ from .authored_section_ids import (
 
 SECTION_SPECS: dict[str, dict[str, Any]] = {
     "state_model": {
+        "platform_api_policy": "forbidden",
         "symbol": "AuthoredStateModel",
         "depends_on": (),
         "public_api": (
@@ -39,6 +40,7 @@ SECTION_SPECS: dict[str, dict[str, Any]] = {
         ),
     },
     "behavior_contract": {
+        "platform_api_policy": "forbidden",
         "symbol": "AuthoredBehaviorContract",
         "depends_on": ("state_model",),
         "responsibility": "Implement the authored player/system behavior contract.",
@@ -48,6 +50,7 @@ SECTION_SPECS: dict[str, dict[str, Any]] = {
         ),
     },
     "algorithm": {
+        "platform_api_policy": "forbidden",
         "symbol": "AuthoredAlgorithm",
         "depends_on": ("state_model", "behavior_contract"),
         "responsibility": "Implement deterministic algorithms from the authored design.",
@@ -57,6 +60,7 @@ SECTION_SPECS: dict[str, dict[str, Any]] = {
         ),
     },
     "authority_and_network": {
+        "platform_api_policy": "host_grounded_only",
         "symbol": "AuthoredAuthorityNetwork",
         "depends_on": ("state_model", "behavior_contract"),
         "responsibility": "Implement server-authoritative synchronization and network-facing rules.",
@@ -66,6 +70,7 @@ SECTION_SPECS: dict[str, dict[str, Any]] = {
         ),
     },
     "persistence": {
+        "platform_api_policy": "forbidden",
         "symbol": "AuthoredPersistence",
         "depends_on": ("state_model",),
         "responsibility": "Implement persistence boundaries for authored state.",
@@ -75,6 +80,7 @@ SECTION_SPECS: dict[str, dict[str, Any]] = {
         ),
     },
     "resources_and_ui": {
+        "platform_api_policy": "host_grounded_only",
         "symbol": "AuthoredResourcesUi",
         "depends_on": ("state_model", "behavior_contract"),
         "responsibility": "Implement the bounded UI/resource-facing behavior in the authored design.",
@@ -84,6 +90,7 @@ SECTION_SPECS: dict[str, dict[str, Any]] = {
         ),
     },
     "failure_and_limits": {
+        "platform_api_policy": "forbidden",
         "symbol": "AuthoredFailureLimits",
         "depends_on": ("state_model",),
         "responsibility": "Implement failure handling, limits, and invariant guards.",
@@ -93,6 +100,7 @@ SECTION_SPECS: dict[str, dict[str, Any]] = {
         ),
     },
     "integration": {
+        "platform_api_policy": "host_grounded_only",
         "symbol": "AuthoredIntegration",
         "depends_on": (
             "state_model", "behavior_contract", "algorithm", "authority_and_network",
