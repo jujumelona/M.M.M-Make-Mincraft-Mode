@@ -646,6 +646,118 @@ def test_structured_tool_declares_domain_type_and_field_together() -> None:
     assert "private static final StateVariable CREDITS" in rendered
 
 
+def test_structured_renderer_canonicalizes_lock_types_before_compilation() -> None:
+    from minecraft_mod_ai.custom_module_generator import _render_atomic_java_structure
+
+    rendered = _render_atomic_java_structure(
+        {
+            "records": [],
+            "enums": [],
+            "classes": [],
+            "fields": [
+                {
+                    "modifiers": ["private", "static", "final"],
+                    "type": "Lock",
+                    "name": "LOCK",
+                    "initializer": "new ReentrantLock()",
+                },
+                {
+                    "modifiers": ["private", "static", "final"],
+                    "type": "java.util.concurrent.Lock",
+                    "name": "LOCK2",
+                    "initializer": "new java.util.concurrent.ReentrantLock()",
+                },
+            ],
+            "methods": [],
+            "static_initializers": [],
+        },
+        response_region="members",
+    )
+
+    assert "java.util.concurrent.locks.Lock LOCK" in rendered
+    assert "new java.util.concurrent.locks.ReentrantLock()" in rendered
+    assert "java.util.concurrent.Lock" not in rendered
+    assert "java.util.concurrent.ReentrantLock" not in rendered
+
+
+def test_structured_generation_rejects_blank_final_before_compilation() -> None:
+    from minecraft_mod_ai.custom_module_generator import _validate_atomic_java_decision
+
+    with pytest.raises(CustomModuleGenerationError, match="must be initialized at its declaration"):
+        _validate_atomic_java_decision(
+            {
+                "fields": [
+                    {
+                        "modifiers": ["private", "static", "final"],
+                        "type": "boolean",
+                        "name": "NO_FLUID_STORAGE_IN_ZERO_G",
+                    }
+                ],
+                "methods": [],
+            },
+            payload={},
+            response_region="members",
+        )
+
+
+def test_structured_generation_rejects_final_rebinding_before_compilation() -> None:
+    from minecraft_mod_ai.custom_module_generator import _validate_atomic_java_decision
+
+    with pytest.raises(CustomModuleGenerationError, match="is reassigned"):
+        _validate_atomic_java_decision(
+            {
+                "fields": [
+                    {
+                        "modifiers": ["private", "static", "final"],
+                        "type": "Map<String, Object>",
+                        "name": "TRANSFER_CACHE",
+                        "initializer": "new HashMap<>()",
+                    }
+                ],
+                "methods": [
+                    {
+                        "return_type": "void",
+                        "name": "resetTransferCache",
+                        "body": ["TRANSFER_CACHE = Collections.emptyMap();"],
+                    }
+                ],
+            },
+            payload={},
+            response_region="members",
+        )
+
+
+def test_structured_generation_rejects_object_return_into_narrow_map_before_compilation() -> None:
+    from minecraft_mod_ai.custom_module_generator import _validate_atomic_java_decision
+
+    payload = {
+        "dependency_api": [
+            {
+                "symbol": "AuthoredStateModel",
+                "public_api": [
+                    "public static Object getState(String key)"
+                ],
+            }
+        ]
+    }
+
+    with pytest.raises(CustomModuleGenerationError, match="authoritative Object-valued call"):
+        _validate_atomic_java_decision(
+            {
+                "fields": [],
+                "methods": [
+                    {
+                        "return_type": "Map<String, Object>",
+                        "name": "shipConfig",
+                        "body": ['return AuthoredStateModel.getState("shipConfig");'],
+                    }
+                ],
+            },
+            payload=payload,
+            response_region="members",
+        )
+
+
 def test_structured_tool_host_qualifies_common_jdk_types() -> None:
     from minecraft_mod_ai.custom_module_generator import _render_atomic_java_structure
 
