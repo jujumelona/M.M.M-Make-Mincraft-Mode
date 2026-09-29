@@ -267,3 +267,42 @@ def test_compile_java_runs_only_compile_task(monkeypatch, tmp_path: Path) -> Non
         ("compile_java", ("--no-daemon", "compileJava", "--stacktrace"))
     ]
 
+
+
+def test_compile_java_timeout_is_not_reported_as_source_failure(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    cache = tmp_path / "cache"
+    gradle = cache / "gradle-8.11" / "bin" / ("gradle.bat" if os.name == "nt" else "gradle")
+    logs = project / ".minecraft_ai" / "logs"
+    logs.mkdir(parents=True)
+
+    prepared = runner_module._PreparedBuild(
+        project_root=project,
+        gradle_version="8.11",
+        gradle_sha256="e" * 64,
+        gradle=gradle,
+        logs=logs,
+        environment={},
+    )
+    runner = GradleRunner(cache, command_timeout_seconds=1200)
+    monkeypatch.setattr(runner, "_prepare_build_context", lambda _root: prepared)
+
+    def fake_run(**kwargs):
+        return CommandResult(
+            name=kwargs["name"],
+            command=(str(kwargs["executable"]), *kwargs["arguments"]),
+            exit_code=124,
+            duration_seconds=1205.0,
+            log_path=str(kwargs["log_path"]),
+            timed_out=True,
+        )
+
+    monkeypatch.setattr(runner, "_run", fake_run)
+    report = runner.compile_java(project)
+
+    assert report.status == "TIMEOUT"
+    assert report.failure_class == "infrastructure_timeout"
+    assert report.error_code == "GRADLE_COMPILE_TIMEOUT"
+    assert report.repairable is False
+    assert report.commands[0].timed_out is True
