@@ -331,11 +331,24 @@ class JavaStructureAssembly:
                     _closed({key: scalars[key] for key in keys}, [key for key in keys if key in required]),
                     path, "Declare this component's identity, type and initial value.",
                 ))
-        arrays = {key: value for key, value in properties.items() if value.get("type") == "array"}
-        while arrays:
+        # Schema metadata and cursor state must never share the same mutable
+        # container. array_specs is immutable for the lifetime of this object
+        # assembly; remaining_parts alone tracks which native multi-call batches
+        # are still open.
+        array_specs = {
+            key: value
+            for key, value in properties.items()
+            if value.get("type") == "array"
+        }
+        remaining_parts = list(array_specs)
+        while remaining_parts:
             selected = self._ask(
-                _closed({"part": {"type": "string", "enum": [*arrays, "done"]}}, ["part"]),
-                path, "Select the next necessary part of this component; done closes it.",
+                _closed(
+                    {"part": {"type": "string", "enum": [*remaining_parts, "done"]}},
+                    ["part"],
+                ),
+                path,
+                "Select the next necessary part of this component; done closes it.",
             )["part"]
             if selected == "done":
                 break
@@ -344,13 +357,13 @@ class JavaStructureAssembly:
                 raise OutputBudgetExhausted(
                     f"OUTPUT_BUDGET_EXHAUSTED: {path + [selected]} needs decomposition."
                 )
-            item_schema = arrays[selected]["items"]
-            # Production uses native multi-call turns. A selected array part is one
-            # complete batch, not a resumable cursor. Closing it immediately prevents
-            # the model from reopening fields/methods/body and redeclaring items that
-            # were already accepted in the preceding native turn.
+            selected_spec = array_specs[selected]
+            item_schema = selected_spec["items"]
+            # Native multi-call turns emit the complete sibling batch for the
+            # selected part. Close only the cursor state; keep selected_spec
+            # available for validation/rendering below.
             if self.multi_callback is not None:
-                arrays.pop(selected)
+                remaining_parts.remove(selected)
             item_path = [*path, selected, len(values)]
             remaining = MAX_PART_ITEMS - len(values)
             if item_schema.get("type") == "object":
@@ -444,7 +457,7 @@ class JavaStructureAssembly:
                 )
                 for row in emitted:
                     value = row["value"]
-                    if arrays[selected].get("uniqueItems") and value in values:
+                    if selected_spec.get("uniqueItems") and value in values:
                         raise AtomicJavaDecisionError(
                             f"ATOMIC_JAVA_ASSEMBLY_INVALID: duplicate {selected} value.",
                             response=value,
