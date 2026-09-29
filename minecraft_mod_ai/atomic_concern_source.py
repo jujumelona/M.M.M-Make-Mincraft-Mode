@@ -1993,6 +1993,38 @@ def _messages(
     ]
 
 @dataclass
+def _compile_report_timed_out(report: Any) -> bool:
+    if str(getattr(report, "status", "") or "").strip().upper() == "TIMEOUT":
+        return True
+    for command in tuple(getattr(report, "commands", ()) or ()):
+        if bool(getattr(command, "timed_out", False)):
+            return True
+        try:
+            if int(getattr(command, "exit_code", 0) or 0) == 124:
+                return True
+        except (TypeError, ValueError):
+            pass
+    return False
+
+
+def _compile_timeout_message(report: Any) -> str:
+    commands = tuple(getattr(report, "commands", ()) or ())
+    command = commands[-1] if commands else None
+    duration = getattr(command, "duration_seconds", None) if command is not None else None
+    log_path = str(getattr(command, "log_path", "") or "") if command is not None else ""
+    suffix = []
+    if duration is not None:
+        suffix.append(f"duration_seconds={duration}")
+    if log_path:
+        suffix.append(f"log_path={log_path}")
+    detail = "; ".join(suffix)
+    return (
+        "ATOMIC_CONCERN_COMPILE_TIMEOUT: Gradle compileJava timed out; "
+        "this is not a localized Java source diagnostic, so model source repair was not attempted."
+        + (f" {detail}" if detail else "")
+    )
+
+
 class AtomicConcernExecutor:
     root: Path
     target: Path
@@ -2355,6 +2387,8 @@ class AtomicConcernExecutor:
         return self.compile_java(self.root)
 
     def _repair_once(self, report: Any) -> Any:
+        if _compile_report_timed_out(report):
+            raise CustomModuleGenerationError(_compile_timeout_message(report))
         failure = self.compile_log(report) or str(
             getattr(report, "error", "") or "Gradle compileJava failed."
         )
@@ -2435,6 +2469,8 @@ class AtomicConcernExecutor:
                 self._apply(concern)
             report = self._compile()
             if getattr(report, "status", "") != "PASS":
+                if _compile_report_timed_out(report):
+                    raise CustomModuleGenerationError(_compile_timeout_message(report))
                 failure = self.compile_log(report) or str(
                     getattr(report, "error", "")
                     or "Host-compiled structured state model did not compile."
