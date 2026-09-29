@@ -727,9 +727,19 @@ _COMMON_JAVA_NAMES = {
     "Set": "java.util.Set",
     "UUID": "java.util.UUID",
     "ConcurrentHashMap": "java.util.concurrent.ConcurrentHashMap",
+    "Lock": "java.util.concurrent.locks.Lock",
+    "ReentrantLock": "java.util.concurrent.locks.ReentrantLock",
+    "ReadWriteLock": "java.util.concurrent.locks.ReadWriteLock",
+    "ReentrantReadWriteLock": "java.util.concurrent.locks.ReentrantReadWriteLock",
     "AtomicBoolean": "java.util.concurrent.atomic.AtomicBoolean",
     "AtomicInteger": "java.util.concurrent.atomic.AtomicInteger",
     "AtomicLong": "java.util.concurrent.atomic.AtomicLong",
+}
+_KNOWN_JAVA_FQCN_ALIASES = {
+    "java.util.concurrent.Lock": "java.util.concurrent.locks.Lock",
+    "java.util.concurrent.ReentrantLock": "java.util.concurrent.locks.ReentrantLock",
+    "java.util.concurrent.ReadWriteLock": "java.util.concurrent.locks.ReadWriteLock",
+    "java.util.concurrent.ReentrantReadWriteLock": "java.util.concurrent.locks.ReentrantReadWriteLock",
 }
 _IDENTIFIER_TOKEN = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
 
@@ -931,6 +941,19 @@ def _rewrite_java_identifiers(value: Any, renames: Mapping[str, str]) -> str:
             out.extend((ch, nxt))
             index += 2
             block_comment = True
+            continue
+        alias_match = next(
+            (
+                (alias, canonical)
+                for alias, canonical in _KNOWN_JAVA_FQCN_ALIASES.items()
+                if source.startswith(alias, index)
+            ),
+            None,
+        )
+        if alias_match is not None:
+            alias, canonical = alias_match
+            out.append(canonical)
+            index += len(alias)
             continue
         match = _IDENTIFIER_TOKEN.match(source, index)
         if match is None:
@@ -1446,6 +1469,167 @@ def _force_outer_static(item: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _assignment_to_name(text: str, name: str) -> bool:
+    token = re.escape(str(name or "").strip())
+    if not token:
+        return False
+    return bool(
+        re.search(
+            rf"(?<![A-Za-z0-9_$]){token}\s*(?:\+\+|--|(?:>>>|>>|<<|[+\-*/%&|^])?=(?!=))",
+            str(text or ""),
+        )
+    )
+
+
+def _decision_body_strings(decision: Mapping[str, Any]) -> tuple[str, ...]:
+    rows: list[str] = []
+
+    def visit_methods(raw: Any) -> None:
+        for method in raw if isinstance(raw, Sequence) else ():
+            if not isinstance(method, Mapping):
+                continue
+            rows.extend(str(item or "") for item in method.get("body") or ())
+
+    visit_methods(decision.get("methods") or ())
+    for initializer in decision.get("static_initializers") or ():
+        if isinstance(initializer, Mapping):
+            rows.extend(str(item or "") for item in initializer.get("body") or ())
+    for category in ("records", "classes"):
+        for item in decision.get(category) or ():
+            if not isinstance(item, Mapping):
+                continue
+            visit_methods(item.get("methods") or ())
+            for constructor in item.get("constructors") or ():
+                if isinstance(constructor, Mapping):
+                    rows.extend(str(value or "") for value in constructor.get("body") or ())
+    return tuple(rows)
+
+
+def _field_rows(decision: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
+    rows: list[Mapping[str, Any]] = [
+        item
+        for item in decision.get("fields") or ()
+        if isinstance(item, Mapping)
+    ]
+    for category in ("classes",):
+        for owner in decision.get(category) or ():
+            if not isinstance(owner, Mapping):
+                continue
+            rows.extend(
+                item
+                for item in owner.get("fields") or ()
+                if isinstance(item, Mapping)
+            )
+    return tuple(rows)
+
+
+def _authority_method_return_types(payload: Mapping[str, Any]) -> dict[str, str]:
+    result: dict[str, str] = {}
+
+    def ingest(declaration: Any) -> None:
+        text = " ".join(str(declaration or "").replace("{ ... }", "").split())
+        if not text or "(" not in text:
+            return
+        match = re.search(
+            r"(?:^|\s)([A-Za-z_$][A-Za-z0-9_$<>?,.\[\] ]*)\s+"
+            r"([A-Za-z_$][A-Za-z0-9_$]*)\s*\(",
+            text,
+        )
+        if match is None:
+            return
+        return_type = re.sub(
+            r"^(?:(?:public|protected|private|static|final|synchronized|abstract|native)\s+)+",
+            "",
+            match.group(1).strip(),
+        )
+        name = match.group(2)
+        if return_type and name:
+            result.setdefault(name, return_type)
+
+    for row in payload.get("available_sibling_api") or ():
+        if isinstance(row, Mapping) and row.get("kind") == "method":
+            ingest(row.get("declaration"))
+    for row in payload.get("dependency_api") or ():
+        if not isinstance(row, Mapping):
+            continue
+        for declaration in row.get("public_api") or ():
+            ingest(declaration)
+    return result
+
+
+def _is_object_type(java_type: str) -> bool:
+    return re.sub(r"\s+", "", str(java_type or "")) in {"Object", "java.lang.Object"}
+
+
+def _validate_atomic_java_decision(
+    decision: Mapping[str, Any],
+    *,
+    payload: Mapping[str, Any],
+    response_region: str,
+) -> None:
+    if response_region == "initialize":
+        return
+
+    body_text = "\n".join(_decision_body_strings(decision))
+    final_names: set[str] = set()
+
+    for field in _field_rows(decision):
+        modifiers = {str(value) for value in field.get("modifiers") or ()}
+        name = str(field.get("name") or "").strip()
+        initializer = str(field.get("initializer") or "").strip()
+        if "final" in modifiers:
+            if not initializer:
+                raise CustomModuleGenerationError(
+                    "ATOMIC_CONCERN_RESPONSE_INVALID: final field "
+                    f"{name!r} must be initialized at its declaration in structured generation."
+                )
+            if name:
+                final_names.add(name)
+
+    for row in payload.get("available_sibling_api") or ():
+        if (
+            isinstance(row, Mapping)
+            and row.get("kind") == "field"
+            and row.get("mutable") is False
+            and str(row.get("symbol") or "").strip()
+        ):
+            final_names.add(str(row["symbol"]).strip())
+
+    for name in sorted(final_names):
+        if _assignment_to_name(body_text, name):
+            raise CustomModuleGenerationError(
+                "ATOMIC_CONCERN_RESPONSE_INVALID: final field "
+                f"{name!r} is reassigned by generated executable code."
+            )
+
+    authoritative_returns = _authority_method_return_types(payload)
+    if not authoritative_returns:
+        return
+    for method in decision.get("methods") or ():
+        if not isinstance(method, Mapping):
+            continue
+        target_type = str(method.get("return_type") or "").strip()
+        if not target_type or target_type == "void" or _is_object_type(target_type):
+            continue
+        for statement in method.get("body") or ():
+            match = re.fullmatch(
+                r"\s*return\s+(?:[A-Za-z_$][A-Za-z0-9_$.]*\.)?"
+                r"([A-Za-z_$][A-Za-z0-9_$]*)\s*\([^;]*\)\s*;?\s*",
+                str(statement or ""),
+                re.DOTALL,
+            )
+            if match is None:
+                continue
+            source_type = authoritative_returns.get(match.group(1), "")
+            if _is_object_type(source_type):
+                raise CustomModuleGenerationError(
+                    "ATOMIC_CONCERN_RESPONSE_INVALID: method "
+                    f"{method.get('name')!r} returns {target_type} but directly returns "
+                    f"authoritative Object-valued call {match.group(1)}(...); "
+                    "narrow the runtime value with an explicit type check first."
+                )
+
+
 def _render_atomic_java_structure(
     decision: Mapping[str, Any],
     *,
@@ -1548,6 +1732,11 @@ def _call_atomic_java_region(
     from .atomic_concern_source import _validate_region_text
 
     try:
+        _validate_atomic_java_decision(
+            decision,
+            payload=payload,
+            response_region=response_region,
+        )
         source = _render_atomic_java_structure(
             decision, response_region=response_region,
             host_symbol=str(payload.get("host_selected_class") or "").strip(),
@@ -1781,8 +1970,7 @@ def _run_atomic_ir_generation(
         call_coder=lambda messages: _call_coder(
             generator.router,
             messages,
-            force_non_thinking=True,
-            structured_java_region=False,
+            structured_java_region=True,
         ),
         compile_java=context.compiler.compile_java,
         compile_log=_compile_log,
