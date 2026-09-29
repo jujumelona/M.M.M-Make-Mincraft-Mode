@@ -163,6 +163,21 @@ def class_body_chunks(value: str) -> tuple[str, ...]:
     )
 
 
+def class_body_member_kinds(value: str) -> tuple[str, ...]:
+    """Return Tree-sitter node kinds for one syntactically valid Java class-body region."""
+    region = str(value or "").strip()
+    if not region:
+        return ()
+    prefix = "final class __MMMRegionHost {\n"
+    source, root = _parse(prefix + region + "\n}\n")
+    body = _class_body(root)
+    return tuple(
+        node.type
+        for node in body.named_children
+        if node.type not in _COMMENT_TYPES and _text(source, node).strip()
+    )
+
+
 def strict_member_chunks(value: str) -> tuple[str, ...]:
     """Parse model-authored class-body members and enforce concern ownership policy."""
     region = str(value or "").strip()
