@@ -122,6 +122,28 @@ def test_existing_saved_text_uses_localization_without_replanning(monkeypatch, t
         for member in node.payload["members"]
     )
 
+def test_fresh_structured_authority_reaches_graph_request_losslessly():
+    plan = _structured_plan(
+        "space mod",
+        "# state_model\n- variables: credits\n",
+    )
+
+    proposal = CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(plan)
+
+    request = proposal.modules[0].config["implementation_graph_request"]
+    assert request["structured_sections"] == plan.structured_sections
+    expected = "sha256:" + hashlib.sha256(
+        json.dumps(
+            plan.structured_sections,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    assert request["structured_sections_sha256"] == expected
+
+
 def test_fresh_authored_execution_defers_source_ownership_until_ir():
     plan = _structured_plan(
         "space mod",
