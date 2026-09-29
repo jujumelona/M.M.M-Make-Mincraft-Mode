@@ -121,6 +121,21 @@ class GradleRunner:
             env=prepared.environment,
             log_path=prepared.logs / "gradle-compile-java.log",
         )
+        if result.timed_out:
+            return BuildReport(
+                status="TIMEOUT",
+                gradle_version=prepared.gradle_version,
+                commands=(result,),
+                jar_path=None,
+                gametest_report=None,
+                error=(
+                    "Gradle compileJava timed out after "
+                    f"{self.command_timeout_seconds} seconds."
+                ),
+                failure_class="infrastructure_timeout",
+                error_code="GRADLE_COMPILE_TIMEOUT",
+                repairable=False,
+            )
         if result.exit_code != 0:
             return self._failed_build(
                 prepared,
