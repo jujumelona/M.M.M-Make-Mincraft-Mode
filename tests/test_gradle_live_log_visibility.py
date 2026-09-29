@@ -19,6 +19,7 @@ def test_command_output_reaches_cell_before_child_finishes(monkeypatch, tmp_path
 
     monkeypatch.setattr(sys, "stderr", Cell())
     monkeypatch.setenv("MMM_ROOT_CAUSE_TRACE_PATH", str(tmp_path / "trace.jsonl"))
+    monkeypatch.setenv("MMM_GRADLE_TRACE_OUTPUT", "1")
     script = (
         "import pathlib,time,sys; print('compiler detail',flush=True); "
         f"p=pathlib.Path({str(acknowledgment)!r}); end=time.monotonic()+3; "
