@@ -616,11 +616,18 @@ def _compile_new_authored_modules(
     main_symbol = _main_class_name(mod_id)
     main_path = f"src/main/java/{package_name.replace('.', '/')}/{main_symbol}.java"
     task_id = "authored_implementation_graph"
+    structured_sections = deepcopy(plan.structured_sections)
+    if not structured_sections:
+        raise ValueError(
+            "AUTHORED_STRUCTURED_AUTHORITY_REQUIRED: fresh authored production "
+            "requires canonical structured_sections."
+        )
     request = {
         "text": plan.text, "package": package_name, "mod_id": mod_id,
         "target": dict(target), "entrypoint_path": main_path,
         "entrypoint_symbol": main_symbol,
-        "structured_sections": deepcopy(plan.structured_sections),
+        "structured_sections": structured_sections,
+        "structured_sections_sha256": _sha256_json(structured_sections),
         "production_state_section": deepcopy(
             dict(production_state_section or {})
         ),
@@ -1038,10 +1045,15 @@ def compile_authored_design(
         existing_input_sha256 or implementation_plan.existing_input_sha256 or ""
     ).strip()
     production_state_section: dict[str, Any] = {}
-    if (
+    structured_state = implementation_plan.structured_sections.get("state_model")
+    if isinstance(structured_state, Mapping):
+        production_state_section = deepcopy(dict(structured_state))
+    elif (
         not effective_existing
         and callable(getattr(router, "generate_text", None))
     ):
+        # Legacy-only migration path. Canonical authored plans already carry
+        # state_model in structured_sections and never re-derive it from prose.
         from .production_state_compiler import compile_production_state_section
 
         production_state_section = compile_production_state_section(
