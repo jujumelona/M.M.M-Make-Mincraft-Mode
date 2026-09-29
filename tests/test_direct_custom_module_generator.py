@@ -370,25 +370,23 @@ def test_ir_atomic_concerns_are_isolated_and_compiled_as_one_host_file(
     tmp_path: Path, monkeypatch
 ) -> None:
     root, path, symbol = _project(tmp_path)
-    responses = [
-        *_native_field_parts("int", "balance", "0"),
-        *_native_method_parts("valid", "return balance >= 0;"),
-    ]
+    responses = iter([
+        "private static int balance = 0;",
+        "private static boolean valid() { return balance >= 0; }",
+    ])
     calls: list[tuple[str, dict[str, object]]] = []
 
     class Router:
-        def __init__(self):
-            self.responses = iter(responses)
-
-        def generate_tool_decision(self, role, messages, **kwargs):
+        def generate_text(self, role, messages, **kwargs):
             assert role == "coder"
-            part_schema = kwargs["parameters"].get("properties", {}).get("part")
-            if isinstance(part_schema, dict):
-                assert "static_initializers" not in part_schema.get("enum", ())
+            assert kwargs.get("enable_tools") is False
             payload = json.loads(messages[-1]["content"])
             concern = payload["concern"]["name"]
             calls.append((concern, dict(kwargs)))
-            return next(self.responses)
+            return next(responses)
+
+        def generate_tool_decision(self, *_args, **_kwargs):
+            raise AssertionError("production concern generation must not use scalar Java tools")
 
     class Runner:
         def __init__(self, _cache):
@@ -411,10 +409,7 @@ def test_ir_atomic_concerns_are_isolated_and_compiled_as_one_host_file(
         if index == 0 or calls[index - 1][0] != name
     ]
     assert concern_transitions == ["steps", "branches"]
-    tool_names = {kwargs["tool_name"] for _name, kwargs in calls}
-    assert "emit_java_part" in tool_names
-    assert "emit_java_statement" in tool_names
-    assert all("parameters" in kwargs for _name, kwargs in calls)
+    assert all(kwargs.get("enable_tools") is False for _name, kwargs in calls)
     assert "static int balance = 0;" in source
     assert "private static boolean valid()" in source
     assert "MMM_ATOMIC_CONCERN_STEPS_MEMBERS_START" in source
@@ -426,26 +421,24 @@ def test_atomic_concern_compile_repair_reopens_only_localized_concern(
     tmp_path: Path, monkeypatch
 ) -> None:
     root, path, symbol = _project(tmp_path)
-    responses = [
-        *_native_field_parts("Object", "value", "new Object(1)"),
-        *_native_field_parts("Object", "value", "new Object()"),
-        *_native_method_parts("valid", "return value != null;"),
-    ]
+    responses = iter([
+        "private static Object value = new Object(1);",
+        "private static Object value = new Object();",
+        "private static boolean valid() { return value != null; }",
+    ])
     calls: list[tuple[str, bool]] = []
 
     class Router:
-        def __init__(self):
-            self.responses = iter(responses)
-
-        def generate_tool_decision(self, role, messages, **kwargs):
-            del role
-            part_schema = kwargs["parameters"].get("properties", {}).get("part")
-            if isinstance(part_schema, dict):
-                assert "static_initializers" not in part_schema.get("enum", ())
+        def generate_text(self, role, messages, **kwargs):
+            assert role == "coder"
+            assert kwargs.get("enable_tools") is False
             payload = json.loads(messages[-1]["content"])
             concern = payload["concern"]["name"]
             calls.append((concern, bool(payload.get("repair_failure"))))
-            return next(self.responses)
+            return next(responses)
+
+        def generate_tool_decision(self, *_args, **_kwargs):
+            raise AssertionError("production concern generation must not use scalar Java tools")
 
     class Runner:
         def __init__(self, _cache):
