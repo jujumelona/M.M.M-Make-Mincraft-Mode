@@ -19,16 +19,6 @@ from minecraft_mod_ai.structured_state_runtime import (
 )
 
 
-class PlanRouter:
-    def __init__(self, response: str):
-        self.response = response
-        self.calls = []
-
-    def generate_text(self, role, messages, **kwargs):
-        self.calls.append((role, messages, kwargs))
-        return self.response
-
-
 class ProductionStateRouter:
     def __init__(self):
         self.calls = []
