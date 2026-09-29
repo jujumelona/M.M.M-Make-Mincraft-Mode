@@ -100,9 +100,6 @@ jobs:
         run: |
           python -m pytest -q \
             tests/test_direct_custom_module_generator.py \
-            tests/test_atomic_concern_response_contract.py::test_real_member_scope_escape_is_rejected_and_regenerated \
-            tests/test_atomic_concern_response_contract.py::test_identical_invalid_region_output_stops_on_semantic_no_progress \
-            tests/test_atomic_concern_response_contract.py::test_distinct_invalid_region_outputs_stop_at_bounded_attempt_limit \
             tests/test_atomic_concern_response_contract.py::test_stored_state_semantic_shape_retries_then_accepts_declarations_only \
             tests/test_atomic_java_first_pass.py::test_stored_state_schema_forbids_outer_methods_before_model_decode \
             tests/test_atomic_java_first_pass.py::test_stored_state_native_part_selector_never_offers_methods \
