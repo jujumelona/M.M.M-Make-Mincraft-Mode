@@ -1028,6 +1028,19 @@ def _qualify_common_java_names(value: str) -> str:
             index += 2
             block_comment = True
             continue
+        alias_match = next(
+            (
+                (alias, canonical)
+                for alias, canonical in _KNOWN_JAVA_FQCN_ALIASES.items()
+                if source.startswith(alias, index)
+            ),
+            None,
+        )
+        if alias_match is not None:
+            alias, canonical = alias_match
+            out.append(canonical)
+            index += len(alias)
+            continue
         match = _IDENTIFIER_TOKEN.match(source, index)
         if match is None:
             out.append(ch)
