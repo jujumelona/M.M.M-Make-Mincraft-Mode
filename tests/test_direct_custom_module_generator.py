@@ -361,7 +361,7 @@ def _native_field_parts(kind, name, initializer):
 def _native_method_parts(name, body):
     return [
         {"part": "methods"}, {"return_type": "boolean", "name": name},
-        {"part": "body"}, {"value": body},
+        {"part": "body"}, {"statement": body},
         {"part": "done"}, {"part": "done"},
     ]
 
