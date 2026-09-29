@@ -665,5 +665,5 @@ def test_invalid_collection_initializer_is_terminal_without_repair() -> None:
     ])
     with pytest.raises(AtomicJavaDecisionError, match="cannot be instantiated directly"):
         _call_atomic_java_region(router, messages, output_token_ceiling=None)
-    assert len(router.calls) == 3
+    assert len(router.calls) == 2
     assert all(kwargs["tool_name"] == "emit_java_part" for _, kwargs in router.calls)
