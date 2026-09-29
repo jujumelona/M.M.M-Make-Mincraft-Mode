@@ -27,8 +27,8 @@ from .java_region_parser import (
 MEMBERS_MARKER = "<<<MMM_CONCERN_MEMBERS>>>"
 INITIALIZE_MARKER = "<<<MMM_CONCERN_INITIALIZE>>>"
 END_MARKER = "<<<MMM_CONCERN_END>>>"
-_DEFAULT_REGION_ATTEMPT_LIMIT = 4
-_MAX_REGION_ATTEMPT_LIMIT = 32
+_DEFAULT_REGION_ATTEMPT_LIMIT = 1
+_MAX_REGION_ATTEMPT_LIMIT = 1
 _DEFAULT_COMPILE_REPAIR_LIMIT = 4
 _MAX_COMPILE_REPAIR_LIMIT = 16
 _DECLARATION_ONLY_CONCERNS = frozenset({"stored_state"})
@@ -47,14 +47,9 @@ _DECLARATION_ONLY_MEMBER_KINDS = frozenset(
 def _region_attempt_limit() -> int:
     """Return the host safety bound for one already-decomposed concern region."""
 
-    raw = os.environ.get("MMM_ATOMIC_CONCERN_REGION_ATTEMPTS", "").strip()
-    if not raw:
-        return _DEFAULT_REGION_ATTEMPT_LIMIT
-    try:
-        value = int(raw)
-    except ValueError:
-        return _DEFAULT_REGION_ATTEMPT_LIMIT
-    return max(1, min(_MAX_REGION_ATTEMPT_LIMIT, value))
+    # Production concern generation is first-pass only. The environment can no
+    # longer reopen a rejected model decode.
+    return 1
 
 
 def _compile_repair_limit() -> int:
@@ -2337,9 +2332,8 @@ class AtomicConcernExecutor:
                 )
                 if attempt >= attempt_limit:
                     raise CustomModuleGenerationError(
-                        "ATOMIC_CONCERN_RESPONSE_RETRY_EXHAUSTED: "
-                        f"{name}:{response_region} remained invalid after "
-                        f"{attempt_limit} bounded attempts. Last failure: {reason}"
+                        "ATOMIC_CONCERN_FIRST_PASS_RESPONSE_INVALID: "
+                        f"{name}:{response_region} failed its only production decode: {reason}"
                     ) from exc
 
                 validation_failure = (
