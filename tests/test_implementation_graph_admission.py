@@ -347,7 +347,7 @@ def test_native_router_retains_schema_rejection_fields_for_compiler_feedback():
             return nullcontext()
 
     with pytest.raises(NativeToolDecisionRejected) as caught:
-        Router().generate_tool_decision("planner", [{"role": "user", "content": "compile"}],
+        Router().generate_tool_decision("coder", [{"role": "user", "content": "compile"}],
                                        tool_name="compile_implementation_graph", parameters=ir.PAGE_SCHEMA)
     assert getattr(caught.value, "rejections", None) == (rejection,)
     assert "nodes.0.public_api" in str(caught.value)
