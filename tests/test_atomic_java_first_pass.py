@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 
@@ -9,6 +10,7 @@ import pytest
 from jsonschema import Draft202012Validator, ValidationError
 
 from minecraft_mod_ai.atomic_concern_source import _state_default_literal
+from minecraft_mod_ai.atomic_java_assembly import _EXECUTABLE_SCALAR_PATTERN
 from minecraft_mod_ai.custom_module_errors import CustomModuleGenerationError
 from minecraft_mod_ai.custom_module_generator import _call_atomic_java_region
 from minecraft_mod_ai.model_output_atomicity_contract import assert_atomic_model_schema
@@ -31,6 +33,16 @@ def _compile_run(tmp_path, members, probe):
     ("float", "1.0", "1.0f"), ("float", "1e-3", "0.001f"),
     ("long", "3000000000", "3000000000L"),
 ])
+def test_executable_scalar_pattern_compiles_and_blocks_scope_escape() -> None:
+    pattern = re.compile(_EXECUTABLE_SCALAR_PATTERN)
+    assert pattern.fullmatch("return value != null;")
+    assert pattern.fullmatch("if (ready) { return; }")
+    assert pattern.fullmatch("import java.util.List;") is None
+    assert pattern.fullmatch("public class Escape {}") is None
+    assert pattern.fullmatch("public static void initialize() {}") is None
+    assert pattern.fullmatch("static { value = 1; }") is None
+
+
 def test_host_numeric_defaults_compile_without_model_repair(tmp_path, kind, value, expected):
     members = f"static {kind} value = {_state_default_literal(kind, value)};"
     _compile_run(tmp_path, members,
