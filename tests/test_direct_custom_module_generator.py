@@ -294,6 +294,64 @@ def test_host_reserved_missing_target_is_materialized_and_does_not_require_initi
     assert (root / path).read_text(encoding="utf-8") == source
 
 
+def test_platform_api_policy_is_section_wide() -> None:
+    atomic = __import__(
+        "minecraft_mod_ai.atomic_concern_source",
+        fromlist=["_validate_platform_api_admission"],
+    )
+
+    with pytest.raises(
+        direct.CustomModuleGenerationError,
+        match="ATOMIC_CONCERN_PLATFORM_API_FORBIDDEN",
+    ):
+        atomic._validate_platform_api_admission(
+            (
+                "private static Object encode(Object value) { "
+                "return net.minecraft.nbt.NbtUtils.writeItemStack("
+                "(net.minecraft.world.item.ItemStack) value); }"
+            ),
+            section="persistence",
+            grounding={},
+        )
+
+    grounded = {
+        "facts": [
+            {
+                "required_imports": [
+                    "net.minecraft.resources.ResourceLocation",
+                ],
+                "api_symbols": {
+                    "resource_location_factory": {
+                        "owner": "net.minecraft.resources.ResourceLocation",
+                    }
+                },
+            }
+        ]
+    }
+    atomic._validate_platform_api_admission(
+        (
+            "private static Object id(String ns, String path) { "
+            "return net.minecraft.resources.ResourceLocation.fromNamespaceAndPath(ns, path); }"
+        ),
+        section="resources_and_ui",
+        grounding=grounded,
+    )
+
+    with pytest.raises(
+        direct.CustomModuleGenerationError,
+        match="ATOMIC_CONCERN_UNGROUNDED_PLATFORM_API",
+    ):
+        atomic._validate_platform_api_admission(
+            (
+                "private static Object bad(Object value) { "
+                "return net.minecraft.nbt.NbtUtils.writeItemStack("
+                "(net.minecraft.world.item.ItemStack) value); }"
+            ),
+            section="resources_and_ui",
+            grounding=grounded,
+        )
+
+
 def _atomic_module(path: str, symbol: str) -> ProductionModule:
     """Generic semantic-Java atomic fixture; state_model is host-compiled elsewhere."""
     base = _module(path, symbol)
