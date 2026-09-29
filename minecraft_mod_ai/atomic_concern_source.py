@@ -603,6 +603,387 @@ _JAVA_LANG_SIMPLE_TYPES = frozenset(
 )
 
 
+_JDK_CANONICAL_SIMPLE_TYPES = {
+    "Object": "java.lang.Object",
+    "Collection": "java.util.Collection",
+    "List": "java.util.List",
+    "Map": "java.util.Map",
+    "Set": "java.util.Set",
+    "Queue": "java.util.Queue",
+    "Deque": "java.util.Deque",
+    "ArrayList": "java.util.ArrayList",
+    "HashMap": "java.util.HashMap",
+    "LinkedHashMap": "java.util.LinkedHashMap",
+    "HashSet": "java.util.HashSet",
+    "LinkedHashSet": "java.util.LinkedHashSet",
+    "ArrayDeque": "java.util.ArrayDeque",
+    "ConcurrentHashMap": "java.util.concurrent.ConcurrentHashMap",
+    "Lock": "java.util.concurrent.locks.Lock",
+    "ReentrantLock": "java.util.concurrent.locks.ReentrantLock",
+    "ReadWriteLock": "java.util.concurrent.locks.ReadWriteLock",
+    "ReentrantReadWriteLock": "java.util.concurrent.locks.ReentrantReadWriteLock",
+    "AtomicBoolean": "java.util.concurrent.atomic.AtomicBoolean",
+    "AtomicInteger": "java.util.concurrent.atomic.AtomicInteger",
+    "AtomicLong": "java.util.concurrent.atomic.AtomicLong",
+}
+_JDK_FQCN_ALIASES = {
+    "java.util.ConcurrentHashMap": "java.util.concurrent.ConcurrentHashMap",
+    "java.util.Lock": "java.util.concurrent.locks.Lock",
+    "java.util.ReentrantLock": "java.util.concurrent.locks.ReentrantLock",
+    "java.util.ReadWriteLock": "java.util.concurrent.locks.ReadWriteLock",
+    "java.util.ReentrantReadWriteLock": "java.util.concurrent.locks.ReentrantReadWriteLock",
+    "java.util.AtomicBoolean": "java.util.concurrent.atomic.AtomicBoolean",
+    "java.util.AtomicInteger": "java.util.concurrent.atomic.AtomicInteger",
+    "java.util.AtomicLong": "java.util.concurrent.atomic.AtomicLong",
+    "java.util.concurrent.Lock": "java.util.concurrent.locks.Lock",
+    "java.util.concurrent.ReentrantLock": "java.util.concurrent.locks.ReentrantLock",
+    "java.util.concurrent.ReadWriteLock": "java.util.concurrent.locks.ReadWriteLock",
+    "java.util.concurrent.ReentrantReadWriteLock": "java.util.concurrent.locks.ReentrantReadWriteLock",
+}
+_JDK_ASSIGNABLE_DECLARATIONS = {
+    "java.util.ArrayList": frozenset(
+        {"java.util.ArrayList", "java.util.List", "java.util.Collection", "java.lang.Object"}
+    ),
+    "java.util.HashMap": frozenset(
+        {"java.util.HashMap", "java.util.Map", "java.lang.Object"}
+    ),
+    "java.util.LinkedHashMap": frozenset(
+        {"java.util.LinkedHashMap", "java.util.Map", "java.lang.Object"}
+    ),
+    "java.util.concurrent.ConcurrentHashMap": frozenset(
+        {"java.util.concurrent.ConcurrentHashMap", "java.util.Map", "java.lang.Object"}
+    ),
+    "java.util.HashSet": frozenset(
+        {"java.util.HashSet", "java.util.Set", "java.util.Collection", "java.lang.Object"}
+    ),
+    "java.util.LinkedHashSet": frozenset(
+        {"java.util.LinkedHashSet", "java.util.Set", "java.util.Collection", "java.lang.Object"}
+    ),
+    "java.util.ArrayDeque": frozenset(
+        {
+            "java.util.ArrayDeque",
+            "java.util.Deque",
+            "java.util.Queue",
+            "java.util.Collection",
+            "java.lang.Object",
+        }
+    ),
+    "java.util.concurrent.locks.ReentrantLock": frozenset(
+        {
+            "java.util.concurrent.locks.ReentrantLock",
+            "java.util.concurrent.locks.Lock",
+            "java.lang.Object",
+        }
+    ),
+    "java.util.concurrent.locks.ReentrantReadWriteLock": frozenset(
+        {
+            "java.util.concurrent.locks.ReentrantReadWriteLock",
+            "java.util.concurrent.locks.ReadWriteLock",
+            "java.lang.Object",
+        }
+    ),
+    "java.util.concurrent.atomic.AtomicBoolean": frozenset(
+        {"java.util.concurrent.atomic.AtomicBoolean", "java.lang.Object"}
+    ),
+    "java.util.concurrent.atomic.AtomicInteger": frozenset(
+        {"java.util.concurrent.atomic.AtomicInteger", "java.lang.Object"}
+    ),
+    "java.util.concurrent.atomic.AtomicLong": frozenset(
+        {"java.util.concurrent.atomic.AtomicLong", "java.lang.Object"}
+    ),
+}
+_JDK_PREFERRED_DECLARATIONS = {
+    "java.util.ArrayList": "java.util.List",
+    "java.util.HashMap": "java.util.Map",
+    "java.util.LinkedHashMap": "java.util.Map",
+    "java.util.concurrent.ConcurrentHashMap": "java.util.Map",
+    "java.util.HashSet": "java.util.Set",
+    "java.util.LinkedHashSet": "java.util.Set",
+    "java.util.ArrayDeque": "java.util.Deque",
+    "java.util.concurrent.locks.ReentrantLock": "java.util.concurrent.locks.Lock",
+    "java.util.concurrent.locks.ReentrantReadWriteLock": "java.util.concurrent.locks.ReadWriteLock",
+    "java.util.concurrent.atomic.AtomicBoolean": "java.util.concurrent.atomic.AtomicBoolean",
+    "java.util.concurrent.atomic.AtomicInteger": "java.util.concurrent.atomic.AtomicInteger",
+    "java.util.concurrent.atomic.AtomicLong": "java.util.concurrent.atomic.AtomicLong",
+}
+_JDK_GENERIC_ARITY = {
+    "java.util.Collection": 1,
+    "java.util.List": 1,
+    "java.util.Set": 1,
+    "java.util.Queue": 1,
+    "java.util.Deque": 1,
+    "java.util.ArrayList": 1,
+    "java.util.HashSet": 1,
+    "java.util.LinkedHashSet": 1,
+    "java.util.ArrayDeque": 1,
+    "java.util.Map": 2,
+    "java.util.HashMap": 2,
+    "java.util.LinkedHashMap": 2,
+    "java.util.concurrent.ConcurrentHashMap": 2,
+}
+_JDK_LOCK_RECEIVER_METHODS = frozenset(
+    {"lock", "unlock", "tryLock", "lockInterruptibly", "newCondition"}
+)
+_FIELD_MODIFIERS = frozenset(
+    {"public", "protected", "private", "static", "final", "volatile", "transient"}
+)
+
+
+def _canonical_jdk_class_name(value: str) -> str:
+    raw = re.sub(r"\s+", "", _erase_generic_arguments(str(value or ""))).strip()
+    return _JDK_FQCN_ALIASES.get(
+        raw,
+        _JDK_CANONICAL_SIMPLE_TYPES.get(raw, raw),
+    )
+
+
+def _rewrite_known_jdk_fqcns(value: str) -> str:
+    source = str(value or "")
+    aliases = tuple(
+        sorted(_JDK_FQCN_ALIASES.items(), key=lambda item: len(item[0]), reverse=True)
+    )
+    out: list[str] = []
+    index = 0
+    quote = ""
+    line_comment = False
+    block_comment = False
+    while index < len(source):
+        char = source[index]
+        nxt = source[index + 1] if index + 1 < len(source) else ""
+        if line_comment:
+            out.append(char)
+            if char == "\n":
+                line_comment = False
+            index += 1
+            continue
+        if block_comment:
+            out.append(char)
+            if char == "*" and nxt == "/":
+                out.append(nxt)
+                index += 2
+                block_comment = False
+            else:
+                index += 1
+            continue
+        if quote:
+            out.append(char)
+            if char == "\\" and index + 1 < len(source):
+                out.append(source[index + 1])
+                index += 2
+                continue
+            if char == quote:
+                quote = ""
+            index += 1
+            continue
+        if char in {'"', "'"}:
+            quote = char
+            out.append(char)
+            index += 1
+            continue
+        if char == "/" and nxt == "/":
+            out.extend((char, nxt))
+            index += 2
+            line_comment = True
+            continue
+        if char == "/" and nxt == "*":
+            out.extend((char, nxt))
+            index += 2
+            block_comment = True
+            continue
+        matched = False
+        for alias, canonical in aliases:
+            if not source.startswith(alias, index):
+                continue
+            end = index + len(alias)
+            before = source[index - 1] if index else ""
+            after = source[end] if end < len(source) else ""
+            if (
+                (before and (before.isalnum() or before in "_$"))
+                or (after and (after.isalnum() or after in "_$"))
+            ):
+                continue
+            out.append(canonical)
+            index = end
+            matched = True
+            break
+        if matched:
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
+def _single_initialized_field_parts(
+    chunk: str,
+) -> tuple[str, str, str] | None:
+    declaration = str(chunk or "").strip()
+    if not declaration.endswith(";"):
+        return None
+    body = declaration[:-1].strip()
+    assignment = _top_level_assignment_index(body)
+    if assignment < 0:
+        return None
+    left = body[:assignment].strip()
+    initializer = body[assignment + 1 :].strip()
+    identifiers = _JAVA_IDENTIFIER.findall(_structure_scan(left))
+    if not identifiers:
+        return None
+    field_name = identifiers[-1]
+    name_match = re.search(rf"\b{re.escape(field_name)}\s*$", left)
+    if name_match is None:
+        return None
+    prefix = left[: name_match.start()].strip()
+    tokens = prefix.split()
+    while tokens and tokens[0] in _FIELD_MODIFIERS:
+        tokens.pop(0)
+    declared_type = " ".join(tokens).strip()
+    if not declared_type or "@" in declared_type:
+        return None
+    return declared_type, field_name, initializer
+
+
+def _initializer_constructor_type(initializer: str) -> str:
+    match = re.match(
+        r"^new\s+([A-Za-z_$][A-Za-z0-9_$.]*)\s*(?:<[^()]*>)?\s*\(",
+        str(initializer or "").strip(),
+    )
+    if match is None:
+        return ""
+    return _canonical_jdk_class_name(match.group(1))
+
+
+def _receiver_method_names(source: str, field_name: str) -> frozenset[str]:
+    return frozenset(
+        match.group(1)
+        for match in re.finditer(
+            rf"\b{re.escape(field_name)}\s*\.\s*"
+            r"([A-Za-z_$][A-Za-z0-9_$]*)\s*\(",
+            _structure_scan(source),
+        )
+    )
+
+
+def _generic_arguments(value: str) -> tuple[str, ...]:
+    text = str(value or "").strip()
+    start = text.find("<")
+    if start < 0:
+        return ()
+    depth = 0
+    end = -1
+    for index in range(start, len(text)):
+        char = text[index]
+        if char == "<":
+            depth += 1
+        elif char == ">":
+            depth -= 1
+            if depth == 0:
+                end = index
+                break
+    if end < 0:
+        return ()
+    inner = text[start + 1 : end]
+    return tuple(
+        part.strip()
+        for part in _split_top_level(inner, ",")
+        if part.strip()
+    )
+
+
+def _render_canonical_declared_type(target: str, original: str) -> str:
+    arity = _JDK_GENERIC_ARITY.get(target)
+    if not arity:
+        return target
+    arguments = _generic_arguments(original)
+    if len(arguments) != arity:
+        return target
+    return target + "<" + ", ".join(arguments) + ">"
+
+
+def _canonicalize_generated_jdk_semantics(
+    value: str,
+) -> tuple[str, tuple[str, ...]]:
+    """Canonicalize known JDK runtime types before the first compiler invocation.
+
+    The small coder still authors complete Java regions, but the host owns canonical
+    JDK spellings and obvious constructor/declared-type compatibility. This keeps
+    the first compile from failing on deterministic standard-library facts.
+    """
+
+    source = _rewrite_known_jdk_fqcns(value)
+    chunks = class_body_chunks(source)
+    kinds = class_body_member_kinds(source)
+    if len(chunks) != len(kinds):
+        raise CustomModuleGenerationError(
+            "ATOMIC_CONCERN_JAVA_PARSE_INVALID: member chunk/kind cardinality drift"
+        )
+
+    changes: list[str] = []
+    rendered: list[str] = []
+    for chunk, kind in zip(chunks, kinds, strict=True):
+        if kind != "field_declaration":
+            rendered.append(chunk)
+            continue
+        parts = _single_initialized_field_parts(chunk)
+        if parts is None:
+            rendered.append(chunk)
+            continue
+        declared_type, field_name, initializer = parts
+        constructor_type = _initializer_constructor_type(initializer)
+        if not constructor_type:
+            rendered.append(chunk)
+            continue
+        assignable = _JDK_ASSIGNABLE_DECLARATIONS.get(constructor_type)
+        if not assignable:
+            rendered.append(chunk)
+            continue
+
+        declared_class = _canonical_jdk_class_name(declared_type)
+        receiver_methods = _receiver_method_names(source, field_name)
+        target_type = ""
+        if (
+            receiver_methods & _JDK_LOCK_RECEIVER_METHODS
+            and constructor_type
+            in {
+                "java.util.concurrent.locks.ReentrantLock",
+                "java.util.concurrent.locks.ReentrantReadWriteLock",
+            }
+        ):
+            target_type = _JDK_PREFERRED_DECLARATIONS[constructor_type]
+        elif declared_class not in assignable:
+            target_type = _JDK_PREFERRED_DECLARATIONS.get(
+                constructor_type,
+                constructor_type,
+            )
+        elif declared_class == "java.lang.Object" and receiver_methods:
+            target_type = _JDK_PREFERRED_DECLARATIONS.get(
+                constructor_type,
+                constructor_type,
+            )
+
+        normalized_chunk = chunk
+        if target_type:
+            rendered_type = _render_canonical_declared_type(
+                target_type,
+                declared_type,
+            )
+            normalized_chunk = normalized_chunk.replace(
+                declared_type,
+                rendered_type,
+                1,
+            )
+            changes.append(
+                f"{field_name}:declared_type:{declared_type}->{rendered_type}"
+            )
+        if normalized_chunk != chunk:
+            normalized_chunk = _rewrite_known_jdk_fqcns(normalized_chunk)
+        rendered.append(normalized_chunk)
+
+    normalized = "\n\n".join(item.strip() for item in rendered if item.strip()).strip()
+    if normalized != value and not changes:
+        changes.append("canonical_jdk_fqcn")
+    return normalized, tuple(changes)
+
+
 def _declared_type_names(value: str) -> set[str]:
     return {
         display
@@ -2359,6 +2740,7 @@ def _messages(
                 "The first answer must compile as Java for the selected host JDK; do not rely on a later repair pass.",
                 "Never guess a package or fully-qualified class name. Use only a JDK/external type whose canonical package and API are known from the supplied authority.",
                 "For non-java.lang JDK types, use canonical fully-qualified names because imports are not allowed in an atomic region.",
+                "A field declaration type must be assignment-compatible with its initializer, and every receiver method call must exist on that declared type. Never use Map/List/Object as a lock holder merely because the field also guards cached state.",
                 "Every concern-local final field must be definitely assigned before any read. Prefer initialization at the declaration; use a blank final only when the same region performs exactly one unconditional assignment in a static initializer.",
                 "Never reassign a final field. If the binding must change, declare a non-final field; if a final field holds a mutable container, mutate the container rather than rebinding the field.",
                 "Respect available_sibling_api types and mutability exactly; final sibling fields are read-only after declaration.",
@@ -2374,6 +2756,23 @@ def _messages(
                 "reentrant_lock": "java.util.concurrent.locks.ReentrantLock",
                 "atomics": "java.util.concurrent.atomic",
                 "time": "java.time",
+            },
+            "jdk_runtime_patterns": {
+                "exclusive_lock": {
+                    "declared_type": "java.util.concurrent.locks.Lock",
+                    "initializer": "new java.util.concurrent.locks.ReentrantLock()",
+                    "receiver_methods": ["lock", "unlock", "tryLock"],
+                },
+                "map": {
+                    "declared_type": "java.util.Map<K,V>",
+                    "initializer_example": "new java.util.HashMap<>()",
+                    "receiver_methods": ["get", "put", "remove", "containsKey"],
+                },
+                "atomic_counter": {
+                    "declared_type": "java.util.concurrent.atomic.AtomicLong",
+                    "initializer_example": "new java.util.concurrent.atomic.AtomicLong(0L)",
+                    "receiver_methods": ["get", "set", "incrementAndGet", "compareAndSet"],
+                },
             },
             "preferred_shape": (
                 "fields_and_local_types"
@@ -2654,6 +3053,25 @@ class AtomicConcernExecutor:
                     output,
                     response_region=response_region,
                 )
+                if response_region == "members":
+                    canonical, canonical_changes = _canonicalize_generated_jdk_semantics(
+                        parsed
+                    )
+                    if canonical_changes:
+                        from .root_cause_trace import emit_root_cause
+
+                        emit_root_cause(
+                            "atomic_concern_jdk_semantics_canonicalized",
+                            stage="production",
+                            operation="atomic_concern_region",
+                            gate="first_pass_semantic_canonicalization",
+                            result="PASS",
+                            details={
+                                "concern": name,
+                                "changes": list(canonical_changes),
+                            },
+                        )
+                    parsed = canonical
                 if response_region == "members" and name in _DECLARATION_ONLY_CONCERNS:
                     kinds = class_body_member_kinds(parsed)
                     if kinds and any(
@@ -2989,32 +3407,35 @@ class AtomicConcernExecutor:
                 "repair_count": 0,
             }
 
+        compile_repair_limit = _compile_repair_limit()
         for concern in self.ordered:
             name = _slug(concern["concern"])
             self._apply(concern)
             report = self._compile()
-            if getattr(report, "status", "") != "PASS":
+            while getattr(report, "status", "") != "PASS":
                 if _compile_report_timed_out(report):
                     raise CustomModuleGenerationError(_compile_timeout_message(report))
-                failure = self.compile_log(report) or str(
-                    getattr(report, "error", "") or "Gradle compileJava failed."
-                )
-                failing_name = _failure_concern(
-                    self.source,
-                    log=failure,
-                    relative=self.relative,
-                ) or name
-                raise CustomModuleGenerationError(
-                    "ATOMIC_CONCERN_FIRST_PASS_COMPILE_FAILED: "
-                    f"{failing_name} did not compile on its first generated source. "
-                    "Production does not invoke model repair.\n"
-                    + _compact_compiler_failure(
-                        failure,
-                        source=self.source,
-                        relative=self.relative,
-                        concern=failing_name,
+                if self.repairs >= compile_repair_limit:
+                    failure = self.compile_log(report) or str(
+                        getattr(report, "error", "") or "Gradle compileJava failed."
                     )
-                )
+                    failing_name = _failure_concern(
+                        self.source,
+                        log=failure,
+                        relative=self.relative,
+                    ) or name
+                    raise CustomModuleGenerationError(
+                        "ATOMIC_CONCERN_COMPILE_REPAIR_EXHAUSTED: "
+                        f"{failing_name} still did not compile after "
+                        f"{compile_repair_limit} bounded concern-local repairs.\n"
+                        + _compact_compiler_failure(
+                            failure,
+                            source=self.source,
+                            relative=self.relative,
+                            concern=failing_name,
+                        )
+                    )
+                report = self._repair_once(report)
         return {
             "source": self.source,
             "summary": " | ".join(self.summaries),

@@ -934,12 +934,12 @@ def test_stored_state_mixed_shape_is_projected_before_compile(
     assert compiles == 1
 
 
-def test_atomic_compile_failure_is_not_retried(
+def test_atomic_first_candidate_canonicalizes_jdk_lock_semantics_before_compile(
     tmp_path: Path, monkeypatch
 ) -> None:
     root, path, symbol = _project(tmp_path)
-    original = (root / path).read_bytes()
     calls: list[str] = []
+    compiles = 0
 
     class Router:
         def generate_text(self, role, messages, **kwargs):
@@ -949,7 +949,14 @@ def test_atomic_compile_failure_is_not_retried(
             payload = json.loads(messages[-1]["content"])
             concern = payload["concern"]["name"]
             calls.append(concern)
-            return "private static Object value = new Object(1);"
+            return (
+                "private static final java.util.Map<String, java.lang.Object> CACHE_LOCK = "
+                "new java.util.ReentrantLock();\n"
+                "private static void loadCachedState() {\n"
+                "    CACHE_LOCK.lock();\n"
+                "    try { } finally { CACHE_LOCK.unlock(); }\n"
+                "}"
+            )
 
         def generate_tool_decision(self, *_args, **_kwargs):
             raise AssertionError("production concern generation must not use scalar Java tools")
@@ -959,7 +966,68 @@ def test_atomic_compile_failure_is_not_retried(
             pass
 
         def compile_java(self, project_root):
+            nonlocal compiles
+            compiles += 1
             source = (project_root / path).read_text(encoding="utf-8")
+            assert (
+                "java.util.concurrent.locks.Lock CACHE_LOCK = "
+                "new java.util.concurrent.locks.ReentrantLock();"
+            ) in source
+            assert "java.util.ReentrantLock" not in source
+            assert "java.util.Map<String, java.lang.Object> CACHE_LOCK" not in source
+            assert "CACHE_LOCK.lock();" in source
+            assert "CACHE_LOCK.unlock();" in source
+            return SimpleNamespace(status="PASS", commands=(), error=None)
+
+    monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
+    monkeypatch.setattr(direct, "GradleRunner", Runner)
+
+    result = direct.CustomModuleGenerator(Router()).generate(
+        root,
+        module=_atomic_module(path, symbol),
+        minecraft_version="1.21.1",
+        loader="fabric",
+    )
+
+    assert result["generation_verification"]["atomic_repair_count"] == 0
+    assert calls == ["steps"]
+    assert compiles == 1
+
+
+def test_atomic_compile_failure_is_repaired_with_local_bounded_retry(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root, path, symbol = _project(tmp_path)
+    calls: list[str] = []
+    compiles = 0
+
+    class Router:
+        def generate_text(self, role, messages, **kwargs):
+            assert role == "coder"
+            assert kwargs.get("enable_tools") is False
+            assert kwargs.get("force_non_thinking") is True
+            payload = json.loads(messages[-1]["content"])
+            concern = payload["concern"]["name"]
+            calls.append(concern)
+            if len(calls) == 1:
+                return "private static Object value = new Object(1);"
+            repair_failure = str(payload.get("repair_failure") or "")
+            assert "constructor Object cannot be applied" in repair_failure
+            return "private static Object value = new Object();"
+
+        def generate_tool_decision(self, *_args, **_kwargs):
+            raise AssertionError("production concern generation must not use scalar Java tools")
+
+    class Runner:
+        def __init__(self, _cache):
+            pass
+
+        def compile_java(self, project_root):
+            nonlocal compiles
+            compiles += 1
+            source = (project_root / path).read_text(encoding="utf-8")
+            if "new Object(1)" not in source:
+                return SimpleNamespace(status="PASS", commands=(), error=None)
             line = next(
                 index for index, text in enumerate(source.splitlines(), start=1)
                 if "new Object(1)" in text
@@ -979,19 +1047,19 @@ def test_atomic_compile_failure_is_not_retried(
     monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
     monkeypatch.setattr(direct, "GradleRunner", Runner)
 
-    with pytest.raises(
-        direct.CustomModuleGenerationError,
-        match="ATOMIC_CONCERN_FIRST_PASS_COMPILE_FAILED",
-    ):
-        direct.CustomModuleGenerator(Router()).generate(
-            root,
-            module=_atomic_module(path, symbol),
-            minecraft_version="1.21.1",
-            loader="fabric",
-        )
+    result = direct.CustomModuleGenerator(Router()).generate(
+        root,
+        module=_atomic_module(path, symbol),
+        minecraft_version="1.21.1",
+        loader="fabric",
+    )
 
-    assert calls == ["steps"]
-    assert (root / path).read_bytes() == original
+    source = (root / path).read_text(encoding="utf-8")
+    assert "new Object();" in source
+    assert "new Object(1)" not in source
+    assert result["generation_verification"]["atomic_repair_count"] == 1
+    assert calls == ["steps", "steps"]
+    assert compiles == 2
 
 def test_nonintegration_atomic_concern_cannot_write_initialize_body() -> None:
     from minecraft_mod_ai.atomic_concern_source import parse_concern_content
