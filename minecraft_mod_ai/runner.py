@@ -113,10 +113,16 @@ class GradleRunner:
         prepared = self._prepare_build_context(self._trusted_project_root(project_root))
         if isinstance(prepared, BuildReport):
             return prepared
+        # Atomic concern generation invokes compileJava many times across temporary
+        # staging projects that intentionally share one GRADLE_USER_HOME for dependency
+        # caches. Do not also share a long-lived Gradle daemon across those projects:
+        # a poisoned/stalled daemon can turn an otherwise 1-7s compile into a 1200s
+        # process timeout. --no-daemon still reuses the shared Gradle dependency/cache
+        # directories while isolating process state for each compiler oracle call.
         result = self._run(
             name="compile_java",
             executable=prepared.gradle,
-            arguments=("compileJava", "--stacktrace"),
+            arguments=("--no-daemon", "compileJava", "--stacktrace"),
             cwd=prepared.project_root,
             env=prepared.environment,
             log_path=prepared.logs / "gradle-compile-java.log",
