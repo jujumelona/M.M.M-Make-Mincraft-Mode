@@ -147,8 +147,23 @@ def _chunks_from_body(body: Any, source: bytes, *, drop_host_lifecycle: bool) ->
     return tuple(chunk for chunk in chunks if chunk)
 
 
+def class_body_chunks(value: str) -> tuple[str, ...]:
+    """Split a syntactically valid Java class body without applying ownership policy."""
+    region = str(value or "").strip()
+    if not region:
+        return ()
+    prefix = "final class __MMMRegionHost {\n"
+    source, root = _parse(prefix + region + "\n}\n")
+    body = _class_body(root)
+    return tuple(
+        _text(source, node).strip()
+        for node in body.named_children
+        if node.type not in _COMMENT_TYPES and _text(source, node).strip()
+    )
+
+
 def strict_member_chunks(value: str) -> tuple[str, ...]:
-    """Parse a Java class-body fragment and return structural top-level members."""
+    """Parse model-authored class-body members and enforce concern ownership policy."""
     region = str(value or "").strip()
     if not region:
         return ()
