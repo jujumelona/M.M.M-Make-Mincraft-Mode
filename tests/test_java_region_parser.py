@@ -101,3 +101,54 @@ def test_parser_only_split_keeps_host_static_initializer_for_host_code() -> None
 def test_model_admission_still_rejects_static_initializer() -> None:
     with pytest.raises(JavaRegionParseError, match="static_initializer"):
         strict_member_chunks("static { value = 1; }")
+
+
+def test_markdown_it_selects_last_admissible_java_fence_from_reasoning_output() -> None:
+    output = """
+The user is asking me to implement entry_conditions. Let me analyze the requirements.
+
+```java
+public static void initialize() {
+    throw new AssertionError("draft");
+}
+```
+
+I need to reconsider the design and produce the final member region.
+
+```java
+private static final java.util.concurrent.locks.ReentrantLock entryConditionLock =
+        new java.util.concurrent.locks.ReentrantLock();
+private static boolean firstSmelterCompleted;
+
+public static void initialize() {
+    firstSmelterCompleted = false;
+}
+
+public static boolean isEntryConditionsMet() {
+    return firstSmelterCompleted;
+}
+```
+"""
+    admitted = admit_member_region(output)
+    assert "entryConditionLock" in admitted
+    assert "firstSmelterCompleted" in admitted
+    assert "isEntryConditionsMet" in admitted
+    assert "initialize()" not in admitted
+    assert "The user is asking" not in admitted
+
+
+def test_markdown_it_prefers_last_valid_java_draft() -> None:
+    output = """
+```java
+private static int draftValue = 1;
+```
+
+revising...
+
+```java
+private static int finalValue = 2;
+```
+"""
+    admitted = admit_member_region(output)
+    assert "finalValue = 2" in admitted
+    assert "draftValue" not in admitted
