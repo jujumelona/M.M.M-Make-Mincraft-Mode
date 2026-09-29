@@ -354,7 +354,7 @@ def _atomic_module(path: str, symbol: str) -> ProductionModule:
 def _native_field_parts(kind, name, initializer):
     return [
         {"part": "fields"}, {"type": kind, "name": name, "initializer": initializer},
-        {"part": "done"}, {"part": "done"},
+        {"part": "done"},
     ]
 
 
