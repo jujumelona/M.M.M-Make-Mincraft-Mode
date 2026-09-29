@@ -294,6 +294,16 @@ def test_host_reserved_missing_target_is_materialized_and_does_not_require_initi
     assert (root / path).read_text(encoding="utf-8") == source
 
 
+def test_every_execution_section_declares_platform_api_policy() -> None:
+    schema = __import__(
+        "minecraft_mod_ai.authored_execution_schema",
+        fromlist=["SECTION_SPECS"],
+    )
+    assert schema.SECTION_SPECS
+    for section, spec in schema.SECTION_SPECS.items():
+        assert spec["platform_api_policy"] in {"forbidden", "host_grounded_only"}, section
+
+
 def test_platform_api_policy_is_section_wide() -> None:
     atomic = __import__(
         "minecraft_mod_ai.atomic_concern_source",
