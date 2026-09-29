@@ -411,7 +411,9 @@ def test_ir_atomic_concerns_are_isolated_and_compiled_as_one_host_file(
         if index == 0 or calls[index - 1][0] != name
     ]
     assert concern_transitions == ["steps", "branches"]
-    assert all(kwargs["tool_name"] == "emit_java_part" for _name, kwargs in calls)
+    tool_names = {kwargs["tool_name"] for _name, kwargs in calls}
+    assert "emit_java_part" in tool_names
+    assert "emit_java_statement" in tool_names
     assert all("parameters" in kwargs for _name, kwargs in calls)
     assert "static int balance = 0;" in source
     assert "private static boolean valid()" in source
