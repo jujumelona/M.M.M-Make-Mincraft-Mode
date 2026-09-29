@@ -188,13 +188,20 @@ class JavaStructureAssembly:
         }
         use_multi = bool(multiple and self.multi_callback is not None)
         callback = self.multi_callback if use_multi else self.callback
+        statement_path = bool(path and path[-1] in {"body", "statements"})
         kwargs = {
-            "tool_name": "emit_java_part",
+            "tool_name": "emit_java_statement" if statement_path else "emit_java_part",
             "parameters": dict(schema),
             "description": (
-                "Emit one Java sibling item per native function call."
-                if use_multi
-                else "Fill the selected Java declaration or statement using native scalar arguments."
+                "Emit exactly one executable Java statement or balanced control-flow block "
+                "for an already-declared host-owned method/lifecycle body. Never emit a "
+                "method signature, declaration wrapper, import, type declaration, or static initializer."
+                if statement_path
+                else (
+                    "Emit one Java sibling item per native function call."
+                    if use_multi
+                    else "Fill the selected Java declaration using native scalar arguments."
+                )
             ),
         }
         signature = inspect.signature(callback)
@@ -466,14 +473,27 @@ class JavaStructureAssembly:
                     self._object(item_schema, item, item_path)
             else:
                 scalar = _scalar_schema(item_schema, selected)
+                executable = selected in {"body", "statements"}
+                argument = "statement" if executable else "value"
+                purpose = "Append one or more complete values; one native call per value."
+                if executable:
+                    owner_name = str(target.get("name") or "").strip()
+                    owner_return = str(target.get("return_type") or "").strip()
+                    signature = (
+                        f"{owner_return} {owner_name}(...)" if owner_name else "host-owned lifecycle body"
+                    )
+                    purpose = (
+                        f"Emit executable statements only for existing {signature}. "
+                        "The declaration/header already exists and must not be repeated."
+                    )
                 emitted = self._ask_many(
-                    _closed({"value": scalar}, ["value"]),
+                    _closed({argument: scalar}, [argument]),
                     [*path, selected],
-                    "Append one or more complete values; one native call per value.",
+                    purpose,
                     limit=remaining,
                 )
                 for row in emitted:
-                    value = row["value"]
+                    value = row[argument]
                     if selected_spec.get("uniqueItems") and value in values:
                         raise AtomicJavaDecisionError(
                             f"ATOMIC_JAVA_ASSEMBLY_INVALID: duplicate {selected} value.",
