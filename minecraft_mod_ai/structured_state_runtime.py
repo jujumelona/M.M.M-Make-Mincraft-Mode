@@ -745,6 +745,90 @@ private static int $mmmCompare(Object left, Object right) {
     return String.valueOf(left).compareTo(String.valueOf(right));
 }
 
+private static double $mmmSumValue(Object value) {
+    if (value == null) {
+        return 0.0d;
+    }
+    if (value instanceof java.lang.Iterable<?> iterable) {
+        double total = 0.0d;
+        for (Object item : iterable) {
+            total += $mmmSumValue(item);
+        }
+        return total;
+    }
+    if (value instanceof java.util.Map<?, ?> map) {
+        double total = 0.0d;
+        for (Object item : map.values()) {
+            total += $mmmSumValue(item);
+        }
+        return total;
+    }
+    if (value.getClass().isArray()) {
+        double total = 0.0d;
+        int length = java.lang.reflect.Array.getLength(value);
+        for (int index = 0; index < length; index++) {
+            total += $mmmSumValue(java.lang.reflect.Array.get(value, index));
+        }
+        return total;
+    }
+    return $mmmNumber(value);
+}
+
+private static int $mmmSize(Object value) {
+    if (value == null) {
+        return 0;
+    }
+    if (value instanceof java.util.Collection<?> collection) {
+        return collection.size();
+    }
+    if (value instanceof java.util.Map<?, ?> map) {
+        return map.size();
+    }
+    if (value instanceof java.lang.CharSequence text) {
+        return text.length();
+    }
+    if (value.getClass().isArray()) {
+        return java.lang.reflect.Array.getLength(value);
+    }
+    return 1;
+}
+
+private static Object $mmmFunction(
+        String name,
+        java.util.List<Object> args,
+        java.util.Map<String, Object> context
+) {
+    return switch (name) {
+        case "sum" -> {
+            double total = 0.0d;
+            for (Object arg : args) {
+                total += $mmmSumValue(arg);
+            }
+            yield total;
+        }
+        case "min" -> {
+            double result = Double.POSITIVE_INFINITY;
+            for (Object arg : args) {
+                result = Math.min(result, $mmmNumber(arg));
+            }
+            yield result == Double.POSITIVE_INFINITY ? 0.0d : result;
+        }
+        case "max" -> {
+            double result = Double.NEGATIVE_INFINITY;
+            for (Object arg : args) {
+                result = Math.max(result, $mmmNumber(arg));
+            }
+            yield result == Double.NEGATIVE_INFINITY ? 0.0d : result;
+        }
+        case "abs" -> Math.abs(args.isEmpty() ? 0.0d : $mmmNumber(args.get(0)));
+        case "count", "size", "len" ->
+                args.isEmpty() ? 0 : $mmmSize(args.get(0));
+        default -> throw new IllegalArgumentException(
+                "Unsupported structured-state function: " + name
+        );
+    };
+}
+
 public static synchronized String transition(
         String fromState,
         String trigger,
