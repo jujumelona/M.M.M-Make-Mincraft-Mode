@@ -11,6 +11,8 @@ on:
       - 'minecraft_mod_ai/java_region_parser.py'
       - 'minecraft_mod_ai/authored_production.py'
       - 'minecraft_mod_ai/production_state_compiler.py'
+      - 'minecraft_mod_ai/structured_state_runtime.py'
+      - 'minecraft_mod_ai/implementation_graph_execution.py'
       - 'minecraft_mod_ai/runner.py'
       - 'minecraft_mod_ai/complete_orchestrator.py'
       - 'minecraft_mod_ai/scheduler_claim_fencing_contract.py'
@@ -20,6 +22,8 @@ on:
       - 'tests/test_java_region_parser.py'
       - 'tests/test_authored_direct_lowering.py'
       - 'tests/test_production_state_compiler.py'
+      - 'tests/test_authored_state_lowering_regression.py'
+      - 'tests/test_implementation_graph_admission.py'
       - 'tests/test_complete_final_validation_contract.py'
       - 'tests/test_scheduler_claim_fencing_contract.py'
       - '.github/workflows/production-path-contract.yml'
@@ -33,6 +37,8 @@ on:
       - 'minecraft_mod_ai/java_region_parser.py'
       - 'minecraft_mod_ai/authored_production.py'
       - 'minecraft_mod_ai/production_state_compiler.py'
+      - 'minecraft_mod_ai/structured_state_runtime.py'
+      - 'minecraft_mod_ai/implementation_graph_execution.py'
       - 'minecraft_mod_ai/runner.py'
       - 'minecraft_mod_ai/complete_orchestrator.py'
       - 'minecraft_mod_ai/scheduler_claim_fencing_contract.py'
@@ -42,6 +48,8 @@ on:
       - 'tests/test_java_region_parser.py'
       - 'tests/test_authored_direct_lowering.py'
       - 'tests/test_production_state_compiler.py'
+      - 'tests/test_authored_state_lowering_regression.py'
+      - 'tests/test_implementation_graph_admission.py'
       - 'tests/test_complete_final_validation_contract.py'
       - 'tests/test_scheduler_claim_fencing_contract.py'
       - '.github/workflows/production-path-contract.yml'
@@ -77,6 +85,8 @@ jobs:
             minecraft_mod_ai/custom_module_generator.py \
             minecraft_mod_ai/authored_production.py \
             minecraft_mod_ai/production_state_compiler.py \
+            minecraft_mod_ai/structured_state_runtime.py \
+            minecraft_mod_ai/implementation_graph_execution.py \
             minecraft_mod_ai/runner.py \
             minecraft_mod_ai/complete_orchestrator.py \
             minecraft_mod_ai/scheduler_claim_fencing_contract.py \
@@ -88,5 +98,7 @@ jobs:
             tests/test_direct_custom_module_generator.py \
             tests/test_authored_direct_lowering.py \
             tests/test_production_state_compiler.py \
+            tests/test_authored_state_lowering_regression.py \
+            tests/test_implementation_graph_admission.py \
             tests/test_complete_final_validation_contract.py \
             tests/test_scheduler_claim_fencing_contract.py
