@@ -12,6 +12,7 @@ from minecraft_mod_ai.production_state_compiler import (
     _normalize_expression,
     _parse_semantic_page,
     compile_production_state_section,
+    normalize_structured_state_section,
 )
 from minecraft_mod_ai.structured_state_runtime import (
     render_state_model_concern,
@@ -611,3 +612,165 @@ def test_production_state_is_sidecar_and_preserves_structured_authority():
     assert request["structured_sections"] == structured
     assert request["structured_sections_sha256"].startswith("sha256:")
     assert original.structured_sections == structured
+
+
+def test_lark_state_expression_accepts_word_logic_aggregates_and_implication():
+    for expression in (
+        "current_ship_volume <= 50000 AND ship_module_slots_available > 0 OR trade_offer_validated",
+        "player_resource_balance >= sum(required_costs_for_all_pending_module_constructions)",
+        "interstellar_travel_sequence_active -> warp_gate_access_enabled = true",
+        "NOT blocked OR (credits >= cost AND ready)",
+    ):
+        validate_state_expression(expression)
+
+
+def test_structured_state_boundary_normalizes_latest_runtime_shapes():
+    raw = {
+        "specification": {
+            "variables": [
+                {
+                    "name": "resource_balance",
+                    "owner": "player",
+                    "type": "double",
+                    "unit": "credits",
+                    "default": "0",
+                    "domain": "number",
+                },
+                {
+                    "name": "interstellar_travel_status",
+                    "owner": "player",
+                    "type": "boolean",
+                    "unit": "status",
+                    "default": "false",
+                    "domain": "boolean",
+                },
+            ],
+            "transitions": [],
+            "invariants": [
+                {
+                    "condition": (
+                        "current_ship_volume <= 50000 AND "
+                        "ship_module_slots_available > 0 OR trade_offer_validated"
+                    ),
+                    "enforcement": "reject invalid state",
+                },
+                {
+                    "condition": (
+                        "player_resource_balance >= "
+                        "sum(required_costs_for_all_pending_module_constructions)"
+                    ),
+                    "enforcement": "reject insufficient resources",
+                },
+                {
+                    "condition": (
+                        "interstellar_travel_sequence_active -> "
+                        "warp_gate_access_enabled = true"
+                    ),
+                    "enforcement": "block early travel",
+                },
+            ],
+            "initialization": [
+                {
+                    "owner": "game_engine",
+                    "trigger": "start",
+                    "initial_state": (
+                        "interstellar_travel_status: false, "
+                        "unknown_external_state: {}"
+                    ),
+                }
+            ],
+            "updates": [
+                {
+                    "trigger": "tick",
+                    "mutation": (
+                        "resource_balance += extracted_amount; "
+                        "inventory.update()"
+                    ),
+                    "owner": "game_engine",
+                }
+            ],
+            "cleanup": [],
+            "concurrency": [],
+            "inapplicable_concerns": [],
+        },
+        "constraint_evidence_refs": [],
+    }
+
+    normalized = normalize_structured_state_section(raw)
+    spec = normalized["specification"]
+
+    assert spec["invariants"][0]["condition"] == (
+        "current_ship_volume <= 50000 && "
+        "ship_module_slots_available > 0 || trade_offer_validated"
+    )
+    assert "sum" in spec["invariants"][1]["condition"]
+    assert "->" in spec["invariants"][2]["condition"]
+    assert spec["updates"] == [
+        {
+            "trigger": "tick",
+            "mutation": "resource_balance += extracted_amount",
+            "owner": "game_engine",
+        }
+    ]
+    assert all(
+        "inventory.update" not in row.get("mutation", "")
+        for row in spec["updates"]
+    )
+
+
+def test_lark_state_expression_compiles_latest_invariants_without_model():
+    obligations = [
+        json.dumps({
+            "instruction": json.dumps(
+                {"section": "state_model", "concern": "variables"}
+            ),
+            "structured_records": [
+                {
+                    "name": "resource_balance",
+                    "owner": "player",
+                    "type": "double",
+                    "unit": "credits",
+                    "default": "0",
+                    "domain": "number",
+                }
+            ],
+        }),
+        json.dumps({
+            "instruction": json.dumps(
+                {"section": "state_model", "concern": "invariants"}
+            ),
+            "structured_records": [
+                {
+                    "condition": (
+                        "current_ship_volume <= 50000 AND "
+                        "ship_module_slots_available > 0 OR trade_offer_validated"
+                    ),
+                    "enforcement": "reject",
+                },
+                {
+                    "condition": (
+                        "player_resource_balance >= "
+                        "sum(required_costs_for_all_pending_module_constructions)"
+                    ),
+                    "enforcement": "reject",
+                },
+                {
+                    "condition": (
+                        "interstellar_travel_sequence_active -> "
+                        "warp_gate_access_enabled = true"
+                    ),
+                    "enforcement": "reject",
+                },
+            ],
+        }),
+    ]
+    java = render_state_model_concern(
+        {"implementation_obligations": obligations},
+        "invariants",
+        include_runtime=True,
+    )
+
+    assert java is not None
+    assert "$mmmFunction" in java
+    assert "&&" in java
+    assert "||" in java
