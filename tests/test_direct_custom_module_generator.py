@@ -437,10 +437,14 @@ This wrapper is complete.
         "private static boolean valid() { return balance >= 0; }",
     ])
 
+    calls = 0
+
     class Router:
         def generate_text(self, role, messages, **kwargs):
+            nonlocal calls
             assert role == "coder"
             assert kwargs.get("enable_tools") is False
+            calls += 1
             return next(responses)
 
         def generate_tool_decision(self, *_args, **_kwargs):
@@ -468,6 +472,7 @@ This wrapper is complete.
     assert "AccidentalOuter" not in source
     assert "private static int balance = 0;" in source
     assert "private static boolean valid()" in source
+    assert calls == 2
 
 
 def test_atomic_concern_compile_repair_reopens_only_localized_concern(
