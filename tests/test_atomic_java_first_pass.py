@@ -64,6 +64,83 @@ def _messages():
     })}]
 
 
+def test_structured_assembly_receives_first_pass_compiler_contract() -> None:
+    router = ScalarRouter([{"part": "done"}])
+    messages = [{"role": "user", "content": json.dumps({
+        "response_region": "members",
+        "host_selected_class": "Probe",
+        "concern": {"name": "concurrency_hazards"},
+        "generation_recipe": {
+            "first_pass_goal": "compile on the first generated candidate",
+            "compiler_first_rules": [
+                "Never reassign a final field.",
+                "Narrow Object with an explicit runtime type check.",
+            ],
+            "jdk_package_anchors": {
+                "locks": "java.util.concurrent.locks",
+            },
+            "sibling_api_is_authoritative": True,
+            "never_mutate_final_sibling_fields": True,
+        },
+    })}]
+
+    _call_atomic_java_region(router, messages, output_token_ceiling=512)
+
+    request_messages, _kwargs = router.calls[0]
+    system = request_messages[0]["content"]
+    payload = json.loads(request_messages[-1]["content"])
+
+    assert payload["compiler_contract"]["first_pass_goal"] == (
+        "compile on the first generated candidate"
+    )
+    assert payload["compiler_contract"]["rules"] == [
+        "Never reassign a final field.",
+        "Narrow Object with an explicit runtime type check.",
+    ]
+    assert payload["compiler_contract"]["jdk_package_anchors"]["locks"] == (
+        "java.util.concurrent.locks"
+    )
+    assert payload["compiler_contract"]["sibling_api_is_authoritative"] is True
+    assert payload["compiler_contract"]["never_mutate_final_sibling_fields"] is True
+    assert "first-pass compilable Java" in system
+    assert "Lock/ReentrantLock live in java.util.concurrent.locks" in system
+
+
+def test_blank_field_cannot_select_final_modifier_during_native_assembly() -> None:
+    captured_modifier_schema = {}
+
+    class Router:
+        def __init__(self):
+            self.responses = iter([
+                {"part": "fields"},
+                {"type": "boolean", "name": "flag"},
+                {"part": "modifiers"},
+                {"value": "private"},
+                {"part": "done"},
+                {"part": "done"},
+            ])
+
+        def generate_tool_decision(self, role, messages, **kwargs):
+            del role, messages
+            schema = kwargs["parameters"]
+            properties = schema.get("properties", {})
+            value_schema = properties.get("value", {})
+            if "enum" in value_schema and "private" in value_schema["enum"]:
+                captured_modifier_schema.update(value_schema)
+            value = next(self.responses)
+            Draft202012Validator(schema).validate(value)
+            return value
+
+    rendered = _call_atomic_java_region(
+        Router(),
+        _messages(),
+        output_token_ceiling=512,
+    )
+
+    assert rendered == "private static boolean flag;"
+    assert "final" not in captured_modifier_schema["enum"]
+
+
 def test_initialization_is_assembled_from_native_scalars_and_executes(tmp_path):
     router = ScalarRouter([
         {"part": "methods"}, {"return_type": "void", "name": "initPlayerState"},
