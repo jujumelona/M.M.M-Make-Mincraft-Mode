@@ -1640,7 +1640,19 @@ def _field_rows(decision: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
 
 
 def _authority_method_return_types(payload: Mapping[str, Any]) -> dict[str, str]:
-    result: dict[str, str] = {}
+    """Return only unambiguous authoritative method return types.
+
+    Tree-sitter-derived contracts are preferred. Text parsing remains a compatibility
+    fallback for dependency rows produced before typed_public_api existed.
+    """
+
+    candidates: dict[str, set[str]] = {}
+
+    def record(name: Any, return_type: Any) -> None:
+        symbol = str(name or "").strip()
+        declared = str(return_type or "").strip()
+        if symbol and declared:
+            candidates.setdefault(symbol, set()).add(declared)
 
     def ingest(declaration: Any) -> None:
         text = " ".join(str(declaration or "").replace("{ ... }", "").split())
@@ -1658,19 +1670,36 @@ def _authority_method_return_types(payload: Mapping[str, Any]) -> dict[str, str]
             "",
             match.group(1).strip(),
         )
-        name = match.group(2)
-        if return_type and name:
-            result.setdefault(name, return_type)
+        record(match.group(2), return_type)
 
     for row in payload.get("available_sibling_api") or ():
-        if isinstance(row, Mapping) and row.get("kind") == "method":
+        if not isinstance(row, Mapping) or row.get("kind") != "method":
+            continue
+        if row.get("return_type"):
+            record(row.get("symbol"), row.get("return_type"))
+        else:
             ingest(row.get("declaration"))
+
     for row in payload.get("dependency_api") or ():
         if not isinstance(row, Mapping):
             continue
+        typed = [
+            item
+            for item in row.get("typed_public_api") or ()
+            if isinstance(item, Mapping) and item.get("kind") == "method"
+        ]
+        if typed:
+            for item in typed:
+                record(item.get("symbol"), item.get("return_type"))
+            continue
         for declaration in row.get("public_api") or ():
             ingest(declaration)
-    return result
+
+    return {
+        name: next(iter(types))
+        for name, types in candidates.items()
+        if len(types) == 1
+    }
 
 
 def _is_object_type(java_type: str) -> bool:
