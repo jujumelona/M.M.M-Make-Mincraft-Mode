@@ -6,7 +6,7 @@ import shutil
 import subprocess
 
 import pytest
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, ValidationError
 
 from minecraft_mod_ai.atomic_concern_source import _state_default_literal
 from minecraft_mod_ai.custom_module_errors import CustomModuleGenerationError
@@ -107,6 +107,33 @@ def test_structured_assembly_receives_first_pass_compiler_contract() -> None:
     assert payload["compiler_contract"]["never_mutate_final_sibling_fields"] is True
     assert "first-pass compilable Java" in system
     assert "Lock/ReentrantLock live in java.util.concurrent.locks" in system
+
+
+@pytest.mark.parametrize("concern_name", ["actors", "variables"])
+def test_static_initializers_are_never_model_selectable(concern_name: str) -> None:
+    class Router:
+        def generate_tool_decision(self, role, messages, **kwargs):
+            del role, messages
+            properties = kwargs["parameters"]["properties"]
+            assert set(properties) == {"part"}
+            choices = properties["part"]["enum"]
+            assert "static_initializers" not in choices
+            return {"part": "done"}
+
+    rendered = _call_atomic_java_region(
+        Router(),
+        [{
+            "role": "user",
+            "content": json.dumps({
+                "response_region": "members",
+                "host_selected_class": "Probe",
+                "concern": {"name": concern_name},
+            }),
+        }],
+        output_token_ceiling=512,
+    )
+
+    assert rendered == ""
 
 
 def test_java_modifiers_are_never_model_authored() -> None:
@@ -248,6 +275,15 @@ def test_multi_call_scalar_batch_keeps_schema_after_cursor_close() -> None:
             if {"return_type", "name"} <= set(properties):
                 return ({"return_type": "void", "name": "launch"},)
             if set(properties) == {"value"}:
+                with pytest.raises(ValidationError):
+                    Draft202012Validator(kwargs["parameters"]).validate({
+                        "value": (
+                            "import java.util.concurrent.locks.ReentrantLock;\n"
+                            "public class AuthoredBehaviorContract {\n"
+                            "    public static void initialize() {}\n"
+                            "}"
+                        )
+                    })
                 return ({"value": "return;"},)
             raise AssertionError(f"unexpected batch schema: {sorted(properties)}")
 
