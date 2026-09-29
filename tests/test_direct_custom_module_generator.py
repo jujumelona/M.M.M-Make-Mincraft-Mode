@@ -417,6 +417,57 @@ def test_ir_atomic_concerns_are_isolated_and_compiled_as_one_host_file(
     assert result["generation_verification"]["mode"] == "gradle_compile_java_semantic_concerns"
     assert result["generation_verification"]["atomic_concern_count"] == 2
 
+def test_production_tree_sitter_unwraps_accidental_outer_class(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root, path, symbol = _project(tmp_path)
+    responses = iter([
+        """
+package accidental.wrapper;
+import java.util.List;
+
+public final class AccidentalOuter {
+    private AccidentalOuter() {}
+    private static int balance = 0;
+    public static void initialize() {}
+}
+""",
+        "private static boolean valid() { return balance >= 0; }",
+    ])
+
+    class Router:
+        def generate_text(self, role, messages, **kwargs):
+            assert role == "coder"
+            assert kwargs.get("enable_tools") is False
+            return next(responses)
+
+        def generate_tool_decision(self, *_args, **_kwargs):
+            raise AssertionError("production concern generation must not use scalar Java tools")
+
+    class Runner:
+        def __init__(self, _cache):
+            pass
+
+        def compile_java(self, _root):
+            return SimpleNamespace(status="PASS", commands=(), error=None)
+
+    monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
+    monkeypatch.setattr(direct, "GradleRunner", Runner)
+    direct.CustomModuleGenerator(Router()).generate(
+        root,
+        module=_atomic_module(path, symbol),
+        minecraft_version="1.21.1",
+        loader="fabric",
+    )
+
+    source = (root / path).read_text(encoding="utf-8")
+    assert "package accidental.wrapper" not in source
+    assert "import java.util.List" not in source
+    assert "AccidentalOuter" not in source
+    assert "private static int balance = 0;" in source
+    assert "private static boolean valid()" in source
+
+
 def test_atomic_concern_compile_repair_reopens_only_localized_concern(
     tmp_path: Path, monkeypatch
 ) -> None:
