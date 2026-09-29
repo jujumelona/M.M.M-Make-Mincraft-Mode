@@ -267,9 +267,11 @@ def _leaf_module(
         production_state_section=request.get("production_state_section"),
     )
     parent = parent_config if isinstance(parent_config, Mapping) else {}
+    parent_task = parent.get("evidence_task")
+    parent_task = parent_task if isinstance(parent_task, Mapping) else {}
     grounding_identity: dict[str, Any] = {}
     for key in ("semantic_kind", "artifact_kind", "implementation_responsibilities"):
-        value = parent.get(key)
+        value = parent.get(key) or parent_task.get(key)
         if value:
             grounding_identity[key] = deepcopy(value)
     return ProductionModule(
