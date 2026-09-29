@@ -354,7 +354,6 @@ def _atomic_module(path: str, symbol: str) -> ProductionModule:
 def _native_field_parts(kind, name, initializer):
     return [
         {"part": "fields"}, {"type": kind, "name": name, "initializer": initializer},
-        {"part": "modifiers"}, {"value": "private"},
         {"part": "done"}, {"part": "done"},
     ]
 
@@ -362,7 +361,6 @@ def _native_field_parts(kind, name, initializer):
 def _native_method_parts(name, body):
     return [
         {"part": "methods"}, {"return_type": "boolean", "name": name},
-        {"part": "modifiers"}, {"value": "public"},
         {"part": "body"}, {"value": body},
         {"part": "done"}, {"part": "done"},
     ]
@@ -413,7 +411,7 @@ def test_ir_atomic_concerns_are_isolated_and_compiled_as_one_host_file(
     assert all(kwargs["tool_name"] == "emit_java_part" for _name, kwargs in calls)
     assert all("parameters" in kwargs for _name, kwargs in calls)
     assert "static int balance = 0;" in source
-    assert "public static boolean valid()" in source
+    assert "private static boolean valid()" in source
     assert "MMM_ATOMIC_CONCERN_STEPS_MEMBERS_START" in source
     assert "MMM_ATOMIC_CONCERN_BRANCHES_MEMBERS_START" in source
     assert result["generation_verification"]["mode"] == "gradle_compile_java_semantic_concerns"
@@ -484,7 +482,7 @@ def test_atomic_concern_compile_repair_reopens_only_localized_concern(
     source = (root / path).read_text(encoding="utf-8")
     assert "new Object(1)" not in source
     assert "new Object()" in source
-    assert "public static boolean valid()" in source
+    assert "private static boolean valid()" in source
     assert result["generation_verification"]["atomic_repair_count"] == 1
 
 def test_nonintegration_atomic_concern_cannot_write_initialize_body() -> None:
