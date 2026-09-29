@@ -337,7 +337,7 @@ def test_native_router_retains_schema_rejection_fields_for_compiler_feedback():
 
     class Router(ModelRouter):
         def __init__(self):
-            pass
+            self._agent_require_fresh_evidence = False
 
         def _generation_adapter(self, role):
             return SimpleNamespace(adapter="llama_cpp"), SimpleNamespace(generate_turn=lambda request: GenerationResponse(
