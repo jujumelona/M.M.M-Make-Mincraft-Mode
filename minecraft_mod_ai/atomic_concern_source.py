@@ -21,8 +21,11 @@ from .java_region_parser import (
     admit_initialize_region,
     admit_member_region,
     class_body_chunks,
+    class_body_assignment_targets,
+    class_body_direct_return_calls,
     class_body_member_contracts,
     class_body_member_kinds,
+    class_body_method_invocations,
     public_source_member_contracts,
     strict_initialize_statements,
     strict_member_chunks,
@@ -2601,6 +2604,164 @@ def _dependency_declared_identifiers(raw: str) -> tuple[str, ...]:
     return tuple(sorted(names))
 
 
+def _typed_dependency_method_contracts(
+    raw: str,
+) -> dict[str, dict[str, tuple[dict[str, Any], ...]]]:
+    """Return Tree-sitter-derived dependency method contracts keyed by owner/name."""
+
+    result: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    for row in _dependency_context_rows(raw):
+        owner = str(row.get("symbol") or "").strip()
+        source = str(row.get("source") or "").strip()
+        if not owner or not source:
+            continue
+        try:
+            contracts = public_source_member_contracts(source)
+        except JavaRegionParseError:
+            continue
+        by_name = result.setdefault(owner, {})
+        for contract in contracts:
+            if contract.get("kind") != "method":
+                continue
+            name = str(contract.get("symbol") or "").strip()
+            if not name:
+                continue
+            by_name.setdefault(name, []).append(dict(contract))
+    return {
+        owner: {
+            name: tuple(entries)
+            for name, entries in methods.items()
+        }
+        for owner, methods in result.items()
+    }
+
+
+def _simple_object_type(value: Any) -> bool:
+    normalized = re.sub(r"\s+", "", str(value or ""))
+    return normalized in {"Object", "java.lang.Object"}
+
+
+def _validate_first_pass_java_semantics(
+    value: str,
+    *,
+    dependency_source: str,
+    sibling_api: Sequence[Mapping[str, Any]],
+) -> None:
+    """Reject deterministic Java mistakes before the first Gradle compile.
+
+    Syntax/declaration facts come from tree-sitter-java. Project/classpath-complete
+    binding remains owned by javac/JDT/Gradle; this gate intentionally checks only
+    facts that are unambiguous from the candidate and host-supplied dependency API.
+    """
+
+    contracts = class_body_member_contracts(value)
+    final_fields = {
+        str(item.get("symbol") or "")
+        for item in contracts
+        if item.get("kind") == "field"
+        and item.get("final") is True
+        and str(item.get("symbol") or "")
+    }
+    blank_finals = sorted(
+        str(item.get("symbol") or "")
+        for item in contracts
+        if item.get("kind") == "field"
+        and item.get("final") is True
+        and item.get("initialized") is False
+        and str(item.get("symbol") or "")
+    )
+    if blank_finals:
+        raise CustomModuleGenerationError(
+            "ATOMIC_CONCERN_RESPONSE_INVALID: blank final field(s) have no legal "
+            "concern-owned initialization path: " + ", ".join(blank_finals)
+        )
+
+    final_fields.update(
+        str(row.get("symbol") or "")
+        for row in sibling_api
+        if isinstance(row, Mapping)
+        and row.get("kind") == "field"
+        and row.get("mutable") is False
+        and str(row.get("symbol") or "")
+    )
+    assigned = set(class_body_assignment_targets(value))
+    rebound = sorted(final_fields & assigned)
+    if rebound:
+        raise CustomModuleGenerationError(
+            "ATOMIC_CONCERN_RESPONSE_INVALID: generated executable code reassigns "
+            "final field(s): " + ", ".join(rebound)
+        )
+
+    dependencies = _typed_dependency_method_contracts(dependency_source)
+    if not dependencies:
+        return
+
+    for call in class_body_method_invocations(value):
+        receiver = str(call.get("receiver") or "").strip()
+        name = str(call.get("symbol") or "").strip()
+        arity = int(call.get("argument_count") or 0)
+        owner_methods = dependencies.get(receiver)
+        if owner_methods is None:
+            continue
+        candidates = owner_methods.get(name)
+        if not candidates:
+            raise CustomModuleGenerationError(
+                "ATOMIC_CONCERN_RESPONSE_INVALID: dependency API "
+                f"{receiver}.{name}(...) does not exist in the Tree-sitter-derived "
+                "authoritative dependency source."
+            )
+        matching = [
+            item
+            for item in candidates
+            if len(item.get("parameters") or ()) == arity
+        ]
+        if not matching:
+            expected = sorted(
+                {len(item.get("parameters") or ()) for item in candidates}
+            )
+            raise CustomModuleGenerationError(
+                "ATOMIC_CONCERN_RESPONSE_INVALID: dependency API "
+                f"{receiver}.{name} called with {arity} argument(s); authoritative "
+                f"arity is {expected}."
+            )
+        if not any(item.get("static") is True for item in matching):
+            raise CustomModuleGenerationError(
+                "ATOMIC_CONCERN_RESPONSE_INVALID: dependency API "
+                f"{receiver}.{name}(...) is instance-owned, not a static class call."
+            )
+
+    for returned in class_body_direct_return_calls(value):
+        receiver = str(returned.get("receiver") or "").strip()
+        name = str(returned.get("symbol") or "").strip()
+        arity = int(returned.get("argument_count") or 0)
+        target_type = str(returned.get("declared_return_type") or "").strip()
+        owner_methods = dependencies.get(receiver)
+        if owner_methods is None:
+            continue
+        matching = [
+            item
+            for item in owner_methods.get(name, ())
+            if len(item.get("parameters") or ()) == arity
+        ]
+        source_types = {
+            str(item.get("return_type") or "").strip()
+            for item in matching
+            if str(item.get("return_type") or "").strip()
+        }
+        if (
+            len(source_types) == 1
+            and _simple_object_type(next(iter(source_types)))
+            and target_type
+            and not _simple_object_type(target_type)
+        ):
+            raise CustomModuleGenerationError(
+                "ATOMIC_CONCERN_RESPONSE_INVALID: method "
+                f"{returned.get('method')!r} returns {target_type} but directly "
+                f"returns Object-valued dependency call {receiver}.{name}(...); "
+                "perform explicit runtime type narrowing first."
+            )
+
+
 def _region_content(source: str, *, concern: str, region: str) -> str:
     start = _marker(concern, region, "START")
     end = _marker(concern, region, "END")
@@ -3436,6 +3597,14 @@ class AtomicConcernExecutor:
                             },
                         )
                     parsed = canonical
+                    _validate_first_pass_java_semantics(
+                        parsed,
+                        dependency_source=self.dependency_source,
+                        sibling_api=_sibling_symbol_inventory(
+                            self.source,
+                            sibling_concerns=sibling_names,
+                        ),
+                    )
                 if response_region == "members" and name in _DECLARATION_ONLY_CONCERNS:
                     kinds = class_body_member_kinds(parsed)
                     if kinds and any(
