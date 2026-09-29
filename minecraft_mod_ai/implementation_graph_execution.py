@@ -337,6 +337,19 @@ def _normalize_implementation_graph_request(raw_request: Mapping[str, Any]) -> d
     request["structured_sections"] = structured
     request["structured_sections_sha256"] = actual_sha
 
+    from .production_state_compiler import normalize_structured_state_section
+
+    raw_state = request.get("production_state_section")
+    if not isinstance(raw_state, Mapping):
+        candidate = structured.get("state_model")
+        raw_state = candidate if isinstance(candidate, Mapping) else None
+    if isinstance(raw_state, Mapping):
+        request["production_state_section"] = normalize_structured_state_section(
+            raw_state
+        )
+    else:
+        request["production_state_section"] = {}
+
     normalized_text, report = normalize_authored_document(str(request["text"]))
     request["text"] = normalized_text
     _trace_authored_document_normalization(report)
