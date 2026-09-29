@@ -610,6 +610,7 @@ _JAVA_LANG_SIMPLE_TYPES = frozenset(
 
 _JDK_CANONICAL_SIMPLE_TYPES = {
     "Object": "java.lang.Object",
+    "String": "java.lang.String",
     "Collection": "java.util.Collection",
     "List": "java.util.List",
     "Map": "java.util.Map",
