@@ -2395,3 +2395,66 @@ def test_stored_state_semantic_shape_retries_then_accepts_declarations_only() ->
     assert "STATE = new java.util.HashMap<>()" in result["source"]
     assert "registerState" not in result["source"]
     assert remaining == []
+
+
+def test_multiline_behavior_actor_source_is_host_lowered_without_structured_plan() -> None:
+    import json
+
+    from minecraft_mod_ai.atomic_concern_source import _behavior_actor_records
+    from minecraft_mod_ai.authored_execution_schema import concern_contracts
+    from minecraft_mod_ai.implementation_graph_execution import (
+        _canonical_atomic_obligations,
+    )
+
+    requirements = {
+        "R2": "## behavior_contract",
+        "R3": "- actors:",
+        "R4": "    - player: 자원 채굴, 제작, 거래를 실행하는 주체",
+        "R5": "    - dockyard_ai: 건설 요청을 검증하고 배치하는 자동화 로직",
+        "R6": "    - trade_npc: 자원 및 통화를 교환하는 상점 NPC",
+        "R7": "- entry_conditions:",
+        "R8": "    - trigger_owner: player",
+    }
+    concerns = list(concern_contracts("behavior_contract"))
+    obligations, drifted, active = _canonical_atomic_obligations(
+        section="behavior_contract",
+        concerns=concerns,
+        requirements=requirements,
+        raw_obligations=[],
+        structured_sections={},
+    )
+
+    assert drifted == []
+    assert [item["concern"] for item in active][:2] == [
+        "actors",
+        "entry_conditions",
+    ]
+
+    task = {"implementation_obligations": obligations}
+    actors = next(item for item in active if item["concern"] == "actors")
+    rows = _behavior_actor_records(task, actors)
+
+    assert rows == (
+        {
+            "name": "player",
+            "role": "자원 채굴, 제작, 거래를 실행하는 주체",
+            "authority": "",
+        },
+        {
+            "name": "dockyard_ai",
+            "role": "건설 요청을 검증하고 배치하는 자동화 로직",
+            "authority": "",
+        },
+        {
+            "name": "trade_npc",
+            "role": "자원 및 통화를 교환하는 상점 NPC",
+            "authority": "",
+        },
+    )
+
+    actor_payload = next(
+        json.loads(raw)
+        for raw in obligations
+        if json.loads(json.loads(raw)["instruction"])["concern"] == "actors"
+    )
+    assert list(actor_payload["source_requirements"]) == ["R2", "R3", "R4", "R5", "R6"]

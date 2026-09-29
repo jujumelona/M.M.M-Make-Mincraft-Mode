@@ -1248,36 +1248,98 @@ def _behavior_actor_records(
     # this canonical concern from that exact requirement; never ask the model
     # to infer a missing local Actor type.
     sources = authority.get("source_requirements")
-    if isinstance(sources, Mapping):
-        candidates = [str(value or "") for value in sources.values()]
-    else:
-        candidates = []
-    for source in candidates:
-        for line in source.replace("\r\n", "\n").replace("\r", "\n").splitlines():
-            match = re.match(r"^\s*(?:[-*+]\s*)?actors\s*:\s*(.+?)\s*$", line, re.I)
-            if match is None:
+    if not isinstance(sources, Mapping):
+        return ()
+
+    def source_key(item: tuple[Any, Any]) -> tuple[int, int | str]:
+        match = re.fullmatch(r"R(\d+)", str(item[0] or ""))
+        if match:
+            return (0, int(match.group(1)))
+        return (1, str(item[0] or ""))
+
+    lines: list[str] = []
+    for _key, source in sorted(sources.items(), key=source_key):
+        lines.extend(
+            str(source or "")
+            .replace("\r\n", "\n")
+            .replace("\r", "\n")
+            .splitlines()
+        )
+
+    def add_row(name: str, role: str = "", actor_authority: str = "") -> None:
+        actor_name = name.strip()
+        if not actor_name:
+            return
+        if any(row["name"] == actor_name for row in rows):
+            return
+        rows.append(
+            {
+                "name": actor_name,
+                "role": role.strip() or actor_name,
+                "authority": actor_authority.strip(),
+            }
+        )
+
+    def add_inline(raw: str) -> None:
+        for item in _split_balanced_commas(raw):
+            value = item.strip()
+            if not value:
                 continue
-            for item in _split_balanced_commas(match.group(1)):
-                value = item.strip()
-                if not value:
-                    continue
-                wrapped = re.fullmatch(r"(?P<name>.+?)\s*\((?P<authority>.*)\)", value)
-                if wrapped is None:
-                    rows.append({"name": value, "role": value, "authority": ""})
-                    continue
-                name = wrapped.group("name").strip()
-                actor_authority = wrapped.group("authority").strip()
-                if name:
-                    rows.append(
-                        {
-                            "name": name,
-                            "role": name,
-                            "authority": actor_authority,
-                        }
-                    )
-            if rows:
-                return tuple(rows)
-    return ()
+            wrapped = re.fullmatch(
+                r"(?P<name>.+?)\s*\((?P<authority>.*)\)",
+                value,
+            )
+            if wrapped is not None:
+                add_row(
+                    wrapped.group("name"),
+                    wrapped.group("name"),
+                    wrapped.group("authority"),
+                )
+                continue
+            if ":" in value:
+                name, role = value.split(":", 1)
+                add_row(name, role)
+                continue
+            add_row(value, value)
+
+    actor_indent: int | None = None
+    for line in lines:
+        anchor = re.match(
+            r"^(?P<indent>\s*)[-*+]\s*actors\s*:\s*(?P<tail>.*?)\s*$",
+            line,
+            re.I,
+        )
+        if anchor is not None:
+            actor_indent = len(anchor.group("indent"))
+            tail = anchor.group("tail").strip()
+            if tail:
+                add_inline(tail)
+            continue
+
+        if actor_indent is None or not line.strip():
+            continue
+
+        child = re.match(
+            r"^(?P<indent>\s*)[-*+]\s*(?P<body>.+?)\s*$",
+            line,
+        )
+        if child is not None:
+            indent = len(child.group("indent"))
+            if indent <= actor_indent:
+                break
+            body = child.group("body").strip()
+            if ":" in body:
+                name, role = body.split(":", 1)
+                add_row(name, role)
+            else:
+                add_row(body, body)
+            continue
+
+        indentation = len(line) - len(line.lstrip())
+        if indentation <= actor_indent:
+            break
+
+    return tuple(rows)
 
 
 def _java_string_literal(value: Any) -> str:
