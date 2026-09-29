@@ -650,6 +650,89 @@ def test_behavior_actors_recover_from_exact_requirement_when_structured_sections
     )
 
 
+def _entry_conditions_atomic_module(path: str, symbol: str) -> ProductionModule:
+    base = _atomic_module(path, symbol)
+    config = dict(base.config)
+    config["implementation_section"] = "behavior_contract"
+    config["implementation_atomic_concerns"] = [
+        {
+            "sequence": 0,
+            "identifier": "feature/behavior_contract/entry_conditions",
+            "concern": "entry_conditions",
+            "task": "Resolve exactly one host-requested entry conditions record.",
+            "rules": [],
+            "record_schema": {
+                "type": "object",
+                "properties": {
+                    "trigger": {"type": "string"},
+                    "owner": {"type": "string"},
+                },
+                "required": ["trigger", "owner"],
+                "additionalProperties": False,
+            },
+        }
+    ]
+    task = dict(config["evidence_task"])
+    task["implementation_obligations"] = [
+        json.dumps(
+            {
+                "instruction": json.dumps(
+                    {"concern": "entry_conditions"},
+                    ensure_ascii=False,
+                ),
+                "source_requirements": {
+                    "R1": (
+                        "- entry_conditions: 플레이어가 도크 블록과 상호작용하거나 "
+                        "상인과 대화할 때, 자금 또는 재료 보유 확인 시"
+                    )
+                },
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    ]
+    config["evidence_task"] = task
+    return ProductionModule(
+        module_id=base.module_id,
+        kind=base.kind,
+        config=config,
+        required_gates=base.required_gates,
+    )
+
+
+def test_behavior_contract_generic_concern_is_host_compiled(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root, path, symbol = _project(tmp_path)
+
+    class Router:
+        def generate_text(self, *_args, **_kwargs):
+            raise AssertionError("behavior_contract concerns must not call the coder")
+
+        def generate_tool_decision(self, *_args, **_kwargs):
+            raise AssertionError("behavior_contract concerns must not use scalar Java tools")
+
+    class Runner:
+        def __init__(self, _cache):
+            pass
+
+        def compile_java(self, _root):
+            source = (root / path).read_text(encoding="utf-8")
+            assert "CONTRACT_ENTRY_CONDITIONS" in source
+            assert "entry_conditions" in source
+            return SimpleNamespace(status="PASS", commands=(), error=None)
+
+    monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
+    monkeypatch.setattr(direct, "GradleRunner", Runner)
+
+    direct.CustomModuleGenerator(Router()).generate(
+        root,
+        module=_entry_conditions_atomic_module(path, symbol),
+        minecraft_version="1.21.1",
+        loader="fabric",
+    )
+
+
 def _stored_state_atomic_module(path: str, symbol: str) -> ProductionModule:
     base = _atomic_module(path, symbol)
     config = dict(base.config)
