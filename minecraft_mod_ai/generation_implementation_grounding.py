@@ -351,7 +351,8 @@ def build_generation_implementation_grounding(
             "model_must_preserve_template_call_topology": True,
             "prefer_minimal_required_responsibilities": True,
             "do_not_invent_entrypoints": True,
-            "compile_feedback_repairs_same_generation": True,
+            "compile_feedback_repairs_same_generation": False,
+            "first_pass_must_compile": True,
         },
     }
     return {
