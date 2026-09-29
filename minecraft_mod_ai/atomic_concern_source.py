@@ -2193,6 +2193,11 @@ class AtomicConcernExecutor:
                     output_text = exc.response_text
                     output_sha = exc.response_sha256 or ""
                 reason = str(exc).split("\n", 1)[0]
+                rejected_response = (
+                    exc.response_text
+                    if isinstance(exc, AtomicJavaDecisionError) and exc.response_text is not None
+                    else (output_text or None)
+                )
                 recoverable = reason.startswith(
                     (
                         "ATOMIC_CONCERN_RESPONSE_INVALID:",
@@ -2213,7 +2218,7 @@ class AtomicConcernExecutor:
                         reason=reason,
                         output_sha256=output_sha,
                         output_chars=len(output_text),
-                        rejected_response=(exc.response_text if isinstance(exc, AtomicJavaDecisionError) else None),
+                        rejected_response=rejected_response,
                     )
                     raise
 
@@ -2229,7 +2234,7 @@ class AtomicConcernExecutor:
                         reason=reason,
                         output_sha256=output_sha,
                         output_chars=len(output_text),
-                        rejected_response=(exc.response_text if isinstance(exc, AtomicJavaDecisionError) else None),
+                        rejected_response=rejected_response,
                     )
                     raise CustomModuleGenerationError(
                         f"ATOMIC_CONCERN_RESPONSE_NO_PROGRESS: {name}:{response_region} "
@@ -2248,7 +2253,7 @@ class AtomicConcernExecutor:
                     reason=reason,
                     output_sha256=output_sha,
                     output_chars=len(output_text),
-                    rejected_response=(exc.response_text if isinstance(exc, AtomicJavaDecisionError) else None),
+                    rejected_response=rejected_response,
                 )
                 if attempt >= attempt_limit:
                     raise CustomModuleGenerationError(
