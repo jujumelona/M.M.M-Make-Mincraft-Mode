@@ -423,6 +423,7 @@ def test_production_tree_sitter_unwraps_accidental_outer_class(
     root, path, symbol = _project(tmp_path)
     responses = iter([
         """
+Here is the complete Java implementation for the requested concern.
 package accidental.wrapper;
 import java.util.List;
 
@@ -431,6 +432,7 @@ public final class AccidentalOuter {
     private static int balance = 0;
     public static void initialize() {}
 }
+This wrapper is complete.
 """,
         "private static boolean valid() { return balance >= 0; }",
     ])
