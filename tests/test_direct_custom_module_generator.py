@@ -398,6 +398,20 @@ def _atomic_module(path: str, symbol: str) -> ProductionModule:
         required_gates=base.required_gates,
     )
 
+def _single_atomic_module(path: str, symbol: str) -> ProductionModule:
+    base = _atomic_module(path, symbol)
+    config = dict(base.config)
+    config["implementation_atomic_concerns"] = [
+        dict(config["implementation_atomic_concerns"][0])
+    ]
+    return ProductionModule(
+        module_id=base.module_id,
+        kind=base.kind,
+        config=config,
+        required_gates=base.required_gates,
+    )
+
+
 def _native_field_parts(kind, name, initializer):
     return [
         {"part": "fields"}, {"type": kind, "name": name, "initializer": initializer},
@@ -984,7 +998,7 @@ def test_atomic_first_candidate_canonicalizes_jdk_lock_semantics_before_compile(
 
     result = direct.CustomModuleGenerator(Router()).generate(
         root,
-        module=_atomic_module(path, symbol),
+        module=_single_atomic_module(path, symbol),
         minecraft_version="1.21.1",
         loader="fabric",
     )
@@ -1049,7 +1063,7 @@ def test_atomic_compile_failure_is_repaired_with_local_bounded_retry(
 
     result = direct.CustomModuleGenerator(Router()).generate(
         root,
-        module=_atomic_module(path, symbol),
+        module=_single_atomic_module(path, symbol),
         minecraft_version="1.21.1",
         loader="fabric",
     )
