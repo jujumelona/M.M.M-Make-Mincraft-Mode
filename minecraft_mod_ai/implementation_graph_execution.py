@@ -219,7 +219,13 @@ def _bind_atomic_leaf_contract(
         )
     return section, active
 
-def _leaf_module(node: dict[str, Any], graph: dict[str, Any], request: dict[str, Any]) -> ProductionModule:
+def _leaf_module(
+    node: dict[str, Any],
+    graph: dict[str, Any],
+    request: dict[str, Any],
+    *,
+    parent_config: Mapping[str, Any] | None = None,
+) -> ProductionModule:
     from .authored_production import _exact_authored_task
 
     by_symbol = {n["symbol"]: n for n in graph["nodes"]}
@@ -260,6 +266,12 @@ def _leaf_module(node: dict[str, Any], graph: dict[str, Any], request: dict[str,
         structured_sections=request.get("structured_sections"),
         production_state_section=request.get("production_state_section"),
     )
+    parent = parent_config if isinstance(parent_config, Mapping) else {}
+    grounding_identity: dict[str, Any] = {}
+    for key in ("semantic_kind", "artifact_kind", "implementation_responsibilities"):
+        value = parent.get(key)
+        if value:
+            grounding_identity[key] = deepcopy(value)
     return ProductionModule(
         module_id="ir_" + node["symbol"].lower(), kind="custom_java",
         config={"implementation": "custom", "evidence_task": task,
@@ -267,6 +279,7 @@ def _leaf_module(node: dict[str, Any], graph: dict[str, Any], request: dict[str,
                 "implementation_section": section,
                 "implementation_atomic_concerns": atomic_concerns,
                 "implementation_dependency_context": json.dumps(dependencies, ensure_ascii=False),
+                **grounding_identity,
                 **request["target"]}, required_gates=("target_compile",),
     )
 
@@ -418,7 +431,12 @@ def execute_implementation_graph(generator: Any, project_root: str | Path, *,
                             json.loads(payload["content"])
                             direct._atomic_write(dest, payload["content"])
                         else:
-                            leaf = _leaf_module(node, graph, request)
+                            leaf = _leaf_module(
+                                node,
+                                graph,
+                                request,
+                                parent_config=module.config,
+                            )
                             if not dest.exists():
                                 source = f"package {package};\npublic final class {node['symbol']} {{\n"
                                 if node["activation"]:
