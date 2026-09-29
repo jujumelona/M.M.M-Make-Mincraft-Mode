@@ -326,7 +326,7 @@ def test_atomic_region_uses_required_structured_tool_not_free_text() -> None:
         structured_java_region=True,
     )
 
-    assert result == "static int COST = 10;"
+    assert result == "private static int COST = 10;"
     assert captured["role"] == "coder"
     assert captured["tool_name"] == "emit_java_part"
     assert captured["output_token_ceiling"] == 1536
@@ -1642,7 +1642,6 @@ def test_preferred_shape_is_guidance_not_schema_restriction() -> None:
             "classes",
             "fields",
             "methods",
-            "static_initializers",
         }
 
 def test_structured_output_exhaustion_becomes_bounded_concern_failure() -> None:
@@ -2150,15 +2149,20 @@ def test_atomic_prompt_hides_planning_record_schema_from_coder() -> None:
     executor.run()
 
     payload = __import__("json").loads(captured[0][-1]["content"])
-    assert set(payload["concern"]) == {
+    assert {
         "sequence",
         "identifier",
         "name",
         "implementation_goal",
-    }
+        "task",
+        "rules",
+        "java_shape",
+        "semantic_fields",
+    } <= set(payload["concern"])
     assert "record_schema" not in payload["concern"]
-    assert "Resolve exactly one inputs record" not in captured[0][-1]["content"]
-    assert "Author the requested gameplay record" not in captured[0][-1]["content"]
+    assert "record_schema" not in captured[0][-1]["content"]
+    assert payload["concern"]["task"]
+    assert payload["concern"]["rules"]
 
 
 def test_logic_concerns_cannot_emit_nested_types() -> None:
@@ -2181,7 +2185,6 @@ def test_logic_concerns_cannot_emit_nested_types() -> None:
     assert set(parameters["properties"]) == {
         "fields",
         "methods",
-        "static_initializers",
     }
     with pytest.raises(ValidationError):
         Draft202012Validator(parameters).validate(
