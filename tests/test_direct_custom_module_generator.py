@@ -372,17 +372,22 @@ def test_ir_atomic_concerns_are_isolated_and_compiled_as_one_host_file(
     tmp_path: Path, monkeypatch
 ) -> None:
     root, path, symbol = _project(tmp_path)
+    responses = [
+        *_native_field_parts("int", "balance", "0"),
+        *_native_method_parts("valid", "return balance >= 0;"),
+    ]
     calls: list[tuple[str, dict[str, object]]] = []
 
     class Router:
-        def generate_text(self, role, messages, **kwargs):
+        def __init__(self):
+            self.responses = iter(responses)
+
+        def generate_tool_decision(self, role, messages, **kwargs):
             assert role == "coder"
             payload = json.loads(messages[-1]["content"])
             concern = payload["concern"]["name"]
             calls.append((concern, dict(kwargs)))
-            if concern == "steps":
-                return "private static int balance = 0;"
-            return "public static boolean valid() { return balance >= 0; }"
+            return next(self.responses)
 
     class Runner:
         def __init__(self, _cache):
@@ -399,38 +404,42 @@ def test_ir_atomic_concerns_are_isolated_and_compiled_as_one_host_file(
     )
 
     source = (root / path).read_text(encoding="utf-8")
-    assert [name for name, _kwargs in calls] == ["steps", "branches"]
-    assert all(kwargs["enable_tools"] is False for _name, kwargs in calls)
-    assert all(kwargs["response_format"] == "text" for _name, kwargs in calls)
-    assert all(kwargs["force_non_thinking"] is True for _name, kwargs in calls)
-    assert "private static int balance = 0;" in source
+    concern_transitions = [
+        name
+        for index, (name, _kwargs) in enumerate(calls)
+        if index == 0 or calls[index - 1][0] != name
+    ]
+    assert concern_transitions == ["steps", "branches"]
+    assert all(kwargs["tool_name"] == "emit_java_part" for _name, kwargs in calls)
+    assert all("parameters" in kwargs for _name, kwargs in calls)
+    assert "static int balance = 0;" in source
     assert "public static boolean valid()" in source
     assert "MMM_ATOMIC_CONCERN_STEPS_MEMBERS_START" in source
     assert "MMM_ATOMIC_CONCERN_BRANCHES_MEMBERS_START" in source
     assert result["generation_verification"]["mode"] == "gradle_compile_java_semantic_concerns"
     assert result["generation_verification"]["atomic_concern_count"] == 2
 
-
 def test_atomic_concern_compile_repair_reopens_only_localized_concern(
     tmp_path: Path, monkeypatch
 ) -> None:
     root, path, symbol = _project(tmp_path)
-    calls: list[str] = []
+    responses = [
+        *_native_field_parts("Object", "value", "new Object(1)"),
+        *_native_field_parts("Object", "value", "new Object()"),
+        *_native_method_parts("valid", "return value != null;"),
+    ]
+    calls: list[tuple[str, bool]] = []
 
     class Router:
-        def generate_text(self, role, messages, **kwargs):
+        def __init__(self):
+            self.responses = iter(responses)
+
+        def generate_tool_decision(self, role, messages, **kwargs):
             del role, kwargs
             payload = json.loads(messages[-1]["content"])
             concern = payload["concern"]["name"]
-            calls.append(concern)
-            repairing = bool(payload.get("repair_failure"))
-            if concern == "steps":
-                return (
-                    "private static Object value = new Object();"
-                    if repairing
-                    else "private static Object value = new Object(1);"
-                )
-            return "public static boolean valid() { return value != null; }"
+            calls.append((concern, bool(payload.get("repair_failure"))))
+            return next(self.responses)
 
     class Runner:
         def __init__(self, _cache):
@@ -463,13 +472,20 @@ def test_atomic_concern_compile_repair_reopens_only_localized_concern(
         minecraft_version="1.21.1", loader="fabric",
     )
 
-    assert calls == ["steps", "steps", "branches"]
+    concern_transitions: list[tuple[str, bool]] = []
+    for call in calls:
+        if not concern_transitions or concern_transitions[-1] != call:
+            concern_transitions.append(call)
+    assert concern_transitions == [
+        ("steps", False),
+        ("steps", True),
+        ("branches", False),
+    ]
     source = (root / path).read_text(encoding="utf-8")
     assert "new Object(1)" not in source
     assert "new Object()" in source
     assert "public static boolean valid()" in source
     assert result["generation_verification"]["atomic_repair_count"] == 1
-
 
 def test_nonintegration_atomic_concern_cannot_write_initialize_body() -> None:
     from minecraft_mod_ai.atomic_concern_source import parse_concern_content
