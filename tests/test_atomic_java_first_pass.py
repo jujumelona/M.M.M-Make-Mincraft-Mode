@@ -207,6 +207,68 @@ def test_multi_call_field_batch_is_closed_after_first_native_turn() -> None:
     ]
 
 
+def test_multi_call_scalar_batch_keeps_schema_after_cursor_close() -> None:
+    class Router:
+        def __init__(self):
+            self.root_selected = False
+            self.body_selected = False
+            self.batch_calls = 0
+
+        def generate_tool_decision(self, role, messages, **kwargs):
+            del role
+            schema = kwargs["parameters"]
+            properties = schema["properties"]
+            assert set(properties) == {"part"}
+            payload = json.loads(messages[-1]["content"])
+            path = payload["assembly"]["path"]
+            choices = properties["part"]["enum"]
+
+            if path == []:
+                if not self.root_selected:
+                    self.root_selected = True
+                    assert "methods" in choices
+                    return {"part": "methods"}
+                assert "methods" not in choices
+                return {"part": "done"}
+
+            if path == ["methods", 0]:
+                if not self.body_selected:
+                    self.body_selected = True
+                    assert "body" in choices
+                    return {"part": "body"}
+                assert "body" not in choices
+                return {"part": "done"}
+
+            raise AssertionError(f"unexpected assembly path: {path}")
+
+        def generate_tool_decisions(self, role, messages, **kwargs):
+            del role, messages
+            properties = kwargs["parameters"]["properties"]
+            self.batch_calls += 1
+            if {"return_type", "name"} <= set(properties):
+                return ({"return_type": "void", "name": "launch"},)
+            if set(properties) == {"value"}:
+                return ({"value": "return;"},)
+            raise AssertionError(f"unexpected batch schema: {sorted(properties)}")
+
+    router = Router()
+    rendered = _call_atomic_java_region(
+        router,
+        [{
+            "role": "user",
+            "content": json.dumps({
+                "response_region": "members",
+                "host_selected_class": "Probe",
+                "concern": {"name": "entry_conditions"},
+            }),
+        }],
+        output_token_ceiling=512,
+    )
+
+    assert router.batch_calls == 2
+    assert rendered == "private static void launch() {\n    return;\n}"
+
+
 def test_outer_public_api_modifiers_come_from_host_contract() -> None:
     captured_paths: list[list[object]] = []
 
