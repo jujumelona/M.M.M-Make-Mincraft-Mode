@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from .authored_ir_parser import slice_concern_requirements
+from .authored_ir_parser import section_slug, slice_concern_requirements
 from .custom_module_errors import AtomicJavaDecisionError, CustomModuleGenerationError
 from .authored_execution_schema import section_spec
 from .generation_implementation_grounding import render_generation_implementation_authority_prompt
@@ -1273,23 +1273,42 @@ def _behavior_actor_records(
             .splitlines()
         )
 
+    def strip_markdown_wrapper(value: str) -> str:
+        text = str(value or "").strip()
+        wrappers = ("**", "__", "`", "*", "_")
+        changed = True
+        while changed and text:
+            changed = False
+            for wrapper in wrappers:
+                if (
+                    len(text) > len(wrapper) * 2
+                    and text.startswith(wrapper)
+                    and text.endswith(wrapper)
+                ):
+                    text = text[len(wrapper):-len(wrapper)].strip()
+                    changed = True
+                    break
+        return text
+
     def add_row(name: str, role: str = "", actor_authority: str = "") -> None:
-        actor_name = name.strip()
+        actor_name = strip_markdown_wrapper(name)
         if not actor_name:
             return
+        clean_role = strip_markdown_wrapper(role)
+        clean_authority = str(actor_authority or "").strip()
         if any(row["name"] == actor_name for row in rows):
             return
         rows.append(
             {
                 "name": actor_name,
-                "role": role.strip() or actor_name,
-                "authority": actor_authority.strip(),
+                "role": clean_role or actor_name,
+                "authority": clean_authority,
             }
         )
 
     def add_inline(raw: str) -> None:
         for item in _split_balanced_commas(raw):
-            value = item.strip()
+            value = item.strip().rstrip(".;")
             if not value:
                 continue
             wrapped = re.fullmatch(
@@ -1312,11 +1331,13 @@ def _behavior_actor_records(
     actor_indent: int | None = None
     for line in lines:
         anchor = re.match(
-            r"^(?P<indent>\s*)[-*+]\s*actors\s*:\s*(?P<tail>.*?)\s*$",
+            r"^(?P<indent>\s*)[-*+]\s*(?P<label>[^:]+?)\s*:\s*(?P<tail>.*?)\s*$",
             line,
-            re.I,
         )
-        if anchor is not None:
+        if (
+            anchor is not None
+            and section_slug(anchor.group("label")) == "actors"
+        ):
             actor_indent = len(anchor.group("indent"))
             tail = anchor.group("tail").strip()
             if tail:

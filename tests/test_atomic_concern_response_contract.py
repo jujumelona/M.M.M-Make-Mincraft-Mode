@@ -2458,3 +2458,68 @@ def test_multiline_behavior_actor_source_is_host_lowered_without_structured_plan
         if json.loads(json.loads(raw)["instruction"])["concern"] == "actors"
     )
     assert list(actor_payload["source_requirements"]) == ["R2", "R3", "R4", "R5", "R6"]
+
+
+def test_bold_inline_behavior_actor_source_is_host_lowered_without_structured_plan() -> None:
+    import json
+
+    from minecraft_mod_ai.atomic_concern_source import _behavior_actor_records
+    from minecraft_mod_ai.authored_execution_schema import concern_contracts
+    from minecraft_mod_ai.implementation_graph_execution import (
+        _canonical_atomic_obligations,
+    )
+
+    requirements = {
+        "R2": "## behavior_contract",
+        "R3": (
+            "- **actors**: 플레이어 (User), "
+            "우주선 컨트롤러 (ShipController, 서버 권위), "
+            "행성 관리자 (PlanetManager, 서버 권위), "
+            "시장 중재자 (MarketArbitrator, 클라이언트 예측 + 서버 검증)."
+        ),
+        "R4": "- **entry_conditions**: 플레이어가 우주 도크에 접근한 경우.",
+    }
+    concerns = list(concern_contracts("behavior_contract"))
+    obligations, drifted, active = _canonical_atomic_obligations(
+        section="behavior_contract",
+        concerns=concerns,
+        requirements=requirements,
+        raw_obligations=[],
+        structured_sections={},
+    )
+
+    assert drifted == []
+    assert [item["concern"] for item in active][:2] == [
+        "actors",
+        "entry_conditions",
+    ]
+
+    task = {"implementation_obligations": obligations}
+    actors = next(item for item in active if item["concern"] == "actors")
+    rows = _behavior_actor_records(task, actors)
+
+    assert rows == (
+        {"name": "플레이어", "role": "플레이어", "authority": "User"},
+        {
+            "name": "우주선 컨트롤러",
+            "role": "우주선 컨트롤러",
+            "authority": "ShipController, 서버 권위",
+        },
+        {
+            "name": "행성 관리자",
+            "role": "행성 관리자",
+            "authority": "PlanetManager, 서버 권위",
+        },
+        {
+            "name": "시장 중재자",
+            "role": "시장 중재자",
+            "authority": "MarketArbitrator, 클라이언트 예측 + 서버 검증",
+        },
+    )
+
+    actor_payload = next(
+        json.loads(raw)
+        for raw in obligations
+        if json.loads(json.loads(raw)["instruction"])["concern"] == "actors"
+    )
+    assert list(actor_payload["source_requirements"]) == ["R2", "R3"]

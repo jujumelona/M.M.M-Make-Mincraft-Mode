@@ -102,6 +102,7 @@ jobs:
             tests/test_direct_custom_module_generator.py \
             tests/test_atomic_concern_response_contract.py::test_stored_state_semantic_shape_retries_then_accepts_declarations_only \
             tests/test_atomic_concern_response_contract.py::test_multiline_behavior_actor_source_is_host_lowered_without_structured_plan \
+            tests/test_atomic_concern_response_contract.py::test_bold_inline_behavior_actor_source_is_host_lowered_without_structured_plan \
             tests/test_atomic_java_first_pass.py::test_stored_state_schema_forbids_outer_methods_before_model_decode \
             tests/test_atomic_java_first_pass.py::test_stored_state_native_part_selector_never_offers_methods \
             tests/test_authored_direct_lowering.py \
