@@ -48,6 +48,7 @@ _FORBIDDEN_ENTRYPOINT = re.compile(
     r"\b(?:implements\s+)?(?:ModInitializer|ClientModInitializer)\b"
 )
 _BODY_MARKER = "MMM_AUTHORED_FEATURE_BODY"
+_ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING = 2048
 
 def _sha256_text(text: str) -> str:
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -2072,6 +2073,7 @@ def _run_atomic_ir_generation(
         call_coder=lambda messages: _call_coder(
             generator.router,
             messages,
+            output_token_ceiling=_ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING,
             force_non_thinking=True,
             structured_java_region=False,
         ),
