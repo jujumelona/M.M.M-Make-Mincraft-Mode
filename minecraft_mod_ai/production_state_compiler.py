@@ -332,7 +332,7 @@ def _string_like(record: Mapping[str, str]) -> bool:
 
 
 def _split_expression_segments(text: str) -> list[str]:
-    operators = ("||", "&&", "==", "!=", ">=", "<=", "(", ")", "!", "+", "-", "*", "/", "%", ">", "<")
+    operators = ("->", "||", "&&", "==", "!=", ">=", "<=", "(", ")", "!", "+", "-", "*", "/", "%", ">", "<")
     source = str(text or "")
     segments: list[str] = []
     buffer: list[str] = []
@@ -420,7 +420,7 @@ def _canonicalize_expression_operands(
 
     for index, raw in enumerate(list(segments)):
         atom = raw.strip()
-        if not atom or atom in {"||", "&&", "==", "!=", ">=", "<=", "(", ")", "!", "+", "-", "*", "/", "%", ">", "<"}:
+        if not atom or atom in {"->", "||", "&&", "==", "!=", ">=", "<=", "(", ")", "!", "+", "-", "*", "/", "%", ">", "<"}:
             continue
         if _simple_expression_atom(atom):
             segments[index] = atom
