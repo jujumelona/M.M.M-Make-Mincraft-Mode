@@ -1185,6 +1185,125 @@ def _concern_authority(
     }
 
 
+
+def _behavior_actor_records(
+    task: Mapping[str, Any],
+    concern: Mapping[str, Any],
+) -> tuple[dict[str, str], ...]:
+    """Recover the canonical actor records without asking the coder to invent Java types."""
+    authority = _concern_authority(task, concern)
+    rows: list[dict[str, str]] = []
+    structured = authority.get("structured_records")
+    if isinstance(structured, Sequence) and not isinstance(
+        structured, (str, bytes, bytearray)
+    ):
+        for raw in structured:
+            if not isinstance(raw, Mapping):
+                continue
+            name = str(raw.get("name") or "").strip()
+            role = str(raw.get("role") or "").strip()
+            actor_authority = str(raw.get("authority") or "").strip()
+            if name:
+                rows.append(
+                    {
+                        "name": name,
+                        "role": role or name,
+                        "authority": actor_authority,
+                    }
+                )
+    if rows:
+        return tuple(rows)
+
+    # Older/legacy saved designs can arrive with structured_sections={} even
+    # though the exact authored source requirement is preserved. Recover only
+    # this canonical concern from that exact requirement; never ask the model
+    # to infer a missing local Actor type.
+    sources = authority.get("source_requirements")
+    if isinstance(sources, Mapping):
+        candidates = [str(value or "") for value in sources.values()]
+    else:
+        candidates = []
+    for source in candidates:
+        for line in source.replace("\r\n", "\n").replace("\r", "\n").splitlines():
+            match = re.match(r"^\s*(?:[-*+]\s*)?actors\s*:\s*(.+?)\s*$", line, re.I)
+            if match is None:
+                continue
+            for item in _split_balanced_commas(match.group(1)):
+                value = item.strip()
+                if not value:
+                    continue
+                wrapped = re.fullmatch(r"(?P<name>.+?)\s*\((?P<authority>.*)\)", value)
+                if wrapped is None:
+                    rows.append({"name": value, "role": value, "authority": ""})
+                    continue
+                name = wrapped.group("name").strip()
+                actor_authority = wrapped.group("authority").strip()
+                if name:
+                    rows.append(
+                        {
+                            "name": name,
+                            "role": name,
+                            "authority": actor_authority,
+                        }
+                    )
+            if rows:
+                return tuple(rows)
+    return ()
+
+
+def _java_string_literal(value: Any) -> str:
+    return json.dumps(str(value or ""), ensure_ascii=True)
+
+
+def _deterministic_behavior_actor_members(
+    task: Mapping[str, Any],
+    concern: Mapping[str, Any],
+) -> str:
+    rows = _behavior_actor_records(task, concern)
+    if not rows:
+        raise CustomModuleGenerationError(
+            "STRUCTURED_ACTORS_CONTRACT_REQUIRED: behavior_contract.actors must "
+            "have canonical structured records or an exact actors source requirement; "
+            "free-form Java fallback is disabled."
+        )
+
+    values = ",\n        ".join(
+        "new Actor("
+        + ", ".join(
+            (
+                _java_string_literal(row["name"]),
+                _java_string_literal(row["role"]),
+                _java_string_literal(row["authority"]),
+            )
+        )
+        + ")"
+        for row in rows
+    )
+    return (
+        "private static final class Actor {\n"
+        "    private final String name;\n"
+        "    private final String role;\n"
+        "    private final String authority;\n\n"
+        "    private Actor(String name, String role, String authority) {\n"
+        "        this.name = java.util.Objects.requireNonNull(name, \"name\");\n"
+        "        this.role = java.util.Objects.requireNonNull(role, \"role\");\n"
+        "        this.authority = java.util.Objects.requireNonNull(authority, \"authority\");\n"
+        "    }\n"
+        "}\n\n"
+        "private static final java.util.List<Actor> ACTORS = java.util.List.of(\n"
+        f"        {values}\n"
+        ");\n\n"
+        "private static Actor actorByName(String name) {\n"
+        "    for (Actor actor : ACTORS) {\n"
+        "        if (actor.name.equals(name)) {\n"
+        "            return actor;\n"
+        "        }\n"
+        "    }\n"
+        "    return null;\n"
+        "}"
+    )
+
+
 _STATE_VARIABLE_ATTRIBUTE = re.compile(
     r"\b(?P<key>[A-Za-z_][A-Za-z0-9_]*)\((?P<value>[^()]*)\)"
 )
@@ -2132,6 +2251,30 @@ class AtomicConcernExecutor:
         seen_violations: set[tuple[str, str]] = set()
         repair_failure = failure
         attempt_limit = _region_attempt_limit()
+
+        if (
+            not failure
+            and response_region == "members"
+            and str(self.section or "").strip() == "behavior_contract"
+            and name == "actors"
+        ):
+            host_members = _deterministic_behavior_actor_members(
+                self.task,
+                concern,
+            )
+            output_sha = hashlib.sha256(host_members.encode("utf-8")).hexdigest()
+            _trace_region_generation(
+                "atomic_concern_region_host_lowered",
+                result="PASS",
+                concern=name,
+                region=response_region,
+                attempt=1,
+                attempt_limit=1,
+                output_sha256=output_sha,
+                output_chars=len(host_members),
+            )
+            self.host_owned_concerns.add(name)
+            return host_members
 
         if (
             not failure
