@@ -3,9 +3,10 @@ from __future__ import annotations
 """Direct, whole-file custom-module generation.
 
 Authored designs first compile to a responsibility/dependency implementation graph.
-Each admitted source unit owns an exact host-selected file. The coder returns complete
-source, and Gradle failures enter compiler repair. Output exhaustion instead returns to
-graph decomposition and cannot retry the exhausted task. No patch transport is involved.
+Each admitted source unit owns an exact host-selected file. The coder returns one complete
+first-pass source candidate and Gradle is a pass/fail verification gate, never a model-repair
+loop. Output exhaustion returns to graph decomposition and cannot retry the exhausted task.
+No patch transport is involved.
 """
 
 import hashlib
@@ -2102,7 +2103,7 @@ def _run_atomic_ir_generation(
             raise
 
 class CustomModuleGenerator:
-    """One exact task -> one complete source file -> compiler-guided repair loop."""
+    """One exact task -> one first-pass source candidate -> host compile gate."""
 
     def __init__(
         self,
