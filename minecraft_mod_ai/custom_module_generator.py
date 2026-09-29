@@ -470,17 +470,14 @@ def _direct_host_grounding(
 _ATOMIC_JAVA_REGION_TOOL = "emit_java_structure"
 _JAVA_IDENTIFIER_PATTERN = r"^[A-Za-z_$][A-Za-z0-9_$]*$"
 _ATOMIC_METHOD_NAME_PATTERN = r"^(?:<init>|[A-Za-z_$][A-Za-z0-9_$]*)$"
-_ATOMIC_MODIFIER_VALUES = [
-    "public",
-    "protected",
-    "private",
-    "static",
-    "final",
-    "synchronized",
-    "volatile",
-    "transient",
-    "abstract",
-]
+_ATOMIC_VISIBILITY_SCHEMA: dict[str, Any] = {
+    "type": "string",
+    "enum": ["private", "protected", "public"],
+    "description": (
+        "Java visibility keyword only. Never emit a declaration, type, identifier, "
+        "modifier sequence, or semicolon here."
+    ),
+}
 _ATOMIC_PARAMETER_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -509,17 +506,28 @@ _ATOMIC_PARAMETER_SCHEMA: dict[str, Any] = {
 _ATOMIC_FIELD_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "modifiers": {
-            "type": "array",
-            "items": {"type": "string"},
-            "uniqueItems": True,
+        "visibility": deepcopy(_ATOMIC_VISIBILITY_SCHEMA),
+        "is_final": {
+            "type": "boolean",
+            "description": (
+                "True only when this field binding must be immutable and an initializer "
+                "is supplied in this declaration."
+            ),
         },
+        "is_static": {
+            "type": "boolean",
+            "description": (
+                "Static intent for nested-class fields. Outer fields are made static by the host."
+            ),
+        },
+        "is_volatile": {"type": "boolean"},
+        "is_transient": {"type": "boolean"},
         "type": {
             "type": "string",
             "minLength": 1,
             "description": (
-                "Java field type. Concern-owned domain types may be declared in the same "
-                "records/enums/classes payload."
+                "Java field type only. Concern-owned domain types may be declared in the same "
+                "records/enums/classes payload. Never include visibility or modifiers."
             ),
         },
         "name": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
@@ -538,12 +546,20 @@ _ATOMIC_FIELD_SCHEMA: dict[str, Any] = {
 _ATOMIC_METHOD_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "modifiers": {
-            "type": "array",
-            "items": {"type": "string"},
-            "uniqueItems": True,
+        "visibility": deepcopy(_ATOMIC_VISIBILITY_SCHEMA),
+        "is_final": {"type": "boolean"},
+        "is_static": {
+            "type": "boolean",
+            "description": (
+                "Static intent for nested-type methods. Outer methods are made static by the host."
+            ),
         },
-        "return_type": {"type": "string", "minLength": 1},
+        "is_synchronized": {"type": "boolean"},
+        "return_type": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Java return type only; never include visibility or modifiers.",
+        },
         "name": {"type": "string", "pattern": _ATOMIC_METHOD_NAME_PATTERN},
         "parameters": {"type": "array", "items": _ATOMIC_PARAMETER_SCHEMA},
         "throws": {"type": "array", "items": {"type": "string", "minLength": 1}},
@@ -583,7 +599,6 @@ _ATOMIC_CONSTRUCTOR_SCHEMA: dict[str, Any] = {
 _ATOMIC_RECORD_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "modifiers": {"type": "array", "items": {"type": "string"}, "uniqueItems": True},
         "name": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
         "components": {"type": "array", "items": _ATOMIC_PARAMETER_SCHEMA},
         "constructors": {"type": "array", "items": _ATOMIC_CONSTRUCTOR_SCHEMA},
@@ -595,7 +610,6 @@ _ATOMIC_RECORD_SCHEMA: dict[str, Any] = {
 _ATOMIC_ENUM_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "modifiers": {"type": "array", "items": {"type": "string"}, "uniqueItems": True},
         "name": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
         "constants": {
             "type": "array",
@@ -609,7 +623,6 @@ _ATOMIC_ENUM_SCHEMA: dict[str, Any] = {
 _ATOMIC_CLASS_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "modifiers": {"type": "array", "items": {"type": "string"}, "uniqueItems": True},
         "name": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
         "fields": {"type": "array", "items": _ATOMIC_FIELD_SCHEMA},
         "constructors": {"type": "array", "items": _ATOMIC_CONSTRUCTOR_SCHEMA},
@@ -1456,6 +1469,80 @@ def _validate_atomic_type_namespace(
             seen[name] = kind
 
 
+def _materialize_semantic_modifiers(
+    item: Mapping[str, Any],
+    *,
+    kind: str,
+) -> dict[str, Any]:
+    result = dict(item)
+    visibility = str(result.pop("visibility", "") or "").strip()
+    if visibility not in {"public", "protected", "private"}:
+        visibility = "private"
+
+    modifiers = [visibility]
+    initializer = str(result.get("initializer") or "").strip()
+    if kind == "field":
+        if bool(result.pop("is_static", False)):
+            modifiers.append("static")
+        if bool(result.pop("is_final", False)) and initializer:
+            modifiers.append("final")
+        elif bool(result.get("is_final", False)):
+            result.pop("is_final", None)
+        if bool(result.pop("is_volatile", False)) and "final" not in modifiers:
+            modifiers.append("volatile")
+        if bool(result.pop("is_transient", False)):
+            modifiers.append("transient")
+    elif kind == "method":
+        if bool(result.pop("is_static", False)):
+            modifiers.append("static")
+        if bool(result.pop("is_final", False)):
+            modifiers.append("final")
+        if bool(result.pop("is_synchronized", False)):
+            modifiers.append("synchronized")
+    result.pop("is_final", None)
+    result["modifiers"] = modifiers
+    return result
+
+
+def _materialize_atomic_java_modifiers(
+    decision: Mapping[str, Any],
+) -> dict[str, Any]:
+    result = deepcopy(dict(decision))
+
+    result["fields"] = [
+        _materialize_semantic_modifiers(item, kind="field")
+        if isinstance(item, Mapping)
+        else item
+        for item in result.get("fields") or []
+    ]
+    result["methods"] = [
+        _materialize_semantic_modifiers(item, kind="method")
+        if isinstance(item, Mapping)
+        else item
+        for item in result.get("methods") or []
+    ]
+
+    for category in ("records", "classes"):
+        for owner in result.get(category) or []:
+            if not isinstance(owner, dict):
+                continue
+            if "fields" in owner:
+                owner["fields"] = [
+                    _materialize_semantic_modifiers(item, kind="field")
+                    if isinstance(item, Mapping)
+                    else item
+                    for item in owner.get("fields") or []
+                ]
+            if "methods" in owner:
+                owner["methods"] = [
+                    _materialize_semantic_modifiers(item, kind="method")
+                    if isinstance(item, Mapping)
+                    else item
+                    for item in owner.get("methods") or []
+                ]
+    return result
+
+
 def _force_outer_static(item: Mapping[str, Any]) -> dict[str, Any]:
     result = dict(item)
     modifiers = [
@@ -1729,6 +1816,7 @@ def _call_atomic_java_region(
         config=config,
         multi_callback=multi_callback,
     ).run(parameters)
+    decision = _materialize_atomic_java_modifiers(decision)
     from .atomic_concern_source import _validate_region_text
 
     try:
