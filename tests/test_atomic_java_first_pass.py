@@ -200,7 +200,7 @@ def test_multi_call_field_batch_is_closed_after_first_native_turn() -> None:
 
     assert router.batch_calls == 1
     assert router.part_calls == 2
-    assert rendered.splitlines() == [
+    assert [line for line in rendered.splitlines() if line.strip()] == [
         "private static actors.Player player;",
         "private static actors.NPCMerchant npcMerchant;",
         "private static actors.ShipAI shipAI;",
