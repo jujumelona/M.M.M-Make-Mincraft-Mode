@@ -21,7 +21,9 @@ from .java_region_parser import (
     admit_initialize_region,
     admit_member_region,
     class_body_chunks,
+    class_body_member_contracts,
     class_body_member_kinds,
+    public_source_member_contracts,
     strict_initialize_statements,
     strict_member_chunks,
 )
@@ -2546,15 +2548,27 @@ def _dependency_context_rows(raw: str) -> tuple[dict[str, Any], ...]:
     return tuple(rows)
 
 
-def _dependency_api_context(raw: str, *, max_chars: int = 12000) -> list[dict[str, Any]]:
+def _dependency_api_context(raw: str, *, max_chars: int = 16000) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     used = 0
     for row in _dependency_context_rows(raw):
+        source = str(row.get("source") or "")
+        typed_api: list[dict[str, Any]] = []
+        if source.strip():
+            try:
+                typed_api = [
+                    dict(item)
+                    for item in public_source_member_contracts(source)
+                ]
+            except JavaRegionParseError:
+                typed_api = []
         compact = {
             "symbol": str(row.get("symbol") or ""),
             "path": str(row.get("path") or ""),
             "responsibility": str(row.get("responsibility") or ""),
             "public_api": list(row.get("public_api") or []),
+            "typed_public_api": typed_api,
+            "typed_api_source": "tree_sitter_java" if typed_api else "unavailable",
         }
         encoded = json.dumps(
             compact,
@@ -2562,7 +2576,17 @@ def _dependency_api_context(raw: str, *, max_chars: int = 12000) -> list[dict[st
             sort_keys=True,
         )
         if used + len(encoded) > max_chars:
-            break
+            # Preserve legacy/frozen public_api when a rich typed contract would
+            # exceed the atomic prompt budget.
+            compact["typed_public_api"] = []
+            compact["typed_api_source"] = "budget_fallback"
+            encoded = json.dumps(
+                compact,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            if used + len(encoded) > max_chars:
+                break
         result.append(compact)
         used += len(encoded)
     return result
@@ -2854,6 +2878,27 @@ def _sibling_symbol_inventory(
     rows: list[dict[str, Any]] = []
     for concern in sibling_concerns:
         members = _region_content(source, concern=concern, region="MEMBERS")
+        try:
+            contracts = class_body_member_contracts(members)
+        except JavaRegionParseError:
+            contracts = ()
+        if contracts:
+            for contract in contracts:
+                row = {
+                    "owner_concern": concern,
+                    **dict(contract),
+                    "typed_api_source": "tree_sitter_java",
+                }
+                if row.get("kind") == "field" and row.get("declared_type"):
+                    row["declared_type"] = _canonicalize_jdk_type_expression(
+                        str(row["declared_type"])
+                    )
+                    row["generic_type_is_authoritative"] = True
+                rows.append(row)
+            continue
+
+        # Compatibility fallback for legacy/incomplete regions that cannot be
+        # represented as a complete Tree-sitter class body.
         for chunk in _top_level_member_chunks(members):
             declaration = _member_declaration_summary(chunk)
             symbols = _member_declaration_symbols(chunk)
@@ -2864,6 +2909,7 @@ def _sibling_symbol_inventory(
                     "kind": kind,
                     "symbol": display,
                     "declaration": declaration,
+                    "typed_api_source": "legacy_fallback",
                 }
                 if kind == "field":
                     row["mutable"] = not bool(
