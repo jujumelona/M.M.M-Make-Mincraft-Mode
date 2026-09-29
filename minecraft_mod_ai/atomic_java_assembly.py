@@ -32,6 +32,7 @@ from .model_output_atomicity_contract import (
 
 MAX_ASSEMBLY_CALLS = 128
 MAX_PART_ITEMS = 32
+MAX_NATIVE_TOOL_DECISION_ATTEMPTS = 3
 _MODIFIERS = {
     "fields": ["public", "protected", "private", "static", "final", "volatile", "transient"],
     "methods": ["public", "protected", "private", "static", "final", "synchronized"],
@@ -102,6 +103,27 @@ def _normalize_java_scalar_arguments(value: Mapping[str, Any]) -> dict[str, Any]
             separators=(",", ":"),
         )
     return result
+
+
+def _native_rejection_feedback(exc: NativeToolDecisionRejected) -> dict[str, Any]:
+    rejections: list[dict[str, str]] = []
+    for item in exc.rejections[:4]:
+        compact: dict[str, str] = {}
+        for key in ("failure_code", "error", "raw_arguments"):
+            raw = item.get(key)
+            if raw is not None and str(raw).strip():
+                compact[key] = str(raw)[:1024]
+        if compact:
+            rejections.append(compact)
+    return {
+        "instruction": (
+            "The previous emit_java_part call failed native schema validation. "
+            "Correct only the current assembly.path and match the supplied JSON schema exactly. "
+            "For enum-valued fields emit exactly one listed enum token per call; never emit "
+            "a Java declaration, type, name, or semicolon in that scalar."
+        ),
+        "rejections": rejections,
+    }
 
 
 def _assembly_context(value: Any, selected_path: list, path: tuple = ()) -> Any:
@@ -233,7 +255,55 @@ class JavaStructureAssembly:
                 f"OUTPUT_BUDGET_EXHAUSTED: Java assembly context needs decomposition ({size + 2048}>{budget})."
             )
         try:
-            raw = callback("coder", messages, **kwargs)
+            native_rejection: NativeToolDecisionRejected | None = None
+            raw: Any = None
+            for native_attempt in range(1, MAX_NATIVE_TOOL_DECISION_ATTEMPTS + 1):
+                attempt_messages = messages
+                if native_rejection is not None:
+                    if self.calls >= MAX_ASSEMBLY_CALLS:
+                        raise OutputBudgetExhausted(
+                            "OUTPUT_BUDGET_EXHAUSTED: Java assembly call limit requires further decomposition."
+                        )
+                    self.calls += 1
+                    retry_payload = deepcopy(payload)
+                    retry_payload["assembly"] = dict(retry_payload["assembly"])
+                    retry_payload["assembly"]["remaining_calls"] = MAX_ASSEMBLY_CALLS - self.calls
+                    retry_payload["assembly"]["native_validation_failure"] = (
+                        _native_rejection_feedback(native_rejection)
+                    )
+                    attempt_messages = [
+                        messages[0],
+                        {
+                            "role": "user",
+                            "content": json.dumps(
+                                retry_payload,
+                                ensure_ascii=False,
+                                sort_keys=True,
+                            ),
+                        },
+                    ]
+                    retry_size = len(
+                        json.dumps(
+                            attempt_messages,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ).encode("utf-8")
+                    )
+                    if retry_size + 2048 > budget:
+                        raise OutputBudgetExhausted(
+                            "OUTPUT_BUDGET_EXHAUSTED: Java assembly retry context "
+                            f"needs decomposition ({retry_size + 2048}>{budget})."
+                        )
+                try:
+                    raw = callback("coder", attempt_messages, **kwargs)
+                    break
+                except NativeToolDecisionRejected as exc:
+                    if native_attempt >= MAX_NATIVE_TOOL_DECISION_ATTEMPTS:
+                        raise AtomicJavaDecisionError(
+                            f"ATOMIC_JAVA_ASSEMBLY_INVALID: {path}: {exc}",
+                            response=exc.rejections,
+                        ) from exc
+                    native_rejection = exc
             values = tuple(raw) if use_multi else (raw,)
             if not values:
                 raise AtomicJavaDecisionError(
@@ -251,10 +321,10 @@ class JavaStructureAssembly:
                 Draft202012Validator(schema).validate(normalized)
                 validated.append(normalized)
             return tuple(validated)
-        except (NativeToolDecisionRejected, ValidationError) as exc:
+        except ValidationError as exc:
             raise AtomicJavaDecisionError(
                 f"ATOMIC_JAVA_ASSEMBLY_INVALID: {path}: {exc}",
-                response=getattr(exc, "rejections", getattr(exc, "instance", None)),
+                response=exc.instance,
             ) from exc
         except AtomicJavaDecisionError:
             raise
@@ -444,6 +514,10 @@ class JavaStructureAssembly:
                             item for item in allowed_modifiers if item != "final"
                         ]
                     scalar["enum"] = allowed_modifiers
+                    scalar["description"] = (
+                        "Emit exactly one Java modifier token per native call from this enum; "
+                        "never emit a declaration, type, field name, or semicolon."
+                    )
                 emitted = self._ask_many(
                     _closed({"value": scalar}, ["value"]),
                     [*path, selected],
