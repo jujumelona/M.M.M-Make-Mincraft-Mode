@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from minecraft_mod_ai import planning_state_pipeline
+from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner
 from minecraft_mod_ai.fixed_template_generation import generate_fixed_template_value
 from minecraft_mod_ai.model_router import ModelRouter
 from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
@@ -107,3 +108,67 @@ def test_interrupted_writer_reports_original_cause_and_keeps_draft(monkeypatch):
         pipeline.prepare("space mod")
     assert caught.value.planning_state == state
     assert "HANDOFF_READY" not in str(caught.value)
+
+
+def _canonical_authored_sections_fixture() -> dict[str, object]:
+    from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
+
+    sections: dict[str, object] = {}
+    for section, concerns in DETAIL_RECORDS.items():
+        specification = {name: [] for name in concerns}
+        specification["inapplicable_concerns"] = [
+            {"concern": name, "reason": "not required by fixture"}
+            for name in concerns
+        ]
+        sections[section] = {
+            "specification": specification,
+            "constraint_evidence_refs": [],
+        }
+    return sections
+
+
+def test_authored_plan_producer_persists_canonical_structured_authority(monkeypatch):
+    from minecraft_mod_ai import planning_state_implementation
+    from minecraft_mod_ai.authored_structured_design import render_structured_sections
+
+    structured = _canonical_authored_sections_fixture()
+    monkeypatch.setattr(
+        planning_state_implementation,
+        "compile_authored_worksheet",
+        lambda router, prompt: structured,
+    )
+
+    planner = CompleteGameDesignPlanner(SimpleNamespace())
+    plan = planner.plan("Design a space economy.")
+
+    assert plan.structured_sections == structured
+    assert plan.text == render_structured_sections(structured)
+    assert plan.to_dict()["structured_sections"] == structured
+
+
+def test_legacy_fresh_authored_plan_migrates_before_production(monkeypatch):
+    from minecraft_mod_ai import authored_production, planning_state_implementation
+
+    structured = _canonical_authored_sections_fixture()
+    monkeypatch.setattr(
+        planning_state_implementation,
+        "compile_authored_worksheet",
+        lambda router, prompt: structured,
+    )
+    seen = {}
+
+    def compile_stub(router, plan, *, existing_input_sha256=""):
+        seen["plan"] = plan
+        return SimpleNamespace()
+
+    monkeypatch.setattr(authored_production, "compile_authored_design", compile_stub)
+
+    legacy = __import__(
+        "minecraft_mod_ai.authored_plan", fromlist=["AuthoredPlan"]
+    ).AuthoredPlan("space mod", "legacy prose only")
+    CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(legacy)
+
+    migrated = seen["plan"]
+    assert migrated.structured_sections == structured
+    assert migrated.text
+    assert migrated.text != legacy.text
