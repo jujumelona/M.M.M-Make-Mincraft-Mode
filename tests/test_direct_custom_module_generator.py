@@ -380,6 +380,7 @@ def test_ir_atomic_concerns_are_isolated_and_compiled_as_one_host_file(
         def generate_text(self, role, messages, **kwargs):
             assert role == "coder"
             assert kwargs.get("enable_tools") is False
+            assert kwargs.get("force_non_thinking") is True
             payload = json.loads(messages[-1]["content"])
             concern = payload["concern"]["name"]
             calls.append((concern, dict(kwargs)))
@@ -444,6 +445,7 @@ This wrapper is complete.
             nonlocal calls
             assert role == "coder"
             assert kwargs.get("enable_tools") is False
+            assert kwargs.get("force_non_thinking") is True
             calls += 1
             return next(responses)
 
@@ -504,6 +506,7 @@ public static void initialize() { balance = 0; }
             nonlocal calls
             assert role == "coder"
             assert kwargs.get("enable_tools") is False
+            assert kwargs.get("force_non_thinking") is True
             calls += 1
             return next(responses)
 
@@ -549,6 +552,7 @@ def test_atomic_concern_compile_repair_reopens_only_localized_concern(
         def generate_text(self, role, messages, **kwargs):
             assert role == "coder"
             assert kwargs.get("enable_tools") is False
+            assert kwargs.get("force_non_thinking") is True
             payload = json.loads(messages[-1]["content"])
             concern = payload["concern"]["name"]
             calls.append((concern, bool(payload.get("repair_failure"))))
