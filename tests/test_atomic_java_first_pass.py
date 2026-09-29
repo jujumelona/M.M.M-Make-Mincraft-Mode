@@ -149,6 +149,64 @@ def test_java_modifiers_are_never_model_authored() -> None:
     )
 
 
+def test_multi_call_field_batch_is_closed_after_first_native_turn() -> None:
+    class Router:
+        def __init__(self):
+            self.part_calls = 0
+            self.batch_calls = 0
+
+        def generate_tool_decision(self, role, messages, **kwargs):
+            del role, messages
+            schema = kwargs["parameters"]
+            properties = schema["properties"]
+            assert set(properties) == {"part"}
+            choices = properties["part"]["enum"]
+            self.part_calls += 1
+            if self.part_calls == 1:
+                assert "fields" in choices
+                return {"part": "fields"}
+            # Regression: after the fields multi-call turn is accepted, the host
+            # must not offer fields again. The logged failure reopened this part,
+            # causing player/npcMerchant/shipAI to be emitted a second time.
+            assert "fields" not in choices
+            return {"part": "done"}
+
+        def generate_tool_decisions(self, role, messages, **kwargs):
+            del role, messages
+            schema = kwargs["parameters"]
+            properties = schema["properties"]
+            assert {"type", "name"} <= set(properties)
+            self.batch_calls += 1
+            assert self.batch_calls == 1
+            return (
+                {"type": "actors.Player", "name": "player"},
+                {"type": "actors.NPCMerchant", "name": "npcMerchant"},
+                {"type": "actors.ShipAI", "name": "shipAI"},
+            )
+
+    router = Router()
+    rendered = _call_atomic_java_region(
+        router,
+        [{
+            "role": "user",
+            "content": json.dumps({
+                "response_region": "members",
+                "host_selected_class": "Probe",
+                "concern": {"name": "actors"},
+            }),
+        }],
+        output_token_ceiling=512,
+    )
+
+    assert router.batch_calls == 1
+    assert router.part_calls == 2
+    assert rendered.splitlines() == [
+        "private static actors.Player player;",
+        "private static actors.NPCMerchant npcMerchant;",
+        "private static actors.ShipAI shipAI;",
+    ]
+
+
 def test_outer_public_api_modifiers_come_from_host_contract() -> None:
     captured_paths: list[list[object]] = []
 
