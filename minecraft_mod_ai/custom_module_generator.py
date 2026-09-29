@@ -2062,10 +2062,17 @@ def _run_atomic_ir_generation(
         grounding=context.host_grounding,
         dependency_source=context.dependency_context,
         require_initialize=context.require_initialize,
+        # AtomicConcernExecutor already owns the concern boundary, sibling
+        # declaration inventory, scope validation, compiler feedback, and bounded
+        # repair. Do not put a second syntax-level JavaStructureAssembly between
+        # that host contract and the coder: scalar slots such as type/modifier/body
+        # are exactly what caused valid Java intent to be misrouted across schema
+        # fields (for example type="final"). The coder emits one complete,
+        # concern-local Java region and the host parses/adjudicates its declarations.
         call_coder=lambda messages: _call_coder(
             generator.router,
             messages,
-            structured_java_region=True,
+            structured_java_region=False,
         ),
         compile_java=context.compiler.compile_java,
         compile_log=_compile_log,
