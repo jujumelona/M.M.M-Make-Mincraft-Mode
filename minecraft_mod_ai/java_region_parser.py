@@ -189,6 +189,17 @@ def strict_member_chunks(value: str) -> tuple[str, ...]:
     return _chunks_from_body(body, source, drop_host_lifecycle=False)
 
 
+def _declaration_summary(node: Any, source: bytes) -> str:
+    body = node.child_by_field_name("body")
+    if body is None:
+        return _text(source, node).strip()
+    header = source[node.start_byte:body.start_byte].decode(
+        "utf-8",
+        errors="replace",
+    ).strip()
+    return (header + " { ... }").strip()
+
+
 def _parameter_contracts(parameters: Any, source: bytes) -> tuple[dict[str, str], ...]:
     if parameters is None:
         return ()
@@ -241,7 +252,7 @@ def _node_contracts(node: Any, source: bytes) -> tuple[dict[str, Any], ...]:
                 "symbol": name,
                 "return_type": _text(source, type_node).strip(),
                 "parameters": list(_parameter_contracts(parameters, source)),
-                "declaration": _text(source, node).strip(),
+                "declaration": _declaration_summary(node, source),
             },
         )
 
@@ -256,7 +267,7 @@ def _node_contracts(node: Any, source: bytes) -> tuple[dict[str, Any], ...]:
                 "kind": "constructor",
                 "symbol": name,
                 "parameters": list(_parameter_contracts(parameters, source)),
-                "declaration": _text(source, node).strip(),
+                "declaration": _declaration_summary(node, source),
             },
         )
 
@@ -280,7 +291,7 @@ def _node_contracts(node: Any, source: bytes) -> tuple[dict[str, Any], ...]:
                     "declared_type": java_type,
                     "mutable": "final" not in modifiers,
                     "initialized": child.child_by_field_name("value") is not None,
-                    "declaration": _text(source, node).strip(),
+                    "declaration": _declaration_summary(node, source),
                 }
             )
         return tuple(rows)
@@ -293,7 +304,7 @@ def _node_contracts(node: Any, source: bytes) -> tuple[dict[str, Any], ...]:
                 "kind": "type",
                 "symbol": name,
                 "declaration_kind": node.type,
-                "declaration": _text(source, node).strip(),
+                "declaration": _declaration_summary(node, source),
             },
         ) if name else ()
 
