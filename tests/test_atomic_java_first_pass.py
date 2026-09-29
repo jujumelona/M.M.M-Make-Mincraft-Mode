@@ -29,10 +29,6 @@ def _compile_run(tmp_path, members, probe):
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.parametrize("kind,value,expected", [
-    ("float", "1.0", "1.0f"), ("float", "1e-3", "0.001f"),
-    ("long", "3000000000", "3000000000L"),
-])
 def test_executable_scalar_pattern_compiles_and_blocks_scope_escape() -> None:
     pattern = re.compile(_EXECUTABLE_SCALAR_PATTERN)
     assert pattern.fullmatch("return value != null;")
@@ -43,6 +39,10 @@ def test_executable_scalar_pattern_compiles_and_blocks_scope_escape() -> None:
     assert pattern.fullmatch("static { value = 1; }") is None
 
 
+@pytest.mark.parametrize("kind,value,expected", [
+    ("float", "1.0", "1.0f"), ("float", "1e-3", "0.001f"),
+    ("long", "3000000000", "3000000000L"),
+])
 def test_host_numeric_defaults_compile_without_model_repair(tmp_path, kind, value, expected):
     members = f"static {kind} value = {_state_default_literal(kind, value)};"
     _compile_run(tmp_path, members,
