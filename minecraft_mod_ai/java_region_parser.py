@@ -11,6 +11,7 @@ from threading import local
 from typing import Any
 
 import tree_sitter_java
+from markdown_it import MarkdownIt
 from tree_sitter import Language, Parser
 
 
@@ -222,26 +223,76 @@ def _unwrap_single_outer_class(value: str) -> tuple[str, ...]:
     return chunks
 
 
-def admit_member_region(value: str) -> str:
-    """Normalize model Java into host-admissible members without regex parsing.
+def _markdown_java_candidates(value: str) -> tuple[str, ...]:
+    """Extract Java fenced blocks from noisy model Markdown with markdown-it."""
+    tokens = MarkdownIt("commonmark").parse(str(value or ""))
+    candidates: list[str] = []
+    for token in tokens:
+        if token.type != "fence":
+            continue
+        language = str(token.info or "").strip().split(maxsplit=1)[0].casefold()
+        if language not in {"java", "javac"}:
+            continue
+        candidate = str(token.content or "").strip()
+        if candidate:
+            candidates.append(candidate)
+    return tuple(candidates)
 
-    Direct class-body fragments are accepted as-is. If the model accidentally emits
-    package/import lines plus one outer class wrapper, Tree-sitter unwraps that single
-    class and drops only host-owned constructor/initialize/static-initializer nodes.
+
+def _admit_member_candidate(region: str) -> tuple[str, ...]:
+    """Admit one candidate Java payload; host-owned lifecycle nodes are discarded."""
+    candidate = str(region or "").strip()
+    if not candidate:
+        return ()
+    prefix = "final class __MMMRegionHost {\n"
+    try:
+        source, root = _parse(prefix + candidate + "\n}\n")
+        body = _class_body(root)
+        chunks = _chunks_from_body(body, source, drop_host_lifecycle=True)
+        if chunks:
+            return chunks
+    except JavaRegionParseError:
+        pass
+    return _unwrap_single_outer_class(candidate)
+
+
+def admit_member_region(value: str) -> str:
+    """Normalize noisy model output into host-admissible Java members.
+
+    The raw output may already be Java, may accidentally wrap members in one outer
+    class, or may be Markdown containing several Java drafts. Markdown parsing is
+    delegated to markdown-it and Java parsing to Tree-sitter. When several fenced
+    Java drafts exist, the last structurally admissible candidate wins because local
+    models commonly reason through earlier drafts before emitting their final answer.
     """
     region = str(value or "").strip()
     if not region:
         return ""
+
+    direct_error: JavaRegionParseError | None = None
     try:
-        chunks = strict_member_chunks(region)
-    except JavaRegionParseError as direct_error:
+        chunks = _admit_member_candidate(region)
+        if chunks:
+            return "\n\n".join(chunks).strip()
+    except JavaRegionParseError as exc:
+        direct_error = exc
+
+    fenced = _markdown_java_candidates(region)
+    fence_errors: list[str] = []
+    for candidate in reversed(fenced):
         try:
-            chunks = _unwrap_single_outer_class(region)
-        except JavaRegionParseError as envelope_error:
-            raise JavaRegionParseError(
-                f"class-body parse failed ({direct_error}); envelope admission failed ({envelope_error})"
-            ) from envelope_error
-    return "\n\n".join(chunks).strip()
+            chunks = _admit_member_candidate(candidate)
+            if chunks:
+                return "\n\n".join(chunks).strip()
+        except JavaRegionParseError as exc:
+            fence_errors.append(str(exc))
+
+    detail = str(direct_error or "raw output contained no admissible Java members")
+    if fenced:
+        detail += f"; {len(fenced)} Java fence(s) found but none were admissible"
+        if fence_errors:
+            detail += f"; last fence error: {fence_errors[0]}"
+    raise JavaRegionParseError(detail)
 
 
 def strict_initialize_statements(value: str) -> tuple[str, ...]:
