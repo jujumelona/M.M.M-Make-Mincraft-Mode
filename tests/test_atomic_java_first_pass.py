@@ -9,8 +9,10 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from minecraft_mod_ai.atomic_concern_source import _state_default_literal
+from minecraft_mod_ai.atomic_java_assembly import MAX_NATIVE_TOOL_DECISION_ATTEMPTS
 from minecraft_mod_ai.custom_module_errors import CustomModuleGenerationError
 from minecraft_mod_ai.custom_module_generator import _call_atomic_java_region
+from minecraft_mod_ai.model_adapters.base import NativeToolDecisionRejected
 from minecraft_mod_ai.model_output_atomicity_contract import assert_atomic_model_schema
 
 
@@ -139,6 +141,102 @@ def test_blank_field_cannot_select_final_modifier_during_native_assembly() -> No
 
     assert rendered == "private static boolean flag;"
     assert "final" not in captured_modifier_schema["enum"]
+
+
+def test_native_modifier_schema_rejection_retries_only_current_scalar() -> None:
+    class Router:
+        def __init__(self):
+            self.responses = iter([
+                {"part": "fields"},
+                {"type": "int", "name": "player"},
+                {"part": "modifiers"},
+                {"part": "done"},
+                {"part": "done"},
+            ])
+            self.modifier_attempts = 0
+            self.retry_payload = None
+
+        def generate_tool_decision(self, role, messages, **kwargs):
+            del role
+            schema = kwargs["parameters"]
+            value_schema = schema.get("properties", {}).get("value", {})
+            if "enum" in value_schema and "private" in value_schema["enum"]:
+                self.modifier_attempts += 1
+                if self.modifier_attempts == 1:
+                    raise NativeToolDecisionRejected(
+                        "emit_java_part",
+                        [{
+                            "failure_code": "TOOL_SCHEMA_INVALID",
+                            "error": (
+                                "value 'private final Player player;' is not one of "
+                                "['public', 'protected', 'private', 'static', 'volatile', 'transient']"
+                            ),
+                            "raw_arguments": json.dumps(
+                                {"value": "private final Player player;"}
+                            ),
+                        }],
+                    )
+                self.retry_payload = json.loads(messages[-1]["content"])
+                value = {"value": "private"}
+            else:
+                value = next(self.responses)
+            Draft202012Validator(schema).validate(value)
+            return value
+
+    router = Router()
+    rendered = _call_atomic_java_region(
+        router,
+        _messages(),
+        output_token_ceiling=512,
+    )
+
+    assert rendered == "private static int player;"
+    assert router.modifier_attempts == 2
+    feedback = router.retry_payload["assembly"]["native_validation_failure"]
+    assert "exactly one listed enum token per call" in feedback["instruction"]
+    assert feedback["rejections"][0]["failure_code"] == "TOOL_SCHEMA_INVALID"
+    assert "private final Player player;" in feedback["rejections"][0]["raw_arguments"]
+
+
+def test_native_modifier_schema_rejection_retry_is_bounded() -> None:
+    class Router:
+        def __init__(self):
+            self.responses = iter([
+                {"part": "fields"},
+                {"type": "int", "name": "player"},
+                {"part": "modifiers"},
+            ])
+            self.modifier_attempts = 0
+
+        def generate_tool_decision(self, role, messages, **kwargs):
+            del role, messages
+            schema = kwargs["parameters"]
+            value_schema = schema.get("properties", {}).get("value", {})
+            if "enum" in value_schema and "private" in value_schema["enum"]:
+                self.modifier_attempts += 1
+                raise NativeToolDecisionRejected(
+                    "emit_java_part",
+                    [{
+                        "failure_code": "TOOL_SCHEMA_INVALID",
+                        "error": "modifier declaration was emitted instead of one enum token",
+                        "raw_arguments": json.dumps(
+                            {"value": "private final Player player;"}
+                        ),
+                    }],
+                )
+            value = next(self.responses)
+            Draft202012Validator(schema).validate(value)
+            return value
+
+    router = Router()
+    with pytest.raises(CustomModuleGenerationError, match="ATOMIC_JAVA_ASSEMBLY_INVALID"):
+        _call_atomic_java_region(
+            router,
+            _messages(),
+            output_token_ceiling=512,
+        )
+
+    assert router.modifier_attempts == MAX_NATIVE_TOOL_DECISION_ATTEMPTS
 
 
 def test_initialization_is_assembled_from_native_scalars_and_executes(tmp_path):
