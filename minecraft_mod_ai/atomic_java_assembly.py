@@ -426,7 +426,19 @@ class JavaStructureAssembly:
             else:
                 scalar = _scalar_schema(item_schema, selected)
                 if selected == "modifiers":
-                    scalar["enum"] = _MODIFIERS.get(str(path[-2]) if len(path) >= 2 else "", [])
+                    owner_kind = str(path[-2]) if len(path) >= 2 else ""
+                    allowed_modifiers = list(_MODIFIERS.get(owner_kind, []))
+                    # Blank final fields are a compile-time trap. The structured
+                    # generator may select final only after it has supplied a
+                    # declaration initializer for this exact field.
+                    if (
+                        owner_kind == "fields"
+                        and not str(target.get("initializer") or "").strip()
+                    ):
+                        allowed_modifiers = [
+                            item for item in allowed_modifiers if item != "final"
+                        ]
+                    scalar["enum"] = allowed_modifiers
                 emitted = self._ask_many(
                     _closed({"value": scalar}, ["value"]),
                     [*path, selected],
