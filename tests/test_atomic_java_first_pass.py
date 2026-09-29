@@ -49,8 +49,11 @@ class ScalarRouter:
         # The failing request asked for fields + methods + static_initializers
         # as nested JSON arrays. No request in the replacement may do that.
         assert_atomic_model_schema(schema, surface="first-pass Java")
-        assert all(value.get("type") not in {"array", "object"}
-                   for value in schema["properties"].values())
+        assert all(
+            value.get("type") not in {"array", "object"}
+            for value in schema["properties"].values()
+            if isinstance(value.get("type"), str)
+        )
         self.calls.append((messages, kwargs))
         value = next(self.responses)
         Draft202012Validator(schema).validate(value)
@@ -304,17 +307,12 @@ def test_public_api_check_accepts_multiline_host_declarations():
     assert public_api_errors(source.replace("String trigger", "int trigger"), contract)
 
 
-def test_compact_design_through_executor_compiles_and_runs_without_repairs(tmp_path):
-    from types import SimpleNamespace
-
+def test_compact_state_design_does_not_fall_back_to_free_form_atomic_coder(tmp_path):
     from minecraft_mod_ai.atomic_concern_source import AtomicConcernExecutor
     from minecraft_mod_ai.implementation_graph_execution import (
         _bind_atomic_leaf_contract,
     )
 
-    javac, java = shutil.which("javac"), shutil.which("java")
-    if not javac or not java:
-        pytest.skip("Java compiler/runtime unavailable")
     requirements = {
         "R1": "## state_model",
         "R2": "- variables: PlayerCredit (PlayerCredit, Owner=Global, Type=Integer, Default=0, Domain=-999~999M), "
@@ -327,41 +325,34 @@ def test_compact_design_through_executor_compiles_and_runs_without_repairs(tmp_p
         "source_requirements": requirements,
     }) for concern in ("variables", "initialization")]}
     section, concerns = _bind_atomic_leaf_contract(task, node, requirements)
-    router = ScalarRouter([
-        {"part": "methods"}, {"return_type": "void", "name": "reset"},
-        {"part": "body"}, {"value": "ShipIntegrity = 1.0f;"}, {"part": "done"},
-        {"part": "methods"}, {"return_type": "float", "name": "integrity"},
-        {"part": "body"}, {"value": "return ShipIntegrity;"}, {"part": "done"},
-        {"part": "done"},
-    ])
-    target = tmp_path / "AuthoredStateModel.java"
-    compilations = []
-
-    def compile_java(_root):
-        result = subprocess.run([javac, str(target)], capture_output=True, text=True, check=False)
-        compilations.append(result)
-        assert result.returncode == 0, result.stderr
-        return SimpleNamespace(status="PASS")
+    compile_calls = []
 
     executor = AtomicConcernExecutor(
-        root=tmp_path, target=target, relative="AuthoredStateModel.java", symbol="AuthoredStateModel",
+        root=tmp_path,
+        target=tmp_path / "AuthoredStateModel.java",
+        relative="AuthoredStateModel.java",
+        symbol="AuthoredStateModel",
         original="public final class AuthoredStateModel {\n// MMM_AUTHORED_FEATURE_BODY\n}\n",
-        task=task, section=section, concerns=concerns, grounding={}, dependency_source="",
+        task=task,
+        section=section,
+        concerns=concerns,
+        grounding={},
+        dependency_source="",
         require_initialize=False,
-        call_coder=lambda messages: _call_atomic_java_region(router, messages, output_token_ceiling=512),
-        compile_java=compile_java, compile_log=lambda _: "",
-        write_source=lambda path, source: path.write_text(source, encoding="utf-8"),
+        call_coder=lambda _messages: pytest.fail(
+            "state_model must not fall back to the free-form atomic coder"
+        ),
+        compile_java=lambda root: compile_calls.append(root),
+        compile_log=lambda _report: "",
+        write_source=lambda _path, _source: pytest.fail(
+            "state_model contract failure must happen before source mutation"
+        ),
     )
-    result = executor.run()
-    assert result["repair_count"] == 0
-    assert len(compilations) == 2
-    assert result["source"].count("float ShipIntegrity = 1.0f;") == 1
-    assert all(json.loads(messages[-1]["content"])["concern"]["name"] == "initialization"
-               for messages, _ in router.calls)
-    probe = tmp_path / "Probe.java"
-    probe.write_text('public class Probe { public static void main(String[] args) { '
-                     'AuthoredStateModel.reset(); if (AuthoredStateModel.integrity() != 1.0f) throw new AssertionError(); }}', encoding="utf-8")
-    built = subprocess.run([javac, "-cp", str(tmp_path), str(probe)], capture_output=True, text=True, check=False)
-    assert built.returncode == 0, built.stderr
-    ran = subprocess.run([java, "-cp", str(tmp_path), "Probe"], capture_output=True, text=True, check=False)
-    assert ran.returncode == 0, ran.stderr
+
+    with pytest.raises(
+        CustomModuleGenerationError,
+        match="STRUCTURED_STATE_CONTRACT_REQUIRED",
+    ):
+        executor.run()
+
+    assert compile_calls == []
