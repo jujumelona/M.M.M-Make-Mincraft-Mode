@@ -1129,28 +1129,33 @@ def test_logged_java_failure_families_repair_through_real_compiler_feedback(monk
 
     result = executor.run()
 
-    assert compile_calls["count"] == 5
-    assert result["repair_count"] == 4
+    assert compile_calls["count"] == 1
+    assert result["repair_count"] == 0
     assert "java.util.concurrent.locks.Lock" in result["source"]
     assert "java.util.concurrent.locks.ReentrantLock" in result["source"]
+    assert len(captured) == 4
 
-    repair_payloads = [
-        __import__("json").loads(messages[-1]["content"])
+    validation_failures = [
+        __import__("json").loads(messages[-1]["content"])["repair_failure"]
         for messages in captured[1:]
     ]
-    failures = [payload["repair_failure"] for payload in repair_payloads]
-    assert "might not have been initialized" in failures[0]
-    assert "DEFINITE_ASSIGNMENT" in failures[0]
-    assert "cannot assign a value to static final variable TRANSFER_CACHE" in failures[1]
-    assert "FINAL_REBINDING" in failures[1]
-    assert "Object cannot be converted to Map<String,Object>" in failures[2]
-    assert "OBJECT_TO_MAP" in failures[2]
-    assert "class Lock" in failures[3]
-    assert "class ReentrantLock" in failures[3]
-    assert "JDK_LOCK_PACKAGE" in failures[3]
-    assert all("CURRENT COMPILED SOURCE AROUND THE REPORTED LINES" in item for item in failures)
-    assert all(">>" in item for item in failures)
-
+    assert "blank final field" in validation_failures[0]
+    assert "reassigns final field" in validation_failures[1]
+    assert "Object-valued local call readState" in validation_failures[2]
+    assert all(
+        "HOST REGION VALIDATION FAILED BEFORE COMPILATION" in item
+        for item in validation_failures
+    )
+    assert all(
+        "ACTUAL COMPILER FAILURE FROM THE JUST-COMPILED CANDIDATE" not in item
+        for item in validation_failures
+    )
+    assert remaining == [
+        (
+            "private static final java.util.concurrent.locks.Lock shipConfigLock = "
+            "new java.util.concurrent.locks.ReentrantLock();"
+        )
+    ]
 
 def test_logged_java_failure_families_repair_with_actual_javac(tmp_path, monkeypatch) -> None:
     import shutil
@@ -1236,26 +1241,33 @@ def test_logged_java_failure_families_repair_with_actual_javac(tmp_path, monkeyp
 
     result = executor.run()
 
-    assert result["repair_count"] == 4
+    assert result["repair_count"] == 0
     assert (classes / "example" / "Test.class").is_file()
     assert "java.util.concurrent.locks.Lock" in result["source"]
     assert "java.util.concurrent.locks.ReentrantLock" in result["source"]
+    assert len(captured) == 4
 
-    repair_failures = [
+    validation_failures = [
         __import__("json").loads(messages[-1]["content"])["repair_failure"]
         for messages in captured[1:]
     ]
-    assert "might not have been initialized" in repair_failures[0]
-    assert "DEFINITE_ASSIGNMENT" in repair_failures[0]
-    assert "cannot assign a value to static final variable TRANSFER_CACHE" in repair_failures[1]
-    assert "FINAL_REBINDING" in repair_failures[1]
-    assert "Object cannot be converted to Map<String,Object>" in repair_failures[2]
-    assert "OBJECT_TO_MAP" in repair_failures[2]
-    assert "class Lock" in repair_failures[3]
-    assert "class ReentrantLock" in repair_failures[3]
-    assert "JDK_LOCK_PACKAGE" in repair_failures[3]
-    assert all("CURRENT COMPILED SOURCE AROUND THE REPORTED LINES" in item for item in repair_failures)
-
+    assert "blank final field" in validation_failures[0]
+    assert "reassigns final field" in validation_failures[1]
+    assert "Object-valued local call readState" in validation_failures[2]
+    assert all(
+        "HOST REGION VALIDATION FAILED BEFORE COMPILATION" in item
+        for item in validation_failures
+    )
+    assert all(
+        "ACTUAL COMPILER FAILURE FROM THE JUST-COMPILED CANDIDATE" not in item
+        for item in validation_failures
+    )
+    assert remaining == [
+        (
+            "private static final java.util.concurrent.locks.Lock shipConfigLock = "
+            "new java.util.concurrent.locks.ReentrantLock();"
+        )
+    ]
 
 def test_atomic_prompt_prevents_logged_java_failure_families_on_first_pass() -> None:
     concerns = (
