@@ -316,11 +316,6 @@ def _normalize_implementation_graph_request(raw_request: Mapping[str, Any]) -> d
         if isinstance(request.get("structured_sections"), Mapping)
         else None
     )
-    if not structured:
-        raise ImplementationGraphError(
-            "IMPLEMENTATION_IR_STRUCTURED_AUTHORITY_REQUIRED: "
-            "production graph requests may not downgrade to prose-only authority."
-        )
     supplied_sha = str(request.get("structured_sections_sha256") or "").strip()
     actual_sha = "sha256:" + hashlib.sha256(
         json.dumps(
@@ -330,12 +325,32 @@ def _normalize_implementation_graph_request(raw_request: Mapping[str, Any]) -> d
             separators=(",", ":"),
         ).encode("utf-8")
     ).hexdigest()
-    if supplied_sha != actual_sha:
+    if structured:
+        if supplied_sha != actual_sha:
+            raise ImplementationGraphError(
+                "IMPLEMENTATION_IR_STRUCTURED_AUTHORITY_HASH_MISMATCH"
+            )
+    elif supplied_sha and supplied_sha != actual_sha:
         raise ImplementationGraphError(
             "IMPLEMENTATION_IR_STRUCTURED_AUTHORITY_HASH_MISMATCH"
         )
     request["structured_sections"] = structured
     request["structured_sections_sha256"] = actual_sha
+    if not structured:
+        emit_root_cause(
+            "implementation_graph_prose_authority_selected",
+            stage="production",
+            operation="execute_implementation_graph",
+            gate="authored_authority_selection",
+            result="PASS",
+            details={
+                "authority": "canonical_markdown_concern_anchors",
+                "structured_section_count": 0,
+                "state_sidecar_present": isinstance(
+                    request.get("production_state_section"), Mapping
+                ),
+            },
+        )
 
     from .production_state_compiler import normalize_structured_state_section
 

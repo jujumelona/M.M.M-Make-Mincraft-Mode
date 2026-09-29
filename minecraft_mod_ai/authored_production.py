@@ -616,11 +616,13 @@ def _compile_new_authored_modules(
     main_symbol = _main_class_name(mod_id)
     main_path = f"src/main/java/{package_name.replace('.', '/')}/{main_symbol}.java"
     task_id = "authored_implementation_graph"
+    structured_sections = deepcopy(plan.structured_sections)
     request = {
         "text": plan.text, "package": package_name, "mod_id": mod_id,
         "target": dict(target), "entrypoint_path": main_path,
         "entrypoint_symbol": main_symbol,
-        "structured_sections": deepcopy(plan.structured_sections),
+        "structured_sections": structured_sections,
+        "structured_sections_sha256": _sha256_json(structured_sections),
         "production_state_section": deepcopy(
             dict(production_state_section or {})
         ),

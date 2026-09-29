@@ -747,17 +747,19 @@ def test_repeated_authored_concern_obligations_merge_source_provenance():
     assert payload["source_requirements"] == requirements
 
 
-def test_implementation_graph_rejects_empty_structured_authority():
+def test_implementation_graph_accepts_markdown_authority_when_structured_sections_are_empty():
     request = {
         "text": DESIGN,
         "structured_sections": {},
         "structured_sections_sha256": "",
     }
-    with pytest.raises(
-        ir.ImplementationGraphError,
-        match="STRUCTURED_AUTHORITY_REQUIRED",
-    ):
-        graph_execution._normalize_implementation_graph_request(request)
+
+    normalized = graph_execution._normalize_implementation_graph_request(request)
+
+    expected_sha = "sha256:" + hashlib.sha256(b"{}").hexdigest()
+    assert normalized["structured_sections"] == {}
+    assert normalized["structured_sections_sha256"] == expected_sha
+    assert normalized["production_state_section"] == {}
 
 
 def test_implementation_graph_rejects_structured_authority_hash_drift():

@@ -75,6 +75,26 @@ def test_existing_saved_text_uses_localization_without_replanning(monkeypatch, t
         for member in node.payload["members"]
     )
 
+def test_fresh_markdown_graph_request_hashes_empty_structured_authority():
+    plan = AuthoredPlan(
+        "space mod",
+        "# behavior_contract\n- actors: player controls the ship.\n"
+        "## state_model\n- variables: credits are server-owned.\n",
+    )
+    modules, _manifest = _compile_new_authored_modules(
+        plan,
+        mod_id="authored_test",
+        package_name="example",
+        target={},
+        production_state_section={},
+    )
+
+    request = modules[0].config["implementation_graph_request"]
+    assert request["structured_sections"] == {}
+    expected_sha = "sha256:" + hashlib.sha256(b"{}").hexdigest()
+    assert request["structured_sections_sha256"] == expected_sha
+
+
 def test_fresh_authored_execution_defers_source_ownership_until_ir():
     plan = AuthoredPlan("space mod", "# Design\n## Wallet\nPersist credits.\n## Purchase\nSpend credits.")
     modules, manifest = _compile_new_authored_modules(plan, mod_id="authored_test", package_name="example", target={})
