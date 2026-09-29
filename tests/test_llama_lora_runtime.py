@@ -141,3 +141,21 @@ def test_initialize_managed_server_explicitly_zeros_loaded_adapters(monkeypatch)
     assert lora._ADAPTER_IDS_BY_ORIGIN["http://127.0.0.1:8910"] == {
         "coding_agentic": 3
     }
+
+
+def test_atomic_java_stage_routes_coder_lora(monkeypatch) -> None:
+    monkeypatch.setattr(
+        lora,
+        "_adapter_id_map",
+        lambda *_args, **_kwargs: {"coding_agentic": 7},
+    )
+    request = SimpleNamespace(
+        metadata={"tool_stage": "atomic_java"},
+        tools=(),
+    )
+
+    assert lora.request_lora_payload(
+        "http://127.0.0.1:8910/v1",
+        _config(role="coder"),
+        request,
+    ) == [{"id": 7, "scale": 1.0}]

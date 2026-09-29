@@ -157,3 +157,18 @@ def test_forced_tool_uses_registry_non_thinking_sampling_profile() -> None:
         "preserve_thinking": False,
     }
     assert "reasoning_effort" not in payload
+
+
+def test_atomic_java_coder_uses_thinking_precise_coding_profile() -> None:
+    request = _request(metadata={"tool_stage": "atomic_java"})
+    payload = _payload(role="coder", request=request)
+
+    assert payload["temperature"] == 0.23
+    assert payload["top_p"] == 0.67
+    assert payload["top_k"] == 13
+    assert payload["presence_penalty"] == 0.12
+    assert payload["repeat_penalty"] == 0.89
+    assert payload["chat_template_kwargs"] == {
+        "enable_thinking": True,
+        "preserve_thinking": True,
+    }

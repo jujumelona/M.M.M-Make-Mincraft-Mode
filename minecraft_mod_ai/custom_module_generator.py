@@ -49,7 +49,7 @@ _FORBIDDEN_ENTRYPOINT = re.compile(
     r"\b(?:implements\s+)?(?:ModInitializer|ClientModInitializer)\b"
 )
 _BODY_MARKER = "MMM_AUTHORED_FEATURE_BODY"
-_ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING = 2048
+_ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING = 4096
 
 def _sha256_text(text: str) -> str:
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -1873,6 +1873,7 @@ def _call_coder(
     output_token_ceiling: int | None = None,
     force_non_thinking: bool = False,
     structured_java_region: bool = False,
+    tool_stage: str = "generation",
 ) -> str:
     if structured_java_region:
         return _call_atomic_java_region(
@@ -1890,7 +1891,7 @@ def _call_coder(
     for key, value in (
         ("response_format", "text"),
         ("enable_tools", False),
-        ("tool_stage", "generation"),
+        ("tool_stage", tool_stage),
     ):
         if _supports_kwarg(callback, key):
             kwargs[key] = value
@@ -2095,8 +2096,9 @@ def _run_atomic_ir_generation(
             generator.router,
             messages,
             output_token_ceiling=_ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING,
-            force_non_thinking=True,
+            force_non_thinking=False,
             structured_java_region=False,
+            tool_stage="atomic_java",
         ),
         compile_java=context.compiler.compile_java,
         compile_log=_compile_log,

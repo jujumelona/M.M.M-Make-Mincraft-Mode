@@ -441,7 +441,8 @@ def test_ir_atomic_concerns_are_isolated_and_compiled_as_one_host_file(
         def generate_text(self, role, messages, **kwargs):
             assert role == "coder"
             assert kwargs.get("enable_tools") is False
-            assert kwargs.get("force_non_thinking") is True
+            assert not kwargs.get("force_non_thinking", False)
+            assert kwargs.get("tool_stage") == "atomic_java"
             payload = json.loads(messages[-1]["content"])
             concern = payload["concern"]["name"]
             calls.append((concern, dict(kwargs)))
@@ -506,7 +507,8 @@ This wrapper is complete.
             nonlocal calls
             assert role == "coder"
             assert kwargs.get("enable_tools") is False
-            assert kwargs.get("force_non_thinking") is True
+            assert not kwargs.get("force_non_thinking", False)
+            assert kwargs.get("tool_stage") == "atomic_java"
             calls += 1
             return next(responses)
 
@@ -567,7 +569,8 @@ public static void initialize() { balance = 0; }
             nonlocal calls
             assert role == "coder"
             assert kwargs.get("enable_tools") is False
-            assert kwargs.get("force_non_thinking") is True
+            assert not kwargs.get("force_non_thinking", False)
+            assert kwargs.get("tool_stage") == "atomic_java"
             calls += 1
             return next(responses)
 
@@ -859,8 +862,9 @@ def test_stored_state_receives_semantic_shape_and_compact_output_budget(
         def generate_text(self, role, messages, **kwargs):
             assert role == "coder"
             assert kwargs.get("enable_tools") is False
-            assert kwargs.get("force_non_thinking") is True
-            assert kwargs.get("output_token_ceiling") == 2048
+            assert not kwargs.get("force_non_thinking", False)
+            assert kwargs.get("tool_stage") == "atomic_java"
+            assert kwargs.get("output_token_ceiling") == 4096
             payload = json.loads(messages[-1]["content"])
             concern = payload["concern"]
             seen.append(concern)
@@ -907,7 +911,7 @@ def test_stored_state_mixed_shape_is_projected_before_compile(
         def generate_text(self, role, messages, **kwargs):
             nonlocal calls
             assert role == "coder"
-            assert kwargs.get("output_token_ceiling") == 2048
+            assert kwargs.get("output_token_ceiling") == 4096
             calls += 1
             return (
                 "private static final java.util.Map<String, String> STATE_MAPPINGS = "
@@ -959,7 +963,8 @@ def test_atomic_first_candidate_canonicalizes_jdk_lock_semantics_before_compile(
         def generate_text(self, role, messages, **kwargs):
             assert role == "coder"
             assert kwargs.get("enable_tools") is False
-            assert kwargs.get("force_non_thinking") is True
+            assert not kwargs.get("force_non_thinking", False)
+            assert kwargs.get("tool_stage") == "atomic_java"
             payload = json.loads(messages[-1]["content"])
             concern = payload["concern"]["name"]
             calls.append(concern)
@@ -1027,7 +1032,8 @@ def test_atomic_compile_failure_is_repaired_with_local_bounded_retry(
         def generate_text(self, role, messages, **kwargs):
             assert role == "coder"
             assert kwargs.get("enable_tools") is False
-            assert kwargs.get("force_non_thinking") is True
+            assert not kwargs.get("force_non_thinking", False)
+            assert kwargs.get("tool_stage") == "atomic_java"
             payload = json.loads(messages[-1]["content"])
             concern = payload["concern"]["name"]
             calls.append(concern)

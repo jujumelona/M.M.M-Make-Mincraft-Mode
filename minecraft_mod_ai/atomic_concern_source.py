@@ -3061,6 +3061,28 @@ def _messages(
                     "receiver_methods": ["get", "set", "incrementAndGet", "compareAndSet"],
                 },
             },
+            "pre_emit_compile_checklist": [
+                "Before emitting Java, internally type-check every assignment: declared_type <- expression_type.",
+                "For every field or local receiver.method(...), verify the method exists on the receiver's declared type.",
+                "For every generic projection, preserve exact invariant type arguments from available_sibling_api.",
+                "For every return statement, verify the expression type is assignable to the declared return type.",
+                "For every constructor call, verify the canonical JDK/package owner and constructor arguments.",
+                "Only after all five checks pass, emit the final Java region with no reasoning prose.",
+            ],
+            "compile_ready_examples": [
+                {
+                    "bad": "java.util.Map<String,Object> lock = new java.util.ReentrantLock();",
+                    "good": "java.util.concurrent.locks.Lock lock = new java.util.concurrent.locks.ReentrantLock();",
+                },
+                {
+                    "bad": "java.util.Map<String,String> value = entry.getValue(); // entry is Map.Entry<String,Map<String,Object>>",
+                    "good": "java.util.Map<String,Object> value = entry.getValue();",
+                },
+                {
+                    "bad": "String value = objectMap.get(key);",
+                    "good": "Object raw = objectMap.get(key); String value = raw instanceof String s ? s : \"\";",
+                },
+            ],
             "preferred_shape": (
                 "fields_and_local_types"
                 if name in {"variables", "inputs", "outputs", "stored_state", "payloads"}
