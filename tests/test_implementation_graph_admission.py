@@ -12,6 +12,7 @@ from jsonschema import Draft202012Validator
 from test_implementation_ir import DESIGN, TARGET, Decisions, node
 
 from minecraft_mod_ai import implementation_ir as ir
+from minecraft_mod_ai import implementation_graph_execution as graph_execution
 from minecraft_mod_ai.model_adapters.base import (
     GenerationResponse,
     NativeToolDecisionRejected,
@@ -743,3 +744,56 @@ def test_repeated_authored_concern_obligations_merge_source_provenance():
     assert len(combined[0]["obligations"]) == 1
     payload = json.loads(combined[0]["obligations"][0])
     assert payload["source_requirements"] == requirements
+
+
+def test_implementation_graph_rejects_empty_structured_authority():
+    request = {
+        "text": DESIGN,
+        "structured_sections": {},
+        "structured_sections_sha256": "",
+    }
+    with pytest.raises(
+        ir.ImplementationGraphError,
+        match="STRUCTURED_AUTHORITY_REQUIRED",
+    ):
+        graph_execution._normalize_implementation_graph_request(request)
+
+
+def test_implementation_graph_rejects_structured_authority_hash_drift():
+    structured = {
+        "behavior_contract": {
+            "specification": {
+                "actors": [],
+                "entry_conditions": [],
+                "preconditions": [],
+                "inputs": [],
+                "outputs": [],
+                "success_postconditions": [],
+                "rejection_postconditions": [],
+                "ordering_and_timing": [],
+                "boundaries": [],
+                "inapplicable_concerns": [
+                    {"concern": "actors", "reason": "fixture"},
+                    {"concern": "entry_conditions", "reason": "fixture"},
+                    {"concern": "preconditions", "reason": "fixture"},
+                    {"concern": "inputs", "reason": "fixture"},
+                    {"concern": "outputs", "reason": "fixture"},
+                    {"concern": "success_postconditions", "reason": "fixture"},
+                    {"concern": "rejection_postconditions", "reason": "fixture"},
+                    {"concern": "ordering_and_timing", "reason": "fixture"},
+                    {"concern": "boundaries", "reason": "fixture"},
+                ],
+            },
+            "constraint_evidence_refs": [],
+        }
+    }
+    request = {
+        "text": DESIGN,
+        "structured_sections": structured,
+        "structured_sections_sha256": "sha256:" + "0" * 64,
+    }
+    with pytest.raises(
+        ir.ImplementationGraphError,
+        match="STRUCTURED_AUTHORITY_HASH_MISMATCH",
+    ):
+        graph_execution._normalize_implementation_graph_request(request)
