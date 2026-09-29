@@ -738,6 +738,84 @@ def _normalize_records(
     return result
 
 
+def normalize_structured_state_section(
+    section: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Canonicalize any structured state authority through the production SSOT.
+
+    This is the only production boundary for state-model semantics, regardless of
+    whether records came from the dedicated state compiler or from a structured
+    authored design. External subsystem actions are excluded, expressions are
+    canonicalized, and the result is validated by the host DSL parser before any
+    Java lowering occurs.
+    """
+    raw_specification = section.get("specification")
+    specification = (
+        raw_specification
+        if isinstance(raw_specification, Mapping)
+        else section
+    )
+    raw: dict[str, list[dict[str, str]]] = {
+        concern: [] for concern in _STATE_CONCERNS
+    }
+    for concern in _STATE_CONCERNS:
+        rows = specification.get(concern)
+        if not isinstance(rows, Sequence) or isinstance(
+            rows, (str, bytes, bytearray)
+        ):
+            continue
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            raw[concern].append(
+                {str(key): str(value) for key, value in row.items()}
+            )
+
+    normalized = _normalize_records(raw)
+    result_specification: dict[str, Any] = {
+        concern: normalized.get(concern, [])
+        for concern in _STATE_CONCERNS
+    }
+    explicit_inapplicable = specification.get("inapplicable_concerns")
+    inapplicable_by_name: dict[str, dict[str, str]] = {}
+    if isinstance(explicit_inapplicable, Sequence) and not isinstance(
+        explicit_inapplicable, (str, bytes, bytearray)
+    ):
+        for row in explicit_inapplicable:
+            if not isinstance(row, Mapping):
+                continue
+            name = str(row.get("concern") or "").strip()
+            if name:
+                inapplicable_by_name[name] = {
+                    "concern": name,
+                    "reason": str(row.get("reason") or "Not required.").strip()
+                    or "Not required.",
+                }
+    for concern in _STATE_CONCERNS:
+        if not result_specification[concern]:
+            inapplicable_by_name.setdefault(
+                concern,
+                {
+                    "concern": concern,
+                    "reason": (
+                        "No canonical state mutation/condition remains after "
+                        "production semantic normalization."
+                    ),
+                },
+            )
+    result_specification["inapplicable_concerns"] = list(
+        inapplicable_by_name.values()
+    )
+    normalized_section = {
+        "specification": result_specification,
+        "constraint_evidence_refs": list(
+            section.get("constraint_evidence_refs") or []
+        ),
+    }
+    validate_structured_state_section(normalized_section)
+    return normalized_section
+
+
 def compile_production_state_section(router: Any, plan: AuthoredPlan) -> dict[str, Any]:
     source = _section_text(plan.text, "state_model")
     if not source:
@@ -780,4 +858,7 @@ def compile_production_state_section(router: Any, plan: AuthoredPlan) -> dict[st
     return section
 
 
-__all__ = ["compile_production_state_section"]
+__all__ = [
+    "compile_production_state_section",
+    "normalize_structured_state_section",
+]
