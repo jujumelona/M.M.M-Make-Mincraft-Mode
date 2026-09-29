@@ -2270,8 +2270,9 @@ class CustomModuleGenerator:
             "another mod entrypoint. The host already resolved project/platform evidence; "
             "do not search for tools or invent unlisted Minecraft/Fabric APIs. "
             "Only the integration section may perform lifecycle/registration wiring; other "
-            "authored sections implement bounded domain logic. The host will compile the "
-            "real project and return the exact compiler failure for repair."
+            "authored sections implement bounded domain logic. This is the only production "
+            "decode. The host compiles it as a pass/fail gate and never sends compiler errors "
+            "back to the model for repair."
             + ("\n\n" + authority_prompt if authority_prompt else "")
         )
         initial_user = (
@@ -2319,29 +2320,15 @@ class CustomModuleGenerator:
         with project_write_lock(root):
             while True:
                 attempt += 1
-                if attempt == 1:
-                    messages: list[dict[str, str]] = [
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": initial_user},
-                    ]
-                else:
-                    messages = [
-                        {"role": "system", "content": system},
-                        {
-                            "role": "user",
-                            "content": (
-                                f"Repair pass {attempt} for "
-                                f"{relative}#{symbol}.\n"
-                                "Return the complete corrected Java file, "
-                                "not a patch.\n\n"
-                                f"Approved task:\n{task_text}\n\n"
-                                f"Host implementation grounding:\n{grounding_text}\n\n"
-                                f"Current complete source:\n{current}\n\n"
-                                "Exact validation/compiler failure:\n"
-                                f"{last_failure}"
-                            ),
-                        },
-                    ]
+                if attempt != 1:
+                    raise CustomModuleGenerationError(
+                        "DIRECT_CODER_INTERNAL_RETRY_FORBIDDEN: production source generation "
+                        "must use exactly one model decode."
+                    )
+                messages: list[dict[str, str]] = [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": initial_user},
+                ]
 
                 try:
                     payload = _call_coder(self.router, messages)
@@ -2377,22 +2364,16 @@ class CustomModuleGenerator:
                     invariant_errors += public_api_errors(candidate, ir_contract)
                 candidate_sha = _sha256_text(candidate)
                 if invariant_errors:
-                    current = candidate
-                    last_failure = "\n".join(
-                        f"- {error}" for error in invariant_errors
+                    if target_existed:
+                        _atomic_write(target, original_bytes)
+                    else:
+                        target.unlink(missing_ok=True)
+                    raise CustomModuleGenerationError(
+                        "DIRECT_CODER_FIRST_PASS_CONTRACT_FAILED: "
+                        f"{relative}#{symbol} violated the host source contract on its only "
+                        "production decode:\n"
+                        + "\n".join(f"- {error}" for error in invariant_errors)
                     )
-                    measure = (1, len(set(invariant_errors)))
-                    if (
-                        candidate_sha in seen_candidates
-                        or (
-                            best_failure_measure is not None
-                            and measure >= best_failure_measure
-                        )
-                    ):
-                        break
-                    seen_candidates.add(candidate_sha)
-                    best_failure_measure = measure
-                    continue
 
                 _atomic_write(target, candidate)
                 current = candidate
@@ -2443,26 +2424,24 @@ class CustomModuleGenerator:
                     getattr(report, "error", "")
                     or "Gradle compileJava failed."
                 )
-                measure = _compile_failure_measure(last_failure)
-                if (
-                    candidate_sha in seen_candidates
-                    or (
-                        best_failure_measure is not None
-                        and measure >= best_failure_measure
-                    )
-                ):
-                    break
-                seen_candidates.add(candidate_sha)
-                best_failure_measure = measure
+                if target_existed:
+                    _atomic_write(target, original_bytes)
+                else:
+                    target.unlink(missing_ok=True)
+                raise CustomModuleGenerationError(
+                    "DIRECT_CODER_FIRST_PASS_COMPILE_FAILED: exact whole-file generation "
+                    f"did not compile on its only production decode for {relative}. "
+                    "Production does not invoke model repair.\n"
+                    + last_failure
+                )
 
             if target_existed:
                 _atomic_write(target, original_bytes)
             else:
                 target.unlink(missing_ok=True)
             raise CustomModuleGenerationError(
-                "DIRECT_CODER_COMPILE_FAILED: exact whole-file generation "
-                f"stopped after repair evidence ceased to improve for {relative}. "
-                "Last failure:\n"
+                "DIRECT_CODER_FIRST_PASS_FAILED: exact whole-file generation failed "
+                f"before compile for {relative}.\n"
                 + last_failure
             )
 
