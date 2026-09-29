@@ -842,14 +842,17 @@ def _single_initialized_field_parts(
     return declared_type, field_name, initializer
 
 
-def _initializer_constructor_type(initializer: str) -> str:
+def _initializer_constructor_type(
+    initializer: str,
+) -> tuple[str, str]:
     match = re.match(
         r"^new\s+([A-Za-z_$][A-Za-z0-9_$.]*)\s*(?:<[^()]*>)?\s*\(",
         str(initializer or "").strip(),
     )
     if match is None:
-        return ""
-    return _canonical_jdk_class_name(match.group(1))
+        return "", ""
+    raw = match.group(1)
+    return raw, _canonical_jdk_class_name(raw)
 
 
 def _receiver_method_names(source: str, field_name: str) -> frozenset[str]:
@@ -928,7 +931,7 @@ def _canonicalize_generated_jdk_semantics(
             rendered.append(chunk)
             continue
         declared_type, field_name, initializer = parts
-        constructor_type = _initializer_constructor_type(initializer)
+        constructor_raw, constructor_type = _initializer_constructor_type(initializer)
         if not constructor_type:
             rendered.append(chunk)
             continue
@@ -937,9 +940,19 @@ def _canonicalize_generated_jdk_semantics(
             rendered.append(chunk)
             continue
 
+        declared_raw = re.sub(
+            r"\s+",
+            "",
+            _erase_generic_arguments(declared_type),
+        ).strip()
         declared_class = _canonical_jdk_class_name(declared_type)
         receiver_methods = _receiver_method_names(source, field_name)
-        target_type = ""
+        target_type = (
+            declared_class
+            if declared_raw != declared_class
+            and declared_class in set().union(*_JDK_ASSIGNABLE_DECLARATIONS.values())
+            else ""
+        )
         if (
             receiver_methods & _JDK_LOCK_RECEIVER_METHODS
             and constructor_type
@@ -961,6 +974,16 @@ def _canonicalize_generated_jdk_semantics(
             )
 
         normalized_chunk = chunk
+        if constructor_raw and constructor_raw != constructor_type:
+            normalized_chunk = re.sub(
+                rf"\bnew\s+{re.escape(constructor_raw)}(?=\s*(?:<[^()]*>)?\s*\()",
+                "new " + constructor_type,
+                normalized_chunk,
+                count=1,
+            )
+            changes.append(
+                f"{field_name}:initializer_type:{constructor_raw}->{constructor_type}"
+            )
         if target_type:
             rendered_type = _render_canonical_declared_type(
                 target_type,
@@ -3410,12 +3433,14 @@ class AtomicConcernExecutor:
         compile_repair_limit = _compile_repair_limit()
         for concern in self.ordered:
             name = _slug(concern["concern"])
+            concern_repair_start = self.repairs
             self._apply(concern)
             report = self._compile()
             while getattr(report, "status", "") != "PASS":
                 if _compile_report_timed_out(report):
                     raise CustomModuleGenerationError(_compile_timeout_message(report))
-                if self.repairs >= compile_repair_limit:
+                concern_repairs = self.repairs - concern_repair_start
+                if concern_repairs >= compile_repair_limit:
                     failure = self.compile_log(report) or str(
                         getattr(report, "error", "") or "Gradle compileJava failed."
                     )

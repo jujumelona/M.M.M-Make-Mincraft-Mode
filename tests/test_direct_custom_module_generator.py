@@ -964,9 +964,12 @@ def test_atomic_first_candidate_canonicalizes_jdk_lock_semantics_before_compile(
             concern = payload["concern"]["name"]
             calls.append(concern)
             return (
+                "private static final Map<String, java.lang.Object> CACHE = "
+                "new HashMap<>();\n"
                 "private static final java.util.Map<String, java.lang.Object> CACHE_LOCK = "
                 "new java.util.ReentrantLock();\n"
                 "private static void loadCachedState() {\n"
+                "    CACHE.put(\"ready\", java.lang.Boolean.TRUE);\n"
                 "    CACHE_LOCK.lock();\n"
                 "    try { } finally { CACHE_LOCK.unlock(); }\n"
                 "}"
@@ -984,9 +987,14 @@ def test_atomic_first_candidate_canonicalizes_jdk_lock_semantics_before_compile(
             compiles += 1
             source = (project_root / path).read_text(encoding="utf-8")
             assert (
+                "java.util.Map<String, java.lang.Object> CACHE = "
+                "new java.util.HashMap<>();"
+            ) in source
+            assert (
                 "java.util.concurrent.locks.Lock CACHE_LOCK = "
                 "new java.util.concurrent.locks.ReentrantLock();"
             ) in source
+            assert "new HashMap<>()" not in source
             assert "java.util.ReentrantLock" not in source
             assert "java.util.Map<String, java.lang.Object> CACHE_LOCK" not in source
             assert "CACHE_LOCK.lock();" in source
