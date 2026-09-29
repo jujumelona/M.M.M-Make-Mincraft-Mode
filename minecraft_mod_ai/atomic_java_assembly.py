@@ -212,6 +212,11 @@ class JavaStructureAssembly:
                 "not a fragment of JSON or a partial brace. Split long logic into named helper methods. "
                 "For a declaration, type/return_type contains only a Java type, never modifiers. "
                 "The host adds static to outer fields/methods. Omit unnecessary optional scalar values. "
+                "A field marked final must have a declaration initializer and generated executable code must never "
+                "rebind a final field. Preserve generic types exactly. If an authoritative API returns Object, "
+                "do not directly return it from a narrower typed method; inspect/narrow the runtime value first. "
+                "For JDK locks use java.util.concurrent.locks.Lock/ReentrantLock (or simple Lock/ReentrantLock, "
+                "which the host canonicalizes), never java.util.concurrent.Lock/ReentrantLock. "
                 "Do not invent Minecraft/Fabric APIs or metadata-only gameplay implementations."
             )},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False, sort_keys=True)},
