@@ -279,6 +279,7 @@ def _node_contracts(node: Any, source: bytes) -> tuple[dict[str, Any], ...]:
                     "symbol": _text(source, name_node).strip(),
                     "declared_type": java_type,
                     "mutable": "final" not in modifiers,
+                    "initialized": child.child_by_field_name("value") is not None,
                     "declaration": _text(source, node).strip(),
                 }
             )
@@ -343,6 +344,109 @@ def public_source_member_contracts(value: str) -> tuple[dict[str, Any], ...]:
                 rows.append(contract)
     return tuple(rows)
 
+
+def _walk_named(node: Any):
+    yield node
+    for child in node.named_children:
+        yield from _walk_named(child)
+
+
+def class_body_assignment_targets(value: str) -> tuple[str, ...]:
+    """Return simple identifiers assigned/updated by executable class-body code."""
+    region = str(value or "").strip()
+    if not region:
+        return ()
+    prefix = "final class __MMMRegionHost {\n"
+    source, root = _parse(prefix + region + "\n}\n")
+    body = _class_body(root)
+    targets: list[str] = []
+    for node in _walk_named(body):
+        target = None
+        if node.type == "assignment_expression":
+            target = node.child_by_field_name("left")
+        elif node.type == "update_expression":
+            target = node.child_by_field_name("operand")
+            if target is None and node.named_children:
+                target = node.named_children[0]
+        if target is None:
+            continue
+        rendered = _text(source, target).strip()
+        if rendered.isidentifier() and rendered not in targets:
+            targets.append(rendered)
+    return tuple(targets)
+
+
+def _method_invocation_contract(node: Any, source: bytes) -> dict[str, Any] | None:
+    if node.type != "method_invocation":
+        return None
+    name = node.child_by_field_name("name")
+    arguments = node.child_by_field_name("arguments")
+    receiver = node.child_by_field_name("object")
+    if name is None:
+        return None
+    return {
+        "receiver": _text(source, receiver).strip() if receiver is not None else "",
+        "symbol": _text(source, name).strip(),
+        "argument_count": (
+            len(arguments.named_children) if arguments is not None else 0
+        ),
+    }
+
+
+def class_body_method_invocations(value: str) -> tuple[dict[str, Any], ...]:
+    """Return receiver/name/arity for method invocations in a Java class body."""
+    region = str(value or "").strip()
+    if not region:
+        return ()
+    prefix = "final class __MMMRegionHost {\n"
+    source, root = _parse(prefix + region + "\n}\n")
+    body = _class_body(root)
+    rows: list[dict[str, Any]] = []
+    for node in _walk_named(body):
+        row = _method_invocation_contract(node, source)
+        if row is not None:
+            rows.append(row)
+    return tuple(rows)
+
+
+def class_body_direct_return_calls(value: str) -> tuple[dict[str, Any], ...]:
+    """Return direct method calls used as return expressions with enclosing return type.
+
+    This covers the high-value unsafe shape where a method directly returns an API
+    call. Complex expressions are intentionally left to javac/JDT.
+    """
+    region = str(value or "").strip()
+    if not region:
+        return ()
+    prefix = "final class __MMMRegionHost {\n"
+    source, root = _parse(prefix + region + "\n}\n")
+    body = _class_body(root)
+    rows: list[dict[str, Any]] = []
+    for method in body.named_children:
+        if method.type != "method_declaration":
+            continue
+        method_name = method.child_by_field_name("name")
+        return_type = method.child_by_field_name("type")
+        method_body = method.child_by_field_name("body")
+        if method_name is None or return_type is None or method_body is None:
+            continue
+        for node in _walk_named(method_body):
+            if node.type != "return_statement":
+                continue
+            expression = next(iter(node.named_children), None)
+            if expression is None or expression.type != "method_invocation":
+                continue
+            call = _method_invocation_contract(expression, source)
+            if call is None:
+                continue
+            rows.append(
+                {
+                    "method": _text(source, method_name).strip(),
+                    "declared_return_type": _text(source, return_type).strip(),
+                    **call,
+                }
+            )
+    return tuple(rows)
 
 def _outer_type_candidates(node: Any) -> tuple[Any, ...]:
     """Find outermost Java type declarations even when Tree-sitter nests them in ERROR."""
