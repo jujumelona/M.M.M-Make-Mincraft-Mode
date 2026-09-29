@@ -812,10 +812,46 @@ def _concern_at_line(source: str, line_number: int) -> str:
 
 def _failure_concern(source: str, *, log: str, relative: str) -> str:
     filename = re.escape(PurePosixPath(relative).name)
-    for match in re.finditer(rf"(?:^|[\\/]){filename}:(\d+)(?::\d+)?", str(log or "")):
+    rendered_log = str(log or "")
+    for match in re.finditer(rf"(?:^|[\\/]){filename}:(\d+)(?::\d+)?", rendered_log):
         concern = _concern_at_line(source, int(match.group(1)))
         if concern:
             return concern
+
+    # javac reports some declaration-owned failures at a use site outside the
+    # declaration region. The common case is definite assignment of a blank
+    # final, which is reported at the constructor even though the field belongs
+    # to one atomic concern. Route those diagnostics by the named symbol before
+    # declaring the failure unlocalized.
+    symbols: list[str] = []
+    for pattern in (
+        r"variable\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+might not have been initialized",
+        r"cannot assign a value to (?:static )?final variable\s+([A-Za-z_$][A-Za-z0-9_$]*)",
+    ):
+        for match in re.finditer(pattern, rendered_log, re.IGNORECASE):
+            symbol = match.group(1)
+            if symbol not in symbols:
+                symbols.append(symbol)
+    for symbol in symbols:
+        owners: list[str] = []
+        declaration = re.compile(rf"\b{re.escape(symbol)}\b")
+        active = ""
+        for line in source.splitlines():
+            marker = re.search(
+                r"MMM_ATOMIC_CONCERN_([A-Z0-9_]+)_(?:MEMBERS|INIT)_(START|END)",
+                line,
+            )
+            if marker:
+                name = marker.group(1).casefold()
+                if marker.group(2) == "START":
+                    active = name
+                elif active == name:
+                    active = ""
+                continue
+            if active and declaration.search(line) and active not in owners:
+                owners.append(active)
+        if len(owners) == 1:
+            return owners[0]
     return ""
 
 
