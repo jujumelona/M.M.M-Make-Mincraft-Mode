@@ -2676,3 +2676,142 @@ def test_authority_return_types_prefer_typed_contracts_and_drop_ambiguous_overlo
     assert returns["localValue"] == "java.util.Map<String, Object>"
     assert returns["getState"] == "Object"
     assert "lookup" not in returns
+
+
+def test_first_pass_tree_sitter_gate_rejects_blank_final_before_compile() -> None:
+    from minecraft_mod_ai.atomic_concern_source import _validate_first_pass_java_semantics
+
+    with pytest.raises(
+        CustomModuleGenerationError,
+        match="blank final field.*NO_FLUID_STORAGE_IN_ZERO_G",
+    ):
+        _validate_first_pass_java_semantics(
+            "private static final boolean NO_FLUID_STORAGE_IN_ZERO_G;",
+            dependency_source="",
+            sibling_api=(),
+        )
+
+
+def test_first_pass_tree_sitter_gate_rejects_final_rebinding_before_compile() -> None:
+    from minecraft_mod_ai.atomic_concern_source import _validate_first_pass_java_semantics
+
+    source = (
+        "private static void reset() { "
+        "TRANSFER_CACHE = java.util.Collections.emptyMap(); }"
+    )
+    with pytest.raises(
+        CustomModuleGenerationError,
+        match="reassigns final field.*TRANSFER_CACHE",
+    ):
+        _validate_first_pass_java_semantics(
+            source,
+            dependency_source="",
+            sibling_api=(
+                {
+                    "kind": "field",
+                    "symbol": "TRANSFER_CACHE",
+                    "declared_type": "java.util.Map<String, Object>",
+                    "mutable": False,
+                },
+            ),
+        )
+
+
+def test_first_pass_tree_sitter_gate_rejects_unknown_dependency_method_and_arity() -> None:
+    import json
+
+    from minecraft_mod_ai.atomic_concern_source import _validate_first_pass_java_semantics
+
+    dependency_source = json.dumps(
+        {
+            "symbol": "AuthoredStateModel",
+            "path": "AuthoredStateModel.java",
+            "public_api": ["public static Object getState(String key)"],
+            "source": (
+                "public final class AuthoredStateModel { "
+                "public static Object getState(String key) { return null; } "
+                "}"
+            ),
+        }
+    )
+
+    with pytest.raises(CustomModuleGenerationError, match="does not exist"):
+        _validate_first_pass_java_semantics(
+            "private static Object read() { "
+            "return AuthoredStateModel.getUnknown("x"); }",
+            dependency_source=dependency_source,
+            sibling_api=(),
+        )
+
+    with pytest.raises(CustomModuleGenerationError, match="called with 2 argument"):
+        _validate_first_pass_java_semantics(
+            "private static Object read() { "
+            "return AuthoredStateModel.getState("x", 1); }",
+            dependency_source=dependency_source,
+            sibling_api=(),
+        )
+
+
+def test_first_pass_tree_sitter_gate_rejects_object_direct_return_to_map() -> None:
+    import json
+
+    from minecraft_mod_ai.atomic_concern_source import _validate_first_pass_java_semantics
+
+    dependency_source = json.dumps(
+        {
+            "symbol": "AuthoredStateModel",
+            "path": "AuthoredStateModel.java",
+            "public_api": ["public static Object getState(String key)"],
+            "source": (
+                "public final class AuthoredStateModel { "
+                "public static Object getState(String key) { return null; } "
+                "}"
+            ),
+        }
+    )
+
+    with pytest.raises(
+        CustomModuleGenerationError,
+        match="directly returns Object-valued dependency call",
+    ):
+        _validate_first_pass_java_semantics(
+            "private static java.util.Map<String, Object> shipConfig() { "
+            "return AuthoredStateModel.getState("ship"); }",
+            dependency_source=dependency_source,
+            sibling_api=(),
+        )
+
+
+def test_first_pass_tree_sitter_gate_accepts_explicit_object_narrowing() -> None:
+    import json
+
+    from minecraft_mod_ai.atomic_concern_source import _validate_first_pass_java_semantics
+
+    dependency_source = json.dumps(
+        {
+            "symbol": "AuthoredStateModel",
+            "path": "AuthoredStateModel.java",
+            "public_api": ["public static Object getState(String key)"],
+            "source": (
+                "public final class AuthoredStateModel { "
+                "public static Object getState(String key) { return null; } "
+                "}"
+            ),
+        }
+    )
+
+    _validate_first_pass_java_semantics(
+        (
+            "private static java.util.Map<String, Object> shipConfig() { "
+            "Object raw = AuthoredStateModel.getState("ship"); "
+            "if (!(raw instanceof java.util.Map<?, ?> map)) { "
+            "return java.util.Map.of(); } "
+            "java.util.Map<String, Object> result = new java.util.HashMap<>(); "
+            "for (java.util.Map.Entry<?, ?> entry : map.entrySet()) { "
+            "if (entry.getKey() instanceof String key) { "
+            "result.put(key, entry.getValue()); } } "
+            "return result; }"
+        ),
+        dependency_source=dependency_source,
+        sibling_api=(),
+    )
