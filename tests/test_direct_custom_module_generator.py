@@ -590,10 +590,10 @@ def test_behavior_actors_are_host_compiled_without_model_java(
         def __init__(self, _cache):
             pass
 
-        def compile_java(self, _root):
+        def compile_java(self, project_root):
             nonlocal compile_calls
             compile_calls += 1
-            source = (root / path).read_text(encoding="utf-8")
+            source = (project_root / path).read_text(encoding="utf-8")
             assert "private static final class Actor" in source
             assert "java.util.List<Actor> ACTORS" in source
             assert 'new Actor("Player"' in source
@@ -631,8 +631,8 @@ def test_behavior_actors_recover_from_exact_requirement_when_structured_sections
         def __init__(self, _cache):
             pass
 
-        def compile_java(self, _root):
-            source = (root / path).read_text(encoding="utf-8")
+        def compile_java(self, project_root):
+            source = (project_root / path).read_text(encoding="utf-8")
             assert 'new Actor("Player", "Player"' in source
             assert 'new Actor("Merchant NPC", "Merchant NPC"' in source
             assert 'new Actor("Ship AI", "Ship AI"' in source
@@ -716,8 +716,8 @@ def test_behavior_contract_generic_concern_is_host_compiled(
         def __init__(self, _cache):
             pass
 
-        def compile_java(self, _root):
-            source = (root / path).read_text(encoding="utf-8")
+        def compile_java(self, project_root):
+            source = (project_root / path).read_text(encoding="utf-8")
             assert "CONTRACT_ENTRY_CONDITIONS" in source
             assert "entry_conditions" in source
             return SimpleNamespace(status="PASS", commands=(), error=None)
