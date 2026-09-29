@@ -227,7 +227,7 @@ jobs:
         with: {python-version: '3.11', cache: pip}
       - uses: actions/setup-java@v5
         with: {distribution: temurin, java-version: '17'}
-      - run: python -m pip install --prefer-binary -e '.[dev,ui]'
+      - run: python -m pip install --prefer-binary -e '.[dev]'
       - shell: bash
         env:
           TEST_FILES_JSON: ${{ needs.impact.outputs.test_files }}
