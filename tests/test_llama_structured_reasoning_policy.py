@@ -183,3 +183,14 @@ def test_native_tool_transport_keeps_tools_visible_for_pure_content_parser() -> 
     assert "response_format" not in payload
     assert "json_schema" not in payload
     assert "grammar" not in payload
+
+
+def test_force_non_thinking_metadata_disables_qwen_freeform_reasoning() -> None:
+    request = _request(response_format="text")
+    request.metadata = {"mmm_force_non_thinking": True}
+    module = SimpleNamespace(_server_payload=llama_server_hardware_policy._server_payload)
+    bind_structured_decode_policy(module)
+
+    payload = module._server_payload(_adapter(), request)
+
+    assert payload["chat_template_kwargs"].get("enable_thinking") is False
