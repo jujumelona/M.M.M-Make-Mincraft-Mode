@@ -233,7 +233,8 @@ def test_build_locked_preserves_clean_build_evidence_and_rejects_bad_xml(
 
     assert calls[0][0] == "incremental_build"
     build_args = calls[0][1]
-    assert "--daemon" in build_args
+    assert "--no-daemon" in build_args
+    assert "--daemon" not in build_args
     assert "--parallel" in build_args
     assert "build" in build_args
     assert "clean" not in build_args
