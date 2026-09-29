@@ -37,6 +37,14 @@ _TYPE_PATTERN = (
     r"abstract|synchronized|native)\b)[A-Za-z_$][A-Za-z0-9_$.,<>?\[\] @]*$"
 )
 
+_EXECUTABLE_SCALAR_PATTERN = (
+    r"^(?![\\s\\S]*\\b(?:package|import)\\s+[A-Za-z_$])"
+    r"(?![\\s\\S]*\\b(?:class|interface|enum|record)\\s+[A-Za-z_$])"
+    r"(?![\\s\\S]*\\b(?:public|protected|private)\\s+(?:static\\s+)?"
+    r"[A-Za-z_$][A-Za-z0-9_$.,<>?\\[\\] ]*\\s+[A-Za-z_$][A-Za-z0-9_$]*\\s*\\()"
+    r"(?!\\s*static\\s*\\{)[\\s\\S]*$"
+)
+
 
 def _closed(properties: Mapping[str, Any], required=()) -> dict[str, Any]:
     return {"type": "object", "properties": dict(properties),
@@ -55,6 +63,13 @@ def _scalar_schema(schema: Mapping[str, Any], key: str) -> dict[str, Any]:
             result["description"] = (
                 "Java type only. Declaration visibility and modifiers are host-owned; "
                 "the model must never emit them."
+            )
+        elif key in {"body", "statements"}:
+            result["pattern"] = _EXECUTABLE_SCALAR_PATTERN
+            result["description"] = (
+                "One executable Java statement or balanced control-flow block only. "
+                "Package/import directives, type declarations, method declarations, and "
+                "static initializer blocks are host-owned and cannot appear here."
             )
         elif key == "initializer":
             # Qwen native tool calls naturally encode literal booleans/numbers/null as
@@ -210,6 +225,8 @@ class JavaStructureAssembly:
                 "not a fragment of JSON or a partial brace. Split long logic into named helper methods. "
                 "For a declaration, type/return_type contains only a Java type. "
                 "All Java declaration modifiers and visibility are host-owned; the model never emits them. "
+                "Static initializer blocks, package/import directives, outer type declarations, and lifecycle "
+                "wrappers are also host-owned and must never be emitted inside executable body values. "
                 "The host adds static to outer fields/methods and owns nested-type visibility. "
                 "Omit unnecessary optional scalar values. "
                 "A field marked final must have a declaration initializer and generated executable code must never "
