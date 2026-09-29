@@ -623,6 +623,17 @@ _ATOMIC_LOGIC_MEMBERS_PARAMETERS: dict[str, Any] = {
     "required": [],
     "additionalProperties": False,
 }
+_ATOMIC_DECLARATION_MEMBERS_PARAMETERS: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "records": {"type": "array", "items": _ATOMIC_RECORD_SCHEMA},
+        "enums": {"type": "array", "items": _ATOMIC_ENUM_SCHEMA},
+        "classes": {"type": "array", "items": _ATOMIC_CLASS_SCHEMA},
+        "fields": {"type": "array", "items": _ATOMIC_FIELD_SCHEMA},
+    },
+    "required": [],
+    "additionalProperties": False,
+}
 # Static initializer blocks are host-owned lifecycle structure. Concern models
 # may emit fields/methods/local helper types, but never class initialization blocks.
 _ATOMIC_TYPE_OWNING_CONCERNS = frozenset(
@@ -656,23 +667,32 @@ def _atomic_parameters_for_request(
         if isinstance(concern, Mapping)
         else ""
     )
-    if concern_name and concern_name not in _ATOMIC_TYPE_OWNING_CONCERNS:
+    if concern_name == "stored_state":
+        parameters = _ATOMIC_DECLARATION_MEMBERS_PARAMETERS
+        shape = preferred or "declarations_only_fields_or_private_nested_types"
+    elif concern_name and concern_name not in _ATOMIC_TYPE_OWNING_CONCERNS:
         return (
             _ATOMIC_LOGIC_MEMBERS_PARAMETERS,
             preferred or "logic_fields_methods_only",
         )
-    parameters = _ATOMIC_MEMBERS_PARAMETERS
+    else:
+        parameters = _ATOMIC_MEMBERS_PARAMETERS
+        shape = preferred or "smallest_components"
+
     host_symbol = str(payload.get("host_selected_class") or "").strip()
     if host_symbol:
         parameters = deepcopy(parameters)
         for category in ("records", "enums", "classes"):
-            name_schema = parameters["properties"][category]["items"]["properties"]["name"]
+            category_schema = parameters["properties"].get(category)
+            if not isinstance(category_schema, Mapping):
+                continue
+            name_schema = category_schema["items"]["properties"]["name"]
             name_schema["not"] = {"enum": [host_symbol]}
             name_schema["description"] = (
                 f"Name of a nested runtime helper. {host_symbol} is the existing outer class "
                 "and must not be declared again. Place outer fields in fields, not in a class wrapper."
             )
-    return parameters, preferred or "smallest_components"
+    return parameters, shape
 
 
 _COMMON_JAVA_NAMES = {

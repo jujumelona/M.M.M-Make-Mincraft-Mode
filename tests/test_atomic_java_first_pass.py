@@ -487,3 +487,57 @@ def test_compact_state_design_does_not_fall_back_to_free_form_atomic_coder(tmp_p
         executor.run()
 
     assert compile_calls == []
+
+
+def test_stored_state_schema_forbids_outer_methods_before_model_decode() -> None:
+    from minecraft_mod_ai.custom_module_generator import (
+        _ATOMIC_DECLARATION_MEMBERS_PARAMETERS,
+        _atomic_parameters_for_request,
+    )
+
+    parameters, shape = _atomic_parameters_for_request(
+        {
+            "response_region": "members",
+            "host_selected_class": "Probe",
+            "concern": {"name": "stored_state"},
+            "generation_recipe": {"preferred_shape": "fields_and_local_types"},
+        },
+        response_region="members",
+    )
+
+    assert shape == "fields_and_local_types"
+    assert set(parameters["properties"]) == {"records", "enums", "classes", "fields"}
+    assert "methods" not in parameters["properties"]
+    assert parameters["additionalProperties"] is False
+    assert parameters is not _ATOMIC_DECLARATION_MEMBERS_PARAMETERS
+    for category in ("records", "enums", "classes"):
+        name_schema = parameters["properties"][category]["items"]["properties"]["name"]
+        assert name_schema["not"] == {"enum": ["Probe"]}
+
+
+def test_stored_state_native_part_selector_never_offers_methods() -> None:
+    class Router:
+        def generate_tool_decision(self, role, messages, **kwargs):
+            del role, messages
+            properties = kwargs["parameters"]["properties"]
+            assert set(properties) == {"part"}
+            choices = properties["part"]["enum"]
+            assert "methods" not in choices
+            assert set(choices) == {"records", "enums", "classes", "fields", "done"}
+            return {"part": "done"}
+
+    rendered = _call_atomic_java_region(
+        Router(),
+        [{
+            "role": "user",
+            "content": json.dumps({
+                "response_region": "members",
+                "host_selected_class": "Probe",
+                "concern": {"name": "stored_state"},
+                "generation_recipe": {"preferred_shape": "fields_and_local_types"},
+            }),
+        }],
+        output_token_ceiling=512,
+    )
+
+    assert rendered == ""

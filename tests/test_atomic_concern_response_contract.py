@@ -2348,3 +2348,55 @@ def test_noncanonical_record_constructor_must_delegate() -> None:
             },
             response_region="members",
         )
+
+
+def test_stored_state_semantic_shape_retries_then_accepts_declarations_only() -> None:
+    remaining = [
+        (
+            "private static final java.util.Map<String, String> STATE = "
+            "new java.util.HashMap<>();\n"
+            "private static void registerState(String key, String value) { "
+            "STATE.put(key, value); }"
+        ),
+        (
+            "private static final java.util.Map<String, String> STATE = "
+            "new java.util.HashMap<>();"
+        ),
+    ]
+
+    def call_coder(_messages):
+        if not remaining:
+            raise AssertionError("unexpected extra model call")
+        return remaining.pop(0)
+
+    executor = AtomicConcernExecutor(
+        root=Path("."),
+        target=Path("src/main/java/example/Test.java"),
+        relative="src/main/java/example/Test.java",
+        symbol="Test",
+        original="package example;\n// MMM_AUTHORED_FEATURE_BODY\n",
+        task={"task_id": "t", "semantic_outcome": "x"},
+        section="persistence",
+        concerns=(
+            {
+                "sequence": 0,
+                "identifier": "persistence.stored_state",
+                "concern": "stored_state",
+                "task": "store persistent state declarations",
+                "rules": [],
+            },
+        ),
+        grounding={},
+        dependency_source="",
+        require_initialize=False,
+        call_coder=call_coder,
+        compile_java=lambda _root: SimpleNamespace(status="PASS"),
+        compile_log=lambda _report: "",
+        write_source=lambda _path, _source: None,
+    )
+
+    result = executor.run()
+
+    assert "STATE = new java.util.HashMap<>()" in result["source"]
+    assert "registerState" not in result["source"]
+    assert remaining == []

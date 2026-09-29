@@ -29,8 +29,8 @@ from .java_region_parser import (
 MEMBERS_MARKER = "<<<MMM_CONCERN_MEMBERS>>>"
 INITIALIZE_MARKER = "<<<MMM_CONCERN_INITIALIZE>>>"
 END_MARKER = "<<<MMM_CONCERN_END>>>"
-_DEFAULT_REGION_ATTEMPT_LIMIT = 1
-_MAX_REGION_ATTEMPT_LIMIT = 1
+_DEFAULT_REGION_ATTEMPT_LIMIT = 3
+_MAX_REGION_ATTEMPT_LIMIT = 4
 _DEFAULT_COMPILE_REPAIR_LIMIT = 4
 _MAX_COMPILE_REPAIR_LIMIT = 16
 _DECLARATION_ONLY_CONCERNS = frozenset({"stored_state"})
@@ -47,11 +47,16 @@ _DECLARATION_ONLY_MEMBER_KINDS = frozenset(
 
 
 def _region_attempt_limit() -> int:
-    """Return the host safety bound for one already-decomposed concern region."""
+    """Return the bounded semantic-regeneration budget for one concern region."""
 
-    # Production concern generation is first-pass only. The environment can no
-    # longer reopen a rejected model decode.
-    return 1
+    raw = os.environ.get("MMM_ATOMIC_CONCERN_REGION_ATTEMPTS", "").strip()
+    if not raw:
+        return _DEFAULT_REGION_ATTEMPT_LIMIT
+    try:
+        value = int(raw)
+    except ValueError:
+        return _DEFAULT_REGION_ATTEMPT_LIMIT
+    return max(1, min(_MAX_REGION_ATTEMPT_LIMIT, value))
 
 
 def _compile_repair_limit() -> int:
@@ -2158,7 +2163,9 @@ def _messages(
         "earlier concerns: use their exact symbol spelling, declared type, signature, "
         "and mutability. Never treat an object/record field as a primitive, never assign "
         "to a field declared final, and never invent a sibling symbol that is not listed. "
-        "This is the only production decode for this concern. There is no compiler-repair decode. "
+        "Target a correct first production decode for this concern. Host semantic validation may "
+        "request only a bounded regeneration of this same concern when the emitted shape is invalid; "
+        "do not rely on that retry and do not assume a compiler-repair decode. "
         "Resolve every supplied semantic/API fact before emitting source, and do not implement sibling concerns. "
         + (
             "This section is pure Java domain logic. Do not reference net.minecraft.*, "
@@ -2640,17 +2647,26 @@ class AtomicConcernExecutor:
                 )
                 if attempt >= attempt_limit:
                     raise CustomModuleGenerationError(
-                        "ATOMIC_CONCERN_FIRST_PASS_RESPONSE_INVALID: "
-                        f"{name}:{response_region} failed its only production decode: {reason}"
+                        "ATOMIC_CONCERN_RESPONSE_RETRY_EXHAUSTED: "
+                        f"{name}:{response_region} exhausted {attempt_limit} bounded "
+                        f"production decodes: {reason}"
                     ) from exc
 
+                declaration_only_rule = (
+                    " This concern is declaration-only: emit fields and/or private nested "
+                    "data types only; outer methods are forbidden."
+                    if response_region == "members"
+                    and name in _DECLARATION_ONLY_CONCERNS
+                    else ""
+                )
                 validation_failure = (
                     "HOST REGION VALIDATION FAILED BEFORE COMPILATION:\n"
                     + reason
-                    + f"\nRegenerate only the {response_region} region. "
-                    "Do not emit response markers, prose, package/import/top-level/lifecycle declarations. "
-                    "Do not introduce, rename, or change the kind of nested types during compiler repair. "
-                    "Fix fields, method signatures, modifiers, expressions, and method bodies in place. "
+                    + f"\nRegenerate only the {response_region} region."
+                    + declaration_only_rule
+                    + " Do not emit response markers, prose, package/import/top-level/lifecycle declarations. "
+                    "Do not introduce, rename, or change the kind of nested types during bounded regeneration. "
+                    "Fix only the rejected concern region and preserve valid sibling declarations. "
                     "Implement only this concern; do not add declarations for sibling concerns. "
                     "Earlier sibling declarations are immutable and cannot be redeclared. "
                     "Emit executable Java only; no analysis, reasoning, plans, or Markdown commentary."
