@@ -33,6 +33,7 @@ _MEMBER_TYPES = frozenset({"field_declaration", "method_declaration"}) | _NESTED
 _HOST_OWNED_MEMBER_TYPES = frozenset(
     {"block", "constructor_declaration", "compact_constructor_declaration", "static_initializer"}
 )
+_COMMENT_TYPES = frozenset({"line_comment", "block_comment"})
 
 
 def _parser() -> Parser:
@@ -86,6 +87,20 @@ def _name(node: Any, source: bytes) -> str:
     return _text(source, name).strip() if name is not None else ""
 
 
+def _is_host_initialize(node: Any, source: bytes) -> bool:
+    if node.type != "method_declaration" or _name(node, source) != "initialize":
+        return False
+    return_type = node.child_by_field_name("type")
+    parameters = node.child_by_field_name("parameters")
+    return (
+        return_type is not None
+        and _text(source, return_type).strip() == "void"
+        and parameters is not None
+        and _text(source, parameters).strip() == "()"
+        and "static" in _modifiers(node, source)
+    )
+
+
 def _validate_member_node(node: Any, source: bytes) -> None:
     if node.type in _HOST_OWNED_MEMBER_TYPES:
         raise JavaRegionParseError(
@@ -99,9 +114,9 @@ def _validate_member_node(node: Any, source: bytes) -> None:
         raise JavaRegionParseError(
             f"nested type {_name(node, source)!r} must be private because outer type ownership is host-owned"
         )
-    if node.type == "method_declaration" and _name(node, source) == "initialize":
+    if _is_host_initialize(node, source):
         raise JavaRegionParseError(
-            "initialize() is host-owned lifecycle structure and cannot be declared by a concern"
+            "static void initialize() is host-owned lifecycle structure and cannot be declared by a concern"
         )
 
 
@@ -121,13 +136,11 @@ def _class_body(root: Any) -> Any:
 def _chunks_from_body(body: Any, source: bytes, *, drop_host_lifecycle: bool) -> tuple[str, ...]:
     chunks: list[str] = []
     for node in body.named_children:
+        if node.type in _COMMENT_TYPES:
+            continue
         if drop_host_lifecycle and node.type in _HOST_OWNED_MEMBER_TYPES:
             continue
-        if (
-            drop_host_lifecycle
-            and node.type == "method_declaration"
-            and _name(node, source) == "initialize"
-        ):
+        if drop_host_lifecycle and _is_host_initialize(node, source):
             continue
         _validate_member_node(node, source)
         chunks.append(_text(source, node).strip())
@@ -151,7 +164,7 @@ def _unwrap_single_outer_class(value: str) -> tuple[str, ...]:
     declarations = [
         node
         for node in root.named_children
-        if node.type not in {"package_declaration", "import_declaration"}
+        if node.type not in {"package_declaration", "import_declaration"} | _COMMENT_TYPES
     ]
     if len(declarations) != 1 or declarations[0].type != "class_declaration":
         raise JavaRegionParseError(
@@ -215,7 +228,7 @@ def strict_initialize_statements(value: str) -> tuple[str, ...]:
     return tuple(
         _text(source, node).strip()
         for node in body.named_children
-        if _text(source, node).strip()
+        if node.type not in _COMMENT_TYPES and _text(source, node).strip()
     )
 
 
