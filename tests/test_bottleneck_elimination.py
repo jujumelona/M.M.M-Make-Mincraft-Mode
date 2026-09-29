@@ -115,6 +115,7 @@ def test_trace_artifacts_fsync_only_on_failure(monkeypatch, tmp_path):
         return {"path": "trace.json", "sha256": "x", "bytes": 1}
 
     monkeypatch.setenv("MMM_ROOT_CAUSE_TRACE_PATH", str(tmp_path / "trace.jsonl"))
+    monkeypatch.setenv("MMM_ROOT_CAUSE_TRACE_ARTIFACTS", "all")
     monkeypatch.setattr(
         "minecraft_mod_ai.planner_trace_artifacts.save_trace_artifact",
         fake_save,
