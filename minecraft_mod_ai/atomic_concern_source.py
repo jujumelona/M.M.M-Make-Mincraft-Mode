@@ -19,6 +19,7 @@ from .java_region_parser import (
     admit_initialize_region,
     admit_member_region,
     class_body_chunks,
+    class_body_member_kinds,
     strict_initialize_statements,
     strict_member_chunks,
 )
@@ -30,6 +31,17 @@ _DEFAULT_REGION_ATTEMPT_LIMIT = 4
 _MAX_REGION_ATTEMPT_LIMIT = 32
 _DEFAULT_COMPILE_REPAIR_LIMIT = 4
 _MAX_COMPILE_REPAIR_LIMIT = 16
+_DECLARATION_ONLY_CONCERNS = frozenset({"stored_state"})
+_DECLARATION_ONLY_MEMBER_KINDS = frozenset(
+    {
+        "field_declaration",
+        "annotation_type_declaration",
+        "class_declaration",
+        "enum_declaration",
+        "interface_declaration",
+        "record_declaration",
+    }
+)
 
 
 def _region_attempt_limit() -> int:
@@ -1834,6 +1846,14 @@ def _messages(
             "when imports would otherwise be required. The existing outer class constructor and "
             "lifecycle are host-owned. Keep methods bounded and concern-local."
         )
+        if name in _DECLARATION_ONLY_CONCERNS:
+            response_contract += (
+                " This is a declaration-only data concern. Emit at least one concern-owned "
+                "field and/or private nested data type. Do not emit methods, initialize(), "
+                "onInitialize(), registration hooks, load/save lifecycle methods, or calls whose "
+                "only purpose is to invoke another class lifecycle. Encode the supplied semantic "
+                "fields and task authority as data declarations in this region."
+            )
     elif response_region == "initialize":
         response_contract = (
             "Return only compile-ready Java statements or balanced control-flow blocks that belong "
@@ -1884,9 +1904,21 @@ def _messages(
             "sequence": concern.get("sequence"),
             "identifier": concern.get("identifier"),
             "name": name,
+            "task": str(concern.get("task") or ""),
+            "rules": list(concern.get("rules") or []),
+            "semantic_fields": list(
+                (concern.get("record_schema") or {}).get("required") or []
+            )
+            if isinstance(concern.get("record_schema"), Mapping)
+            else [],
             "implementation_goal": (
                 f"Implement only the {name} semantics stated in "
                 "task_authority.source_requirements inside the selected Java class."
+            ),
+            "java_shape": (
+                "declarations_only_fields_or_private_nested_types"
+                if name in _DECLARATION_ONLY_CONCERNS and response_region == "members"
+                else "concern_owned_class_body_members"
             ),
         },
         "task_authority": _concern_authority(task, concern),
@@ -2199,6 +2231,20 @@ class AtomicConcernExecutor:
                     output,
                     response_region=response_region,
                 )
+                if response_region == "members" and name in _DECLARATION_ONLY_CONCERNS:
+                    kinds = class_body_member_kinds(parsed)
+                    if (
+                        not kinds
+                        or any(
+                            kind not in _DECLARATION_ONLY_MEMBER_KINDS
+                            for kind in kinds
+                        )
+                    ):
+                        raise CustomModuleGenerationError(
+                            "ATOMIC_CONCERN_SEMANTIC_SHAPE_INVALID: "
+                            f"{name} must contain only fields/private nested data types; "
+                            f"found {list(kinds)!r}."
+                        )
                 if (
                     self.section in _PURE_JAVA_DOMAIN_SECTIONS
                     and re.search(
@@ -2242,6 +2288,7 @@ class AtomicConcernExecutor:
                         "ATOMIC_CONCERN_REPAIR_STRUCTURE_ESCAPE:",
                         "ATOMIC_CONCERN_SYMBOL_COLLISION:",
                         "ATOMIC_CONCERN_OUTPUT_EXHAUSTED:",
+                        "ATOMIC_CONCERN_SEMANTIC_SHAPE_INVALID:",
                     )
                 )
                 if not recoverable:
