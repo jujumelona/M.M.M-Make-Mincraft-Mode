@@ -537,6 +537,131 @@ public static void initialize() { balance = 0; }
     assert calls == 2
 
 
+def _stored_state_atomic_module(path: str, symbol: str) -> ProductionModule:
+    base = _atomic_module(path, symbol)
+    config = dict(base.config)
+    config["implementation_section"] = "persistence"
+    config["implementation_atomic_concerns"] = [
+        {
+            "sequence": 0,
+            "identifier": "feature/persistence/stored_state",
+            "concern": "stored_state",
+            "task": "Resolve exactly one stored state record for the supplied feature.",
+            "rules": [
+                "Preserve supplied state ownership and scope.",
+                "Do not implement neighboring persistence concerns.",
+            ],
+            "record_schema": {
+                "type": "object",
+                "properties": {
+                    "state": {"type": "string"},
+                    "owner": {"type": "string"},
+                    "scope": {"type": "string"},
+                },
+                "required": ["state", "owner", "scope"],
+                "additionalProperties": False,
+            },
+        }
+    ]
+    return ProductionModule(
+        module_id=base.module_id,
+        kind=base.kind,
+        config=config,
+        required_gates=base.required_gates,
+    )
+
+
+def test_stored_state_receives_semantic_shape_and_compact_output_budget(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root, path, symbol = _project(tmp_path)
+    seen: list[dict[str, object]] = []
+
+    class Router:
+        def generate_text(self, role, messages, **kwargs):
+            assert role == "coder"
+            assert kwargs.get("enable_tools") is False
+            assert kwargs.get("force_non_thinking") is True
+            assert kwargs.get("output_token_ceiling") == 2048
+            payload = json.loads(messages[-1]["content"])
+            concern = payload["concern"]
+            seen.append(concern)
+            assert concern["name"] == "stored_state"
+            assert concern["semantic_fields"] == ["state", "owner", "scope"]
+            assert concern["java_shape"] == "declarations_only_fields_or_private_nested_types"
+            assert "stored state record" in concern["task"]
+            return "private static final java.util.Map<String, Object> storedState = new java.util.HashMap<>();"
+
+        def generate_tool_decision(self, *_args, **_kwargs):
+            raise AssertionError("production concern generation must not use scalar Java tools")
+
+    class Runner:
+        def __init__(self, _cache):
+            pass
+
+        def compile_java(self, _root):
+            return SimpleNamespace(status="PASS", commands=(), error=None)
+
+    monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
+    monkeypatch.setattr(direct, "GradleRunner", Runner)
+
+    direct.CustomModuleGenerator(Router()).generate(
+        root,
+        module=_stored_state_atomic_module(path, symbol),
+        minecraft_version="1.21.1",
+        loader="fabric",
+    )
+
+    source = (root / path).read_text(encoding="utf-8")
+    assert "storedState" in source
+    assert len(seen) == 1
+
+
+def test_stored_state_rejects_method_shape_before_compile(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root, path, symbol = _project(tmp_path)
+    responses = iter([
+        "private static boolean loadStoredState() { return true; }",
+        "private static Object storedState;",
+    ])
+    failures: list[object] = []
+
+    class Router:
+        def generate_text(self, role, messages, **kwargs):
+            assert role == "coder"
+            assert kwargs.get("output_token_ceiling") == 2048
+            payload = json.loads(messages[-1]["content"])
+            failures.append(payload.get("repair_failure"))
+            return next(responses)
+
+        def generate_tool_decision(self, *_args, **_kwargs):
+            raise AssertionError("production concern generation must not use scalar Java tools")
+
+    class Runner:
+        def __init__(self, _cache):
+            pass
+
+        def compile_java(self, _root):
+            return SimpleNamespace(status="PASS", commands=(), error=None)
+
+    monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
+    monkeypatch.setattr(direct, "GradleRunner", Runner)
+
+    direct.CustomModuleGenerator(Router()).generate(
+        root,
+        module=_stored_state_atomic_module(path, symbol),
+        minecraft_version="1.21.1",
+        loader="fabric",
+    )
+
+    assert failures[0] is None
+    assert "ATOMIC_CONCERN_SEMANTIC_SHAPE_INVALID" in str(failures[1])
+    source = (root / path).read_text(encoding="utf-8")
+    assert "loadStoredState" not in source
+    assert "private static Object storedState;" in source
+
+
 def test_atomic_concern_compile_repair_reopens_only_localized_concern(
     tmp_path: Path, monkeypatch
 ) -> None:
