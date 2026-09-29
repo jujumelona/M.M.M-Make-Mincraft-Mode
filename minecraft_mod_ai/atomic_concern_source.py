@@ -655,6 +655,13 @@ def _validate_region_text(value: str, *, initialize_region: bool) -> None:
             "ATOMIC_CONCERN_RESPONSE_INVALID: executable region contains host-marker syntax or Markdown fences."
         )
     region = "initialize body" if initialize_region else "concern members"
+    if _has_forbidden_type_declaration(
+        scan,
+        initialize_region=initialize_region,
+    ):
+        raise CustomModuleGenerationError(
+            f"ATOMIC_CONCERN_SCOPE_ESCAPE: {region} contains a forbidden type declaration."
+        )
     try:
         if initialize_region:
             strict_initialize_statements(value)

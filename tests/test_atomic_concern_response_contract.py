@@ -38,7 +38,7 @@ def test_legacy_marker_parser_still_accepts_well_formed_response() -> None:
 def _executor(
     outputs: list[str],
     *,
-    section: str = "behavior_contract",
+    section: str = "algorithm",
     require_initialize: bool = False,
 ) -> AtomicConcernExecutor:
     remaining = list(outputs)
@@ -370,7 +370,7 @@ def _multi_executor(
     *,
     concerns: tuple[dict[str, object], ...],
     captured_messages: list[list[dict[str, str]]] | None = None,
-    section: str = "behavior_contract",
+    section: str = "algorithm",
 ) -> tuple[AtomicConcernExecutor, dict[str, int]]:
     remaining = list(outputs)
     compile_calls = {"count": 0}
