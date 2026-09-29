@@ -369,6 +369,21 @@ def _value(node: tuple, context: str = "context") -> str:
         return "null"
     if kind == "identifier":
         return f"$mmmRead({_java_string(node[1])}, {context})"
+    if kind == "empty_map":
+        return "new java.util.LinkedHashMap<>()"
+    if kind == "empty_list":
+        return "new java.util.ArrayList<>()"
+    if kind == "call":
+        name = str(node[1]).casefold()
+        if name not in {"sum", "min", "max", "abs", "count", "size", "len"}:
+            raise ValueError(
+                f"STRUCTURED_STATE_EXPRESSION: unsupported function {node[1]!r}"
+            )
+        args = ", ".join(_value(arg, context) for arg in node[2])
+        return (
+            f"$mmmFunction({_java_string(name)}, "
+            f"java.util.Arrays.asList({args}), {context})"
+        )
     if kind == "unary":
         return f"Boolean.valueOf({_condition(node, context)})"
     if kind == "binary":
@@ -393,6 +408,10 @@ def _condition(node: tuple, context: str = "context") -> str:
             right = _condition(node[3], context)
             java_op = "&&" if op == "&&" else "||"
             return f"(({left}) {java_op} ({right}))"
+        if op == "->":
+            left = _condition(node[2], context)
+            right = _condition(node[3], context)
+            return f"((!({left})) || ({right}))"
         if op == "==":
             return f"$mmmEquals({_value(node[2], context)}, {_value(node[3], context)})"
         if op == "!=":
