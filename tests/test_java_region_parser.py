@@ -7,6 +7,8 @@ from minecraft_mod_ai.java_region_parser import (
     admit_initialize_region,
     admit_member_region,
     class_body_chunks,
+    class_body_member_contracts,
+    public_source_member_contracts,
     strict_member_chunks,
 )
 
@@ -152,3 +154,58 @@ private static int finalValue = 2;
     admitted = admit_member_region(output)
     assert "finalValue = 2" in admitted
     assert "draftValue" not in admitted
+
+
+def test_tree_sitter_class_body_contracts_preserve_types_and_mutability() -> None:
+    contracts = class_body_member_contracts(
+        "private static final java.util.Map<String, Object> CACHE = "
+        "new java.util.HashMap<>();\n"
+        "public static java.util.Map<String, Object> snapshot(String key, int limit) "
+        "{ return CACHE; }"
+    )
+
+    field = next(item for item in contracts if item["kind"] == "field")
+    method = next(item for item in contracts if item["kind"] == "method")
+
+    assert field["symbol"] == "CACHE"
+    assert field["declared_type"] == "java.util.Map<String, Object>"
+    assert field["static"] is True
+    assert field["final"] is True
+    assert field["mutable"] is False
+
+    assert method["symbol"] == "snapshot"
+    assert method["return_type"] == "java.util.Map<String, Object>"
+    assert method["static"] is True
+    assert method["parameters"] == [
+        {"type": "String", "name": "key"},
+        {"type": "int", "name": "limit"},
+    ]
+
+
+def test_tree_sitter_public_source_contracts_ignore_private_helpers() -> None:
+    contracts = public_source_member_contracts(
+        """
+package example;
+
+public final class Dependency {
+    private static final Object INTERNAL = new Object();
+    public static Object getState(String key) { return INTERNAL; }
+    protected static java.util.Map<String, Object> copy(
+            java.util.Map<String, Object> input) { return input; }
+    private static void helper() {}
+}
+"""
+    )
+
+    assert [(item["kind"], item["symbol"]) for item in contracts] == [
+        ("method", "getState"),
+        ("method", "copy"),
+    ]
+    get_state = contracts[0]
+    copy = contracts[1]
+    assert get_state["return_type"] == "Object"
+    assert get_state["parameters"] == [{"type": "String", "name": "key"}]
+    assert copy["return_type"] == "java.util.Map<String, Object>"
+    assert copy["parameters"] == [
+        {"type": "java.util.Map<String, Object>", "name": "input"}
+    ]
