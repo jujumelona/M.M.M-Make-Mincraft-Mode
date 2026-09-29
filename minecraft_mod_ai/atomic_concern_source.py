@@ -687,6 +687,29 @@ def parse_concern_content(text: str, *, section: str) -> tuple[str, str]:
     return members, initialize
 
 
+def _project_declaration_only_members(value: str) -> tuple[str, tuple[str, ...]]:
+    """Keep only Tree-sitter-proven declarations allowed by a data-only concern."""
+
+    chunks = class_body_chunks(value)
+    kinds = class_body_member_kinds(value)
+    if len(chunks) != len(kinds):
+        raise CustomModuleGenerationError(
+            "ATOMIC_CONCERN_JAVA_PARSE_INVALID: member chunk/kind cardinality drift"
+        )
+    kept = [
+        chunk
+        for chunk, kind in zip(chunks, kinds, strict=True)
+        if kind in _DECLARATION_ONLY_MEMBER_KINDS
+    ]
+    dropped = tuple(
+        kind for kind in kinds if kind not in _DECLARATION_ONLY_MEMBER_KINDS
+    )
+    projected = "\n\n".join(kept).strip()
+    if projected:
+        _validate_region_text(projected, initialize_region=False)
+    return projected, dropped
+
+
 def _parse_region_content(text: str, *, response_region: str) -> str:
     """Admit one host-selected region through Markdown and Java parsers in order."""
     raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
@@ -2543,6 +2566,30 @@ class AtomicConcernExecutor:
                 )
                 if response_region == "members" and name in _DECLARATION_ONLY_CONCERNS:
                     kinds = class_body_member_kinds(parsed)
+                    if kinds and any(
+                        kind not in _DECLARATION_ONLY_MEMBER_KINDS
+                        for kind in kinds
+                    ):
+                        projected, dropped = _project_declaration_only_members(parsed)
+                        if projected:
+                            from .root_cause_trace import emit_root_cause
+
+                            emit_root_cause(
+                                "atomic_concern_declaration_only_projection",
+                                stage="production",
+                                operation="atomic_concern_region",
+                                gate="semantic_shape_projection",
+                                result="PASS",
+                                details={
+                                    "concern": name,
+                                    "dropped_member_kinds": list(dropped),
+                                    "retained_member_kinds": list(
+                                        class_body_member_kinds(projected)
+                                    ),
+                                },
+                            )
+                            parsed = projected
+                            kinds = class_body_member_kinds(parsed)
                     if (
                         not kinds
                         or any(
@@ -2552,8 +2599,8 @@ class AtomicConcernExecutor:
                     ):
                         raise CustomModuleGenerationError(
                             "ATOMIC_CONCERN_SEMANTIC_SHAPE_INVALID: "
-                            f"{name} must contain only fields/private nested data types; "
-                            f"found {list(kinds)!r}."
+                            f"{name} must contain at least one field/private nested data type "
+                            f"and no outer methods; found {list(kinds)!r}."
                         )
                 _validate_platform_api_admission(
                     parsed,

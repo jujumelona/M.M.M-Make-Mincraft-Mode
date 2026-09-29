@@ -882,12 +882,12 @@ def test_stored_state_receives_semantic_shape_and_compact_output_budget(
 
 
 
-def test_stored_state_invalid_shape_is_not_retried(
+def test_stored_state_mixed_shape_is_projected_before_compile(
     tmp_path: Path, monkeypatch
 ) -> None:
     root, path, symbol = _project(tmp_path)
-    original = (root / path).read_bytes()
     calls = 0
+    compiles = 0
 
     class Router:
         def generate_text(self, role, messages, **kwargs):
@@ -895,7 +895,14 @@ def test_stored_state_invalid_shape_is_not_retried(
             assert role == "coder"
             assert kwargs.get("output_token_ceiling") == 2048
             calls += 1
-            return "private static boolean loadStoredState() { return true; }"
+            return (
+                "private static final java.util.Map<String, String> STATE_MAPPINGS = "
+                "new java.util.HashMap<>();\n"
+                "private static void registerStateMapping(String owner, String state) { "
+                "STATE_MAPPINGS.put(owner, state); }\n"
+                "private static String getStateForOwner(String owner) { "
+                "return STATE_MAPPINGS.get(owner); }"
+            )
 
         def generate_tool_decision(self, *_args, **_kwargs):
             raise AssertionError("production concern generation must not use scalar Java tools")
@@ -905,24 +912,26 @@ def test_stored_state_invalid_shape_is_not_retried(
             pass
 
         def compile_java(self, _root):
-            raise AssertionError("compiler must not run for semantic-shape-invalid source")
+            nonlocal compiles
+            compiles += 1
+            return SimpleNamespace(status="PASS", commands=(), error=None)
 
     monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
     monkeypatch.setattr(direct, "GradleRunner", Runner)
 
-    with pytest.raises(
-        direct.CustomModuleGenerationError,
-        match="ATOMIC_CONCERN_SEMANTIC_SHAPE_INVALID",
-    ):
-        direct.CustomModuleGenerator(Router()).generate(
-            root,
-            module=_stored_state_atomic_module(path, symbol),
-            minecraft_version="1.21.1",
-            loader="fabric",
-        )
+    direct.CustomModuleGenerator(Router()).generate(
+        root,
+        module=_stored_state_atomic_module(path, symbol),
+        minecraft_version="1.21.1",
+        loader="fabric",
+    )
 
+    source = (root / path).read_text(encoding="utf-8")
+    assert "STATE_MAPPINGS" in source
+    assert "registerStateMapping" not in source
+    assert "getStateForOwner" not in source
     assert calls == 1
-    assert (root / path).read_bytes() == original
+    assert compiles == 1
 
 
 def test_atomic_compile_failure_is_not_retried(

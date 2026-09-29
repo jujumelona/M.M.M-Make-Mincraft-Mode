@@ -2352,12 +2352,7 @@ def test_noncanonical_record_constructor_must_delegate() -> None:
 
 def test_stored_state_semantic_shape_retries_then_accepts_declarations_only() -> None:
     remaining = [
-        (
-            "private static final java.util.Map<String, String> STATE = "
-            "new java.util.HashMap<>();\n"
-            "private static void registerState(String key, String value) { "
-            "STATE.put(key, value); }"
-        ),
+        "private static void registerState(String key, String value) {}",
         (
             "private static final java.util.Map<String, String> STATE = "
             "new java.util.HashMap<>();"
