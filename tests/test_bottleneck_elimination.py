@@ -91,15 +91,15 @@ def test_relations_use_host_owned_pair_cardinality_without_model_continuation():
     assert all(call[1]["source_id"] != call[1]["target_id"] for call in router.calls)
 
 
-def test_gradle_hot_path_is_incremental_parallel_and_daemon_reused(monkeypatch):
+def test_gradle_hot_path_is_incremental_parallel_and_process_isolated(monkeypatch):
     monkeypatch.delenv("MMM_GRADLE_WORKERS", raising=False)
     monkeypatch.setattr(gradle_contract.os, "cpu_count", lambda: 8)
 
     args = gradle_contract._gradle_execution_arguments("build")
 
     assert "clean" not in args
-    assert "--no-daemon" not in args
-    assert "--daemon" in args
+    assert "--no-daemon" in args
+    assert "--daemon" not in args
     assert "--parallel" in args
     assert "--max-workers=7" in args
     assert "--build-cache" in args
