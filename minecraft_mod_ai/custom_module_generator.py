@@ -2072,6 +2072,7 @@ def _run_atomic_ir_generation(
         call_coder=lambda messages: _call_coder(
             generator.router,
             messages,
+            force_non_thinking=True,
             structured_java_region=False,
         ),
         compile_java=context.compiler.compile_java,
