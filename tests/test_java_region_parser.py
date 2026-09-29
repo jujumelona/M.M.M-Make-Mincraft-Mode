@@ -6,6 +6,7 @@ from minecraft_mod_ai.java_region_parser import (
     JavaRegionParseError,
     admit_initialize_region,
     admit_member_region,
+    class_body_chunks,
     strict_member_chunks,
 )
 
@@ -86,3 +87,17 @@ def test_tree_sitter_member_chunks_ignore_comments_without_losing_members() -> N
     assert len(chunks) == 2
     assert chunks[0].startswith("private static int value")
     assert chunks[1].startswith("private static int read")
+
+
+def test_parser_only_split_keeps_host_static_initializer_for_host_code() -> None:
+    chunks = class_body_chunks(
+        "private static int value;\nstatic { value = 1; }"
+    )
+    assert len(chunks) == 2
+    assert chunks[0].startswith("private static int value")
+    assert chunks[1].startswith("static {")
+
+
+def test_model_admission_still_rejects_static_initializer() -> None:
+    with pytest.raises(JavaRegionParseError, match="static_initializer"):
+        strict_member_chunks("static { value = 1; }")
