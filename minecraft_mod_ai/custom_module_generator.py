@@ -470,14 +470,6 @@ def _direct_host_grounding(
 _ATOMIC_JAVA_REGION_TOOL = "emit_java_structure"
 _JAVA_IDENTIFIER_PATTERN = r"^[A-Za-z_$][A-Za-z0-9_$]*$"
 _ATOMIC_METHOD_NAME_PATTERN = r"^(?:<init>|[A-Za-z_$][A-Za-z0-9_$]*)$"
-_ATOMIC_VISIBILITY_SCHEMA: dict[str, Any] = {
-    "type": "string",
-    "enum": ["private", "protected", "public"],
-    "description": (
-        "Java visibility keyword only. Never emit a declaration, type, identifier, "
-        "modifier sequence, or semicolon here."
-    ),
-}
 _ATOMIC_PARAMETER_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -506,28 +498,12 @@ _ATOMIC_PARAMETER_SCHEMA: dict[str, Any] = {
 _ATOMIC_FIELD_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "visibility": deepcopy(_ATOMIC_VISIBILITY_SCHEMA),
-        "is_final": {
-            "type": "boolean",
-            "description": (
-                "True only when this field binding must be immutable and an initializer "
-                "is supplied in this declaration."
-            ),
-        },
-        "is_static": {
-            "type": "boolean",
-            "description": (
-                "Static intent for nested-class fields. Outer fields are made static by the host."
-            ),
-        },
-        "is_volatile": {"type": "boolean"},
-        "is_transient": {"type": "boolean"},
         "type": {
             "type": "string",
             "minLength": 1,
             "description": (
                 "Java field type only. Concern-owned domain types may be declared in the same "
-                "records/enums/classes payload. Never include visibility or modifiers."
+                "records/enums/classes payload. Declaration modifiers are host-owned."
             ),
         },
         "name": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
@@ -546,19 +522,12 @@ _ATOMIC_FIELD_SCHEMA: dict[str, Any] = {
 _ATOMIC_METHOD_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "visibility": deepcopy(_ATOMIC_VISIBILITY_SCHEMA),
-        "is_final": {"type": "boolean"},
-        "is_static": {
-            "type": "boolean",
-            "description": (
-                "Static intent for nested-type methods. Outer methods are made static by the host."
-            ),
-        },
-        "is_synchronized": {"type": "boolean"},
         "return_type": {
             "type": "string",
             "minLength": 1,
-            "description": "Java return type only; never include visibility or modifiers.",
+            "description": (
+                "Java return type only. Declaration modifiers are host-owned."
+            ),
         },
         "name": {"type": "string", "pattern": _ATOMIC_METHOD_NAME_PATTERN},
         "parameters": {"type": "array", "items": _ATOMIC_PARAMETER_SCHEMA},
@@ -1469,54 +1438,98 @@ def _validate_atomic_type_namespace(
             seen[name] = kind
 
 
-def _materialize_semantic_modifiers(
+_HOST_JAVA_MODIFIER_ORDER = (
+    "public",
+    "protected",
+    "private",
+    "static",
+    "final",
+    "synchronized",
+    "volatile",
+    "transient",
+    "abstract",
+)
+
+
+def _implementation_api_modifiers(
+    payload: Mapping[str, Any],
+) -> dict[tuple[str, str], tuple[str, ...]]:
+    grounding = payload.get("host_grounding")
+    contract = (
+        grounding.get("implementation_contract")
+        if isinstance(grounding, Mapping)
+        else None
+    )
+    declarations = (
+        contract.get("public_api")
+        if isinstance(contract, Mapping)
+        else ()
+    )
+    result: dict[tuple[str, str], tuple[str, ...]] = {}
+    for raw in declarations or ():
+        text = " ".join(str(raw or "").replace("{ ... }", "").split()).strip()
+        if not text:
+            continue
+        kind = "method" if "(" in text else "field"
+        head = text.split("(", 1)[0] if kind == "method" else text.split("=", 1)[0]
+        head = head.rstrip(";").strip()
+        match = re.search(r"([A-Za-z_$][A-Za-z0-9_$]*)\s*$", head)
+        if match is None:
+            continue
+        name = match.group(1)
+        modifiers = tuple(
+            token
+            for token in _HOST_JAVA_MODIFIER_ORDER
+            if re.search(rf"\b{re.escape(token)}\b", head)
+        )
+        if modifiers:
+            result[(kind, name)] = modifiers
+    return result
+
+
+def _host_owned_member_modifiers(
     item: Mapping[str, Any],
     *,
     kind: str,
+    outer: bool,
+    public_api_modifiers: Mapping[tuple[str, str], tuple[str, ...]],
 ) -> dict[str, Any]:
     result = dict(item)
-    visibility = str(result.pop("visibility", "") or "").strip()
-    if visibility not in {"public", "protected", "private"}:
-        visibility = "private"
-
-    modifiers = [visibility]
-    initializer = str(result.get("initializer") or "").strip()
-    if kind == "field":
-        if bool(result.pop("is_static", False)):
-            modifiers.append("static")
-        if bool(result.pop("is_final", False)) and initializer:
-            modifiers.append("final")
-        elif bool(result.get("is_final", False)):
-            result.pop("is_final", None)
-        if bool(result.pop("is_volatile", False)) and "final" not in modifiers:
-            modifiers.append("volatile")
-        if bool(result.pop("is_transient", False)):
-            modifiers.append("transient")
-    elif kind == "method":
-        if bool(result.pop("is_static", False)):
-            modifiers.append("static")
-        if bool(result.pop("is_final", False)):
-            modifiers.append("final")
-        if bool(result.pop("is_synchronized", False)):
-            modifiers.append("synchronized")
-    result.pop("is_final", None)
+    name = str(result.get("name") or "").strip()
+    if outer:
+        modifiers = list(public_api_modifiers.get((kind, name), ("private",)))
+    else:
+        modifiers = ["private"]
     result["modifiers"] = modifiers
     return result
 
 
 def _materialize_atomic_java_modifiers(
     decision: Mapping[str, Any],
+    *,
+    payload: Mapping[str, Any],
 ) -> dict[str, Any]:
     result = deepcopy(dict(decision))
+    public_api_modifiers = _implementation_api_modifiers(payload)
 
     result["fields"] = [
-        _materialize_semantic_modifiers(item, kind="field")
+        _host_owned_member_modifiers(
+            item,
+            kind="field",
+            outer=True,
+            public_api_modifiers=public_api_modifiers,
+        )
         if isinstance(item, Mapping)
         else item
         for item in result.get("fields") or []
     ]
     result["methods"] = [
-        _materialize_semantic_modifiers(item, kind="method")
+        _host_owned_member_modifiers(
+            item,
+            kind="method",
+            outer=True,
+            public_api_modifiers=public_api_modifiers,
+        )
         if isinstance(item, Mapping)
         else item
         for item in result.get("methods") or []
@@ -1528,14 +1541,24 @@ def _materialize_atomic_java_modifiers(
                 continue
             if "fields" in owner:
                 owner["fields"] = [
-                    _materialize_semantic_modifiers(item, kind="field")
+                    _host_owned_member_modifiers(
+                        item,
+                        kind="field",
+                        outer=False,
+                        public_api_modifiers=public_api_modifiers,
+                    )
                     if isinstance(item, Mapping)
                     else item
                     for item in owner.get("fields") or []
                 ]
             if "methods" in owner:
                 owner["methods"] = [
-                    _materialize_semantic_modifiers(item, kind="method")
+                    _host_owned_member_modifiers(
+                        item,
+                        kind="method",
+                        outer=False,
+                        public_api_modifiers=public_api_modifiers,
+                    )
                     if isinstance(item, Mapping)
                     else item
                     for item in owner.get("methods") or []
@@ -1816,7 +1839,7 @@ def _call_atomic_java_region(
         config=config,
         multi_callback=multi_callback,
     ).run(parameters)
-    decision = _materialize_atomic_java_modifiers(decision)
+    decision = _materialize_atomic_java_modifiers(decision, payload=payload)
     from .atomic_concern_source import _validate_region_text
 
     try:
