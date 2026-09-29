@@ -2731,19 +2731,38 @@ def _validate_first_pass_java_semantics(
                 f"{receiver}.{name}(...) is instance-owned, not a static class call."
             )
 
+    local_methods: dict[str, list[dict[str, Any]]] = {}
+    for item in contracts:
+        if item.get("kind") != "method":
+            continue
+        symbol = str(item.get("symbol") or "").strip()
+        if symbol:
+            local_methods.setdefault(symbol, []).append(dict(item))
+
     for returned in class_body_direct_return_calls(value):
         receiver = str(returned.get("receiver") or "").strip()
         name = str(returned.get("symbol") or "").strip()
         arity = int(returned.get("argument_count") or 0)
         target_type = str(returned.get("declared_return_type") or "").strip()
-        owner_methods = dependencies.get(receiver)
-        if owner_methods is None:
-            continue
-        matching = [
-            item
-            for item in owner_methods.get(name, ())
-            if len(item.get("parameters") or ()) == arity
-        ]
+
+        if receiver in {"", "this"}:
+            matching = [
+                item
+                for item in local_methods.get(name, ())
+                if len(item.get("parameters") or ()) == arity
+            ]
+            origin = f"local call {name}(...)"
+        else:
+            owner_methods = dependencies.get(receiver)
+            if owner_methods is None:
+                continue
+            matching = [
+                item
+                for item in owner_methods.get(name, ())
+                if len(item.get("parameters") or ()) == arity
+            ]
+            origin = f"dependency call {receiver}.{name}(...)"
+
         source_types = {
             str(item.get("return_type") or "").strip()
             for item in matching
@@ -2758,8 +2777,8 @@ def _validate_first_pass_java_semantics(
             raise CustomModuleGenerationError(
                 "ATOMIC_CONCERN_RESPONSE_INVALID: method "
                 f"{returned.get('method')!r} returns {target_type} but directly "
-                f"returns Object-valued dependency call {receiver}.{name}(...); "
-                "perform explicit runtime type narrowing first."
+                f"returns Object-valued {origin}; perform explicit runtime type "
+                "narrowing first."
             )
 
 
