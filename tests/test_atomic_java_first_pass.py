@@ -286,17 +286,17 @@ def test_multi_call_scalar_batch_keeps_schema_after_cursor_close() -> None:
             self.batch_calls += 1
             if {"return_type", "name"} <= set(properties):
                 return ({"return_type": "void", "name": "launch"},)
-            if set(properties) == {"value"}:
+            if set(properties) == {"statement"}:
+                assert kwargs["tool_name"] == "emit_java_statement"
                 with pytest.raises(ValidationError):
                     Draft202012Validator(kwargs["parameters"]).validate({
-                        "value": (
-                            "import java.util.concurrent.locks.ReentrantLock;\n"
-                            "public class AuthoredBehaviorContract {\n"
-                            "    public static void initialize() {}\n"
+                        "statement": (
+                            "public java.util.List getActors(java.util.List actors) {\n"
+                            "    return actors;\n"
                             "}"
                         )
                     })
-                return ({"value": "return;"},)
+                return ({"statement": "return;"},)
             raise AssertionError(f"unexpected batch schema: {sorted(properties)}")
 
     router = Router()
@@ -343,8 +343,9 @@ def test_outer_public_api_modifiers_come_from_host_contract() -> None:
                 return {"part": "done"}
             if set(properties) == {"return_type", "name"}:
                 return {"return_type": "void", "name": "launch"}
-            if set(properties) == {"value"}:
-                return {"value": "return;"}
+            if set(properties) == {"statement"}:
+                assert kwargs["tool_name"] == "emit_java_statement"
+                return {"statement": "return;"}
             raise AssertionError(f"unexpected schema properties: {sorted(properties)}")
 
     messages = [{
@@ -375,7 +376,7 @@ def test_outer_public_api_modifiers_come_from_host_contract() -> None:
 def test_initialization_is_assembled_from_native_scalars_and_executes(tmp_path):
     router = ScalarRouter([
         {"part": "methods"}, {"return_type": "void", "name": "initPlayerState"},
-        {"part": "body"}, {"value": "integrity = 1.0f;"},
+        {"part": "body"}, {"statement": "integrity = 1.0f;"},
         {"part": "done"}, {"part": "done"},
     ])
     members = _call_atomic_java_region(router, _messages(), output_token_ceiling=512)
@@ -420,7 +421,7 @@ def test_model_numeric_initializers_use_the_same_typed_renderer(tmp_path):
 def test_unbalanced_body_is_terminal_before_executor_can_retry():
     router = ScalarRouter([
         {"part": "methods"}, {"return_type": "void", "name": "bad"},
-        {"part": "body"}, {"value": "if (true) {"},
+        {"part": "body"}, {"statement": "if (true) {"},
         {"part": "done"}, {"part": "done"},
     ])
     with pytest.raises(CustomModuleGenerationError, match="ATOMIC_JAVA_ASSEMBLY_INVALID"):
