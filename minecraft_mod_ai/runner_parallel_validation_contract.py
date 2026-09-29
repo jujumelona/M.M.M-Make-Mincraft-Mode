@@ -154,7 +154,7 @@ def _gradle_worker_count() -> int:
 
 def _gradle_execution_arguments(*tasks: str) -> tuple[str, ...]:
     return (
-        "--daemon",
+        "--no-daemon",
         "--parallel",
         f"--max-workers={_gradle_worker_count()}",
         *tasks,
