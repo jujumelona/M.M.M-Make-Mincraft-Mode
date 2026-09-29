@@ -1304,6 +1304,79 @@ def _deterministic_behavior_actor_members(
     )
 
 
+def _flatten_contract_record(record: Mapping[str, Any]) -> str:
+    parts: list[str] = []
+
+    def visit(prefix: str, value: Any) -> None:
+        if isinstance(value, Mapping):
+            for key in sorted(value):
+                next_prefix = f"{prefix}.{key}" if prefix else str(key)
+                visit(next_prefix, value[key])
+            return
+        if isinstance(value, Sequence) and not isinstance(
+            value, (str, bytes, bytearray)
+        ):
+            for index, item in enumerate(value):
+                visit(f"{prefix}[{index}]", item)
+            return
+        parts.append(f"{prefix}={value}")
+
+    visit("", record)
+    return "; ".join(part for part in parts if part)
+
+
+def _behavior_contract_values(
+    task: Mapping[str, Any],
+    concern: Mapping[str, Any],
+) -> tuple[str, ...]:
+    authority = _concern_authority(task, concern)
+    structured = authority.get("structured_records")
+    values: list[str] = []
+    if isinstance(structured, Sequence) and not isinstance(
+        structured, (str, bytes, bytearray)
+    ):
+        for raw in structured:
+            if isinstance(raw, Mapping):
+                value = _flatten_contract_record(raw)
+                if value:
+                    values.append(value)
+    if values:
+        return tuple(values)
+
+    sources = authority.get("source_requirements")
+    if isinstance(sources, Mapping):
+        for key in sorted(sources):
+            value = " ".join(str(sources[key] or "").split())
+            if value and value not in values:
+                values.append(value)
+    if values:
+        return tuple(values)
+
+    raise CustomModuleGenerationError(
+        "STRUCTURED_BEHAVIOR_CONTRACT_REQUIRED: "
+        f"{_slug(concern.get('concern'))} has neither structured records nor exact "
+        "source requirements; free-form Java fallback is disabled."
+    )
+
+
+def _deterministic_behavior_contract_members(
+    task: Mapping[str, Any],
+    concern: Mapping[str, Any],
+) -> str:
+    name = _slug(concern.get("concern"))
+    if name == "actors":
+        return _deterministic_behavior_actor_members(task, concern)
+
+    values = _behavior_contract_values(task, concern)
+    constant = "CONTRACT_" + _host_java_identifier(name).upper()
+    literals = ",\n        ".join(_java_string_literal(value) for value in values)
+    return (
+        f"private static final java.util.List<String> {constant} = java.util.List.of(\n"
+        f"        {literals}\n"
+        ");"
+    )
+
+
 _STATE_VARIABLE_ATTRIBUTE = re.compile(
     r"\b(?P<key>[A-Za-z_][A-Za-z0-9_]*)\((?P<value>[^()]*)\)"
 )
@@ -2256,9 +2329,8 @@ class AtomicConcernExecutor:
             not failure
             and response_region == "members"
             and str(self.section or "").strip() == "behavior_contract"
-            and name == "actors"
         ):
-            host_members = _deterministic_behavior_actor_members(
+            host_members = _deterministic_behavior_contract_members(
                 self.task,
                 concern,
             )
