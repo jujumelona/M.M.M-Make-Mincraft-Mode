@@ -173,6 +173,21 @@ def strict_member_chunks(value: str) -> tuple[str, ...]:
     return _chunks_from_body(body, source, drop_host_lifecycle=False)
 
 
+def _outer_type_candidates(node: Any) -> tuple[Any, ...]:
+    """Find outermost Java type declarations even when Tree-sitter nests them in ERROR."""
+    found: list[Any] = []
+
+    def visit(current: Any) -> None:
+        if current.type in _NESTED_TYPES:
+            found.append(current)
+            return
+        for child in current.named_children:
+            visit(child)
+
+    visit(node)
+    return tuple(found)
+
+
 def _unwrap_single_outer_class(value: str) -> tuple[str, ...]:
     """Salvage one structurally sound outer class from a noisy model envelope.
 
@@ -183,28 +198,15 @@ def _unwrap_single_outer_class(value: str) -> tuple[str, ...]:
     source = str(value or "").encode("utf-8")
     tree = _parser().parse(source)
     root = tree.root_node
-    classes = [
-        node for node in root.named_children if node.type == "class_declaration"
-    ]
-    if len(classes) != 1:
+    outer_types = _outer_type_candidates(root)
+    if len(outer_types) != 1 or outer_types[0].type != "class_declaration":
         raise JavaRegionParseError(
             "output is neither a class-body region nor one unambiguous outer-class envelope"
         )
-    outer = classes[0]
+    outer = outer_types[0]
     issue = _first_error(outer, source) if outer.has_error else ""
     if issue:
         raise JavaRegionParseError(f"outer-class envelope is malformed: {issue}")
-    unexpected = [
-        node.type
-        for node in root.named_children
-        if node is not outer
-        and node.type not in {"package_declaration", "import_declaration", "ERROR"} | _COMMENT_TYPES
-    ]
-    if unexpected:
-        raise JavaRegionParseError(
-            "outer-class envelope contains additional top-level Java declarations: "
-            + ", ".join(unexpected)
-        )
     if "private" in _modifiers(outer, source):
         raise JavaRegionParseError(
             "a private top-level class cannot be treated as an accidental host wrapper"
