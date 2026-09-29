@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from minecraft_mod_ai.authored_plan import AuthoredPlan
+from minecraft_mod_ai.authored_structured_design import render_structured_sections
 from minecraft_mod_ai.authored_execution_schema import concern_contracts
 from minecraft_mod_ai.authored_production import _compile_new_authored_modules
 from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner
@@ -82,20 +83,49 @@ def _plan_text() -> str:
     )
 
 
-def test_plan_remains_free_markdown_generation_without_structured_compiler():
-    router = PlanRouter(_plan_text())
-    planner = CompleteGameDesignPlanner(router)
+def test_plan_persists_structured_authority_instead_of_free_markdown(monkeypatch):
+    from minecraft_mod_ai import planning_state_implementation
+
+    structured = {
+        "state_model": {
+            "specification": {
+                "variables": [{
+                    "name": "credits",
+                    "owner": "player",
+                    "type": "integer",
+                    "unit": "credits",
+                    "default": "0",
+                    "domain": "integer >= 0",
+                }],
+                "transitions": [],
+                "invariants": [],
+                "initialization": [],
+                "updates": [],
+                "cleanup": [],
+                "concurrency": [],
+                "inapplicable_concerns": [
+                    {"concern": name, "reason": "not required by fixture"}
+                    for name in (
+                        "transitions", "invariants", "initialization",
+                        "updates", "cleanup", "concurrency"
+                    )
+                ],
+            },
+            "constraint_evidence_refs": [],
+        }
+    }
+    monkeypatch.setattr(
+        planning_state_implementation,
+        "compile_authored_worksheet",
+        lambda router, prompt: structured,
+    )
+    planner = CompleteGameDesignPlanner(object())
 
     plan = planner.plan("make a space mod")
 
-    assert plan.text == _plan_text()
-    assert plan.structured_sections == {}
-    assert len(router.calls) == 1
-    role, _messages, kwargs = router.calls[0]
-    assert role == "planner"
-    assert kwargs["response_format"] == "text"
-    assert kwargs["response_schema"] is None
-    assert kwargs["enable_tools"] is False
+    assert plan.structured_sections == structured
+    assert plan.text == render_structured_sections(structured)
+    assert plan.to_dict()["structured_sections"] == structured
 
 
 def test_malformed_json_like_state_output_is_parsed_without_json_validation():
@@ -567,10 +597,16 @@ def test_production_state_sidecar_activates_state_leaf_without_text_anchor():
     assert payload["structured_records"] == section["specification"]["variables"]
 
 
-def test_production_state_is_sidecar_and_does_not_mutate_authored_plan():
+def test_production_state_is_sidecar_and_preserves_structured_authority():
     router = ProductionStateRouter()
-    original = AuthoredPlan("make a space mod", _plan_text())
-    section = compile_production_state_section(router, original)
+    prose = AuthoredPlan("make a space mod", _plan_text())
+    section = compile_production_state_section(router, prose)
+    structured = {"state_model": section}
+    original = AuthoredPlan(
+        "make a space mod",
+        render_structured_sections(structured),
+        structured_sections=structured,
+    )
 
     modules, _manifest = _compile_new_authored_modules(
         original,
@@ -582,6 +618,6 @@ def test_production_state_is_sidecar_and_does_not_mutate_authored_plan():
 
     request = modules[0].config["implementation_graph_request"]
     assert request["production_state_section"] == section
-    assert request["structured_sections"] == {}
-    assert original.text == _plan_text()
-    assert original.structured_sections == {}
+    assert request["structured_sections"] == structured
+    assert request["structured_sections_sha256"].startswith("sha256:")
+    assert original.structured_sections == structured
