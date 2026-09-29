@@ -2586,3 +2586,93 @@ def test_map_entry_value_generic_narrowing_is_canonicalized() -> None:
     ) in normalized
     assert "java.util.Map<String, String> condition" not in normalized
     assert any("entry.getValue" in change for change in changes)
+
+
+def test_dependency_api_context_uses_tree_sitter_typed_contracts() -> None:
+    import json
+
+    from minecraft_mod_ai.atomic_concern_source import _dependency_api_context
+
+    source = """
+package example;
+
+public final class Dependency {
+    public static Object getState(String key) { return null; }
+    public static java.util.Map<String, Object> snapshot(String key) {
+        return java.util.Map.of();
+    }
+    private static void hidden() {}
+}
+"""
+    raw = json.dumps(
+        {
+            "symbol": "Dependency",
+            "path": "src/main/java/example/Dependency.java",
+            "responsibility": "state dependency",
+            "public_api": [
+                "public static Object getState(String key)",
+                "public static java.util.Map<String, Object> snapshot(String key)",
+            ],
+            "source": source,
+        }
+    )
+
+    rows = _dependency_api_context(raw)
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["typed_api_source"] == "tree_sitter_java"
+    assert [(item["kind"], item["symbol"]) for item in row["typed_public_api"]] == [
+        ("method", "getState"),
+        ("method", "snapshot"),
+    ]
+    assert row["typed_public_api"][0]["return_type"] == "Object"
+    assert row["typed_public_api"][1]["return_type"] == "java.util.Map<String, Object>"
+
+
+def test_authority_return_types_prefer_typed_contracts_and_drop_ambiguous_overloads() -> None:
+    from minecraft_mod_ai.custom_module_generator import _authority_method_return_types
+
+    payload = {
+        "available_sibling_api": [
+            {
+                "kind": "method",
+                "symbol": "localValue",
+                "return_type": "java.util.Map<String, Object>",
+                "declaration": "public static Object localValue() { ... }",
+            }
+        ],
+        "dependency_api": [
+            {
+                "typed_public_api": [
+                    {
+                        "kind": "method",
+                        "symbol": "getState",
+                        "return_type": "Object",
+                        "parameters": [{"type": "String", "name": "key"}],
+                    },
+                    {
+                        "kind": "method",
+                        "symbol": "lookup",
+                        "return_type": "String",
+                        "parameters": [{"type": "String", "name": "key"}],
+                    },
+                    {
+                        "kind": "method",
+                        "symbol": "lookup",
+                        "return_type": "Object",
+                        "parameters": [{"type": "int", "name": "id"}],
+                    },
+                ],
+                "public_api": [
+                    "public static String getState(String key)"
+                ],
+            }
+        ],
+    }
+
+    returns = _authority_method_return_types(payload)
+
+    assert returns["localValue"] == "java.util.Map<String, Object>"
+    assert returns["getState"] == "Object"
+    assert "lookup" not in returns
