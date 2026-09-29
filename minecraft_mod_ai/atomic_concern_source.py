@@ -3440,7 +3440,7 @@ class AtomicConcernExecutor:
             "source": self.source,
             "summary": " | ".join(self.summaries),
             "concern_count": len(self.ordered),
-            "repair_count": 0,
+            "repair_count": self.repairs,
         }
 
 __all__ = [
