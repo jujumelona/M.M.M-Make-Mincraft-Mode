@@ -475,6 +475,65 @@ This wrapper is complete.
     assert calls == 2
 
 
+def test_production_admits_reasoning_with_multiple_java_fences(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root, path, symbol = _project(tmp_path)
+    responses = iter([
+        """
+The user is asking me to implement the actors concern. Let me analyze it.
+
+```java
+public static void initialize() {}
+```
+
+I need to reconsider the design and provide only the final members.
+
+```java
+private static int balance = 0;
+public static void initialize() { balance = 0; }
+```
+""",
+        "private static boolean valid() { return balance >= 0; }",
+    ])
+
+    calls = 0
+
+    class Router:
+        def generate_text(self, role, messages, **kwargs):
+            nonlocal calls
+            assert role == "coder"
+            assert kwargs.get("enable_tools") is False
+            calls += 1
+            return next(responses)
+
+        def generate_tool_decision(self, *_args, **_kwargs):
+            raise AssertionError("production concern generation must not use scalar Java tools")
+
+    class Runner:
+        def __init__(self, _cache):
+            pass
+
+        def compile_java(self, _root):
+            return SimpleNamespace(status="PASS", commands=(), error=None)
+
+    monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
+    monkeypatch.setattr(direct, "GradleRunner", Runner)
+    direct.CustomModuleGenerator(Router()).generate(
+        root,
+        module=_atomic_module(path, symbol),
+        minecraft_version="1.21.1",
+        loader="fabric",
+    )
+
+    source = (root / path).read_text(encoding="utf-8")
+    assert "private static int balance = 0;" in source
+    assert "private static boolean valid()" in source
+    assert "The user is asking" not in source
+    assert "public static void initialize() { balance = 0; }" not in source
+    assert calls == 2
+
+
 def test_atomic_concern_compile_repair_reopens_only_localized_concern(
     tmp_path: Path, monkeypatch
 ) -> None:
