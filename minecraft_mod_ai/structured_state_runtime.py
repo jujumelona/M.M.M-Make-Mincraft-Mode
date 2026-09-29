@@ -8,9 +8,13 @@ or compiler-repair loop is used on this path.
 
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
+import ast
 import json
 import re
 from typing import Any
+
+from lark import Lark, Transformer, UnexpectedInput, v_args
+from lark.exceptions import VisitError
 
 
 
@@ -161,139 +165,196 @@ def constrain_state_chunk_schema(
             )
     return result
 
-_TOKEN = re.compile(
-    r"""\s*(?:
-        (?P<number>[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)
-      | (?P<string>"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')
-      | (?P<identifier>[A-Za-z_$][A-Za-z0-9_$]*)
-      | (?P<operator>\|\||&&|==|!=|>=|<=|[()!<>+\-*/%])
-    )""",
-    re.VERBOSE,
-)
-_ASSIGNMENT = re.compile(
-    r"^\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*(\+=|-=|\*=|/=|=)\s*(.*?)\s*$"
+_STATE_DSL_GRAMMAR = r"""
+?expr: implication
+?implication: or_expr
+            | or_expr IMPLIES implication      -> implication
+?or_expr: and_expr (OR and_expr)*              -> or_expr
+?and_expr: comparison (AND comparison)*        -> and_expr
+?comparison: sum_expr
+           | sum_expr COMP_OP sum_expr         -> comparison
+?sum_expr: product (ADD_OP product)*           -> sum_expr
+?product: unary (MUL_OP unary)*                -> product
+?unary: NOT unary                              -> logical_not
+      | "-" unary                              -> negate
+      | atom
+?atom: NUMBER                                  -> number
+     | STRING                                  -> string
+     | TRUE                                    -> true
+     | FALSE                                   -> false
+     | NULL                                    -> null
+     | EMPTY_MAP                               -> empty_map
+     | EMPTY_LIST                              -> empty_list
+     | function_call
+     | NAME                                    -> identifier
+     | "(" implication ")"                     -> grouped
+
+function_call: NAME "(" [arguments] ")"         -> function_call
+arguments: implication ("," implication)*       -> arguments
+assignment: NAME ASSIGN_OP expr                 -> assignment
+
+OR.5: "||" | /(?i:OR)\b/
+AND.5: "&&" | /(?i:AND)\b/
+NOT.5: "!" | /(?i:NOT)\b/
+IMPLIES.5: "->" | /(?i:IMPLIES)\b/
+COMP_OP: "==" | "!=" | ">=" | "<=" | ">" | "<" | "="
+ADD_OP: "+" | "-"
+MUL_OP: "*" | "/" | "%"
+ASSIGN_OP: "+=" | "-=" | "*=" | "/=" | "=" | ":"
+TRUE.6: /(?i:true)\b/
+FALSE.6: /(?i:false)\b/
+NULL.6: /(?i:null)\b/
+EMPTY_MAP: "{}"
+EMPTY_LIST: "[]"
+NAME: /[A-Za-z_$][A-Za-z0-9_$.]*/
+NUMBER: /[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?/
+STRING: ESCAPED_STRING | /'(?:\\.|[^'\\])*'/
+
+%import common.ESCAPED_STRING
+%import common.WS
+%ignore WS
+"""
+
+_STATE_DSL_PARSER = Lark(
+    _STATE_DSL_GRAMMAR,
+    parser="lalr",
+    lexer="contextual",
+    start=["expr", "assignment"],
+    maybe_placeholders=False,
 )
 
 
-def _java_string(value: Any) -> str:
-    return json.dumps(str(value), ensure_ascii=False)
+def _fold_binary(first: tuple, tail: tuple[Any, ...], op_map: Mapping[str, str] | None = None) -> tuple:
+    node = first
+    if len(tail) % 2:
+        raise ValueError("STRUCTURED_STATE_EXPRESSION: malformed operator sequence")
+    for index in range(0, len(tail), 2):
+        raw_op = str(tail[index])
+        right = tail[index + 1]
+        op = op_map.get(raw_op.casefold(), raw_op) if op_map else raw_op
+        node = ("binary", op, node, right)
+    return node
+
+
+@v_args(inline=True)
+class _StateDslTransformer(Transformer):
+    def number(self, token):
+        return ("number", str(token))
+
+    def string(self, token):
+        text = str(token)
+        try:
+            value = ast.literal_eval(text)
+        except (SyntaxError, ValueError) as exc:
+            raise ValueError(
+                f"STRUCTURED_STATE_EXPRESSION: invalid string literal {text!r}"
+            ) from exc
+        return ("string", str(value))
+
+    def true(self, _token):
+        return ("bool", True)
+
+    def false(self, _token):
+        return ("bool", False)
+
+    def null(self, _token):
+        return ("null",)
+
+    def empty_map(self, _token):
+        return ("empty_map",)
+
+    def empty_list(self, _token):
+        return ("empty_list",)
+
+    def identifier(self, token):
+        return ("identifier", str(token))
+
+    def grouped(self, node):
+        return node
+
+    def arguments(self, *nodes):
+        return tuple(nodes)
+
+    def function_call(self, name, arguments=()):
+        args = arguments if isinstance(arguments, tuple) else (arguments,)
+        return ("call", str(name), args)
+
+    def logical_not(self, _operator, node):
+        return ("unary", "!", node)
+
+    def negate(self, node):
+        return ("binary", "-", ("number", "0"), node)
+
+    def product(self, first, *tail):
+        return _fold_binary(first, tail)
+
+    def sum_expr(self, first, *tail):
+        return _fold_binary(first, tail)
+
+    def comparison(self, left, operator, right):
+        op = "==" if str(operator) == "=" else str(operator)
+        return ("binary", op, left, right)
+
+    def and_expr(self, first, *tail):
+        return _fold_binary(first, tail, {"and": "&&", "&&": "&&"})
+
+    def or_expr(self, first, *tail):
+        return _fold_binary(first, tail, {"or": "||", "||": "||"})
+
+    def implication(self, left, _operator, right):
+        return ("binary", "->", left, right)
+
+    def assignment(self, name, operator, expression):
+        op = "=" if str(operator) == ":" else str(operator)
+        return (str(name), op, expression)
+
+
+_STATE_DSL_TRANSFORMER = _StateDslTransformer()
+
+
+def _state_dsl_error(source: str, exc: BaseException) -> ValueError:
+    if isinstance(exc, UnexpectedInput):
+        context = exc.get_context(source, span=48).strip().replace("\n", " ")
+        return ValueError(
+            "STRUCTURED_STATE_EXPRESSION: parse error at "
+            f"{exc.line}:{exc.column}: {context}"
+        )
+    if isinstance(exc, VisitError) and isinstance(exc.orig_exc, ValueError):
+        return exc.orig_exc
+    return ValueError(f"STRUCTURED_STATE_EXPRESSION: {exc}")
+
+
+def _parse_state_expression(text: str) -> tuple:
+    source = str(text or "").strip()
+    if not source:
+        return ("bool", True)
+    try:
+        tree = _STATE_DSL_PARSER.parse(source, start="expr")
+        return _STATE_DSL_TRANSFORMER.transform(tree)
+    except (UnexpectedInput, VisitError, ValueError) as exc:
+        raise _state_dsl_error(source, exc) from exc
+
+
+def _parse_state_assignment(text: str) -> tuple[str, str, tuple]:
+    source = str(text or "").strip()
+    try:
+        tree = _STATE_DSL_PARSER.parse(source, start="assignment")
+        result = _STATE_DSL_TRANSFORMER.transform(tree)
+    except (UnexpectedInput, VisitError, ValueError) as exc:
+        raise _state_dsl_error(source, exc) from exc
+    if not isinstance(result, tuple) or len(result) != 3:
+        raise ValueError("STRUCTURED_STATE_MUTATION: invalid assignment")
+    return result
 
 
 class _Expression:
+    """Compatibility facade backed entirely by the Lark grammar."""
+
     def __init__(self, text: str) -> None:
-        self.tokens: list[tuple[str, str]] = []
-        cursor = 0
-        source = str(text or "")
-        while cursor < len(source):
-            if not source[cursor:].strip():
-                break
-            match = _TOKEN.match(source, cursor)
-            if match is None:
-                raise ValueError(
-                    "STRUCTURED_STATE_EXPRESSION: unsupported token near "
-                    + repr(source[cursor:cursor + 32])
-                )
-            kind = next(key for key, value in match.groupdict().items() if value is not None)
-            self.tokens.append((kind, match.group(kind)))
-            cursor = match.end()
-        self.index = 0
-
-    def _peek(self, value: str | None = None) -> bool:
-        if self.index >= len(self.tokens):
-            return False
-        return value is None or self.tokens[self.index][1] == value
-
-    def _take(self, value: str | None = None) -> tuple[str, str]:
-        if not self._peek(value):
-            expected = value or "token"
-            found = self.tokens[self.index][1] if self.index < len(self.tokens) else "<end>"
-            raise ValueError(
-                f"STRUCTURED_STATE_EXPRESSION: expected {expected!r}, found {found!r}"
-            )
-        token = self.tokens[self.index]
-        self.index += 1
-        return token
+        self.text = str(text or "")
 
     def parse(self) -> tuple:
-        if not self.tokens:
-            return ("bool", True)
-        node = self._or()
-        if self.index != len(self.tokens):
-            raise ValueError(
-                "STRUCTURED_STATE_EXPRESSION: trailing token "
-                + repr(self.tokens[self.index][1])
-            )
-        return node
-
-    def _or(self) -> tuple:
-        node = self._and()
-        while self._peek("||"):
-            self._take()
-            node = ("binary", "||", node, self._and())
-        return node
-
-    def _and(self) -> tuple:
-        node = self._compare()
-        while self._peek("&&"):
-            self._take()
-            node = ("binary", "&&", node, self._compare())
-        return node
-
-    def _compare(self) -> tuple:
-        node = self._add()
-        if self._peek() and self.tokens[self.index][1] in {
-            "==", "!=", ">=", "<=", ">", "<"
-        }:
-            op = self._take()[1]
-            node = ("binary", op, node, self._add())
-        return node
-
-    def _add(self) -> tuple:
-        node = self._multiply()
-        while self._peek() and self.tokens[self.index][1] in {"+", "-"}:
-            op = self._take()[1]
-            node = ("binary", op, node, self._multiply())
-        return node
-
-    def _multiply(self) -> tuple:
-        node = self._unary()
-        while self._peek() and self.tokens[self.index][1] in {"*", "/", "%"}:
-            op = self._take()[1]
-            node = ("binary", op, node, self._unary())
-        return node
-
-    def _unary(self) -> tuple:
-        if self._peek("!"):
-            self._take()
-            return ("unary", "!", self._unary())
-        if self._peek("-"):
-            self._take()
-            return ("binary", "-", ("number", "0"), self._unary())
-        return self._primary()
-
-    def _primary(self) -> tuple:
-        if self._peek("("):
-            self._take()
-            node = self._or()
-            self._take(")")
-            return node
-        kind, value = self._take()
-        if kind == "number":
-            return ("number", value)
-        if kind == "string":
-            if value.startswith("'"):
-                value = json.dumps(bytes(value[1:-1], "utf-8").decode("unicode_escape"))
-            return ("string", json.loads(value))
-        if kind == "identifier":
-            lowered = value.casefold()
-            if lowered == "true":
-                return ("bool", True)
-            if lowered == "false":
-                return ("bool", False)
-            if lowered == "null":
-                return ("null",)
-            return ("identifier", value)
-        raise ValueError(f"STRUCTURED_STATE_EXPRESSION: invalid primary {value!r}")
+        return _parse_state_expression(self.text)
 
 
 def _value(node: tuple, context: str = "context") -> str:
