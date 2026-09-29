@@ -194,6 +194,8 @@ class JavaStructureAssembly:
                 "Fill only the current assembly.path using the supplied scalar schema. "
                 "The host constructs objects/arrays; never serialize them into strings. "
                 "When the current path is a sibling batch, emit one function call per sibling item. "
+                "A batch part is single-use: when a part is selected, emit every needed sibling item "
+                "for that part in the same native turn because the host closes that part immediately. "
                 "Keep the authored requirements, dependency_api, available_sibling_api, and "
                 "compiler_contract authoritative. The target is first-pass compilable Java, not code that "
                 "expects a compiler-repair round. Reuse exact sibling declarations; do not redeclare them "
@@ -343,6 +345,12 @@ class JavaStructureAssembly:
                     f"OUTPUT_BUDGET_EXHAUSTED: {path + [selected]} needs decomposition."
                 )
             item_schema = arrays[selected]["items"]
+            # Production uses native multi-call turns. A selected array part is one
+            # complete batch, not a resumable cursor. Closing it immediately prevents
+            # the model from reopening fields/methods/body and redeclaring items that
+            # were already accepted in the preceding native turn.
+            if self.multi_callback is not None:
+                arrays.pop(selected)
             item_path = [*path, selected, len(values)]
             remaining = MAX_PART_ITEMS - len(values)
             if item_schema.get("type") == "object":
