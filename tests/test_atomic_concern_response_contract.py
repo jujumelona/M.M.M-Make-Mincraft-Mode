@@ -2738,7 +2738,7 @@ def test_first_pass_tree_sitter_gate_rejects_unknown_dependency_method_and_arity
     with pytest.raises(CustomModuleGenerationError, match="does not exist"):
         _validate_first_pass_java_semantics(
             "private static Object read() { "
-            "return AuthoredStateModel.getUnknown("x"); }",
+            "return AuthoredStateModel.getUnknown(\\"x\\"); }",
             dependency_source=dependency_source,
             sibling_api=(),
         )
@@ -2746,7 +2746,7 @@ def test_first_pass_tree_sitter_gate_rejects_unknown_dependency_method_and_arity
     with pytest.raises(CustomModuleGenerationError, match="called with 2 argument"):
         _validate_first_pass_java_semantics(
             "private static Object read() { "
-            "return AuthoredStateModel.getState("x", 1); }",
+            "return AuthoredStateModel.getState(\\"x\\", 1); }",
             dependency_source=dependency_source,
             sibling_api=(),
         )
@@ -2776,7 +2776,7 @@ def test_first_pass_tree_sitter_gate_rejects_object_direct_return_to_map() -> No
     ):
         _validate_first_pass_java_semantics(
             "private static java.util.Map<String, Object> shipConfig() { "
-            "return AuthoredStateModel.getState("ship"); }",
+            "return AuthoredStateModel.getState(\\"ship\\"); }",
             dependency_source=dependency_source,
             sibling_api=(),
         )
@@ -2803,7 +2803,7 @@ def test_first_pass_tree_sitter_gate_accepts_explicit_object_narrowing() -> None
     _validate_first_pass_java_semantics(
         (
             "private static java.util.Map<String, Object> shipConfig() { "
-            "Object raw = AuthoredStateModel.getState("ship"); "
+            "Object raw = AuthoredStateModel.getState(\\"ship\\"); "
             "if (!(raw instanceof java.util.Map<?, ?> map)) { "
             "return java.util.Map.of(); } "
             "java.util.Map<String, Object> result = new java.util.HashMap<>(); "
