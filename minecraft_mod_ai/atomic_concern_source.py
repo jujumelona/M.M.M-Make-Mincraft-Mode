@@ -674,20 +674,25 @@ def parse_concern_content(text: str, *, section: str) -> tuple[str, str]:
 
 
 def _parse_region_content(text: str, *, response_region: str) -> str:
-    """Admit one host-selected region through the Tree-sitter Java grammar."""
+    """Admit one host-selected region through Markdown and Java parsers in order."""
     raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
     exact_markers = {
         MEMBERS_MARKER,
         INITIALIZE_MARKER,
         END_MARKER,
     }
-    rows = [line for line in raw.splitlines() if line.strip() not in exact_markers]
-    value = _normalize_region_text("\n".join(rows))
+    raw_value = "\n".join(
+        line for line in raw.splitlines() if line.strip() not in exact_markers
+    ).strip()
     initialize_region = response_region == "initialize"
     if response_region not in {"members", "initialize"}:
         raise CustomModuleGenerationError(
             f"ATOMIC_CONCERN_RESPONSE_REGION_INVALID: {response_region!r}"
         )
+
+    # Preserve Markdown fences for member admission. markdown-it must see the
+    # original fence tokens before any legacy normalization removes them.
+    value = _normalize_region_text(raw_value) if initialize_region else raw_value
     if initialize_region and _is_inert_empty_region(value):
         return ""
     try:
