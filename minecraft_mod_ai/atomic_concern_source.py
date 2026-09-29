@@ -14,6 +14,7 @@ from typing import Any
 
 from .authored_ir_parser import slice_concern_requirements
 from .custom_module_errors import AtomicJavaDecisionError, CustomModuleGenerationError
+from .authored_execution_schema import section_spec
 from .generation_implementation_grounding import render_generation_implementation_authority_prompt
 from .java_region_parser import (
     JavaRegionParseError,
@@ -1873,21 +1874,15 @@ def _deterministic_state_variable_members(
     return "\n".join(rows)
 
 
-_PURE_JAVA_DOMAIN_SECTIONS = frozenset(
-    {
-        "behavior_contract",
-        "state_model",
-        "algorithm",
-        "persistence",
-        "failure_and_limits",
-    }
-)
-_PLATFORM_BOUND_SECTIONS = frozenset(
-    {"authority_and_network", "resources_and_ui", "integration"}
-)
 _PLATFORM_FQN = re.compile(
     r"\b(?:net\.minecraft|net\.fabricmc)(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+"
 )
+
+
+def _section_platform_api_policy(section: str) -> str:
+    spec = section_spec(str(section or "").strip()) or {}
+    policy = str(spec.get("platform_api_policy") or "").strip()
+    return policy if policy in {"forbidden", "host_grounded_only"} else "forbidden"
 
 
 def _bounded_grounding(
@@ -1898,7 +1893,7 @@ def _bounded_grounding(
     direct = grounding.get("direct_host_context")
     direct_payload = dict(direct) if isinstance(direct, Mapping) else {}
     host_version_facts = dict(direct_payload.get("host_version_facts") or {})
-    if str(section or "").strip() in _PURE_JAVA_DOMAIN_SECTIONS:
+    if _section_platform_api_policy(section) == "forbidden":
         # Domain concerns do not own Fabric/Minecraft registration or lifecycle.
         # Hiding unrelated API symbols prevents a coder from "helpfully" adding
         # registry/Identifier plumbing that the authored concern never requested.
@@ -1981,17 +1976,12 @@ def _validate_platform_api_admission(
         return
 
     normalized_section = str(section or "").strip()
-    if normalized_section in _PURE_JAVA_DOMAIN_SECTIONS:
+    policy = _section_platform_api_policy(normalized_section)
+    if policy == "forbidden":
         raise CustomModuleGenerationError(
             "ATOMIC_CONCERN_PLATFORM_API_FORBIDDEN: "
-            f"{normalized_section} is host-classified pure Java and referenced "
-            f"platform owners {list(refs)!r}."
-        )
-
-    if normalized_section not in _PLATFORM_BOUND_SECTIONS:
-        raise CustomModuleGenerationError(
-            "ATOMIC_CONCERN_PLATFORM_API_FORBIDDEN: "
-            f"{normalized_section or '<unknown>'} does not own platform APIs."
+            f"{normalized_section or '<unknown>'} is host-classified platform-neutral "
+            f"and referenced platform owners {list(refs)!r}."
         )
 
     approved = _approved_platform_owners(grounding)
@@ -2174,7 +2164,7 @@ def _messages(
             "This section is pure Java domain logic. Do not reference net.minecraft.*, "
             "net.fabricmc.*, registries, resource identifiers, packets, lifecycle hooks, or "
             "game registration APIs. "
-            if section in _PURE_JAVA_DOMAIN_SECTIONS
+            if _section_platform_api_policy(section) == "forbidden"
             else (
                 "This is a platform-bound section. You may reference net.minecraft.* or "
                 "net.fabricmc.* only when the exact owner is present in implementation_authority "
