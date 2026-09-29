@@ -357,6 +357,10 @@ class _Expression:
         return _parse_state_expression(self.text)
 
 
+def _java_string(value: Any) -> str:
+    return json.dumps(str(value), ensure_ascii=False)
+
+
 def _value(node: tuple, context: str = "context") -> str:
     kind = node[0]
     if kind == "number":
@@ -479,22 +483,18 @@ def _compile_mutation(
         statement = raw.strip()
         if not statement:
             continue
-        match = _ASSIGNMENT.fullmatch(statement)
-        if match is None:
+        try:
+            name, operator, expression = _parse_state_assignment(statement)
+        except ValueError as exc:
             raise ValueError(
                 "STRUCTURED_STATE_MUTATION: expected assignment, got "
                 + repr(statement)
-            )
-        name, operator, expression = match.groups()
-        if not str(expression or "").strip():
-            raise ValueError(
-                f"STRUCTURED_STATE_MUTATION: empty assignment expression for {name!r}"
-            )
+            ) from exc
         if name not in declared:
             raise ValueError(
                 f"STRUCTURED_STATE_MUTATION: undeclared state variable {name!r}"
             )
-        right = _value(_Expression(expression).parse(), context)
+        right = _value(expression, context)
         if operator == "=":
             rows.append(f"setState({_java_string(name)}, {right});")
         else:
