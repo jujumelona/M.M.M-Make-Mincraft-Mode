@@ -157,10 +157,13 @@ class CompleteGameDesignPlanner:
                 media_paths=tuple(str(path) for path in media_paths),
             )
 
-        # Legacy authored-plan v1/v2 files may predate structured_sections.
+        # Legacy fresh-authored plan v1/v2 files may predate structured_sections.
         # Migrate them once at the plan boundary through the existing canonical
-        # worksheet compiler. Production never reparses prose after this point.
-        if not plan.structured_sections:
+        # worksheet compiler. Existing-project localization remains exact-text based.
+        effective_existing = str(
+            existing_input_sha256 or plan.existing_input_sha256 or ""
+        ).strip()
+        if not plan.structured_sections and not effective_existing:
             structured_sections = compile_authored_worksheet(
                 self.router,
                 plan.text or plan.requested_prompt,
