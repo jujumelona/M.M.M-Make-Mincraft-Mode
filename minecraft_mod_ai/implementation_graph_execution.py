@@ -119,7 +119,12 @@ def _canonical_atomic_obligations(
     exact_sources: dict[str, dict[str, str]] = {}
     for concern in concerns:
         name = str(concern["concern"])
-        if section_is_structured and name not in structured_records:
+        if section_is_structured:
+            if name not in structured_records:
+                continue
+            # Structured records are the semantic authority. Prose is projection/
+            # provenance only and must not be reinterpreted into production facts.
+            exact_sources[name] = {}
             continue
         source = slice_concern_requirements(
             requirements,
@@ -128,8 +133,6 @@ def _canonical_atomic_obligations(
         )
         if source:
             exact_sources[name] = source
-        elif name in structured_records:
-            exact_sources[name] = {}
 
     # Legacy/free-form sections have no canonical concern anchors. Preserve one
     # already-admitted owner rather than manufacturing every schema concern.
@@ -302,8 +305,35 @@ def _trace_authored_document_normalization(report: Mapping[str, Any] | None) -> 
 
 def _normalize_implementation_graph_request(raw_request: Mapping[str, Any]) -> dict[str, Any]:
     from .authored_document_contract import normalize_authored_document
+    from .authored_structured_design import normalize_structured_sections
 
     request = dict(raw_request)
+    structured = normalize_structured_sections(
+        request.get("structured_sections")
+        if isinstance(request.get("structured_sections"), Mapping)
+        else None
+    )
+    if not structured:
+        raise ImplementationGraphError(
+            "IMPLEMENTATION_IR_STRUCTURED_AUTHORITY_REQUIRED: "
+            "production graph requests may not downgrade to prose-only authority."
+        )
+    supplied_sha = str(request.get("structured_sections_sha256") or "").strip()
+    actual_sha = "sha256:" + hashlib.sha256(
+        json.dumps(
+            structured,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    if supplied_sha != actual_sha:
+        raise ImplementationGraphError(
+            "IMPLEMENTATION_IR_STRUCTURED_AUTHORITY_HASH_MISMATCH"
+        )
+    request["structured_sections"] = structured
+    request["structured_sections_sha256"] = actual_sha
+
     normalized_text, report = normalize_authored_document(str(request["text"]))
     request["text"] = normalized_text
     _trace_authored_document_normalization(report)
