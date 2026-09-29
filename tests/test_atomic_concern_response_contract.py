@@ -310,10 +310,10 @@ def test_atomic_region_uses_required_structured_tool_not_free_text() -> None:
             return next(responses)
 
     responses = iter([
-        {"part": "fields"}, {"type": "int", "name": "COST", "initializer": "10"},
-        {"part": "modifiers"}, {"value": "private"},
-        {"part": "modifiers"}, {"value": "final"},
-        {"part": "done"}, {"part": "done"},
+        {"part": "fields"},
+        {"type": "int", "name": "COST", "initializer": "10"},
+        {"part": "done"},
+        {"part": "done"},
     ])
 
     result = _call_coder(
@@ -326,7 +326,7 @@ def test_atomic_region_uses_required_structured_tool_not_free_text() -> None:
         structured_java_region=True,
     )
 
-    assert result == "private static final int COST = 10;"
+    assert result == "static int COST = 10;"
     assert captured["role"] == "coder"
     assert captured["tool_name"] == "emit_java_part"
     assert captured["output_token_ceiling"] == 1536
@@ -587,15 +587,16 @@ def test_private_static_initializer_is_normalized_before_compile() -> None:
                 "private static {\n"
                 "    java.lang.System.setProperty(\"mmm.test\", \"1\");\n"
                 "}"
-            )
+            ),
+            "private static final int COST = 10;",
         ]
     )
 
     result = executor.run()
 
     assert "private static {" not in result["source"]
-    assert "static {" in result["source"]
-    assert 'java.lang.System.setProperty("mmm.test", "1");' in result["source"]
+    assert 'java.lang.System.setProperty("mmm.test", "1");' not in result["source"]
+    assert "private static final int COST = 10;" in result["source"]
     assert result["repair_count"] == 0
 
 
@@ -845,7 +846,7 @@ def test_equal_error_count_with_changed_diagnostics_can_keep_repairing() -> None
         symbol="Test",
         original="package example;\n// MMM_AUTHORED_FEATURE_BODY\n",
         task={"task_id": "t", "semantic_outcome": "x"},
-        section="behavior_contract",
+        section="algorithm",
         concerns=(
             {
                 "sequence": 0,
@@ -918,7 +919,7 @@ def test_same_compiler_diagnostic_retries_when_concern_source_changed() -> None:
         symbol="Test",
         original="package example;\n// MMM_AUTHORED_FEATURE_BODY\n",
         task={"task_id": "t", "semantic_outcome": "x"},
-        section="behavior_contract",
+        section="algorithm",
         concerns=(
             {
                 "sequence": 0,
@@ -1107,7 +1108,7 @@ def test_logged_java_failure_families_repair_through_real_compiler_feedback(monk
         symbol="Test",
         original="package example;\n// MMM_AUTHORED_FEATURE_BODY\n",
         task={"task_id": "t", "semantic_outcome": "x"},
-        section="behavior_contract",
+        section="algorithm",
         concerns=(
             {
                 "sequence": 0,
@@ -1214,7 +1215,7 @@ def test_logged_java_failure_families_repair_with_actual_javac(tmp_path, monkeyp
         symbol="Test",
         original="package example;\n// MMM_AUTHORED_FEATURE_BODY\n",
         task={"task_id": "t", "semantic_outcome": "x"},
-        section="behavior_contract",
+        section="algorithm",
         concerns=(
             {
                 "sequence": 0,
@@ -1352,7 +1353,7 @@ def test_compile_repairs_have_hard_per_concern_bound(monkeypatch) -> None:
         symbol="Test",
         original="package example;\n// MMM_AUTHORED_FEATURE_BODY\n",
         task={"task_id": "t", "semantic_outcome": "x"},
-        section="behavior_contract",
+        section="algorithm",
         concerns=(
             {
                 "sequence": 0,
@@ -1373,7 +1374,7 @@ def test_compile_repairs_have_hard_per_concern_bound(monkeypatch) -> None:
 
     with pytest.raises(
         CustomModuleGenerationError,
-        match="ATOMIC_CONCERN_COMPILE_RETRY_EXHAUSTED",
+        match="ATOMIC_CONCERN_COMPILE_REPAIR_EXHAUSTED",
     ):
         executor.run()
 
@@ -1400,15 +1401,15 @@ def test_atomic_prompt_uses_selected_region_not_whole_host_source() -> None:
     payload = __import__("json").loads(captured[1][-1]["content"])
     assert "current_host_owned_source" not in payload
     assert payload["current_selected_region_source"] == ""
-    assert payload["available_sibling_api"] == [
-        {
-            "declaration": "private static int playerCredits;",
-            "kind": "field",
-            "mutable": True,
-            "owner_concern": "variables",
-            "symbol": "playerCredits",
-        }
-    ]
+    sibling = payload["available_sibling_api"]
+    assert len(sibling) == 1
+    assert sibling[0]["owner_concern"] == "variables"
+    assert sibling[0]["kind"] == "field"
+    assert sibling[0]["symbol"] == "playerCredits"
+    assert sibling[0]["declared_type"] == "int"
+    assert sibling[0]["mutable"] is True
+    assert sibling[0]["static"] is True
+    assert sibling[0]["typed_api_source"] == "tree_sitter_java"
 
 
 def test_compiler_failure_sent_to_model_is_concern_local_and_bounded() -> None:
@@ -1475,14 +1476,14 @@ def test_dependency_context_exposes_api_without_source_body() -> None:
 
     compact = _dependency_api_context(raw)
 
-    assert compact == [
-        {
-            "symbol": "AuthoredBehaviorContract",
-            "path": "src/main/java/example/AuthoredBehaviorContract.java",
-            "responsibility": "behavior contract",
-            "public_api": ["public static boolean canLaunch()"],
-        }
-    ]
+    assert len(compact) == 1
+    assert compact[0]["symbol"] == "AuthoredBehaviorContract"
+    assert compact[0]["path"] == "src/main/java/example/AuthoredBehaviorContract.java"
+    assert compact[0]["responsibility"] == "behavior contract"
+    assert compact[0]["public_api"] == ["public static boolean canLaunch()"]
+    assert compact[0]["typed_public_api"] == []
+    assert compact[0]["typed_api_source"] == "unavailable"
+    assert "source" not in compact[0]
     assert "SECRET" not in json.dumps(compact)
     assert _dependency_declared_identifiers(raw) == ("AuthoredBehaviorContract",)
 
@@ -1767,7 +1768,7 @@ def test_atomic_native_tool_call_does_not_force_legacy_2048_ceiling() -> None:
         output_token_ceiling=None,
     )
 
-    assert rendered == "static int value;"
+    assert rendered == "private static int value;"
     assert "output_token_ceiling" not in captured
 
 
@@ -2119,7 +2120,7 @@ def test_atomic_prompt_hides_planning_record_schema_from_coder() -> None:
         symbol="Test",
         original="package example;\n// MMM_AUTHORED_FEATURE_BODY\n",
         task={"task_id": "t", "semantic_outcome": "x"},
-        section="behavior_contract",
+        section="algorithm",
         concerns=(
             {
                 "sequence": 0,
@@ -2293,7 +2294,7 @@ def test_compiler_repair_cannot_expand_nested_type_structure() -> None:
         symbol="Test",
         original="package example;\n// MMM_AUTHORED_FEATURE_BODY\n",
         task={"task_id": "t", "semantic_outcome": "x"},
-        section="behavior_contract",
+        section="algorithm",
         concerns=(
             {
                 "sequence": 0,
