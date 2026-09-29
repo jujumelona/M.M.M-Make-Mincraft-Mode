@@ -516,6 +516,140 @@ public static void initialize() { balance = 0; }
     assert calls == 2
 
 
+def _actors_atomic_module(
+    path: str,
+    symbol: str,
+    *,
+    structured: bool,
+) -> ProductionModule:
+    base = _atomic_module(path, symbol)
+    config = dict(base.config)
+    config["implementation_section"] = "behavior_contract"
+    config["implementation_atomic_concerns"] = [
+        {
+            "sequence": 0,
+            "identifier": "feature/behavior_contract/actors",
+            "concern": "actors",
+            "task": "Resolve exactly one actors record for the supplied feature and acceptance criterion.",
+            "rules": [],
+            "record_schema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "role": {"type": "string"},
+                    "authority": {"type": "string"},
+                },
+                "required": ["name", "role", "authority"],
+                "additionalProperties": False,
+            },
+        }
+    ]
+    task = dict(config["evidence_task"])
+    payload = {
+        "instruction": json.dumps({"concern": "actors"}, ensure_ascii=False),
+        "source_requirements": {
+            "R1": (
+                "- actors: Player(사용자, 소유권 및 실행 권한), "
+                "Merchant NPC(상인, 거래 및 정보 제공), "
+                "Ship AI(우주선, 항행 및 자동 방어), "
+                "Server Authority(서버, 상태 검증 및 세계 데이터 관리)"
+            )
+        },
+    }
+    if structured:
+        payload["structured_records"] = [
+            {"name": "Player", "role": "사용자", "authority": "소유권 및 실행 권한"},
+            {"name": "Merchant NPC", "role": "상인", "authority": "거래 및 정보 제공"},
+        ]
+    task["implementation_obligations"] = [
+        json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    ]
+    config["evidence_task"] = task
+    return ProductionModule(
+        module_id=base.module_id,
+        kind=base.kind,
+        config=config,
+        required_gates=base.required_gates,
+    )
+
+
+def test_behavior_actors_are_host_compiled_without_model_java(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root, path, symbol = _project(tmp_path)
+    compile_calls = 0
+
+    class Router:
+        def generate_text(self, *_args, **_kwargs):
+            raise AssertionError("actors must be host-compiled, not model-generated")
+
+        def generate_tool_decision(self, *_args, **_kwargs):
+            raise AssertionError("actors must not use scalar Java tools")
+
+    class Runner:
+        def __init__(self, _cache):
+            pass
+
+        def compile_java(self, _root):
+            nonlocal compile_calls
+            compile_calls += 1
+            source = (root / path).read_text(encoding="utf-8")
+            assert "private static final class Actor" in source
+            assert "java.util.List<Actor> ACTORS" in source
+            assert 'new Actor("Player"' in source
+            assert 'new Actor("Merchant NPC"' in source
+            assert "createPlayer" not in source
+            return SimpleNamespace(status="PASS", commands=(), error=None)
+
+    monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
+    monkeypatch.setattr(direct, "GradleRunner", Runner)
+
+    result = direct.CustomModuleGenerator(Router()).generate(
+        root,
+        module=_actors_atomic_module(path, symbol, structured=True),
+        minecraft_version="1.21.1",
+        loader="fabric",
+    )
+
+    assert compile_calls == 1
+    assert result["generation_verification"]["atomic_concern_count"] == 1
+
+
+def test_behavior_actors_recover_from_exact_requirement_when_structured_sections_missing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root, path, symbol = _project(tmp_path)
+
+    class Router:
+        def generate_text(self, *_args, **_kwargs):
+            raise AssertionError("legacy actors requirement must still be host-compiled")
+
+        def generate_tool_decision(self, *_args, **_kwargs):
+            raise AssertionError("actors must not use scalar Java tools")
+
+    class Runner:
+        def __init__(self, _cache):
+            pass
+
+        def compile_java(self, _root):
+            source = (root / path).read_text(encoding="utf-8")
+            assert 'new Actor("Player", "Player"' in source
+            assert 'new Actor("Merchant NPC", "Merchant NPC"' in source
+            assert 'new Actor("Ship AI", "Ship AI"' in source
+            assert 'new Actor("Server Authority", "Server Authority"' in source
+            return SimpleNamespace(status="PASS", commands=(), error=None)
+
+    monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
+    monkeypatch.setattr(direct, "GradleRunner", Runner)
+
+    direct.CustomModuleGenerator(Router()).generate(
+        root,
+        module=_actors_atomic_module(path, symbol, structured=False),
+        minecraft_version="1.21.1",
+        loader="fabric",
+    )
+
+
 def _stored_state_atomic_module(path: str, symbol: str) -> ProductionModule:
     base = _atomic_module(path, symbol)
     config = dict(base.config)
