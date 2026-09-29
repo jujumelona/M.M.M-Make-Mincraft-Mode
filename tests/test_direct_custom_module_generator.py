@@ -60,68 +60,57 @@ def _adapter() -> SimpleNamespace:
     )
 
 
-def test_invariant_failure_repairs_from_complete_current_source(
+
+def test_invariant_failure_is_not_retried(
     tmp_path: Path, monkeypatch
 ) -> None:
     root, path, symbol = _project(tmp_path)
+    original = (root / path).read_bytes()
     calls: list[tuple[list[dict[str, str]], dict[str, object]]] = []
-
     bad = (
         "package example;\n\n"
         "public class AuthoredFeature001 {\n"
         "    public void initialize() {}\n"
         "}\n"
     )
-    good = (
-        "package example;\n\n"
-        "public final class AuthoredFeature001 {\n"
-        "    private AuthoredFeature001() {}\n"
-        "    public static void initialize() { System.out.println(\"ok\"); }\n"
-        "}\n"
-    )
 
     class Router:
         def generate_text(self, role, messages, **kwargs):
             calls.append((list(messages), dict(kwargs)))
-            content = bad if len(calls) == 1 else good
-            return content
+            return bad
 
     class Runner:
         def __init__(self, _cache):
             pass
 
         def compile_java(self, _root):
-            return SimpleNamespace(status="PASS", commands=(), error=None)
+            raise AssertionError("compiler must not run for contract-invalid source")
 
     monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
     monkeypatch.setattr(direct, "GradleRunner", Runner)
 
-    generator = direct.CustomModuleGenerator(Router())
-    result = generator.generate(
-        root,
-        module=_module(path, symbol),
-        minecraft_version="1.21.1",
-        loader="fabric",
-    )
+    with pytest.raises(
+        direct.CustomModuleGenerationError,
+        match="DIRECT_CODER_FIRST_PASS_CONTRACT_FAILED",
+    ):
+        direct.CustomModuleGenerator(Router()).generate(
+            root,
+            module=_module(path, symbol),
+            minecraft_version="1.21.1",
+            loader="fabric",
+        )
 
-    assert result["status"] == "SOURCE_GENERATED"
-    assert len(calls) == 2
+    assert len(calls) == 1
     assert calls[0][1]["enable_tools"] is False
     assert calls[0][1]["response_format"] == "text"
-    assert "response_schema" not in calls[0][1]
-    assert "output_token_ceiling" not in calls[0][1]
-    assert '"model_tool_choice_required": false' in calls[0][0][-1]["content"]
-    assert '"resolved_before_first_coder_decode": true' in calls[0][0][-1]["content"]
-    repair_prompt = calls[1][0][-1]["content"]
-    assert bad in repair_prompt
-    assert "public final class AuthoredFeature001" in repair_prompt
-    assert (root / path).read_text(encoding="utf-8") == good
+    assert (root / path).read_bytes() == original
 
 
-def test_compiler_failure_repairs_from_complete_source_and_exact_log(
+def test_compiler_failure_is_not_sent_back_to_model(
     tmp_path: Path, monkeypatch
 ) -> None:
     root, path, symbol = _project(tmp_path)
+    original = (root / path).read_bytes()
     calls: list[list[dict[str, str]]] = []
     first = (
         "package example;\n\n"
@@ -130,20 +119,12 @@ def test_compiler_failure_repairs_from_complete_source_and_exact_log(
         "    public static void initialize() { MissingType.run(); }\n"
         "}\n"
     )
-    second = (
-        "package example;\n\n"
-        "public final class AuthoredFeature001 {\n"
-        "    private AuthoredFeature001() {}\n"
-        "    public static void initialize() { System.out.println(\"fixed\"); }\n"
-        "}\n"
-    )
 
     class Router:
         def generate_text(self, role, messages, **kwargs):
             del role, kwargs
             calls.append(list(messages))
-            content = first if len(calls) == 1 else second
-            return content
+            return first
 
     class Runner:
         attempts = 0
@@ -153,37 +134,35 @@ def test_compiler_failure_repairs_from_complete_source_and_exact_log(
 
         def compile_java(self, project_root):
             Runner.attempts += 1
-            if Runner.attempts == 1:
-                log = project_root / ".minecraft_ai/logs/gradle-compile-java.log"
-                log.parent.mkdir(parents=True, exist_ok=True)
-                log.write_text(
-                    "AuthoredFeature001.java:5: error: cannot find symbol MissingType",
-                    encoding="utf-8",
-                )
-                return SimpleNamespace(
-                    status="FAIL",
-                    commands=(SimpleNamespace(log_path=str(log)),),
-                    error="Gradle Java compilation failed.",
-                )
-            return SimpleNamespace(status="PASS", commands=(), error=None)
+            log = project_root / ".minecraft_ai/logs/gradle-compile-java.log"
+            log.parent.mkdir(parents=True, exist_ok=True)
+            log.write_text(
+                "AuthoredFeature001.java:5: error: cannot find symbol MissingType",
+                encoding="utf-8",
+            )
+            return SimpleNamespace(
+                status="FAIL",
+                commands=(SimpleNamespace(log_path=str(log)),),
+                error="Gradle Java compilation failed.",
+            )
 
     monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
     monkeypatch.setattr(direct, "GradleRunner", Runner)
 
-    result = direct.CustomModuleGenerator(Router()).generate(
-        root,
-        module=_module(path, symbol),
-        minecraft_version="1.21.1",
-        loader="fabric",
-    )
+    with pytest.raises(
+        direct.CustomModuleGenerationError,
+        match="DIRECT_CODER_FIRST_PASS_COMPILE_FAILED",
+    ):
+        direct.CustomModuleGenerator(Router()).generate(
+            root,
+            module=_module(path, symbol),
+            minecraft_version="1.21.1",
+            loader="fabric",
+        )
 
-    assert result["status"] == "SOURCE_GENERATED"
-    assert len(calls) == 2
-    repair_prompt = calls[1][-1]["content"]
-    assert first in repair_prompt
-    assert "cannot find symbol MissingType" in repair_prompt
-    assert (root / path).read_text(encoding="utf-8") == second
-
+    assert len(calls) == 1
+    assert Runner.attempts == 1
+    assert (root / path).read_bytes() == original
 
 def test_package_import_has_one_live_runtime_bootstrap_owner() -> None:
     package = Path(__file__).resolve().parents[1] / "minecraft_mod_ai"
@@ -212,7 +191,8 @@ def test_retired_runtime_composition_files_stay_absent() -> None:
         assert not (package / name).exists(), name
 
 
-def test_invalid_or_truncated_model_output_is_not_blindly_retried(
+
+def test_invalid_or_truncated_model_output_is_not_retried(
     tmp_path: Path, monkeypatch
 ) -> None:
     root, path, symbol = _project(tmp_path)
@@ -235,7 +215,10 @@ def test_invalid_or_truncated_model_output_is_not_blindly_retried(
     monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
     monkeypatch.setattr(direct, "GradleRunner", Runner)
 
-    with pytest.raises(direct.CustomModuleGenerationError, match="DIRECT_CODER_COMPILE_FAILED"):
+    with pytest.raises(
+        direct.CustomModuleGenerationError,
+        match="DIRECT_CODER_FIRST_PASS_CONTRACT_FAILED",
+    ):
         direct.CustomModuleGenerator(Router()).generate(
             root,
             module=_module(path, symbol),
@@ -243,12 +226,8 @@ def test_invalid_or_truncated_model_output_is_not_blindly_retried(
             loader="fabric",
         )
 
-    assert len(calls) == 2
-    repair_prompt = calls[1][-1]["content"]
-    assert "top-level contract must be exactly" in repair_prompt
-    assert "required `public static void initialize()` is missing" in repair_prompt
+    assert len(calls) == 1
     assert (root / path).read_bytes() == original
-
 
 def test_host_reserved_missing_target_is_materialized_and_does_not_require_initialize(
     tmp_path: Path, monkeypatch
@@ -617,23 +596,21 @@ def test_stored_state_receives_semantic_shape_and_compact_output_budget(
     assert len(seen) == 1
 
 
-def test_stored_state_rejects_method_shape_before_compile(
+
+def test_stored_state_invalid_shape_is_not_retried(
     tmp_path: Path, monkeypatch
 ) -> None:
     root, path, symbol = _project(tmp_path)
-    responses = iter([
-        "private static boolean loadStoredState() { return true; }",
-        "private static Object storedState;",
-    ])
-    failures: list[object] = []
+    original = (root / path).read_bytes()
+    calls = 0
 
     class Router:
         def generate_text(self, role, messages, **kwargs):
+            nonlocal calls
             assert role == "coder"
             assert kwargs.get("output_token_ceiling") == 2048
-            payload = json.loads(messages[-1]["content"])
-            failures.append(payload.get("repair_failure"))
-            return next(responses)
+            calls += 1
+            return "private static boolean loadStoredState() { return true; }"
 
         def generate_tool_decision(self, *_args, **_kwargs):
             raise AssertionError("production concern generation must not use scalar Java tools")
@@ -643,35 +620,32 @@ def test_stored_state_rejects_method_shape_before_compile(
             pass
 
         def compile_java(self, _root):
-            return SimpleNamespace(status="PASS", commands=(), error=None)
+            raise AssertionError("compiler must not run for semantic-shape-invalid source")
 
     monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
     monkeypatch.setattr(direct, "GradleRunner", Runner)
 
-    direct.CustomModuleGenerator(Router()).generate(
-        root,
-        module=_stored_state_atomic_module(path, symbol),
-        minecraft_version="1.21.1",
-        loader="fabric",
-    )
+    with pytest.raises(
+        direct.CustomModuleGenerationError,
+        match="ATOMIC_CONCERN_SEMANTIC_SHAPE_INVALID",
+    ):
+        direct.CustomModuleGenerator(Router()).generate(
+            root,
+            module=_stored_state_atomic_module(path, symbol),
+            minecraft_version="1.21.1",
+            loader="fabric",
+        )
 
-    assert failures[0] is None
-    assert "ATOMIC_CONCERN_SEMANTIC_SHAPE_INVALID" in str(failures[1])
-    source = (root / path).read_text(encoding="utf-8")
-    assert "loadStoredState" not in source
-    assert "private static Object storedState;" in source
+    assert calls == 1
+    assert (root / path).read_bytes() == original
 
 
-def test_atomic_concern_compile_repair_reopens_only_localized_concern(
+def test_atomic_compile_failure_is_not_retried(
     tmp_path: Path, monkeypatch
 ) -> None:
     root, path, symbol = _project(tmp_path)
-    responses = iter([
-        "private static Object value = new Object(1);",
-        "private static Object value = new Object();",
-        "private static boolean valid() { return value != null; }",
-    ])
-    calls: list[tuple[str, bool]] = []
+    original = (root / path).read_bytes()
+    calls: list[str] = []
 
     class Router:
         def generate_text(self, role, messages, **kwargs):
@@ -680,8 +654,8 @@ def test_atomic_concern_compile_repair_reopens_only_localized_concern(
             assert kwargs.get("force_non_thinking") is True
             payload = json.loads(messages[-1]["content"])
             concern = payload["concern"]["name"]
-            calls.append((concern, bool(payload.get("repair_failure"))))
-            return next(responses)
+            calls.append(concern)
+            return "private static Object value = new Object(1);"
 
         def generate_tool_decision(self, *_args, **_kwargs):
             raise AssertionError("production concern generation must not use scalar Java tools")
@@ -692,8 +666,6 @@ def test_atomic_concern_compile_repair_reopens_only_localized_concern(
 
         def compile_java(self, project_root):
             source = (project_root / path).read_text(encoding="utf-8")
-            if "new Object(1)" not in source:
-                return SimpleNamespace(status="PASS", commands=(), error=None)
             line = next(
                 index for index, text in enumerate(source.splitlines(), start=1)
                 if "new Object(1)" in text
@@ -712,25 +684,20 @@ def test_atomic_concern_compile_repair_reopens_only_localized_concern(
 
     monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
     monkeypatch.setattr(direct, "GradleRunner", Runner)
-    result = direct.CustomModuleGenerator(Router()).generate(
-        root, module=_atomic_module(path, symbol),
-        minecraft_version="1.21.1", loader="fabric",
-    )
 
-    concern_transitions: list[tuple[str, bool]] = []
-    for call in calls:
-        if not concern_transitions or concern_transitions[-1] != call:
-            concern_transitions.append(call)
-    assert concern_transitions == [
-        ("steps", False),
-        ("steps", True),
-        ("branches", False),
-    ]
-    source = (root / path).read_text(encoding="utf-8")
-    assert "new Object(1)" not in source
-    assert "new Object()" in source
-    assert "private static boolean valid()" in source
-    assert result["generation_verification"]["atomic_repair_count"] == 1
+    with pytest.raises(
+        direct.CustomModuleGenerationError,
+        match="ATOMIC_CONCERN_FIRST_PASS_COMPILE_FAILED",
+    ):
+        direct.CustomModuleGenerator(Router()).generate(
+            root,
+            module=_atomic_module(path, symbol),
+            minecraft_version="1.21.1",
+            loader="fabric",
+        )
+
+    assert calls == ["steps"]
+    assert (root / path).read_bytes() == original
 
 def test_nonintegration_atomic_concern_cannot_write_initialize_body() -> None:
     from minecraft_mod_ai.atomic_concern_source import parse_concern_content
