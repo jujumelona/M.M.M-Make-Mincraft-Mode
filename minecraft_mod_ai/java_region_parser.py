@@ -174,18 +174,37 @@ def strict_member_chunks(value: str) -> tuple[str, ...]:
 
 
 def _unwrap_single_outer_class(value: str) -> tuple[str, ...]:
-    """Salvage an accidental compilation-unit/class envelope using the Java AST."""
-    source, root = _parse(str(value or ""))
-    declarations = [
-        node
-        for node in root.named_children
-        if node.type not in {"package_declaration", "import_declaration"} | _COMMENT_TYPES
+    """Salvage one structurally sound outer class from a noisy model envelope.
+
+    Tree-sitter is intentionally error-tolerant. Noise outside the one class
+    declaration (for example prose that became an ERROR node) is ignored, but
+    any syntax error inside the class itself remains terminal.
+    """
+    source = str(value or "").encode("utf-8")
+    tree = _parser().parse(source)
+    root = tree.root_node
+    classes = [
+        node for node in root.named_children if node.type == "class_declaration"
     ]
-    if len(declarations) != 1 or declarations[0].type != "class_declaration":
+    if len(classes) != 1:
         raise JavaRegionParseError(
             "output is neither a class-body region nor one unambiguous outer-class envelope"
         )
-    outer = declarations[0]
+    outer = classes[0]
+    issue = _first_error(outer, source) if outer.has_error else ""
+    if issue:
+        raise JavaRegionParseError(f"outer-class envelope is malformed: {issue}")
+    unexpected = [
+        node.type
+        for node in root.named_children
+        if node is not outer
+        and node.type not in {"package_declaration", "import_declaration", "ERROR"} | _COMMENT_TYPES
+    ]
+    if unexpected:
+        raise JavaRegionParseError(
+            "outer-class envelope contains additional top-level Java declarations: "
+            + ", ".join(unexpected)
+        )
     if "private" in _modifiers(outer, source):
         raise JavaRegionParseError(
             "a private top-level class cannot be treated as an accidental host wrapper"
