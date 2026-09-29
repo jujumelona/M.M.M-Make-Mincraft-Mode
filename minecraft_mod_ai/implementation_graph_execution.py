@@ -1,6 +1,7 @@
 """Transactional execution of host-admitted implementation source units."""
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections.abc import Mapping
@@ -284,6 +285,8 @@ def _leaf_module(
                 "implementation_section": section,
                 "implementation_atomic_concerns": atomic_concerns,
                 "implementation_dependency_context": json.dumps(dependencies, ensure_ascii=False),
+                "implementation_structured_sections": deepcopy(request["structured_sections"]),
+                "implementation_structured_sections_sha256": request["structured_sections_sha256"],
                 **grounding_identity,
                 **request["target"]}, required_gates=("target_compile",),
     )
