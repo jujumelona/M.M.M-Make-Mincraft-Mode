@@ -189,6 +189,161 @@ def strict_member_chunks(value: str) -> tuple[str, ...]:
     return _chunks_from_body(body, source, drop_host_lifecycle=False)
 
 
+def _parameter_contracts(parameters: Any, source: bytes) -> tuple[dict[str, str], ...]:
+    if parameters is None:
+        return ()
+    rows: list[dict[str, str]] = []
+    for node in parameters.named_children:
+        if node.type not in {
+            "formal_parameter",
+            "spread_parameter",
+            "receiver_parameter",
+        }:
+            continue
+        type_node = node.child_by_field_name("type")
+        name_node = node.child_by_field_name("name")
+        if type_node is None:
+            continue
+        java_type = _text(source, type_node).strip()
+        if node.type == "spread_parameter" and not java_type.endswith("..."):
+            java_type += "..."
+        rows.append(
+            {
+                "type": java_type,
+                "name": _text(source, name_node).strip() if name_node is not None else "",
+            }
+        )
+    return tuple(rows)
+
+
+def _node_contracts(node: Any, source: bytes) -> tuple[dict[str, Any], ...]:
+    modifiers = _modifiers(node, source)
+    visibility = next(
+        (item for item in ("public", "protected", "private") if item in modifiers),
+        "package",
+    )
+    common = {
+        "visibility": visibility,
+        "static": "static" in modifiers,
+        "final": "final" in modifiers,
+    }
+
+    if node.type == "method_declaration":
+        type_node = node.child_by_field_name("type")
+        parameters = node.child_by_field_name("parameters")
+        name = _name(node, source)
+        if not name or type_node is None:
+            return ()
+        return (
+            {
+                **common,
+                "kind": "method",
+                "symbol": name,
+                "return_type": _text(source, type_node).strip(),
+                "parameters": list(_parameter_contracts(parameters, source)),
+                "declaration": _text(source, node).strip(),
+            },
+        )
+
+    if node.type == "constructor_declaration":
+        parameters = node.child_by_field_name("parameters")
+        name = _name(node, source)
+        if not name:
+            return ()
+        return (
+            {
+                **common,
+                "kind": "constructor",
+                "symbol": name,
+                "parameters": list(_parameter_contracts(parameters, source)),
+                "declaration": _text(source, node).strip(),
+            },
+        )
+
+    if node.type == "field_declaration":
+        type_node = node.child_by_field_name("type")
+        if type_node is None:
+            return ()
+        java_type = _text(source, type_node).strip()
+        rows: list[dict[str, Any]] = []
+        for child in node.named_children:
+            if child.type != "variable_declarator":
+                continue
+            name_node = child.child_by_field_name("name")
+            if name_node is None:
+                continue
+            rows.append(
+                {
+                    **common,
+                    "kind": "field",
+                    "symbol": _text(source, name_node).strip(),
+                    "declared_type": java_type,
+                    "mutable": "final" not in modifiers,
+                    "declaration": _text(source, node).strip(),
+                }
+            )
+        return tuple(rows)
+
+    if node.type in _NESTED_TYPES:
+        name = _name(node, source)
+        return (
+            {
+                **common,
+                "kind": "type",
+                "symbol": name,
+                "declaration_kind": node.type,
+                "declaration": _text(source, node).strip(),
+            },
+        ) if name else ()
+
+    return ()
+
+
+def class_body_member_contracts(value: str) -> tuple[dict[str, Any], ...]:
+    """Return Tree-sitter-derived declaration contracts for one Java class body."""
+    region = str(value or "").strip()
+    if not region:
+        return ()
+    prefix = "final class __MMMRegionHost {\n"
+    source, root = _parse(prefix + region + "\n}\n")
+    body = _class_body(root)
+    rows: list[dict[str, Any]] = []
+    for node in body.named_children:
+        if node.type in _COMMENT_TYPES:
+            continue
+        rows.extend(_node_contracts(node, source))
+    return tuple(rows)
+
+
+def public_source_member_contracts(value: str) -> tuple[dict[str, Any], ...]:
+    """Extract public/protected API contracts from one complete Java source unit.
+
+    Tree-sitter owns syntax/declaration structure. This is intentionally not a
+    symbol resolver; project/JDK binding still belongs to javac/JDT.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return ()
+    source, root = _parse(text)
+    declaration = next(
+        (child for child in root.named_children if child.type in _NESTED_TYPES),
+        None,
+    )
+    if declaration is None:
+        return ()
+    body = declaration.child_by_field_name("body")
+    if body is None:
+        return ()
+    rows: list[dict[str, Any]] = []
+    for node in body.named_children:
+        if node.type in _COMMENT_TYPES:
+            continue
+        for contract in _node_contracts(node, source):
+            if contract.get("visibility") in {"public", "protected"}:
+                rows.append(contract)
+    return tuple(rows)
+
+
 def _outer_type_candidates(node: Any) -> tuple[Any, ...]:
     """Find outermost Java type declarations even when Tree-sitter nests them in ERROR."""
     found: list[Any] = []
