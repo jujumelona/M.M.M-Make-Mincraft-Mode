@@ -2831,3 +2831,69 @@ def test_first_pass_tree_sitter_gate_accepts_explicit_object_narrowing() -> None
         dependency_source=dependency_source,
         sibling_api=(),
     )
+
+
+def test_first_pass_tree_sitter_gate_rejects_ungrounded_simple_type_name() -> None:
+    from minecraft_mod_ai.atomic_concern_source import _validate_first_pass_java_semantics
+
+    with pytest.raises(
+        CustomModuleGenerationError,
+        match="ungrounded simple Java type.*ReentrantLokk",
+    ):
+        _validate_first_pass_java_semantics(
+            "private static ReentrantLokk lock;",
+            dependency_source="",
+            sibling_api=(),
+        )
+
+
+def test_first_pass_tree_sitter_gate_rejects_ungrounded_generic_leaf_type() -> None:
+    from minecraft_mod_ai.atomic_concern_source import _validate_first_pass_java_semantics
+
+    with pytest.raises(
+        CustomModuleGenerationError,
+        match="ungrounded simple Java type.*HashMapp",
+    ):
+        _validate_first_pass_java_semantics(
+            "private static HashMapp<String, Object> cache;",
+            dependency_source="",
+            sibling_api=(),
+        )
+
+
+def test_first_pass_type_authority_accepts_dependency_declared_simple_type() -> None:
+    import json
+
+    from minecraft_mod_ai.atomic_concern_source import _validate_first_pass_java_semantics
+
+    dependency_source = json.dumps(
+        {
+            "symbol": "AuthoredStateModel",
+            "path": "AuthoredStateModel.java",
+            "public_api": [
+                "public static State currentState()",
+            ],
+            "source": (
+                "public final class AuthoredStateModel { "
+                "public static record State(String name) {} "
+                "public static State currentState() { return new State(\"ok\"); } "
+                "}"
+            ),
+        }
+    )
+
+    _validate_first_pass_java_semantics(
+        "private static State copy(State input) { return input; }",
+        dependency_source=dependency_source,
+        sibling_api=(),
+    )
+
+
+def test_first_pass_type_authority_defers_fqcn_binding_to_jdt_javac() -> None:
+    from minecraft_mod_ai.atomic_concern_source import _validate_first_pass_java_semantics
+
+    _validate_first_pass_java_semantics(
+        "private static com.example.ExternalType value;",
+        dependency_source="",
+        sibling_api=(),
+    )
