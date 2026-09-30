@@ -935,10 +935,42 @@ def test_resource_leaf_materializes_direct_json_end_to_end(tmp_path, monkeypatch
             "nodes": [resource],
         }
 
+    class ForbiddenCoarseLock:
+        def __enter__(self):
+            raise AssertionError(
+                "pipeline-deferred graph must not acquire the coarse project lock"
+            )
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    locked_paths = []
+
+    class RecordingPathLock:
+        def __init__(self, paths):
+            self.paths = tuple(str(item) for item in paths)
+
+        def __enter__(self):
+            locked_paths.append(self.paths)
+            return None
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
     monkeypatch.setattr(
         graph_execution, "compile_authored_graph", compile_resource_graph
     )
     monkeypatch.setattr(direct, "GradleRunner", Runner)
+    monkeypatch.setattr(
+        graph_execution,
+        "project_write_lock",
+        lambda _root: ForbiddenCoarseLock(),
+    )
+    monkeypatch.setattr(
+        graph_execution,
+        "project_path_write_locks",
+        lambda _root, paths: RecordingPathLock(paths),
+    )
 
     request = {
         "text": "# implementation\nProvide one English translation.",
@@ -969,6 +1001,8 @@ def test_resource_leaf_materializes_direct_json_end_to_end(tmp_path, monkeypatch
         "item.test.credit": "Credit"
     }
     assert resource_rel in result["touched_paths"]
+    assert (resource_rel,) in locked_paths
+    assert (entry_rel,) in locked_paths
     assert result["generation_verification"]["compile_deferred"] is True
     assert (
         result["generation_verification"]["mode"]
