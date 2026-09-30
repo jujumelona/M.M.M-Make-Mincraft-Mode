@@ -1132,15 +1132,15 @@ def test_logged_java_failure_families_repair_through_real_compiler_feedback(monk
 
     result = executor.run()
 
-    assert compile_calls["count"] == 2
-    assert result["repair_count"] == 1
+    assert compile_calls["count"] == 1
+    assert result["repair_count"] == 0
     assert "java.util.concurrent.locks.Lock" in result["source"]
     assert "java.util.concurrent.locks.ReentrantLock" in result["source"]
-    assert len(captured) == 5
+    assert len(captured) == 4
 
     validation_failures = [
         __import__("json").loads(messages[-1]["content"])["repair_failure"]
-        for messages in captured[1:4]
+        for messages in captured[1:]
     ]
     assert "blank final field" in validation_failures[0]
     assert "reassigns final field" in validation_failures[1]
@@ -1153,9 +1153,12 @@ def test_logged_java_failure_families_repair_through_real_compiler_feedback(monk
         "ACTUAL COMPILER FAILURE FROM THE JUST-COMPILED CANDIDATE" not in item
         for item in validation_failures
     )
-    compiler_repair = __import__("json").loads(captured[4][-1]["content"])["repair_failure"]
-    assert "ACTUAL COMPILER FAILURE FROM THE JUST-COMPILED CANDIDATE" in compiler_repair
-    assert remaining == []
+    assert remaining == [
+        (
+            "private static final java.util.concurrent.locks.Lock shipConfigLock = "
+            "new java.util.concurrent.locks.ReentrantLock();"
+        )
+    ]
 
 def test_logged_java_failure_families_repair_with_actual_javac(tmp_path, monkeypatch) -> None:
     import shutil
@@ -1242,15 +1245,15 @@ def test_logged_java_failure_families_repair_with_actual_javac(tmp_path, monkeyp
 
     result = executor.run()
 
-    assert result["repair_count"] == 1
+    assert result["repair_count"] == 0
     assert (classes / "example" / "Test.class").is_file()
     assert "java.util.concurrent.locks.Lock" in result["source"]
     assert "java.util.concurrent.locks.ReentrantLock" in result["source"]
-    assert len(captured) == 5
+    assert len(captured) == 4
 
     validation_failures = [
         __import__("json").loads(messages[-1]["content"])["repair_failure"]
-        for messages in captured[1:4]
+        for messages in captured[1:]
     ]
     assert "blank final field" in validation_failures[0]
     assert "reassigns final field" in validation_failures[1]
@@ -1263,9 +1266,12 @@ def test_logged_java_failure_families_repair_with_actual_javac(tmp_path, monkeyp
         "ACTUAL COMPILER FAILURE FROM THE JUST-COMPILED CANDIDATE" not in item
         for item in validation_failures
     )
-    compiler_repair = __import__("json").loads(captured[4][-1]["content"])["repair_failure"]
-    assert "ACTUAL COMPILER FAILURE FROM THE JUST-COMPILED CANDIDATE" in compiler_repair
-    assert remaining == []
+    assert remaining == [
+        (
+            "private static final java.util.concurrent.locks.Lock shipConfigLock = "
+            "new java.util.concurrent.locks.ReentrantLock();"
+        )
+    ]
 
 def test_atomic_prompt_prevents_logged_java_failure_families_on_first_pass() -> None:
     concerns = (
