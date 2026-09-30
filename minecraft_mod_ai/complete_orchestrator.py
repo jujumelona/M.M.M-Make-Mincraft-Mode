@@ -1136,12 +1136,15 @@ class CompleteProductionOrchestrator:
                 action=lambda: _replace_stale_file_target(
                     run_root / release_output,
                     lambda: _attach_verified_release_artifact(
-                        tool_service.package_release(
+                        tool_service._package_release_from_verified_evidence(
                             str(project_root),
                             base.to_dict(),
                             base.calculate_hash(),
                             output_zip=release_output,
                             jar_path=str(jar_path),
+                            source_validation=source_report,
+                            jar_validation=jar_validation,
+                            expected_jar_sha256=str(artifact_receipt['sha256']),
                         ),
                         resource_pack_bundle,
                         archive_name='generated-resource-pack.zip',
