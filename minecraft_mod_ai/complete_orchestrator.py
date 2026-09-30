@@ -1560,9 +1560,9 @@ class CompleteProductionOrchestrator:
                 # workspace/tool state and still share one llama-server/model copy.
                 with runtime_init_lock:
                     if fallback_custom_generator is None:
-                        fallback_custom_generator = CustomModuleGenerator(base_router, policy=self.policy, fast_mode=getattr(self, '_fast_mode', False), project_index=shared_project_index, checkpoint_root=run_root / '.minecraft_ai' / '.mmm-custom-checkpoints')
+                        fallback_custom_generator = CustomModuleGenerator(base_router, policy=self.policy, fast_mode=getattr(self, '_fast_mode', False), project_index=shared_project_index, checkpoint_root=run_root / '.minecraft_ai' / '.mmm-custom-checkpoints', defer_compile_to_pipeline=True)
                     return fallback_custom_generator
-            return CustomModuleGenerator(worker_router, policy=self.policy, fast_mode=getattr(self, '_fast_mode', False), project_index=shared_project_index, checkpoint_root=run_root / '.minecraft_ai' / '.mmm-custom-checkpoints')
+            return CustomModuleGenerator(worker_router, policy=self.policy, fast_mode=getattr(self, '_fast_mode', False), project_index=shared_project_index, checkpoint_root=run_root / '.minecraft_ai' / '.mmm-custom-checkpoints', defer_compile_to_pipeline=True)
 
         def module_node_action(
             node: WorkNode,
