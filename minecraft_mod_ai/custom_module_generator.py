@@ -2531,9 +2531,16 @@ class CustomModuleGenerator:
                                     f"DIRECT_CODER_TARGET_DRIFT: {relative} changed during generation."
                                 )
                         elif target.exists():
-                            raise CustomModuleGenerationError(
-                                f"DIRECT_CODER_TARGET_DRIFT: {relative} appeared during generation."
-                            )
+                            try:
+                                current = target.read_text(encoding="utf-8")
+                            except (OSError, UnicodeError) as exc:
+                                raise CustomModuleGenerationError(
+                                    f"DIRECT_CODER_TARGET_DRIFT: {relative}: {exc}"
+                                ) from exc
+                            if _sha256_text(current) != before_sha:
+                                raise CustomModuleGenerationError(
+                                    f"DIRECT_CODER_TARGET_DRIFT: {relative} appeared with different content during generation."
+                                )
                         _atomic_write(target, candidate)
                     after_sha = _sha256_text(candidate)
                     return {
