@@ -141,6 +141,33 @@ public static boolean isEntryConditionsMet() {
     assert "The user is asking" not in admitted
 
 
+def test_markdown_it_handles_empty_fence_info_without_index_error() -> None:
+    output = """
+reasoning before code
+
+```
+private static int bareFenceValue = 7;
+```
+"""
+    admitted = admit_member_region(output)
+    assert "bareFenceValue = 7" in admitted
+
+
+def test_markdown_it_ignores_explicit_non_java_fence_and_uses_java_candidate() -> None:
+    output = """
+```text
+not java
+```
+
+```java
+private static int javaValue = 9;
+```
+"""
+    admitted = admit_member_region(output)
+    assert "javaValue = 9" in admitted
+    assert "not java" not in admitted
+
+
 def test_markdown_it_prefers_last_valid_java_draft() -> None:
     output = """
 ```java
