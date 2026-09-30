@@ -205,17 +205,17 @@ def _run_distinct_empty_repairs(tmp_path: Path, *, max_attempts=None):
     return result, counts
 
 
-def test_default_repair_hard_cap_bounds_distinct_failure_states(tmp_path: Path) -> None:
+def test_default_repair_reuses_unchanged_evidence_across_empty_patch_attempts(tmp_path: Path) -> None:
     result, counts = _run_distinct_empty_repairs(tmp_path)
 
     assert result["status"] == "FAIL"
-    assert result["stop_reason"] == "hard_max_attempts"
-    assert counts == {"evidence": 3, "patch": 2}
+    assert result["stop_reason"] == "repeated_signature"
+    assert counts == {"evidence": 1, "patch": 2}
 
 
 def test_explicit_large_repair_budget_cannot_raise_host_hard_cap(tmp_path: Path) -> None:
     result, counts = _run_distinct_empty_repairs(tmp_path, max_attempts=8)
 
     assert result["status"] == "FAIL"
-    assert result["stop_reason"] == "hard_max_attempts"
-    assert counts == {"evidence": 3, "patch": 2}
+    assert result["stop_reason"] == "repeated_signature"
+    assert counts == {"evidence": 1, "patch": 2}
