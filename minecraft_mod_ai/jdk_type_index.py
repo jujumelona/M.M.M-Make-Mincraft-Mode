@@ -97,11 +97,11 @@ def _runtime_index(home_text: str) -> dict[str, tuple[str, ...]]:
 
 
 @lru_cache(maxsize=512)
-def _public_type(home_text: str, fqcn: str) -> bool:
+def _javap_public_output(home_text: str, fqcn: str) -> str:
     home = Path(home_text)
     javap = _javap_executable(home)
     if not javap:
-        return False
+        return ""
     try:
         completed = subprocess.run(
             [javap, "-public", fqcn],
@@ -113,10 +113,66 @@ def _public_type(home_text: str, fqcn: str) -> bool:
             timeout=10,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return False
-    return (
-        completed.returncode == 0
-        and _PUBLIC_DECLARATION.search(completed.stdout) is not None
+        return ""
+    return completed.stdout if completed.returncode == 0 else ""
+
+
+@lru_cache(maxsize=512)
+def _public_type(home_text: str, fqcn: str) -> bool:
+    return _PUBLIC_DECLARATION.search(
+        _javap_public_output(home_text, fqcn)
+    ) is not None
+
+
+def _parameter_arity(parameter_text: str) -> tuple[int, bool]:
+    text = str(parameter_text or "").strip()
+    if not text:
+        return 0, False
+    depth = 0
+    count = 1
+    for char in text:
+        if char in "<([{":
+            depth += 1
+        elif char in ">)]}":
+            depth = max(0, depth - 1)
+        elif char == "," and depth == 0:
+            count += 1
+    return count, text.rstrip().endswith("...")
+
+
+def _constructor_shapes_from_javap(
+    text: str,
+    fqcn: str,
+) -> tuple[dict[str, object], ...]:
+    rows: list[dict[str, object]] = []
+    simple = fqcn.rsplit(".", 1)[-1]
+    for raw in str(text or "").splitlines():
+        line = raw.strip()
+        if not line.startswith("public ") or not line.endswith(";"):
+            continue
+        match = re.match(r"public\s+([^\s(]+)\((.*)\);$", line)
+        if match is None:
+            continue
+        owner = match.group(1)
+        if owner not in {fqcn, simple} and not owner.endswith("." + simple):
+            continue
+        arity, varargs = _parameter_arity(match.group(2))
+        rows.append({"arity": arity, "varargs": varargs})
+    return tuple(rows)
+
+
+def public_jdk_constructor_shapes(value: str) -> tuple[dict[str, object], ...]:
+    """Return public constructor arity/varargs facts for one installed-JDK type."""
+
+    fqcn = str(value or "").strip()
+    if not fqcn.startswith(("java.", "javax.")):
+        return ()
+    home = _java_home()
+    if home is None or not _public_type(str(home), fqcn):
+        return ()
+    return _constructor_shapes_from_javap(
+        _javap_public_output(str(home), fqcn),
+        fqcn,
     )
 
 
@@ -183,5 +239,6 @@ def is_public_jdk_type(value: str) -> bool:
 __all__ = [
     "canonical_public_jdk_type",
     "is_public_jdk_type",
+    "public_jdk_constructor_shapes",
     "public_jdk_type_candidates",
 ]
