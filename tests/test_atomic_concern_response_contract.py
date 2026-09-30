@@ -12,12 +12,14 @@ from minecraft_mod_ai.atomic_concern_source import (
     MEMBERS_MARKER,
     AtomicConcernExecutor,
     _messages,
+    _strip_host_orchestrated_dependency_lifecycle_calls,
     parse_concern_content,
 )
 from minecraft_mod_ai.custom_module_errors import CustomModuleGenerationError
 from minecraft_mod_ai.custom_module_generator import (
     _call_coder,
 )
+from minecraft_mod_ai.implementation_ir import OutputBudgetExhausted
 
 
 def _response(members: str = "", initialize: str = "") -> str:
@@ -3150,3 +3152,72 @@ def test_first_pass_rejects_argument_added_to_zero_arity_dependency_hook() -> No
             dependency_source=dependency_source,
             sibling_api=(),
         )
+
+
+def test_host_removes_only_standalone_dependency_lifecycle_calls() -> None:
+    dependency_source = json.dumps(
+        {
+            "symbol": "AuthoredStateModel",
+            "source": (
+                "public final class AuthoredStateModel { "
+                "public static void initialize() {} "
+                "public static Object getState(String name) { return null; } "
+                "}"
+            ),
+        }
+    )
+    source = (
+        "private static void run() {\n"
+        "    AuthoredStateModel.initialize(\"wrong-extra-argument\");\n"
+        "    Object value = AuthoredStateModel.getState(\"credits\");\n"
+        "}"
+    )
+
+    repaired, changes = _strip_host_orchestrated_dependency_lifecycle_calls(
+        source,
+        dependency_source=dependency_source,
+    )
+
+    assert changes == ("AuthoredStateModel.initialize",)
+    assert "wrong-extra-argument" not in repaired
+    assert "AuthoredStateModel.getState(\"credits\")" in repaired
+
+
+def test_output_budget_exhaustion_escapes_atomic_executor_for_graph_decomposition() -> None:
+    def exhausted(_messages):
+        raise OutputBudgetExhausted(
+            "OUTPUT_BUDGET_EXHAUSTED: return to implementation decomposition"
+        )
+
+    executor = AtomicConcernExecutor(
+        root=Path("."),
+        target=Path("src/main/java/example/Test.java"),
+        relative="src/main/java/example/Test.java",
+        symbol="Test",
+        original="package example;\n// MMM_AUTHORED_FEATURE_BODY\n",
+        task={"task_id": "t", "semantic_outcome": "x"},
+        section="algorithm",
+        concerns=(
+            {
+                "sequence": 0,
+                "identifier": "feature/algorithm/steps",
+                "concern": "steps",
+                "task": "implement one bounded step",
+                "rules": [],
+            },
+        ),
+        grounding={},
+        dependency_source="",
+        require_initialize=False,
+        call_coder=exhausted,
+        compile_java=lambda _root: (_ for _ in ()).throw(
+            AssertionError("compile must not run after output exhaustion")
+        ),
+        compile_log=lambda _report: "",
+        write_source=lambda _path, _source: None,
+        region_attempt_limit=1,
+        compile_repair_limit=0,
+    )
+
+    with pytest.raises(OutputBudgetExhausted):
+        executor.run()
