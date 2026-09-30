@@ -789,13 +789,14 @@ class CompleteProductionOrchestrator:
                 launcher_source = Path(options.server_launcher).expanduser().resolve()
                 if not launcher_source.is_file() or launcher_source.is_symlink():
                     raise CompleteProductionError('server_launcher must be a regular file.')
-                launcher_copy = run_root / 'integration-inputs/fabric-server-launch.jar'
-                launcher_copy.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(launcher_source, launcher_copy)
                 prepared = runtime_manager.prepare_instance(
                     'complete-integration',
                     mod_jar=jar_path,
-                    server_launcher=launcher_copy,
+                    # prepare_instance validates the external launcher and snapshots
+                    # it directly into the disposable runtime. An intermediate
+                    # integration-input copy was never consumed by any receipt and
+                    # only doubled launcher I/O.
+                    server_launcher=launcher_source,
                     eula_accepted=True,
                     expected_mod_sha256=str(artifact_receipt['sha256']),
                 )
