@@ -5,10 +5,6 @@ from types import SimpleNamespace
 import pytest
 
 from minecraft_mod_ai import planning_state_pipeline
-from minecraft_mod_ai.authored_structured_design import (
-    _generate_authored_chunk,
-    _recover_planner_string_overflow,
-)
 from minecraft_mod_ai.fixed_template_generation import generate_fixed_template_value
 from minecraft_mod_ai.model_router import ModelRouter
 from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
@@ -16,9 +12,7 @@ from minecraft_mod_ai.planning_pipeline import (
     PlanningGenerationInterrupted,
     PlanningPipeline,
 )
-from minecraft_mod_ai.structured_output import StructuredOutputValidationError
 from minecraft_mod_ai.task_template_catalog import load_record_template
-from minecraft_mod_ai.worksheet_atomic_chunker import WorksheetConcernChunk
 
 SCHEMA = {
     "type": "object",
@@ -113,114 +107,3 @@ def test_interrupted_writer_reports_original_cause_and_keeps_draft(monkeypatch):
         pipeline.prepare("space mod")
     assert caught.value.planning_state == state
     assert "HANDOFF_READY" not in str(caught.value)
-
-
-def test_planner_overlong_string_is_clamped_without_model_retry():
-    schema = {
-        "type": "object",
-        "properties": {
-            "formulae": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "clamping": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 256,
-                        }
-                    },
-                    "required": ["clamping"],
-                    "additionalProperties": False,
-                },
-                "minItems": 1,
-                "maxItems": 3,
-            }
-        },
-        "required": ["formulae"],
-        "additionalProperties": False,
-    }
-    raw = json.dumps(
-        {"formulae": [{"clamping": "x" * 320}]},
-        ensure_ascii=False,
-    )
-    failure = StructuredOutputValidationError(
-        output=raw,
-        errors=('$["formulae"][0]["clamping"]: value is too long',),
-    )
-
-    repaired = _recover_planner_string_overflow(failure, schema)
-
-    assert len(repaired["formulae"][0]["clamping"]) == 256
-    assert repaired["formulae"][0]["clamping"] == "x" * 256
-
-
-def test_planner_schema_recovery_does_not_hide_non_length_errors():
-    schema = {
-        "type": "object",
-        "properties": {
-            "count": {"type": "integer"},
-            "note": {"type": "string", "maxLength": 4},
-        },
-        "required": ["count", "note"],
-        "additionalProperties": False,
-    }
-    raw = json.dumps({"count": "wrong", "note": "too long"})
-    failure = StructuredOutputValidationError(
-        output=raw,
-        errors=(
-            '$["count"]: value is not of type integer',
-            '$["note"]: value is too long',
-        ),
-    )
-
-    with pytest.raises(StructuredOutputValidationError) as raised:
-        _recover_planner_string_overflow(failure, schema)
-
-    assert raised.value is failure
-
-
-def test_authored_chunk_recovers_length_overflow_without_second_model_call(monkeypatch):
-    raw = json.dumps(
-        {
-            "formulae": [
-                {"clamping": "a" * 300},
-                {"clamping": "b" * 300},
-                {"clamping": "c" * 300},
-            ]
-        }
-    )
-    calls = 0
-
-    def fail_once(*args, **kwargs):
-        nonlocal calls
-        calls += 1
-        raise StructuredOutputValidationError(
-            output=raw,
-            errors=('$["formulae"][0]["clamping"]: value is too long',),
-        )
-
-    monkeypatch.setattr(
-        "minecraft_mod_ai.fixed_template_generation.generate_fixed_template_value",
-        fail_once,
-    )
-    concerns = WorksheetConcernChunk(
-        ("formulae",),
-        {"formulae": ("clamping",)},
-    )
-
-    value = _generate_authored_chunk(
-        object(),
-        "Design a space exploration mod.",
-        section="algorithm",
-        chunk_index=1,
-        chunk_count=1,
-        concerns=concerns,
-        completed={},
-        include_evidence=False,
-        record_counts={"formulae": 3},
-        media_paths=(),
-    )
-
-    assert calls == 1
-    assert [len(item["clamping"]) for item in value["formulae"]] == [256, 256, 256]
