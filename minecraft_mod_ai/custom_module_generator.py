@@ -11,6 +11,7 @@ No patch transport is involved.
 
 import hashlib
 import inspect
+from contextlib import nullcontext
 import json
 import os
 import re
@@ -221,6 +222,7 @@ def _materialize_host_scaffold(
     relative: str,
     symbol: str,
     task: Mapping[str, Any],
+    write_to_disk: bool = True,
 ) -> str:
     anchor = _target_anchor(task, relative, symbol)
     if anchor is None or not _host_reserved(anchor):
@@ -240,7 +242,8 @@ def _materialize_host_scaffold(
         + "    // MMM_AUTHORED_FEATURE_BODY\n"
         + "}\n"
     )
-    _atomic_write(target, source)
+    if write_to_disk:
+        _atomic_write(target, source)
     return source
 
 
@@ -2369,6 +2372,7 @@ class CustomModuleGenerator:
                 relative=relative,
                 symbol=symbol,
                 task=task,
+                write_to_disk=not self.defer_compile_to_pipeline,
             )
 
         package_match = _PACKAGE.search(original)
@@ -2460,7 +2464,12 @@ class CustomModuleGenerator:
             return _run_atomic_ir_generation(self, context_state)
         attempt = 0
 
-        with project_write_lock(root):
+        generation_lock = (
+            nullcontext()
+            if self.defer_compile_to_pipeline
+            else project_write_lock(root)
+        )
+        with generation_lock:
             while True:
                 attempt += 1
                 if attempt != 1:
