@@ -18,6 +18,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
 from typing import Any
 
 from .complete_spec import ProductionModule
@@ -2071,7 +2072,11 @@ def _atomic_ir_plan(
 
 
 def _atomic_result_receipt(
-    context: _AtomicGenerationContext, atomic: Mapping[str, Any], candidate: str
+    context: _AtomicGenerationContext,
+    atomic: Mapping[str, Any],
+    candidate: str,
+    *,
+    compile_deferred: bool = False,
 ) -> dict[str, Any]:
     after_sha = _sha256_text(candidate)
     return {
@@ -2103,7 +2108,12 @@ def _atomic_result_receipt(
         "agent_summary": str(atomic["summary"]).strip(),
         "generation_verification": {
             "status": "PASS",
-            "mode": "gradle_compile_java_semantic_concerns",
+            "mode": (
+                "host_semantic_validation_deferred_to_implementation_graph"
+                if compile_deferred
+                else "gradle_compile_java_semantic_concerns"
+            ),
+            "compile_deferred": compile_deferred,
             "target_path": context.relative,
             "atomic_concern_count": int(atomic["concern_count"]),
             "atomic_repair_count": int(atomic["repair_count"]),
@@ -2136,6 +2146,17 @@ def _run_atomic_ir_generation(
     from .atomic_concern_source import AtomicConcernExecutor
     from .implementation_graph_execution import public_api_errors
 
+    compile_deferred = (
+        context.module.config.get("implementation_graph_deferred_compile") is True
+        and context.module.module_id.startswith("ir_")
+        and isinstance(context.ir_contract, Mapping)
+    )
+    compile_java = (
+        (lambda _root: SimpleNamespace(status="PASS", error="", commands=()))
+        if compile_deferred
+        else context.compiler.compile_java
+    )
+
     executor = AtomicConcernExecutor(
         root=context.root,
         target=context.target,
@@ -2166,7 +2187,7 @@ def _run_atomic_ir_generation(
             structured_java_region=False,
             tool_stage="atomic_java",
         ),
-        compile_java=context.compiler.compile_java,
+        compile_java=compile_java,
         compile_log=_compile_log,
         write_source=lambda path, source: _atomic_write(path, source),
         # Production is fail-fast regardless of diagnostic environment variables.
@@ -2189,7 +2210,12 @@ def _run_atomic_ir_generation(
                 raise CustomModuleGenerationError(
                     "ATOMIC_CONCERN_FINAL_CONTRACT_FAILED: " + "; ".join(errors)
                 )
-            return _atomic_result_receipt(context, atomic, candidate)
+            return _atomic_result_receipt(
+                context,
+                atomic,
+                candidate,
+                compile_deferred=compile_deferred,
+            )
         except BaseException:
             _restore_atomic_target(context)
             raise
