@@ -206,6 +206,7 @@ def _generate_concern_records(
         "concern": concern,
         "fields": fields,
         "approved_state_model": _concern_source(source, concern) or source,
+        "contains_authored_values": _concern_has_explicit_payload(source, concern),
         "declared_state_variables": list(declared_names),
         "record_limit": _MAX_CONCERN_RECORDS,
     }
@@ -222,7 +223,9 @@ def _generate_concern_records(
         "String/state literals must be quoted. Never use Java enum/member syntax such "
         "as ShipStatus.COMPLETE; write a quoted literal such as \"COMPLETE\". "
         "The host supplies only the selected concern when it can isolate it. "
-        "If the supplied concern visibly contains authored values, STATUS=EMPTY is invalid. "
+        "The user payload contains contains_authored_values, computed deterministically by "
+        "the host from the fixed concern descriptor. When it is true, STATUS=EMPTY is invalid "
+        "and at least one RECORD must be emitted. "
         "If this concern truly has no concrete requirement in the approved plan, output only "
         "STATUS=EMPTY. Otherwise output at most the host record_limit records. "
         "Never paginate and never output STATUS=MORE."
