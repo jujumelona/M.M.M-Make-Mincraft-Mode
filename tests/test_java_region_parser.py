@@ -9,6 +9,7 @@ from minecraft_mod_ai.java_region_parser import (
     class_body_chunks,
     class_body_direct_return_calls,
     class_body_member_contracts,
+    class_body_object_creations,
     public_source_member_contracts,
     strict_member_chunks,
 )
@@ -238,3 +239,15 @@ def test_tree_sitter_extracts_parenthesized_direct_return_call() -> None:
 
     assert calls[0]["method"] == "value"
     assert calls[0]["symbol"] == "readState"
+
+
+def test_tree_sitter_extracts_object_creation_type_and_arity() -> None:
+    creations = class_body_object_creations(
+        "private static Object a = new Object();\n"
+        "private static String b = new String(new char[]{'x'});"
+    )
+
+    assert creations == (
+        {"type": "Object", "argument_count": 0},
+        {"type": "String", "argument_count": 1},
+    )
