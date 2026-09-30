@@ -164,3 +164,47 @@ def test_long_serial_dependency_chain_is_compressed_into_bounded_shards() -> Non
     assert [stage for stage, _ in shards] == ["content", "content", "content"]
     assert [len(members) for _, members in shards] == [48, 48, 24]
     assert sum(len(members) for _, members in shards) == 120
+
+
+def test_system_modules_batch_by_shared_pack_writer() -> None:
+    modules = (
+        ProductionModule(module_id="class_a", kind="class"),
+        ProductionModule(module_id="skill_a", kind="skill"),
+        ProductionModule(module_id="class_b", kind="class"),
+        ProductionModule(module_id="quest_a", kind="quest"),
+        ProductionModule(module_id="quest_b", kind="quest"),
+    )
+    policy = SimpleNamespace(entity_shard_size=24, java_shard_size=48)
+
+    shaped = [
+        (stage, [module.module_id for module in members])
+        for stage, members in work_graph._module_shards(modules, policy=policy)
+    ]
+
+    assert shaped == [
+        ("system", ["class_a", "skill_a", "class_b"]),
+        ("system", ["quest_a", "quest_b"]),
+    ]
+
+
+def test_system_modules_with_different_pack_writers_never_coalesce() -> None:
+    modules = (
+        ProductionModule(module_id="economy_a", kind="economy"),
+        ProductionModule(module_id="shop_a", kind="shop"),
+        ProductionModule(module_id="gui_a", kind="gui"),
+        ProductionModule(module_id="network_a", kind="networking"),
+        ProductionModule(module_id="party_a", kind="party"),
+        ProductionModule(module_id="guild_a", kind="guild"),
+    )
+    policy = SimpleNamespace(entity_shard_size=24, java_shard_size=48)
+
+    shaped = [
+        (stage, [module.kind for module in members])
+        for stage, members in work_graph._module_shards(modules, policy=policy)
+    ]
+
+    assert shaped == [
+        ("system", ["economy", "shop"]),
+        ("system", ["gui", "networking"]),
+        ("system", ["party", "guild"]),
+    ]
