@@ -1162,9 +1162,13 @@ def test_atomic_sibling_map_generics_are_propagated_before_first_compile(
             source = (project_root / path).read_text(encoding="utf-8")
             if "failClosed()" in source:
                 assert (
-                    "java.util.Map<String, java.lang.Object> condition = "
+                    "java.util.Map<java.lang.String, java.lang.Object> condition = "
                     "entry.getValue();"
                 ) in source
+                assert (
+                    "java.util.Map<java.lang.String, java.lang.String> condition"
+                    not in source
+                )
                 assert (
                     "java.util.Map<String, java.lang.String> condition"
                     not in source
