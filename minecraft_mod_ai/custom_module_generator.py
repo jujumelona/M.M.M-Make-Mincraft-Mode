@@ -270,15 +270,27 @@ def _project_context(root: Path, target: Path, *, relevance_text: str) -> str:
         except (OSError, UnicodeError):
             pass
 
+    # Tokenize the evidence once. The previous implementation ran one regex
+    # search over the full task/scaffold text for every Java file, making context
+    # discovery O(project_files * evidence_size) for every custom generation.
+    referenced_symbols = set(
+        re.findall(
+            r"(?<![A-Za-z0-9_$])[A-Za-z_$][A-Za-z0-9_$]*(?![A-Za-z0-9_$])",
+            evidence,
+        )
+    )
+    target_resolved = target.resolve()
     candidates = [
         path
         for path in java_root.rglob("*.java")
-        if path.is_file() and not path.is_symlink() and path.resolve() != target
+        if path.is_file()
+        and not path.is_symlink()
+        and path.resolve() != target_resolved
     ]
     selected = [
         path
         for path in candidates
-        if re.search(rf"\b{re.escape(path.stem)}\b", evidence)
+        if path.stem in referenced_symbols
     ]
     selected.sort(key=lambda path: path.relative_to(root).as_posix())
 
