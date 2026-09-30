@@ -636,165 +636,64 @@ def _compile_worksheet_section(
     operation = f"detailed_section:{section}"
     chunks_def = pack_section_concerns(section)
     chunk_count = len(chunks_def)
-    chunk_results: list[dict[str, Any] | None] = [None] * chunk_count
+    chunk_results: list[dict[str, Any]] = []
     record_counts: dict[str, int] = {}
-
-    # Field paging creates a real dependency only when a later chunk contains
-    # another page of the same concern. Independent concerns do not need to wait
-    # for one another, so expose that parallelism to the already bounded native
-    # llama slot gate instead of serializing every chunk in this section.
-    first_chunk_for_concern: dict[str, int] = {}
-    chunk_dependencies: list[frozenset[int]] = []
-    for chunk_index, concerns in enumerate(chunks_def):
-        dependencies: set[int] = set()
-        for concern in concerns:
-            prior = first_chunk_for_concern.get(concern)
-            if prior is None:
-                first_chunk_for_concern[concern] = chunk_index
-            else:
-                dependencies.add(prior)
-        chunk_dependencies.append(frozenset(dependencies))
-
-    def generate_chunk(
-        chunk_index: int,
-        counts_snapshot: Mapping[str, int],
-    ) -> dict[str, Any]:
-        concerns = chunks_def[chunk_index]
-        index = chunk_index + 1
-        is_first = chunk_index == 0
-        chunk_schema = worksheet_chunk_schema(
-            section,
-            concerns,
-            include_evidence=is_first,
-            record_counts=counts_snapshot,
-        )
-        messages = _chunk_messages(
-            requirement,
-            selected_sections,
-            section,
-            evidence,
-            completed,
-            chunk_index=index,
-            chunk_count=chunk_count,
-            concerns=concerns,
-            include_evidence=is_first,
-            record_counts=counts_snapshot,
-        )
-        return _generate_chunk(
-            router,
-            messages,
-            section=section,
-            index=index,
-            concerns=concerns,
-            chunk_schema=chunk_schema,
-            recovery_context={
-                "requirement": requirement,
-                "selected_sections": selected_sections,
-                "section": section,
-                "evidence": evidence,
-                "completed": completed,
-                "index": index,
-                "chunk_count": chunk_count,
-                "include_evidence": is_first,
-            },
-        )
-
-    def accept_chunk(chunk_index: int, decoded: dict[str, Any]) -> None:
-        concerns = chunks_def[chunk_index]
-        inapplicable = {
-            str(item.get("concern") or "")
-            for item in decoded.get("inapplicable_concerns", [])
-            if isinstance(item, Mapping)
-        }
-        for concern in concerns:
-            value = decoded.get(concern)
-            if isinstance(value, list):
-                record_counts.setdefault(concern, len(value))
-            elif concern in inapplicable:
-                record_counts.setdefault(concern, 0)
-        chunk_results[chunk_index] = decoded
 
     try:
         with planner_operation(operation):
-            workers = min(
-                max(1, chunk_count),
-                max(1, router_native_model_parallelism(router)),
-            )
-            if workers == 1 or chunk_count <= 1:
-                for chunk_index in range(chunk_count):
-                    counts_snapshot = {
-                        concern: record_counts[concern]
-                        for concern in chunks_def[chunk_index]
-                        if concern in record_counts
-                    }
-                    accept_chunk(
-                        chunk_index,
-                        generate_chunk(chunk_index, counts_snapshot),
-                    )
-            else:
-                pending = set(range(chunk_count))
-                running: dict[Future[dict[str, Any]], int] = {}
-                completed_indices: set[int] = set()
-                pool = ThreadPoolExecutor(
-                    max_workers=workers,
-                    thread_name_prefix=f"planning-chunk-{section}",
+            for index, concerns in enumerate(chunks_def, start=1):
+                is_first = index == 1
+                chunk_schema = worksheet_chunk_schema(
+                    section,
+                    concerns,
+                    include_evidence=is_first,
+                    record_counts=record_counts,
                 )
-                try:
-                    while pending or running:
-                        for chunk_index in sorted(tuple(pending)):
-                            if len(running) >= workers:
-                                break
-                            if not chunk_dependencies[chunk_index].issubset(
-                                completed_indices
-                            ):
-                                continue
-                            counts_snapshot = {
-                                concern: record_counts[concern]
-                                for concern in chunks_def[chunk_index]
-                                if concern in record_counts
-                            }
-                            context_copy = copy_context()
-                            future = pool.submit(
-                                context_copy.run,
-                                generate_chunk,
-                                chunk_index,
-                                counts_snapshot,
-                            )
-                            running[future] = chunk_index
-                            pending.remove(chunk_index)
-
-                        if not running:
-                            raise RuntimeError(
-                                "DETAILED_PLAN_CHUNK_DAG_DEADLOCK: "
-                                f"{section} pending={sorted(pending)}"
-                            )
-
-                        done, _ = wait(
-                            tuple(running),
-                            return_when=FIRST_COMPLETED,
-                        )
-                        for future in sorted(
-                            done,
-                            key=lambda item: running[item],
-                        ):
-                            chunk_index = running.pop(future)
-                            decoded = future.result(timeout=0)
-                            accept_chunk(chunk_index, decoded)
-                            completed_indices.add(chunk_index)
-                finally:
-                    for future in running:
-                        future.cancel()
-                    pool.shutdown(wait=False, cancel_futures=True)
-
-            if any(item is None for item in chunk_results):
-                raise RuntimeError(
-                    f"DETAILED_PLAN_CHUNK_INCOMPLETE: {section}"
+                messages = _chunk_messages(
+                    requirement,
+                    selected_sections,
+                    section,
+                    evidence,
+                    completed,
+                    chunk_index=index,
+                    chunk_count=chunk_count,
+                    concerns=concerns,
+                    include_evidence=is_first,
+                    record_counts=record_counts,
                 )
-            return merge_worksheet_section_chunks(
-                section,
-                [item for item in chunk_results if item is not None],
-                allowed,
-            )
+                decoded = _generate_chunk(
+                    router,
+                    messages,
+                    section=section,
+                    index=index,
+                    concerns=concerns,
+                    chunk_schema=chunk_schema,
+                    recovery_context={
+                        "requirement": requirement,
+                        "selected_sections": selected_sections,
+                        "section": section,
+                        "evidence": evidence,
+                        "completed": completed,
+                        "index": index,
+                        "chunk_count": chunk_count,
+                        "include_evidence": is_first,
+                    },
+                )
+
+                inapplicable = {
+                    str(item.get("concern") or "")
+                    for item in decoded.get("inapplicable_concerns", [])
+                    if isinstance(item, Mapping)
+                }
+                for concern in concerns:
+                    value = decoded.get(concern)
+                    if isinstance(value, list):
+                        record_counts.setdefault(concern, len(value))
+                    elif concern in inapplicable:
+                        record_counts.setdefault(concern, 0)
+                chunk_results.append(decoded)
+
+            return merge_worksheet_section_chunks(section, chunk_results, allowed)
     except (ValueError, RuntimeError, json.JSONDecodeError) as exc:
         raw_text = _structured_output_text(exc)
         emit_root_cause(
