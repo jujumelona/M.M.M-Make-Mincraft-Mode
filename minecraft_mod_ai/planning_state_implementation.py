@@ -334,7 +334,7 @@ def _chunk_messages(
     ]
 
 
-def _generate_chunk(
+def _generate_chunk_once(
     router: Any,
     messages: list[dict[str, str]],
     *,
@@ -343,7 +343,7 @@ def _generate_chunk(
     concerns: Sequence[str],
     chunk_schema: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Generate one chunk once; rejected shapes are decomposed by the host caller."""
+    """Execute exactly one model work item and validate only its transport shape."""
 
     tool_suffix = "_".join(str(concern) for concern in concerns)
     raw = generate_fixed_template_text(
@@ -369,6 +369,39 @@ def _generate_chunk(
             "Please output records matching the template skeleton."
         )
     return dict(decoded)
+
+
+def _generate_chunk(
+    router: Any,
+    messages: list[dict[str, str]],
+    *,
+    section: str,
+    index: int,
+    concerns: Sequence[str],
+    chunk_schema: Mapping[str, Any],
+    recovery_context: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Generate once; if rejected, shrink the semantic work instead of retrying it."""
+
+    try:
+        return _generate_chunk_once(
+            router,
+            messages,
+            section=section,
+            index=index,
+            concerns=concerns,
+            chunk_schema=chunk_schema,
+        )
+    except (json.JSONDecodeError, ValueError) as error:
+        if recovery_context is None:
+            raise
+        context = {**dict(recovery_context), "error": error}
+        return _recover_rejected_chunk(
+            router,
+            context,
+            concerns,
+            include_evidence=bool(recovery_context.get("include_evidence")),
+        )
 
 
 def _recovery_projection(
@@ -440,7 +473,7 @@ def _recovery_task(
 
 
 def _execute_recovery_task(router: Any, task: Mapping[str, Any]) -> dict[str, Any]:
-    return _generate_chunk(
+    return _generate_chunk_once(
         router,
         task["messages"],
         section=str(task["section"]),
@@ -628,31 +661,24 @@ def _compile_worksheet_section(
                     include_evidence=is_first,
                     record_counts=record_counts,
                 )
-                try:
-                    decoded = _generate_chunk(
-                        router,
-                        messages,
-                        section=section,
-                        index=index,
-                        concerns=concerns,
-                        chunk_schema=chunk_schema,
-                    )
-                except (json.JSONDecodeError, ValueError) as parse_err:
-                    decoded = _recover_rejected_chunk(
-                        router,
-                        {
-                            "requirement": requirement,
-                            "selected_sections": selected_sections,
-                            "section": section,
-                            "evidence": evidence,
-                            "completed": completed,
-                            "index": index,
-                            "chunk_count": chunk_count,
-                            "error": parse_err,
-                        },
-                        concerns,
-                        include_evidence=is_first,
-                    )
+                decoded = _generate_chunk(
+                    router,
+                    messages,
+                    section=section,
+                    index=index,
+                    concerns=concerns,
+                    chunk_schema=chunk_schema,
+                    recovery_context={
+                        "requirement": requirement,
+                        "selected_sections": selected_sections,
+                        "section": section,
+                        "evidence": evidence,
+                        "completed": completed,
+                        "index": index,
+                        "chunk_count": chunk_count,
+                        "include_evidence": is_first,
+                    },
+                )
 
                 inapplicable = {
                     str(item.get("concern") or "")
