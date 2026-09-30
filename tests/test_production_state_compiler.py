@@ -110,7 +110,11 @@ def test_planner_authors_structured_ssot_and_renders_markdown_from_it():
             if raw_type == "boolean":
                 return True
             if raw_type == "object":
-                return {}
+                properties = schema.get("properties") or {}
+                return {
+                    key: Router._value(value)
+                    for key, value in properties.items()
+                }
             return "authored"
 
         def generate_text(self, role, messages, **kwargs):
@@ -122,9 +126,11 @@ def test_planner_authors_structured_ssot_and_renders_markdown_from_it():
                 if key not in {"inapplicable_concerns", "constraint_evidence_refs"}
             )
             item_properties = properties[concern]["items"]["properties"]
-            field = next(iter(item_properties))
             payload = {
-                concern: [{field: self._value(item_properties[field])}],
+                concern: [{
+                    field: self._value(field_schema)
+                    for field, field_schema in item_properties.items()
+                }],
             }
             if "constraint_evidence_refs" in properties:
                 payload["constraint_evidence_refs"] = []

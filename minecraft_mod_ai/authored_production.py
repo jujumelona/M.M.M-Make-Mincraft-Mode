@@ -1036,6 +1036,26 @@ def _execution_plan_projection(
     }
 
 
+def _legacy_production_state_sidecar(
+    router: Any,
+    plan: AuthoredPlan,
+    *,
+    existing: bool,
+) -> dict[str, Any] | None:
+    """Compile state from prose only for legacy plans that have no structured SSOT."""
+
+    if (
+        existing
+        or plan.structured_sections
+        or not callable(getattr(router, "generate_text", None))
+    ):
+        return None
+
+    from .production_state_compiler import compile_production_state_section
+
+    return compile_production_state_section(router, plan)
+
+
 def compile_authored_design(
     router: Any, plan: AuthoredPlan, *, existing_input_sha256: str = ""
 ) -> CompleteProposal:
@@ -1043,18 +1063,11 @@ def compile_authored_design(
     effective_existing = str(
         existing_input_sha256 or implementation_plan.existing_input_sha256 or ""
     ).strip()
-    production_state_section: dict[str, Any] | None = None
-    if not effective_existing and not implementation_plan.structured_sections:
-        # Legacy saved Markdown has no canonical semantic authority. Keep the old
-        # compatibility compiler only for those plans; newly authored plans never
-        # re-extract state semantics from prose in production.
-        if callable(getattr(router, "generate_text", None)):
-            from .production_state_compiler import compile_production_state_section
-
-            production_state_section = compile_production_state_section(
-                router,
-                implementation_plan,
-            )
+    production_state_section = _legacy_production_state_sidecar(
+        router,
+        implementation_plan,
+        existing=bool(effective_existing),
+    )
     execution_plan, execution_projection = _execution_plan_projection(implementation_plan)
     # These are host project coordinates, not inferred gameplay or placeholder content.
     mod_id = "authored_" + execution_plan.calculate_hash()[:12]

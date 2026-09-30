@@ -6,7 +6,6 @@ The model authors fixed concern records. Markdown is a deterministic projection 
 human review and provenance only; executable production consumes the records.
 """
 
-import json
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from pathlib import Path
@@ -129,161 +128,19 @@ def render_structured_sections(sections: Mapping[str, Any]) -> str:
     return "\n".join(lines).rstrip()
 
 
-def _authored_chunk_messages(
-    prompt: str,
-    *,
-    section: str,
-    chunk_index: int,
-    chunk_count: int,
-    concerns: Sequence[str],
-    completed: Mapping[str, Mapping[str, Any]],
-    include_evidence: bool,
-    record_counts: Mapping[str, int],
-) -> tuple[dict[str, str], ...]:
-    from .planning_state_implementation import SECTION_DEPENDENCIES
-    from .worksheet_atomic_chunker import worksheet_chunk_prompt
 
-    dependencies = {
-        dependency: deepcopy(completed[dependency])
-        for dependency in SECTION_DEPENDENCIES.get(section, ())
-        if dependency in completed
-    }
-    prerequisite_text = (
-        json.dumps(
-            dependencies,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        if dependencies
-        else "{}"
-    )
-    return (
-        {
-            "role": "system",
-            "content": (
-                "Author one bounded piece of the game design directly into the host-owned "
-                "canonical record template. Make concrete design choices from the user's "
-                "request; do not summarize a separate Markdown draft and do not defer semantic "
-                "work to production. Preserve prerequisite records exactly where they constrain "
-                "this chunk. Do not invent external API symbols, repository facts, versions, "
-                "or evidence identifiers. Return only the fixed structured payload requested "
-                "by the host."
-            ),
-        },
-        {
-            "role": "user",
-            "content": (
-                "User request:\n"
-                + prompt
-                + "\n\nCanonical prerequisite sections:\n"
-                + prerequisite_text
-                + "\n\n"
-                + worksheet_chunk_prompt(
-                    section,
-                    chunk_index,
-                    chunk_count,
-                    concerns,
-                    include_evidence=include_evidence,
-                    record_counts=record_counts,
-                )
-            ),
-        },
-    )
+class _MediaBoundPlannerRouter:
+    """Inject plan media into structured planner turns without changing the base router."""
 
+    def __init__(self, router: Any, media_paths: Sequence[str | Path]) -> None:
+        self._router = router
+        self._media_paths = tuple(media_paths)
+        self.registry = getattr(router, "registry", None)
+        self.profile = getattr(router, "profile", None)
 
-def _generate_authored_chunk(
-    router: Any,
-    prompt: str,
-    *,
-    section: str,
-    chunk_index: int,
-    chunk_count: int,
-    concerns: Sequence[str],
-    completed: Mapping[str, Mapping[str, Any]],
-    include_evidence: bool,
-    record_counts: Mapping[str, int],
-    media_paths: Sequence[str | Path],
-) -> dict[str, Any]:
-    """Generate one canonical chunk; schema failure becomes narrower work, not prose recovery."""
-
-    from .fixed_template_generation import generate_fixed_template_value
-    from .worksheet_atomic_chunker import WorksheetConcernChunk, worksheet_chunk_schema
-
-    def generate(selected: Sequence[str], *, evidence: bool) -> dict[str, Any]:
-        schema = worksheet_chunk_schema(
-            section,
-            selected,
-            include_evidence=evidence,
-            record_counts=record_counts,
-        )
-        value = generate_fixed_template_value(
-            router,
-            "planner",
-            _authored_chunk_messages(
-                prompt,
-                section=section,
-                chunk_index=chunk_index,
-                chunk_count=chunk_count,
-                concerns=selected,
-                completed=completed,
-                include_evidence=evidence,
-                record_counts=record_counts,
-            ),
-            response_schema=schema,
-            media_paths=media_paths,
-            enable_tools=False,
-            tool_name=f"author_{section}_{chunk_index}",
-            description=f"Author canonical {section} concern records.",
-        )
-        if not isinstance(value, Mapping):
-            raise ValueError(
-                f"AUTHORED_STRUCTURED_DESIGN: {section} chunk {chunk_index} must be an object"
-            )
-        return dict(value)
-
-    try:
-        return generate(concerns, evidence=include_evidence)
-    except (ValueError, RuntimeError, TypeError):
-        if len(concerns) <= 1:
-            raise
-
-    explicit_projection = getattr(concerns, "field_projection", {})
-    merged: dict[str, Any] = {}
-    merged_inapplicable: list[dict[str, Any]] = []
-    merged_refs: list[str] = []
-    for position, concern in enumerate(concerns):
-        fields = (
-            explicit_projection.get(concern)
-            if isinstance(explicit_projection, Mapping)
-            else None
-        )
-        isolated = WorksheetConcernChunk(
-            (concern,),
-            {
-                concern: tuple(fields)
-                if fields
-                else tuple(DETAIL_RECORDS[section][concern].split())
-            },
-        )
-        value = generate(
-            isolated,
-            evidence=bool(include_evidence and position == 0),
-        )
-        if concern in value:
-            merged[concern] = deepcopy(value[concern])
-        for item in value.get("inapplicable_concerns", []):
-            if isinstance(item, Mapping) and item not in merged_inapplicable:
-                merged_inapplicable.append(deepcopy(dict(item)))
-        for ref in value.get("constraint_evidence_refs", []):
-            if isinstance(ref, str) and ref not in merged_refs:
-                merged_refs.append(ref)
-
-    if merged_inapplicable:
-        merged["inapplicable_concerns"] = merged_inapplicable
-    if include_evidence:
-        merged["constraint_evidence_refs"] = merged_refs
-    return merged
+    def generate_text(self, role: str, messages: Any, **kwargs: Any) -> str:
+        kwargs["media_paths"] = self._media_paths
+        return self._router.generate_text(role, messages, **kwargs)
 
 
 def author_structured_sections(
@@ -292,55 +149,39 @@ def author_structured_sections(
     *,
     media_paths: Sequence[str | Path] = (),
 ) -> dict[str, Any]:
-    """Author the canonical design directly, one small concern chunk at a time.
+    """Author one canonical worksheet through the existing parallel section DAG."""
 
-    The returned records are the semantic source of truth. Markdown is rendered from
-    these records afterward and is never required to be re-parsed to recover semantics.
-    """
+    from .model_concurrency import router_native_model_parallelism
+    from .planning_state_implementation import _compile_requirement_plans_dag
 
-    from .worksheet_atomic_chunker import (
-        merge_worksheet_section_chunks,
-        pack_section_concerns,
+    requirement_id = "authored_request"
+    selected_sections = tuple(WORKSHEET_SECTIONS)
+    requirement = {
+        "requirement_id": requirement_id,
+        "statement": prompt,
+        "acceptance": [],
+    }
+    planning_router = (
+        _MediaBoundPlannerRouter(router, media_paths)
+        if media_paths
+        else router
     )
-
-    completed: dict[str, Any] = {}
-    for section in WORKSHEET_SECTIONS:
-        chunks = pack_section_concerns(section)
-        chunk_results: list[dict[str, Any]] = []
-        record_counts: dict[str, int] = {}
-        for index, concerns in enumerate(chunks, start=1):
-            value = _generate_authored_chunk(
-                router,
-                prompt,
-                section=section,
-                chunk_index=index,
-                chunk_count=len(chunks),
-                concerns=concerns,
-                completed=completed,
-                include_evidence=index == 1,
-                record_counts=record_counts,
-                media_paths=media_paths,
-            )
-            inapplicable = {
-                str(item.get("concern") or "")
-                for item in value.get("inapplicable_concerns", [])
-                if isinstance(item, Mapping)
-            }
-            for concern in concerns:
-                rows = value.get(concern)
-                if isinstance(rows, list):
-                    record_counts.setdefault(concern, len(rows))
-                elif concern in inapplicable:
-                    record_counts.setdefault(concern, 0)
-            chunk_results.append(value)
-
-        completed[section] = merge_worksheet_section_chunks(
-            section,
-            chunk_results,
-            set(),
-        )
-
-    return normalize_structured_sections(completed)
+    workers = max(
+        1,
+        min(
+            len(selected_sections),
+            router_native_model_parallelism(router),
+        ),
+    )
+    compiled = _compile_requirement_plans_dag(
+        planning_router,
+        {"research_queue": [], "evidence": []},
+        [requirement],
+        {requirement_id: selected_sections},
+        workers=workers,
+    )
+    worksheet = compiled[0]["engineering_worksheet"]
+    return normalize_structured_sections(worksheet)
 
 
 __all__ = [
