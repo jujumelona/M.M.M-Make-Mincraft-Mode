@@ -3,11 +3,9 @@ from __future__ import annotations
 """Claim-fenced publication helpers for the canonical orchestrator work-node owner."""
 
 import hashlib
-import threading
 import time
 from typing import Any
 
-_INDEX_COMMIT_LOCK = threading.RLock()
 
 
 def _snapshot_claim(ledger: Any, node_id: str) -> tuple[int, str]:
@@ -78,35 +76,52 @@ def _commit_success(
     rendered = canonical_json(receipt)
     digest = "sha256:" + hashlib.sha256(rendered.encode("utf-8")).hexdigest()
 
+    expected = (WorkState.RUNNING.value, attempt, owner)
+
+    # Do the potentially expensive file reads/hashes outside SQLite's write
+    # transaction. ProjectIndex already serializes its own snapshot mutation with
+    # an instance lock. Holding BEGIN IMMEDIATE while update_files reads source
+    # files made unrelated claim/heartbeat/success writes wait behind filesystem I/O.
+    with ledger._connect() as connection:
+        row = connection.execute(
+            "SELECT state, attempt, lease_owner FROM tasks WHERE node_id = ?",
+            (node_id,),
+        ).fetchone()
+    if row is None or tuple(row) != expected:
+        raise WorkGraphError(
+            f"Stale worker claim rejected for {node_id}: expected "
+            f"attempt={attempt}, owner={owner}."
+        )
+
+    if shared_index is not None:
+        touched = _receipt_touched_paths(receipt)
+        if touched:
+            try:
+                # Keep the execution snapshot current in memory. The orchestrator
+                # persists the canonical manifest once at the generation phase
+                # boundary, avoiding one manifest transaction per work node.
+                shared_index.update_files(touched)
+            except Exception as exc:
+                raise index_error_type(
+                    f"Shared ProjectIndex commit failed for {node_id}: "
+                    f"{type(exc).__name__}: {exc}"
+                ) from exc
+
+    # Re-check the exact fenced claim under the short write transaction. A lease
+    # can change while the index refresh runs; only the still-current attempt may
+    # publish dependency-visible success.
     with ledger._connect() as connection:
         connection.execute("BEGIN IMMEDIATE")
         row = connection.execute(
             "SELECT state, attempt, lease_owner FROM tasks WHERE node_id = ?",
             (node_id,),
         ).fetchone()
-        expected = (WorkState.RUNNING.value, attempt, owner)
         if row is None or tuple(row) != expected:
             connection.rollback()
             raise WorkGraphError(
                 f"Stale worker claim rejected for {node_id}: expected "
                 f"attempt={attempt}, owner={owner}."
             )
-
-        if shared_index is not None:
-            touched = _receipt_touched_paths(receipt)
-            if touched:
-                try:
-                    with _INDEX_COMMIT_LOCK:
-                        # Keep the execution snapshot current in memory. The orchestrator
-                        # persists the canonical manifest once at the generation phase
-                        # boundary, avoiding one manifest transaction per work node.
-                        shared_index.update_files(touched)
-                except Exception as exc:
-                    connection.rollback()
-                    raise index_error_type(
-                        f"Shared ProjectIndex commit failed for {node_id}: "
-                        f"{type(exc).__name__}: {exc}"
-                    ) from exc
 
         cursor = connection.execute(
             """
