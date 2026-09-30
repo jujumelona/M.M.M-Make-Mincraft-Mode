@@ -2109,7 +2109,11 @@ def _atomic_result_receipt(
         "generation_verification": {
             "status": "PASS",
             "mode": (
-                "host_semantic_validation_deferred_to_implementation_graph"
+                (
+                    "host_semantic_validation_deferred_to_implementation_graph"
+                    if context.module.config.get("implementation_graph_deferred_compile") is True
+                    else "host_semantic_validation_deferred_to_pipeline"
+                )
                 if compile_deferred
                 else "gradle_compile_java_semantic_concerns"
             ),
@@ -2146,10 +2150,14 @@ def _run_atomic_ir_generation(
     from .atomic_concern_source import AtomicConcernExecutor
     from .implementation_graph_execution import public_api_errors
 
-    compile_deferred = (
+    graph_compile_deferred = (
         context.module.config.get("implementation_graph_deferred_compile") is True
         and context.module.module_id.startswith("ir_")
         and isinstance(context.ir_contract, Mapping)
+    )
+    compile_deferred = (
+        graph_compile_deferred
+        or bool(getattr(generator, "defer_compile_to_pipeline", False))
     )
     compile_java = (
         (lambda _root: SimpleNamespace(status="PASS", error="", commands=()))
@@ -2248,10 +2256,12 @@ class CustomModuleGenerator:
         fast_mode: bool = False,
         project_index: Any | None = None,
         checkpoint_root: str | Path | None = None,
+        defer_compile_to_pipeline: bool = False,
     ) -> None:
         self.router = router
         self.policy = policy or ScalePolicy.from_environment()
         self.fast_mode = bool(fast_mode)
+        self.defer_compile_to_pipeline = bool(defer_compile_to_pipeline)
         self._cached_index = project_index
         self._cached_root = (
             Path(project_index.root).resolve()
@@ -2506,6 +2516,64 @@ class CustomModuleGenerator:
                         "production decode:\n"
                         + "\n".join(f"- {error}" for error in invariant_errors)
                     )
+
+                if self.defer_compile_to_pipeline:
+                    with project_path_write_locks(root, (relative,)):
+                        if target_existed:
+                            try:
+                                current = target.read_text(encoding="utf-8")
+                            except (OSError, UnicodeError) as exc:
+                                raise CustomModuleGenerationError(
+                                    f"DIRECT_CODER_TARGET_DRIFT: {relative}: {exc}"
+                                ) from exc
+                            if _sha256_text(current) != before_sha:
+                                raise CustomModuleGenerationError(
+                                    f"DIRECT_CODER_TARGET_DRIFT: {relative} changed during generation."
+                                )
+                        elif target.exists():
+                            raise CustomModuleGenerationError(
+                                f"DIRECT_CODER_TARGET_DRIFT: {relative} appeared during generation."
+                            )
+                        _atomic_write(target, candidate)
+                    after_sha = _sha256_text(candidate)
+                    return {
+                        "schema_version": "mmm/custom-module-result-v3",
+                        "module_id": module.module_id,
+                        "kind": module.kind,
+                        "status": "SOURCE_GENERATED",
+                        "patch_receipt": {
+                            "schema_version": "mmm/direct-source-write-v1",
+                            "status": "APPLIED",
+                            "operations": [{
+                                "operation": "replace" if target_existed else "create",
+                                "path": relative,
+                                "before_sha256": before_sha if target_existed else "",
+                                "after_sha256": after_sha,
+                            }],
+                            "touched_paths": [relative],
+                        },
+                        "operation_count": 1,
+                        "runtime_tests": [
+                            "Build the real project and execute the requested GameTest/runtime gates."
+                        ],
+                        "source_observation_receipt": {
+                            "path": relative,
+                            "sha256": before_sha,
+                        },
+                        "touched_paths": [relative],
+                        "discarded_out_of_scope_paths": [],
+                        "agent_summary": summary.strip(),
+                        "generation_verification": {
+                            "status": "PASS",
+                            "mode": "host_source_validation_deferred_to_pipeline",
+                            "compile_deferred": True,
+                            "target_path": relative,
+                            "attempt": attempt,
+                        },
+                        "output_exhaustion_continuations": 0,
+                        "generation_checkpoint_resumed": False,
+                        "required_gates": list(module.required_gates),
+                    }
 
                 _atomic_write(target, candidate)
                 report = compiler.compile_java(root)
