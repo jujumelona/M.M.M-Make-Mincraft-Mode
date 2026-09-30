@@ -213,13 +213,15 @@ def test_private_nested_helper_types_are_valid_class_body_members() -> None:
         "} private static final int ESCAPED = 1; {",
     ],
 )
-def test_non_private_or_brace_escape_member_structure_is_rejected(bad: str) -> None:
+def test_non_private_or_brace_escape_member_structure_is_rejected(bad: str, monkeypatch) -> None:
+    monkeypatch.setenv("MMM_ATOMIC_CONCERN_REGION_ATTEMPTS", "2")
     executor = _executor([bad, "private static final int COST = 10;"])
     result = executor.run()
     assert "private static final int COST = 10;" in result["source"]
 
 
-def test_initialize_region_rejects_even_private_local_type_declarations() -> None:
+def test_initialize_region_rejects_even_private_local_type_declarations(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_ATOMIC_CONCERN_REGION_ATTEMPTS", "2")
     executor = _executor(
         [
             "private static void helper() {}",
@@ -423,7 +425,7 @@ def test_sibling_symbol_collision_cannot_replace_accepted_sibling() -> None:
 
     result = executor.run()
 
-    assert compile_calls["count"] == len(concerns)
+    assert compile_calls["count"] == 1
     assert result["source"].count("private static boolean isTransactionInFlight;") == 1
     assert result["source"].count("private static void beginTransaction() {}") == 1
     assert result["source"].count("private static void endTransaction() {}") == 1
@@ -514,7 +516,7 @@ def test_method_overloads_with_different_parameter_types_do_not_collide() -> Non
 
     result = executor.run()
 
-    assert compile_calls["count"] == len(concerns)
+    assert compile_calls["count"] == 1
     assert "update(int value)" in result["source"]
     assert "update(String value)" in result["source"]
 
@@ -540,7 +542,7 @@ def test_generic_method_erasure_collision_preserves_original_owner() -> None:
 
     result = executor.run()
 
-    assert compile_calls["count"] == len(concerns)
+    assert compile_calls["count"] == 1
     assert result["source"].count("private static void update(") == 1
     assert "java.util.List<String> value" in result["source"]
     assert "java.util.List<Integer> value" not in result["source"]
@@ -567,7 +569,7 @@ def test_state_model_later_concerns_cannot_rehome_variables() -> None:
 
     result = executor.run()
 
-    assert compile_calls["count"] == len(concerns)
+    assert compile_calls["count"] == 1
     assert result["source"].count("private static double playerCredits;") == 1
     assert result["source"].count("private static final String FROM_STATE_LOCKED = \"locked\";") == 1
     assert result["source"].count("private static final int INVARIANT_PLAYER_CREDITS_MIN_COST = 0;") == 1
@@ -795,7 +797,7 @@ def test_previous_concern_nested_type_is_available_to_next_concern() -> None:
 
     result = executor.run()
 
-    assert compile_calls["count"] == len(concerns)
+    assert compile_calls["count"] == 1
     assert "SharedValue VALUE" in result["source"]
 
 
@@ -2281,6 +2283,7 @@ def test_outer_atomic_fields_and_methods_are_forced_static() -> None:
 
 
 def test_compiler_repair_cannot_expand_nested_type_structure(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_ATOMIC_CONCERN_REGION_ATTEMPTS", "2")
     monkeypatch.setenv("MMM_ATOMIC_CONCERN_COMPILE_REPAIRS", "1")
     compile_calls = {"count": 0}
     outputs = iter(
