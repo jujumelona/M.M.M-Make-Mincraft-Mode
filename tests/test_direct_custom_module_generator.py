@@ -431,6 +431,7 @@ def test_ir_atomic_concerns_are_isolated_and_compiled_as_one_host_file(
     tmp_path: Path, monkeypatch
 ) -> None:
     root, path, symbol = _project(tmp_path)
+    compile_calls = 0
     responses = iter([
         "private static int balance = 0;",
         "private static boolean valid() { return balance >= 0; }",
@@ -455,7 +456,12 @@ def test_ir_atomic_concerns_are_isolated_and_compiled_as_one_host_file(
         def __init__(self, _cache):
             pass
 
-        def compile_java(self, _root):
+        def compile_java(self, project_root):
+            nonlocal compile_calls
+            compile_calls += 1
+            source = (project_root / path).read_text(encoding="utf-8")
+            assert "static int balance = 0;" in source
+            assert "private static boolean valid()" in source
             return SimpleNamespace(status="PASS", commands=(), error=None)
 
     monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
@@ -479,6 +485,7 @@ def test_ir_atomic_concerns_are_isolated_and_compiled_as_one_host_file(
     assert "MMM_ATOMIC_CONCERN_BRANCHES_MEMBERS_START" in source
     assert result["generation_verification"]["mode"] == "gradle_compile_java_semantic_concerns"
     assert result["generation_verification"]["atomic_concern_count"] == 2
+    assert compile_calls == 1
 
 def test_production_tree_sitter_unwraps_accidental_outer_class(
     tmp_path: Path, monkeypatch
@@ -1190,7 +1197,7 @@ def test_atomic_sibling_map_generics_are_propagated_before_first_compile(
     )
 
     assert calls == ["steps", "branches"]
-    assert compiles == 2
+    assert compiles == 1
     assert result["generation_verification"]["atomic_repair_count"] == 0
     assert result["generation_verification"]["atomic_first_pass_rejection_count"] == 0
     assert result["generation_verification"]["atomic_first_compile_failure_count"] == 0
