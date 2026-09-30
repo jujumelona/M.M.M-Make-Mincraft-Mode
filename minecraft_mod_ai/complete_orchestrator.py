@@ -2053,7 +2053,8 @@ class CompleteProductionOrchestrator:
                 info = zipfile.ZipInfo(relative, date_time=(1980, 1, 1, 0, 0, 0))
                 info.compress_type = zipfile.ZIP_DEFLATED
                 info.external_attr = (0o644 & 0xFFFF) << 16
-                archive.writestr(info, path.read_bytes())
+                with path.open('rb') as source, archive.open(info, 'w') as sink:
+                    shutil.copyfileobj(source, sink, length=1024 * 1024)
         return {
             'status': 'PASS',
             'path': str(target),
