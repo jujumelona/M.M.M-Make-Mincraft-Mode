@@ -23,8 +23,10 @@ _PUBLIC_DECLARATION = re.compile(
 
 
 def _java_home() -> Path | None:
-    configured = os.environ.get("JAVA_HOME", "").strip()
-    if configured:
+    for variable in ("MMM_PROJECT_JAVA_HOME", "JAVA_HOME"):
+        configured = os.environ.get(variable, "").strip()
+        if not configured:
+            continue
         candidate = Path(configured).expanduser().resolve()
         if (candidate / "lib" / "modules").is_file():
             return candidate
