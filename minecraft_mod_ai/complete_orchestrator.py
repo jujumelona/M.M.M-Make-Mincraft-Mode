@@ -718,6 +718,7 @@ class CompleteProductionOrchestrator:
                 'refreshed_after_build': validation_refreshed,
             },
         )
+        jar_validation_input_sha256 = file_sha256(jar_path)
         jar_validation = run_named_checkpoint(
             ledger,
             'validate-jar',
@@ -726,7 +727,7 @@ class CompleteProductionOrchestrator:
                 'validate-jar',
                 {
                     'graph_hash': work_plan.graph_hash,
-                    'jar_sha256': file_sha256(jar_path),
+                    'jar_sha256': jar_validation_input_sha256,
                 },
             ),
             action=lambda: validate_jar(jar_path, spec).to_dict(),
@@ -775,7 +776,7 @@ class CompleteProductionOrchestrator:
                 'Built JAR failed independent validation.'
                 + (f' {summary}' if summary else '')
             )
-        self._succeed_work_node(ledger, 'validate-jar', {'schema_version': 'mmm/work-node-receipt-v1', 'status': 'PASS', 'jar_sha256': file_sha256(jar_path), 'checks_run': jar_validation.get('checks_run', 0)})
+        self._succeed_work_node(ledger, 'validate-jar', {'schema_version': 'mmm/work-node-receipt-v1', 'status': 'PASS', 'jar_sha256': jar_validation_input_sha256, 'checks_run': jar_validation.get('checks_run', 0)})
         runtime_manager: MinecraftRuntimeManager | None = None
         try:
             if options.run_runtime:
@@ -1109,7 +1110,7 @@ class CompleteProductionOrchestrator:
                 'graph_hash': work_plan.graph_hash,
                 'proposal_hash': approved.calculate_hash(),
                 'base_proposal_hash': base.calculate_hash(),
-                'jar_sha256': file_sha256(jar_path),
+                'jar_sha256': jar_validation_input_sha256,
                 'coverage_sha256': str(coverage_receipt.get('coverage_sha256') or ''),
                 'runtime_receipt_sha256': _stable_payload_sha256(persisted_runtime_receipt),
                 'build_receipt_sha256': _stable_payload_sha256(build_receipt),
