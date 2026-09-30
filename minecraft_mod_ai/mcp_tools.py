@@ -307,6 +307,49 @@ class MMMToolService:
         report = validate_jar(jar, parsed.spec)
         return {**report.to_dict(), 'jar_path': str(jar), 'jar_sha256': _sha256(jar)}
 
+    def _write_release_archive(
+        self,
+        *,
+        approved: Proposal,
+        root: Path,
+        output_zip: str,
+        jar: Path | None,
+        source_validation: dict[str, Any],
+        jar_validation: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        target = self._new_file(output_zip)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            raise FileExistsError(f'Release already exists: {target}')
+        with zipfile.ZipFile(target, 'w', compression=zipfile.ZIP_DEFLATED) as zipped:
+            from .release_source_files import release_source_files
+
+            for path in release_source_files(root):
+                if path.resolve() == target.resolve():
+                    continue
+                relative = path.relative_to(root)
+                zipped.write(path, Path('source') / relative)
+            if jar is not None:
+                zipped.write(jar, Path('binary') / jar.name)
+            zipped.writestr(
+                'release-manifest.json',
+                canonical_json(
+                    {
+                        'schema_version': 'mmm/release-manifest-v2',
+                        'proposal_hash': approved.calculate_hash(),
+                        'source_validation': source_validation,
+                        'jar_validation': jar_validation,
+                        'resource_policy': self.policy.__dict__,
+                    }
+                ),
+            )
+        return {
+            'status': 'PACKAGED',
+            'release_zip': str(target),
+            'sha256': _sha256(target),
+            'includes_verified_jar': jar is not None,
+        }
+
     def package_release(self, project_root: str, proposal: dict[str, Any], approval_hash: str, output_zip: str='releases/mmm-release.zip', jar_path: str | None=None) -> dict[str, Any]:
         approved = self._approved(proposal, approval_hash)
         root = self._existing_dir(project_root)
@@ -322,22 +365,63 @@ class MMMToolService:
             if not validated.passed:
                 raise RuntimeError('JAR validation failed; release package was not created.')
             jar_report = validated.to_dict()
-        target = self._new_file(output_zip)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if target.exists():
-            raise FileExistsError(f'Release already exists: {target}')
-        with zipfile.ZipFile(target, 'w', compression=zipfile.ZIP_DEFLATED) as zipped:
-            from .release_source_files import release_source_files
+        return self._write_release_archive(
+            approved=approved,
+            root=root,
+            output_zip=output_zip,
+            jar=jar,
+            source_validation=source_report.to_dict(),
+            jar_validation=jar_report,
+        )
 
-            for path in release_source_files(root):
-                if path.resolve() == target.resolve():
-                    continue
-                relative = path.relative_to(root)
-                zipped.write(path, Path('source') / relative)
-            if jar is not None:
-                zipped.write(jar, Path('binary') / jar.name)
-            zipped.writestr('release-manifest.json', canonical_json({'schema_version': 'mmm/release-manifest-v2', 'proposal_hash': approved.calculate_hash(), 'source_validation': source_report.to_dict(), 'jar_validation': jar_report, 'resource_policy': self.policy.__dict__}))
-        return {'status': 'PACKAGED', 'release_zip': str(target), 'sha256': _sha256(target), 'includes_verified_jar': jar is not None}
+    def _package_release_from_verified_evidence(
+        self,
+        project_root: str,
+        proposal: dict[str, Any],
+        approval_hash: str,
+        *,
+        output_zip: str,
+        jar_path: str,
+        source_validation: dict[str, Any],
+        jar_validation: dict[str, Any],
+        expected_jar_sha256: str,
+    ) -> dict[str, Any]:
+        """Internal production fast path; reuse already completed validation gates."""
+
+        from .validation_checkpoint_policy import cached_validation_is_reusable
+
+        approved = self._approved(proposal, approval_hash)
+        root = self._existing_dir(project_root)
+        self.broker.authorize(
+            approved_request(
+                ToolAction.PACKAGE,
+                project_root=root,
+                workspace_root=self.workspace_root,
+                proposal=approved,
+            ),
+            approved,
+        )
+        if not cached_validation_is_reusable('validate-source', source_validation):
+            raise RuntimeError(
+                'Verified release packaging requires a complete passing source receipt.'
+            )
+        if not cached_validation_is_reusable('validate-jar', jar_validation):
+            raise RuntimeError(
+                'Verified release packaging requires a complete passing JAR receipt.'
+            )
+        jar = self._existing_file(jar_path)
+        if _sha256(jar) != str(expected_jar_sha256):
+            raise RuntimeError(
+                'Verified release packaging JAR changed after validation.'
+            )
+        return self._write_release_archive(
+            approved=approved,
+            root=root,
+            output_zip=output_zip,
+            jar=jar,
+            source_validation=dict(source_validation),
+            jar_validation=dict(jar_validation),
+        )
 
     def _run_gradle(self, project_root: str, proposal: dict[str, Any], approval_hash: str, *, run_gametest: bool) -> dict[str, Any]:
         approved = self._approved(proposal, approval_hash)
