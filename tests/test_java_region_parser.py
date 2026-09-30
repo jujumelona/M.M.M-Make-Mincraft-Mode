@@ -153,6 +153,21 @@ private static int bareFenceValue = 7;
     assert "bareFenceValue = 7" in admitted
 
 
+def test_initialize_admission_uses_same_bare_fence_envelope_boundary() -> None:
+    output = """
+initialization follows
+
+```
+value = 1;
+if (ready) { start(); }
+```
+"""
+    admitted = admit_initialize_region(output)
+    assert "value = 1;" in admitted
+    assert "if (ready) { start(); }" in admitted
+    assert "initialization follows" not in admitted
+
+
 def test_markdown_it_ignores_explicit_non_java_fence_and_uses_java_candidate() -> None:
     output = """
 ```text
