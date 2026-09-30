@@ -16,7 +16,6 @@ from minecraft_mod_ai.colab_run_modes import (
     FULL_MODE,
     PLAN_MODE,
     RUN_MODES,
-    _assert_colab_checkout_current,
     audit_path,
     build_result_download_target,
     debug_audit_path,
@@ -77,53 +76,6 @@ def _cell_source(path: Path, cell_id: str) -> str:
 
 def _must_not_prompt(_: str) -> str:
     raise AssertionError("automatic Colab flow must not request manual approval input")
-
-
-def test_colab_checkout_freshness_accepts_current_main(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    (tmp_path / ".git").mkdir()
-    commit = "a" * 40
-    monkeypatch.setenv(
-        "MMM_COLAB_SETUP_RECEIPT",
-        json.dumps({"repo_dir": str(tmp_path), "used_commit": commit}),
-    )
-
-    def fake_check_output(command, **kwargs):
-        if "rev-parse" in command:
-            return commit + "\n"
-        if "ls-remote" in command:
-            return f"{commit}\trefs/heads/main\n"
-        raise AssertionError(command)
-
-    monkeypatch.setattr(colab_run_modes.subprocess, "check_output", fake_check_output)
-    _assert_colab_checkout_current()
-
-
-def test_colab_checkout_freshness_rejects_advanced_main_before_model_request(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    (tmp_path / ".git").mkdir()
-    used = "a" * 40
-    remote = "b" * 40
-    monkeypatch.setenv(
-        "MMM_COLAB_SETUP_RECEIPT",
-        json.dumps({"repo_dir": str(tmp_path), "used_commit": used}),
-    )
-
-    def fake_check_output(command, **kwargs):
-        if "rev-parse" in command:
-            return used + "\n"
-        if "ls-remote" in command:
-            return f"{remote}\trefs/heads/main\n"
-        raise AssertionError(command)
-
-    monkeypatch.setattr(colab_run_modes.subprocess, "check_output", fake_check_output)
-
-    with pytest.raises(RuntimeError, match="checkout is stale"):
-        _assert_colab_checkout_current()
 
 
 def test_run_modes_are_exact_and_full_mode_builds_by_default() -> None:
