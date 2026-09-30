@@ -1357,8 +1357,22 @@ def test_pipeline_deferred_whole_file_generation_skips_gradle_but_commits_source
                 "complete-production generation must defer compile to the final build gate"
             )
 
+    class ForbiddenCoarseLock:
+        def __enter__(self):
+            raise AssertionError(
+                "pipeline-deferred whole-file generation must not hold the coarse project lock"
+            )
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
     monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
     monkeypatch.setattr(direct, "GradleRunner", Runner)
+    monkeypatch.setattr(
+        direct,
+        "project_write_lock",
+        lambda _root: ForbiddenCoarseLock(),
+    )
 
     result = direct.CustomModuleGenerator(
         Router(),
