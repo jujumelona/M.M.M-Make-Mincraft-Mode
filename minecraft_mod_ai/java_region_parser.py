@@ -459,6 +459,46 @@ def class_body_method_invocations(value: str) -> tuple[dict[str, Any], ...]:
             rows.append(row)
     return tuple(rows)
 
+def class_body_object_creations(value: str) -> tuple[dict[str, Any], ...]:
+    """Return constructed type spelling and argument count for object creation expressions."""
+
+    region = str(value or "").strip()
+    if not region:
+        return ()
+    prefix = "final class __MMMRegionHost {\n"
+    source, root = _parse(prefix + region + "\n}\n")
+    body = _class_body(root)
+    rows: list[dict[str, Any]] = []
+    for node in _walk_named(body):
+        if node.type != "object_creation_expression":
+            continue
+        type_node = node.child_by_field_name("type")
+        arguments = node.child_by_field_name("arguments")
+        if type_node is None:
+            type_node = next(
+                (
+                    child
+                    for child in node.named_children
+                    if child.type in {
+                        "type_identifier",
+                        "scoped_type_identifier",
+                        "generic_type",
+                    }
+                ),
+                None,
+            )
+        if type_node is None:
+            continue
+        rows.append(
+            {
+                "type": _text(source, type_node).strip(),
+                "argument_count": (
+                    len(arguments.named_children) if arguments is not None else 0
+                ),
+            }
+        )
+    return tuple(rows)
+
 
 def class_body_direct_return_calls(value: str) -> tuple[dict[str, Any], ...]:
     """Return direct method calls used as return expressions with enclosing return type.
