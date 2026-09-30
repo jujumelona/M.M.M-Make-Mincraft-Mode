@@ -2941,3 +2941,42 @@ def test_first_pass_type_authority_rejects_nonexistent_java_fqcn() -> None:
             dependency_source="",
             sibling_api=(),
         )
+
+
+def test_jdk_type_index_prefers_project_toolchain(tmp_path, monkeypatch) -> None:
+    from minecraft_mod_ai.jdk_type_index import _java_home
+
+    project_home = tmp_path / "project-jdk"
+    system_home = tmp_path / "system-jdk"
+    (project_home / "lib").mkdir(parents=True)
+    (system_home / "lib").mkdir(parents=True)
+    (project_home / "lib" / "modules").write_bytes(b"project")
+    (system_home / "lib" / "modules").write_bytes(b"system")
+
+    monkeypatch.setenv("MMM_PROJECT_JAVA_HOME", str(project_home))
+    monkeypatch.setenv("JAVA_HOME", str(system_home))
+
+    assert _java_home() == project_home.resolve()
+
+
+def test_jdk_image_parser_indexes_only_top_level_java_types() -> None:
+    from minecraft_mod_ai.jdk_type_index import _parse_jimage_type_index
+
+    index = _parse_jimage_type_index(
+        """
+Module: java.base
+    java/lang/String.class
+    java/util/Optional.class
+    java/util/Map$Entry.class
+Module: java.sql
+    java/sql/Date.class
+Module: other
+    com/example/Hidden.class
+"""
+    )
+
+    assert index["String"] == ("java.lang.String",)
+    assert index["Optional"] == ("java.util.Optional",)
+    assert index["Date"] == ("java.sql.Date",)
+    assert "Entry" not in index
+    assert "Hidden" not in index
