@@ -2662,6 +2662,7 @@ def _compact_prompt_member_contract(
         "return_type",
         "static",
         "mutable",
+        "typed_api_source",
     ):
         value = raw.get(key)
         if value not in (None, "", (), []):
@@ -2700,17 +2701,19 @@ def _dependency_api_context(raw: str, *, max_chars: int = 10000) -> list[dict[st
                 typed_api = []
         compact = {
             "symbol": str(row.get("symbol") or ""),
+            "path": str(row.get("path") or ""),
             "responsibility": str(row.get("responsibility") or ""),
             # Parsed source is authoritative when available. Do not duplicate every
             # declaration as both prose public_api and typed_public_api.
             "public_api": [] if typed_api else list(row.get("public_api") or []),
             "typed_public_api": typed_api,
-            "typed_api_source": "tree_sitter_java" if typed_api else "fallback",
+            "typed_api_source": "tree_sitter_java" if typed_api else "unavailable",
         }
         encoded = json.dumps(compact, ensure_ascii=False, sort_keys=True)
         if used + len(encoded) > max_chars:
             fallback = {
                 "symbol": compact["symbol"],
+                "path": compact["path"],
                 "responsibility": compact["responsibility"],
                 "public_api": list(row.get("public_api") or []),
                 "typed_public_api": [],
@@ -3579,7 +3582,11 @@ def _messages(
                 "and use only JDK/dependency APIs. "
             )
         )
-        + "Use only supplied host grounding and dependency_api; never invent a Minecraft/Fabric API."
+        + "Use only supplied host grounding and dependency APIs; never invent a Minecraft/Fabric API. "
+        "dependency_call_contract is exhaustive for dependency method calls: match owner, method, "
+        "static=true, arity, and parameter types exactly. If no exact row exists, do not emit the call. "
+        "Never add arguments to a zero-arity method. Never call a dependency initialize/onInitialize "
+        "lifecycle hook from a concern region."
     )
     payload = {
         "phase": "implement_atomic_concern_region",
