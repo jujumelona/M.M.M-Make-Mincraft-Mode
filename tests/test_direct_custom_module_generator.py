@@ -1017,6 +1017,8 @@ def test_atomic_first_candidate_canonicalizes_jdk_lock_semantics_before_compile(
     )
 
     assert result["generation_verification"]["atomic_repair_count"] == 0
+    assert result["generation_verification"]["atomic_first_pass_rejection_count"] == 0
+    assert result["generation_verification"]["atomic_first_compile_failure_count"] == 0
     assert calls == ["steps"]
     assert compiles == 1
 
@@ -1086,6 +1088,8 @@ def test_atomic_compile_failure_is_repaired_with_local_bounded_retry(
     assert "new Object();" in source
     assert "new Object(1)" not in source
     assert result["generation_verification"]["atomic_repair_count"] == 1
+    assert result["generation_verification"]["atomic_first_pass_rejection_count"] == 0
+    assert result["generation_verification"]["atomic_first_compile_failure_count"] == 1
     assert calls == ["steps", "steps"]
     assert compiles == 2
 
@@ -1188,3 +1192,5 @@ def test_atomic_sibling_map_generics_are_propagated_before_first_compile(
     assert calls == ["steps", "branches"]
     assert compiles == 2
     assert result["generation_verification"]["atomic_repair_count"] == 0
+    assert result["generation_verification"]["atomic_first_pass_rejection_count"] == 0
+    assert result["generation_verification"]["atomic_first_compile_failure_count"] == 0
