@@ -2905,14 +2905,37 @@ def test_first_pass_canonicalizes_unique_installed_jdk_simple_types() -> None:
     source, changes = _canonicalize_generated_jdk_semantics(
         (
             "private static Optional<String> maybe;\n"
-            "private static Duration timeout;"
+            "private static UUID id;"
         )
     )
 
     assert "java.util.Optional<String> maybe;" in source
-    assert "java.time.Duration timeout;" in source
+    assert "java.util.UUID id;" in source
     assert any("Optional->java.util.Optional" in item for item in changes)
-    assert any("Duration->java.time.Duration" in item for item in changes)
+    assert any("UUID->java.util.UUID" in item for item in changes)
+
+
+def test_ambiguous_installed_jdk_simple_type_requires_explicit_fqcn() -> None:
+    from minecraft_mod_ai.atomic_concern_source import (
+        _canonicalize_generated_jdk_semantics,
+        _validate_first_pass_java_semantics,
+    )
+
+    source, changes = _canonicalize_generated_jdk_semantics(
+        "private static Duration timeout;"
+    )
+
+    assert source == "private static Duration timeout;"
+    assert not changes
+    with pytest.raises(
+        CustomModuleGenerationError,
+        match="ungrounded simple Java type.*Duration",
+    ):
+        _validate_first_pass_java_semantics(
+            source,
+            dependency_source="",
+            sibling_api=(),
+        )
 
 
 def test_first_pass_canonicalizes_wrong_unique_jdk_fqcn_from_installed_jdk() -> None:
