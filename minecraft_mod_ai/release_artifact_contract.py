@@ -207,7 +207,14 @@ def attach_verified_release_artifact(
                     if info.filename == "release-manifest.json":
                         manifest_info = info
                         continue
-                    rewritten.writestr(info, original.read(info.filename))
+                    with original.open(info, "r") as source_member, rewritten.open(
+                        info, "w"
+                    ) as target_member:
+                        shutil.copyfileobj(
+                            source_member,
+                            target_member,
+                            length=1024 * 1024,
+                        )
                 if source is not None:
                     attachment_info = zipfile.ZipInfo(
                         member_name,
@@ -215,7 +222,14 @@ def attach_verified_release_artifact(
                     )
                     attachment_info.compress_type = zipfile.ZIP_DEFLATED
                     attachment_info.external_attr = (0o644 & 0xFFFF) << 16
-                    rewritten.writestr(attachment_info, source.read_bytes())
+                    with source.open("rb") as source_member, rewritten.open(
+                        attachment_info, "w"
+                    ) as target_member:
+                        shutil.copyfileobj(
+                            source_member,
+                            target_member,
+                            length=1024 * 1024,
+                        )
                 if manifest_info is None:
                     raise CompleteProductionError(
                         "Release manifest metadata disappeared."
