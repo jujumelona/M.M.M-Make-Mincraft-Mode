@@ -26,6 +26,7 @@ from .java_region_parser import (
     class_body_member_contracts,
     class_body_member_kinds,
     class_body_method_invocations,
+    class_body_simple_type_occurrences,
     public_source_member_contracts,
     strict_initialize_statements,
     strict_member_chunks,
@@ -737,10 +738,16 @@ _FIELD_MODIFIERS = frozenset(
 
 def _canonical_jdk_class_name(value: str) -> str:
     raw = re.sub(r"\s+", "", _erase_generic_arguments(str(value or ""))).strip()
-    return _JDK_FQCN_ALIASES.get(
+    mapped = _JDK_FQCN_ALIASES.get(
         raw,
         _JDK_CANONICAL_SIMPLE_TYPES.get(raw, raw),
     )
+    try:
+        from .jdk_type_index import canonical_public_jdk_type
+
+        return canonical_public_jdk_type(mapped)
+    except (OSError, RuntimeError, ValueError):
+        return mapped
 
 
 def _rewrite_known_jdk_fqcns(value: str) -> str:
@@ -908,10 +915,70 @@ def _render_canonical_declared_type(target: str, original: str) -> str:
     return target + "<" + ", ".join(arguments) + ">"
 
 
+def _canonicalize_tree_sitter_jdk_types(
+    value: str,
+    *,
+    protected_simple_types: Sequence[str] = (),
+) -> tuple[str, tuple[str, ...]]:
+    """Rewrite only AST-proven simple JDK type identifiers to canonical FQCNs."""
+
+    source = str(value or "")
+    if not source.strip():
+        return source, ()
+    protected = {
+        str(name or "").strip()
+        for name in protected_simple_types
+        if str(name or "").strip()
+    }
+    try:
+        contracts = class_body_member_contracts(source)
+    except JavaRegionParseError:
+        return source, ()
+    protected.update(
+        str(item.get("symbol") or "").strip()
+        for item in contracts
+        if item.get("kind") == "type" and str(item.get("symbol") or "").strip()
+    )
+
+    replacements: list[tuple[int, int, str, str]] = []
+    for occurrence in class_body_simple_type_occurrences(source):
+        name = str(occurrence.get("name") or "").strip()
+        if not name or name in protected:
+            continue
+        canonical = _canonical_jdk_class_name(name)
+        if (
+            canonical == name
+            or canonical.startswith("java.lang.")
+            or "." not in canonical
+        ):
+            continue
+        replacements.append(
+            (
+                int(occurrence["start_byte"]),
+                int(occurrence["end_byte"]),
+                name,
+                canonical,
+            )
+        )
+
+    if not replacements:
+        return source, ()
+
+    raw = source.encode("utf-8")
+    changes: list[str] = []
+    for start, end, name, canonical in sorted(
+        replacements, key=lambda item: item[0], reverse=True
+    ):
+        raw = raw[:start] + canonical.encode("utf-8") + raw[end:]
+        changes.append(f"type:{name}->{canonical}")
+    return raw.decode("utf-8"), tuple(reversed(changes))
+
+
 def _canonicalize_generated_jdk_semantics(
     value: str,
     *,
     authoritative_field_types: Mapping[str, str] | None = None,
+    protected_simple_types: Sequence[str] = (),
 ) -> tuple[str, tuple[str, ...]]:
     """Canonicalize known JDK runtime types before the first compiler invocation.
 
@@ -921,6 +988,10 @@ def _canonicalize_generated_jdk_semantics(
     """
 
     source = _rewrite_known_jdk_fqcns(value)
+    source, type_changes = _canonicalize_tree_sitter_jdk_types(
+        source,
+        protected_simple_types=protected_simple_types,
+    )
     chunks = class_body_chunks(source)
     kinds = class_body_member_kinds(source)
     if len(chunks) != len(kinds):
@@ -928,7 +999,7 @@ def _canonicalize_generated_jdk_semantics(
             "ATOMIC_CONCERN_JAVA_PARSE_INVALID: member chunk/kind cardinality drift"
         )
 
-    changes: list[str] = []
+    changes: list[str] = list(type_changes)
     rendered: list[str] = []
     for chunk, kind in zip(chunks, kinds, strict=True):
         if kind != "field_declaration":
@@ -2762,10 +2833,19 @@ def _validate_declared_type_authority(
                 if (
                     not leaf
                     or leaf in _JAVA_PRIMITIVE_TYPES
-                    or "." in leaf
                     or leaf in allowed
                     or (len(leaf) == 1 and leaf.isupper())
                 ):
+                    continue
+                if "." in leaf:
+                    if leaf.startswith(("java.", "javax.")):
+                        try:
+                            from .jdk_type_index import is_public_jdk_type
+
+                            if not is_public_jdk_type(leaf):
+                                unknown.add(leaf)
+                        except (OSError, RuntimeError, ValueError):
+                            pass
                     continue
                 unknown.add(leaf)
 
@@ -3744,6 +3824,12 @@ class AtomicConcernExecutor:
                         authoritative_field_types=_sibling_field_type_contracts(
                             self.source,
                             sibling_concerns=sibling_names,
+                        ),
+                        protected_simple_types=(
+                            *self._known_simple_types(exclude=name),
+                            *_dependency_authorized_simple_types(
+                                self.dependency_source
+                            ),
                         ),
                     )
                     if canonical_changes:
