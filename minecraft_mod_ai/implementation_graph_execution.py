@@ -285,6 +285,11 @@ def _leaf_module(
                 "implementation_section": section,
                 "implementation_atomic_concerns": atomic_concerns,
                 "implementation_dependency_context": json.dumps(dependencies, ensure_ascii=False),
+                # The graph transaction owns the real Gradle compile after every
+                # admitted leaf and the host-owned entrypoint binding are assembled.
+                # Leaf generation still runs Tree-sitter/semantic/API admission, but
+                # must not spawn one Gradle process per file.
+                "implementation_graph_deferred_compile": True,
                 "implementation_structured_sections": deepcopy(request["structured_sections"]),
                 "implementation_structured_sections_sha256": request["structured_sections_sha256"],
                 **grounding_identity,
