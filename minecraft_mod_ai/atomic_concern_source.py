@@ -2642,6 +2642,142 @@ def _simple_object_type(value: Any) -> bool:
     return normalized in {"Object", "java.lang.Object"}
 
 
+_JAVA_PRIMITIVE_TYPES = frozenset({
+    "boolean", "byte", "short", "int", "long", "char", "float", "double", "void",
+})
+
+
+def _type_leaf_names(value: Any) -> tuple[str, ...]:
+    """Return raw leaf type names from one Java type expression.
+
+    Fully-qualified names are returned intact so the caller can defer their
+    existence/binding to JDT/javac instead of guessing from spelling.
+    """
+
+    text = str(value or "").strip()
+    if not text:
+        return ()
+    text = re.sub(r"\s*\.\.\.\s*$", "", text)
+    while text.endswith("[]"):
+        text = text[:-2].strip()
+    for prefix in ("? extends ", "? super "):
+        if text.startswith(prefix):
+            return _type_leaf_names(text[len(prefix):])
+    if text == "?":
+        return ()
+
+    raw, args = _generic_type_parts(text)
+    normalized_raw = re.sub(r"\s+", "", raw)
+    leaves: list[str] = []
+    if normalized_raw:
+        leaves.append(normalized_raw)
+    for arg in args:
+        leaves.extend(_type_leaf_names(arg))
+    return tuple(dict.fromkeys(leaves))
+
+
+def _dependency_authorized_simple_types(raw: str) -> set[str]:
+    names = set(_dependency_declared_identifiers(raw))
+    for row in _dependency_context_rows(raw):
+        source = str(row.get("source") or "").strip()
+        if not source:
+            continue
+        try:
+            contracts = public_source_member_contracts(source)
+        except JavaRegionParseError:
+            continue
+        for contract in contracts:
+            if contract.get("kind") == "type":
+                symbol = str(contract.get("symbol") or "").strip()
+                if symbol:
+                    names.add(symbol)
+            type_values: list[Any] = []
+            if contract.get("kind") == "field":
+                type_values.append(contract.get("declared_type"))
+            elif contract.get("kind") == "method":
+                type_values.append(contract.get("return_type"))
+                type_values.extend(
+                    parameter.get("type")
+                    for parameter in contract.get("parameters") or ()
+                    if isinstance(parameter, Mapping)
+                )
+            for type_value in type_values:
+                for leaf in _type_leaf_names(type_value):
+                    if "." not in leaf and leaf not in _JAVA_PRIMITIVE_TYPES:
+                        names.add(leaf)
+    return names
+
+
+def _validate_declared_type_authority(
+    contracts: Sequence[Mapping[str, Any]],
+    *,
+    dependency_source: str,
+    sibling_api: Sequence[Mapping[str, Any]],
+) -> None:
+    """Reject ungrounded simple declaration types before javac.
+
+    FQCNs are deliberately deferred to JDT/javac because package/classpath
+    binding is semantic. Simple names, however, must come from java.lang/JDK,
+    the current candidate, an accepted sibling type, or dependency authority.
+    """
+
+    allowed = (
+        set(_JAVA_LANG_SIMPLE_TYPES)
+        | set(_JDK_CANONICAL_SIMPLE_TYPES)
+        | _dependency_authorized_simple_types(dependency_source)
+    )
+    allowed.update(
+        str(item.get("symbol") or "").strip()
+        for item in contracts
+        if item.get("kind") == "type" and str(item.get("symbol") or "").strip()
+    )
+    allowed.update(
+        str(item.get("symbol") or "").strip()
+        for item in sibling_api
+        if isinstance(item, Mapping)
+        and item.get("kind") == "type"
+        and str(item.get("symbol") or "").strip()
+    )
+
+    unknown: set[str] = set()
+    for contract in contracts:
+        values: list[Any] = []
+        if contract.get("kind") == "field":
+            values.append(contract.get("declared_type"))
+        elif contract.get("kind") == "method":
+            values.append(contract.get("return_type"))
+            values.extend(
+                parameter.get("type")
+                for parameter in contract.get("parameters") or ()
+                if isinstance(parameter, Mapping)
+            )
+        elif contract.get("kind") == "constructor":
+            values.extend(
+                parameter.get("type")
+                for parameter in contract.get("parameters") or ()
+                if isinstance(parameter, Mapping)
+            )
+        for value in values:
+            for leaf in _type_leaf_names(value):
+                if (
+                    not leaf
+                    or leaf in _JAVA_PRIMITIVE_TYPES
+                    or "." in leaf
+                    or leaf in allowed
+                    or (len(leaf) == 1 and leaf.isupper())
+                ):
+                    continue
+                unknown.add(leaf)
+
+    if unknown:
+        raise CustomModuleGenerationError(
+            "ATOMIC_CONCERN_RESPONSE_INVALID: ungrounded simple Java type name(s): "
+            + ", ".join(sorted(unknown))
+            + ". Use an authoritative sibling/dependency type, a known JDK type, "
+            "or the exact fully-qualified external type."
+        )
+
+
 def _validate_first_pass_java_semantics(
     value: str,
     *,
@@ -2656,6 +2792,11 @@ def _validate_first_pass_java_semantics(
     """
 
     contracts = class_body_member_contracts(value)
+    _validate_declared_type_authority(
+        contracts,
+        dependency_source=dependency_source,
+        sibling_api=sibling_api,
+    )
     final_fields = {
         str(item.get("symbol") or "")
         for item in contracts
