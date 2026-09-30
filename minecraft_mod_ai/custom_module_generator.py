@@ -2373,7 +2373,6 @@ class CustomModuleGenerator:
             "sha256:" + hashlib.sha256(original_bytes).hexdigest()
             if original_bytes is not None else _sha256_text(original)
         )
-        current = original
         summary = ""
         last_failure = ""
         compiler = GradleRunner(self._cache_dir(root))
@@ -2388,8 +2387,6 @@ class CustomModuleGenerator:
             )
             return _run_atomic_ir_generation(self, context_state)
         attempt = 0
-        best_failure_measure: tuple[int, int] | None = None
-        seen_candidates: set[str] = set()
 
         with project_write_lock(root):
             while True:
@@ -2436,7 +2433,6 @@ class CustomModuleGenerator:
                 if isinstance(ir_contract, Mapping):
                     from .implementation_graph_execution import public_api_errors
                     invariant_errors += public_api_errors(candidate, ir_contract)
-                candidate_sha = _sha256_text(candidate)
                 if invariant_errors:
                     if target_existed:
                         _atomic_write(target, original_bytes)
@@ -2450,7 +2446,6 @@ class CustomModuleGenerator:
                     )
 
                 _atomic_write(target, candidate)
-                current = candidate
                 report = compiler.compile_java(root)
                 if getattr(report, "status", "") == "PASS":
                     after_sha = _sha256_text(candidate)

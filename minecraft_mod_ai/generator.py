@@ -11,7 +11,7 @@ from .fabric_official_template_provider import _install_host_gametest_contract
 from .platform_catalog import adapter_for_lock_values
 from .spec import BossSpec, ContentKind, ContentSpec, ModSpec
 from .toolchain_contract import fabric_dependency_predicates
-from .texture_equivalence_cache import _TEXTURE_CACHE, _TEXTURE_CACHE_LOCK, cached_texture_renderer
+from .texture_equivalence_cache import cached_texture_renderer
 
 
 class GenerationError(RuntimeError):
