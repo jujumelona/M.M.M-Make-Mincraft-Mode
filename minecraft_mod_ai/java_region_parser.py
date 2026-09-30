@@ -601,24 +601,47 @@ def _unwrap_single_outer_class(value: str) -> tuple[str, ...]:
     return chunks
 
 
-def _markdown_java_candidates(value: str) -> tuple[str, ...]:
-    """Extract Java fenced blocks from noisy model Markdown with markdown-it."""
-    tokens = MarkdownIt("commonmark").parse(str(value or ""))
-    candidates: list[str] = []
+def _fence_language(info: object) -> str:
+    """Normalize a Markdown fence info string without assuming a language token."""
+    parts = str(info or "").strip().split(maxsplit=1)
+    return parts[0].casefold() if parts else ""
+
+
+def _model_java_candidates(value: str) -> tuple[str, ...]:
+    """Return Java-shaped payload candidates from an arbitrary model envelope.
+
+    This function is the single normalization boundary for model-authored Java.
+    It is intentionally total for ordinary text inputs: Markdown metadata is never
+    indexed blindly, bare fences are accepted as candidates, explicit non-Java
+    fences are ignored, and the raw payload remains a final fallback. Candidate
+    syntax is still decided only by Tree-sitter downstream.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return ()
+
+    fenced: list[str] = []
+    try:
+        tokens = MarkdownIt("commonmark").parse(raw)
+    except Exception:
+        tokens = ()
     for token in tokens:
         if token.type != "fence":
             continue
-        info_parts = str(token.info or "").strip().split(maxsplit=1)
-        language = info_parts[0].casefold() if info_parts else ""
-        # Bare fences are admissible candidates only after the same structural
-        # Java parser validates their content downstream. Explicit non-Java
-        # languages remain excluded.
+        language = _fence_language(token.info)
         if language not in {"", "java", "javac"}:
             continue
         candidate = str(token.content or "").strip()
-        if candidate:
-            candidates.append(candidate)
-    return tuple(candidates)
+        if candidate and candidate not in fenced:
+            fenced.append(candidate)
+
+    # Models often emit earlier draft fences followed by a final fence. Prefer
+    # later fenced candidates; raw text is only the final fallback for direct Java
+    # or accidental single-class envelopes.
+    ordered = list(reversed(fenced))
+    if raw not in ordered:
+        ordered.append(raw)
+    return tuple(ordered)
 
 
 def _admit_member_candidate(region: str) -> tuple[str, ...]:
@@ -639,41 +662,25 @@ def _admit_member_candidate(region: str) -> tuple[str, ...]:
 
 
 def admit_member_region(value: str) -> str:
-    """Normalize noisy model output into host-admissible Java members.
-
-    The raw output may already be Java, may accidentally wrap members in one outer
-    class, or may be Markdown containing several Java drafts. Markdown parsing is
-    delegated to markdown-it and Java parsing to Tree-sitter. When several fenced
-    Java drafts exist, the last structurally admissible candidate wins because local
-    models commonly reason through earlier drafts before emitting their final answer.
-    """
-    region = str(value or "").strip()
-    if not region:
+    """Normalize arbitrary model output into host-admissible Java members."""
+    candidates = _model_java_candidates(value)
+    if not candidates:
         return ""
 
-    direct_error: JavaRegionParseError | None = None
-    try:
-        chunks = _admit_member_candidate(region)
-        if chunks:
-            return "\n\n".join(chunks).strip()
-    except JavaRegionParseError as exc:
-        direct_error = exc
-
-    fenced = _markdown_java_candidates(region)
-    fence_errors: list[str] = []
-    for candidate in reversed(fenced):
+    errors: list[str] = []
+    for candidate in candidates:
         try:
             chunks = _admit_member_candidate(candidate)
             if chunks:
                 return "\n\n".join(chunks).strip()
         except JavaRegionParseError as exc:
-            fence_errors.append(str(exc))
+            errors.append(str(exc))
 
-    detail = str(direct_error or "raw output contained no admissible Java members")
-    if fenced:
-        detail += f"; {len(fenced)} Java fence(s) found but none were admissible"
-        if fence_errors:
-            detail += f"; last fence error: {fence_errors[0]}"
+    detail = (
+        f"{len(candidates)} model Java candidate(s) were structurally inadmissible"
+    )
+    if errors:
+        detail += f"; last candidate error: {errors[-1]}"
     raise JavaRegionParseError(detail)
 
 
@@ -702,4 +709,23 @@ def strict_initialize_statements(value: str) -> tuple[str, ...]:
 
 
 def admit_initialize_region(value: str) -> str:
-    return "\n".join(strict_initialize_statements(value)).strip()
+    """Normalize arbitrary model output into host-owned initialize statements."""
+    candidates = _model_java_candidates(value)
+    if not candidates:
+        return ""
+
+    errors: list[str] = []
+    for candidate in candidates:
+        try:
+            statements = strict_initialize_statements(candidate)
+            if statements or not candidate.strip():
+                return "\n".join(statements).strip()
+        except JavaRegionParseError as exc:
+            errors.append(str(exc))
+
+    detail = (
+        f"{len(candidates)} model initialize candidate(s) were structurally inadmissible"
+    )
+    if errors:
+        detail += f"; last candidate error: {errors[-1]}"
+    raise JavaRegionParseError(detail)
