@@ -14,6 +14,10 @@ on:
       - 'minecraft_mod_ai/structured_state_runtime.py'
       - 'minecraft_mod_ai/implementation_graph_execution.py'
       - 'minecraft_mod_ai/runner.py'
+      - 'minecraft_mod_ai/resource_asset_production.py'
+      - 'minecraft_mod_ai/mcp_tools.py'
+      - 'minecraft_mod_ai/publisher.py'
+      - 'minecraft_mod_ai/release_artifact_contract.py'
       - 'minecraft_mod_ai/complete_orchestrator.py'
       - 'minecraft_mod_ai/scheduler_claim_fencing_contract.py'
       - 'minecraft_mod_ai/complete_build_repair.py'
@@ -32,6 +36,10 @@ on:
       - 'tests/test_complete_final_validation_contract.py'
       - 'tests/test_build_repairability_guard.py'
       - 'tests/test_repair_semantic_convergence_contract.py'
+      - 'tests/test_repair_project_index_efficiency.py'
+      - 'tests/test_runner_gametest_first_execution.py'
+      - 'tests/test_resource_asset_clean_contract.py'
+      - 'tests/test_release_source_hygiene.py'
       - 'tests/test_scheduler_claim_fencing_contract.py'
       - '.github/workflows/production-path-contract.yml'
   push:
@@ -47,6 +55,10 @@ on:
       - 'minecraft_mod_ai/structured_state_runtime.py'
       - 'minecraft_mod_ai/implementation_graph_execution.py'
       - 'minecraft_mod_ai/runner.py'
+      - 'minecraft_mod_ai/resource_asset_production.py'
+      - 'minecraft_mod_ai/mcp_tools.py'
+      - 'minecraft_mod_ai/publisher.py'
+      - 'minecraft_mod_ai/release_artifact_contract.py'
       - 'minecraft_mod_ai/complete_orchestrator.py'
       - 'minecraft_mod_ai/scheduler_claim_fencing_contract.py'
       - 'minecraft_mod_ai/complete_build_repair.py'
@@ -65,6 +77,10 @@ on:
       - 'tests/test_complete_final_validation_contract.py'
       - 'tests/test_build_repairability_guard.py'
       - 'tests/test_repair_semantic_convergence_contract.py'
+      - 'tests/test_repair_project_index_efficiency.py'
+      - 'tests/test_runner_gametest_first_execution.py'
+      - 'tests/test_resource_asset_clean_contract.py'
+      - 'tests/test_release_source_hygiene.py'
       - 'tests/test_scheduler_claim_fencing_contract.py'
       - '.github/workflows/production-path-contract.yml'
 
@@ -102,6 +118,10 @@ jobs:
             minecraft_mod_ai/structured_state_runtime.py \
             minecraft_mod_ai/implementation_graph_execution.py \
             minecraft_mod_ai/runner.py \
+            minecraft_mod_ai/resource_asset_production.py \
+            minecraft_mod_ai/mcp_tools.py \
+            minecraft_mod_ai/publisher.py \
+            minecraft_mod_ai/release_artifact_contract.py \
             minecraft_mod_ai/complete_orchestrator.py \
             minecraft_mod_ai/scheduler_claim_fencing_contract.py \
             minecraft_mod_ai/complete_build_repair.py \
@@ -125,4 +145,8 @@ jobs:
             tests/test_complete_final_validation_contract.py \
             tests/test_build_repairability_guard.py \
             tests/test_repair_semantic_convergence_contract.py \
+            tests/test_repair_project_index_efficiency.py \
+            tests/test_runner_gametest_first_execution.py \
+            tests/test_resource_asset_clean_contract.py \
+            tests/test_release_source_hygiene.py \
             tests/test_scheduler_claim_fencing_contract.py
