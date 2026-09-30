@@ -3076,43 +3076,44 @@ def _validate_first_pass_java_semantics(
         )
 
     dependencies = _typed_dependency_method_contracts(dependency_source)
-    if not dependencies:
-        return
 
-    for call in class_body_method_invocations(value):
-        receiver = str(call.get("receiver") or "").strip()
-        name = str(call.get("symbol") or "").strip()
-        arity = int(call.get("argument_count") or 0)
-        owner_methods = dependencies.get(receiver)
-        if owner_methods is None:
-            continue
-        candidates = owner_methods.get(name)
-        if not candidates:
-            raise CustomModuleGenerationError(
-                "ATOMIC_CONCERN_RESPONSE_INVALID: dependency API "
-                f"{receiver}.{name}(...) does not exist in the Tree-sitter-derived "
-                "authoritative dependency source."
-            )
-        matching = [
-            item
-            for item in candidates
-            if len(item.get("parameters") or ()) == arity
-        ]
-        if not matching:
-            expected = sorted(
-                {len(item.get("parameters") or ()) for item in candidates}
-            )
-            raise CustomModuleGenerationError(
-                "ATOMIC_CONCERN_RESPONSE_INVALID: dependency API "
-                f"{receiver}.{name} called with {arity} argument(s); authoritative "
-                f"arity is {expected}."
-            )
-        if not any(item.get("static") is True for item in matching):
-            raise CustomModuleGenerationError(
-                "ATOMIC_CONCERN_RESPONSE_INVALID: dependency API "
-                f"{receiver}.{name}(...) is instance-owned, not a static class call."
-            )
+    if dependencies:
+        for call in class_body_method_invocations(value):
+            receiver = str(call.get("receiver") or "").strip()
+            name = str(call.get("symbol") or "").strip()
+            arity = int(call.get("argument_count") or 0)
+            owner_methods = dependencies.get(receiver)
+            if owner_methods is None:
+                continue
+            candidates = owner_methods.get(name)
+            if not candidates:
+                raise CustomModuleGenerationError(
+                    "ATOMIC_CONCERN_RESPONSE_INVALID: dependency API "
+                    f"{receiver}.{name}(...) does not exist in the Tree-sitter-derived "
+                    "authoritative dependency source."
+                )
+            matching = [
+                item
+                for item in candidates
+                if len(item.get("parameters") or ()) == arity
+            ]
+            if not matching:
+                expected = sorted(
+                    {len(item.get("parameters") or ()) for item in candidates}
+                )
+                raise CustomModuleGenerationError(
+                    "ATOMIC_CONCERN_RESPONSE_INVALID: dependency API "
+                    f"{receiver}.{name} called with {arity} argument(s); authoritative "
+                    f"arity is {expected}."
+                )
+            if not any(item.get("static") is True for item in matching):
+                raise CustomModuleGenerationError(
+                    "ATOMIC_CONCERN_RESPONSE_INVALID: dependency API "
+                    f"{receiver}.{name}(...) is instance-owned, not a static class call."
+                )
 
+    # Local return-type validation is independent of dependency APIs. Never skip it
+    # merely because this concern has no external dependency source.
     local_methods: dict[str, list[dict[str, Any]]] = {}
     for item in contracts:
         if item.get("kind") != "method":
