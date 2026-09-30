@@ -35,7 +35,6 @@ from .planning_detail_template import (
 from .planning_state_contract import validate_planning_state
 from .root_cause_trace import emit_root_cause
 from .worksheet_atomic_chunker import (
-    WorksheetConcernChunk,
     merge_worksheet_section_chunks,
     pack_section_concerns,
     worksheet_chunk_prompt,
@@ -334,7 +333,7 @@ def _chunk_messages(
     ]
 
 
-def _generate_chunk_once(
+def _generate_chunk(
     router: Any,
     messages: list[dict[str, str]],
     *,
@@ -343,20 +342,32 @@ def _generate_chunk_once(
     concerns: Sequence[str],
     chunk_schema: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Execute exactly one model work item and validate only its transport shape."""
+    tool_name = f"submit_{section}_{index}_chunk"
+    description = f"Submit worksheet specifications for {section}: {', '.join(concerns)}."
 
-    tool_suffix = "_".join(str(concern) for concern in concerns)
-    raw = generate_fixed_template_text(
-        router,
+    if hasattr(router, "generate_tool_decision"):
+        try:
+            raw_decision = router.generate_tool_decision(
+                "planner",
+                messages,
+                tool_name=tool_name,
+                parameters=chunk_schema,
+                description=description,
+            )
+            if isinstance(raw_decision, Mapping):
+                return dict(raw_decision)
+        except Exception as exc:
+            from .model_adapters import ModelConfigurationError
+
+            if isinstance(exc, ModelConfigurationError):
+                raise
+            # Fall back to text generation if native tool call fails or is not enabled for role
+
+    raw = generate_fixed_template_text(router,
         "planner",
         messages,
         response_schema=chunk_schema,
         enable_tools=False,
-        tool_name=f"submit_{section}_{index}_{tool_suffix}",
-        description=(
-            f"Submit worksheet specifications for {section}: "
-            + ", ".join(str(concern) for concern in concerns)
-        ),
     )
     from .planning_contract_ssot import is_schema_definition_echo
 
@@ -369,255 +380,6 @@ def _generate_chunk_once(
             "Please output records matching the template skeleton."
         )
     return dict(decoded)
-
-
-def _generate_chunk(
-    router: Any,
-    messages: list[dict[str, str]],
-    *,
-    section: str,
-    index: int,
-    concerns: Sequence[str],
-    chunk_schema: Mapping[str, Any],
-    recovery_context: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Generate once; if rejected, shrink the semantic work instead of retrying it."""
-
-    try:
-        return _generate_chunk_once(
-            router,
-            messages,
-            section=section,
-            index=index,
-            concerns=concerns,
-            chunk_schema=chunk_schema,
-        )
-    except (json.JSONDecodeError, ValueError) as error:
-        if recovery_context is None:
-            raise
-        context = {**dict(recovery_context), "error": error}
-        return _recover_rejected_chunk(
-            router,
-            context,
-            concerns,
-            include_evidence=bool(recovery_context.get("include_evidence")),
-        )
-
-
-def _recovery_projection(
-    section: str,
-    concerns: Sequence[str],
-) -> dict[str, tuple[str, ...]]:
-    explicit = getattr(concerns, "field_projection", None)
-    if isinstance(explicit, Mapping):
-        return {
-            str(concern): tuple(str(field) for field in explicit[concern])
-            for concern in concerns
-        }
-
-    from .planning_detail_slots import DETAIL_RECORDS
-
-    return {
-        str(concern): tuple(DETAIL_RECORDS[section][str(concern)].split())
-        for concern in concerns
-    }
-
-
-def _recovery_task(
-    context: Mapping[str, Any],
-    concern: str,
-    field: str,
-    *,
-    record_count: int | None,
-    include_evidence: bool,
-    continuation: bool,
-) -> dict[str, Any]:
-    isolated = WorksheetConcernChunk((concern,), {concern: (field,)})
-    counts = {concern: record_count} if record_count is not None else None
-    schema = worksheet_chunk_schema(
-        str(context["section"]),
-        isolated,
-        include_evidence=include_evidence,
-        record_counts=counts,
-    )
-    if continuation:
-        schema = deepcopy(schema)
-        schema["properties"].pop("inapplicable_concerns", None)
-        schema["required"] = [concern]
-        schema.pop("anyOf", None)
-
-    error = str(context["error"])
-    messages = _chunk_messages(
-        context["requirement"],
-        context["selected_sections"],
-        str(context["section"]),
-        context["evidence"],
-        context["completed"],
-        chunk_index=int(context["index"]),
-        chunk_count=int(context["chunk_count"]),
-        concerns=isolated,
-        include_evidence=include_evidence,
-        record_counts=counts,
-        repair_error=(
-            f"{error}. Host decomposed the rejected chunk; author only "
-            f"{concern}.{field} in this work item."
-        ),
-    )
-    return {
-        "messages": messages,
-        "section": str(context["section"]),
-        "index": int(context["index"]),
-        "concerns": isolated,
-        "schema": schema,
-    }
-
-
-def _execute_recovery_task(router: Any, task: Mapping[str, Any]) -> dict[str, Any]:
-    return _generate_chunk_once(
-        router,
-        task["messages"],
-        section=str(task["section"]),
-        index=int(task["index"]),
-        concerns=task["concerns"],
-        chunk_schema=task["schema"],
-    )
-
-
-def _run_recovery_tasks(
-    router: Any,
-    tasks: Sequence[Mapping[str, Any]],
-) -> list[dict[str, Any]]:
-    if not tasks:
-        return []
-
-    workers = max(1, min(len(tasks), router_native_model_parallelism(router)))
-    contexts = [copy_context() for _task in tasks]
-    with ThreadPoolExecutor(
-        max_workers=workers,
-        thread_name_prefix="planning-field-recovery",
-    ) as pool:
-        futures = [
-            pool.submit(context.run, _execute_recovery_task, router, task)
-            for context, task in zip(contexts, tasks, strict=True)
-        ]
-        return [future.result() for future in futures]
-
-
-def _merge_recovery_rows(
-    merged: dict[str, Any],
-    key: str,
-    value: Any,
-) -> None:
-    if not isinstance(value, list):
-        return
-
-    rows = merged.setdefault(key, [])
-    while len(rows) < len(value):
-        rows.append({})
-    for index, item in enumerate(value):
-        if not isinstance(item, Mapping):
-            continue
-        for field, field_value in item.items():
-            previous = rows[index].get(field)
-            if previous is not None and previous != field_value:
-                raise ValueError(
-                    "DETAILED_PLAN_RECOVERY_CONFLICT: "
-                    f"{key}[{index}].{field} changed across isolated work items"
-                )
-            rows[index][field] = deepcopy(field_value)
-
-
-def _merge_recovery_metadata(
-    key: str,
-    value: Any,
-    inapplicable: dict[str, dict[str, Any]],
-    refs: list[str],
-) -> bool:
-    if key == "constraint_evidence_refs":
-        for ref in value if isinstance(value, list) else ():
-            if isinstance(ref, str) and ref not in refs:
-                refs.append(ref)
-        return True
-    if key != "inapplicable_concerns":
-        return False
-
-    for item in value if isinstance(value, list) else ():
-        if not isinstance(item, Mapping):
-            continue
-        concern = str(item.get("concern") or "")
-        if concern:
-            inapplicable.setdefault(concern, deepcopy(dict(item)))
-    return True
-
-
-def _merge_recovery_fragments(
-    fragments: Sequence[Mapping[str, Any]],
-) -> dict[str, Any]:
-    merged: dict[str, Any] = {}
-    inapplicable: dict[str, dict[str, Any]] = {}
-    refs: list[str] = []
-
-    for fragment in fragments:
-        for key, value in fragment.items():
-            if _merge_recovery_metadata(key, value, inapplicable, refs):
-                continue
-            _merge_recovery_rows(merged, key, value)
-
-    if inapplicable:
-        merged["inapplicable_concerns"] = list(inapplicable.values())
-    if refs:
-        merged["constraint_evidence_refs"] = refs
-    return merged
-
-
-def _recover_rejected_chunk(
-    router: Any,
-    context: Mapping[str, Any],
-    concerns: Sequence[str],
-    *,
-    include_evidence: bool,
-) -> dict[str, Any]:
-    """Shrink a rejected chunk to concern/field work items instead of retrying it."""
-
-    section = str(context["section"])
-    projection = _recovery_projection(section, concerns)
-    anchors = [(str(concern), projection[str(concern)][0]) for concern in concerns]
-    anchor_tasks = [
-        _recovery_task(
-            context,
-            concern,
-            field,
-            record_count=None,
-            include_evidence=bool(include_evidence and position == 0),
-            continuation=False,
-        )
-        for position, (concern, field) in enumerate(anchors)
-    ]
-    anchor_results = _run_recovery_tasks(router, anchor_tasks)
-
-    counts = {
-        concern: len(rows)
-        for (concern, _field), result in zip(anchors, anchor_results, strict=True)
-        if isinstance((rows := result.get(concern)), list) and rows
-    }
-    continuation_specs = [
-        (concern, field, count)
-        for concern, count in counts.items()
-        for field in projection[concern][1:]
-    ]
-    continuation_tasks = [
-        _recovery_task(
-            context,
-            concern,
-            field,
-            record_count=count,
-            include_evidence=False,
-            continuation=True,
-        )
-        for concern, field, count in continuation_specs
-    ]
-    continuation_results = _run_recovery_tasks(router, continuation_tasks)
-    return _merge_recovery_fragments([*anchor_results, *continuation_results])
 
 
 def _compile_worksheet_section(
@@ -661,24 +423,37 @@ def _compile_worksheet_section(
                     include_evidence=is_first,
                     record_counts=record_counts,
                 )
-                decoded = _generate_chunk(
-                    router,
-                    messages,
-                    section=section,
-                    index=index,
-                    concerns=concerns,
-                    chunk_schema=chunk_schema,
-                    recovery_context={
-                        "requirement": requirement,
-                        "selected_sections": selected_sections,
-                        "section": section,
-                        "evidence": evidence,
-                        "completed": completed,
-                        "index": index,
-                        "chunk_count": chunk_count,
-                        "include_evidence": is_first,
-                    },
-                )
+                try:
+                    decoded = _generate_chunk(
+                        router,
+                        messages,
+                        section=section,
+                        index=index,
+                        concerns=concerns,
+                        chunk_schema=chunk_schema,
+                    )
+                except (json.JSONDecodeError, ValueError) as parse_err:
+                    repair_messages = _chunk_messages(
+                        requirement,
+                        selected_sections,
+                        section,
+                        evidence,
+                        completed,
+                        chunk_index=index,
+                        chunk_count=chunk_count,
+                        concerns=concerns,
+                        include_evidence=is_first,
+                        record_counts=record_counts,
+                        repair_error=str(parse_err),
+                    )
+                    decoded = _generate_chunk(
+                        router,
+                        repair_messages,
+                        section=section,
+                        index=index,
+                        concerns=concerns,
+                        chunk_schema=chunk_schema,
+                    )
 
                 inapplicable = {
                     str(item.get("concern") or "")
@@ -715,8 +490,8 @@ def _compile_worksheet_section(
                 "chunks_count": chunk_count,
                 "allowed_evidence_refs": sorted(allowed),
                 "parser_rule": (
-                    "rejected chunks are decomposed to single concern/field work items; "
-                    "host merge and evidence-ref validation run only after that frontier"
+                    "atomic JSON worksheet chunks merged and validated by host; "
+                    "evidence refs are validated by the host"
                 ),
             },
             exc=exc,
