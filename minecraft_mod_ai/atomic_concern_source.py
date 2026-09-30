@@ -3710,6 +3710,8 @@ class AtomicConcernExecutor:
     compile_java: Callable[[Path], Any]
     compile_log: Callable[[Any], str]
     write_source: Callable[[Path, str], None]
+    region_attempt_limit: int | None = None
+    compile_repair_limit: int | None = None
     ordered: tuple[dict[str, Any], ...] = field(init=False)
     source: str = field(init=False)
     state: dict[str, tuple[str, str]] = field(default_factory=dict, init=False)
@@ -3778,7 +3780,11 @@ class AtomicConcernExecutor:
         name = _slug(concern["concern"])
         seen_violations: set[tuple[str, str]] = set()
         repair_failure = failure
-        attempt_limit = _region_attempt_limit()
+        attempt_limit = (
+            _region_attempt_limit()
+            if self.region_attempt_limit is None
+            else max(1, int(self.region_attempt_limit))
+        )
 
         if (
             not failure
@@ -4287,7 +4293,11 @@ class AtomicConcernExecutor:
         # Tree-sitter and the semantic admission gates validate each concern locally;
         # javac/Gradle is the integration gate for the complete source, not a
         # checkpoint after every partially populated concern.
-        compile_repair_limit = _compile_repair_limit()
+        compile_repair_limit = (
+            _compile_repair_limit()
+            if self.compile_repair_limit is None
+            else max(0, int(self.compile_repair_limit))
+        )
         for concern in self.ordered:
             self._apply(concern)
 
