@@ -608,8 +608,12 @@ def _markdown_java_candidates(value: str) -> tuple[str, ...]:
     for token in tokens:
         if token.type != "fence":
             continue
-        language = str(token.info or "").strip().split(maxsplit=1)[0].casefold()
-        if language not in {"java", "javac"}:
+        info_parts = str(token.info or "").strip().split(maxsplit=1)
+        language = info_parts[0].casefold() if info_parts else ""
+        # Bare fences are admissible candidates only after the same structural
+        # Java parser validates their content downstream. Explicit non-Java
+        # languages remain excluded.
+        if language not in {"", "java", "javac"}:
             continue
         candidate = str(token.content or "").strip()
         if candidate:
