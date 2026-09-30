@@ -8,6 +8,7 @@ from minecraft_mod_ai.authored_production import _compile_new_authored_modules
 from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner
 from minecraft_mod_ai.implementation_graph_execution import _canonical_atomic_obligations
 from minecraft_mod_ai.production_state_compiler import (
+    _generate_concern_records,
     _normalize_expression,
     _parse_semantic_page,
     compile_production_state_section,
@@ -747,3 +748,67 @@ def test_lark_state_expression_compiles_latest_invariants_without_model():
     assert "$mmmFunction" in java
     assert "&&" in java
     assert "||" in java
+
+
+
+def test_production_state_extractor_receives_only_selected_concern_block():
+    class Router:
+        def __init__(self):
+            self.payload = None
+
+        def generate_text(self, role, messages, **kwargs):
+            self.payload = json.loads(messages[-1]["content"])
+            return (
+                "STATUS=DONE\nRECORD\n"
+                "name=player_currency\n"
+                "owner=Player\n"
+                "type=long\n"
+                "unit=crystals\n"
+                "default=0\n"
+                "domain=integer >= 0\nEND"
+            )
+
+    source = (
+        "## state_model\n"
+        "- variables: name owner type unit default domain: "
+        "`player_currency` Player long crystals 0 integer\n"
+        "- transitions: from_state trigger guard mutation to_state: "
+        "DRAFT build_part true player_currency -= 1 IN_PROGRESS\n"
+    )
+    router = Router()
+    rows = _generate_concern_records(
+        router,
+        source=source,
+        concern="variables",
+        declared_names=[],
+    )
+
+    assert rows[0]["name"] == "player_currency"
+    assert router.payload is not None
+    supplied = router.payload["approved_state_model"]
+    assert "- variables:" in supplied
+    assert "- transitions:" not in supplied
+
+
+def test_production_state_extractor_rejects_false_empty_for_explicit_authored_values():
+    class EmptyRouter:
+        def generate_text(self, role, messages, **kwargs):
+            return "STATUS=EMPTY"
+
+    source = (
+        "## state_model\n"
+        "- variables: name owner type unit default domain: "
+        "`player_ship` Player enum status DRAFT DRAFT|IN_PROGRESS|READY|DESTROYED\n"
+    )
+
+    try:
+        _generate_concern_records(
+            EmptyRouter(),
+            source=source,
+            concern="variables",
+            declared_names=[],
+        )
+    except ValueError as exc:
+        assert "PRODUCTION_STATE_LOWERING_FALSE_EMPTY" in str(exc)
+    else:
+        raise AssertionError("explicit authored state must never be accepted as EMPTY")
