@@ -1241,3 +1241,60 @@ def test_atomic_sibling_map_generics_are_propagated_before_first_compile(
     assert result["generation_verification"]["atomic_repair_count"] == 0
     assert result["generation_verification"]["atomic_first_pass_rejection_count"] == 0
     assert result["generation_verification"]["atomic_first_compile_failure_count"] == 0
+
+def test_graph_owned_atomic_leaf_defers_gradle_until_graph_boundary(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root, path, symbol = _project(tmp_path)
+    calls = 0
+
+    class Router:
+        def generate_text(self, role, messages, **kwargs):
+            nonlocal calls
+            calls += 1
+            assert role == "coder"
+            assert kwargs.get("force_non_thinking") is True
+            return "private static int balance = 0;"
+
+    class Runner:
+        def __init__(self, _cache):
+            pass
+
+        @staticmethod
+        def compile_java(_root):
+            raise AssertionError(
+                "implementation-graph leaf must defer Gradle to the graph transaction"
+            )
+
+    base = _single_atomic_module(path, symbol)
+    config = dict(base.config)
+    config["implementation_graph_deferred_compile"] = True
+    module = ProductionModule(
+        module_id="ir_authored_algorithm",
+        kind=base.kind,
+        config=config,
+        required_gates=base.required_gates,
+    )
+
+    monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
+    monkeypatch.setattr(direct, "GradleRunner", Runner)
+
+    result = direct.CustomModuleGenerator(Router()).generate(
+        root,
+        module=module,
+        minecraft_version="1.21.1",
+        loader="fabric",
+    )
+
+    assert calls == 1
+    assert "private static int balance = 0;" in (
+        root / path
+    ).read_text(encoding="utf-8")
+    verification = result["generation_verification"]
+    assert verification["status"] == "PASS"
+    assert verification["compile_deferred"] is True
+    assert (
+        verification["mode"]
+        == "host_semantic_validation_deferred_to_implementation_graph"
+    )
+
