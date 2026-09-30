@@ -442,7 +442,7 @@ def test_ir_atomic_concerns_are_isolated_and_compiled_as_one_host_file(
         def generate_text(self, role, messages, **kwargs):
             assert role == "coder"
             assert kwargs.get("enable_tools") is False
-            assert not kwargs.get("force_non_thinking", False)
+            assert kwargs.get("force_non_thinking") is True
             assert kwargs.get("tool_stage") == "atomic_java"
             payload = json.loads(messages[-1]["content"])
             concern = payload["concern"]["name"]
@@ -514,7 +514,7 @@ This wrapper is complete.
             nonlocal calls
             assert role == "coder"
             assert kwargs.get("enable_tools") is False
-            assert not kwargs.get("force_non_thinking", False)
+            assert kwargs.get("force_non_thinking") is True
             assert kwargs.get("tool_stage") == "atomic_java"
             calls += 1
             return next(responses)
@@ -576,7 +576,7 @@ public static void initialize() { balance = 0; }
             nonlocal calls
             assert role == "coder"
             assert kwargs.get("enable_tools") is False
-            assert not kwargs.get("force_non_thinking", False)
+            assert kwargs.get("force_non_thinking") is True
             assert kwargs.get("tool_stage") == "atomic_java"
             calls += 1
             return next(responses)
@@ -869,7 +869,7 @@ def test_stored_state_receives_semantic_shape_and_compact_output_budget(
         def generate_text(self, role, messages, **kwargs):
             assert role == "coder"
             assert kwargs.get("enable_tools") is False
-            assert not kwargs.get("force_non_thinking", False)
+            assert kwargs.get("force_non_thinking") is True
             assert kwargs.get("tool_stage") == "atomic_java"
             assert kwargs.get("output_token_ceiling") == 4096
             payload = json.loads(messages[-1]["content"])
@@ -970,7 +970,7 @@ def test_atomic_first_candidate_canonicalizes_jdk_lock_semantics_before_compile(
         def generate_text(self, role, messages, **kwargs):
             assert role == "coder"
             assert kwargs.get("enable_tools") is False
-            assert not kwargs.get("force_non_thinking", False)
+            assert kwargs.get("force_non_thinking") is True
             assert kwargs.get("tool_stage") == "atomic_java"
             payload = json.loads(messages[-1]["content"])
             concern = payload["concern"]["name"]
@@ -1043,7 +1043,7 @@ def test_atomic_compile_failure_is_terminal_without_model_retry(
         def generate_text(self, role, messages, **kwargs):
             assert role == "coder"
             assert kwargs.get("enable_tools") is False
-            assert not kwargs.get("force_non_thinking", False)
+            assert kwargs.get("force_non_thinking") is True
             assert kwargs.get("tool_stage") == "atomic_java"
             payload = json.loads(messages[-1]["content"])
             concern = payload["concern"]["name"]
