@@ -68,7 +68,9 @@ def _concern_source(source: str, concern: str) -> str:
     text = str(source or "")
     lines = text.splitlines()
     start = -1
-    bullet = re.compile(r"^\s*-\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$")
+    bullet = re.compile(
+        r"^\s*-\s*(?:\*\*|__)?([A-Za-z_][A-Za-z0-9_]*)(?:\*\*|__)?\s*:\s*(.*)$"
+    )
     for index, line in enumerate(lines):
         match = bullet.match(line)
         if match is not None and match.group(1) == concern:
@@ -97,7 +99,7 @@ def _concern_has_explicit_payload(source: str, concern: str) -> bool:
         return False
     first = block.splitlines()[0]
     match = re.match(
-        rf"^\s*-\s*{re.escape(concern)}\s*:\s*(.*)$",
+        rf"^\s*-\s*(?:\*\*|__)?{re.escape(concern)}(?:\*\*|__)?\s*:\s*(.*)$",
         first,
     )
     if match is None:

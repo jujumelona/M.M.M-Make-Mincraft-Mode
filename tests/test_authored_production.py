@@ -749,3 +749,34 @@ def test_inline_or_fenced_reasoning_close_is_preserved() -> None:
         projected, provenance = _implementation_authored_plan(plan)
         assert projected is plan
         assert provenance is None
+
+
+def test_fresh_structured_plan_skips_production_state_reextraction(monkeypatch):
+    from minecraft_mod_ai import production_state_compiler
+
+    plan = _structured_state_plan()
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("structured authored plan re-entered production semantic extraction")
+
+    monkeypatch.setattr(
+        production_state_compiler,
+        "compile_production_state_section",
+        forbidden,
+    )
+    monkeypatch.setattr(
+        PlanningPipeline,
+        "_bind_existing_project",
+        lambda self, design: design,
+    )
+    monkeypatch.setattr(
+        PlanningPipeline,
+        "_bind_platform",
+        lambda self, prompt, design, base: (design, base, None, None),
+    )
+
+    proposal = CompleteGameDesignPlanner(SimpleNamespace()).compile_for_production(plan)
+    request = proposal.modules[0].config["implementation_graph_request"]
+
+    assert request["structured_sections"] == plan.structured_sections
+    assert "production_state_section" not in request

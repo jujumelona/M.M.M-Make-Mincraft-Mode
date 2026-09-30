@@ -84,20 +84,69 @@ def _plan_text() -> str:
     )
 
 
-def test_plan_remains_free_markdown_generation_without_structured_compiler():
-    router = PlanRouter(_plan_text())
+def test_planner_authors_structured_ssot_and_renders_markdown_from_it():
+    from minecraft_mod_ai.authored_structured_design import render_structured_sections
+    from minecraft_mod_ai.planning_detail_template import WORKSHEET_SECTIONS
+
+    class Router:
+        def __init__(self):
+            self.calls = []
+
+        @staticmethod
+        def _value(schema):
+            enum = schema.get("enum")
+            if isinstance(enum, list) and enum:
+                return enum[0]
+            raw_type = schema.get("type")
+            if isinstance(raw_type, list):
+                raw_type = next((item for item in raw_type if item != "null"), "string")
+            if raw_type == "array":
+                item_schema = schema.get("items") or {}
+                return [Router._value(item_schema)]
+            if raw_type == "integer":
+                return 1
+            if raw_type == "number":
+                return 1.0
+            if raw_type == "boolean":
+                return True
+            if raw_type == "object":
+                return {}
+            return "authored"
+
+        def generate_text(self, role, messages, **kwargs):
+            schema = kwargs["response_schema"]
+            properties = schema["properties"]
+            concern = next(
+                key
+                for key in properties
+                if key not in {"inapplicable_concerns", "constraint_evidence_refs"}
+            )
+            item_properties = properties[concern]["items"]["properties"]
+            field = next(iter(item_properties))
+            payload = {
+                concern: [{field: self._value(item_properties[field])}],
+            }
+            if "constraint_evidence_refs" in properties:
+                payload["constraint_evidence_refs"] = []
+            self.calls.append((role, messages, kwargs))
+            return json.dumps(payload)
+
+    router = Router()
     planner = CompleteGameDesignPlanner(router)
 
     plan = planner.plan("make a space mod")
 
-    assert plan.text == _plan_text()
-    assert plan.structured_sections == {}
-    assert len(router.calls) == 1
-    role, _messages, kwargs = router.calls[0]
-    assert role == "planner"
-    assert kwargs["response_format"] == "text"
-    assert kwargs["response_schema"] is None
-    assert kwargs["enable_tools"] is False
+    assert set(plan.structured_sections) == set(WORKSHEET_SECTIONS)
+    assert plan.text == render_structured_sections(plan.structured_sections)
+    assert "## state_model" in plan.text
+    assert len(router.calls) > 1
+    assert all(
+        role == "planner"
+        and kwargs["response_format"] == "json"
+        and kwargs["response_schema"] is not None
+        and kwargs["enable_tools"] is False
+        for role, _messages, kwargs in router.calls
+    )
 
 def test_malformed_json_like_state_output_is_parsed_without_json_validation():
     raw = (
@@ -813,3 +862,24 @@ def test_production_state_extractor_rejects_false_empty_for_explicit_authored_va
         assert "PRODUCTION_STATE_LOWERING_FALSE_EMPTY" in str(exc)
     else:
         raise AssertionError("explicit authored state must never be accepted as EMPTY")
+
+
+def test_legacy_bold_state_concern_labels_are_detected_before_compat_lowering():
+    from minecraft_mod_ai.production_state_compiler import (
+        _concern_has_explicit_payload,
+        _concern_source,
+    )
+
+    source = (
+        "## state_model\n"
+        "- **variables**: name owner type unit default domain\n"
+        "  - record_1: name=credits; owner=player; type=integer; "
+        "unit=credits; default=0; domain=integer >= 0\n"
+        "- **transitions**: from_state trigger guard mutation to_state\n"
+    )
+
+    block = _concern_source(source, "variables")
+
+    assert block.startswith("- **variables**:")
+    assert "name=credits" in block
+    assert _concern_has_explicit_payload(source, "variables") is True

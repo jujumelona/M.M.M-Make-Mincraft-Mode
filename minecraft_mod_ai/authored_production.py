@@ -623,10 +623,14 @@ def _compile_new_authored_modules(
         "entrypoint_symbol": main_symbol,
         "structured_sections": structured_sections,
         "structured_sections_sha256": _sha256_json(structured_sections),
-        "production_state_section": deepcopy(
-            dict(production_state_section or {})
-        ),
     }
+    if production_state_section is not None:
+        # Compatibility sidecar for legacy prose-only plans. Structured plans omit
+        # this key so implementation_graph_execution consumes state_model directly
+        # from structured_sections, preserving a single semantic authority.
+        request["production_state_section"] = deepcopy(
+            dict(production_state_section)
+        )
     task = _exact_authored_task(
         task_id=task_id, path=main_path, symbol=main_symbol, target=target,
         obligation="Compile the complete saved design into a responsibility/dependency IR, then execute admitted source units.",
@@ -1039,17 +1043,18 @@ def compile_authored_design(
     effective_existing = str(
         existing_input_sha256 or implementation_plan.existing_input_sha256 or ""
     ).strip()
-    production_state_section: dict[str, Any] = {}
-    if (
-        not effective_existing
-        and callable(getattr(router, "generate_text", None))
-    ):
-        from .production_state_compiler import compile_production_state_section
+    production_state_section: dict[str, Any] | None = None
+    if not effective_existing and not implementation_plan.structured_sections:
+        # Legacy saved Markdown has no canonical semantic authority. Keep the old
+        # compatibility compiler only for those plans; newly authored plans never
+        # re-extract state semantics from prose in production.
+        if callable(getattr(router, "generate_text", None)):
+            from .production_state_compiler import compile_production_state_section
 
-        production_state_section = compile_production_state_section(
-            router,
-            implementation_plan,
-        )
+            production_state_section = compile_production_state_section(
+                router,
+                implementation_plan,
+            )
     execution_plan, execution_projection = _execution_plan_projection(implementation_plan)
     # These are host project coordinates, not inferred gameplay or placeholder content.
     mod_id = "authored_" + execution_plan.calculate_hash()[:12]
