@@ -119,8 +119,10 @@ def test_repeated_verifier_signature_still_terminates_unbounded_repair(
 
     monkeypatch.setattr(repair_engine, "ProjectIndex", Index)
     engine = RepairEngine(router=SimpleNamespace(), gradle_cache=tmp_path / "cache")
+    evidence_calls = {"count": 0}
 
     def evidence(self, _root, *, run_gametest):
+        evidence_calls["count"] += 1
         return {
             "passed": False,
             "diagnostics": {"diagnostics": {}},
@@ -140,3 +142,4 @@ def test_repeated_verifier_signature_still_terminates_unbounded_repair(
     assert result["status"] == "FAIL"
     assert result["stop_reason"] == "repeated_signature"
     assert result["attempts"] == 0
+    assert evidence_calls["count"] == 1
