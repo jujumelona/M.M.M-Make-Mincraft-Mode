@@ -1234,16 +1234,18 @@ def _parse_region_content(text: str, *, response_region: str) -> str:
             f"ATOMIC_CONCERN_RESPONSE_REGION_INVALID: {response_region!r}"
         )
 
-    # Preserve Markdown fences for member admission. markdown-it must see the
-    # original fence tokens before any legacy normalization removes them.
-    value = _normalize_region_text(raw_value) if initialize_region else raw_value
-    if initialize_region and _is_inert_empty_region(value):
+    # Java envelope handling is centralized in java_region_parser for both
+    # member and initialize regions. Legacy normalization is used only to decide
+    # whether an initialize response is semantically empty.
+    if initialize_region and _is_inert_empty_region(
+        _normalize_region_text(raw_value)
+    ):
         return ""
     try:
         value = (
-            admit_initialize_region(value)
+            admit_initialize_region(raw_value)
             if initialize_region
-            else admit_member_region(value)
+            else admit_member_region(raw_value)
         )
     except JavaRegionParseError as exc:
         region = "initialize body" if initialize_region else "concern members"
@@ -4278,27 +4280,34 @@ class AtomicConcernExecutor:
                 "first_compile_failure_count": self.first_compile_failures,
             }
 
+        # Build the complete host-owned concern file before invoking Gradle.
+        # Tree-sitter and the semantic admission gates validate each concern locally;
+        # javac/Gradle is the integration gate for the complete source, not a
+        # checkpoint after every partially populated concern.
         compile_repair_limit = _compile_repair_limit()
         for concern in self.ordered:
-            name = _slug(concern["concern"])
-            concern_repair_start = self.repairs
             self._apply(concern)
-            report = self._compile()
-            if getattr(report, "status", "") != "PASS":
-                self.first_compile_failures += 1
-            while getattr(report, "status", "") != "PASS":
-                if _compile_report_timed_out(report):
-                    raise CustomModuleGenerationError(_compile_timeout_message(report))
-                concern_repairs = self.repairs - concern_repair_start
+
+        report = self._compile()
+        if getattr(report, "status", "") != "PASS":
+            self.first_compile_failures += 1
+
+        repair_counts: dict[str, int] = {}
+        while getattr(report, "status", "") != "PASS":
+            if _compile_report_timed_out(report):
+                raise CustomModuleGenerationError(_compile_timeout_message(report))
+
+            failure = self.compile_log(report) or str(
+                getattr(report, "error", "") or "Gradle compileJava failed."
+            )
+            failing_name = _failure_concern(
+                self.source,
+                log=failure,
+                relative=self.relative,
+            )
+            if failing_name:
+                concern_repairs = repair_counts.get(failing_name, 0)
                 if concern_repairs >= compile_repair_limit:
-                    failure = self.compile_log(report) or str(
-                        getattr(report, "error", "") or "Gradle compileJava failed."
-                    )
-                    failing_name = _failure_concern(
-                        self.source,
-                        log=failure,
-                        relative=self.relative,
-                    ) or name
                     raise CustomModuleGenerationError(
                         "ATOMIC_CONCERN_COMPILE_REPAIR_EXHAUSTED: "
                         f"{failing_name} still did not compile after "
@@ -4310,7 +4319,10 @@ class AtomicConcernExecutor:
                             concern=failing_name,
                         )
                     )
-                report = self._repair_once(report)
+
+            report = self._repair_once(report)
+            if failing_name:
+                repair_counts[failing_name] = repair_counts.get(failing_name, 0) + 1
         return {
             "source": self.source,
             "summary": " | ".join(self.summaries),
