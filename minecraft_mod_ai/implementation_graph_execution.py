@@ -602,9 +602,16 @@ def execute_implementation_graph(generator: Any, project_root: str | Path, *,
             if count != 1:
                 raise ImplementationGraphError("IMPLEMENTATION_IR_ENTRYPOINT_BINDING_FAILED")
             direct._atomic_write(main, source)
-            report = direct.GradleRunner(generator._cache_dir(root)).compile_java(root)
-            if getattr(report, "status", "") != "PASS":
-                raise ImplementationGraphError("IMPLEMENTATION_IR_INTEGRATION_COMPILE_FAILED: " + direct._compile_log(report))
+            compile_deferred = bool(
+                getattr(generator, "defer_compile_to_pipeline", False)
+            )
+            if not compile_deferred:
+                report = direct.GradleRunner(generator._cache_dir(root)).compile_java(root)
+                if getattr(report, "status", "") != "PASS":
+                    raise ImplementationGraphError(
+                        "IMPLEMENTATION_IR_INTEGRATION_COMPILE_FAILED: "
+                        + direct._compile_log(report)
+                    )
             operations = []
             for path, before in originals.items():
                 dest = direct._safe_target(root, path)
@@ -623,7 +630,15 @@ def execute_implementation_graph(generator: Any, project_root: str | Path, *,
                                   "operations": operations, "touched_paths": paths},
                 "operation_count": len(operations), "implementation_ir": graph,
                 "source_unit_receipts": receipts, "required_gates": list(module.required_gates),
-                "generation_verification": {"status": "PASS", "mode": "gradle_compile_java"},
+                "generation_verification": {
+                    "status": "PASS",
+                    "mode": (
+                        "host_graph_validation_deferred_to_pipeline"
+                        if compile_deferred
+                        else "gradle_compile_java"
+                    ),
+                    "compile_deferred": compile_deferred,
+                },
                 "runtime_tests": ["Execute the requested GameTest/runtime gates."],
                 "output_exhaustion_continuations": 0, "decomposition_count": state["refinements"],
             }
