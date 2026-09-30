@@ -40,13 +40,25 @@ def _persist_build_diagnostics(
     return {**bundle, "diagnostics": diagnostics}
 
 
+def _repair_evidence_build(repair_result: Any) -> dict[str, Any] | None:
+    """Return the terminal build already observed by the repair loop."""
+
+    if not isinstance(repair_result, dict):
+        return None
+    evidence = repair_result.get("evidence")
+    if not isinstance(evidence, dict):
+        return None
+    build = evidence.get("build")
+    return dict(build) if isinstance(build, dict) else None
+
+
 def _attested_repair_build(repair_result: Any) -> dict[str, Any] | None:
     if not isinstance(repair_result, dict) or repair_result.get("status") != "PASS":
         return None
     evidence = repair_result.get("evidence")
     if not isinstance(evidence, dict) or evidence.get("passed") is not True:
         return None
-    build = evidence.get("build")
+    build = _repair_evidence_build(repair_result)
     if not isinstance(build, dict) or build.get("status") != "PASS":
         return None
     return build
@@ -102,9 +114,18 @@ def _run_source_repair(
     if attested is not None:
         build = dict(attested)
     else:
-        build = GradleRunner(cache).build(
-            project_root, run_gametest=run_gametest
-        ).to_dict()
+        # RepairEngine evaluates the real target build at the top of every
+        # iteration and returns that terminal evidence on failure. Rebuilding the
+        # unchanged project here cannot improve the result and adds another full
+        # Gradle/GameTest invocation to an already failed production path.
+        observed = _repair_evidence_build(repair)
+        build = (
+            observed
+            if observed is not None
+            else GradleRunner(cache).build(
+                project_root, run_gametest=run_gametest
+            ).to_dict()
+        )
     return {"build": build, "repair": repair}, active_router
 
 
