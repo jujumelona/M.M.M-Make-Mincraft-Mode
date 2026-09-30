@@ -327,6 +327,46 @@ def class_body_member_contracts(value: str) -> tuple[dict[str, Any], ...]:
     return tuple(rows)
 
 
+def class_body_simple_type_occurrences(value: str) -> tuple[dict[str, Any], ...]:
+    """Return byte ranges of unqualified simple type identifiers in one class body.
+
+    Only Tree-sitter type_identifier nodes are returned. Identifiers nested inside
+    scoped_type_identifier are omitted so already-qualified FQCNs are never doubled.
+    Byte ranges are relative to the original class-body region.
+    """
+
+    region = str(value or "").strip()
+    if not region:
+        return ()
+    prefix = "final class __MMMRegionHost {\n"
+    prefix_bytes = prefix.encode("utf-8")
+    region_bytes = region.encode("utf-8")
+    source, root = _parse(prefix + region + "\n}\n")
+    body = _class_body(root)
+    rows: list[dict[str, Any]] = []
+    for node in _walk_named(body):
+        if node.type != "type_identifier":
+            continue
+        parent = getattr(node, "parent", None)
+        if parent is not None and parent.type in {
+            "scoped_type_identifier",
+            "scoped_identifier",
+        }:
+            continue
+        start = node.start_byte - len(prefix_bytes)
+        end = node.end_byte - len(prefix_bytes)
+        if start < 0 or end > len(region_bytes) or start >= end:
+            continue
+        rows.append(
+            {
+                "name": _text(source, node).strip(),
+                "start_byte": start,
+                "end_byte": end,
+            }
+        )
+    return tuple(rows)
+
+
 def public_source_member_contracts(value: str) -> tuple[dict[str, Any], ...]:
     """Extract public/protected API contracts from one complete Java source unit.
 
