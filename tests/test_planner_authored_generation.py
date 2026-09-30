@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from minecraft_mod_ai import planning_state_pipeline
+from minecraft_mod_ai.authored_structured_design import _recover_planner_string_overflow
 from minecraft_mod_ai.fixed_template_generation import generate_fixed_template_value
 from minecraft_mod_ai.model_router import ModelRouter
 from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
@@ -12,6 +13,7 @@ from minecraft_mod_ai.planning_pipeline import (
     PlanningGenerationInterrupted,
     PlanningPipeline,
 )
+from minecraft_mod_ai.structured_output import StructuredOutputValidationError
 from minecraft_mod_ai.task_template_catalog import load_record_template
 
 SCHEMA = {
@@ -107,3 +109,68 @@ def test_interrupted_writer_reports_original_cause_and_keeps_draft(monkeypatch):
         pipeline.prepare("space mod")
     assert caught.value.planning_state == state
     assert "HANDOFF_READY" not in str(caught.value)
+
+
+def test_planner_overlong_string_is_clamped_without_model_retry():
+    schema = {
+        "type": "object",
+        "properties": {
+            "formulae": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "clamping": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 256,
+                        }
+                    },
+                    "required": ["clamping"],
+                    "additionalProperties": False,
+                },
+                "minItems": 1,
+                "maxItems": 3,
+            }
+        },
+        "required": ["formulae"],
+        "additionalProperties": False,
+    }
+    raw = json.dumps(
+        {"formulae": [{"clamping": "x" * 320}]},
+        ensure_ascii=False,
+    )
+    failure = StructuredOutputValidationError(
+        output=raw,
+        errors=('$["formulae"][0]["clamping"]: value is too long',),
+    )
+
+    repaired = _recover_planner_string_overflow(failure, schema)
+
+    assert len(repaired["formulae"][0]["clamping"]) == 256
+    assert repaired["formulae"][0]["clamping"] == "x" * 256
+
+
+def test_planner_schema_recovery_does_not_hide_non_length_errors():
+    schema = {
+        "type": "object",
+        "properties": {
+            "count": {"type": "integer"},
+            "note": {"type": "string", "maxLength": 4},
+        },
+        "required": ["count", "note"],
+        "additionalProperties": False,
+    }
+    raw = json.dumps({"count": "wrong", "note": "too long"})
+    failure = StructuredOutputValidationError(
+        output=raw,
+        errors=(
+            '$["count"]: value is not of type integer',
+            '$["note"]: value is too long',
+        ),
+    )
+
+    with pytest.raises(StructuredOutputValidationError) as raised:
+        _recover_planner_string_overflow(failure, schema)
+
+    assert raised.value is failure
