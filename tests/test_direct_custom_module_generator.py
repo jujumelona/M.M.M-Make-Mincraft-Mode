@@ -1030,7 +1030,7 @@ def test_atomic_first_candidate_canonicalizes_jdk_lock_semantics_before_compile(
     assert compiles == 1
 
 
-def test_atomic_compile_failure_is_repaired_with_local_bounded_retry(
+def test_atomic_compile_failure_is_terminal_without_model_retry(
     tmp_path: Path, monkeypatch
 ) -> None:
     root, path, symbol = _project(tmp_path)
@@ -1046,11 +1046,7 @@ def test_atomic_compile_failure_is_repaired_with_local_bounded_retry(
             payload = json.loads(messages[-1]["content"])
             concern = payload["concern"]["name"]
             calls.append(concern)
-            if len(calls) == 1:
-                return "private static int value = missingSymbol;"
-            repair_failure = str(payload.get("repair_failure") or "")
-            assert "cannot find symbol" in repair_failure
-            return "private static int value = 0;"
+            return "private static int value = missingSymbol;"
 
         def generate_tool_decision(self, *_args, **_kwargs):
             raise AssertionError("production concern generation must not use scalar Java tools")
@@ -1063,8 +1059,6 @@ def test_atomic_compile_failure_is_repaired_with_local_bounded_retry(
             nonlocal compiles
             compiles += 1
             source = (project_root / path).read_text(encoding="utf-8")
-            if "missingSymbol" not in source:
-                return SimpleNamespace(status="PASS", commands=(), error=None)
             line = next(
                 index for index, text in enumerate(source.splitlines(), start=1)
                 if "missingSymbol" in text
@@ -1084,21 +1078,21 @@ def test_atomic_compile_failure_is_repaired_with_local_bounded_retry(
     monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
     monkeypatch.setattr(direct, "GradleRunner", Runner)
 
-    result = direct.CustomModuleGenerator(Router()).generate(
-        root,
-        module=_single_atomic_module(path, symbol),
-        minecraft_version="1.21.1",
-        loader="fabric",
-    )
+    with pytest.raises(
+        direct.CustomModuleGenerationError,
+        match="ATOMIC_CONCERN_FIRST_PASS_COMPILE_FAILED",
+    ):
+        direct.CustomModuleGenerator(Router()).generate(
+            root,
+            module=_single_atomic_module(path, symbol),
+            minecraft_version="1.21.1",
+            loader="fabric",
+        )
 
     source = (root / path).read_text(encoding="utf-8")
-    assert "value = 0;" in source
     assert "missingSymbol" not in source
-    assert result["generation_verification"]["atomic_repair_count"] == 1
-    assert result["generation_verification"]["atomic_first_pass_rejection_count"] == 0
-    assert result["generation_verification"]["atomic_first_compile_failure_count"] == 1
-    assert calls == ["steps", "steps"]
-    assert compiles == 2
+    assert calls == ["steps"]
+    assert compiles == 1
 
 def test_nonintegration_atomic_concern_cannot_write_initialize_body() -> None:
     from minecraft_mod_ai.atomic_concern_source import parse_concern_content
