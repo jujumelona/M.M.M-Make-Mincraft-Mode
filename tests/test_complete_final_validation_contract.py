@@ -1282,7 +1282,7 @@ def test_release_readiness_is_decided_before_packaging() -> None:
     source = inspect.getsource(CompleteProductionOrchestrator.execute)
 
     readiness = source.index("release_ready = (")
-    package = source.index("tool_service.package_release(")
+    package = source.index("release_result = run_named_checkpoint(")
     distribution = source.index("package_distribution_bundle(")
 
     assert readiness < package < distribution
