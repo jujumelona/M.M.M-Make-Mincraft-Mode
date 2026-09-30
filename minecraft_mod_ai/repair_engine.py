@@ -257,20 +257,53 @@ class RepairEngine:
                 try:
                     patch = self._request_patch(evidence, context)
                     if not patch:
-                        print("  [!] Repair attempt produced no patch operations (retrying)", flush=True)
-                        continue
+                        # No source mutation means the verifier state is unchanged.
+                        # Rebuilding here only rediscovers the same signature before
+                        # terminating, so stop on the already observed evidence.
+                        print(
+                            "  [!] Repair attempt produced no patch operations; stopping on unchanged evidence",
+                            flush=True,
+                        )
+                        return {
+                            "schema_version": "mmm/repair-result-v2",
+                            "status": "FAIL",
+                            "attempts": attempt,
+                            "stop_reason": "repeated_signature",
+                            "evidence": evidence,
+                            "patch_receipts": receipts,
+                        }
                     self._hydrate_repair_preconditions(root, patch)
                     self._validate_patch_scope(patch)
                     if not patch:
-                        print("  [!] Repair operations empty after scope validation (retrying)", flush=True)
-                        continue
+                        print(
+                            "  [!] Repair operations empty after scope validation; stopping on unchanged evidence",
+                            flush=True,
+                        )
+                        return {
+                            "schema_version": "mmm/repair-result-v2",
+                            "status": "FAIL",
+                            "attempts": attempt,
+                            "stop_reason": "repeated_signature",
+                            "evidence": evidence,
+                            "patch_receipts": receipts,
+                        }
                     receipt = TransactionalSourcePatcher(root).apply(patch)
                 except Exception as exc:
+                    # TransactionalSourcePatcher did not commit, so the source tree
+                    # is unchanged. A verifier rebuild would be identical and the
+                    # next loop iteration would terminate on the same signature.
                     print(
-                        f"  [!] Repair patch application failed (retrying next attempt): {exc}",
+                        f"  [!] Repair patch application failed on unchanged source: {exc}",
                         flush=True,
                     )
-                    continue
+                    return {
+                        "schema_version": "mmm/repair-result-v2",
+                        "status": "FAIL",
+                        "attempts": attempt,
+                        "stop_reason": "repeated_signature",
+                        "evidence": evidence,
+                        "patch_receipts": receipts,
+                    }
 
                 # Only a successfully committed patch may mutate the in-memory index.
                 # The patch contract already rejects duplicate/unsafe paths, so this is
