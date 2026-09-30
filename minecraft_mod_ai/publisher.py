@@ -31,6 +31,14 @@ _DEPENDENCY_RELATIONSHIPS = {
 }
 _PLATFORM_DEPENDENCIES = frozenset({"minecraft", "java", "fabricloader"})
 
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return "sha256:" + digest.hexdigest()
+
 # Stable project identifiers verified from the providers' published project
 # pages. Unknown custom mods are never guessed from their Fabric mod ID.
 _KNOWN_MODRINTH_PROJECTS = {
@@ -190,7 +198,7 @@ def build_distribution_metadata(
             declared_ids={item["mod_id"] for item in dependencies},
         ).items()
     }
-    digest = "sha256:" + hashlib.sha256(jar.read_bytes()).hexdigest()
+    digest = _sha256_file(jar)
     return {
         "schema_version": "mmm/distribution-metadata-v1",
         "mod_id": mod_id,
@@ -387,7 +395,7 @@ def package_distribution_bundle(
         "schema_version": "mmm/distribution-bundle-v1",
         "status": "PACKAGED",
         "path": str(target),
-        "sha256": "sha256:" + hashlib.sha256(target.read_bytes()).hexdigest(),
+        "sha256": _sha256_file(target),
     }
 
 
@@ -434,7 +442,7 @@ def _validated_jar(metadata: dict[str, Any]) -> Path:
     jar = requested_jar.resolve()
     if not jar.is_file():
         raise PublishingError("Distribution JAR is missing.")
-    digest = "sha256:" + hashlib.sha256(jar.read_bytes()).hexdigest()
+    digest = _sha256_file(jar)
     if digest != metadata.get("jar_sha256"):
         raise PublishingError("Distribution JAR changed after metadata was created.")
     if metadata.get("jar_name") != jar.name or metadata.get("jar_size_bytes") != jar.stat().st_size:
