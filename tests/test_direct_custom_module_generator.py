@@ -1331,3 +1331,50 @@ def test_graph_owned_atomic_leaf_defers_gradle_until_graph_boundary(
         == "host_semantic_validation_deferred_to_implementation_graph"
     )
 
+def test_pipeline_deferred_whole_file_generation_skips_gradle_but_commits_source(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root, path, symbol = _project(tmp_path)
+    source = (
+        "package example;\n\n"
+        "public final class AuthoredFeature001 {\n"
+        "    private AuthoredFeature001() {}\n"
+        "    public static void initialize() { int ready = 1; }\n"
+        "}\n"
+    )
+
+    class Router:
+        def generate_text(self, role, messages, **kwargs):
+            assert role == "coder"
+            return source
+
+    class Runner:
+        def __init__(self, _cache):
+            pass
+
+        def compile_java(self, _root):
+            raise AssertionError(
+                "complete-production generation must defer compile to the final build gate"
+            )
+
+    monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
+    monkeypatch.setattr(direct, "GradleRunner", Runner)
+
+    result = direct.CustomModuleGenerator(
+        Router(),
+        defer_compile_to_pipeline=True,
+    ).generate(
+        root,
+        module=_module(path, symbol),
+        minecraft_version="1.21.1",
+        loader="fabric",
+    )
+
+    assert (root / path).read_text(encoding="utf-8") == source
+    assert result["generation_verification"]["status"] == "PASS"
+    assert result["generation_verification"]["compile_deferred"] is True
+    assert (
+        result["generation_verification"]["mode"]
+        == "host_source_validation_deferred_to_pipeline"
+    )
+
