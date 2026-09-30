@@ -113,3 +113,35 @@ loom {
         "runGameTestServer",
         "--stacktrace",
     )
+
+def test_legacy_integrated_gametest_is_not_launched_twice(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project = tmp_path / "legacy-integrated"
+    project.mkdir()
+    (project / "build.gradle").write_text(
+        """
+loom {
+    runs {
+        gameTestServer {
+            server()
+        }
+    }
+}
+""",
+        encoding="utf-8",
+    )
+    runner = _RecordingRunner(tmp_path / "cache")
+    monkeypatch.setattr(
+        runner,
+        "_executed_gametest_task",
+        lambda _command: "runGameTestServer",
+    )
+
+    report = runner._execute_prepared_build(_prepared(project), run_gametest=True)
+
+    assert report.status == "PASS"
+    assert report.gametest_mode == "integrated_build"
+    assert report.gametest_task == "runGameTestServer"
+    assert [name for name, _args in runner.calls] == ["build"]
+
