@@ -36,9 +36,9 @@ from .java_region_parser import (
 MEMBERS_MARKER = "<<<MMM_CONCERN_MEMBERS>>>"
 INITIALIZE_MARKER = "<<<MMM_CONCERN_INITIALIZE>>>"
 END_MARKER = "<<<MMM_CONCERN_END>>>"
-_DEFAULT_REGION_ATTEMPT_LIMIT = 3
+_DEFAULT_REGION_ATTEMPT_LIMIT = 1
 _MAX_REGION_ATTEMPT_LIMIT = 4
-_DEFAULT_COMPILE_REPAIR_LIMIT = 4
+_DEFAULT_COMPILE_REPAIR_LIMIT = 0
 _MAX_COMPILE_REPAIR_LIMIT = 16
 _DECLARATION_ONLY_CONCERNS = frozenset({"stored_state"})
 _DECLARATION_ONLY_MEMBER_KINDS = frozenset(
@@ -54,7 +54,7 @@ _DECLARATION_ONLY_MEMBER_KINDS = frozenset(
 
 
 def _region_attempt_limit() -> int:
-    """Return the bounded semantic-regeneration budget for one concern region."""
+    """Use one production decode by default; explicit diagnostics may opt into retries."""
 
     raw = os.environ.get("MMM_ATOMIC_CONCERN_REGION_ATTEMPTS", "").strip()
     if not raw:
@@ -67,7 +67,7 @@ def _region_attempt_limit() -> int:
 
 
 def _compile_repair_limit() -> int:
-    """Bound compiler-driven repair rounds for one concern checkpoint."""
+    """Disable model compiler-repair in production unless explicitly opted in."""
 
     raw = os.environ.get("MMM_ATOMIC_CONCERN_COMPILE_REPAIRS", "").strip()
     if not raw:
@@ -76,7 +76,7 @@ def _compile_repair_limit() -> int:
         value = int(raw)
     except ValueError:
         return _DEFAULT_COMPILE_REPAIR_LIMIT
-    return max(1, min(_MAX_COMPILE_REPAIR_LIMIT, value))
+    return max(0, min(_MAX_COMPILE_REPAIR_LIMIT, value))
 
 
 def _trace_region_generation(
@@ -3472,9 +3472,8 @@ def _messages(
         "getKey() is exactly K, and getValue() is exactly V. Never treat an object/record "
         "field as a primitive, never assign "
         "to a field declared final, and never invent a sibling symbol that is not listed. "
-        "Target a correct first production decode for this concern. Host semantic validation may "
-        "request only a bounded regeneration of this same concern when the emitted shape is invalid; "
-        "do not rely on that retry and do not assume a compiler-repair decode. "
+        "This is the production decode for this concern. It must pass host semantic validation "
+        "and compile without relying on regeneration or compiler-repair. "
         "Resolve every supplied semantic/API fact before emitting source, and do not implement sibling concerns. "
         + (
             "This section is pure Java domain logic. Do not reference net.minecraft.*, "
@@ -4066,10 +4065,14 @@ class AtomicConcernExecutor:
                     rejected_response=rejected_response,
                 )
                 if attempt >= attempt_limit:
+                    code = (
+                        "ATOMIC_CONCERN_FIRST_PASS_RESPONSE_INVALID"
+                        if attempt_limit == 1
+                        else "ATOMIC_CONCERN_RESPONSE_RETRY_EXHAUSTED"
+                    )
                     raise CustomModuleGenerationError(
-                        "ATOMIC_CONCERN_RESPONSE_RETRY_EXHAUSTED: "
-                        f"{name}:{response_region} exhausted {attempt_limit} bounded "
-                        f"production decodes: {reason}"
+                        f"{code}: {name}:{response_region} failed after "
+                        f"{attempt_limit} production decode(s): {reason}"
                     ) from exc
 
                 if failure:
@@ -4292,6 +4295,28 @@ class AtomicConcernExecutor:
         if getattr(report, "status", "") != "PASS":
             self.first_compile_failures += 1
 
+        if getattr(report, "status", "") != "PASS" and compile_repair_limit <= 0:
+            if _compile_report_timed_out(report):
+                raise CustomModuleGenerationError(_compile_timeout_message(report))
+            failure = self.compile_log(report) or str(
+                getattr(report, "error", "") or "Gradle compileJava failed."
+            )
+            failing_name = _failure_concern(
+                self.source,
+                log=failure,
+                relative=self.relative,
+            )
+            raise CustomModuleGenerationError(
+                "ATOMIC_CONCERN_FIRST_PASS_COMPILE_FAILED: production compile failed "
+                "after the single generated candidate; model compiler-repair is disabled.\n"
+                + _compact_compiler_failure(
+                    failure,
+                    source=self.source,
+                    relative=self.relative,
+                    concern=failing_name,
+                )
+            )
+
         repair_counts: dict[str, int] = {}
         while getattr(report, "status", "") != "PASS":
             if _compile_report_timed_out(report):
@@ -4311,7 +4336,7 @@ class AtomicConcernExecutor:
                     raise CustomModuleGenerationError(
                         "ATOMIC_CONCERN_COMPILE_REPAIR_EXHAUSTED: "
                         f"{failing_name} still did not compile after "
-                        f"{compile_repair_limit} bounded concern-local repairs.\n"
+                        f"{compile_repair_limit} explicitly enabled concern-local repairs.\n"
                         + _compact_compiler_failure(
                             failure,
                             source=self.source,
