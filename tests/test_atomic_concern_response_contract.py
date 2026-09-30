@@ -127,27 +127,20 @@ def test_inert_initialize_answer_becomes_empty_region() -> None:
         "public static void initialize() {}",
     ],
 )
-def test_real_member_scope_escape_is_rejected_and_regenerated(bad: str) -> None:
-    executor = _executor(
-        [
-            bad,
-            "private static final int COST = 10;",
-        ]
-    )
-    result = executor.run()
-    assert "private static final int COST = 10;" in result["source"]
-
-
-def test_identical_invalid_region_output_stops_on_semantic_no_progress() -> None:
-    executor = _executor(
-        [
-            "package example;",
-            "package example;",
-        ]
-    )
+def test_real_member_scope_escape_fails_first_pass_without_regeneration(bad: str) -> None:
+    executor = _executor([bad])
     with pytest.raises(
         CustomModuleGenerationError,
-        match="ATOMIC_CONCERN_RESPONSE_NO_PROGRESS",
+        match="ATOMIC_CONCERN_FIRST_PASS_RESPONSE_INVALID",
+    ):
+        executor.run()
+
+
+def test_invalid_region_output_is_terminal_on_the_first_production_decode() -> None:
+    executor = _executor(["package example;"])
+    with pytest.raises(
+        CustomModuleGenerationError,
+        match="ATOMIC_CONCERN_FIRST_PASS_RESPONSE_INVALID",
     ):
         executor.run()
 
@@ -255,11 +248,12 @@ def test_initialize_region_rejects_even_private_local_type_declarations() -> Non
     ],
 )
 def test_reasoning_or_markdown_is_rejected_before_compile(bad: str) -> None:
-    executor = _executor([bad, "private static final int COST = 10;"])
-    result = executor.run()
-    assert "private static final int COST = 10;" in result["source"]
-    assert "The user" not in result["source"]
-    assert "I need" not in result["source"]
+    executor = _executor([bad])
+    with pytest.raises(
+        CustomModuleGenerationError,
+        match="ATOMIC_CONCERN_FIRST_PASS_RESPONSE_INVALID",
+    ):
+        executor.run()
 
 
 def test_atomic_coder_can_force_non_thinking_transport() -> None:
@@ -580,7 +574,8 @@ def test_state_model_later_concerns_cannot_rehome_variables() -> None:
     assert executor.state["transitions"][0] == ""
     assert executor.state["invariants"][0] == ""
 
-def test_private_static_initializer_is_normalized_before_compile() -> None:
+def test_private_static_initializer_is_normalized_before_compile(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_ATOMIC_CONCERN_REGION_ATTEMPTS", "2")
     executor = _executor(
         [
             (
@@ -600,7 +595,8 @@ def test_private_static_initializer_is_normalized_before_compile() -> None:
     assert result["repair_count"] == 0
 
 
-def test_visibility_instance_initializer_is_rejected_before_compile() -> None:
+def test_visibility_instance_initializer_is_rejected_before_compile(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_ATOMIC_CONCERN_REGION_ATTEMPTS", "2")
     executor = _executor(
         [
             "private { initializeSomething(); }",
@@ -803,7 +799,8 @@ def test_previous_concern_nested_type_is_available_to_next_concern() -> None:
     assert "SharedValue VALUE" in result["source"]
 
 
-def test_equal_error_count_with_changed_diagnostics_can_keep_repairing() -> None:
+def test_equal_error_count_with_changed_diagnostics_can_keep_repairing(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_ATOMIC_CONCERN_COMPILE_REPAIRS", "2")
     remaining = [
         "private static int VALUE = missingA();",
         "private static int VALUE = missingB();",
@@ -872,7 +869,8 @@ def test_equal_error_count_with_changed_diagnostics_can_keep_repairing() -> None
     assert "VALUE = 1" in result["source"]
 
 
-def test_same_compiler_diagnostic_retries_when_concern_source_changed() -> None:
+def test_same_compiler_diagnostic_retries_when_concern_source_changed(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_ATOMIC_CONCERN_COMPILE_REPAIRS", "2")
     captured: list[list[dict[str, str]]] = []
     remaining = [
         "private static int VALUE = missingA();",
@@ -999,6 +997,7 @@ def test_long_compiler_log_keeps_repair_checklist_and_contract() -> None:
 
 
 def test_logged_java_failure_families_repair_through_real_compiler_feedback(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_ATOMIC_CONCERN_REGION_ATTEMPTS", "4")
     monkeypatch.setenv("MMM_ATOMIC_CONCERN_COMPILE_REPAIRS", "4")
     captured: list[list[dict[str, str]]] = []
     remaining = [
@@ -1164,6 +1163,7 @@ def test_logged_java_failure_families_repair_with_actual_javac(tmp_path, monkeyp
     if shutil.which("javac") is None:
         pytest.skip("javac is required for the compiler-feedback integration regression")
 
+    monkeypatch.setenv("MMM_ATOMIC_CONCERN_REGION_ATTEMPTS", "4")
     monkeypatch.setenv("MMM_ATOMIC_CONCERN_COMPILE_REPAIRS", "4")
     captured: list[list[dict[str, str]]] = []
     remaining = [
@@ -2280,7 +2280,8 @@ def test_outer_atomic_fields_and_methods_are_forced_static() -> None:
     assert "static int credits()" in rendered
 
 
-def test_compiler_repair_cannot_expand_nested_type_structure() -> None:
+def test_compiler_repair_cannot_expand_nested_type_structure(monkeypatch) -> None:
+    monkeypatch.setenv("MMM_ATOMIC_CONCERN_COMPILE_REPAIRS", "1")
     compile_calls = {"count": 0}
     outputs = iter(
         [
@@ -2366,19 +2367,12 @@ def test_noncanonical_record_constructor_must_delegate() -> None:
         )
 
 
-def test_stored_state_semantic_shape_retries_then_accepts_declarations_only() -> None:
-    remaining = [
-        "private static void registerState(String key, String value) {}",
-        (
-            "private static final java.util.Map<String, String> STATE = "
-            "new java.util.HashMap<>();"
-        ),
-    ]
+def test_stored_state_invalid_shape_fails_first_pass_without_regeneration() -> None:
+    calls = {"count": 0}
 
     def call_coder(_messages):
-        if not remaining:
-            raise AssertionError("unexpected extra model call")
-        return remaining.pop(0)
+        calls["count"] += 1
+        return "private static void registerState(String key, String value) {}"
 
     executor = AtomicConcernExecutor(
         root=Path("."),
@@ -2406,11 +2400,13 @@ def test_stored_state_semantic_shape_retries_then_accepts_declarations_only() ->
         write_source=lambda _path, _source: None,
     )
 
-    result = executor.run()
+    with pytest.raises(
+        CustomModuleGenerationError,
+        match="ATOMIC_CONCERN_FIRST_PASS_RESPONSE_INVALID",
+    ):
+        executor.run()
 
-    assert "STATE = new java.util.HashMap<>()" in result["source"]
-    assert "registerState" not in result["source"]
-    assert remaining == []
+    assert calls["count"] == 1
 
 
 def test_multiline_behavior_actor_source_is_host_lowered_without_structured_plan() -> None:
