@@ -253,49 +253,43 @@ class RepairEngine:
                     }
 
                 context = self._context(root, evidence)
-                repair_attempts += 1
-                try:
-                    patch = self._request_patch(evidence, context)
-                    if not patch:
-                        # No source mutation means the verifier state is unchanged.
-                        # Rebuilding here only rediscovers the same signature before
-                        # terminating, so stop on the already observed evidence.
+                receipt = None
+                patch: list[dict[str, Any]] = []
+                while repair_attempts < attempt_limit and receipt is None:
+                    repair_attempts += 1
+                    try:
+                        patch = self._request_patch(evidence, context)
+                        if not patch:
+                            print(
+                                "  [!] Repair attempt produced no patch operations; "
+                                "retrying coder against unchanged verifier evidence",
+                                flush=True,
+                            )
+                            continue
+                        self._hydrate_repair_preconditions(root, patch)
+                        self._validate_patch_scope(patch)
+                        if not patch:
+                            print(
+                                "  [!] Repair operations empty after scope validation; "
+                                "retrying coder against unchanged verifier evidence",
+                                flush=True,
+                            )
+                            continue
+                        receipt = TransactionalSourcePatcher(root).apply(patch)
+                    except Exception as exc:
+                        # The source tree is unchanged when the transaction does not
+                        # commit. Preserve the small model's bounded second chance,
+                        # but reuse this exact verifier evidence instead of paying for
+                        # another Gradle/JDT pass over identical source.
                         print(
-                            "  [!] Repair attempt produced no patch operations; stopping on unchanged evidence",
+                            "  [!] Repair patch application failed on unchanged source; "
+                            f"retrying coder without rebuild: {exc}",
                             flush=True,
                         )
-                        return {
-                            "schema_version": "mmm/repair-result-v2",
-                            "status": "FAIL",
-                            "attempts": attempt,
-                            "stop_reason": "repeated_signature",
-                            "evidence": evidence,
-                            "patch_receipts": receipts,
-                        }
-                    self._hydrate_repair_preconditions(root, patch)
-                    self._validate_patch_scope(patch)
-                    if not patch:
-                        print(
-                            "  [!] Repair operations empty after scope validation; stopping on unchanged evidence",
-                            flush=True,
-                        )
-                        return {
-                            "schema_version": "mmm/repair-result-v2",
-                            "status": "FAIL",
-                            "attempts": attempt,
-                            "stop_reason": "repeated_signature",
-                            "evidence": evidence,
-                            "patch_receipts": receipts,
-                        }
-                    receipt = TransactionalSourcePatcher(root).apply(patch)
-                except Exception as exc:
-                    # TransactionalSourcePatcher did not commit, so the source tree
-                    # is unchanged. A verifier rebuild would be identical and the
-                    # next loop iteration would terminate on the same signature.
-                    print(
-                        f"  [!] Repair patch application failed on unchanged source: {exc}",
-                        flush=True,
-                    )
+                        receipt = None
+                        continue
+
+                if receipt is None:
                     return {
                         "schema_version": "mmm/repair-result-v2",
                         "status": "FAIL",
