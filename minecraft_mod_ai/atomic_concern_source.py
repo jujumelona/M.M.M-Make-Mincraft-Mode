@@ -3012,6 +3012,49 @@ def _validate_jdk_object_creations(value: str) -> None:
         )
 
 
+def _strip_host_orchestrated_dependency_lifecycle_calls(
+    value: str,
+    *,
+    dependency_source: str,
+) -> tuple[str, tuple[str, ...]]:
+    """Remove standalone dependency lifecycle calls already owned by the host graph.
+
+    Only statement-shaped calls to exact dependency owners with an authoritative
+    static initialize()/onInitialize() contract are removed. Other dependency calls
+    are never rewritten.
+    """
+
+    dependencies = _typed_dependency_method_contracts(dependency_source)
+    owners: set[str] = set()
+    for owner, methods in dependencies.items():
+        for lifecycle in ("initialize", "onInitialize"):
+            contracts = methods.get(lifecycle) or ()
+            if any(item.get("static") is True for item in contracts):
+                owners.add(owner)
+                break
+    if not owners:
+        return value, ()
+
+    source = str(value or "")
+    changes: list[str] = []
+    for owner in sorted(owners, key=len, reverse=True):
+        # Generated atomic regions are import-free, so dependency owners are simple
+        # host-provided symbols. Restrict canonicalization to one standalone Java
+        # expression statement; embedded calls remain validator-owned failures.
+        pattern = re.compile(
+            rf"(?m)^(?P<indent>[ \t]*){re.escape(owner)}\s*\.\s*"
+            rf"(?P<method>initialize|onInitialize)\s*\([^;\n]*\)\s*;[ \t]*$"
+        )
+
+        def replace(match: re.Match[str]) -> str:
+            changes.append(f"{owner}.{match.group('method')}")
+            return match.group("indent") + "// host-orchestrated dependency lifecycle"
+
+        source = pattern.sub(replace, source)
+
+    return source, tuple(changes)
+
+
 def _validate_first_pass_java_semantics(
     value: str,
     *,
@@ -4018,6 +4061,26 @@ class AtomicConcernExecutor:
                     output,
                     response_region=response_region,
                 )
+                parsed, lifecycle_changes = (
+                    _strip_host_orchestrated_dependency_lifecycle_calls(
+                        parsed,
+                        dependency_source=self.dependency_source,
+                    )
+                )
+                if lifecycle_changes:
+                    from .root_cause_trace import emit_root_cause
+
+                    emit_root_cause(
+                        "atomic_concern_dependency_lifecycle_host_owned",
+                        stage="production",
+                        operation="atomic_concern_region",
+                        gate="host_lifecycle_canonicalization",
+                        result="PASS",
+                        details={
+                            "concern": name,
+                            "calls_removed": list(lifecycle_changes),
+                        },
+                    )
                 if response_region == "members":
                     sibling_names = tuple(
                         _slug(item["concern"])
