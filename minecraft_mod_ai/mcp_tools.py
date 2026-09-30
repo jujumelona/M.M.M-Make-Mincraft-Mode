@@ -316,11 +316,53 @@ class MMMToolService:
         jar: Path | None,
         source_validation: dict[str, Any],
         jar_validation: dict[str, Any] | None,
+        additional_artifacts: dict[str, dict[str, Any]] | None = None,
+        manifest_provenance: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         target = self._new_file(output_zip)
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists():
             raise FileExistsError(f'Release already exists: {target}')
+        manifest: dict[str, Any] = {
+            'schema_version': 'mmm/release-manifest-v2',
+            'proposal_hash': approved.calculate_hash(),
+            'source_validation': source_validation,
+            'jar_validation': jar_validation,
+            'resource_policy': self.policy.__dict__,
+        }
+        if manifest_provenance:
+            for key, value in manifest_provenance.items():
+                if not isinstance(key, str) or not key or not isinstance(value, str):
+                    raise RuntimeError(
+                        'Release manifest provenance must contain non-empty string keys and string values.'
+                    )
+                manifest[key] = value
+
+        verified_attachments: list[tuple[str, Path, str]] = []
+        if additional_artifacts:
+            manifest_artifacts: dict[str, str] = {}
+            for archive_name, descriptor in sorted(additional_artifacts.items()):
+                if not archive_name or Path(archive_name).name != archive_name:
+                    raise RuntimeError('Release attachment name is unsafe.')
+                if not isinstance(descriptor, dict):
+                    raise RuntimeError('Release attachment descriptor is invalid.')
+                source = Path(str(descriptor.get('path') or '')).expanduser().resolve()
+                expected = str(descriptor.get('sha256') or '')
+                try:
+                    source.relative_to(self.workspace_root)
+                except ValueError as exc:
+                    raise RuntimeError('Release attachment escaped the workspace.') from exc
+                if (
+                    not source.is_file()
+                    or source.is_symlink()
+                    or not expected
+                    or _sha256(source) != expected
+                ):
+                    raise RuntimeError('Release attachment digest mismatch.')
+                verified_attachments.append((archive_name, source, expected))
+                manifest_artifacts[archive_name] = expected
+            manifest['additional_artifacts'] = manifest_artifacts
+
         with zipfile.ZipFile(target, 'w', compression=zipfile.ZIP_DEFLATED) as zipped:
             from .release_source_files import release_source_files
 
@@ -331,18 +373,17 @@ class MMMToolService:
                 zipped.write(path, Path('source') / relative)
             if jar is not None:
                 zipped.write(jar, Path('binary') / jar.name)
-            zipped.writestr(
-                'release-manifest.json',
-                canonical_json(
-                    {
-                        'schema_version': 'mmm/release-manifest-v2',
-                        'proposal_hash': approved.calculate_hash(),
-                        'source_validation': source_validation,
-                        'jar_validation': jar_validation,
-                        'resource_policy': self.policy.__dict__,
-                    }
-                ),
-            )
+            for archive_name, source, _expected in verified_attachments:
+                info = zipfile.ZipInfo(
+                    'additional/' + archive_name,
+                    date_time=(1980, 1, 1, 0, 0, 0),
+                )
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.external_attr = (0o644 & 0xFFFF) << 16
+                with source.open('rb') as source_handle, zipped.open(info, 'w') as target_handle:
+                    import shutil
+                    shutil.copyfileobj(source_handle, target_handle, length=1024 * 1024)
+            zipped.writestr('release-manifest.json', canonical_json(manifest))
         return {
             'status': 'PACKAGED',
             'release_zip': str(target),
@@ -385,6 +426,8 @@ class MMMToolService:
         source_validation: dict[str, Any],
         jar_validation: dict[str, Any],
         expected_jar_sha256: str,
+        additional_artifacts: dict[str, dict[str, Any]] | None = None,
+        manifest_provenance: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Internal production fast path; reuse already completed validation gates."""
 
@@ -421,6 +464,8 @@ class MMMToolService:
             jar=jar,
             source_validation=dict(source_validation),
             jar_validation=dict(jar_validation),
+            additional_artifacts=additional_artifacts,
+            manifest_provenance=manifest_provenance,
         )
 
     def _run_gradle(self, project_root: str, proposal: dict[str, Any], approval_hash: str, *, run_gametest: bool) -> dict[str, Any]:
