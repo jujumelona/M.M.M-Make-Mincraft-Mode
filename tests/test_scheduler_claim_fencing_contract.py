@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import sqlite3
 import pytest
 
 from minecraft_mod_ai import complete_orchestrator, work_graph
@@ -194,3 +195,39 @@ def test_stale_failure_cannot_fail_newer_attempt(tmp_path) -> None:
     assert current["state"] == work_graph.WorkState.RUNNING.value
     assert current["attempt"] == 2
     assert current["error"] is None
+
+
+def test_project_index_refresh_runs_outside_sqlite_write_transaction(tmp_path) -> None:
+    from minecraft_mod_ai.scheduler_claim_fencing_contract import _commit_success
+
+    ledger, node = _ledger_and_node(tmp_path)
+    claim = ledger.claim_ready(
+        "mmm-orchestrator",
+        stages=("generate:test",),
+        lease_seconds=900,
+    )
+    assert claim is not None
+    observed: list[str] = []
+
+    class Index:
+        def update_files(self, _paths):
+            # A second writer can acquire BEGIN IMMEDIATE only when the fenced
+            # success path is not holding the ledger write transaction around
+            # filesystem hashing/index refresh.
+            with sqlite3.connect(ledger.path, timeout=0.1) as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                observed.append("independent-writer-entered")
+                connection.rollback()
+            assert ledger.task(node.node_id)["state"] == work_graph.WorkState.RUNNING.value
+
+    _commit_success(
+        ledger,
+        node.node_id,
+        {"status": "PASS", "touched_paths": ["src/main/java/X.java"]},
+        attempt=int(claim["attempt"]),
+        owner=str(claim["lease_owner"]),
+        shared_index=Index(),
+    )
+
+    assert observed == ["independent-writer-entered"]
+    assert ledger.task(node.node_id)["state"] == work_graph.WorkState.SUCCEEDED.value
