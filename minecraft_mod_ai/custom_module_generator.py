@@ -2095,6 +2095,15 @@ def _atomic_result_receipt(
             "target_path": context.relative,
             "atomic_concern_count": int(atomic["concern_count"]),
             "atomic_repair_count": int(atomic["repair_count"]),
+            "atomic_first_pass_rejection_count": int(
+                atomic.get("first_pass_rejection_count", 0)
+            ),
+            "atomic_repair_region_rejection_count": int(
+                atomic.get("repair_region_rejection_count", 0)
+            ),
+            "atomic_first_compile_failure_count": int(
+                atomic.get("first_compile_failure_count", 0)
+            ),
         },
         "output_exhaustion_continuations": 0,
         "generation_checkpoint_resumed": False,
