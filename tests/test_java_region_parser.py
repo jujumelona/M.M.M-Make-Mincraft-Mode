@@ -7,6 +7,7 @@ from minecraft_mod_ai.java_region_parser import (
     admit_initialize_region,
     admit_member_region,
     class_body_chunks,
+    class_body_direct_return_calls,
     class_body_member_contracts,
     public_source_member_contracts,
     strict_member_chunks,
@@ -209,3 +210,31 @@ public final class Dependency {
     assert copy["parameters"] == [
         {"type": "java.util.Map<String, Object>", "name": "input"}
     ]
+
+
+def test_tree_sitter_extracts_unqualified_direct_return_call() -> None:
+    calls = class_body_direct_return_calls(
+        "private static Object readState() { return null; }\n"
+        "private static java.util.Map<String, Object> shipConfig() { "
+        "return readState(); }"
+    )
+
+    assert calls == (
+        {
+            "method": "shipConfig",
+            "declared_return_type": "java.util.Map<String, Object>",
+            "receiver": "",
+            "symbol": "readState",
+            "argument_count": 0,
+        },
+    )
+
+
+def test_tree_sitter_extracts_parenthesized_direct_return_call() -> None:
+    calls = class_body_direct_return_calls(
+        "private static Object readState() { return null; }\n"
+        "private static String value() { return (readState()); }"
+    )
+
+    assert calls[0]["method"] == "value"
+    assert calls[0]["symbol"] == "readState"
