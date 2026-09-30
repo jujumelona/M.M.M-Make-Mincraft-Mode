@@ -130,3 +130,78 @@ def test_prerequisite_json_preserves_long_tail_and_newlines():
     payload["specification"]["actors"][0]["role"] = "x" * 14000 + "\nTAIL_RULE"
     context = planning._section_dependency_context("state_model", WORKSHEET_SECTIONS, {"behavior_contract": payload})
     assert json.loads(context) == {"behavior_contract": payload}
+
+
+def test_schema_rejection_decomposes_to_field_work_instead_of_retrying_same_chunk():
+    rejected_shapes = []
+    accepted_shapes = []
+
+    class Router:
+        @staticmethod
+        def _value(schema):
+            enum = schema.get("enum")
+            if isinstance(enum, list) and enum:
+                return enum[0]
+            raw_type = schema.get("type")
+            if isinstance(raw_type, list):
+                raw_type = next((item for item in raw_type if item != "null"), "string")
+            if raw_type == "array":
+                return [Router._value(schema.get("items") or {})]
+            if raw_type == "object":
+                return {
+                    key: Router._value(child)
+                    for key, child in (schema.get("properties") or {}).items()
+                }
+            if raw_type == "integer":
+                return 1
+            if raw_type == "number":
+                return 1.0
+            if raw_type == "boolean":
+                return True
+            return "authored"
+
+        def generate_text(self, role, messages, **kwargs):
+            del role, messages
+            schema = kwargs["response_schema"]
+            properties = schema["properties"]
+            concerns = [
+                key for key in properties
+                if key not in {"inapplicable_concerns", "constraint_evidence_refs"}
+            ]
+            field_counts = [
+                len(properties[concern]["items"]["properties"])
+                for concern in concerns
+            ]
+            shape = (tuple(concerns), tuple(field_counts))
+            if len(concerns) > 1 or any(count > 1 for count in field_counts):
+                rejected_shapes.append(shape)
+                raise ValueError("fixture rejects non-isolated worksheet work")
+
+            accepted_shapes.append(shape)
+            concern = concerns[0]
+            item_properties = properties[concern]["items"]["properties"]
+            payload = {
+                concern: [{
+                    field: self._value(field_schema)
+                    for field, field_schema in item_properties.items()
+                }]
+            }
+            if "constraint_evidence_refs" in properties:
+                payload["constraint_evidence_refs"] = []
+            return json.dumps(payload)
+
+    result = planning._compile_worksheet_section(
+        Router(),
+        requirement={"requirement_id": "r", "statement": "Gather a resource."},
+        selected_sections=("behavior_contract",),
+        section="behavior_contract",
+        evidence=[],
+        allowed=set(),
+        completed={},
+    )
+
+    assert rejected_shapes
+    assert accepted_shapes
+    assert all(len(concerns) == 1 and counts == (1,) for concerns, counts in accepted_shapes)
+    assert result["specification"]["actors"]
+    assert result["specification"]["inputs"]
