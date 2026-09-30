@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from contextlib import nullcontext
 from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
@@ -23,7 +24,7 @@ from .implementation_ir import (
     validate_node,
 )
 from .implementation_lifecycle import ACTIVATION_API, activation_call
-from .project_write_lock import project_write_lock
+from .project_write_lock import project_path_write_locks, project_write_lock
 from .root_cause_trace import emit_root_cause
 
 
@@ -419,7 +420,15 @@ def execute_implementation_graph(generator: Any, project_root: str | Path, *,
         state["refinement_pending"] = pending
         save()
 
-    with project_write_lock(root):
+    compile_at_pipeline_boundary = bool(
+        getattr(generator, "defer_compile_to_pipeline", False)
+    )
+    transaction_lock = (
+        nullcontext()
+        if compile_at_pipeline_boundary
+        else project_write_lock(root)
+    )
+    with transaction_lock:
         if cache.is_file():
             state = json.loads(cache.read_text(encoding="utf-8"))
             if state.get("request_hash") != digest(request):
@@ -533,7 +542,11 @@ def execute_implementation_graph(generator: Any, project_root: str | Path, *,
                                     "IMPLEMENTATION_IR_RESOURCE_JSON_INVALID: "
                                     f"{node['path']}: {exc.msg}"
                                 ) from exc
-                            direct._atomic_write(dest, payload.rstrip() + "\n")
+                            if compile_at_pipeline_boundary:
+                                with project_path_write_locks(root, (node["path"],)):
+                                    direct._atomic_write(dest, payload.rstrip() + "\n")
+                            else:
+                                direct._atomic_write(dest, payload.rstrip() + "\n")
                         else:
                             leaf = _leaf_module(
                                 node,
@@ -547,7 +560,12 @@ def execute_implementation_graph(generator: Any, project_root: str | Path, *,
                                     source += ACTIVATION_API + " { /* MMM_AUTHORED_FEATURE_BODY */ }\n"
                                 else:
                                     source += "// MMM_AUTHORED_FEATURE_BODY\n"
-                                direct._atomic_write(dest, source + "}\n")
+                                if compile_at_pipeline_boundary:
+                                    with project_path_write_locks(root, (node["path"],)):
+                                        if not dest.exists():
+                                            direct._atomic_write(dest, source + "}\n")
+                                else:
+                                    direct._atomic_write(dest, source + "}\n")
                             result = generator.generate(root, module=leaf,
                                                         minecraft_version=target["minecraft_version"],
                                                         loader=target["loader"],
@@ -589,19 +607,44 @@ def execute_implementation_graph(generator: Any, project_root: str | Path, *,
                     save()
 
             main = remember(request["entrypoint_path"])
-            source = main.read_text(encoding="utf-8")
-            calls = "\n".join(f"        {activation_call(n['symbol'])}" for n in graph["nodes"] if n["activation"])
-            start, end = "// MMM_IR_ACTIVATION_START", "// MMM_IR_ACTIVATION_END"
-            block = start + "\n" + calls + "\n        " + end + "\n"
-            if start in source:
-                source, count = re.subn(re.escape(start) + r".*?" + re.escape(end), lambda _: block,
-                                        source, count=1, flags=re.DOTALL)
+
+            def bind_entrypoint() -> None:
+                source = main.read_text(encoding="utf-8")
+                calls = "\n".join(
+                    f"        {activation_call(n['symbol'])}"
+                    for n in graph["nodes"]
+                    if n["activation"]
+                )
+                start, end = "// MMM_IR_ACTIVATION_START", "// MMM_IR_ACTIVATION_END"
+                block = start + "\n" + calls + "\n        " + end + "\n"
+                if start in source:
+                    updated, count = re.subn(
+                        re.escape(start) + r".*?" + re.escape(end),
+                        lambda _: block,
+                        source,
+                        count=1,
+                        flags=re.DOTALL,
+                    )
+                else:
+                    updated, count = re.subn(
+                        r"(public\s+void\s+onInitialize\s*\(\s*\)\s*\{)",
+                        lambda m: m[1] + "\n        " + block,
+                        source,
+                        count=1,
+                    )
+                if count != 1:
+                    raise ImplementationGraphError(
+                        "IMPLEMENTATION_IR_ENTRYPOINT_BINDING_FAILED"
+                    )
+                direct._atomic_write(main, updated)
+
+            if compile_at_pipeline_boundary:
+                with project_path_write_locks(
+                    root, (request["entrypoint_path"],)
+                ):
+                    bind_entrypoint()
             else:
-                source, count = re.subn(r"(public\s+void\s+onInitialize\s*\(\s*\)\s*\{)",
-                                        lambda m: m[1] + "\n        " + block, source, count=1)
-            if count != 1:
-                raise ImplementationGraphError("IMPLEMENTATION_IR_ENTRYPOINT_BINDING_FAILED")
-            direct._atomic_write(main, source)
+                bind_entrypoint()
             compile_deferred = bool(
                 getattr(generator, "defer_compile_to_pipeline", False)
             )
