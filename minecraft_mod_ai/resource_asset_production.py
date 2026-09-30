@@ -782,6 +782,8 @@ def _validate_container_layout(
     project_root: Path,
     run_root: Path,
     rows: Sequence[Mapping[str, Any]],
+    *,
+    package_resource_pack: bool = True,
 ) -> tuple[dict[str, Any], str]:
     containers = {str(row.get("container") or "mod") for row in rows}
     unknown = containers - {"mod", "resource_pack"}
@@ -828,13 +830,14 @@ def _validate_container_layout(
         decoded = json.loads(metadata_path.read_text(encoding="utf-8"))
         if decoded != metadata or not (root / "assets").is_dir():
             raise AssetProductionError("Standalone resource-pack container validation failed.")
-        archive = run_root / "resource-packs" / "generated-resource-pack.zip"
-        archive.parent.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
-            for path in sorted(root.rglob("*")):
-                if path.is_file() and not path.is_symlink():
-                    bundle.write(path, path.relative_to(root).as_posix())
-        resource_pack_zip = str(archive)
+        if package_resource_pack:
+            archive = run_root / "resource-packs" / "generated-resource-pack.zip"
+            archive.parent.mkdir(parents=True, exist_ok=True)
+            with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+                for path in sorted(root.rglob("*")):
+                    if path.is_file() and not path.is_symlink():
+                        bundle.write(path, path.relative_to(root).as_posix())
+            resource_pack_zip = str(archive)
         result["standalone_resource_pack"] = {
             "status": "PASS",
             "root": str(root),
@@ -925,7 +928,14 @@ def _asset_execution_projection(proposal: CompleteProposal) -> CompleteProposal:
     return projected
 
 
-def generate_assets(router: Any, proposal: CompleteProposal, project_root: Path, run_root: Path) -> dict[str, Any]:
+def generate_assets(
+    router: Any,
+    proposal: CompleteProposal,
+    project_root: Path,
+    run_root: Path,
+    *,
+    package_resource_pack: bool = True,
+) -> dict[str, Any]:
     proposal = _asset_execution_projection(proposal)
     from .model_adapters.image_diffusion import ImageGenerationConfig
     from .resource_image_pipeline import generate_candidate, validate_texture
@@ -1012,7 +1022,11 @@ def generate_assets(router: Any, proposal: CompleteProposal, project_root: Path,
         project_root, run_root, rows, namespace=proposal.base_proposal.spec.mod_id
     )
     container_validation, resource_pack_zip = _validate_container_layout(
-        proposal, project_root, run_root, rows
+        proposal,
+        project_root,
+        run_root,
+        rows,
+        package_resource_pack=package_resource_pack,
     )
     return {
         "schema_version": "mmm/resource-production-receipt-v2",
