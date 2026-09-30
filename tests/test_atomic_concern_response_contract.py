@@ -3116,3 +3116,37 @@ def test_small_model_prompt_exposes_exact_dependency_calls_and_drops_irrelevant_
     assert payload["host_grounding"]["host_version_facts"] == {}
     assert "Never add arguments to a zero-arity method" in messages[0]["content"]
     assert "Do not think aloud" in messages[0]["content"]
+
+
+def test_first_pass_rejects_argument_added_to_zero_arity_dependency_hook() -> None:
+    from minecraft_mod_ai.atomic_concern_source import _validate_first_pass_java_semantics
+
+    dependency_source = json.dumps(
+        {
+            "symbol": "AuthoredStateModel",
+            "path": "src/main/java/example/AuthoredStateModel.java",
+            "responsibility": "host-compiled state runtime",
+            "public_api": ["public static void initialize()"],
+            "source": (
+                "package example; public final class AuthoredStateModel { "
+                "public static void initialize() {} "
+                "public static Object getState(String name) { return null; } "
+                "public static void setState(String name, Object value) {} "
+                "}"
+            ),
+        }
+    )
+
+    with pytest.raises(
+        CustomModuleGenerationError,
+        match=r"AuthoredStateModel\.initialize called with 1 argument.*arity is \[0\]",
+    ):
+        _validate_first_pass_java_semantics(
+            (
+                "private static void rejectInvalidInput() { "
+                'AuthoredStateModel.initialize("invalid_inputs_initialization"); '
+                "}"
+            ),
+            dependency_source=dependency_source,
+            sibling_api=(),
+        )
