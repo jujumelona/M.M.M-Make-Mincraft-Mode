@@ -1047,10 +1047,10 @@ def test_atomic_compile_failure_is_repaired_with_local_bounded_retry(
             concern = payload["concern"]["name"]
             calls.append(concern)
             if len(calls) == 1:
-                return "private static Object value = new Object(1);"
+                return "private static int value = missingSymbol;"
             repair_failure = str(payload.get("repair_failure") or "")
-            assert "constructor Object cannot be applied" in repair_failure
-            return "private static Object value = new Object();"
+            assert "cannot find symbol" in repair_failure
+            return "private static int value = 0;"
 
         def generate_tool_decision(self, *_args, **_kwargs):
             raise AssertionError("production concern generation must not use scalar Java tools")
@@ -1063,16 +1063,16 @@ def test_atomic_compile_failure_is_repaired_with_local_bounded_retry(
             nonlocal compiles
             compiles += 1
             source = (project_root / path).read_text(encoding="utf-8")
-            if "new Object(1)" not in source:
+            if "missingSymbol" not in source:
                 return SimpleNamespace(status="PASS", commands=(), error=None)
             line = next(
                 index for index, text in enumerate(source.splitlines(), start=1)
-                if "new Object(1)" in text
+                if "missingSymbol" in text
             )
             log = project_root / ".minecraft_ai/logs/atomic.log"
             log.parent.mkdir(parents=True, exist_ok=True)
             log.write_text(
-                f"{project_root / path}:{line}: error: constructor Object cannot be applied to given types",
+                f"{project_root / path}:{line}: error: cannot find symbol\n  symbol:   variable missingSymbol",
                 encoding="utf-8",
             )
             return SimpleNamespace(
@@ -1092,8 +1092,8 @@ def test_atomic_compile_failure_is_repaired_with_local_bounded_retry(
     )
 
     source = (root / path).read_text(encoding="utf-8")
-    assert "new Object();" in source
-    assert "new Object(1)" not in source
+    assert "value = 0;" in source
+    assert "missingSymbol" not in source
     assert result["generation_verification"]["atomic_repair_count"] == 1
     assert result["generation_verification"]["atomic_first_pass_rejection_count"] == 0
     assert result["generation_verification"]["atomic_first_compile_failure_count"] == 1
