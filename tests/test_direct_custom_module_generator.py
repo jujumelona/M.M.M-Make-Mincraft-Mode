@@ -1276,8 +1276,40 @@ def test_graph_owned_atomic_leaf_defers_gradle_until_graph_boundary(
         required_gates=base.required_gates,
     )
 
+    class ForbiddenCoarseLock:
+        def __enter__(self):
+            raise AssertionError(
+                "graph-owned deferred leaf must not hold the coarse project lock during model decode"
+            )
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    path_locks: list[tuple[str, ...]] = []
+
+    class RecordingPathLock:
+        def __init__(self, paths):
+            self.paths = tuple(str(item) for item in paths)
+
+        def __enter__(self):
+            path_locks.append(self.paths)
+            return None
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
     monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
     monkeypatch.setattr(direct, "GradleRunner", Runner)
+    monkeypatch.setattr(
+        direct,
+        "project_write_lock",
+        lambda _root: ForbiddenCoarseLock(),
+    )
+    monkeypatch.setattr(
+        direct,
+        "project_path_write_locks",
+        lambda _root, paths: RecordingPathLock(paths),
+    )
 
     result = direct.CustomModuleGenerator(Router()).generate(
         root,
@@ -1287,6 +1319,7 @@ def test_graph_owned_atomic_leaf_defers_gradle_until_graph_boundary(
     )
 
     assert calls == 1
+    assert path_locks == [(path,)]
     assert "private static int balance = 0;" in (
         root / path
     ).read_text(encoding="utf-8")
