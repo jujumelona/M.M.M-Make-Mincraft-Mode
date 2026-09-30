@@ -351,23 +351,30 @@ class GradleRunner:
 
         gametest_mode = None
         if gametest_task is not None:
-            gametest_result = self._run(
-                name="gametest",
-                executable=prepared.gradle,
-                arguments=("--no-daemon", gametest_task, "--stacktrace"),
-                cwd=prepared.project_root,
-                env=prepared.environment,
-                log_path=prepared.logs / "gradle-gametest.log",
-            )
-            commands.append(gametest_result)
-            gametest_mode = "explicit_task"
-            if gametest_result.exit_code != 0:
-                return self._failed_build(
-                    prepared,
-                    commands,
-                    "Headless Fabric GameTest failed.",
-                    include_artifacts=True,
+            integrated_task = self._executed_gametest_task(build_result)
+            if integrated_task == gametest_task:
+                # Some legacy Fabric/Loom builds wire GameTest into the build task.
+                # The successful Gradle log is execution evidence, so launching the
+                # same server test task again only duplicates the slowest verifier stage.
+                gametest_mode = "integrated_build"
+            else:
+                gametest_result = self._run(
+                    name="gametest",
+                    executable=prepared.gradle,
+                    arguments=("--no-daemon", gametest_task, "--stacktrace"),
+                    cwd=prepared.project_root,
+                    env=prepared.environment,
+                    log_path=prepared.logs / "gradle-gametest.log",
                 )
+                commands.append(gametest_result)
+                gametest_mode = "explicit_task"
+                if gametest_result.exit_code != 0:
+                    return self._failed_build(
+                        prepared,
+                        commands,
+                        "Headless Fabric GameTest failed.",
+                        include_artifacts=True,
+                    )
 
         jar_path = self._find_release_jar(prepared.project_root)
         if jar_path is None:
