@@ -3212,7 +3212,15 @@ class CompleteProductionOrchestrator:
         return False
 
     def _generate_assets(self, router: ModelRouter, proposal: CompleteProposal, project_root: Path, run_root: Path) -> dict[str, Any]:
-        return generate_assets(router, proposal, project_root, run_root)
+        # Asset shards share one standalone resource-pack root. Validate each shard
+        # in place, then compress exactly once after all shards have committed.
+        return generate_assets(
+            router,
+            proposal,
+            project_root,
+            run_root,
+            package_resource_pack=False,
+        )
 
     @staticmethod
     def _blockbench_review(gecko_receipt: dict[str, Any], run_root: Path) -> dict[str, Any]:
