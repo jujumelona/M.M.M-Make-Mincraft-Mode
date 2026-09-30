@@ -728,6 +728,13 @@ _JDK_GENERIC_ARITY = {
     "java.util.LinkedHashMap": 2,
     "java.util.concurrent.ConcurrentHashMap": 2,
 }
+_KNOWN_CANONICAL_JDK_TYPES = frozenset(
+    set(_JDK_CANONICAL_SIMPLE_TYPES.values())
+    | set(_JDK_FQCN_ALIASES.values())
+    | set(_JDK_ASSIGNABLE_DECLARATIONS)
+    | set().union(*_JDK_ASSIGNABLE_DECLARATIONS.values())
+)
+
 _JDK_LOCK_RECEIVER_METHODS = frozenset(
     {"lock", "unlock", "tryLock", "lockInterruptibly", "newCondition"}
 )
@@ -738,16 +745,20 @@ _FIELD_MODIFIERS = frozenset(
 
 def _canonical_jdk_class_name(value: str) -> str:
     raw = re.sub(r"\s+", "", _erase_generic_arguments(str(value or ""))).strip()
-    mapped = _JDK_FQCN_ALIASES.get(
-        raw,
-        _JDK_CANONICAL_SIMPLE_TYPES.get(raw, raw),
-    )
+    if raw in _JDK_FQCN_ALIASES:
+        return _JDK_FQCN_ALIASES[raw]
+    if raw in _JDK_CANONICAL_SIMPLE_TYPES:
+        return _JDK_CANONICAL_SIMPLE_TYPES[raw]
+    # Only consult the installed JDK image for a previously unknown simple name.
+    # Exact FQCN validation is handled by the declaration-authority gate below.
+    if "." in raw or "$" in raw:
+        return raw
     try:
         from .jdk_type_index import canonical_public_jdk_type
 
-        return canonical_public_jdk_type(mapped)
+        return canonical_public_jdk_type(raw)
     except (OSError, RuntimeError, ValueError):
-        return mapped
+        return raw
 
 
 def _rewrite_known_jdk_fqcns(value: str) -> str:
@@ -2838,7 +2849,10 @@ def _validate_declared_type_authority(
                 ):
                     continue
                 if "." in leaf:
-                    if leaf.startswith(("java.", "javax.")):
+                    if (
+                        leaf.startswith(("java.", "javax."))
+                        and leaf not in _KNOWN_CANONICAL_JDK_TYPES
+                    ):
                         try:
                             from .jdk_type_index import is_public_jdk_type
 
