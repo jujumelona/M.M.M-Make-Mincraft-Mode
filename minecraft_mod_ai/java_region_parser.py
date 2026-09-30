@@ -484,8 +484,21 @@ def class_body_direct_return_calls(value: str) -> tuple[dict[str, Any], ...]:
         for node in _walk_named(method_body):
             if node.type != "return_statement":
                 continue
-            expression = next(iter(node.named_children), None)
-            if expression is None or expression.type != "method_invocation":
+            expression = (
+                node.child_by_field_name("expression")
+                or node.child_by_field_name("value")
+                or next(iter(node.named_children), None)
+            )
+            if expression is None:
+                continue
+            if expression.type == "parenthesized_expression":
+                invocations = [
+                    child
+                    for child in _walk_named(expression)
+                    if child.type == "method_invocation"
+                ]
+                expression = invocations[0] if len(invocations) == 1 else expression
+            if expression.type != "method_invocation":
                 continue
             call = _method_invocation_contract(expression, source)
             if call is None:
