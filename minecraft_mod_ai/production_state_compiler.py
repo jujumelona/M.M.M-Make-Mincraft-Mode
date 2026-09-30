@@ -57,6 +57,70 @@ def _section_text(text: str, section: str) -> str:
     return "\n".join(lines[start:end]).strip()
 
 
+def _concern_source(source: str, concern: str) -> str:
+    """Return only one authored concern block from a canonical section.
+
+    The free-Markdown planner emits one top-level bullet per concern. Production
+    extraction must not repeatedly send the entire state_model to a small model:
+    unrelated concern rows materially increase false EMPTY classifications.
+    """
+
+    text = str(source or "")
+    lines = text.splitlines()
+    start = -1
+    bullet = re.compile(r"^\s*-\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$")
+    for index, line in enumerate(lines):
+        match = bullet.match(line)
+        if match is not None and match.group(1) == concern:
+            start = index
+            break
+    if start < 0:
+        return ""
+
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        match = bullet.match(lines[index])
+        if match is not None and match.group(1) in _STATE_CONCERNS:
+            end = index
+            break
+        if parse_markdown_heading(lines[index]) is not None:
+            end = index
+            break
+    return "\n".join(lines[start:end]).strip()
+
+
+def _concern_has_explicit_payload(source: str, concern: str) -> bool:
+    """Detect canonical template rows that visibly contain authored values."""
+
+    block = _concern_source(source, concern)
+    if not block:
+        return False
+    first = block.splitlines()[0]
+    match = re.match(
+        rf"^\s*-\s*{re.escape(concern)}\s*:\s*(.*)$",
+        first,
+    )
+    if match is None:
+        return False
+    body = match.group(1).strip()
+    fields = tuple(DETAIL_RECORDS["state_model"][concern].split())
+    if not fields:
+        return bool(body)
+
+    # The planner template starts with the fixed field descriptor. A completed
+    # authored row normally appends another ':' followed by concrete values.
+    field_pattern = r"\s+".join(re.escape(field) for field in fields)
+    descriptor = re.match(rf"^{field_pattern}\s*:\s*(.+)$", body)
+    if descriptor is not None:
+        return bool(descriptor.group(1).strip())
+
+    # Structured Markdown projections use field=value rows under the concern.
+    return any(
+        re.search(rf"(?<![A-Za-z0-9_]){re.escape(field)}\s*=", block)
+        for field in fields
+    )
+
+
 def _json_key(value: Mapping[str, Any]) -> str:
     return json.dumps(dict(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -141,7 +205,7 @@ def _generate_concern_records(
         "section": "state_model",
         "concern": concern,
         "fields": fields,
-        "approved_state_model": source,
+        "approved_state_model": _concern_source(source, concern) or source,
         "declared_state_variables": list(declared_names),
         "record_limit": _MAX_CONCERN_RECORDS,
     }
@@ -157,7 +221,9 @@ def _generate_concern_records(
         "=, +=, -=, *=, /=. Mutation targets should use declared_state_variables. "
         "String/state literals must be quoted. Never use Java enum/member syntax such "
         "as ShipStatus.COMPLETE; write a quoted literal such as \"COMPLETE\". "
-        "If this concern has no concrete requirement in the approved plan, output only "
+        "The host supplies only the selected concern when it can isolate it. "
+        "If the supplied concern visibly contains authored values, STATUS=EMPTY is invalid. "
+        "If this concern truly has no concrete requirement in the approved plan, output only "
         "STATUS=EMPTY. Otherwise output at most the host record_limit records. "
         "Never paginate and never output STATUS=MORE."
     )
@@ -201,6 +267,13 @@ def _generate_concern_records(
 
     if accepted:
         return accepted
+
+    explicit_payload = _concern_has_explicit_payload(source, concern)
+    if explicit_payload:
+        raise ValueError(
+            "PRODUCTION_STATE_LOWERING_FALSE_EMPTY: "
+            f"state_model.{concern} contains authored values but extraction returned no records"
+        )
     if terminal:
         return []
     if re.search(r"(?im)^\s*STATUS\s*[:=]?\s*(?:EMPTY|DONE|COMPLETE)\s*$", raw):
@@ -850,6 +923,14 @@ def compile_production_state_section(router: Any, plan: AuthoredPlan) -> dict[st
         for concern in _STATE_CONCERNS
         if not specification[concern]
     ]
+    if not any(specification[concern] for concern in _STATE_CONCERNS) and any(
+        _concern_has_explicit_payload(source, concern)
+        for concern in _STATE_CONCERNS
+    ):
+        raise ValueError(
+            "PRODUCTION_STATE_LOWERING_EMPTY_CONTRADICTION: approved state_model "
+            "contains explicit authored values but canonical production state is empty"
+        )
     section = {
         "specification": specification,
         "constraint_evidence_refs": [],
