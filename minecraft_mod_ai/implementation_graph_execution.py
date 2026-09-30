@@ -480,19 +480,55 @@ def execute_implementation_graph(generator: Any, project_root: str | Path, *,
                     before = originals[node["path"]]
                     try:
                         if node["kind"] == "resource":
-                            payload = direct._call_coder(generator.router, [
-                                {"role": "system", "content": (
-                                    'Return {"content":"<complete JSON resource>","summary":"..."}. '
-                                    "Implement this exact resource only, using the selected platform format."
-                                )},
-                                {"role": "user", "content": json.dumps({
-                                    "node": node, "platform": target,
-                                    "requirements": {r: graph["requirements"][r] for r in node["requirements"]},
-                                    "execution_feedback": direct._bounded_execution_feedback(execution_feedback),
-                                }, ensure_ascii=False)},
-                            ])
-                            json.loads(payload["content"])
-                            direct._atomic_write(dest, payload["content"])
+                            # Resource leaves already have an exact host-selected path.
+                            # Ask for the resource itself instead of a JSON envelope that
+                            # double-encodes JSON and forces a small model to escape every
+                            # quote. _call_coder returns text, so treating it as a mapping
+                            # also made every admitted resource node fail at runtime.
+                            payload = direct._call_coder(
+                                generator.router,
+                                [
+                                    {
+                                        "role": "system",
+                                        "content": (
+                                            "Return only the complete JSON resource text. "
+                                            "No prose, Markdown, wrapper object, summary, or patch. "
+                                            "Implement this exact resource only, using the selected "
+                                            "platform format."
+                                        ),
+                                    },
+                                    {
+                                        "role": "user",
+                                        "content": json.dumps(
+                                            {
+                                                "node": node,
+                                                "platform": target,
+                                                "requirements": {
+                                                    r: graph["requirements"][r]
+                                                    for r in node["requirements"]
+                                                },
+                                                "execution_feedback": (
+                                                    direct._bounded_execution_feedback(
+                                                        execution_feedback
+                                                    )
+                                                ),
+                                            },
+                                            ensure_ascii=False,
+                                        ),
+                                    },
+                                ],
+                                output_token_ceiling=runtime_budget,
+                                force_non_thinking=True,
+                                tool_stage="resource_json",
+                            )
+                            try:
+                                json.loads(payload)
+                            except json.JSONDecodeError as exc:
+                                raise ImplementationGraphError(
+                                    "IMPLEMENTATION_IR_RESOURCE_JSON_INVALID: "
+                                    f"{node['path']}: {exc.msg}"
+                                ) from exc
+                            direct._atomic_write(dest, payload.rstrip() + "\n")
                         else:
                             leaf = _leaf_module(
                                 node,
