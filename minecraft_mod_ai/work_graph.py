@@ -940,6 +940,27 @@ def _exclusive_anchor_keys(module: ProductionModule) -> tuple[str, ...]:
             keys.append(locator)
     return tuple(dict.fromkeys(keys))
 
+_SYSTEM_PIPELINE_PACKS = {
+    "quest": "quest-system",
+    "class": "class-skill-system",
+    "skill": "class-skill-system",
+    "economy": "economy-shop",
+    "shop": "economy-shop",
+    "gui": "gui-networking",
+    "networking": "gui-networking",
+    "party": "party-guild",
+    "guild": "party-guild",
+}
+
+
+def _module_batch_key(module: ProductionModule, stage: str) -> str:
+    """Return the shared-writer identity that may safely batch in one work node."""
+
+    if stage == "system":
+        return _SYSTEM_PIPELINE_PACKS.get(module.kind, module.kind)
+    return ""
+
+
 def _module_stage(
     module: ProductionModule,
     *,
@@ -1035,7 +1056,7 @@ def _module_shards(
 
     groups: list[dict[str, Any]] = []
     module_group: dict[str, int] = {}
-    open_by_key: dict[tuple[str, frozenset[int]], int] = {}
+    open_by_key: dict[tuple[str, str, frozenset[int]], int] = {}
 
     def shard_size_for(stage: str) -> int:
         if stage == 'content':
@@ -1046,7 +1067,7 @@ def _module_shards(
         if stage == 'system':
             return _pipeline_shard_size(
                 'MMM_SYSTEM_PIPELINE_SHARD_SIZE',
-                1,
+                max(1, int(policy.java_shard_size)),
                 max(1, int(policy.java_shard_size)),
             )
         if stage == 'entity':
@@ -1071,6 +1092,7 @@ def _module_shards(
             )
 
         shard_size = shard_size_for(stage)
+        batch_key = _module_batch_key(module, stage)
         dependency_groups = {module_group[dependency] for dependency in module.depends_on}
 
         if stage == "custom" and _is_host_exact_authored_module(module):
@@ -1084,6 +1106,7 @@ def _module_shards(
             groups.append(
                 {
                     "stage": stage,
+                    "batch_key": batch_key,
                     "members": [module],
                     "external_groups": set(dependency_groups),
                     "first_order": len(module_group),
@@ -1095,7 +1118,7 @@ def _module_shards(
 
         candidates: set[int] = set()
 
-        exact_key = (stage, frozenset(dependency_groups))
+        exact_key = (stage, batch_key, frozenset(dependency_groups))
         exact = open_by_key.get(exact_key)
         if exact is not None and len(groups[exact]['members']) < shard_size:
             candidates.add(exact)
@@ -1118,19 +1141,24 @@ def _module_shards(
             groups.append(
                 {
                     'stage': stage,
+                    'batch_key': batch_key,
                     'members': [],
                     'external_groups': external_groups,
                     'first_order': len(module_group),
                     'sealed': False,
                 }
             )
-            open_by_key[(stage, frozenset(external_groups))] = chosen
+            open_by_key[(stage, batch_key, frozenset(external_groups))] = chosen
 
         group = groups[chosen]
         group['members'].append(module)
         module_group[module.module_id] = chosen
 
-        group_key = (str(group['stage']), frozenset(group['external_groups']))
+        group_key = (
+            str(group['stage']),
+            str(group.get('batch_key', '')),
+            frozenset(group['external_groups']),
+        )
         if len(group['members']) >= shard_size:
             if open_by_key.get(group_key) == chosen:
                 open_by_key.pop(group_key, None)
