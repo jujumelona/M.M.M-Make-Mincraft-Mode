@@ -786,6 +786,7 @@ def test_production_state_extractor_receives_only_selected_concern_block():
     assert rows[0]["name"] == "player_currency"
     assert router.payload is not None
     supplied = router.payload["approved_state_model"]
+    assert router.payload["contains_authored_values"] is True
     assert "- variables:" in supplied
     assert "- transitions:" not in supplied
 
