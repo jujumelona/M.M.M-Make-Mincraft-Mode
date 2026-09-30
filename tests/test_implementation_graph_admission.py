@@ -851,3 +851,125 @@ def test_implementation_graph_boundary_canonicalizes_structured_state_authority(
 
     assert state["invariants"][0]["condition"] == "credits >= 0 && ready == true"
     assert normalized["structured_sections"] == structured
+
+def test_resource_leaf_materializes_direct_json_end_to_end(tmp_path, monkeypatch):
+    """Resource graph leaves must consume coder text as JSON, not as a mapping."""
+    from minecraft_mod_ai import custom_module_generator as direct
+    from minecraft_mod_ai.complete_spec import ProductionModule
+
+    root = tmp_path / "project"
+    entry_rel = "src/main/java/example/TestMod.java"
+    entry = root / entry_rel
+    entry.parent.mkdir(parents=True)
+    entry.write_text(
+        "package example;\n"
+        "public final class TestMod {\n"
+        "    public void onInitialize() {}\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    resource_rel = "src/main/resources/assets/test/lang/en_us.json"
+    model_calls = []
+
+    class Router:
+        implementation_output_budget = 4096
+
+        def generate_text(self, role, messages, **kwargs):
+            model_calls.append((role, list(messages), dict(kwargs)))
+            return '{"item.test.credit":"Credit"}'
+
+    class Generator:
+        def __init__(self):
+            self.router = Router()
+            self.policy = None
+
+        @staticmethod
+        def _cache_dir(project_root):
+            return project_root / ".cache" / "gradle"
+
+    class Runner:
+        def __init__(self, _cache):
+            pass
+
+        @staticmethod
+        def compile_java(_root):
+            return SimpleNamespace(status="PASS", error="", commands=())
+
+    def compile_resource_graph(
+        _router,
+        *,
+        text,
+        package,
+        mod_id,
+        target,
+        context,
+        resume=None,
+        checkpoint=None,
+    ):
+        del target, context, resume, checkpoint
+        resource = ir.validate_node(
+            {
+                "symbol": "EnglishLanguageResource",
+                "kind": "resource",
+                "resource_path": resource_rel,
+                "responsibility": "Provide the English language resource.",
+                "requirements": ["R1"],
+                "obligations": ["Materialize the selected language JSON resource."],
+                "public_api": [],
+                "depends_on": [],
+                "activation": False,
+                "estimated_tokens": 256,
+            },
+            package=package,
+            mod_id=mod_id,
+            refs={"R1"},
+        )
+        return {
+            "schema_version": ir.IMPLEMENTATION_IR_SCHEMA_VERSION,
+            "source_text": text,
+            "requirements": {"R1": "Provide one English translation."},
+            "nodes": [resource],
+        }
+
+    monkeypatch.setattr(
+        graph_execution, "compile_authored_graph", compile_resource_graph
+    )
+    monkeypatch.setattr(direct, "GradleRunner", Runner)
+
+    request = {
+        "text": "# implementation\nProvide one English translation.",
+        "package": "example",
+        "mod_id": "test",
+        "target": dict(TARGET),
+        "entrypoint_path": entry_rel,
+        "entrypoint_symbol": "TestMod",
+    }
+    module = ProductionModule(
+        module_id="authored_implementation_graph",
+        kind="custom_java",
+        config={
+            "implementation": "custom",
+            "implementation_graph_request": request,
+        },
+        required_gates=("target_compile",),
+    )
+
+    result = graph_execution.execute_implementation_graph(
+        Generator(),
+        root,
+        module=module,
+    )
+
+    resource = root / resource_rel
+    assert json.loads(resource.read_text(encoding="utf-8")) == {
+        "item.test.credit": "Credit"
+    }
+    assert resource_rel in result["touched_paths"]
+    assert len(model_calls) == 1
+    kwargs = model_calls[0][2]
+    assert kwargs["force_non_thinking"] is True
+    assert kwargs["output_token_ceiling"] == 4096
+    assert kwargs["tool_stage"] == "resource_json"
+    assert "wrapper object" in model_calls[0][1][0]["content"]
+
