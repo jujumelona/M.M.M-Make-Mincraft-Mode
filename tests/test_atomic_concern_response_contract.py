@@ -3003,3 +3003,46 @@ Module: other
     assert index["Date"] == ("java.sql.Date",)
     assert "Entry" not in index
     assert "Hidden" not in index
+
+
+def test_first_pass_rejects_invalid_installed_jdk_constructor_arity() -> None:
+    from minecraft_mod_ai.atomic_concern_source import _validate_first_pass_java_semantics
+
+    with pytest.raises(
+        CustomModuleGenerationError,
+        match="installed-JDK constructor java.lang.Object called with 1 argument",
+    ):
+        _validate_first_pass_java_semantics(
+            "private static Object value = new Object(1);",
+            dependency_source="",
+            sibling_api=(),
+        )
+
+
+def test_first_pass_accepts_valid_installed_jdk_constructor_arity() -> None:
+    from minecraft_mod_ai.atomic_concern_source import _validate_first_pass_java_semantics
+
+    _validate_first_pass_java_semantics(
+        "private static Object value = new Object();",
+        dependency_source="",
+        sibling_api=(),
+    )
+
+
+def test_javap_constructor_shape_parser_handles_varargs() -> None:
+    from minecraft_mod_ai.jdk_type_index import _constructor_shapes_from_javap
+
+    shapes = _constructor_shapes_from_javap(
+        (
+            "public final class java.example.Sample {\n"
+            "  public java.example.Sample();\n"
+            "  public java.example.Sample(java.lang.String, java.lang.Object...);\n"
+            "}\n"
+        ),
+        "java.example.Sample",
+    )
+
+    assert shapes == (
+        {"arity": 0, "varargs": False},
+        {"arity": 2, "varargs": True},
+    )
