@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -102,3 +103,50 @@ def test_reference_closure_resolves_generated_texture_and_model_references(tmp_p
     assert report["status"] == "PASS"
     assert report["checked_reference_count"] == 2
     assert {item["kind"] for item in report["references"]} == {"model", "texture"}
+
+def test_sharded_resource_pack_validation_can_defer_zip_until_final_merge(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "project"
+    run_root = tmp_path / "run"
+    pack_root = run_root / "resource-pack"
+    texture = pack_root / "assets/example/textures/item/widget.png"
+    texture.parent.mkdir(parents=True)
+    texture.write_bytes(b"texture")
+
+    proposal = SimpleNamespace(
+        base_proposal=SimpleNamespace(
+            spec=SimpleNamespace(
+                platform=SimpleNamespace(resource_pack_format=34)
+            )
+        )
+    )
+    rows = [
+        {
+            "asset_id": "widget_icon",
+            "container": "resource_pack",
+            "textures": [
+                {
+                    "target_path": "assets/example/textures/item/widget.png",
+                }
+            ],
+            "documents": [],
+        }
+    ]
+
+    validation, archive = assets._validate_container_layout(
+        proposal,
+        project_root,
+        run_root,
+        rows,
+        package_resource_pack=False,
+    )
+
+    pack = validation["standalone_resource_pack"]
+    assert pack["status"] == "PASS"
+    assert pack["root"] == str(pack_root.resolve())
+    assert pack["zip"] == ""
+    assert archive == ""
+    assert not (run_root / "resource-packs/generated-resource-pack.zip").exists()
+    assert (pack_root / "pack.mcmeta").is_file()
+
