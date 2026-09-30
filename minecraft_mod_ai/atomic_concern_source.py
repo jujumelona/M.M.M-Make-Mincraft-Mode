@@ -2532,10 +2532,18 @@ def _bounded_grounding(
     return {
         "schema_version": grounding.get("schema_version"),
         "artifact_kind": grounding.get("artifact_kind"),
-        "facts": grounding.get("facts") or [],
+        "facts": (
+            grounding.get("facts") or []
+            if _section_platform_api_policy(section) != "forbidden"
+            else []
+        ),
         "policy": dict(grounding.get("policy") or {}),
         "platform": dict(direct_payload.get("platform") or {}),
-        "host_version_facts": host_version_facts,
+        "host_version_facts": (
+            host_version_facts
+            if _section_platform_api_policy(section) != "forbidden"
+            else {}
+        ),
         "implementation_contract": implementation_contract,
     }
 
@@ -2637,7 +2645,46 @@ def _dependency_context_rows(raw: str) -> tuple[dict[str, Any], ...]:
     return tuple(rows)
 
 
-def _dependency_api_context(raw: str, *, max_chars: int = 16000) -> list[dict[str, Any]]:
+def _compact_prompt_member_contract(
+    raw: Mapping[str, Any],
+    *,
+    owner_concern: str = "",
+) -> dict[str, Any]:
+    """Project parsed Java API facts to the minimum model-visible contract."""
+
+    result: dict[str, Any] = {}
+    if owner_concern:
+        result["owner_concern"] = owner_concern
+    for key in (
+        "kind",
+        "symbol",
+        "declared_type",
+        "return_type",
+        "static",
+        "mutable",
+    ):
+        value = raw.get(key)
+        if value not in (None, "", (), []):
+            result[key] = value
+    parameters = raw.get("parameters")
+    if isinstance(parameters, Sequence) and not isinstance(
+        parameters, (str, bytes, bytearray)
+    ):
+        result["parameters"] = [
+            {
+                key: item.get(key)
+                for key in ("name", "type", "varargs")
+                if item.get(key) not in (None, "")
+            }
+            for item in parameters
+            if isinstance(item, Mapping)
+        ]
+    return result
+
+
+def _dependency_api_context(raw: str, *, max_chars: int = 10000) -> list[dict[str, Any]]:
+    """Expose compact exact dependency declarations instead of full source-shaped noise."""
+
     result: list[dict[str, Any]] = []
     used = 0
     for row in _dependency_context_rows(raw):
@@ -2646,36 +2693,33 @@ def _dependency_api_context(raw: str, *, max_chars: int = 16000) -> list[dict[st
         if source.strip():
             try:
                 typed_api = [
-                    dict(item)
+                    _compact_prompt_member_contract(item)
                     for item in public_source_member_contracts(source)
                 ]
             except JavaRegionParseError:
                 typed_api = []
         compact = {
             "symbol": str(row.get("symbol") or ""),
-            "path": str(row.get("path") or ""),
             "responsibility": str(row.get("responsibility") or ""),
-            "public_api": list(row.get("public_api") or []),
+            # Parsed source is authoritative when available. Do not duplicate every
+            # declaration as both prose public_api and typed_public_api.
+            "public_api": [] if typed_api else list(row.get("public_api") or []),
             "typed_public_api": typed_api,
-            "typed_api_source": "tree_sitter_java" if typed_api else "unavailable",
+            "typed_api_source": "tree_sitter_java" if typed_api else "fallback",
         }
-        encoded = json.dumps(
-            compact,
-            ensure_ascii=False,
-            sort_keys=True,
-        )
+        encoded = json.dumps(compact, ensure_ascii=False, sort_keys=True)
         if used + len(encoded) > max_chars:
-            # Preserve legacy/frozen public_api when a rich typed contract would
-            # exceed the atomic prompt budget.
-            compact["typed_public_api"] = []
-            compact["typed_api_source"] = "budget_fallback"
-            encoded = json.dumps(
-                compact,
-                ensure_ascii=False,
-                sort_keys=True,
-            )
+            fallback = {
+                "symbol": compact["symbol"],
+                "responsibility": compact["responsibility"],
+                "public_api": list(row.get("public_api") or []),
+                "typed_public_api": [],
+                "typed_api_source": "budget_fallback",
+            }
+            encoded = json.dumps(fallback, ensure_ascii=False, sort_keys=True)
             if used + len(encoded) > max_chars:
                 break
+            compact = fallback
         result.append(compact)
         used += len(encoded)
     return result
@@ -2720,6 +2764,32 @@ def _typed_dependency_method_contracts(
         }
         for owner, methods in result.items()
     }
+
+
+def _dependency_call_contracts(raw: str) -> list[dict[str, Any]]:
+    """Flatten exact dependency call signatures for small-model source generation."""
+
+    rows: list[dict[str, Any]] = []
+    for owner, methods in sorted(_typed_dependency_method_contracts(raw).items()):
+        for name, contracts in sorted(methods.items()):
+            for contract in contracts:
+                parameters = [
+                    str(item.get("type") or "").strip()
+                    for item in contract.get("parameters") or ()
+                    if isinstance(item, Mapping)
+                ]
+                rows.append(
+                    {
+                        "owner": owner,
+                        "method": name,
+                        "arity": len(parameters),
+                        "parameter_types": parameters,
+                        "return_type": str(contract.get("return_type") or "").strip(),
+                        "static": bool(contract.get("static") is True),
+                        "call_shape": f"{owner}.{name}(" + ", ".join(parameters) + ")",
+                    }
+                )
+    return rows
 
 
 def _simple_object_type(value: Any) -> bool:
@@ -3408,6 +3478,26 @@ def _sibling_symbol_inventory(
                 rows.append(row)
     return rows
 
+
+def _prompt_sibling_api(
+    source: str,
+    *,
+    sibling_concerns: Sequence[str],
+) -> list[dict[str, Any]]:
+    """Keep sibling authority exact but small enough for a local coder."""
+
+    return [
+        _compact_prompt_member_contract(
+            row,
+            owner_concern=str(row.get("owner_concern") or ""),
+        )
+        for row in _sibling_symbol_inventory(
+            source,
+            sibling_concerns=sibling_concerns,
+        )
+    ]
+
+
 def _messages(
     *,
     section: str,
@@ -3454,6 +3544,8 @@ def _messages(
             f"ATOMIC_CONCERN_RESPONSE_REGION_INVALID: {response_region!r}"
         )
     system = (
+        "Emit one final Java region only. Do not think aloud, explain, draft, reconsider, "
+        "or emit multiple candidate implementations. "
         "Implement exactly one host-selected concern inside one already-selected Java class. "
         "Planning record schemas, planning task labels, and concern cardinality are host-owned "
         "metadata and are deliberately not exposed as Java source shapes. Source requirement labels "
@@ -3522,14 +3614,19 @@ def _messages(
             else []
         ),
         "host_grounding": _bounded_grounding(grounding, section=section),
-        "implementation_authority": render_generation_implementation_authority_prompt(grounding),
+        "implementation_authority": (
+            render_generation_implementation_authority_prompt(grounding)
+            if _section_platform_api_policy(section) != "forbidden"
+            else ""
+        ),
         "dependency_api": _dependency_api_context(dependency_source),
+        "dependency_call_contract": _dependency_call_contracts(dependency_source),
         "current_selected_region_source": _region_content(
             current_source,
             concern=name,
             region="INIT" if response_region == "initialize" else "MEMBERS",
         ),
-        "available_sibling_api": _sibling_symbol_inventory(
+        "available_sibling_api": _prompt_sibling_api(
             current_source,
             sibling_concerns=sibling_concerns,
         ),
@@ -3544,6 +3641,13 @@ def _messages(
             "output_language": "java_source_region",
             "no_json_ast_protocol": True,
             "sibling_api_is_authoritative": True,
+            "dependency_call_contract_is_exhaustive": True,
+            "dependency_call_rule": (
+                "Before emitting Owner.method(...), match owner, method, arity, and static=true "
+                "against dependency_call_contract. If no exact row exists, do not emit that call. "
+                "Never add arguments to a zero-arity method. Dependency initialize/onInitialize "
+                "hooks are host-orchestrated; concern regions must not call them."
+            ),
             "never_mutate_final_sibling_fields": True,
             "declare_missing_concern_local_state": (
                 "When this concern reads or writes state absent from available_sibling_api, "
