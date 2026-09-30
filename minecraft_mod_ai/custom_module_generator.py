@@ -2159,7 +2159,10 @@ def _run_atomic_ir_generation(
             generator.router,
             messages,
             output_token_ceiling=_ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING,
-            force_non_thinking=False,
+            # Atomic production is a source-materialization turn, not a reasoning
+            # turn. Qwen thinking can otherwise consume the entire 4096-token page
+            # while drafting/reconsidering multiple implementations before Java.
+            force_non_thinking=True,
             structured_java_region=False,
             tool_stage="atomic_java",
         ),
