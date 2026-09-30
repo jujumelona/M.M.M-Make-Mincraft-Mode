@@ -74,6 +74,9 @@ def test_verified_release_packaging_reuses_completed_validation(
 
     source_validation = {"status": "PASS", "checks_run": 1, "findings": []}
     jar_validation = {"status": "PASS", "checks_run": 1, "findings": []}
+    attachment = tmp_path / "resource-pack.zip"
+    attachment.write_bytes(b"resource-pack")
+    attachment_sha = mcp_tools._sha256(attachment)
     result = service._package_release_from_verified_evidence(
         str(root),
         {},
@@ -83,10 +86,27 @@ def test_verified_release_packaging_reuses_completed_validation(
         source_validation=source_validation,
         jar_validation=jar_validation,
         expected_jar_sha256=mcp_tools._sha256(jar),
+        additional_artifacts={
+            "generated-resource-pack.zip": {
+                "path": str(attachment),
+                "sha256": attachment_sha,
+            }
+        },
+        manifest_provenance={
+            "proposal_scope": "complete",
+        },
     )
 
     with zipfile.ZipFile(result["release_zip"]) as archive:
         names = set(archive.namelist())
+        manifest = __import__("json").loads(
+            archive.read("release-manifest.json").decode("utf-8")
+        )
+        assert archive.read("additional/generated-resource-pack.zip") == b"resource-pack"
     assert "binary/demo.jar" in names
     assert "release-manifest.json" in names
+    assert manifest["additional_artifacts"] == {
+        "generated-resource-pack.zip": attachment_sha
+    }
+    assert manifest["proposal_scope"] == "complete"
 
