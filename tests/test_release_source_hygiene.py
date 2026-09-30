@@ -40,3 +40,53 @@ def test_release_contains_rebuildable_source_and_evidence_without_machine_output
         assert not {"source/" + p for p in unwanted} & names
         assert not any("releases/" in p for p in names)
         assert "binary/demo.jar" in names
+
+def test_verified_release_packaging_reuses_completed_validation(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "project"
+    source = root / "src/main/java/demo/Token.java"
+    source.parent.mkdir(parents=True)
+    source.write_text("package demo; final class Token {}\n", encoding="utf-8")
+    jar = root / "build/libs/demo.jar"
+    jar.parent.mkdir(parents=True)
+    jar.write_bytes(b"verified-jar")
+
+    proposal = SimpleNamespace(spec=object(), calculate_hash=lambda: "sha256:proposal")
+    service = mcp_tools.MMMToolService(workspace_root=tmp_path)
+    monkeypatch.setattr(service, "_approved", lambda *a: proposal)
+    monkeypatch.setattr(service.broker, "authorize", lambda *a: None)
+    monkeypatch.setattr(mcp_tools, "approved_request", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        mcp_tools,
+        "ScalableProjectValidator",
+        lambda **kw: (_ for _ in ()).throw(
+            AssertionError("verified packaging must not rerun source validation")
+        ),
+    )
+    monkeypatch.setattr(
+        mcp_tools,
+        "validate_jar",
+        lambda *a, **kw: (_ for _ in ()).throw(
+            AssertionError("verified packaging must not rerun JAR validation")
+        ),
+    )
+
+    source_validation = {"status": "PASS", "checks_run": 1, "findings": []}
+    jar_validation = {"status": "PASS", "checks_run": 1, "findings": []}
+    result = service._package_release_from_verified_evidence(
+        str(root),
+        {},
+        "approved",
+        output_zip="verified-release.zip",
+        jar_path=str(jar),
+        source_validation=source_validation,
+        jar_validation=jar_validation,
+        expected_jar_sha256=mcp_tools._sha256(jar),
+    )
+
+    with zipfile.ZipFile(result["release_zip"]) as archive:
+        names = set(archive.namelist())
+    assert "binary/demo.jar" in names
+    assert "release-manifest.json" in names
+
