@@ -385,3 +385,84 @@ def test_build_checkpoint_freezes_runtime_linkage_owner(tmp_path: Path) -> None:
     assert diagnostic["path"] == "src/main/java/demo/AuthoredFeature001.java"
     assert "initializeClient" in diagnostic["message"]
 
+def test_failed_repair_reuses_terminal_build_evidence_without_rebuild(
+    monkeypatch, tmp_path: Path
+) -> None:
+    calls = {"build": 0, "repair": 0}
+
+    class Router:
+        def bind_agent_workspace(self, _root, *, require_fresh_evidence):
+            assert require_fresh_evidence is True
+            return self
+
+    router = Router()
+
+    class Runner:
+        def __init__(self, _cache):
+            pass
+
+        def build(self, _root, *, run_gametest):
+            calls["build"] += 1
+            if calls["build"] > 1:
+                raise AssertionError(
+                    "terminal repair evidence must prevent a redundant full rebuild"
+                )
+            return _Report(
+                {
+                    "status": "FAIL",
+                    "error": "initial compiler failure",
+                    "commands": [
+                        {"name": "build", "exit_code": 1, "timed_out": False}
+                    ],
+                }
+            )
+
+    class RepairEngine:
+        def __init__(self, **kwargs):
+            assert kwargs["router"] is router
+
+        def repair(self, _root, *, run_gametest, max_attempts, initial_build):
+            calls["repair"] += 1
+            assert initial_build["status"] == "FAIL"
+            return {
+                "schema_version": "mmm/repair-result-v2",
+                "status": "FAIL",
+                "attempts": 1,
+                "stop_reason": "repeated_signature",
+                "evidence": {
+                    "passed": False,
+                    "build": {
+                        "status": "FAIL",
+                        "error": "terminal compiler failure",
+                        "commands": [
+                            {
+                                "name": "build",
+                                "exit_code": 1,
+                                "timed_out": False,
+                            }
+                        ],
+                    },
+                },
+                "patch_receipts": [{"changed": True}],
+            }
+
+    monkeypatch.setattr(complete_build_repair, "GradleRunner", Runner)
+    monkeypatch.setattr(complete_build_repair, "RepairEngine", RepairEngine)
+
+    bundle, active_router = complete_build_repair.run_build_with_repair(
+        project_root=tmp_path,
+        cache=tmp_path / ".cache",
+        run_gametest=False,
+        auto_repair=True,
+        max_repair_attempts=None,
+        router=router,
+        router_factory=lambda: router,
+        policy=object(),
+    )
+
+    assert active_router is router
+    assert calls == {"build": 1, "repair": 1}
+    assert bundle["build"]["status"] == "FAIL"
+    assert bundle["build"]["error"] == "terminal compiler failure"
+    assert bundle["repair"]["stop_reason"] == "repeated_signature"
+
