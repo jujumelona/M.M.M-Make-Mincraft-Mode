@@ -18,6 +18,78 @@ from .planning_detail_slots import DETAIL_RECORDS
 from .planning_detail_template import WORKSHEET_SECTIONS, worksheet_section_schema
 
 
+def _fit_overlong_strings_to_schema(value: Any, schema: Mapping[str, Any]) -> Any:
+    """Clamp only overlong string leaves to host-owned JSON-schema bounds."""
+
+    if isinstance(value, str):
+        limit = schema.get("maxLength")
+        if isinstance(limit, int) and limit >= 0 and len(value) > limit:
+            return value[:limit]
+        return value
+
+    if isinstance(value, Mapping):
+        properties = schema.get("properties")
+        if not isinstance(properties, Mapping):
+            return dict(value)
+        return {
+            key: _fit_overlong_strings_to_schema(
+                item,
+                properties.get(key, {}) if isinstance(properties.get(key, {}), Mapping) else {},
+            )
+            for key, item in value.items()
+        }
+
+    if isinstance(value, list):
+        item_schema = schema.get("items")
+        if not isinstance(item_schema, Mapping):
+            return list(value)
+        return [
+            _fit_overlong_strings_to_schema(item, item_schema)
+            for item in value
+        ]
+
+    return value
+
+
+def _recover_planner_string_overflow(
+    failure: BaseException,
+    schema: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Recover valid planner JSON when its only repairable defect is string length."""
+
+    from .structured_output import (
+        StructuredOutputValidationError,
+        validate_structured_output,
+    )
+
+    if not isinstance(failure, StructuredOutputValidationError):
+        raise failure
+
+    try:
+        decoded = json.loads(failure.output)
+    except (TypeError, ValueError):
+        raise failure
+
+    repaired = _fit_overlong_strings_to_schema(decoded, schema)
+    if repaired == decoded:
+        raise failure
+
+    repaired_raw = json.dumps(repaired, ensure_ascii=False, separators=(",", ":"))
+    try:
+        validated = validate_structured_output(
+            repaired_raw,
+            response_format="json",
+            response_schema=schema,
+        )
+    except StructuredOutputValidationError:
+        raise failure
+
+    value = json.loads(validated)
+    if not isinstance(value, Mapping):
+        raise failure
+    return dict(value)
+
+
 def normalize_structured_sections(raw: Mapping[str, Any] | None) -> dict[str, Any]:
     if not raw:
         return {}
@@ -217,25 +289,28 @@ def _generate_authored_chunk(
             include_evidence=evidence,
             record_counts=record_counts,
         )
-        value = generate_fixed_template_value(
-            router,
-            "planner",
-            _authored_chunk_messages(
-                prompt,
-                section=section,
-                chunk_index=chunk_index,
-                chunk_count=chunk_count,
-                concerns=selected,
-                completed=completed,
-                include_evidence=evidence,
-                record_counts=record_counts,
-            ),
-            response_schema=schema,
-            media_paths=media_paths,
-            enable_tools=False,
-            tool_name=f"author_{section}_{chunk_index}",
-            description=f"Author canonical {section} concern records.",
-        )
+        try:
+            value = generate_fixed_template_value(
+                router,
+                "planner",
+                _authored_chunk_messages(
+                    prompt,
+                    section=section,
+                    chunk_index=chunk_index,
+                    chunk_count=chunk_count,
+                    concerns=selected,
+                    completed=completed,
+                    include_evidence=evidence,
+                    record_counts=record_counts,
+                ),
+                response_schema=schema,
+                media_paths=media_paths,
+                enable_tools=False,
+                tool_name=f"author_{section}_{chunk_index}",
+                description=f"Author canonical {section} concern records.",
+            )
+        except RuntimeError as failure:
+            value = _recover_planner_string_overflow(failure, schema)
         if not isinstance(value, Mapping):
             raise ValueError(
                 f"AUTHORED_STRUCTURED_DESIGN: {section} chunk {chunk_index} must be an object"
