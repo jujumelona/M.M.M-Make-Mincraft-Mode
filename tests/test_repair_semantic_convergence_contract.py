@@ -14,7 +14,7 @@ def _bind_test_platform(root: Path) -> None:
     )
 
 
-def test_unbounded_repair_uses_semantic_convergence_not_two_attempt_cap(
+def test_unbounded_repair_still_respects_hard_attempt_cap(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -61,6 +61,7 @@ def test_unbounded_repair_uses_semantic_convergence_not_two_attempt_cap(
         evidence_calls["count"] += 1
         count = evidence_calls["count"]
         if count == 4:
+            # The hard host cap must terminate before a third mutation attempt.
             return {
                 "passed": True,
                 "diagnostics": {"diagnostics": {}},
@@ -100,9 +101,11 @@ def test_unbounded_repair_uses_semantic_convergence_not_two_attempt_cap(
 
     result = engine.repair(root, run_gametest=False, max_attempts=None)
 
-    assert result["status"] == "PASS"
-    assert result["attempts"] == 3
-    assert patch_calls["count"] == 3
+    assert result["status"] == "FAIL"
+    assert result["stop_reason"] == "hard_max_attempts"
+    assert result["attempts"] == 2
+    assert patch_calls["count"] == 2
+    assert evidence_calls["count"] == 3
 
 
 def test_repeated_verifier_signature_still_terminates_unbounded_repair(
