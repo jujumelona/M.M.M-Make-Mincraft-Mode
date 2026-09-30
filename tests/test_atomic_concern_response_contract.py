@@ -2897,3 +2897,47 @@ def test_first_pass_type_authority_defers_fqcn_binding_to_jdt_javac() -> None:
         dependency_source="",
         sibling_api=(),
     )
+
+
+def test_first_pass_canonicalizes_unique_installed_jdk_simple_types() -> None:
+    from minecraft_mod_ai.atomic_concern_source import _canonicalize_generated_jdk_semantics
+
+    source, changes = _canonicalize_generated_jdk_semantics(
+        (
+            "private static Optional<String> maybe;\n"
+            "private static Duration timeout;"
+        )
+    )
+
+    assert "java.util.Optional<String> maybe;" in source
+    assert "java.time.Duration timeout;" in source
+    assert any("Optional->java.util.Optional" in item for item in changes)
+    assert any("Duration->java.time.Duration" in item for item in changes)
+
+
+def test_first_pass_canonicalizes_wrong_unique_jdk_fqcn_from_installed_jdk() -> None:
+    from minecraft_mod_ai.atomic_concern_source import _canonicalize_generated_jdk_semantics
+
+    source, _changes = _canonicalize_generated_jdk_semantics(
+        (
+            "private static final java.util.concurrent.ReentrantLock LOCK = "
+            "new java.util.concurrent.ReentrantLock();"
+        )
+    )
+
+    assert "java.util.concurrent.ReentrantLock" not in source
+    assert "java.util.concurrent.locks.ReentrantLock" in source
+
+
+def test_first_pass_type_authority_rejects_nonexistent_java_fqcn() -> None:
+    from minecraft_mod_ai.atomic_concern_source import _validate_first_pass_java_semantics
+
+    with pytest.raises(
+        CustomModuleGenerationError,
+        match="ungrounded simple Java type.*java.util.DoesNotExist",
+    ):
+        _validate_first_pass_java_semantics(
+            "private static java.util.DoesNotExist value;",
+            dependency_source="",
+            sibling_api=(),
+        )
