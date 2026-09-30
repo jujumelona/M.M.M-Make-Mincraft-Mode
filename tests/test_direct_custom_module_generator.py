@@ -1033,6 +1033,8 @@ def test_atomic_first_candidate_canonicalizes_jdk_lock_semantics_before_compile(
 def test_atomic_compile_failure_is_terminal_without_model_retry(
     tmp_path: Path, monkeypatch
 ) -> None:
+    monkeypatch.setenv("MMM_ATOMIC_CONCERN_REGION_ATTEMPTS", "4")
+    monkeypatch.setenv("MMM_ATOMIC_CONCERN_COMPILE_REPAIRS", "4")
     root, path, symbol = _project(tmp_path)
     calls: list[str] = []
     compiles = 0
@@ -1093,6 +1095,50 @@ def test_atomic_compile_failure_is_terminal_without_model_retry(
     assert "missingSymbol" not in source
     assert calls == ["steps"]
     assert compiles == 1
+
+
+def test_production_atomic_response_failure_ignores_diagnostic_retry_env(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("MMM_ATOMIC_CONCERN_REGION_ATTEMPTS", "4")
+    monkeypatch.setenv("MMM_ATOMIC_CONCERN_COMPILE_REPAIRS", "4")
+    root, path, symbol = _project(tmp_path)
+    calls = 0
+
+    class Router:
+        def generate_text(self, role, messages, **kwargs):
+            nonlocal calls
+            assert role == "coder"
+            assert kwargs.get("tool_stage") == "atomic_java"
+            calls += 1
+            return "package escaped;"
+
+        def generate_tool_decision(self, *_args, **_kwargs):
+            raise AssertionError("production concern generation must not use scalar Java tools")
+
+    class Runner:
+        def __init__(self, _cache):
+            pass
+
+        def compile_java(self, _project_root):
+            raise AssertionError("host-invalid atomic output must fail before compile")
+
+    monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
+    monkeypatch.setattr(direct, "GradleRunner", Runner)
+
+    with pytest.raises(
+        direct.CustomModuleGenerationError,
+        match="ATOMIC_CONCERN_FIRST_PASS_RESPONSE_INVALID",
+    ):
+        direct.CustomModuleGenerator(Router()).generate(
+            root,
+            module=_single_atomic_module(path, symbol),
+            minecraft_version="1.21.1",
+            loader="fabric",
+        )
+
+    assert calls == 1
+
 
 def test_nonintegration_atomic_concern_cannot_write_initialize_body() -> None:
     from minecraft_mod_ai.atomic_concern_source import parse_concern_content
