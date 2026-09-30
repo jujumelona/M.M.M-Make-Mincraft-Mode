@@ -26,6 +26,7 @@ from .java_region_parser import (
     class_body_member_contracts,
     class_body_member_kinds,
     class_body_method_invocations,
+    class_body_object_creations,
     class_body_simple_type_occurrences,
     public_source_member_contracts,
     strict_initialize_statements,
@@ -2872,6 +2873,70 @@ def _validate_declared_type_authority(
         )
 
 
+def _jdk_constructor_accepts_arity(
+    shapes: Sequence[Mapping[str, Any]],
+    argument_count: int,
+) -> bool:
+    for shape in shapes:
+        try:
+            arity = int(shape.get("arity", -1))
+        except (TypeError, ValueError):
+            continue
+        if arity < 0:
+            continue
+        if shape.get("varargs") is True:
+            if argument_count >= max(0, arity - 1):
+                return True
+        elif argument_count == arity:
+            return True
+    return False
+
+
+def _validate_jdk_object_creations(value: str) -> None:
+    try:
+        from .jdk_type_index import (
+            is_public_jdk_type,
+            public_jdk_constructor_shapes,
+        )
+    except ImportError:
+        return
+
+    for creation in class_body_object_creations(value):
+        raw_type = str(creation.get("type") or "").strip()
+        fqcn = _canonical_jdk_class_name(raw_type)
+        if not fqcn.startswith(("java.", "javax.")):
+            continue
+        try:
+            if not is_public_jdk_type(fqcn):
+                continue
+            shapes = public_jdk_constructor_shapes(fqcn)
+        except (OSError, RuntimeError, ValueError):
+            continue
+        argument_count = int(creation.get("argument_count") or 0)
+        if shapes and _jdk_constructor_accepts_arity(shapes, argument_count):
+            continue
+        if not shapes:
+            raise CustomModuleGenerationError(
+                "ATOMIC_CONCERN_RESPONSE_INVALID: installed-JDK type "
+                f"{fqcn} has no public constructor available for direct instantiation."
+            )
+        allowed = sorted(
+            {
+                (
+                    f"{int(shape.get('arity', 0)) - 1}+"
+                    if shape.get("varargs") is True
+                    else str(int(shape.get("arity", 0)))
+                )
+                for shape in shapes
+            }
+        )
+        raise CustomModuleGenerationError(
+            "ATOMIC_CONCERN_RESPONSE_INVALID: installed-JDK constructor "
+            f"{fqcn} called with {argument_count} argument(s); authoritative "
+            f"public constructor arity is {allowed}."
+        )
+
+
 def _validate_first_pass_java_semantics(
     value: str,
     *,
@@ -2891,6 +2956,7 @@ def _validate_first_pass_java_semantics(
         dependency_source=dependency_source,
         sibling_api=sibling_api,
     )
+    _validate_jdk_object_creations(value)
     final_fields = {
         str(item.get("symbol") or "")
         for item in contracts
