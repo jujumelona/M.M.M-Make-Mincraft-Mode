@@ -883,6 +883,7 @@ def test_resource_leaf_materializes_direct_json_end_to_end(tmp_path, monkeypatch
         def __init__(self):
             self.router = Router()
             self.policy = None
+            self.defer_compile_to_pipeline = True
 
         @staticmethod
         def _cache_dir(project_root):
@@ -894,7 +895,9 @@ def test_resource_leaf_materializes_direct_json_end_to_end(tmp_path, monkeypatch
 
         @staticmethod
         def compile_java(_root):
-            return SimpleNamespace(status="PASS", error="", commands=())
+            raise AssertionError(
+                "implementation graph compile must be deferred to the pipeline build gate"
+            )
 
     def compile_resource_graph(
         _router,
@@ -966,6 +969,11 @@ def test_resource_leaf_materializes_direct_json_end_to_end(tmp_path, monkeypatch
         "item.test.credit": "Credit"
     }
     assert resource_rel in result["touched_paths"]
+    assert result["generation_verification"]["compile_deferred"] is True
+    assert (
+        result["generation_verification"]["mode"]
+        == "host_graph_validation_deferred_to_pipeline"
+    )
     assert len(model_calls) == 1
     kwargs = model_calls[0][2]
     assert kwargs["force_non_thinking"] is True
