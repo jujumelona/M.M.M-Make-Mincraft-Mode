@@ -32,7 +32,7 @@ from .implementation_ir import OutputBudgetExhausted
 from .llama_finish_reason_contract import OUTPUT_EXHAUSTED, completion_boundary_error
 from .model_router import ModelRouter
 from .platform_catalog import adapter_for_target, adapter_from_project
-from .project_write_lock import project_write_lock
+from .project_write_lock import project_path_write_locks, project_write_lock
 from .runner import GradleRunner
 from .scale_policy import ScalePolicy
 from .target_contract import TargetContractError, validate_target_coordinates
@@ -2157,6 +2157,17 @@ def _run_atomic_ir_generation(
         else context.compiler.compile_java
     )
 
+    def write_atomic_source(path: Path, source: str) -> None:
+        if compile_deferred:
+            # Implementation-graph leaves have unique host-selected targets and
+            # compile once at the graph transaction boundary. Keep slow model
+            # decoding entirely outside the coarse project mutation gate; only the
+            # exact final target write needs exclusion against same-path writers.
+            with project_path_write_locks(context.root, (context.relative,)):
+                _atomic_write(path, source)
+            return
+        _atomic_write(path, source)
+
     executor = AtomicConcernExecutor(
         root=context.root,
         target=context.target,
@@ -2189,13 +2200,14 @@ def _run_atomic_ir_generation(
         ),
         compile_java=compile_java,
         compile_log=_compile_log,
-        write_source=lambda path, source: _atomic_write(path, source),
+        write_source=write_atomic_source,
         # Production is fail-fast regardless of diagnostic environment variables.
         # One concern decode, one assembled-source compile, no model repair loop.
         region_attempt_limit=1,
         compile_repair_limit=0,
     )
-    with project_write_lock(context.root):
+
+    def execute() -> dict[str, Any]:
         try:
             atomic = executor.run()
             candidate = str(atomic["source"])
@@ -2219,6 +2231,11 @@ def _run_atomic_ir_generation(
         except BaseException:
             _restore_atomic_target(context)
             raise
+
+    if compile_deferred:
+        return execute()
+    with project_write_lock(context.root):
+        return execute()
 
 class CustomModuleGenerator:
     """One exact task -> one first-pass source candidate -> host compile gate."""
