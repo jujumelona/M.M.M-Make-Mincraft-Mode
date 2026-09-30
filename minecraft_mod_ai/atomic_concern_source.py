@@ -3556,6 +3556,9 @@ class AtomicConcernExecutor:
     seen_failures: set[str] = field(default_factory=set, init=False)
     host_owned_concerns: set[str] = field(default_factory=set, init=False)
     repairs: int = field(default=0, init=False)
+    first_pass_rejections: int = field(default=0, init=False)
+    repair_region_rejections: int = field(default=0, init=False)
+    first_compile_failures: int = field(default=0, init=False)
 
     def __post_init__(self) -> None:
         self.ordered = _validate_concerns(self.concerns)
@@ -3901,6 +3904,11 @@ class AtomicConcernExecutor:
                         f"production decodes: {reason}"
                     ) from exc
 
+                if failure:
+                    self.repair_region_rejections += 1
+                else:
+                    self.first_pass_rejections += 1
+
                 declaration_only_rule = (
                     " This concern is declaration-only: emit fields and/or private nested "
                     "data types only; outer methods are forbidden."
@@ -4099,6 +4107,9 @@ class AtomicConcernExecutor:
                 "summary": " | ".join(self.summaries),
                 "concern_count": len(self.ordered),
                 "repair_count": 0,
+                "first_pass_rejection_count": self.first_pass_rejections,
+                "repair_region_rejection_count": self.repair_region_rejections,
+                "first_compile_failure_count": self.first_compile_failures,
             }
 
         compile_repair_limit = _compile_repair_limit()
@@ -4107,6 +4118,8 @@ class AtomicConcernExecutor:
             concern_repair_start = self.repairs
             self._apply(concern)
             report = self._compile()
+            if getattr(report, "status", "") != "PASS":
+                self.first_compile_failures += 1
             while getattr(report, "status", "") != "PASS":
                 if _compile_report_timed_out(report):
                     raise CustomModuleGenerationError(_compile_timeout_message(report))
@@ -4137,6 +4150,9 @@ class AtomicConcernExecutor:
             "summary": " | ".join(self.summaries),
             "concern_count": len(self.ordered),
             "repair_count": self.repairs,
+            "first_pass_rejection_count": self.first_pass_rejections,
+            "repair_region_rejection_count": self.repair_region_rejections,
+            "first_compile_failure_count": self.first_compile_failures,
         }
 
 __all__ = [
