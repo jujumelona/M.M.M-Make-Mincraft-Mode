@@ -10,6 +10,7 @@ from minecraft_mod_ai.atomic_concern_source import (
     INITIALIZE_MARKER,
     MEMBERS_MARKER,
     AtomicConcernExecutor,
+    _messages,
     parse_concern_content,
 )
 from minecraft_mod_ai.custom_module_errors import CustomModuleGenerationError
@@ -3045,3 +3046,72 @@ def test_javap_constructor_shape_parser_handles_varargs() -> None:
         {"arity": 0, "varargs": False},
         {"arity": 2, "varargs": True},
     )
+
+
+def test_small_model_prompt_exposes_exact_dependency_calls_and_drops_irrelevant_grounding() -> None:
+    dependency_source = json.dumps(
+        {
+            "symbol": "AuthoredStateModel",
+            "path": "src/main/java/example/AuthoredStateModel.java",
+            "responsibility": "host-compiled state runtime",
+            "public_api": [
+                "public static void initialize()",
+                "public static synchronized Object getState(String name)",
+                "public static synchronized void setState(String name, Object value)",
+            ],
+            "source": (
+                "package example; public final class AuthoredStateModel { "
+                "public static void initialize() {} "
+                "public static synchronized Object getState(String name) { return null; } "
+                "public static synchronized void setState(String name, Object value) {} "
+                "}"
+            ),
+        },
+        ensure_ascii=False,
+    )
+    concern = {
+        "sequence": 0,
+        "identifier": "feature/failure_and_limits/invalid_inputs",
+        "concern": "invalid_inputs",
+        "task": "Reject invalid input without corrupting state.",
+        "rules": [],
+        "record_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    }
+    messages = _messages(
+        section="failure_and_limits",
+        concern=concern,
+        task={"task_id": "t", "implementation_obligations": []},
+        grounding={
+            "schema_version": "mmm/host-owned-coder-grounding",
+            "facts": [{"huge_irrelevant_platform_fact": "x" * 5000}],
+            "policy": {},
+            "direct_host_context": {
+                "platform": {"java_version": 25},
+                "host_version_facts": {"api_symbols": {"noise": {"owner": "net.minecraft.Noise"}}},
+            },
+        },
+        dependency_source=dependency_source,
+        current_source="public final class Test {}",
+        response_region="members",
+        sibling_concerns=(),
+        host_symbol="Test",
+    )
+
+    payload = json.loads(messages[-1]["content"])
+    calls = {
+        (row["owner"], row["method"], row["arity"])
+        for row in payload["dependency_call_contract"]
+    }
+
+    assert ("AuthoredStateModel", "initialize", 0) in calls
+    assert ("AuthoredStateModel", "getState", 1) in calls
+    assert ("AuthoredStateModel", "setState", 2) in calls
+    assert payload["implementation_authority"] == ""
+    assert payload["host_grounding"]["facts"] == []
+    assert payload["host_grounding"]["host_version_facts"] == {}
+    assert "Never add arguments to a zero-arity method" in messages[0]["content"]
+    assert "Do not think aloud" in messages[0]["content"]
