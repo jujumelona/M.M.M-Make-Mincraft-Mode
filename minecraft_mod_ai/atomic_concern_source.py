@@ -3032,19 +3032,25 @@ def _validate_first_pass_java_semantics(
         sibling_api=sibling_api,
     )
     _validate_jdk_object_creations(value)
+    def declared_final(item: Mapping[str, Any]) -> bool:
+        if item.get("final") is True:
+            return True
+        declaration = str(item.get("declaration") or "")
+        return bool(re.search(r"\\bfinal\\b", declaration))
+
     final_fields = {
         str(item.get("symbol") or "")
         for item in contracts
         if item.get("kind") == "field"
-        and item.get("final") is True
+        and declared_final(item)
         and str(item.get("symbol") or "")
     }
     blank_finals = sorted(
         str(item.get("symbol") or "")
         for item in contracts
         if item.get("kind") == "field"
-        and item.get("final") is True
-        and item.get("initialized") is False
+        and declared_final(item)
+        and item.get("initialized") is not True
         and str(item.get("symbol") or "")
     )
     if blank_finals:
