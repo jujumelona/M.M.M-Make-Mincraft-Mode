@@ -28,6 +28,9 @@ from .generation_implementation_grounding import (
     build_generation_implementation_grounding,
     render_generation_implementation_authority_prompt,
 )
+from .execution_contract_policy import (
+    ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING as _ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING,
+)
 from .host_grounding import custom_module_path_allowed
 from .implementation_ir import OutputBudgetExhausted
 from .java_generation_policy import (
@@ -57,8 +60,6 @@ _FORBIDDEN_ENTRYPOINT = re.compile(
     r"\b(?:implements\s+)?(?:ModInitializer|ClientModInitializer)\b"
 )
 _BODY_MARKER = "MMM_AUTHORED_FEATURE_BODY"
-_ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING = 4096
-
 def _sha256_text(text: str) -> str:
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 

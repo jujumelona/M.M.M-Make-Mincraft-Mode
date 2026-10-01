@@ -13,6 +13,17 @@ from collections.abc import Mapping, Sequence
 from functools import wraps
 from typing import Any
 
+from .execution_contract_policy import (
+    DEFAULT_ATOMIC_SCHEMA_LIMITS,
+    DEFAULT_SCHEMA_PROFILE,
+    MODEL_MAX_COMPLETION_TOKENS,
+    SCHEMA_CONTRACT_PROFILE_KEY,
+    SCHEMA_STRING_CLASS_KEY,
+    STRING_CLASS_GENERIC,
+    atomic_schema_limits,
+    string_limit_for_schema_class,
+)
+
 _INSTALLED = False
 _TEXT_MARKER = "_mmm_atomic_model_output_boundary"
 _TOOL_MARKER = "_mmm_atomic_model_tool_boundary"
@@ -21,11 +32,12 @@ _SAME_INSTANCE_CONSTRAINT_KEYWORDS = frozenset(
     {"allOf", "anyOf", "oneOf", "not", "if", "then", "else"}
 )
 
-MAX_MODEL_FIELDS = 3
-MAX_MODEL_STRING_CHARS = 256
-MAX_MODEL_ARRAY_ITEMS = 4
-MAX_SCHEMA_DEPTH = 3
-MAX_COMPLETION_TOKENS = 128
+# Compatibility aliases.  Hard limits are owned by execution_contract_policy.
+MAX_MODEL_FIELDS = DEFAULT_ATOMIC_SCHEMA_LIMITS.max_fields
+MAX_MODEL_STRING_CHARS = DEFAULT_ATOMIC_SCHEMA_LIMITS.max_string_chars
+MAX_MODEL_ARRAY_ITEMS = DEFAULT_ATOMIC_SCHEMA_LIMITS.max_array_items
+MAX_SCHEMA_DEPTH = DEFAULT_ATOMIC_SCHEMA_LIMITS.max_schema_depth
+MAX_COMPLETION_TOKENS = MODEL_MAX_COMPLETION_TOKENS
 
 
 def _schema_has_type(schema: Mapping[str, Any], expected: str) -> bool:
@@ -115,33 +127,58 @@ def assert_strict_atomicity_bounds(
     surface: str = "",
     path: str = "$",
     depth: int = 0,
+    profile: str = DEFAULT_SCHEMA_PROFILE,
 ) -> None:
-    """Enforce physical and structural atomicity bounds for small model reliability."""
-    if depth > MAX_SCHEMA_DEPTH:
+    """Enforce the central atomicity profile selected by the root schema."""
+    try:
+        limits = atomic_schema_limits(profile)
+    except ValueError as exc:
         raise _configuration_error(
-            f"MODEL_ATOMICITY_DEPTH_EXCEEDED: Schema depth {depth} exceeds MAX_SCHEMA_DEPTH={MAX_SCHEMA_DEPTH} at {path} for {surface}"
+            f"MODEL_ATOMICITY_PROFILE_INVALID: {exc} for {surface}"
+        ) from exc
+
+    if depth > limits.max_schema_depth:
+        raise _configuration_error(
+            f"MODEL_ATOMICITY_DEPTH_EXCEEDED: Schema depth {depth} exceeds "
+            f"max_schema_depth={limits.max_schema_depth} for profile {profile!r} "
+            f"at {path} for {surface}"
         )
     if isinstance(value, Mapping):
+        if depth > 0 and SCHEMA_CONTRACT_PROFILE_KEY in value:
+            raise _configuration_error(
+                "MODEL_ATOMICITY_PROFILE_SCOPE_INVALID: contract profile may be "
+                f"declared only at the root schema, not at {path} for {surface}"
+            )
+
         props = value.get("properties")
         if isinstance(props, Mapping):
-            if len(props) > MAX_MODEL_FIELDS:
+            if len(props) > limits.max_fields:
                 raise _configuration_error(
                     f"MODEL_ATOMICITY_FIELDS_EXCEEDED: Declared {len(props)} properties at {path}, "
-                    f"exceeding MAX_MODEL_FIELDS={MAX_MODEL_FIELDS} for {surface}"
+                    f"exceeding max_fields={limits.max_fields} for profile {profile!r} "
+                    f"for {surface}"
                 )
             for k, child in props.items():
-                assert_strict_atomicity_bounds(child, surface=surface, path=f"{path}.{k}", depth=depth + 1)
+                assert_strict_atomicity_bounds(
+                    child,
+                    surface=surface,
+                    path=f"{path}.{k}",
+                    depth=depth + 1,
+                    profile=profile,
+                )
         if _schema_has_type(value, "array"):
             max_items = value.get("maxItems")
             if max_items is None:
                 raise _configuration_error(
-                    f"MODEL_ATOMICITY_ARRAY_UNBOUNDED: Array schema at {path} must declare 'maxItems' <= "
-                    f"{MAX_MODEL_ARRAY_ITEMS} for {surface}"
+                    f"MODEL_ATOMICITY_ARRAY_UNBOUNDED: Array schema at {path} must declare "
+                    f"'maxItems' <= {limits.max_array_items} for profile {profile!r} "
+                    f"for {surface}"
                 )
-            if max_items > MAX_MODEL_ARRAY_ITEMS:
+            if max_items > limits.max_array_items:
                 raise _configuration_error(
                     f"MODEL_ATOMICITY_ARRAY_EXCEEDED: maxItems={max_items} exceeds "
-                    f"MAX_MODEL_ARRAY_ITEMS={MAX_MODEL_ARRAY_ITEMS} at {path} for {surface}"
+                    f"max_array_items={limits.max_array_items} for profile {profile!r} "
+                    f"at {path} for {surface}"
                 )
             if "items" in value and isinstance(value["items"], Mapping):
                 item_schema = value["items"]
@@ -156,10 +193,13 @@ def assert_strict_atomicity_bounds(
                     surface=surface,
                     path=f"{path}[]",
                     depth=depth + (1 if item_is_structural else 0),
+                    profile=profile,
                 )
         for keyword in ("allOf", "anyOf", "oneOf"):
             branches = value.get(keyword)
-            if isinstance(branches, Sequence) and not isinstance(branches, (str, bytes, bytearray)):
+            if isinstance(branches, Sequence) and not isinstance(
+                branches, (str, bytes, bytearray)
+            ):
                 for index, branch in enumerate(branches):
                     if isinstance(branch, Mapping):
                         assert_strict_atomicity_bounds(
@@ -167,26 +207,43 @@ def assert_strict_atomicity_bounds(
                             surface=surface,
                             path=f"{path}.{keyword}[{index}]",
                             depth=depth,
+                            profile=profile,
                         )
         if _schema_has_type(value, "string"):
+            string_class = str(
+                value.get(SCHEMA_STRING_CLASS_KEY, STRING_CLASS_GENERIC)
+                or STRING_CLASS_GENERIC
+            )
+            try:
+                max_string_chars = string_limit_for_schema_class(
+                    profile,
+                    string_class,
+                )
+            except ValueError as exc:
+                raise _configuration_error(
+                    f"MODEL_ATOMICITY_STRING_CLASS_INVALID: {exc} at {path} for {surface}"
+                ) from exc
             if "enum" not in value:
                 max_len = value.get("maxLength")
                 if max_len is None:
                     raise _configuration_error(
-                        f"MODEL_ATOMICITY_STRING_UNBOUNDED: String schema at {path} must declare 'maxLength' <= "
-                        f"{MAX_MODEL_STRING_CHARS} for {surface}"
+                        f"MODEL_ATOMICITY_STRING_UNBOUNDED: String schema at {path} must "
+                        f"declare 'maxLength' <= {max_string_chars} for string class "
+                        f"{string_class!r} under profile {profile!r} for {surface}"
                     )
-                if max_len > MAX_MODEL_STRING_CHARS:
+                if max_len > max_string_chars:
                     raise _configuration_error(
                         f"MODEL_ATOMICITY_STRING_EXCEEDED: maxLength={max_len} exceeds "
-                        f"MAX_MODEL_STRING_CHARS={MAX_MODEL_STRING_CHARS} at {path} for {surface}"
+                        f"allowed={max_string_chars} for string class {string_class!r} "
+                        f"under profile {profile!r} at {path} for {surface}"
                     )
             else:
                 for opt in value.get("enum", ()):
-                    if len(str(opt)) > MAX_MODEL_STRING_CHARS:
+                    if len(str(opt)) > max_string_chars:
                         raise _configuration_error(
-                            f"MODEL_ATOMICITY_STRING_EXCEEDED: enum option {opt!r} length exceeds "
-                            f"MAX_MODEL_STRING_CHARS={MAX_MODEL_STRING_CHARS} at {path} for {surface}"
+                            f"MODEL_ATOMICITY_STRING_EXCEEDED: enum option {opt!r} length "
+                            f"exceeds allowed={max_string_chars} for string class "
+                            f"{string_class!r} under profile {profile!r} at {path} for {surface}"
                         )
 
 
@@ -194,7 +251,15 @@ def assert_atomic_model_schema(schema: Mapping[str, Any], *, surface: str) -> No
     """Require one closed fixed template with strict physical and structural bounds."""
 
     _assert_closed_object_schemas(schema)
-    assert_strict_atomicity_bounds(schema, surface=surface)
+    raw_profile = schema.get(SCHEMA_CONTRACT_PROFILE_KEY, DEFAULT_SCHEMA_PROFILE)
+    profile = str(raw_profile or DEFAULT_SCHEMA_PROFILE).strip()
+    try:
+        atomic_schema_limits(profile)
+    except ValueError as exc:
+        raise _configuration_error(
+            f"MODEL_ATOMICITY_PROFILE_INVALID: {exc} for {surface}"
+        ) from exc
+    assert_strict_atomicity_bounds(schema, surface=surface, profile=profile)
 
 
 def is_atomic_model_schema(schema: Mapping[str, Any]) -> bool:

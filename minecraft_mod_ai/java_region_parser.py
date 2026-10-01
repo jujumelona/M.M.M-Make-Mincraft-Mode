@@ -145,7 +145,13 @@ def _canonical_private_nested_chunk(
     *,
     authorized_symbols: frozenset[str],
 ) -> str:
-    """Downgrade an explicitly-authored nested type to private, never broaden API."""
+    """Canonicalize explicit nested-type visibility to the host-owned private scope.
+
+    Symbol authorization and visibility are separate concerns. Private nested helper
+    types were already admissible regardless of name, so rejecting the same declaration
+    only because a small model wrote public/protected created a producer/consumer contract
+    mismatch without adding an ownership guarantee.
+    """
 
     rendered = _text(source, node).strip()
     if node.type not in _NESTED_TYPES:
@@ -155,10 +161,11 @@ def _canonical_private_nested_chunk(
         _validate_member_node(node, source)
         return rendered
 
-    name = _name(node, source)
-    if name not in authorized_symbols:
-        _validate_member_node(node, source)
-        return rendered
+    # The outer type is host-owned, therefore nested public/protected visibility
+    # is never semantically authoritative. Canonicalize it before strict admission.
+    # Keep authorized_symbols in the signature for compatibility with callers; symbol
+    # ownership is enforced by the higher-level concern contract, not by visibility.
+    _ = authorized_symbols
 
     modifiers = next(
         (child for child in node.named_children if child.type == "modifiers"),

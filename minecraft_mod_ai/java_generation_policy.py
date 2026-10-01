@@ -10,16 +10,16 @@ independent policy literals.
 import re
 from typing import Any
 
-
-DEFAULT_REGION_ATTEMPT_LIMIT = 1
-MAX_REGION_ATTEMPT_LIMIT = 4
-DEFAULT_COMPILE_REPAIR_LIMIT = 0
-MAX_COMPILE_REPAIR_LIMIT = 16
-
-PRODUCTION_REGION_ATTEMPT_LIMIT = 3
-PRODUCTION_RETRY_STRUCTURAL_REJECTIONS = False
-PRODUCTION_CANONICALIZE_LOCAL_FINAL_REBINDINGS = True
-PRODUCTION_COMPILE_REPAIR_LIMIT = 0
+from .execution_contract_policy import (
+    DEFAULT_COMPILE_REPAIR_LIMIT,
+    DEFAULT_REGION_ATTEMPT_LIMIT,
+    MAX_COMPILE_REPAIR_LIMIT,
+    MAX_REGION_ATTEMPT_LIMIT,
+    PRODUCTION_CANONICALIZE_LOCAL_FINAL_REBINDINGS,
+    PRODUCTION_COMPILE_REPAIR_LIMIT,
+    PRODUCTION_REGION_ATTEMPT_LIMIT,
+    PRODUCTION_RETRY_STRUCTURAL_REJECTIONS,
+)
 
 JAVA_FENCE_LANGUAGES = frozenset({"", "java", "javac"})
 EXPLICIT_JDK_IMPORT_PATTERN = re.compile(
@@ -72,6 +72,7 @@ COMPILER_FIRST_RULES = (
     "A field declaration type must be assignment-compatible with its initializer, and every receiver method call must exist on that declared type. Never use Map/List/Object as a lock holder merely because the field also guards cached state.",
     "Every concern-local final field must be definitely assigned before any read. Prefer initialization at the declaration; use a blank final only when the same region performs exactly one unconditional assignment in a static initializer.",
     "Never reassign a final field. If the binding must change, declare a non-final field; if a final field holds a mutable container, mutate the container rather than rebinding the field.",
+    "Nested runtime types live inside a host-owned outer class. Their visibility is host-owned and canonicalized to private; never depend on public/protected nested visibility.",
     "Respect available_sibling_api types, generic arguments, and mutability exactly; final sibling fields are read-only after declaration.",
     "Java generics are invariant. Never narrow Map<K,Object> to Map<K,String>, List<Object> to List<String>, or any sibling generic declaration to a different type argument.",
     "For Map<K,V>.entrySet(), declare the iterator element as Map.Entry<K,V>; entry.getKey() has exact type K and entry.getValue() has exact type V. Preserve those exact types in local variables.",

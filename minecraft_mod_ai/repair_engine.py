@@ -3,6 +3,9 @@ from __future__ import annotations
 from .fixed_template_generation import generate_fixed_template_text
 
 from .repair_response_contract import repair_response_schema
+from .execution_contract_policy import (
+    SOURCE_REPAIR_HARD_ATTEMPTS as _HARD_REPAIR_ATTEMPTS,
+)
 
 import copy
 import hashlib
@@ -21,6 +24,7 @@ from .validation_diagnostic_contract import (
     diagnostic_items as _diagnostic_items,
     run_diagnostics as _run_jdt_diagnostics,
 )
+from .model_adapters import ModelConfigurationError
 from .model_router import ModelRouter
 from .project_index import ProjectIndex
 from .runner import GradleRunner
@@ -48,7 +52,6 @@ _ALLOWED_SUFFIXES = {
     ".yaml",
     ".yml",
 }
-_HARD_REPAIR_ATTEMPTS = 2
 _REPAIR_LOG_SNIPPET_CHARS = 6000
 _REPAIR_LOG_READ_BYTES = 32768
 _JAVAC_LINE = re.compile(
@@ -276,6 +279,8 @@ class RepairEngine:
                             )
                             continue
                         receipt = TransactionalSourcePatcher(root).apply(patch)
+                    except RepairEngineError:
+                        raise
                     except Exception as exc:
                         # The source tree is unchanged when the transaction does not
                         # commit. Preserve the small model's bounded second chance,
@@ -638,8 +643,17 @@ class RepairEngine:
                 tool_stage="quality",
                 response_schema=repair_response_schema(self.policy.max_patch_bytes),
             )
+        except ModelConfigurationError as exc:
+            raise RepairEngineError(
+                "REPAIR_MODEL_CONTRACT_INVALID: repair schema/model boundary is internally "
+                f"inconsistent: {exc}"
+            ) from exc
         except Exception as exc:
-            print(f"  [!] Repair coder model call failed ({type(exc).__name__}: {exc}); skipping attempt", flush=True)
+            print(
+                f"  [!] Repair coder model call failed ({type(exc).__name__}: {exc}); "
+                "skipping attempt",
+                flush=True,
+            )
             return []
         value = _extract_json(text)
         operations = value.get("operations") if isinstance(value, dict) and set(value) == {"operations"} else None

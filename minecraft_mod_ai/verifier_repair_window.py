@@ -6,8 +6,13 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-MAX_REPAIR_WINDOW_CHARS = 4096
-MIN_REPAIR_REPLACEMENT_CHARS = 256
+from .execution_contract_policy import (
+    DEFAULT_ATOMIC_SCHEMA_LIMITS,
+    SOURCE_REPAIR_MAX_SPAN_CHARS,
+)
+
+MAX_REPAIR_WINDOW_CHARS = SOURCE_REPAIR_MAX_SPAN_CHARS
+MIN_REPAIR_REPLACEMENT_CHARS = DEFAULT_ATOMIC_SCHEMA_LIMITS.max_string_chars
 
 
 def repair_replacement_max_chars(old_text: Any) -> int:
