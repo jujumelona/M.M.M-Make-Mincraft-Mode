@@ -4217,6 +4217,7 @@ class AtomicConcernExecutor:
     write_source: Callable[[Path, str], None]
     region_attempt_limit: int | None = None
     retry_structural_rejections: bool = True
+    canonicalize_local_final_rebindings: bool = False
     compile_repair_limit: int | None = None
     completion_decider: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None
     ordered: tuple[dict[str, Any], ...] = field(init=False)
@@ -4524,23 +4525,24 @@ class AtomicConcernExecutor:
                             },
                         )
                     parsed = canonical
-                    parsed, final_rebinding_changes = _canonicalize_local_final_rebindings(
-                        parsed
-                    )
-                    if final_rebinding_changes:
-                        from .root_cause_trace import emit_root_cause
-
-                        emit_root_cause(
-                            "atomic_concern_local_final_rebinding_canonicalized",
-                            stage="production",
-                            operation="atomic_concern_region",
-                            gate="first_pass_semantic_canonicalization",
-                            result="PASS",
-                            details={
-                                "concern": name,
-                                "changes": list(final_rebinding_changes),
-                            },
+                    if self.canonicalize_local_final_rebindings:
+                        parsed, final_rebinding_changes = (
+                            _canonicalize_local_final_rebindings(parsed)
                         )
+                        if final_rebinding_changes:
+                            from .root_cause_trace import emit_root_cause
+
+                            emit_root_cause(
+                                "atomic_concern_local_final_rebinding_canonicalized",
+                                stage="production",
+                                operation="atomic_concern_region",
+                                gate="first_pass_semantic_canonicalization",
+                                result="PASS",
+                                details={
+                                    "concern": name,
+                                    "changes": list(final_rebinding_changes),
+                                },
+                            )
                     _validate_first_pass_java_semantics(
                         parsed,
                         dependency_source=self.dependency_source,

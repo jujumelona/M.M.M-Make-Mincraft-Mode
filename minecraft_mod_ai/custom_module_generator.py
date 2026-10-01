@@ -2219,6 +2219,7 @@ def _run_atomic_ir_generation(
         # detected and terminated early by AtomicConcernExecutor.
         region_attempt_limit=3,
         retry_structural_rejections=False,
+        canonicalize_local_final_rebindings=True,
         compile_repair_limit=0,
         completion_decider=lambda payload: decide_region_completion(generator.router, payload),
     )
