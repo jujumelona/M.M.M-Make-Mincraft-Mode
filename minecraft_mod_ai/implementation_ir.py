@@ -16,7 +16,7 @@ from typing import Any
 from .custom_module_errors import CustomModuleGenerationError
 from .implementation_lifecycle import activation_public_api
 
-IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION = "mmm/implementation-ir-draft-v15"
+IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION = "mmm/implementation-ir-draft-v16"
 IMPLEMENTATION_IR_SCHEMA_VERSION = "mmm/implementation-ir-v3"
 
 
@@ -70,6 +70,8 @@ NODE_SCHEMA = {
              "resource_path": {"minLength": 1, "pattern": r"^src/main/resources/(assets|data)/[^/]+/(?!.*(?:\.\.|\\)).+\.json$"},
              "public_api": {"maxItems": 0}, "activation": {"const": False},
          }}},
+        {"if": {"properties": {"kind": {"const": "java"}, "activation": {"const": False}}},
+         "then": {"properties": {"public_api": {"minItems": 1}}}},
     ],
 }
 PAGE_SCHEMA = {
@@ -82,9 +84,54 @@ PAGE_SCHEMA = {
 }
 
 
+def _canonical_authored_role(value: Any) -> bool:
+    from .authored_execution_schema import section_spec
+
+    return section_spec(str(value or "").strip()) is not None
+
+
+def _canonical_authored_internal_node(raw: Any) -> bool:
+    if not isinstance(raw, Mapping):
+        return False
+    if raw.get("kind") != "java" or raw.get("activation") is True:
+        return False
+    from .authored_execution_schema import section_for_symbol
+
+    return bool(section_for_symbol(str(raw.get("symbol") or "").strip()))
+
+
+def _allow_empty_internal_public_api(schema: dict[str, Any]) -> dict[str, Any]:
+    """Relax only the generic inactive-Java API invariant for host canonical units."""
+
+    result = deepcopy(schema)
+    rules = result.get("allOf")
+    if not isinstance(rules, list):
+        return result
+    result["allOf"] = [
+        rule
+        for rule in rules
+        if not (
+            isinstance(rule, Mapping)
+            and isinstance(rule.get("if"), Mapping)
+            and rule["if"].get("properties", {}).get("kind", {}).get("const") == "java"
+            and rule["if"].get("properties", {}).get("activation", {}).get("const") is False
+            and rule.get("then", {}).get("properties", {}).get("public_api", {}).get("minItems") == 1
+        )
+    ]
+    return result
+
+
 def _page_schema(payload: Mapping[str, Any]) -> dict[str, Any]:
     schema = deepcopy(PAGE_SCHEMA)
     item = schema["properties"]["nodes"]["items"]
+    current_units = payload.get("current_units") or ()
+    if (
+        isinstance(current_units, (list, tuple))
+        and current_units
+        and _canonical_authored_role(current_units[0])
+    ):
+        item = _allow_empty_internal_public_api(item)
+        schema["properties"]["nodes"]["items"] = item
     reqs = list(payload.get("requirements", {}))
     if reqs:
         item["properties"]["requirements"]["items"] = {"type": "string", "enum": reqs}
@@ -553,9 +600,12 @@ def _validated_page(router: Any, name: str, payload: dict[str, Any], *,
 
 
 def validate_node(raw: Any, *, package: str, mod_id: str, refs: set[str]) -> dict[str, Any]:
-    # The exact model-visible schema is also the host admission contract. Avoid
-    # maintaining a second set of stricter, undisclosed per-kind validation rules.
+    # Generic/model-authored Java units still require a non-empty public contract.
+    # Only canonical host-authored internal units may be private implementation
+    # owners with no externally frozen API.
     schema = _page_schema({"requirements": sorted(refs), "mod_id": mod_id})["properties"]["nodes"]["items"]
+    if _canonical_authored_internal_node(raw):
+        schema = _allow_empty_internal_public_api(schema)
     diagnostics = _schema_diagnostics(raw, schema)
     if diagnostics:
         raise ImplementationGraphError("IMPLEMENTATION_IR_INVALID_NODE: " + json.dumps(diagnostics, ensure_ascii=False))
