@@ -1217,19 +1217,18 @@ def _project_declaration_only_members(value: str) -> tuple[str, tuple[str, ...]]
     return projected, dropped
 
 
-def _canonicalize_persistence_lifecycle_wrapper(
+def _canonicalize_accidental_lifecycle_wrapper(
     value: str,
     *,
     concern: str,
 ) -> tuple[str, bool]:
-    """Convert one accidental persistence initialize() wrapper into concern-local Java.
+    """Convert one accidental initialize() wrapper into concern-local Java.
 
-    Lifecycle naming is host-owned. Small coders sometimes put valid persistence
-    logic inside a zero-argument static initialize() method even though persistence
-    concerns are class-body members, not lifecycle owners. When that wrapper is the
-    *only* Java member and has a non-empty body, preserve the body and deterministically
-    rename only the host-owned method declaration. No model retry or regeneration is
-    involved.
+    Lifecycle naming is host-owned. Small coders sometimes put otherwise usable
+    concern logic inside a zero-argument static initialize() method for ordinary
+    non-integration concerns. When that wrapper is the only Java member and has a
+    non-empty body, preserve the body and deterministically rename only the host-owned
+    method declaration. No model retry or regeneration is involved.
     """
 
     normalized = _normalize_region_text(value)
@@ -4112,10 +4111,11 @@ class AtomicConcernExecutor:
                 lifecycle_wrapper_canonicalized = False
                 if (
                     response_region == "members"
-                    and str(self.section or "").strip() == "persistence"
+                    and str(self.section or "").strip() != "integration"
+                    and name not in _DECLARATION_ONLY_CONCERNS
                 ):
                     parse_input, lifecycle_wrapper_canonicalized = (
-                        _canonicalize_persistence_lifecycle_wrapper(
+                        _canonicalize_accidental_lifecycle_wrapper(
                             output_text,
                             concern=name,
                         )
@@ -4124,7 +4124,7 @@ class AtomicConcernExecutor:
                     from .root_cause_trace import emit_root_cause
 
                     emit_root_cause(
-                        "atomic_concern_persistence_lifecycle_wrapper_canonicalized",
+                        "atomic_concern_lifecycle_wrapper_canonicalized",
                         stage="production",
                         operation="atomic_concern_region",
                         gate="host_lifecycle_ownership",
