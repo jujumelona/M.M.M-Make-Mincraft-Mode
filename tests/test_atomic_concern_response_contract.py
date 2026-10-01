@@ -3284,6 +3284,44 @@ def test_first_pass_accepts_existing_installed_jdk_enum_method() -> None:
     )
 
 
+def test_post_admission_validation_is_ast_only_for_java_identifiers() -> None:
+    from minecraft_mod_ai.atomic_concern_source import _validate_region_text
+
+    source = (
+        "private static long nextRandom() {\n"
+        "    long next = 1L;\n"
+        "    next = (next ^ (next >>> 20)) * 0x5DEECE66DL;\n"
+        "    return next;\n"
+        "}"
+    )
+
+    _validate_region_text(source, initialize_region=False)
+
+
+def test_outer_class_recovery_with_next_identifier_survives_post_validation() -> None:
+    from minecraft_mod_ai.atomic_concern_source import _parse_region_content
+
+    output = (
+        "public class AuthoredAlgorithm {\n"
+        "    private static final java.util.concurrent.atomic.AtomicLong SEED = "
+        "new java.util.concurrent.atomic.AtomicLong(0L);\n"
+        "    public static long nextRandom() {\n"
+        "        long current = SEED.get();\n"
+        "        long next = (current ^ (current >>> 30)) * 0x5DEECE66D;\n"
+        "        next = (next ^ (next >>> 20)) * 0x5DEECE66D;\n"
+        "        next = (next ^ (next >>> 16)) * 0x5DEECE66D;\n"
+        "        SEED.set(next);\n"
+        "        return next & 0x7FFFFFFF;\n"
+        "    }\n"
+        "}"
+    )
+
+    parsed = _parse_region_content(output, response_region="members")
+
+    assert "class AuthoredAlgorithm" not in parsed
+    assert "long next =" in parsed
+    assert "next = (next ^ (next >>> 20))" in parsed
+
 def test_first_pass_rejects_invalid_installed_jdk_constructor_arity() -> None:
     from minecraft_mod_ai.atomic_concern_source import _validate_first_pass_java_semantics
 

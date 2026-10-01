@@ -122,36 +122,6 @@ def _trace_region_generation(
 
 _HOST_PREFIX = "MMM_ATOMIC_CONCERN"
 _PACKAGE = re.compile(r"(?m)^\s*package\s+([A-Za-z_$][A-Za-z0-9_$.]*)\s*;\s*$")
-_FORBIDDEN = re.compile(
-    r"\b(?:package|import)\s+"
-    r"|\b(?:ModInitializer|ClientModInitializer|DedicatedServerModInitializer)\b"
-    r"|\bonInitialize(?:Client|Server)?\b"
-)
-_TYPE_DECL = re.compile(
-    r"(?m)^\s*(?P<modifiers>(?:(?:public|protected|private|static|final|abstract|sealed|non-sealed)\s+)*)"
-    r"(?P<kind>class|interface|enum|record)\b"
-)
-_INITIALIZE_DECL = re.compile(r"\bpublic\s+static\s+void\s+initialize\s*\(")
-_MODEL_PROSE_LINE = re.compile(
-    r"(?mi)^\s*(?:"
-    r"the user\b|i\s+(?:need|should|will|must|can|am|want)\b|"
-    r"let me\b|looking at\b|since this\b|we\s+(?:need|should|will|must|can)\b|"
-    r"here(?:'s| is)\b|(?:first|next|finally),?\b|"
-    r"\d+[.)]\s+\S|[-*]\s+\*\*"
-    r")"
-)
-
-
-def _contains_non_java_narrative(scan: str) -> bool:
-    return (
-        "`" in scan
-        or "**" in scan
-        or _MODEL_PROSE_LINE.search(scan) is not None
-    )
-
-
-
-
 def _slug(value: Any) -> str:
     slug = re.sub(r"[^a-z0-9_]+", "_", str(value or "").strip().casefold()).strip("_")
     if not slug or re.fullmatch(r"[a-z][a-z0-9_]*", slug) is None:
@@ -311,16 +281,6 @@ def _brace_balanced_region(scan: str) -> bool:
             if depth < 0:
                 return False
     return depth == 0
-
-
-def _has_forbidden_type_declaration(scan: str, *, initialize_region: bool) -> bool:
-    for match in _TYPE_DECL.finditer(scan):
-        if initialize_region:
-            return True
-        modifiers = set(str(match.group("modifiers") or "").split())
-        if "private" not in modifiers:
-            return True
-    return False
 
 
 _JAVA_IDENTIFIER = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
@@ -1330,19 +1290,15 @@ def _symbol_owner_payload(owners: Mapping[str, str]) -> list[dict[str, str]]:
 
 
 def _validate_region_text(value: str, *, initialize_region: bool) -> None:
-    scan = _structure_scan(value)
-    if _HOST_PREFIX in scan or "```" in scan:
-        raise CustomModuleGenerationError(
-            "ATOMIC_CONCERN_RESPONSE_INVALID: executable region contains host-marker syntax or Markdown fences."
-        )
+    """Validate an already-admitted region using Java AST structure only.
+
+    Model-envelope recovery belongs to java_region_parser. Once that parser has
+    admitted a region, lexical words and identifier spellings are never treated
+    as protocol/prose signals. This prevents valid Java identifiers such as
+    next from being rejected by English-language heuristics.
+    """
+
     region = "initialize body" if initialize_region else "concern members"
-    if _has_forbidden_type_declaration(
-        scan,
-        initialize_region=initialize_region,
-    ):
-        raise CustomModuleGenerationError(
-            f"ATOMIC_CONCERN_SCOPE_ESCAPE: {region} contains a forbidden type declaration."
-        )
     try:
         if initialize_region:
             strict_initialize_statements(value)
@@ -1352,11 +1308,6 @@ def _validate_region_text(value: str, *, initialize_region: bool) -> None:
         raise CustomModuleGenerationError(
             f"ATOMIC_CONCERN_SCOPE_ESCAPE: {region} is not admissible Java: {exc}"
         ) from exc
-    if _contains_non_java_narrative(scan) or _FORBIDDEN.search(scan):
-        raise CustomModuleGenerationError(
-            f"ATOMIC_CONCERN_SCOPE_ESCAPE: {region} contains forbidden host/protocol structure."
-        )
-
 
 
 def parse_concern_content(text: str, *, section: str) -> tuple[str, str]:
