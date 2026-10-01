@@ -20,7 +20,10 @@ from minecraft_mod_ai.java_generation_policy import (
     PRODUCTION_RETRY_STRUCTURAL_REJECTIONS as JAVA_RETRY_STRUCTURAL_REJECTIONS,
 )
 from minecraft_mod_ai.model_adapters import ModelConfigurationError
-from minecraft_mod_ai.model_output_atomicity_contract import assert_atomic_model_schema
+from minecraft_mod_ai.model_output_atomicity_contract import (
+    _model_transport_schema,
+    assert_atomic_model_schema,
+)
 from minecraft_mod_ai.repair_engine import _HARD_REPAIR_ATTEMPTS
 from minecraft_mod_ai.repair_response_contract import repair_response_schema
 from minecraft_mod_ai.verifier_repair_window import (
@@ -92,3 +95,13 @@ def test_production_repair_paths_are_enabled_and_read_the_central_policy() -> No
 def test_verifier_repair_window_reads_central_string_limits() -> None:
     assert MAX_REPAIR_WINDOW_CHARS == SOURCE_REPAIR_MAX_SPAN_CHARS
     assert MIN_REPAIR_REPLACEMENT_CHARS == DEFAULT_ATOMIC_SCHEMA_LIMITS.max_string_chars
+
+
+def test_host_contract_annotations_do_not_leak_to_model_tool_schema() -> None:
+    schema = repair_response_schema(64 * 1024)
+    transport = _model_transport_schema(schema)
+
+    assert SCHEMA_CONTRACT_PROFILE_KEY not in transport
+    rendered = repr(transport)
+    assert SCHEMA_STRING_CLASS_KEY not in rendered
+    assert transport["properties"]["operations"]["items"]["anyOf"][0]["properties"]["content"]["maxLength"] == SOURCE_REPAIR_MAX_SOURCE_CHARS

@@ -12,6 +12,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from .execution_contract_policy import SCHEMA_CONTRACT_PROFILE_KEY
 from .model_output_atomicity_contract import assert_atomic_model_schema
 from .structured_output import validate_structured_output
 
@@ -231,6 +232,9 @@ def _object_field_schemas(
             "required": [raw_name] if raw_name in required_fields else [],
             "additionalProperties": False,
         }
+        profile = parameters.get(SCHEMA_CONTRACT_PROFILE_KEY)
+        if isinstance(profile, str) and profile.strip():
+            field_schema[SCHEMA_CONTRACT_PROFILE_KEY] = profile.strip()
         for keyword in ("$defs", "definitions"):
             definitions = parameters.get(keyword)
             if isinstance(definitions, Mapping):

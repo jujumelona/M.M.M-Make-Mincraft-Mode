@@ -272,6 +272,20 @@ def is_atomic_model_schema(schema: Mapping[str, Any]) -> bool:
     return True
 
 
+def _model_transport_schema(value: Any) -> Any:
+    """Remove host-only contract annotations before sending schema to a model adapter."""
+
+    if isinstance(value, Mapping):
+        return {
+            key: _model_transport_schema(child)
+            for key, child in value.items()
+            if key not in {SCHEMA_CONTRACT_PROFILE_KEY, SCHEMA_STRING_CLASS_KEY}
+        }
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_model_transport_schema(child) for child in value]
+    return value
+
+
 def _tool_template_schema(
     response_schema: Mapping[str, Any],
 ) -> tuple[dict[str, Any], bool]:
@@ -470,12 +484,13 @@ def _install_router_boundary(model_router_module: Any) -> None:
                     f"for role {role!r}"
                 ),
             )
+            transport_parameters = _model_transport_schema(parameters)
             return current_tool_decision(
                 self,
                 role,
                 messages,
                 tool_name=tool_name,
-                parameters=parameters,
+                parameters=transport_parameters,
                 description=description,
                 **(
                     {"output_token_ceiling": output_token_ceiling}
