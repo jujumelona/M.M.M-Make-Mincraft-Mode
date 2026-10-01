@@ -120,13 +120,13 @@ def _concern_has_explicit_payload(source: str, concern: str) -> bool:
     normalized_body = " ".join(body.split())
     normalized_descriptor = " ".join(fields)
 
-    # A bare field descriptor is only the planner template. Any other inline text is
-    # authored state content, including natural-language shorthand.
+    # A bare field descriptor is only the planner template. Inline canonical rows
+    # count as explicit only when they carry the declared field layout; arbitrary
+    # prose shorthand still goes through the bounded extractor below.
     if normalized_body and normalized_body != normalized_descriptor:
         descriptor = re.match(rf"^{field_pattern}\s*:\s*(.+)$", body)
         if descriptor is not None:
             return bool(descriptor.group(1).strip())
-        return True
 
     # Structured projections use field=value rows. Free Markdown plans instead use
     # nested list items such as "- **variables**:" followed by "- `credits`: ...".
