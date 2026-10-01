@@ -2213,11 +2213,11 @@ def _run_atomic_ir_generation(
         compile_java=compile_java,
         compile_log=_compile_log,
         write_source=write_atomic_source,
-        # Production source admission is single-decode. Deterministic host
-        # canonicalizers repair mechanically provable Java mistakes before validation;
-        # ambiguous output fails once instead of repeatedly asking the small coder for
-        # the same region.
-        region_attempt_limit=1,
+        # Production gets a bounded semantic correction budget. Deterministic
+        # host canonicalizers run before this correction path, so mechanically provable
+        # Java mistakes are fixed without another decode. Identical rejected output is
+        # detected and terminated early by AtomicConcernExecutor.
+        region_attempt_limit=3,
         compile_repair_limit=0,
         completion_decider=lambda payload: decide_region_completion(generator.router, payload),
     )
