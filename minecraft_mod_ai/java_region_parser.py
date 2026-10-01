@@ -10,7 +10,6 @@ from __future__ import annotations
 from threading import local
 from typing import Any
 
-import re
 import tree_sitter_java
 from markdown_it import MarkdownIt
 from tree_sitter import Language, Parser
