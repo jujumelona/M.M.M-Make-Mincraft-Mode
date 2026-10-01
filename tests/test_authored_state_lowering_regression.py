@@ -25,6 +25,45 @@ from minecraft_mod_ai.implementation_graph_execution import _bind_atomic_leaf_co
 from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
 from minecraft_mod_ai.worksheet_atomic_chunker import worksheet_chunk_schema
 
+def test_host_state_runtime_exports_context_aware_access_overloads() -> None:
+    from minecraft_mod_ai.structured_state_runtime import PUBLIC_API, render_state_model_concern
+
+    assert (
+        "public static synchronized Object getState(String name, java.util.Map<String, Object> context)"
+        in PUBLIC_API
+    )
+    assert (
+        "public static synchronized void setState(String name, Object value, java.util.Map<String, Object> context)"
+        in PUBLIC_API
+    )
+
+    task = {
+        "implementation_obligations": [
+            json.dumps(
+                {
+                    "instruction": json.dumps({"concern": "variables"}),
+                    "structured_records": [
+                        {
+                            "name": "credits",
+                            "owner": "player",
+                            "type": "int",
+                            "unit": "credits",
+                            "default": "0",
+                            "domain": "[0,Inf]",
+                        }
+                    ],
+                }
+            )
+        ]
+    }
+    source = render_state_model_concern(task, "variables", include_runtime=True)
+    assert source is not None
+    assert "Object getState(\n        String name,\n        java.util.Map<String, Object> context" in source
+    assert "void setState(\n        String name,\n        Object value,\n        java.util.Map<String, Object> context" in source
+    assert "return $mmmRead(name, context);" in source
+    assert "setState(name, value);" in source
+
+
 def test_state_planning_schema_remains_authored_text_not_production_dsl() -> None:
     schema = worksheet_chunk_schema(
         "state_model",
