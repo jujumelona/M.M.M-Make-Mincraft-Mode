@@ -7,7 +7,6 @@ import json
 import os
 import re
 from collections.abc import Callable, Mapping, Sequence
-from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
