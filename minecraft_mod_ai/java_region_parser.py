@@ -139,6 +139,64 @@ def _validate_member_node(node: Any, source: bytes) -> None:
         )
 
 
+def _canonical_private_nested_chunk(
+    node: Any,
+    source: bytes,
+    *,
+    authorized_symbols: frozenset[str],
+) -> str:
+    """Downgrade an explicitly-authored nested type to private, never broaden API."""
+
+    rendered = _text(source, node).strip()
+    if node.type not in _NESTED_TYPES or "private" in _modifiers(node, source):
+        return rendered
+
+    name = _name(node, source)
+    if name not in authorized_symbols:
+        _validate_member_node(node, source)
+        return rendered
+
+    modifiers = next(
+        (child for child in node.named_children if child.type == "modifiers"),
+        None,
+    )
+    if modifiers is None:
+        # Package-visible nested types remain a scope error. Without an explicit
+        # visibility token there is no deterministic modifier replacement to make.
+        _validate_member_node(node, source)
+        return rendered
+
+    modifier_text = _text(source, modifiers)
+    visibility = next(
+        (token for token in ("public", "protected") if token in modifier_text.split()),
+        "",
+    )
+    if not visibility:
+        _validate_member_node(node, source)
+        return rendered
+
+    relative_start = int(modifiers.start_byte) - int(node.start_byte)
+    relative_end = int(modifiers.end_byte) - int(node.start_byte)
+    raw = _text(source, node).encode("utf-8")
+    mods = raw[relative_start:relative_end].decode("utf-8")
+    token_at = mods.find(visibility)
+    if token_at < 0:
+        _validate_member_node(node, source)
+        return rendered
+    replaced_mods = (
+        mods[:token_at] + "private" + mods[token_at + len(visibility):]
+    )
+    normalized = (
+        raw[:relative_start]
+        + replaced_mods.encode("utf-8")
+        + raw[relative_end:]
+    ).decode("utf-8").strip()
+
+    # Reparse the transformed declaration through the strict private-only gate.
+    strict_member_chunks(normalized)
+    return normalized
+
+
 def _class_body(root: Any) -> Any:
     declaration = next(
         (child for child in root.named_children if child.type == "class_declaration"),
@@ -152,8 +210,19 @@ def _class_body(root: Any) -> Any:
     return body
 
 
-def _chunks_from_body(body: Any, source: bytes, *, drop_host_lifecycle: bool) -> tuple[str, ...]:
+def _chunks_from_body(
+    body: Any,
+    source: bytes,
+    *,
+    drop_host_lifecycle: bool,
+    canonical_private_nested_symbols: tuple[str, ...] = (),
+) -> tuple[str, ...]:
     chunks: list[str] = []
+    authorized = frozenset(
+        str(item).strip()
+        for item in canonical_private_nested_symbols
+        if str(item).strip()
+    )
     for node in body.named_children:
         if node.type in _COMMENT_TYPES:
             continue
@@ -161,9 +230,14 @@ def _chunks_from_body(body: Any, source: bytes, *, drop_host_lifecycle: bool) ->
             continue
         if drop_host_lifecycle and _is_host_initialize(node, source):
             continue
-        _validate_member_node(node, source)
-        chunks.append(_text(source, node).strip())
-    return tuple(chunk for chunk in chunks if chunk)
+        chunk = _canonical_private_nested_chunk(
+            node,
+            source,
+            authorized_symbols=authorized,
+        )
+        if chunk:
+            chunks.append(chunk)
+    return tuple(chunks)
 
 
 def class_body_chunks(value: str) -> tuple[str, ...]:
@@ -639,7 +713,11 @@ def _outer_type_candidates(node: Any) -> tuple[Any, ...]:
     return tuple(found)
 
 
-def _unwrap_single_outer_class(value: str) -> tuple[str, ...]:
+def _unwrap_single_outer_class(
+    value: str,
+    *,
+    canonical_private_nested_symbols: tuple[str, ...] = (),
+) -> tuple[str, ...]:
     """Salvage one structurally sound outer class from a noisy model envelope.
 
     Tree-sitter is intentionally error-tolerant. Noise outside the one class
@@ -665,7 +743,12 @@ def _unwrap_single_outer_class(value: str) -> tuple[str, ...]:
     body = outer.child_by_field_name("body")
     if body is None:
         raise JavaRegionParseError("outer-class envelope has no class body")
-    chunks = _chunks_from_body(body, source, drop_host_lifecycle=True)
+    chunks = _chunks_from_body(
+        body,
+        source,
+        drop_host_lifecycle=True,
+        canonical_private_nested_symbols=canonical_private_nested_symbols,
+    )
     if not chunks:
         raise JavaRegionParseError(
             "outer-class envelope contained no admissible concern members after host lifecycle removal"
@@ -1004,7 +1087,11 @@ def _raw_compilation_unit_envelope_kinds(region: str) -> frozenset[str]:
     )
 
 
-def _admit_member_candidate(region: str) -> tuple[str, ...]:
+def _admit_member_candidate(
+    region: str,
+    *,
+    canonical_private_nested_symbols: tuple[str, ...] = (),
+) -> tuple[str, ...]:
     """Admit class-body members first; recover wrappers only after that fails."""
 
     candidate = str(region or "").strip()
@@ -1037,7 +1124,12 @@ def _admit_member_candidate(region: str) -> tuple[str, ...]:
         try:
             source, root = _parse(prefix + candidate + "\n}\n")
             body = _class_body(root)
-            chunks = _chunks_from_body(body, source, drop_host_lifecycle=True)
+            chunks = _chunks_from_body(
+                body,
+                source,
+                drop_host_lifecycle=True,
+                canonical_private_nested_symbols=canonical_private_nested_symbols,
+            )
             if chunks:
                 return chunks
         except JavaRegionParseError as exc:
@@ -1049,7 +1141,12 @@ def _admit_member_candidate(region: str) -> tuple[str, ...]:
             if canonical is not None:
                 source, root = _parse(prefix + canonical + "\n}\n")
                 body = _class_body(root)
-                chunks = _chunks_from_body(body, source, drop_host_lifecycle=True)
+                chunks = _chunks_from_body(
+                body,
+                source,
+                drop_host_lifecycle=True,
+                canonical_private_nested_symbols=canonical_private_nested_symbols,
+            )
                 if chunks:
                     return chunks
         except JavaRegionParseError as exc:
@@ -1057,7 +1154,10 @@ def _admit_member_candidate(region: str) -> tuple[str, ...]:
                 first_failure = exc
 
     try:
-        return _unwrap_single_outer_class(candidate)
+        return _unwrap_single_outer_class(
+            candidate,
+            canonical_private_nested_symbols=canonical_private_nested_symbols,
+        )
     except JavaRegionParseError as exc:
         # Prefer a precise host-body syntax error over the generic "not an outer
         # wrapper" fallback. Preserve explicit scope failures from either path.
@@ -1074,6 +1174,7 @@ def admit_member_region(
     value: str,
     *,
     allow_host_initialize_only_empty: bool = False,
+    canonical_private_nested_symbols: tuple[str, ...] = (),
 ) -> str:
     """Normalize arbitrary model output into host-admissible Java members."""
     candidates = _model_java_candidates(value)
@@ -1088,7 +1189,10 @@ def admit_member_region(
         ):
             return ""
         try:
-            chunks = _admit_member_candidate(candidate)
+            chunks = _admit_member_candidate(
+                candidate,
+                canonical_private_nested_symbols=canonical_private_nested_symbols,
+            )
             if chunks:
                 return "\n\n".join(chunks).strip()
         except JavaRegionParseError as exc:

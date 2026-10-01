@@ -296,6 +296,73 @@ def test_direct_coder_forwards_atomic_output_token_ceiling() -> None:
     assert captured["output_token_ceiling"] == 1536
 
 
+def test_authored_packet_names_are_privately_lowered_without_dropping_scope_rule() -> None:
+    remaining = [
+        (
+            "public static final class ShipSyncPacket {}\n"
+            "public static final class ResourceRequestPacket {}\n"
+            "public static final class TradeOfferPacket {}"
+        )
+    ]
+
+    def call_coder(_messages):
+        return remaining.pop(0)
+
+    task = {
+        "task_id": "t",
+        "semantic_outcome": "packets",
+        "authored_atomic_contract": {
+            "schema_version": "mmm/authored-atomic-contract-v1",
+            "section": "authority_and_network",
+            "concerns": {
+                "packets": {
+                    "instruction": {"concern": "packets"},
+                    "source_requirements": {
+                        "R1": "## authority_and_network",
+                        "R2": "- packets:",
+                        "R3": "    - `ShipSyncPacket` -> Server <- Client",
+                        "R4": "    - `ResourceRequestPacket` -> Server -> Client",
+                        "R5": "    - `TradeOfferPacket` -> Server <-> Client",
+                    },
+                    "structured_records": [],
+                }
+            },
+        },
+    }
+    executor = AtomicConcernExecutor(
+        root=Path("."),
+        target=Path("src/main/java/example/Test.java"),
+        relative="src/main/java/example/Test.java",
+        symbol="Test",
+        original="package example;\n// MMM_AUTHORED_FEATURE_BODY\n",
+        task=task,
+        section="authority_and_network",
+        concerns=(
+            {
+                "sequence": 0,
+                "identifier": "feature/authority_and_network/packets",
+                "concern": "packets",
+                "task": "implement packets",
+                "rules": [],
+            },
+        ),
+        grounding={},
+        dependency_source="",
+        require_initialize=False,
+        call_coder=call_coder,
+        compile_java=lambda _root: SimpleNamespace(status="PASS"),
+        compile_log=lambda _report: "",
+        write_source=lambda _path, _source: None,
+    )
+
+    result = executor.run()
+
+    assert "private static final class ShipSyncPacket" in result["source"]
+    assert "private static final class ResourceRequestPacket" in result["source"]
+    assert "private static final class TradeOfferPacket" in result["source"]
+    assert "public static final class ShipSyncPacket" not in result["source"]
+
+
 def test_private_nested_helper_types_are_valid_class_body_members() -> None:
     output = (
         "private enum ShipState { INITIAL, READY_TO_LAUNCH }\n"

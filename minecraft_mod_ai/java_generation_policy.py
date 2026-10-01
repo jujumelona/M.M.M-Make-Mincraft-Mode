@@ -101,6 +101,48 @@ PRE_EMIT_COMPILE_CHECKLIST = (
 )
 
 
+def authorized_concern_nested_type_symbols(
+    authority: Any,
+) -> tuple[str, ...]:
+    """Return exact authored Java-like type names eligible for private lowering.
+
+    This does not authorize public API expansion. It only identifies concern-owned
+    nested runtime type names explicitly present in the authoritative requirement,
+    so parser admission may downgrade an accidental public/protected modifier to
+    the required private visibility.
+    """
+
+    if not isinstance(authority, dict):
+        return ()
+
+    names: set[str] = set()
+    sources = authority.get("source_requirements")
+    if isinstance(sources, dict):
+        for raw in sources.values():
+            for match in re.finditer(
+                r"`([A-Za-z_$][A-Za-z0-9_$]*)`",
+                str(raw or ""),
+            ):
+                name = match.group(1)
+                if name[:1].isupper():
+                    names.add(name)
+
+    structured = authority.get("structured_records")
+    if isinstance(structured, (list, tuple)):
+        for row in structured:
+            if not isinstance(row, dict):
+                continue
+            for key in ("name", "symbol", "identifier", "purpose", "type"):
+                raw = str(row.get(key) or "").strip()
+                if (
+                    raw[:1].isupper()
+                    and re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", raw)
+                ):
+                    names.add(raw)
+
+    return tuple(sorted(names))
+
+
 def region_recovery_shapes(region: str) -> tuple[str, ...]:
     return tuple(REGION_RECOVERY_SHAPES.get(str(region or "").strip(), ()))
 
@@ -193,6 +235,7 @@ __all__ = [
     "PRODUCTION_REGION_ATTEMPT_LIMIT",
     "PRODUCTION_RETRY_STRUCTURAL_REJECTIONS",
     "atomic_error_recoverable",
+    "authorized_concern_nested_type_symbols",
     "atomic_error_terminal_after_normalization",
     "imported_jdk_use_can_be_qualified",
     "initialize_wrapper_allowed",

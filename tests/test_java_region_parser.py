@@ -181,6 +181,28 @@ public static void initialize() {
         admit_member_region(source)
 
 
+def test_authority_named_public_nested_type_is_lowered_to_private() -> None:
+    admitted = admit_member_region(
+        (
+            "public static final class ShipSyncPacket {\n"
+            "    private final int x = 0;\n"
+            "}"
+        ),
+        canonical_private_nested_symbols=("ShipSyncPacket",),
+    )
+
+    assert "public static final class ShipSyncPacket" not in admitted
+    assert "private static final class ShipSyncPacket" in admitted
+
+
+def test_unapproved_public_nested_type_still_fails_scope_policy() -> None:
+    with pytest.raises(JavaRegionParseError, match="must be private"):
+        admit_member_region(
+            "public static final class InventedPacket {}",
+            canonical_private_nested_symbols=("ShipSyncPacket",),
+        )
+
+
 def test_tree_sitter_keeps_private_nested_runtime_type() -> None:
     admitted = admit_member_region(
         "private static final class ActorState { private int value; }"

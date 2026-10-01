@@ -22,6 +22,7 @@ from .java_generation_policy import (
     MAX_REGION_ATTEMPT_LIMIT as _MAX_REGION_ATTEMPT_LIMIT,
     atomic_error_recoverable,
     atomic_error_terminal_after_normalization,
+    authorized_concern_nested_type_symbols,
     production_java_generation_recipe_policy,
 )
 from .java_region_parser import (
@@ -1371,6 +1372,7 @@ def _parse_region_content(
     response_region: str,
     allow_inert_empty: bool = False,
     allow_host_initialize_only_empty: bool = False,
+    canonical_private_nested_symbols: tuple[str, ...] = (),
 ) -> str:
     """Admit one host-selected region through Markdown and Java parsers in order."""
     raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
@@ -1402,6 +1404,7 @@ def _parse_region_content(
             else admit_member_region(
                 raw_value,
                 allow_host_initialize_only_empty=allow_host_initialize_only_empty,
+                canonical_private_nested_symbols=canonical_private_nested_symbols,
             )
         )
     except JavaRegionParseError as exc:
@@ -4147,6 +4150,9 @@ def _messages(
             ),
         },
         "task_authority": _concern_authority(task, concern),
+        "authorized_nested_runtime_types": list(
+            authorized_concern_nested_type_symbols(_concern_authority(task, concern))
+        ),
         "state_variable_contract": (
             list(_state_variable_contract(task, concern))
             if section == "state_model" and name == "variables"
@@ -4389,6 +4395,12 @@ class AtomicConcernExecutor:
             if self.region_attempt_limit is None
             else max(1, int(self.region_attempt_limit))
         )
+        concern_authority = _concern_authority(self.task, concern)
+        canonical_private_nested_symbols = (
+            authorized_concern_nested_type_symbols(concern_authority)
+            if response_region == "members"
+            else ()
+        )
 
         if (
             not failure
@@ -4549,6 +4561,7 @@ class AtomicConcernExecutor:
                     response_region=response_region,
                     allow_inert_empty=allow_integration_empty_members,
                     allow_host_initialize_only_empty=allow_integration_empty_members,
+                    canonical_private_nested_symbols=canonical_private_nested_symbols,
                 )
                 if correction is not None:
                     parsed = correction.merge(parsed)
@@ -4760,7 +4773,7 @@ class AtomicConcernExecutor:
                     )
                     raise CustomModuleGenerationError(
                         f"ATOMIC_CONCERN_FIRST_PASS_RESPONSE_INVALID: "
-                        f"{name}:{response_region} failed after 1 production decode(s): "
+                        f"{name}:{response_region} failed after {attempt} production decode(s): "
                         f"{reason}"
                     ) from exc
 
