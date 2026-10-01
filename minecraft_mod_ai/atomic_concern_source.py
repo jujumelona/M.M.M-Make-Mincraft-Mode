@@ -4738,8 +4738,14 @@ class AtomicConcernExecutor:
                             parsed,
                             reason,
                             allow_private_restructure=(
-                                not failure and name not in self.state
-                                and ("dependency API " in reason or "Object-valued " in reason)
+                                not failure
+                                and name not in self.state
+                                and reason.startswith(
+                                    (
+                                        "ATOMIC_CONCERN_RESPONSE_INVALID:",
+                                        "ATOMIC_CONCERN_SEMANTIC_SHAPE_INVALID:",
+                                    )
+                                )
                             ),
                         )
                 elif not rejected_region:
