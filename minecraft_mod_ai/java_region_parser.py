@@ -148,7 +148,11 @@ def _canonical_private_nested_chunk(
     """Downgrade an explicitly-authored nested type to private, never broaden API."""
 
     rendered = _text(source, node).strip()
-    if node.type not in _NESTED_TYPES or "private" in _modifiers(node, source):
+    if node.type not in _NESTED_TYPES:
+        _validate_member_node(node, source)
+        return rendered
+    if "private" in _modifiers(node, source):
+        _validate_member_node(node, source)
         return rendered
 
     name = _name(node, source)
