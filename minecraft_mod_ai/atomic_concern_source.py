@@ -4216,6 +4216,7 @@ class AtomicConcernExecutor:
     compile_log: Callable[[Any], str]
     write_source: Callable[[Path, str], None]
     region_attempt_limit: int | None = None
+    retry_structural_rejections: bool = True
     compile_repair_limit: int | None = None
     completion_decider: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None
     ordered: tuple[dict[str, Any], ...] = field(init=False)
@@ -4290,7 +4291,7 @@ class AtomicConcernExecutor:
         dependency_repair = None
         rejected_region = ""
         attempt_limit = (
-            _DEFAULT_REGION_ATTEMPT_LIMIT
+            _region_attempt_limit()
             if self.region_attempt_limit is None
             else max(1, int(self.region_attempt_limit))
         )
@@ -4642,6 +4643,36 @@ class AtomicConcernExecutor:
                         rejected_response=rejected_response,
                     )
                     raise
+
+                structural_terminal = (
+                    not self.retry_structural_rejections
+                    and reason.startswith(
+                        (
+                            "ATOMIC_CONCERN_SCOPE_ESCAPE:",
+                            "ATOMIC_CONCERN_SYMBOL_COLLISION:",
+                            "ATOMIC_CONCERN_PLATFORM_API_FORBIDDEN:",
+                            "ATOMIC_CONCERN_UNGROUNDED_PLATFORM_API:",
+                        )
+                    )
+                )
+                if structural_terminal:
+                    _trace_region_generation(
+                        "atomic_concern_region_rejected",
+                        result="FAIL",
+                        concern=name,
+                        region=response_region,
+                        attempt=attempt,
+                        attempt_limit=attempt_limit,
+                        reason=reason,
+                        output_sha256=output_sha,
+                        output_chars=len(output_text),
+                        rejected_response=rejected_response,
+                    )
+                    raise CustomModuleGenerationError(
+                        f"ATOMIC_CONCERN_FIRST_PASS_RESPONSE_INVALID: "
+                        f"{name}:{response_region} failed after 1 production decode(s): "
+                        f"{reason}"
+                    ) from exc
 
                 violation = (reason, output_sha)
                 if output_sha and violation in seen_violations:
