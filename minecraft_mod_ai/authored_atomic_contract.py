@@ -331,9 +331,32 @@ def task_concern_authority(
     task: Mapping[str, Any],
     concern: str,
 ) -> dict[str, Any]:
-    """Read concern authority from the exact same contract the producer wrote."""
+    """Read concern authority through the same resolver used by the producer."""
 
     name = str(concern or "").strip()
+
+    def render(
+        *,
+        raw_sources: Mapping[str, Any] | None,
+        raw_records: Any,
+    ) -> dict[str, Any]:
+        sources = concern_source_requirements(
+            dict(raw_sources or {}),
+            concern=name,
+        )
+        records = (
+            [deepcopy(dict(item)) for item in raw_records if isinstance(item, Mapping)]
+            if isinstance(raw_records, Sequence)
+            and not isinstance(raw_records, (str, bytes, bytearray))
+            else []
+        )
+        return {
+            "structured_records": records,
+            "task_id": str(task.get("task_id") or ""),
+            "concern": name,
+            "source_requirements": sources,
+        }
+
     contract = task.get("authored_atomic_contract")
     if isinstance(contract, Mapping):
         schema = str(contract.get("schema_version") or "").strip()
@@ -346,18 +369,14 @@ def task_concern_authority(
         if isinstance(raw_concerns, Mapping):
             raw = raw_concerns.get(name)
             if isinstance(raw, Mapping):
-                return {
-                    "task_id": str(task.get("task_id") or ""),
-                    "section": str(contract.get("section") or ""),
-                    "concern": name,
-                    "instruction": deepcopy(dict(raw.get("instruction") or {})),
-                    "source_requirements": deepcopy(
-                        dict(raw.get("source_requirements") or {})
+                return render(
+                    raw_sources=(
+                        raw.get("source_requirements")
+                        if isinstance(raw.get("source_requirements"), Mapping)
+                        else {}
                     ),
-                    "structured_records": deepcopy(
-                        list(raw.get("structured_records") or [])
-                    ),
-                }
+                    raw_records=raw.get("structured_records"),
+                )
 
     raw_obligations = task.get("implementation_obligations")
     if isinstance(raw_obligations, Sequence) and not isinstance(
@@ -370,23 +389,22 @@ def task_concern_authority(
             payload, instruction = decoded
             if str(instruction.get("concern") or "").strip() != name:
                 continue
-            return {
-                "task_id": str(task.get("task_id") or ""),
-                "section": str(instruction.get("section") or ""),
-                "concern": name,
-                "instruction": deepcopy(instruction),
-                "source_requirements": deepcopy(
-                    dict(payload.get("source_requirements") or {})
+            return render(
+                raw_sources=(
+                    payload.get("source_requirements")
+                    if isinstance(payload.get("source_requirements"), Mapping)
+                    else {}
                 ),
-                "structured_records": deepcopy(
-                    list(payload.get("structured_records") or [])
-                ),
-            }
+                raw_records=payload.get("structured_records"),
+            )
 
     return {
+        "structured_records": [],
         "task_id": str(task.get("task_id") or ""),
         "concern": name,
+        "source_requirements": {},
     }
+
 
 
 __all__ = [

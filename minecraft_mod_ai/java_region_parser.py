@@ -1066,11 +1066,18 @@ def strict_initialize_statements(value: str) -> tuple[str, ...]:
     body = method.child_by_field_name("body")
     if body is None:
         raise JavaRegionParseError("Tree-sitter did not produce the initialize wrapper body")
-    return tuple(
-        _text(source, node).strip()
-        for node in body.named_children
-        if node.type not in _COMMENT_TYPES and _text(source, node).strip()
-    )
+    statements: list[str] = []
+    for node in body.named_children:
+        if node.type in _COMMENT_TYPES:
+            continue
+        if node.type in _NESTED_TYPES:
+            raise JavaRegionParseError(
+                f"initialize body cannot declare local type {_name(node, source)!r}"
+            )
+        rendered = _text(source, node).strip()
+        if rendered:
+            statements.append(rendered)
+    return tuple(statements)
 
 
 def _initialize_wrapper_method(node: Any, source: bytes) -> bool:
