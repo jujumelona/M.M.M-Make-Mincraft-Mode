@@ -169,6 +169,133 @@ def test_tree_sitter_parses_initialize_statements_inside_host_method() -> None:
     assert "if (ready) { start(); }" in admitted
 
 
+@pytest.mark.parametrize(
+    "source, expected",
+    [
+        (
+            "public static void initialize() { value = 1; }",
+            "value = 1;",
+        ),
+        (
+            "void initialize() { value = 2; }",
+            "value = 2;",
+        ),
+        (
+            (
+                "java.util.Map<String, Object> state = new java.util.HashMap<>();\n"
+                "public static void initialize() { state.clear(); }"
+            ),
+            "state.clear();",
+        ),
+        (
+            (
+                "private static final java.util.Map<String, Object> state = "
+                "new java.util.HashMap<>();\n"
+                "public static void initialize() { state.clear(); }"
+            ),
+            "state.clear();",
+        ),
+    ],
+)
+def test_initialize_recovery_accepts_predicted_wrapper_shapes(
+    source: str,
+    expected: str,
+) -> None:
+    admitted = admit_initialize_region(source)
+    assert expected in admitted
+    assert "void initialize()" not in admitted
+
+
+def test_initialize_recovery_handles_logged_field_plus_wrapper_shape() -> None:
+    admitted = admit_initialize_region(
+        """
+java.util.concurrent.locks.Lock lock =
+    new java.util.concurrent.locks.ReentrantLock();
+java.util.Map<String, Object> uiState = new java.util.HashMap<>();
+java.util.Map<String, Object> dataState = new java.util.HashMap<>();
+
+public static void initialize() {
+    lock.lock();
+    try {
+        uiState.clear();
+        dataState.clear();
+    } finally {
+        lock.unlock();
+    }
+}
+"""
+    )
+
+    assert "java.util.concurrent.locks.Lock lock =" in admitted
+    assert "java.util.Map<String, Object> uiState =" in admitted
+    assert "public static void initialize()" not in admitted
+    assert "lock.lock();" in admitted
+    assert "lock.unlock();" in admitted
+
+
+def test_initialize_recovery_localizes_field_only_modifiers() -> None:
+    admitted = admit_initialize_region(
+        (
+            "private static final java.util.Map<String, Object> state = "
+            "new java.util.HashMap<>();\n"
+            "public static void initialize() { state.clear(); }"
+        )
+    )
+
+    assert "private " not in admitted
+    assert "static " not in admitted
+    assert "final java.util.Map<String, Object> state" in admitted
+    assert "state.clear();" in admitted
+
+
+def test_initialize_recovery_handles_fenced_jdk_imports_and_static_receiver() -> None:
+    admitted = admit_initialize_region(
+        """```java
+import java.util.Objects;
+Object value = new Object();
+public static void initialize() {
+    Objects.requireNonNull(value);
+}
+```
+"""
+    )
+
+    assert "```" not in admitted
+    assert "import java.util.Objects" not in admitted
+    assert "java.util.Objects.requireNonNull(value);" in admitted
+
+
+def test_initialize_recovery_handles_outer_class_envelope() -> None:
+    admitted = admit_initialize_region(
+        """
+package accidental;
+import java.util.Objects;
+
+public final class WrongOuter {
+    private static Object value = new Object();
+
+    public static void initialize() {
+        Objects.requireNonNull(value);
+    }
+}
+"""
+    )
+
+    assert "class WrongOuter" not in admitted
+    assert "package accidental" not in admitted
+    assert "java.util.Objects.requireNonNull(value);" in admitted
+
+
+def test_initialize_recovery_rejects_unrelated_helper_method() -> None:
+    with pytest.raises(JavaRegionParseError, match="structurally inadmissible"):
+        admit_initialize_region(
+            (
+                "private static void helper() {}\n"
+                "public static void initialize() { helper(); }"
+            )
+        )
+
+
 def test_tree_sitter_member_chunks_ignore_comments_without_losing_members() -> None:
     chunks = strict_member_chunks(
         "// comment\nprivate static int value = 1;\n/* comment */\n"

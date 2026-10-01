@@ -28,6 +28,26 @@ EXPLICIT_JDK_IMPORT_PATTERN = re.compile(
 )
 QUALIFIABLE_JDK_IMPORT_USE_ROLES = frozenset({"type", "static_receiver"})
 
+REGION_RECOVERY_SHAPES = {
+    "members": (
+        "direct_class_body",
+        "jdk_imported_class_body",
+        "outer_class_envelope",
+    ),
+    "initialize": (
+        "direct_statements",
+        "jdk_imported_statements",
+        "initialize_wrapper",
+        "jdk_imported_initialize_wrapper",
+        "outer_class_initialize",
+    ),
+}
+INITIALIZE_WRAPPER_NAMES = frozenset({"initialize"})
+INITIALIZE_LOCALIZABLE_FIELD_MODIFIERS = frozenset(
+    {"public", "protected", "private", "static", "final", "volatile", "transient"}
+)
+INITIALIZE_PRESERVED_LOCAL_MODIFIERS = frozenset({"final"})
+
 RECOVERABLE_ATOMIC_ERROR_PREFIXES = (
     "ATOMIC_CONCERN_RESPONSE_INVALID:",
     "ATOMIC_CONCERN_SCOPE_ESCAPE:",
@@ -79,6 +99,38 @@ PRE_EMIT_COMPILE_CHECKLIST = (
     "The installed-JDK javap contract is authoritative; never assume that a public JDK class has a public constructor or method.",
     "Only after all checks pass, emit the final Java region with no reasoning prose.",
 )
+
+
+def region_recovery_shapes(region: str) -> tuple[str, ...]:
+    return tuple(REGION_RECOVERY_SHAPES.get(str(region or "").strip(), ()))
+
+
+def initialize_wrapper_allowed(
+    name: str,
+    return_type: str,
+    parameters: str,
+) -> bool:
+    return (
+        str(name or "").strip() in INITIALIZE_WRAPPER_NAMES
+        and str(return_type or "").strip() == "void"
+        and str(parameters or "").strip() == "()"
+    )
+
+
+def localize_initialize_field_modifiers(
+    modifiers: str,
+) -> tuple[str, ...] | None:
+    text = str(modifiers or "").strip()
+    if not text:
+        return ()
+    if "@" in text:
+        return None
+    tokens = tuple(item for item in text.split() if item)
+    if any(item not in INITIALIZE_LOCALIZABLE_FIELD_MODIFIERS for item in tokens):
+        return None
+    return tuple(
+        item for item in tokens if item in INITIALIZE_PRESERVED_LOCAL_MODIFIERS
+    )
 
 
 def member_jdk_import_allowed(fqcn: str) -> bool:
@@ -135,6 +187,7 @@ __all__ = [
     "JAVA_FENCE_LANGUAGES",
     "MAX_COMPILE_REPAIR_LIMIT",
     "MAX_REGION_ATTEMPT_LIMIT",
+    "REGION_RECOVERY_SHAPES",
     "PRODUCTION_CANONICALIZE_LOCAL_FINAL_REBINDINGS",
     "PRODUCTION_COMPILE_REPAIR_LIMIT",
     "PRODUCTION_REGION_ATTEMPT_LIMIT",
@@ -142,6 +195,9 @@ __all__ = [
     "atomic_error_recoverable",
     "atomic_error_terminal_after_normalization",
     "imported_jdk_use_can_be_qualified",
+    "initialize_wrapper_allowed",
+    "localize_initialize_field_modifiers",
     "member_jdk_import_allowed",
     "production_java_generation_recipe_policy",
+    "region_recovery_shapes",
 ]

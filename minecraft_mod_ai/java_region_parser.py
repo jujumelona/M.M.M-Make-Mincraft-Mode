@@ -18,7 +18,10 @@ from .java_generation_policy import (
     EXPLICIT_JDK_IMPORT_PATTERN,
     JAVA_FENCE_LANGUAGES,
     imported_jdk_use_can_be_qualified,
+    initialize_wrapper_allowed,
+    localize_initialize_field_modifiers,
     member_jdk_import_allowed,
+    region_recovery_shapes,
 )
 
 
@@ -800,6 +803,79 @@ def _qualify_imported_jdk_names(
     return encoded.decode("utf-8")
 
 
+def _qualify_imported_jdk_names_in_initialize(
+    region: str,
+    imports: dict[str, str],
+) -> str:
+    """Rewrite imported JDK references inside an initialize statement list."""
+
+    candidate = str(region or "").strip()
+    prefix = "final class __MMMRegionHost { static void __mmmInitialize() {\n"
+    prefix_size = len(prefix.encode("utf-8"))
+    region_bytes = candidate.encode("utf-8")
+    source, root = _parse(prefix + candidate + "\n} }\n")
+    outer_body = _class_body(root)
+    method = next(
+        (node for node in outer_body.named_children if node.type == "method_declaration"),
+        None,
+    )
+    if method is None:
+        raise JavaRegionParseError(
+            "Tree-sitter did not produce the initialize wrapper method"
+        )
+    body = method.child_by_field_name("body")
+    if body is None:
+        raise JavaRegionParseError(
+            "Tree-sitter did not produce the initialize wrapper body"
+        )
+
+    edits: list[tuple[int, int, str]] = []
+    for node in _walk_named(body):
+        rendered = _text(source, node).strip()
+        replacement = imports.get(rendered)
+        if replacement is None:
+            continue
+        role = ""
+        if node.type == "type_identifier":
+            role = "type"
+        elif node.type == "identifier":
+            parent = getattr(node, "parent", None)
+            receiver = (
+                parent.child_by_field_name("object")
+                if parent is not None
+                and parent.type in {"field_access", "method_invocation"}
+                else None
+            )
+            if (
+                receiver is not None
+                and int(receiver.start_byte) == int(node.start_byte)
+                and int(receiver.end_byte) == int(node.end_byte)
+            ):
+                role = "static_receiver"
+        if not imported_jdk_use_can_be_qualified(role):
+            continue
+        start = int(node.start_byte) - prefix_size
+        end = int(node.end_byte) - prefix_size
+        if start < 0 or end > len(region_bytes) or start >= end:
+            continue
+        edits.append((start, end, replacement))
+
+    encoded = region_bytes
+    for start, end, replacement in sorted(edits, reverse=True):
+        encoded = encoded[:start] + replacement.encode("utf-8") + encoded[end:]
+    return encoded.decode("utf-8")
+
+
+def _canonicalize_initialize_jdk_imports(region: str) -> str | None:
+    split = _split_leading_jdk_imports(region)
+    if split is None:
+        return None
+    body, imports = split
+    canonical = _qualify_imported_jdk_names_in_initialize(body, imports)
+    strict_initialize_statements(canonical)
+    return canonical
+
+
 def _canonicalize_member_jdk_imports(region: str) -> str | None:
     split = _split_leading_jdk_imports(region)
     if split is None:
@@ -933,24 +1009,177 @@ def strict_initialize_statements(value: str) -> tuple[str, ...]:
     )
 
 
+def _initialize_wrapper_method(node: Any, source: bytes) -> bool:
+    if node.type != "method_declaration":
+        return False
+    name = node.child_by_field_name("name")
+    return_type = node.child_by_field_name("type")
+    parameters = node.child_by_field_name("parameters")
+    return initialize_wrapper_allowed(
+        _text(source, name).strip() if name is not None else "",
+        _text(source, return_type).strip() if return_type is not None else "",
+        _text(source, parameters).strip() if parameters is not None else "",
+    )
+
+
+def _localize_initialize_field(node: Any, source: bytes) -> str:
+    if node.type != "field_declaration":
+        raise JavaRegionParseError(
+            f"initialize wrapper sibling {node.type!r} cannot be localized"
+        )
+    rendered = _text(source, node).strip()
+    modifiers = next(
+        (child for child in node.named_children if child.type == "modifiers"),
+        None,
+    )
+    modifier_text = _text(source, modifiers).strip() if modifiers is not None else ""
+    preserved = localize_initialize_field_modifiers(modifier_text)
+    if preserved is None:
+        raise JavaRegionParseError(
+            f"initialize field modifiers cannot be safely localized: {modifier_text!r}"
+        )
+    if modifiers is None:
+        return rendered
+    # Tree-sitter offsets are byte-based; node-relative slicing keeps Unicode safe.
+    raw_node = _text(source, node)
+    relative_start = int(modifiers.end_byte) - int(node.start_byte)
+    tail = raw_node.encode("utf-8")[relative_start:].decode("utf-8").lstrip()
+    prefix = (" ".join(preserved) + " ") if preserved else ""
+    localized = prefix + tail
+    strict_initialize_statements(localized)
+    return localized
+
+
+def _recover_initialize_from_class_body(candidate: str) -> str:
+    prefix = "final class __MMMRegionHost {\n"
+    source, root = _parse(prefix + str(candidate or "").strip() + "\n}\n")
+    body = _class_body(root)
+    nodes = tuple(
+        node for node in body.named_children if node.type not in _COMMENT_TYPES
+    )
+    wrappers = tuple(
+        node for node in nodes if _initialize_wrapper_method(node, source)
+    )
+    if len(wrappers) != 1:
+        raise JavaRegionParseError(
+            "initialize recovery requires exactly one zero-argument void initialize() wrapper"
+        )
+    wrapper = wrappers[0]
+    locals_: list[str] = []
+    for node in nodes:
+        if node is wrapper:
+            continue
+        locals_.append(_localize_initialize_field(node, source))
+
+    method_body = wrapper.child_by_field_name("body")
+    if method_body is None:
+        raise JavaRegionParseError("initialize wrapper has no method body")
+    statements = [
+        _text(source, node).strip()
+        for node in method_body.named_children
+        if node.type not in _COMMENT_TYPES and _text(source, node).strip()
+    ]
+    recovered = "\n".join([*locals_, *statements]).strip()
+    strict_initialize_statements(recovered)
+    return recovered
+
+
+def _recover_initialize_from_outer_class(candidate: str) -> str:
+    raw = str(candidate or "").strip()
+    source = raw.encode("utf-8")
+    tree = _parser().parse(source)
+    root = tree.root_node
+    outer_types = _outer_type_candidates(root)
+    if len(outer_types) != 1 or outer_types[0].type != "class_declaration":
+        raise JavaRegionParseError(
+            "initialize recovery found no unambiguous outer-class envelope"
+        )
+    outer = outer_types[0]
+    issue = _first_error(outer, source) if outer.has_error else ""
+    if issue:
+        raise JavaRegionParseError(f"outer-class initialize envelope is malformed: {issue}")
+
+    imports: dict[str, str] = {}
+    for node in root.named_children:
+        if node.type != "import_declaration":
+            continue
+        rendered = _text(source, node).strip()
+        match = _EXPLICIT_JDK_IMPORT.fullmatch(rendered)
+        if match is None or not member_jdk_import_allowed(match.group(1)):
+            raise JavaRegionParseError(
+                "outer-class initialize recovery only admits explicit java.* imports"
+            )
+        fqcn = match.group(1)
+        simple = fqcn.rsplit(".", 1)[-1]
+        existing = imports.get(simple)
+        if existing is not None and existing != fqcn:
+            raise JavaRegionParseError(
+                f"ambiguous JDK imports for simple type {simple!r}"
+            )
+        imports[simple] = fqcn
+
+    body = outer.child_by_field_name("body")
+    if body is None:
+        raise JavaRegionParseError("outer-class initialize envelope has no class body")
+    class_body = "\n".join(
+        _text(source, node).strip()
+        for node in body.named_children
+        if node.type not in _COMMENT_TYPES and _text(source, node).strip()
+    )
+    if imports:
+        class_body = _qualify_imported_jdk_names(class_body, imports)
+    return _recover_initialize_from_class_body(class_body)
+
+
+def _recover_initialize_shape(candidate: str, shape: str) -> str:
+    if shape == "direct_statements":
+        return "\n".join(strict_initialize_statements(candidate)).strip()
+    if shape == "jdk_imported_statements":
+        canonical = _canonicalize_initialize_jdk_imports(candidate)
+        if canonical is None:
+            raise JavaRegionParseError("initialize candidate has no leading JDK imports")
+        return "\n".join(strict_initialize_statements(canonical)).strip()
+    if shape == "initialize_wrapper":
+        return _recover_initialize_from_class_body(candidate)
+    if shape == "jdk_imported_initialize_wrapper":
+        canonical = _canonicalize_member_jdk_imports(candidate)
+        if canonical is None:
+            raise JavaRegionParseError(
+                "initialize wrapper candidate has no leading JDK imports"
+            )
+        return _recover_initialize_from_class_body(canonical)
+    if shape == "outer_class_initialize":
+        return _recover_initialize_from_outer_class(candidate)
+    raise JavaRegionParseError(f"unsupported initialize recovery shape {shape!r}")
+
+
 def admit_initialize_region(value: str) -> str:
-    """Normalize arbitrary model output into host-owned initialize statements."""
+    """Recover arbitrary model output into host-owned initialize statements.
+
+    Recovery is policy-driven and shape-based: direct statement lists, explicit
+    JDK imports, accidental initialize() wrappers, and full outer-class envelopes
+    are all attempted before the response is classified as a terminal scope error.
+    """
     candidates = _model_java_candidates(value)
     if not candidates:
         return ""
 
     errors: list[str] = []
+    shapes = region_recovery_shapes("initialize")
     for candidate in candidates:
-        try:
-            statements = strict_initialize_statements(candidate)
-            if statements or not candidate.strip():
-                return "\n".join(statements).strip()
-        except JavaRegionParseError as exc:
-            errors.append(str(exc))
+        for shape in shapes:
+            try:
+                recovered = _recover_initialize_shape(candidate, shape)
+                if recovered or not candidate.strip():
+                    return recovered
+            except JavaRegionParseError as exc:
+                detail = f"{shape}: {exc}"
+                if detail not in errors:
+                    errors.append(detail)
 
     detail = (
         f"{len(candidates)} model initialize candidate(s) were structurally inadmissible"
     )
     if errors:
-        detail += f"; last candidate error: {errors[-1]}"
+        detail += "; recovery attempts: " + " | ".join(errors[-5:])
     raise JavaRegionParseError(detail)
