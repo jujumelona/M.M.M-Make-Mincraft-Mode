@@ -677,6 +677,34 @@ public static synchronized void setState(String name, Object value) {
     }
 }
 
+public static synchronized Object getState(
+        String name,
+        java.util.Map<String, Object> context
+) {
+    return $mmmRead(name, context);
+}
+
+public static synchronized void setState(
+        String name,
+        Object value,
+        java.util.Map<String, Object> context
+) {
+    setState(name, value);
+    if (context == null || name == null || name.isBlank()) {
+        return;
+    }
+    try {
+        if (value == null) {
+            context.remove(name);
+        } else {
+            context.put(name, value);
+        }
+    } catch (UnsupportedOperationException ignored) {
+        // Immutable event contexts remain valid read overlays; persistent state
+        // was already committed above.
+    }
+}
+
 private static Object $mmmRead(
         String name,
         java.util.Map<String, Object> context
@@ -1040,7 +1068,9 @@ def render_state_model_concern(
 
 PUBLIC_API = (
     "public static synchronized Object getState(String name)",
+    "public static synchronized Object getState(String name, java.util.Map<String, Object> context)",
     "public static synchronized void setState(String name, Object value)",
+    "public static synchronized void setState(String name, Object value, java.util.Map<String, Object> context)",
     "public static synchronized String transition(String fromState, String trigger, java.util.Map<String, Object> context)",
     "public static synchronized boolean invariantsHold(java.util.Map<String, Object> context)",
     "public static synchronized java.util.List<String> invariantFailures(java.util.Map<String, Object> context)",
