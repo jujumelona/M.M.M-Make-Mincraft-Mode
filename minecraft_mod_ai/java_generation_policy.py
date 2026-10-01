@@ -2,8 +2,8 @@ from __future__ import annotations
 
 """Compatibility facade over the canonical execution contract.
 
-This module retains Java-specific helper functions used by parsers and older callers.
-Hard policy data lives exclusively in execution_contract_policy.
+All hard policy data and helper decisions live in execution_contract_policy. This
+module exists only so older imports do not fork the execution contract.
 """
 
 import re
@@ -13,10 +13,6 @@ from .execution_contract_policy import (
     DEFAULT_REGION_ATTEMPT_LIMIT,
     JAVA_EXPLICIT_JDK_IMPORT_PATTERN,
     JAVA_FENCE_LANGUAGES,
-    JAVA_INITIALIZE_LOCALIZABLE_FIELD_MODIFIERS,
-    JAVA_INITIALIZE_PRESERVED_LOCAL_MODIFIERS,
-    JAVA_INITIALIZE_WRAPPER_NAMES,
-    JAVA_QUALIFIABLE_JDK_IMPORT_USE_ROLES,
     JAVA_REGION_RECOVERY_SHAPES,
     MAX_COMPILE_REPAIR_LIMIT,
     MAX_REGION_ATTEMPT_LIMIT,
@@ -30,6 +26,11 @@ from .execution_contract_policy import (
     atomic_error_terminal_after_normalization,
     authorized_concern_nested_type_symbols,
     java_generation_shared_recipe_policy,
+    java_imported_jdk_use_can_be_qualified,
+    java_initialize_wrapper_allowed,
+    java_localize_initialize_field_modifiers,
+    java_member_jdk_import_allowed,
+    java_region_recovery_shapes,
 )
 
 EXPLICIT_JDK_IMPORT_PATTERN = re.compile(JAVA_EXPLICIT_JDK_IMPORT_PATTERN)
@@ -37,7 +38,7 @@ REGION_RECOVERY_SHAPES = JAVA_REGION_RECOVERY_SHAPES
 
 
 def region_recovery_shapes(region: str) -> tuple[str, ...]:
-    return tuple(JAVA_REGION_RECOVERY_SHAPES.get(str(region or "").strip(), ()))
+    return java_region_recovery_shapes(region)
 
 
 def initialize_wrapper_allowed(
@@ -45,36 +46,21 @@ def initialize_wrapper_allowed(
     return_type: str,
     parameters: str,
 ) -> bool:
-    return (
-        str(name or "").strip() in JAVA_INITIALIZE_WRAPPER_NAMES
-        and str(return_type or "").strip() == "void"
-        and str(parameters or "").strip() == "()"
-    )
+    return java_initialize_wrapper_allowed(name, return_type, parameters)
 
 
 def localize_initialize_field_modifiers(
     modifiers: str,
 ) -> tuple[str, ...] | None:
-    text = str(modifiers or "").strip()
-    if not text:
-        return ()
-    if "@" in text:
-        return None
-    tokens = tuple(item for item in text.split() if item)
-    if any(item not in JAVA_INITIALIZE_LOCALIZABLE_FIELD_MODIFIERS for item in tokens):
-        return None
-    return tuple(
-        item for item in tokens if item in JAVA_INITIALIZE_PRESERVED_LOCAL_MODIFIERS
-    )
+    return java_localize_initialize_field_modifiers(modifiers)
 
 
 def member_jdk_import_allowed(fqcn: str) -> bool:
-    value = str(fqcn or "").strip()
-    return bool(value.startswith("java.") and "*" not in value)
+    return java_member_jdk_import_allowed(fqcn)
 
 
 def imported_jdk_use_can_be_qualified(role: str) -> bool:
-    return str(role or "").strip() in JAVA_QUALIFIABLE_JDK_IMPORT_USE_ROLES
+    return java_imported_jdk_use_can_be_qualified(role)
 
 
 def production_java_generation_recipe_policy() -> dict:

@@ -298,6 +298,47 @@ def atomic_error_terminal_after_normalization(reason: str) -> bool:
     return str(reason or "").startswith(TERMINAL_AFTER_NORMALIZATION_PREFIXES)
 
 
+def java_region_recovery_shapes(region: str) -> tuple[str, ...]:
+    return tuple(JAVA_REGION_RECOVERY_SHAPES.get(str(region or "").strip(), ()))
+
+
+def java_initialize_wrapper_allowed(
+    name: str,
+    return_type: str,
+    parameters: str,
+) -> bool:
+    return (
+        str(name or "").strip() in JAVA_INITIALIZE_WRAPPER_NAMES
+        and str(return_type or "").strip() == JAVA_HOST_INITIALIZE_RETURN_TYPE
+        and str(parameters or "").strip() == JAVA_HOST_INITIALIZE_PARAMETERS
+    )
+
+
+def java_localize_initialize_field_modifiers(
+    modifiers: str,
+) -> tuple[str, ...] | None:
+    text = str(modifiers or "").strip()
+    if not text:
+        return ()
+    if "@" in text:
+        return None
+    tokens = tuple(item for item in text.split() if item)
+    if any(item not in JAVA_INITIALIZE_LOCALIZABLE_FIELD_MODIFIERS for item in tokens):
+        return None
+    return tuple(
+        item for item in tokens if item in JAVA_INITIALIZE_PRESERVED_LOCAL_MODIFIERS
+    )
+
+
+def java_member_jdk_import_allowed(fqcn: str) -> bool:
+    value = str(fqcn or "").strip()
+    return bool(value.startswith("java.") and "*" not in value)
+
+
+def java_imported_jdk_use_can_be_qualified(role: str) -> bool:
+    return str(role or "").strip() in JAVA_QUALIFIABLE_JDK_IMPORT_USE_ROLES
+
+
 def java_nested_type_scope_error(name: str) -> str:
     return (
         f"nested type {str(name or '')!r} must be "
@@ -344,7 +385,9 @@ def authorized_concern_nested_type_symbols(authority: Any) -> tuple[str, ...]:
                 text,
                 flags=re.IGNORECASE,
             ):
-                names.add(match.group(1))
+                name = match.group(1)
+                if name[:1].isupper():
+                    names.add(name)
 
     structured = authority.get("structured_records")
     if isinstance(structured, (list, tuple)):
@@ -568,6 +611,12 @@ def assert_execution_contract_consistent() -> None:
         failures.append("terminal-after-normalization errors must also be recoverable")
     if JAVA_HOST_INITIALIZE_NAME not in JAVA_INITIALIZE_WRAPPER_NAMES:
         failures.append("host initialize ownership and wrapper recovery disagree")
+    if not java_initialize_wrapper_allowed(
+        JAVA_HOST_INITIALIZE_NAME,
+        JAVA_HOST_INITIALIZE_RETURN_TYPE,
+        JAVA_HOST_INITIALIZE_PARAMETERS,
+    ):
+        failures.append("initialize wrapper recovery disagrees with host lifecycle signature")
     if failures:
         raise RuntimeError(
             "EXECUTION_CONTRACT_INVALID: " + "; ".join(failures)
@@ -636,8 +685,13 @@ __all__ = [
     "authorized_concern_nested_type_symbols",
     "java_generation_recipe_contract",
     "java_generation_shared_recipe_policy",
+    "java_imported_jdk_use_can_be_qualified",
+    "java_initialize_wrapper_allowed",
+    "java_localize_initialize_field_modifiers",
+    "java_member_jdk_import_allowed",
     "java_host_initialize_signature",
     "java_nested_type_scope_error",
+    "java_region_recovery_shapes",
     "java_region_response_contract",
     "java_region_scope_policy",
     "java_region_system_prompt_contract",

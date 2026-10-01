@@ -30,15 +30,13 @@ from .generation_implementation_grounding import (
 )
 from .execution_contract_policy import (
     ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING as _ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING,
-)
-from .host_grounding import custom_module_path_allowed
-from .implementation_ir import OutputBudgetExhausted
-from .java_generation_policy import (
     PRODUCTION_CANONICALIZE_LOCAL_FINAL_REBINDINGS,
     PRODUCTION_COMPILE_REPAIR_LIMIT,
     PRODUCTION_REGION_ATTEMPT_LIMIT,
     PRODUCTION_RETRY_STRUCTURAL_REJECTIONS,
 )
+from .host_grounding import custom_module_path_allowed
+from .implementation_ir import OutputBudgetExhausted
 from .llama_finish_reason_contract import OUTPUT_EXHAUSTED, completion_boundary_error
 from .model_router import ModelRouter
 from .platform_catalog import adapter_for_target, adapter_from_project

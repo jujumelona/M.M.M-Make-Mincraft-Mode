@@ -172,3 +172,5 @@ def test_consumers_do_not_redefine_canonical_contract_literals() -> None:
     assert "COMPILER_FIRST_RULES = (" not in generation_source
     assert "Return only compile-ready Java class-body source" not in concern_source_text
     assert "must be private because outer type ownership is host-owned" not in parser_source
+    assert "from .java_generation_policy import" not in parser_source
+    assert "str(return_type or \"\").strip() == \"void\"" not in generation_source

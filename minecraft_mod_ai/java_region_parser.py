@@ -7,6 +7,7 @@ non-private nested type.
 """
 from __future__ import annotations
 
+import re
 from threading import local
 from typing import Any
 
@@ -16,22 +17,22 @@ from tree_sitter import Language, Parser
 
 from .execution_contract_policy import (
     JAVA_CONCERN_MEMBER_NODE_TYPES,
+    JAVA_EXPLICIT_JDK_IMPORT_PATTERN,
+    JAVA_FENCE_LANGUAGES,
     JAVA_HOST_OWNED_MEMBER_NODE_TYPES,
     JAVA_NESTED_TYPE_CANONICALIZABLE_VISIBILITIES,
     JAVA_NESTED_TYPE_NODE_TYPES,
     JAVA_NESTED_TYPE_REQUIRED_VISIBILITY,
     java_host_initialize_signature,
+    java_imported_jdk_use_can_be_qualified as imported_jdk_use_can_be_qualified,
+    java_initialize_wrapper_allowed as initialize_wrapper_allowed,
+    java_localize_initialize_field_modifiers as localize_initialize_field_modifiers,
+    java_member_jdk_import_allowed as member_jdk_import_allowed,
     java_nested_type_scope_error,
+    java_region_recovery_shapes as region_recovery_shapes,
 )
-from .java_generation_policy import (
-    EXPLICIT_JDK_IMPORT_PATTERN,
-    JAVA_FENCE_LANGUAGES,
-    imported_jdk_use_can_be_qualified,
-    initialize_wrapper_allowed,
-    localize_initialize_field_modifiers,
-    member_jdk_import_allowed,
-    region_recovery_shapes,
-)
+
+EXPLICIT_JDK_IMPORT_PATTERN = re.compile(JAVA_EXPLICIT_JDK_IMPORT_PATTERN)
 
 
 class JavaRegionParseError(ValueError):
