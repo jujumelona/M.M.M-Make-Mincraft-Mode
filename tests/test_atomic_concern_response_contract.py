@@ -3060,13 +3060,17 @@ def test_small_model_prompt_exposes_exact_dependency_calls_and_drops_irrelevant_
             "public_api": [
                 "public static void initialize()",
                 "public static synchronized Object getState(String name)",
+                "public static synchronized Object getState(String name, java.util.Map<String, Object> context)",
                 "public static synchronized void setState(String name, Object value)",
+                "public static synchronized void setState(String name, Object value, java.util.Map<String, Object> context)",
             ],
             "source": (
                 "package example; public final class AuthoredStateModel { "
                 "public static void initialize() {} "
                 "public static synchronized Object getState(String name) { return null; } "
+                "public static synchronized Object getState(String name, java.util.Map<String, Object> context) { return null; } "
                 "public static synchronized void setState(String name, Object value) {} "
+                "public static synchronized void setState(String name, Object value, java.util.Map<String, Object> context) {} "
                 "}"
             ),
         },
@@ -3112,12 +3116,44 @@ def test_small_model_prompt_exposes_exact_dependency_calls_and_drops_irrelevant_
 
     assert ("AuthoredStateModel", "initialize", 0) in calls
     assert ("AuthoredStateModel", "getState", 1) in calls
+    assert ("AuthoredStateModel", "getState", 2) in calls
     assert ("AuthoredStateModel", "setState", 2) in calls
+    assert ("AuthoredStateModel", "setState", 3) in calls
     assert payload["implementation_authority"] == ""
     assert payload["host_grounding"]["facts"] == []
     assert payload["host_grounding"]["host_version_facts"] == {}
     assert "Never add arguments to a zero-arity method" in messages[0]["content"]
     assert "Do not think aloud" in messages[0]["content"]
+
+
+def test_first_pass_accepts_context_aware_state_access_contract() -> None:
+    from minecraft_mod_ai.atomic_concern_source import _validate_first_pass_java_semantics
+
+    dependency_source = json.dumps(
+        {
+            "symbol": "AuthoredStateModel",
+            "source": (
+                "public final class AuthoredStateModel { "
+                "public static Object getState(String name) { return null; } "
+                "public static Object getState(String name, java.util.Map<String, Object> context) { return null; } "
+                "public static void setState(String name, Object value) {} "
+                "public static void setState(String name, Object value, java.util.Map<String, Object> context) {} "
+                "}"
+            ),
+        }
+    )
+    source = (
+        "private static void handle(java.util.Map<String, Object> context) { "
+        'Object value = AuthoredStateModel.getState("inventory", context); '
+        'AuthoredStateModel.setState("inventory", value, context); '
+        "}"
+    )
+
+    _validate_first_pass_java_semantics(
+        source,
+        dependency_source=dependency_source,
+        sibling_api=(),
+    )
 
 
 def test_first_pass_rejects_argument_added_to_zero_arity_dependency_hook() -> None:
