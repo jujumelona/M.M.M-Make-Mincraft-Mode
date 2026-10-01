@@ -2670,6 +2670,48 @@ def test_sibling_inventory_exposes_exact_generic_field_type() -> None:
     assert field["generic_type_is_authoritative"] is True
 
 
+def test_map_entry_wildcards_never_become_standalone_local_types() -> None:
+    from minecraft_mod_ai.atomic_concern_source import (
+        _canonicalize_generated_jdk_semantics,
+    )
+
+    candidate = (
+        "private static void copy() {\n"
+        "    for (java.util.Map.Entry<?, ?> entry : VALUES.entrySet()) {\n"
+        "        Object key = entry.getKey();\n"
+        "        Object value = entry.getValue();\n"
+        "    }\n"
+        "}"
+    )
+
+    normalized, _changes = _canonicalize_generated_jdk_semantics(
+        candidate,
+        authoritative_field_types={"VALUES": "java.util.Map<?, ?>"},
+    )
+
+    assert "? key = entry.getKey()" not in normalized
+    assert "? value = entry.getValue()" not in normalized
+    assert "java.lang.Object key = entry.getKey();" in normalized
+    assert "java.lang.Object value = entry.getValue();" in normalized
+    class_body_member_contracts(normalized)
+
+
+def test_first_pass_semantic_gate_wraps_parser_failure_as_recoverable_response_error() -> None:
+    from minecraft_mod_ai.atomic_concern_source import (
+        _validate_first_pass_java_semantics,
+    )
+
+    with pytest.raises(
+        CustomModuleGenerationError,
+        match="ATOMIC_CONCERN_RESPONSE_INVALID: admitted member source became",
+    ):
+        _validate_first_pass_java_semantics(
+            "private static ? broken;",
+            dependency_source="",
+            sibling_api=(),
+        )
+
+
 def test_map_entry_value_generic_narrowing_is_canonicalized() -> None:
     from minecraft_mod_ai.atomic_concern_source import (
         _canonicalize_generated_jdk_semantics,

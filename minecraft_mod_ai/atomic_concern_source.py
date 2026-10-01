@@ -1094,10 +1094,19 @@ def _canonicalize_generated_jdk_semantics(
         rendered.append(normalized_chunk)
 
     normalized = "\n\n".join(item.strip() for item in rendered if item.strip()).strip()
-    normalized, projection_changes = _rewrite_map_entry_projection_types(
+    pre_projection = normalized
+    projected, projection_changes = _rewrite_map_entry_projection_types(
         normalized,
         authoritative_field_types=dict(authoritative_field_types or {}),
     )
+    try:
+        class_body_chunks(projected)
+        class_body_member_kinds(projected)
+    except JavaRegionParseError:
+        normalized = pre_projection
+        projection_changes = ()
+    else:
+        normalized = projected
     changes.extend(projection_changes)
     if normalized != value and not changes:
         changes.append("canonical_jdk_fqcn")
@@ -3254,7 +3263,13 @@ def _validate_first_pass_java_semantics(
     facts that are unambiguous from the candidate and host-supplied dependency API.
     """
 
-    contracts = class_body_member_contracts(value)
+    try:
+        contracts = class_body_member_contracts(value)
+    except JavaRegionParseError as exc:
+        raise CustomModuleGenerationError(
+            "ATOMIC_CONCERN_RESPONSE_INVALID: admitted member source became "
+            f"syntactically invalid before semantic validation: {exc}"
+        ) from exc
     _validate_declared_type_authority(
         contracts,
         dependency_source=dependency_source,
@@ -3562,6 +3577,27 @@ def _map_entry_type_arguments(value: str) -> tuple[str, str] | None:
     return args[0], args[1]
 
 
+def _map_projection_local_type(value: str) -> str:
+    """Return a legal local-variable type for a Map key/value projection.
+
+    Wildcards are legal as generic arguments but illegal as standalone local
+    declaration types. Reading from an unbounded or lower-bounded wildcard is
+    therefore represented as Object; an upper-bounded wildcard can safely use
+    its upper bound.
+    """
+
+    expected = _canonicalize_jdk_type_expression(value).strip()
+    if expected == "?":
+        return "java.lang.Object"
+    extends_prefix = "? extends "
+    if expected.startswith(extends_prefix):
+        upper = expected[len(extends_prefix):].strip()
+        return upper or "java.lang.Object"
+    if expected.startswith("?"):
+        return "java.lang.Object"
+    return expected
+
+
 def _rewrite_map_entry_projection_types(
     value: str,
     *,
@@ -3642,7 +3678,7 @@ def _rewrite_map_entry_projection_types(
                     modifier_prefix = "final "
                     declared_type = declared_type[6:].strip()
                 actual = _canonicalize_jdk_type_expression(declared_type)
-                expected = _canonicalize_jdk_type_expression(expected_type)
+                expected = _map_projection_local_type(expected_type)
                 if not expected or actual == expected:
                     return match.group(0)
                 actual_raw, _actual_args = _generic_type_parts(actual)
