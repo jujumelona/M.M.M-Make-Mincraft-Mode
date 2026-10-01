@@ -3156,6 +3156,61 @@ def test_first_pass_accepts_context_aware_state_access_contract() -> None:
     )
 
 
+def test_logged_invalid_inputs_candidate_is_admitted_with_context_state_api() -> None:
+    from minecraft_mod_ai.atomic_concern_source import _validate_first_pass_java_semantics
+
+    dependency_source = json.dumps(
+        {
+            "symbol": "AuthoredStateModel",
+            "source": (
+                "public final class AuthoredStateModel { "
+                "public static Object getState(String name) { return null; } "
+                "public static Object getState(String name, java.util.Map<String, Object> context) { return null; } "
+                "public static void setState(String name, Object value) {} "
+                "public static void setState(String name, Object value, java.util.Map<String, Object> context) {} "
+                "}"
+            ),
+        }
+    )
+    source = """
+private static java.util.Map<String, Object> preservedInventory;
+
+public static void handleInvalidInput(
+        String itemName,
+        int quantity,
+        double x,
+        double y,
+        double z,
+        java.util.Map<String, Object> context
+) {
+    if (quantity < 0 || x < 0 || y < 0 || z < 0) {
+        context.put("failure_message", "Invalid input: negative quantity or coordinates");
+        return;
+    }
+
+    Object currentInventory = AuthoredStateModel.getState("inventory", context);
+    if (currentInventory instanceof java.util.Map) {
+        java.util.Map<String, Object> inventoryMap =
+                (java.util.Map<String, Object>) currentInventory;
+        if (preservedInventory == null) {
+            preservedInventory = new java.util.HashMap<>(inventoryMap);
+        }
+        inventoryMap.put(itemName, quantity);
+        AuthoredStateModel.setState("inventory", inventoryMap, context);
+    } else {
+        preservedInventory = new java.util.HashMap<>();
+        AuthoredStateModel.setState("inventory", preservedInventory, context);
+    }
+}
+"""
+
+    _validate_first_pass_java_semantics(
+        source,
+        dependency_source=dependency_source,
+        sibling_api=(),
+    )
+
+
 def test_first_pass_rejects_argument_added_to_zero_arity_dependency_hook() -> None:
     from minecraft_mod_ai.atomic_concern_source import _validate_first_pass_java_semantics
 
