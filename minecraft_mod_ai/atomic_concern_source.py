@@ -36,6 +36,7 @@ from .java_region_parser import (
     class_body_member_kinds,
     class_body_method_invocation_details,
     class_body_method_invocations,
+    class_body_object_creation_sites,
     class_body_object_creations,
     class_body_simple_type_occurrences,
     public_source_member_contracts,
@@ -955,19 +956,11 @@ def _canonicalize_tree_sitter_jdk_types(
 def _canonicalize_local_final_rebindings(
     value: str,
 ) -> tuple[str, tuple[str, ...]]:
-    """Normalize mechanically impossible concern-local final field shapes.
+    """Drop final only for initialized concern-local fields that are actually rebound.
 
-    The host-owned outer class has a private constructor and atomic concerns are
-    forbidden from declaring another outer constructor. Two cases are therefore
-    safe to canonicalize before semantic validation:
-
-    * an initialized concern-local final field that the same region rebinds: drop
-      only final and preserve the authored rebinding;
-    * an uninitialized (blank) final outer field: it has no legal concern-owned
-      definite-assignment path, so lower it to the production backing-state shape:
-      static and non-final.
-
-    Sibling/dependency fields are never rewritten here.
+    Blank finals are not mechanically equivalent to mutable backing state: accepting
+    that rewrite can turn an incomplete model answer into a false successful concern.
+    They remain validator-visible and must be corrected by the bounded semantic path.
     """
 
     source = str(value or "").strip()
@@ -975,6 +968,9 @@ def _canonicalize_local_final_rebindings(
         return source, ()
 
     assigned = set(class_body_assignment_targets(source))
+    if not assigned:
+        return source, ()
+
     chunks = class_body_chunks(source)
     kinds = class_body_member_kinds(source)
     if len(chunks) != len(kinds):
@@ -996,20 +992,18 @@ def _canonicalize_local_final_rebindings(
         except JavaRegionParseError:
             rendered.append(chunk)
             continue
-
-        # Keep rewriting narrowly mechanical. Multi-declarator fields can mix
-        # initialization states, so leave those to validator/model correction.
         if len(fields) != 1:
             rendered.append(chunk)
             continue
 
         field = fields[0]
         symbol = str(field.get("symbol") or "").strip()
-        is_final = field.get("mutable") is False
-        initialized = field.get("initialized") is True
-        rebound = bool(symbol and initialized and symbol in assigned)
-        blank_final = bool(symbol and is_final and not initialized)
-        if not is_final or not (rebound or blank_final):
+        if (
+            not symbol
+            or symbol not in assigned
+            or field.get("mutable") is not False
+            or field.get("initialized") is not True
+        ):
             rendered.append(chunk)
             continue
 
@@ -1017,38 +1011,22 @@ def _canonicalize_local_final_rebindings(
         if normalized == chunk:
             rendered.append(chunk)
             continue
-
-        if blank_final and field.get("static") is not True:
-            visibility = re.match(
-                r"^\s*(?:(?:public|protected|private)\s+)",
-                normalized,
-            )
-            if visibility is not None:
-                insert_at = visibility.end()
-                normalized = (
-                    normalized[:insert_at]
-                    + "static "
-                    + normalized[insert_at:]
-                )
-            else:
-                normalized = "static " + normalized.lstrip()
-            changes.append(f"{symbol}:blank-final->static-mutable")
-        elif blank_final:
-            changes.append(f"{symbol}:blank-final->mutable")
-        else:
-            changes.append(f"{symbol}:final->mutable")
-
         rendered.append(normalized)
+        changes.append(f"{symbol}:final->mutable")
+
+    if not changes:
+        return source, ()
 
     normalized = "\n\n".join(
         item.strip() for item in rendered if item.strip()
     ).strip()
-    if changes:
-        try:
-            class_body_member_contracts(normalized)
-        except JavaRegionParseError:
-            return source, ()
+    try:
+        class_body_member_contracts(normalized)
+    except JavaRegionParseError:
+        return source, ()
     return normalized, tuple(changes)
+
+
 
 def _canonicalize_jdk_construction_semantics(
     value: str,
@@ -1075,7 +1053,7 @@ def _canonicalize_jdk_construction_semantics(
         return source, ()
 
     replacements: list[tuple[int, int, str, str]] = []
-    for creation in class_body_object_creations(source):
+    for creation in class_body_object_creation_sites(source):
         raw_type = str(creation.get("type") or "").strip()
         fqcn = _canonical_jdk_class_name(raw_type)
         if not fqcn.startswith(("java.", "javax.")):

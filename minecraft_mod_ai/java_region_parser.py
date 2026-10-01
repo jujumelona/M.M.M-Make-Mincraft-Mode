@@ -514,8 +514,8 @@ def class_body_method_invocation_details(value: str) -> tuple[dict[str, Any], ..
     return tuple(rows)
 
 
-def class_body_object_creations(value: str) -> tuple[dict[str, Any], ...]:
-    """Return constructed type spelling and argument count for object creation expressions."""
+def class_body_object_creation_sites(value: str) -> tuple[dict[str, Any], ...]:
+    """Return extended object-creation sites for host-side source rewriting."""
 
     region = str(value or "").strip()
     if not region:
@@ -545,8 +545,6 @@ def class_body_object_creations(value: str) -> tuple[dict[str, Any], ...]:
         if type_node is None:
             continue
         prefix_bytes = len(prefix.encode("utf-8"))
-        start_byte = int(node.start_byte) - prefix_bytes
-        end_byte = int(node.end_byte) - prefix_bytes
         argument_nodes = tuple(arguments.named_children) if arguments is not None else ()
         rows.append(
             {
@@ -555,11 +553,23 @@ def class_body_object_creations(value: str) -> tuple[dict[str, Any], ...]:
                 "arguments": tuple(
                     _text(source, item).strip() for item in argument_nodes
                 ),
-                "start_byte": start_byte,
-                "end_byte": end_byte,
+                "start_byte": int(node.start_byte) - prefix_bytes,
+                "end_byte": int(node.end_byte) - prefix_bytes,
             }
         )
     return tuple(rows)
+
+
+def class_body_object_creations(value: str) -> tuple[dict[str, Any], ...]:
+    """Return the stable public object-creation contract: type plus argument count."""
+
+    return tuple(
+        {
+            "type": str(item["type"]),
+            "argument_count": int(item["argument_count"]),
+        }
+        for item in class_body_object_creation_sites(value)
+    )
 
 
 def class_body_direct_return_calls(value: str) -> tuple[dict[str, Any], ...]:
@@ -783,6 +793,43 @@ def _split_leading_jdk_imports(
     return body, imports
 
 
+def _imported_jdk_use_role(node: Any) -> str:
+    """Classify an imported simple name by AST position, including receiver chains."""
+
+    if node.type == "type_identifier":
+        parent = getattr(node, "parent", None)
+        if parent is not None and parent.type in {
+            "scoped_type_identifier",
+            "scoped_identifier",
+        }:
+            return ""
+        return "type"
+    if node.type != "identifier":
+        return ""
+
+    current = node
+    parent = getattr(current, "parent", None)
+    while parent is not None and parent.type in {
+        "field_access",
+        "method_invocation",
+        "scoped_identifier",
+        "scoped_type_identifier",
+    }:
+        receiver = (
+            parent.child_by_field_name("object")
+            or parent.child_by_field_name("scope")
+            or (parent.named_children[0] if parent.named_children else None)
+        )
+        if receiver is None:
+            break
+        if int(current.start_byte) != int(receiver.start_byte):
+            break
+        if int(current.end_byte) > int(receiver.end_byte):
+            break
+        return "static_receiver"
+    return ""
+
+
 def _qualify_imported_jdk_names(
     region: str,
     imports: dict[str, str],
@@ -802,23 +849,7 @@ def _qualify_imported_jdk_names(
         if replacement is None:
             continue
 
-        role = ""
-        if node.type == "type_identifier":
-            role = "type"
-        elif node.type == "identifier":
-            parent = getattr(node, "parent", None)
-            receiver = (
-                parent.child_by_field_name("object")
-                if parent is not None
-                and parent.type in {"field_access", "method_invocation"}
-                else None
-            )
-            if (
-                receiver is not None
-                and int(receiver.start_byte) == int(node.start_byte)
-                and int(receiver.end_byte) == int(node.end_byte)
-            ):
-                role = "static_receiver"
+        role = _imported_jdk_use_role(node)
         if not imported_jdk_use_can_be_qualified(role):
             continue
 
@@ -866,23 +897,7 @@ def _qualify_imported_jdk_names_in_initialize(
         replacement = imports.get(rendered)
         if replacement is None:
             continue
-        role = ""
-        if node.type == "type_identifier":
-            role = "type"
-        elif node.type == "identifier":
-            parent = getattr(node, "parent", None)
-            receiver = (
-                parent.child_by_field_name("object")
-                if parent is not None
-                and parent.type in {"field_access", "method_invocation"}
-                else None
-            )
-            if (
-                receiver is not None
-                and int(receiver.start_byte) == int(node.start_byte)
-                and int(receiver.end_byte) == int(node.end_byte)
-            ):
-                role = "static_receiver"
+        role = _imported_jdk_use_role(node)
         if not imported_jdk_use_can_be_qualified(role):
             continue
         start = int(node.start_byte) - prefix_size
@@ -975,13 +990,19 @@ def _raw_compilation_unit_envelope_kinds(region: str) -> frozenset[str]:
 
 
 def _admit_member_candidate(region: str) -> tuple[str, ...]:
-    """Admit one candidate and preserve syntax-vs-scope failure identity."""
+    """Admit class-body members first; recover wrappers only after that fails."""
+
     candidate = str(region or "").strip()
     if not candidate:
         return ()
+
     prefix = "final class __MMMRegionHost {\n"
     envelope_kinds = _raw_compilation_unit_envelope_kinds(candidate)
-    has_outer_type = bool(
+    has_package = "package_declaration" in envelope_kinds
+    has_import = "import_declaration" in envelope_kinds
+    first_failure: JavaRegionParseError | None = None
+
+    if has_package and not (
         envelope_kinds
         & {
             "class_declaration",
@@ -989,14 +1010,15 @@ def _admit_member_candidate(region: str) -> tuple[str, ...]:
             "enum_declaration",
             "record_declaration",
         }
-    )
-    syntax_failure: JavaRegionParseError | None = None
+    ):
+        raise _scope_error(
+            "package declaration is compilation-unit structure and cannot be a concern member"
+        )
 
-    # A package/import/type envelope is compilation-unit structure, never a class
-    # member. Do not feed it through the class-body parser where tolerant parsing
-    # can reinterpret keywords as identifiers. Recovery below handles JDK imports
-    # and one accidental outer class structurally.
-    if not envelope_kinds:
+    # A raw private class/record/enum is a valid nested member once placed inside
+    # the host-owned class. Raw compilation-unit parsing cannot distinguish that
+    # intent, so package/import directives are the only reasons to skip this path.
+    if not has_package and not has_import:
         try:
             source, root = _parse(prefix + candidate + "\n}\n")
             body = _class_body(root)
@@ -1004,16 +1026,9 @@ def _admit_member_candidate(region: str) -> tuple[str, ...]:
             if chunks:
                 return chunks
         except JavaRegionParseError as exc:
-            if exc.category == "scope":
-                raise
-            syntax_failure = exc
+            first_failure = exc
 
-    if "package_declaration" in envelope_kinds and not has_outer_type:
-        raise _scope_error(
-            "package declaration is compilation-unit structure and cannot be a concern member"
-        )
-
-    if "package_declaration" not in envelope_kinds and not has_outer_type:
+    if has_import and not has_package:
         try:
             canonical = _canonicalize_member_jdk_imports(candidate)
             if canonical is not None:
@@ -1023,17 +1038,21 @@ def _admit_member_candidate(region: str) -> tuple[str, ...]:
                 if chunks:
                     return chunks
         except JavaRegionParseError as exc:
-            if exc.category == "scope":
-                raise
-            if syntax_failure is None:
-                syntax_failure = exc
+            if first_failure is None:
+                first_failure = exc
 
     try:
         return _unwrap_single_outer_class(candidate)
     except JavaRegionParseError as exc:
-        if syntax_failure is not None and exc.category != "scope":
-            raise syntax_failure
+        # Prefer a precise host-body syntax error over the generic "not an outer
+        # wrapper" fallback. Preserve explicit scope failures from either path.
+        if first_failure is not None:
+            if first_failure.category == "scope":
+                raise first_failure
+            if exc.category != "scope":
+                raise first_failure
         raise
+
 
 
 def admit_member_region(
