@@ -177,40 +177,46 @@ def test_canonical_design_schema_skips_context_sections_and_uses_named_owners():
     assert "AuthoredStateModel" in by_symbol["AuthoredIntegration"]["depends_on"]
     assert router.calls == []
 
-def test_host_section_nodes_expand_to_fixed_concern_obligations_without_model_planning():
+def test_unanchored_section_prose_is_owned_once_without_synthetic_sibling_work():
     from minecraft_mod_ai.authored_execution_schema import concern_names
 
     router = NoPlanningModelRouter()
-    text = STRICT_DESIGN
-    graph = compile_with(router, text=text, authored_schema=True)
+    graph = compile_with(router, text=STRICT_DESIGN, authored_schema=True)
     by_symbol = {node["symbol"]: node for node in graph["nodes"]}
+
     state = by_symbol["AuthoredStateModel"]
-    assert len(state["obligations"]) == len(concern_names("state_model"))
-    joined = " ".join(state["obligations"])
-    assert all(name in joined for name in concern_names("state_model"))
+    state_primary = concern_names("state_model")[0]
+    assert len(state["obligations"]) == 1
+    assert state_primary in state["obligations"][0]
+
     network = by_symbol["AuthoredAuthorityNetwork"]
-    assert len(network["obligations"]) == len(concern_names("authority_and_network"))
+    network_primary = concern_names("authority_and_network")[0]
+    assert len(network["obligations"]) == 1
+    assert network_primary in network["obligations"][0]
     assert router.calls == []
 
 
-def test_ir_leaf_carries_same_fixed_concern_sequence_into_coder_contract():
+def test_ir_leaf_preserves_primary_concern_for_unanchored_section_prose():
     from minecraft_mod_ai.authored_execution_schema import concern_names
     from minecraft_mod_ai.implementation_graph_execution import _leaf_module
 
     router = NoPlanningModelRouter()
-    text = STRICT_DESIGN
-    graph = compile_with(router, text=text, authored_schema=True)
+    graph = compile_with(router, text=STRICT_DESIGN, authored_schema=True)
     node = next(item for item in graph["nodes"] if item["symbol"] == "AuthoredStateModel")
     request = {
         "target": {"minecraft_version": "1.21.1", "loader": "fabric"},
         "package": "example",
         "mod_id": "test",
+        "structured_sections": {},
+        "structured_sections_sha256": (
+            "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        ),
     }
     leaf = _leaf_module(node, graph, request)
     concerns = leaf.config["implementation_atomic_concerns"]
-    assert [item["concern"] for item in concerns] == list(concern_names("state_model"))
+    assert [item["concern"] for item in concerns] == [concern_names("state_model")[0]]
     assert leaf.config["implementation_section"] == "state_model"
-    assert len(leaf.config["evidence_task"]["implementation_obligations"]) == len(concerns)
+    assert len(leaf.config["evidence_task"]["implementation_obligations"]) == 1
 
 
 def test_localized_canonical_headings_keep_nested_concerns_and_drop_preamble():
