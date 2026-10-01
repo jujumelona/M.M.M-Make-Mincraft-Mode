@@ -70,8 +70,6 @@ NODE_SCHEMA = {
              "resource_path": {"minLength": 1, "pattern": r"^src/main/resources/(assets|data)/[^/]+/(?!.*(?:\.\.|\\)).+\.json$"},
              "public_api": {"maxItems": 0}, "activation": {"const": False},
          }}},
-        {"if": {"properties": {"kind": {"const": "java"}, "activation": {"const": False}}},
-         "then": {"properties": {"public_api": {"minItems": 1}}}},
     ],
 }
 PAGE_SCHEMA = {
