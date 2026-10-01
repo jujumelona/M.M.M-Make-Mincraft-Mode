@@ -230,6 +230,20 @@ def test_initialize_recovery_accepts_predicted_wrapper_shapes(
     assert "void initialize()" not in admitted
 
 
+def test_initialize_recovery_accepts_logged_comment_only_wrapper_as_noop() -> None:
+    admitted = admit_initialize_region(
+        """```java
+public static void initialize() {
+    // Responsibilities: Client renders UI, Server validates economic rules.
+    // No initialization required for this concern.
+}
+```
+"""
+    )
+
+    assert admitted == ""
+
+
 def test_initialize_recovery_handles_logged_field_plus_wrapper_shape() -> None:
     admitted = admit_initialize_region(
         """
