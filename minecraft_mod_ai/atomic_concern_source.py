@@ -4470,6 +4470,16 @@ class AtomicConcernExecutor:
                 self.host_owned_concerns.add(name)
                 return host_members
 
+        repair_baseline_region = (
+            _region_content(
+                self.source,
+                concern=name,
+                region="MEMBERS",
+            )
+            if failure and response_region == "members"
+            else ""
+        )
+
         for attempt in range(1, attempt_limit + 1):
             _trace_region_generation(
                 "atomic_concern_region_attempt",
@@ -4808,14 +4818,27 @@ class AtomicConcernExecutor:
                     reason,
                 )
                 if candidate_merged:
-                    # Preserve the actual rejected source; do not ask the model to
-                    # recreate it from the original blank scaffold and an error name.
-                    rejected_region = parsed
+                    # A repair candidate that violates the frozen type structure is
+                    # not allowed to become the next correction authority. Keep the
+                    # pre-repair region as the immutable baseline so a subsequent
+                    # valid repair can remove the illegal declaration entirely.
+                    correction_source = (
+                        repair_baseline_region
+                        if (
+                            failure
+                            and repair_baseline_region
+                            and reason.startswith(
+                                "ATOMIC_CONCERN_REPAIR_STRUCTURE_ESCAPE:"
+                            )
+                        )
+                        else parsed
+                    )
+                    rejected_region = correction_source
                     if response_region == "members":
                         from .atomic_region_correction import RegionCorrection
 
                         correction = RegionCorrection.for_diagnostic(
-                            parsed,
+                            correction_source,
                             reason,
                             allow_private_restructure=(
                                 not failure

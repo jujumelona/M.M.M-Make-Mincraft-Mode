@@ -941,16 +941,28 @@ def _canonicalize_member_jdk_imports(region: str) -> str | None:
         rendered = _text(source, node).strip()
         if rendered not in imports:
             continue
-        parent = getattr(node, "parent", None)
-        if parent is not None and parent.type in {
+        fqcn = imports[rendered]
+        current = getattr(node, "parent", None)
+        qualified = False
+        while current is not None and current.type in {
             "scoped_identifier",
             "scoped_type_identifier",
+            "field_access",
+            "method_invocation",
         }:
-            scoped = _text(source, parent).strip()
-            if scoped.startswith(imports[rendered] + ".") or scoped == imports[rendered]:
-                continue
+            scoped = _text(source, current).strip()
+            if (
+                scoped == fqcn
+                or scoped.startswith(fqcn + ".")
+                or ("." + fqcn + ".") in scoped
+            ):
+                qualified = True
+                break
+            current = getattr(current, "parent", None)
+        if qualified:
+            continue
         raise JavaRegionParseError(
-            f"JDK import {imports[rendered]!r} has an unqualified use that "
+            f"JDK import {fqcn!r} has an unqualified use that "
             "cannot be safely canonicalized inside a member region"
         )
     return canonical
