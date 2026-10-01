@@ -2852,6 +2852,48 @@ def test_first_pass_tree_sitter_gate_rejects_blank_final_before_compile() -> Non
         )
 
 
+def test_local_initialized_final_rebinding_is_canonicalized_before_validation() -> None:
+    from minecraft_mod_ai.atomic_concern_source import (
+        _canonicalize_local_final_rebindings,
+        _validate_first_pass_java_semantics,
+    )
+
+    source = (
+        "private static final java.util.Map<String, Object> FAIL_CLOSED_STATE = "
+        "new java.util.HashMap<>();\n"
+        "private static void setFailClosedState(java.util.Map<String, Object> value) { "
+        "FAIL_CLOSED_STATE = value; }"
+    )
+
+    normalized, changes = _canonicalize_local_final_rebindings(source)
+
+    assert "private static final java.util.Map" not in normalized
+    assert "private static java.util.Map<String, Object> FAIL_CLOSED_STATE" in normalized
+    assert changes == ("FAIL_CLOSED_STATE:final->mutable",)
+    _validate_first_pass_java_semantics(
+        normalized,
+        dependency_source="",
+        sibling_api=(),
+    )
+
+
+def test_local_final_without_rebinding_stays_final() -> None:
+    from minecraft_mod_ai.atomic_concern_source import (
+        _canonicalize_local_final_rebindings,
+    )
+
+    source = (
+        "private static final java.util.Map<String, Object> CACHE = "
+        "new java.util.HashMap<>();\n"
+        "private static int size() { return CACHE.size(); }"
+    )
+
+    normalized, changes = _canonicalize_local_final_rebindings(source)
+
+    assert normalized == source
+    assert changes == ()
+
+
 def test_first_pass_tree_sitter_gate_rejects_final_rebinding_before_compile() -> None:
     from minecraft_mod_ai.atomic_concern_source import _validate_first_pass_java_semantics
 

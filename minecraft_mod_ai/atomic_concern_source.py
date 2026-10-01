@@ -987,6 +987,81 @@ def _canonicalize_tree_sitter_jdk_types(
     return raw.decode("utf-8"), tuple(reversed(changes))
 
 
+def _canonicalize_local_final_rebindings(
+    value: str,
+) -> tuple[str, tuple[str, ...]]:
+    """Remove final only from concern-local initialized fields that this region rebinds.
+
+    The model can emit an initialized private static final backing field together
+    with a setter that reassigns the field. Because both declaration and assignment
+    are owned by the same atomic region, the host preserves the authored rebinding
+    semantics by dropping only that local final modifier. Sibling/dependency fields
+    are never rewritten here.
+    """
+
+    source = str(value or "").strip()
+    if not source:
+        return source, ()
+
+    assigned = set(class_body_assignment_targets(source))
+    if not assigned:
+        return source, ()
+
+    chunks = class_body_chunks(source)
+    kinds = class_body_member_kinds(source)
+    if len(chunks) != len(kinds):
+        return source, ()
+
+    changes: list[str] = []
+    rendered: list[str] = []
+    for chunk, kind in zip(chunks, kinds, strict=True):
+        if kind != "field_declaration":
+            rendered.append(chunk)
+            continue
+
+        try:
+            fields = tuple(
+                row
+                for row in class_body_member_contracts(chunk)
+                if row.get("kind") == "field"
+            )
+        except JavaRegionParseError:
+            rendered.append(chunk)
+            continue
+
+        if len(fields) != 1:
+            rendered.append(chunk)
+            continue
+
+        field = fields[0]
+        symbol = str(field.get("symbol") or "").strip()
+        if (
+            not symbol
+            or symbol not in assigned
+            or field.get("final") is not True
+            or field.get("initialized") is not True
+        ):
+            rendered.append(chunk)
+            continue
+
+        normalized = re.sub(r"\bfinal\s+", "", chunk, count=1)
+        if normalized == chunk:
+            rendered.append(chunk)
+            continue
+        rendered.append(normalized)
+        changes.append(f"{symbol}:final->mutable")
+
+    normalized = "\n\n".join(
+        item.strip() for item in rendered if item.strip()
+    ).strip()
+    if changes:
+        try:
+            class_body_member_contracts(normalized)
+        except JavaRegionParseError:
+            return source, ()
+    return normalized, tuple(changes)
+
+
 def _canonicalize_generated_jdk_semantics(
     value: str,
     *,
@@ -3784,6 +3859,27 @@ def _prompt_sibling_api(
     ]
 
 
+def _concern_semantic_fields(concern: Mapping[str, Any]) -> list[str]:
+    schema = concern.get("record_schema")
+    if not isinstance(schema, Mapping):
+        return []
+    required = schema.get("required")
+    if isinstance(required, Sequence) and not isinstance(required, (str, bytes)):
+        return [
+            str(item).strip()
+            for item in required
+            if str(item).strip()
+        ]
+    properties = schema.get("properties")
+    if isinstance(properties, Mapping):
+        return [
+            str(name).strip()
+            for name in properties
+            if str(name).strip()
+        ]
+    return []
+
+
 def _messages(
     *,
     section: str,
@@ -3890,6 +3986,13 @@ def _messages(
             "sequence": concern.get("sequence"),
             "identifier": concern.get("identifier"),
             "name": name,
+            "task": str(concern.get("task") or "").strip(),
+            "rules": [
+                str(item).strip()
+                for item in concern.get("rules") or ()
+                if str(item).strip()
+            ],
+            "semantic_fields": _concern_semantic_fields(concern),
             # Planning templates describe record extraction, not runtime Java.
             # Authored requirements/records remain in task_authority; never send
             # the planner's "return the next record/done" instructions to a coder.
@@ -4187,7 +4290,7 @@ class AtomicConcernExecutor:
         dependency_repair = None
         rejected_region = ""
         attempt_limit = (
-            _region_attempt_limit()
+            _DEFAULT_REGION_ATTEMPT_LIMIT
             if self.region_attempt_limit is None
             else max(1, int(self.region_attempt_limit))
         )
@@ -4420,6 +4523,23 @@ class AtomicConcernExecutor:
                             },
                         )
                     parsed = canonical
+                    parsed, final_rebinding_changes = _canonicalize_local_final_rebindings(
+                        parsed
+                    )
+                    if final_rebinding_changes:
+                        from .root_cause_trace import emit_root_cause
+
+                        emit_root_cause(
+                            "atomic_concern_local_final_rebinding_canonicalized",
+                            stage="production",
+                            operation="atomic_concern_region",
+                            gate="first_pass_semantic_canonicalization",
+                            result="PASS",
+                            details={
+                                "concern": name,
+                                "changes": list(final_rebinding_changes),
+                            },
+                        )
                     _validate_first_pass_java_semantics(
                         parsed,
                         dependency_source=self.dependency_source,
