@@ -142,6 +142,212 @@ def _concern_has_explicit_payload(source: str, concern: str) -> bool:
         if line.strip()
     )
 
+def _nested_concern_entries(source: str, concern: str) -> list[tuple[str, str]]:
+    """Read nested Markdown key/value bullets owned by one state concern."""
+
+    block = _concern_source(source, concern)
+    if not block:
+        return []
+    entries: list[tuple[str, str]] = []
+    pattern = re.compile(
+        r"^\s*[-*+]\s+(?:`([^`]+)`|\*\*([^*]+)\*\*|__([^_]+)__|"
+        r"([A-Za-z_][A-Za-z0-9_]*))\s*:\s*(.*?)\s*$"
+    )
+    for line in block.splitlines()[1:]:
+        match = pattern.match(line)
+        if match is None:
+            continue
+        key = next((part for part in match.groups()[:4] if part), "").strip()
+        value = str(match.group(5) or "").strip()
+        if key and value:
+            entries.append((key, value))
+    return entries
+
+
+def _markdown_code_values(value: str) -> list[str]:
+    return [
+        item.strip()
+        for item in re.findall(r"`([^`]*)`", str(value or ""))
+        if item.strip()
+    ]
+
+
+def _plain_markdown_value(value: str) -> str:
+    text = re.sub(r"`([^`]*)`", r"\1", str(value or ""))
+    text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+    text = re.sub(r"__([^_]+)__", r"\1", text)
+    return " ".join(text.split()).strip()
+
+
+def _labeled_code_value(value: str, *labels: str) -> str:
+    label_pattern = "|".join(re.escape(label) for label in labels)
+    match = re.search(
+        rf"(?i)(?:{label_pattern})\s*[:=]?\s*`([^`]*)`",
+        str(value or ""),
+    )
+    return str(match.group(1) or "").strip() if match is not None else ""
+
+
+def _assignment_fragments(value: str) -> list[str]:
+    result: list[str] = []
+    for item in _markdown_code_values(value):
+        if re.search(r"(?<![=!<>])(?:\+=|-=|\*=|/=|=(?!=))", item):
+            result.append(item)
+    return result
+
+
+def _expression_fragments(value: str) -> list[str]:
+    result: list[str] = []
+    for item in _markdown_code_values(value):
+        if not re.search(r"(?:==|!=|>=|<=|>|<|&&|\|\|)", item):
+            continue
+        # Human prose frequently writes percentages as 100%, while the state DSL
+        # interprets '%' as modulo. Preserve the numeric threshold, not that typo.
+        item = re.sub(r"(?<=\d)%\b|(?<=\d)%$", "", item)
+        result.append(item)
+    return result
+
+
+def _deterministic_variable_records(source: str) -> list[dict[str, str]]:
+    records: list[dict[str, str]] = []
+    for raw_name, body in _nested_concern_entries(source, "variables"):
+        name = _stable_identifier(raw_name, fallback=f"state_{len(records) + 1}")
+        codes = _markdown_code_values(body)
+
+        owner_match = re.search(r"(?i)^(.*?)(?:\s+소유|\s+owner\b)", body)
+        owner_codes = (
+            _markdown_code_values(owner_match.group(1))
+            if owner_match is not None
+            else []
+        )
+        owner = "|".join(owner_codes) if owner_codes else (codes[0] if codes else "system")
+
+        after_owner = body[owner_match.end():] if owner_match is not None else body
+        type_codes = _markdown_code_values(after_owner)
+        type_name = type_codes[0] if type_codes else (
+            codes[1] if len(codes) > 1 else "object"
+        )
+
+        default = _labeled_code_value(body, "기본값", "default") or "null"
+        if type_name.casefold() in {"byte", "short", "int", "integer", "long"}:
+            default = re.sub(r"(?i)^([-+]?\d+)l$", r"\1", default)
+
+        domain = _labeled_code_value(body, "범위", "domain") or "any"
+        unit = _labeled_code_value(body, "단위", "unit") or "value"
+        records.append({
+            "name": name,
+            "owner": owner or "system",
+            "type": type_name or "object",
+            "unit": unit,
+            "default": default,
+            "domain": domain,
+        })
+    return records
+
+
+def _deterministic_concern_records(
+    source: str,
+    concern: str,
+    *,
+    declared_names: Sequence[str],
+) -> list[dict[str, str]]:
+    """Lower planner Markdown without depending on a model response.
+
+    Only shapes that can be mapped without inventing gameplay semantics are emitted.
+    Concerns that cannot be represented safely remain available to the bounded model
+    extractor below.
+    """
+
+    del declared_names
+    entries = _nested_concern_entries(source, concern)
+    if not entries:
+        return []
+    if concern == "variables":
+        return _deterministic_variable_records(source)
+
+    values = {key: value for key, value in entries}
+    if concern == "transitions":
+        required = ("from_state", "trigger", "guard", "mutation", "to_state")
+        if not all(name in values for name in required):
+            return []
+        guards = _expression_fragments(values["guard"])
+        mutations = _assignment_fragments(values["mutation"])
+        if not guards:
+            return []
+        return [{
+            "from_state": _plain_markdown_value(values["from_state"]),
+            "trigger": _plain_markdown_value(values["trigger"]),
+            "guard": " && ".join(f"({item})" for item in guards),
+            "mutation": "; ".join(mutations),
+            "to_state": _plain_markdown_value(values["to_state"]),
+        }]
+
+    if concern == "invariants":
+        if "condition" in values:
+            conditions = _expression_fragments(values["condition"])
+            enforcement = values.get("enforcement", values["condition"])
+        elif "condition_enforcement" in values:
+            conditions = _expression_fragments(values["condition_enforcement"])
+            enforcement = values["condition_enforcement"]
+        else:
+            return []
+        if not conditions:
+            return []
+        return [{
+            "condition": " && ".join(f"({item})" for item in conditions),
+            "enforcement": _plain_markdown_value(enforcement),
+        }]
+
+    if concern == "initialization":
+        if not all(name in values for name in ("owner", "trigger", "initial_state")):
+            return []
+        mutations = _assignment_fragments(values["initial_state"])
+        if not mutations:
+            # Variable defaults already own pure initial-value initialization. Do not
+            # manufacture assignments from prose that does not name state variables.
+            return []
+        return [{
+            "owner": _plain_markdown_value(values["owner"]),
+            "trigger": _plain_markdown_value(values["trigger"]),
+            "initial_state": "; ".join(mutations),
+        }]
+
+    if concern == "updates":
+        if not all(name in values for name in ("trigger", "mutation", "owner")):
+            return []
+        mutations = _assignment_fragments(values["mutation"])
+        if not mutations:
+            return []
+        return [{
+            "trigger": _plain_markdown_value(values["trigger"]),
+            "mutation": "; ".join(mutations),
+            "owner": _plain_markdown_value(values["owner"]),
+        }]
+
+    if concern == "cleanup":
+        if not all(name in values for name in ("event", "action", "retained_state")):
+            return []
+        mutations = _assignment_fragments(values["action"])
+        if not mutations:
+            return []
+        return [{
+            "event": _plain_markdown_value(values["event"]),
+            "action": "; ".join(mutations),
+            "retained_state": _plain_markdown_value(values["retained_state"]),
+        }]
+
+    if concern == "concurrency":
+        required = ("entry_path", "ownership", "reentrancy_rule")
+        if not all(name in values for name in required):
+            return []
+        return [{
+            name: _plain_markdown_value(values[name])
+            for name in required
+        }]
+
+    return []
+
+
 def _json_key(value: Mapping[str, Any]) -> str:
     return json.dumps(dict(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -220,6 +426,14 @@ def _generate_concern_records(
     the record cap, de-duplication, parsing, normalization, and downstream compilation.
     """
 
+    deterministic = _deterministic_concern_records(
+        source,
+        concern,
+        declared_names=declared_names,
+    )
+    if deterministic:
+        return deterministic
+
     fields = tuple(DETAIL_RECORDS["state_model"][concern].split())
     payload = {
         "stage": "production_semantic_lowering",
@@ -297,6 +511,8 @@ def _generate_concern_records(
 
     explicit_payload = _concern_has_explicit_payload(source, concern)
     if explicit_payload:
+        if _nested_concern_entries(source, concern):
+            return []
         raise ValueError(
             "PRODUCTION_STATE_LOWERING_FALSE_EMPTY: "
             f"state_model.{concern} contains authored values but extraction returned no records"
