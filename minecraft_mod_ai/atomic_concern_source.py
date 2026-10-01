@@ -54,7 +54,7 @@ _DECLARATION_ONLY_MEMBER_KINDS = frozenset(
 
 
 def _region_attempt_limit() -> int:
-    """Use one production decode by default; explicit diagnostics may opt into retries."""
+    """Read an optional override; production supplies its own correction budget."""
 
     raw = os.environ.get("MMM_ATOMIC_CONCERN_REGION_ATTEMPTS", "").strip()
     if not raw:
@@ -3617,8 +3617,9 @@ def _messages(
         "getKey() is exactly K, and getValue() is exactly V. Never treat an object/record "
         "field as a primitive, never assign "
         "to a field declared final, and never invent a sibling symbol that is not listed. "
-        "This is the production decode for this concern. It must pass host semantic validation "
-        "and compile without relying on regeneration or compiler-repair. "
+        "This candidate must pass host semantic validation and compilation. "
+        "If repair_failure or region_correction is supplied, correct the actual rejected "
+        "candidate using those diagnostics and preserve unrelated declarations. "
         "Resolve every supplied semantic/API fact before emitting source, and do not implement sibling concerns. "
         + (
             "This section is pure Java domain logic. Do not reference net.minecraft.*, "
@@ -3941,6 +3942,8 @@ class AtomicConcernExecutor:
         name = _slug(concern["concern"])
         seen_violations: set[tuple[str, str]] = set()
         repair_failure = failure
+        correction = None
+        rejected_region = ""
         attempt_limit = (
             _region_attempt_limit()
             if self.region_attempt_limit is None
@@ -4038,10 +4041,12 @@ class AtomicConcernExecutor:
             )
             output_text = ""
             output_sha = ""
+            parsed = ""
+            candidate_merged = False
             try:
                 from .atomic_region_paging import generate_region
 
-                output = generate_region(self.call_coder, _messages(
+                messages = _messages(
                     section=self.section,
                     concern=concern,
                     task=self.task,
@@ -4056,13 +4061,32 @@ class AtomicConcernExecutor:
                         if _slug(item["concern"]) != name
                     ),
                     host_symbol=self.symbol,
-                ))
+                )
+                if rejected_region:
+                    payload = json.loads(messages[-1]["content"])
+                    payload["current_selected_region_source"] = rejected_region
+                    if correction is not None:
+                        payload["region_correction"] = correction.payload()
+                        # The immutable declarations already have their own exact
+                        # context; avoid sending the same full region twice.
+                        payload["current_selected_region_source"] = "\n\n".join(
+                            payload["region_correction"]["selected_declarations"]
+                        )
+                        messages[0]["content"] += (
+                            "\nCORRECTION TURN: region_correction narrows this response to "
+                            "the listed selected declarations. The host retains all others."
+                        )
+                    messages[-1]["content"] = json.dumps(payload, ensure_ascii=False)
+                output = generate_region(self.call_coder, messages)
                 output_text = str(output or "")
                 output_sha = hashlib.sha256(output_text.encode("utf-8")).hexdigest()
                 parsed = _parse_region_content(
                     output,
                     response_region=response_region,
                 )
+                if correction is not None:
+                    parsed = correction.merge(parsed)
+                candidate_merged = True
                 parsed, lifecycle_changes = (
                     _strip_host_orchestrated_dependency_lifecycle_calls(
                         parsed,
@@ -4269,6 +4293,17 @@ class AtomicConcernExecutor:
                 else:
                     self.first_pass_rejections += 1
 
+                if candidate_merged:
+                    # Preserve the actual rejected source; do not ask the model to
+                    # recreate it from the original blank scaffold and an error name.
+                    rejected_region = parsed
+                    if response_region == "members":
+                        from .atomic_region_correction import RegionCorrection
+
+                        correction = RegionCorrection.for_diagnostic(parsed, reason)
+                elif not rejected_region:
+                    rejected_region = output_text
+
                 declaration_only_rule = (
                     " This concern is declaration-only: emit fields and/or private nested "
                     "data types only; outer methods are forbidden."
@@ -4279,7 +4314,8 @@ class AtomicConcernExecutor:
                 validation_failure = (
                     "HOST REGION VALIDATION FAILED BEFORE COMPILATION:\n"
                     + reason
-                    + f"\nRegenerate only the {response_region} region."
+                    + f"\nCorrect only the rejected {response_region} candidate shown in current_selected_region_source."
+                    + " When region_correction is present, emit only its selected declarations."
                     + declaration_only_rule
                     + " Do not emit response markers, prose, package/import/top-level/lifecycle declarations. "
                     "Do not introduce, rename, or change the kind of nested types during bounded regeneration. "

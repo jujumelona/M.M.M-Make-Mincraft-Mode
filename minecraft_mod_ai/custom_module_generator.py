@@ -2193,7 +2193,7 @@ def _run_atomic_ir_generation(
         require_initialize=context.require_initialize,
         # AtomicConcernExecutor already owns the concern boundary, sibling
         # declaration inventory, scope validation, and compile admission. Production
-        # is first-pass only; do not put a second syntax-level JavaStructureAssembly between
+        # uses bounded diagnostic correction; do not put a syntax-level JavaStructureAssembly between
         # that host contract and the coder: scalar slots such as type/modifier/body
         # are exactly what caused valid Java intent to be misrouted across schema
         # fields (for example type="final"). The coder emits one complete,
@@ -2212,9 +2212,10 @@ def _run_atomic_ir_generation(
         compile_java=compile_java,
         compile_log=_compile_log,
         write_source=write_atomic_source,
-        # Production is fail-fast regardless of diagnostic environment variables.
-        # One concern decode, one assembled-source compile, no model repair loop.
-        region_attempt_limit=1,
+        # Keep accepted siblings fixed. A rejected candidate gets at most two
+        # diagnostic-owned corrections, with identical-output detection. This is
+        # source admission, including when the graph defers its real compilation.
+        region_attempt_limit=3,
         compile_repair_limit=0,
     )
 
