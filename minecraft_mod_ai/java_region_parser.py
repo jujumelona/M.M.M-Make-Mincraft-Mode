@@ -10,6 +10,7 @@ from __future__ import annotations
 from threading import local
 from typing import Any
 
+import re
 import tree_sitter_java
 from markdown_it import MarkdownIt
 from tree_sitter import Language, Parser
@@ -681,6 +682,111 @@ def _model_java_candidates(value: str) -> tuple[str, ...]:
     return tuple(ordered)
 
 
+
+_EXPLICIT_JDK_IMPORT = re.compile(
+    r"import\s+(java\.[A-Za-z_$][A-Za-z0-9_$]*"
+    r"(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+)\s*;"
+)
+
+
+def _split_leading_jdk_imports(
+    region: str,
+) -> tuple[str, dict[str, str]] | None:
+    """Detach explicit leading java.* imports from a model-authored member region."""
+    lines = str(region or "").splitlines(keepends=True)
+    imports: dict[str, str] = {}
+    import_lines: set[int] = set()
+    saw_import = False
+
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("//"):
+            continue
+        match = _EXPLICIT_JDK_IMPORT.fullmatch(stripped)
+        if match is not None:
+            fqcn = match.group(1)
+            simple = fqcn.rsplit(".", 1)[-1]
+            existing = imports.get(simple)
+            if existing is not None and existing != fqcn:
+                raise JavaRegionParseError(
+                    f"ambiguous JDK imports for simple type {simple!r}: "
+                    f"{existing!r} and {fqcn!r}"
+                )
+            imports[simple] = fqcn
+            import_lines.add(index)
+            saw_import = True
+            continue
+        if stripped.startswith("import "):
+            raise JavaRegionParseError(
+                "member-region imports must be explicit non-static java.* imports"
+            )
+        break
+
+    if not saw_import:
+        return None
+
+    body = "".join(
+        line for index, line in enumerate(lines) if index not in import_lines
+    ).strip()
+    if not body:
+        raise JavaRegionParseError(
+            "member-region imports were present without any class-body members"
+        )
+    return body, imports
+
+
+def _qualify_imported_jdk_names(
+    region: str,
+    imports: dict[str, str],
+) -> str:
+    """Rewrite imported JDK class references to FQCNs using Tree-sitter spans."""
+    candidate = str(region or "").strip()
+    prefix = "final class __MMMRegionHost {\n"
+    prefix_size = len(prefix.encode("utf-8"))
+    region_bytes = candidate.encode("utf-8")
+    source, root = _parse(prefix + candidate + "\n}\n")
+    body = _class_body(root)
+    edits: list[tuple[int, int, str]] = []
+
+    for node in _walk_named(body):
+        rendered = _text(source, node).strip()
+        replacement = imports.get(rendered)
+        if replacement is None:
+            continue
+
+        replace = node.type == "type_identifier"
+        if node.type == "identifier":
+            parent = getattr(node, "parent", None)
+            if parent is not None and parent.type in {
+                "method_invocation",
+                "field_access",
+            }:
+                replace = parent.child_by_field_name("object") is node
+        if not replace:
+            continue
+
+        start = int(node.start_byte) - prefix_size
+        end = int(node.end_byte) - prefix_size
+        if start < 0 or end > len(region_bytes) or start >= end:
+            continue
+        edits.append((start, end, replacement))
+
+    encoded = region_bytes
+    for start, end, replacement in sorted(edits, reverse=True):
+        encoded = encoded[:start] + replacement.encode("utf-8") + encoded[end:]
+    return encoded.decode("utf-8")
+
+
+def _canonicalize_member_jdk_imports(region: str) -> str | None:
+    split = _split_leading_jdk_imports(region)
+    if split is None:
+        return None
+    body, imports = split
+    canonical = _qualify_imported_jdk_names(body, imports)
+    _parse("final class __MMMRegionHost {\n" + canonical + "\n}\n")
+    return canonical
+
+
 def _host_initialize_only_member_candidate(region: str) -> bool:
     """Return whether a valid class-body candidate contains only host initialize()."""
     candidate = str(region or "").strip()
@@ -712,6 +818,18 @@ def _admit_member_candidate(region: str) -> tuple[str, ...]:
             return chunks
     except JavaRegionParseError:
         pass
+
+    try:
+        canonical = _canonicalize_member_jdk_imports(candidate)
+        if canonical is not None:
+            source, root = _parse(prefix + canonical + "\n}\n")
+            body = _class_body(root)
+            chunks = _chunks_from_body(body, source, drop_host_lifecycle=True)
+            if chunks:
+                return chunks
+    except JavaRegionParseError:
+        pass
+
     return _unwrap_single_outer_class(candidate)
 
 

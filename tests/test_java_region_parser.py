@@ -59,6 +59,58 @@ public final class AccidentalOuter {
     assert "private static boolean valid(int value)" in admitted
 
 
+
+def test_tree_sitter_canonicalizes_leading_jdk_imports_in_member_region() -> None:
+    source = (
+        "import java.util.Map;\n"
+        "import java.util.HashMap;\n"
+        "import java.util.List;\n"
+        "import java.util.ArrayList;\n"
+        "import java.util.concurrent.atomic.AtomicReference;\n"
+        "import java.util.concurrent.locks.ReentrantLock;\n\n"
+        "private static final AtomicReference<String> RETAINED_STATE = new AtomicReference<>();\n"
+        "private static final ReentrantLock LOCK = new ReentrantLock();\n"
+        "private static final Map<String, Object> CHECKPOINT_DATA = new HashMap<>();\n"
+        "public static List<String> snapshot(Map<String, Object> context) {\n"
+        "    return new ArrayList<>();\n"
+        "}"
+    )
+
+    admitted = admit_member_region(source)
+
+    assert "import java." not in admitted
+    assert "java.util.concurrent.atomic.AtomicReference<String>" in admitted
+    assert "new java.util.concurrent.atomic.AtomicReference<>()" in admitted
+    assert "java.util.concurrent.locks.ReentrantLock" in admitted
+    assert "java.util.Map<String, Object>" in admitted
+    assert "new java.util.HashMap<>()" in admitted
+    assert "java.util.List<String> snapshot(java.util.Map<String, Object> context)" in admitted
+    assert "new java.util.ArrayList<>()" in admitted
+
+
+def test_tree_sitter_qualifies_imported_jdk_static_class_receiver() -> None:
+    admitted = admit_member_region(
+        "import java.util.Objects;\n"
+        "private static boolean same(Object left, Object right) { "
+        "return Objects.equals(left, right); }"
+    )
+    assert "java.util.Objects.equals(left, right)" in admitted
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import java.util.*;\nprivate static Map<String, Object> cache;",
+        "import static java.util.Collections.emptyList;\n"
+        "private static Object value() { return emptyList(); }",
+        "import com.example.Widget;\nprivate static Widget widget;",
+    ],
+)
+def test_tree_sitter_rejects_ambiguous_or_non_jdk_member_imports(source: str) -> None:
+    with pytest.raises(JavaRegionParseError):
+        admit_member_region(source)
+
+
 def test_tree_sitter_can_treat_host_initialize_only_as_empty_when_explicitly_allowed() -> None:
     source = """```java
 public static void initialize() {
