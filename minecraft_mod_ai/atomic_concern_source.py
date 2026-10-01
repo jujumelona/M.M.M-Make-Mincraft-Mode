@@ -1412,8 +1412,13 @@ def _parse_region_content(
         )
     except JavaRegionParseError as exc:
         region = "initialize body" if initialize_region else "concern members"
+        prefix = (
+            "ATOMIC_CONCERN_SCOPE_ESCAPE"
+            if getattr(exc, "category", "syntax") == "scope"
+            else "ATOMIC_CONCERN_RESPONSE_INVALID"
+        )
         raise CustomModuleGenerationError(
-            f"ATOMIC_CONCERN_SCOPE_ESCAPE: {region} could not be admitted by the Java parser: {exc}"
+            f"{prefix}: {region} could not be admitted by the Java parser: {exc}"
         ) from exc
     _validate_region_text(value, initialize_region=initialize_region)
     return value

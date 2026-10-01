@@ -88,6 +88,19 @@ def test_tree_sitter_canonicalizes_leading_jdk_imports_in_member_region() -> Non
     assert "new java.util.ArrayList<>()" in admitted
 
 
+def test_java_region_failure_categories_separate_syntax_from_scope() -> None:
+    with pytest.raises(JavaRegionParseError) as syntax:
+        admit_member_region(
+            "private static final java.util.Map<String, Object> CACHE;\n"
+            "private static { CACHE = new java.util.HashMap<>(); }"
+        )
+    assert syntax.value.category == "syntax"
+
+    with pytest.raises(JavaRegionParseError) as scope:
+        admit_member_region("package escaped;")
+    assert scope.value.category == "scope"
+
+
 def test_tree_sitter_rejects_raw_package_declaration_as_member_structure() -> None:
     with pytest.raises(JavaRegionParseError, match="package declaration"):
         admit_member_region("package escaped;")

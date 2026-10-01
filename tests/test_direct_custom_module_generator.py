@@ -1097,6 +1097,61 @@ def test_atomic_compile_failure_is_terminal_without_model_retry(
     assert compiles == 1
 
 
+def test_production_retries_java_syntax_failure_but_not_scope_escape(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root, path, symbol = _project(tmp_path)
+    responses = iter([
+        (
+            "private static final java.util.Map<String, Object> CACHE;\n"
+            "private static { CACHE = new java.util.HashMap<>(); }"
+        ),
+        (
+            "private static final java.util.Map<String, Object> CACHE = "
+            "new java.util.HashMap<>();"
+        ),
+    ])
+    calls = 0
+    compiles = 0
+
+    class Router:
+        def generate_text(self, role, messages, **kwargs):
+            nonlocal calls
+            assert role == "coder"
+            assert kwargs.get("tool_stage") == "atomic_java"
+            calls += 1
+            return next(responses)
+
+        def generate_tool_decision(self, *_args, **_kwargs):
+            raise AssertionError("production concern generation must use complete Java regions")
+
+    class Runner:
+        def __init__(self, _cache):
+            pass
+
+        def compile_java(self, project_root):
+            nonlocal compiles
+            compiles += 1
+            source = (project_root / path).read_text(encoding="utf-8")
+            assert "private static {" not in source
+            assert "new java.util.HashMap<>()" in source
+            return SimpleNamespace(status="PASS", commands=(), error=None)
+
+    monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
+    monkeypatch.setattr(direct, "GradleRunner", Runner)
+
+    result = direct.CustomModuleGenerator(Router()).generate(
+        root,
+        module=_single_atomic_module(path, symbol),
+        minecraft_version="1.21.1",
+        loader="fabric",
+    )
+
+    assert calls == 2
+    assert compiles == 1
+    assert result["generation_verification"]["atomic_first_pass_rejection_count"] == 1
+
+
 def test_production_atomic_response_failure_ignores_diagnostic_retry_env(
     tmp_path: Path, monkeypatch
 ) -> None:

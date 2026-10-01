@@ -28,6 +28,14 @@ from .java_generation_policy import (
 class JavaRegionParseError(ValueError):
     """A Java region could not be safely admitted into the host-owned scaffold."""
 
+    def __init__(self, message: str, *, category: str = "syntax") -> None:
+        super().__init__(message)
+        self.category = "scope" if category == "scope" else "syntax"
+
+
+def _scope_error(message: str) -> JavaRegionParseError:
+    return JavaRegionParseError(message, category="scope")
+
 
 _JAVA = Language(tree_sitter_java.language())
 _THREAD = local()
@@ -114,19 +122,19 @@ def _is_host_initialize(node: Any, source: bytes) -> bool:
 
 def _validate_member_node(node: Any, source: bytes) -> None:
     if node.type in _HOST_OWNED_MEMBER_TYPES:
-        raise JavaRegionParseError(
+        raise _scope_error(
             f"host-owned lifecycle member {node.type!r} is not admissible in a concern region"
         )
     if node.type not in _MEMBER_TYPES:
-        raise JavaRegionParseError(
+        raise _scope_error(
             f"Java class-body node {node.type!r} is not an admissible concern member"
         )
     if node.type in _NESTED_TYPES and "private" not in _modifiers(node, source):
-        raise JavaRegionParseError(
+        raise _scope_error(
             f"nested type {_name(node, source)!r} must be private because outer type ownership is host-owned"
         )
     if _is_host_initialize(node, source):
-        raise JavaRegionParseError(
+        raise _scope_error(
             "static void initialize() is host-owned lifecycle structure and cannot be declared by a concern"
         )
 
@@ -641,7 +649,7 @@ def _unwrap_single_outer_class(value: str) -> tuple[str, ...]:
     if issue:
         raise JavaRegionParseError(f"outer-class envelope is malformed: {issue}")
     if "private" in _modifiers(outer, source):
-        raise JavaRegionParseError(
+        raise _scope_error(
             "a private top-level class cannot be treated as an accidental host wrapper"
         )
     body = outer.child_by_field_name("body")
@@ -660,14 +668,14 @@ def _unwrap_single_outer_class(value: str) -> tuple[str, ...]:
         rendered = _text(source, node).strip()
         match = _EXPLICIT_JDK_IMPORT.fullmatch(rendered)
         if match is None or not member_jdk_import_allowed(match.group(1)):
-            raise JavaRegionParseError(
+            raise _scope_error(
                 "outer-class member recovery only admits explicit java.* imports"
             )
         fqcn = match.group(1)
         simple = fqcn.rsplit(".", 1)[-1]
         existing = imports.get(simple)
         if existing is not None and existing != fqcn:
-            raise JavaRegionParseError(
+            raise _scope_error(
                 f"ambiguous JDK imports for simple type {simple!r}"
             )
         imports[simple] = fqcn
@@ -742,13 +750,13 @@ def _split_leading_jdk_imports(
         if match is not None:
             fqcn = match.group(1)
             if not member_jdk_import_allowed(fqcn):
-                raise JavaRegionParseError(
+                raise _scope_error(
                     f"member-region JDK import is not allowed by production policy: {fqcn!r}"
                 )
             simple = fqcn.rsplit(".", 1)[-1]
             existing = imports.get(simple)
             if existing is not None and existing != fqcn:
-                raise JavaRegionParseError(
+                raise _scope_error(
                     f"ambiguous JDK imports for simple type {simple!r}: "
                     f"{existing!r} and {fqcn!r}"
                 )
@@ -757,7 +765,7 @@ def _split_leading_jdk_imports(
             saw_import = True
             continue
         if stripped.startswith("import "):
-            raise JavaRegionParseError(
+            raise _scope_error(
                 "member-region imports must be explicit non-static java.* imports"
             )
         break
@@ -967,7 +975,7 @@ def _raw_compilation_unit_envelope_kinds(region: str) -> frozenset[str]:
 
 
 def _admit_member_candidate(region: str) -> tuple[str, ...]:
-    """Admit one candidate Java payload; host-owned lifecycle nodes are discarded."""
+    """Admit one candidate and preserve syntax-vs-scope failure identity."""
     candidate = str(region or "").strip()
     if not candidate:
         return ()
@@ -982,6 +990,7 @@ def _admit_member_candidate(region: str) -> tuple[str, ...]:
             "record_declaration",
         }
     )
+    syntax_failure: JavaRegionParseError | None = None
 
     # A package/import/type envelope is compilation-unit structure, never a class
     # member. Do not feed it through the class-body parser where tolerant parsing
@@ -994,11 +1003,13 @@ def _admit_member_candidate(region: str) -> tuple[str, ...]:
             chunks = _chunks_from_body(body, source, drop_host_lifecycle=True)
             if chunks:
                 return chunks
-        except JavaRegionParseError:
-            pass
+        except JavaRegionParseError as exc:
+            if exc.category == "scope":
+                raise
+            syntax_failure = exc
 
     if "package_declaration" in envelope_kinds and not has_outer_type:
-        raise JavaRegionParseError(
+        raise _scope_error(
             "package declaration is compilation-unit structure and cannot be a concern member"
         )
 
@@ -1011,10 +1022,18 @@ def _admit_member_candidate(region: str) -> tuple[str, ...]:
                 chunks = _chunks_from_body(body, source, drop_host_lifecycle=True)
                 if chunks:
                     return chunks
-        except JavaRegionParseError:
-            pass
+        except JavaRegionParseError as exc:
+            if exc.category == "scope":
+                raise
+            if syntax_failure is None:
+                syntax_failure = exc
 
-    return _unwrap_single_outer_class(candidate)
+    try:
+        return _unwrap_single_outer_class(candidate)
+    except JavaRegionParseError as exc:
+        if syntax_failure is not None and exc.category != "scope":
+            raise syntax_failure
+        raise
 
 
 def admit_member_region(
@@ -1027,7 +1046,7 @@ def admit_member_region(
     if not candidates:
         return ""
 
-    errors: list[str] = []
+    errors: list[JavaRegionParseError] = []
     for candidate in candidates:
         if (
             allow_host_initialize_only_empty
@@ -1039,14 +1058,19 @@ def admit_member_region(
             if chunks:
                 return "\n\n".join(chunks).strip()
         except JavaRegionParseError as exc:
-            errors.append(str(exc))
+            errors.append(exc)
 
     detail = (
         f"{len(candidates)} model Java candidate(s) were structurally inadmissible"
     )
     if errors:
         detail += f"; last candidate error: {errors[-1]}"
-    raise JavaRegionParseError(detail)
+    category = (
+        "syntax"
+        if any(exc.category == "syntax" for exc in errors)
+        else "scope"
+    )
+    raise JavaRegionParseError(detail, category=category)
 
 
 def strict_initialize_statements(value: str) -> tuple[str, ...]:
@@ -1071,7 +1095,7 @@ def strict_initialize_statements(value: str) -> tuple[str, ...]:
         if node.type in _COMMENT_TYPES:
             continue
         if node.type in _NESTED_TYPES:
-            raise JavaRegionParseError(
+            raise _scope_error(
                 f"initialize body cannot declare local type {_name(node, source)!r}"
             )
         rendered = _text(source, node).strip()
