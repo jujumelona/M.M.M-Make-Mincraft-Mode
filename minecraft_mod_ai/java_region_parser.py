@@ -644,6 +644,23 @@ def _model_java_candidates(value: str) -> tuple[str, ...]:
     return tuple(ordered)
 
 
+def _host_initialize_only_member_candidate(region: str) -> bool:
+    """Return whether a valid class-body candidate contains only host initialize()."""
+    candidate = str(region or "").strip()
+    if not candidate:
+        return False
+    prefix = "final class __MMMRegionHost {\n"
+    try:
+        source, root = _parse(prefix + candidate + "\n}\n")
+        body = _class_body(root)
+    except JavaRegionParseError:
+        return False
+    nodes = tuple(
+        node for node in body.named_children if node.type not in _COMMENT_TYPES
+    )
+    return bool(nodes) and all(_is_host_initialize(node, source) for node in nodes)
+
+
 def _admit_member_candidate(region: str) -> tuple[str, ...]:
     """Admit one candidate Java payload; host-owned lifecycle nodes are discarded."""
     candidate = str(region or "").strip()
@@ -661,7 +678,11 @@ def _admit_member_candidate(region: str) -> tuple[str, ...]:
     return _unwrap_single_outer_class(candidate)
 
 
-def admit_member_region(value: str) -> str:
+def admit_member_region(
+    value: str,
+    *,
+    allow_host_initialize_only_empty: bool = False,
+) -> str:
     """Normalize arbitrary model output into host-admissible Java members."""
     candidates = _model_java_candidates(value)
     if not candidates:
@@ -669,6 +690,11 @@ def admit_member_region(value: str) -> str:
 
     errors: list[str] = []
     for candidate in candidates:
+        if (
+            allow_host_initialize_only_empty
+            and _host_initialize_only_member_candidate(candidate)
+        ):
+            return ""
         try:
             chunks = _admit_member_candidate(candidate)
             if chunks:

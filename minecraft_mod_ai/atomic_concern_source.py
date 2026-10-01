@@ -1217,7 +1217,13 @@ def _project_declaration_only_members(value: str) -> tuple[str, tuple[str, ...]]
     return projected, dropped
 
 
-def _parse_region_content(text: str, *, response_region: str) -> str:
+def _parse_region_content(
+    text: str,
+    *,
+    response_region: str,
+    allow_inert_empty: bool = False,
+    allow_host_initialize_only_empty: bool = False,
+) -> str:
     """Admit one host-selected region through Markdown and Java parsers in order."""
     raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
     exact_markers = {
@@ -1235,9 +1241,9 @@ def _parse_region_content(text: str, *, response_region: str) -> str:
         )
 
     # Java envelope handling is centralized in java_region_parser for both
-    # member and initialize regions. Legacy normalization is used only to decide
-    # whether an initialize response is semantically empty.
-    if initialize_region and _is_inert_empty_region(
+    # member and initialize regions. Integration members may be intentionally
+    # empty because their executable lifecycle work is generated separately.
+    if (initialize_region or allow_inert_empty) and _is_inert_empty_region(
         _normalize_region_text(raw_value)
     ):
         return ""
@@ -1245,7 +1251,10 @@ def _parse_region_content(text: str, *, response_region: str) -> str:
         value = (
             admit_initialize_region(raw_value)
             if initialize_region
-            else admit_member_region(raw_value)
+            else admit_member_region(
+                raw_value,
+                allow_host_initialize_only_empty=allow_host_initialize_only_empty,
+            )
         )
     except JavaRegionParseError as exc:
         region = "initialize body" if initialize_region else "concern members"
@@ -3596,6 +3605,13 @@ def _messages(
                 "only purpose is to invoke another class lifecycle. Encode the authored runtime "
                 "data requirements in task_authority as data declarations in this region."
             )
+        if str(section or "").strip() == "integration":
+            response_contract += (
+                " Initialization statements are generated in a separate host-owned initialize "
+                "region. Never emit an initialize() wrapper in members. If this concern needs no "
+                "class-body declarations or helper methods, return exactly "
+                "'// no members required'."
+            )
     elif response_region == "initialize":
         response_contract = (
             "Return only compile-ready Java statements or balanced control-flow blocks that belong "
@@ -4090,9 +4106,16 @@ class AtomicConcernExecutor:
                 )
                 output_text = str(output or "")
                 output_sha = hashlib.sha256(output_text.encode("utf-8")).hexdigest()
+                allow_integration_empty_members = (
+                    response_region == "members"
+                    and self.require_initialize
+                    and str(self.section or "").strip() == "integration"
+                )
                 parsed = _parse_region_content(
                     output,
                     response_region=response_region,
+                    allow_inert_empty=allow_integration_empty_members,
+                    allow_host_initialize_only_empty=allow_integration_empty_members,
                 )
                 if correction is not None:
                     parsed = correction.merge(parsed)

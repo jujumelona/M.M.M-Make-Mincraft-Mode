@@ -58,6 +58,20 @@ public final class AccidentalOuter {
     assert "private static boolean valid(int value)" in admitted
 
 
+def test_tree_sitter_can_treat_host_initialize_only_as_empty_when_explicitly_allowed() -> None:
+    source = """```java
+public static void initialize() {
+    AuthoredResourcesUi.initializeState("entry_points", java.util.Map.of());
+}
+```"""
+    assert admit_member_region(
+        source,
+        allow_host_initialize_only_empty=True,
+    ) == ""
+    with pytest.raises(JavaRegionParseError):
+        admit_member_region(source)
+
+
 def test_tree_sitter_keeps_private_nested_runtime_type() -> None:
     admitted = admit_member_region(
         "private static final class ActorState { private int value; }"

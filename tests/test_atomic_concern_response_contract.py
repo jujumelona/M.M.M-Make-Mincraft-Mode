@@ -109,6 +109,37 @@ def test_integration_members_and_initialize_are_generated_as_separate_regions() 
     assert "registerThing();" in result["source"]
 
 
+def test_integration_members_accept_misrouted_host_initialize_and_continue_to_initialize_region() -> None:
+    executor = _executor(
+        [
+            """```java
+public static void initialize() {
+    AuthoredResourcesUi.initializeState("entry_points", java.util.Map.of());
+}
+```""",
+            "registerThing();",
+        ],
+        section="integration",
+        require_initialize=True,
+    )
+    result = executor.run()
+    assert 'AuthoredResourcesUi.initializeState("entry_points"' not in result["source"]
+    assert "registerThing();" in result["source"]
+
+
+def test_integration_members_can_be_intentionally_empty_before_initialize_region() -> None:
+    executor = _executor(
+        [
+            "// no members required",
+            "registerThing();",
+        ],
+        section="integration",
+        require_initialize=True,
+    )
+    result = executor.run()
+    assert "registerThing();" in result["source"]
+
+
 def test_inert_initialize_answer_becomes_empty_region() -> None:
     executor = _executor(
         [
