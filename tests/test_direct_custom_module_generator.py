@@ -1030,14 +1030,16 @@ def test_atomic_first_candidate_canonicalizes_jdk_lock_semantics_before_compile(
     assert compiles == 1
 
 
-def test_atomic_compile_failure_is_terminal_without_model_retry(
+def test_production_compile_failure_is_repaired_with_compiler_feedback(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.setenv("MMM_ATOMIC_CONCERN_REGION_ATTEMPTS", "4")
-    monkeypatch.setenv("MMM_ATOMIC_CONCERN_COMPILE_REPAIRS", "4")
     root, path, symbol = _project(tmp_path)
     calls: list[str] = []
     compiles = 0
+    responses = iter([
+        "private static int value = missingSymbol;",
+        "private static int value = 1;",
+    ])
 
     class Router:
         def generate_text(self, role, messages, **kwargs):
@@ -1048,7 +1050,7 @@ def test_atomic_compile_failure_is_terminal_without_model_retry(
             payload = json.loads(messages[-1]["content"])
             concern = payload["concern"]["name"]
             calls.append(concern)
-            return "private static int value = missingSymbol;"
+            return next(responses)
 
         def generate_tool_decision(self, *_args, **_kwargs):
             raise AssertionError("production concern generation must not use scalar Java tools")
@@ -1061,6 +1063,8 @@ def test_atomic_compile_failure_is_terminal_without_model_retry(
             nonlocal compiles
             compiles += 1
             source = (project_root / path).read_text(encoding="utf-8")
+            if "missingSymbol" not in source:
+                return SimpleNamespace(status="PASS", commands=(), error=None)
             line = next(
                 index for index, text in enumerate(source.splitlines(), start=1)
                 if "missingSymbol" in text
@@ -1080,21 +1084,19 @@ def test_atomic_compile_failure_is_terminal_without_model_retry(
     monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
     monkeypatch.setattr(direct, "GradleRunner", Runner)
 
-    with pytest.raises(
-        direct.CustomModuleGenerationError,
-        match="ATOMIC_CONCERN_FIRST_PASS_COMPILE_FAILED",
-    ):
-        direct.CustomModuleGenerator(Router()).generate(
-            root,
-            module=_single_atomic_module(path, symbol),
-            minecraft_version="1.21.1",
-            loader="fabric",
-        )
+    result = direct.CustomModuleGenerator(Router()).generate(
+        root,
+        module=_single_atomic_module(path, symbol),
+        minecraft_version="1.21.1",
+        loader="fabric",
+    )
 
     source = (root / path).read_text(encoding="utf-8")
     assert "missingSymbol" not in source
-    assert calls == ["steps"]
-    assert compiles == 1
+    assert "private static int value = 1;" in source
+    assert calls == ["steps", "steps"]
+    assert compiles == 2
+    assert result["generation_verification"]["atomic_repair_count"] == 1
 
 
 def test_production_retries_java_syntax_failure_but_not_scope_escape(
@@ -1152,13 +1154,15 @@ def test_production_retries_java_syntax_failure_but_not_scope_escape(
     assert result["generation_verification"]["atomic_first_pass_rejection_count"] == 1
 
 
-def test_production_atomic_response_failure_ignores_diagnostic_retry_env(
+def test_production_scope_escape_gets_bounded_semantic_retry(
     tmp_path: Path, monkeypatch
 ) -> None:
-    monkeypatch.setenv("MMM_ATOMIC_CONCERN_REGION_ATTEMPTS", "4")
-    monkeypatch.setenv("MMM_ATOMIC_CONCERN_COMPILE_REPAIRS", "4")
     root, path, symbol = _project(tmp_path)
     calls = 0
+    responses = iter([
+        "package escaped;",
+        "private static int value = 1;",
+    ])
 
     class Router:
         def generate_text(self, role, messages, **kwargs):
@@ -1166,7 +1170,7 @@ def test_production_atomic_response_failure_ignores_diagnostic_retry_env(
             assert role == "coder"
             assert kwargs.get("tool_stage") == "atomic_java"
             calls += 1
-            return "package escaped;"
+            return next(responses)
 
         def generate_tool_decision(self, *_args, **_kwargs):
             raise AssertionError("production concern generation must not use scalar Java tools")
@@ -1175,24 +1179,24 @@ def test_production_atomic_response_failure_ignores_diagnostic_retry_env(
         def __init__(self, _cache):
             pass
 
-        def compile_java(self, _project_root):
-            raise AssertionError("host-invalid atomic output must fail before compile")
+        def compile_java(self, project_root):
+            source = (project_root / path).read_text(encoding="utf-8")
+            assert "package escaped;" not in source
+            assert "private static int value = 1;" in source
+            return SimpleNamespace(status="PASS", commands=(), error=None)
 
     monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
     monkeypatch.setattr(direct, "GradleRunner", Runner)
 
-    with pytest.raises(
-        direct.CustomModuleGenerationError,
-        match="ATOMIC_CONCERN_FIRST_PASS_RESPONSE_INVALID",
-    ):
-        direct.CustomModuleGenerator(Router()).generate(
-            root,
-            module=_single_atomic_module(path, symbol),
-            minecraft_version="1.21.1",
-            loader="fabric",
-        )
+    result = direct.CustomModuleGenerator(Router()).generate(
+        root,
+        module=_single_atomic_module(path, symbol),
+        minecraft_version="1.21.1",
+        loader="fabric",
+    )
 
-    assert calls == 1
+    assert calls == 2
+    assert result["generation_verification"]["atomic_first_pass_rejection_count"] == 1
 
 
 def test_nonintegration_atomic_concern_cannot_write_initialize_body() -> None:

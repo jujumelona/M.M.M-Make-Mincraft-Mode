@@ -195,14 +195,26 @@ def test_authority_named_public_nested_type_is_lowered_to_private() -> None:
     assert "private static final class ShipSyncPacket" in admitted
 
 
-def test_public_nested_type_visibility_is_host_canonicalized_without_symbol_hint() -> None:
+def test_unapproved_direct_public_nested_type_still_fails_scope_policy() -> None:
+    with pytest.raises(JavaRegionParseError, match="must be private"):
+        admit_member_region(
+            "public static final class InventedPacket {}",
+            canonical_private_nested_symbols=("ShipSyncPacket",),
+        )
+
+
+def test_accidental_outer_wrapper_can_lower_unlisted_inner_visibility() -> None:
     admitted = admit_member_region(
-        "public static final class InventedPacket {}",
-        canonical_private_nested_symbols=("ShipSyncPacket",),
+        """
+public final class AccidentalOuter {
+    public static final class ShipFuelCalculationException extends RuntimeException {}
+}
+"""
     )
 
-    assert "public static final class InventedPacket" not in admitted
-    assert "private static final class InventedPacket" in admitted
+    assert "class AccidentalOuter" not in admitted
+    assert "public static final class ShipFuelCalculationException" not in admitted
+    assert "private static final class ShipFuelCalculationException" in admitted
 
 
 def test_tree_sitter_keeps_private_nested_runtime_type() -> None:

@@ -144,6 +144,7 @@ def _canonical_private_nested_chunk(
     source: bytes,
     *,
     authorized_symbols: frozenset[str],
+    canonicalize_unlisted_visibility: bool = False,
 ) -> str:
     """Canonicalize explicit nested-type visibility to the host-owned private scope.
 
@@ -161,11 +162,10 @@ def _canonical_private_nested_chunk(
         _validate_member_node(node, source)
         return rendered
 
-    # The outer type is host-owned, therefore nested public/protected visibility
-    # is never semantically authoritative. Canonicalize it before strict admission.
-    # Keep authorized_symbols in the signature for compatibility with callers; symbol
-    # ownership is enforced by the higher-level concern contract, not by visibility.
-    _ = authorized_symbols
+    name = _name(node, source)
+    if name not in authorized_symbols and not canonicalize_unlisted_visibility:
+        _validate_member_node(node, source)
+        return rendered
 
     modifiers = next(
         (child for child in node.named_children if child.type == "modifiers"),
@@ -227,6 +227,7 @@ def _chunks_from_body(
     *,
     drop_host_lifecycle: bool,
     canonical_private_nested_symbols: tuple[str, ...] = (),
+    canonicalize_unlisted_nested_visibility: bool = False,
 ) -> tuple[str, ...]:
     chunks: list[str] = []
     authorized = frozenset(
@@ -245,6 +246,7 @@ def _chunks_from_body(
             node,
             source,
             authorized_symbols=authorized,
+            canonicalize_unlisted_visibility=canonicalize_unlisted_nested_visibility,
         )
         if chunk:
             chunks.append(chunk)
@@ -759,6 +761,7 @@ def _unwrap_single_outer_class(
         source,
         drop_host_lifecycle=True,
         canonical_private_nested_symbols=canonical_private_nested_symbols,
+        canonicalize_unlisted_nested_visibility=True,
     )
     if not chunks:
         raise JavaRegionParseError(
