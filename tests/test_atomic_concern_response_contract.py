@@ -2877,6 +2877,54 @@ def test_local_initialized_final_rebinding_is_canonicalized_before_validation() 
     )
 
 
+def test_blank_final_outer_backing_fields_are_lowered_to_static_mutable_state() -> None:
+    from minecraft_mod_ai.atomic_concern_source import (
+        _canonicalize_local_final_rebindings,
+        _validate_first_pass_java_semantics,
+    )
+
+    source = (
+        "private final String operation;\n\n"
+        "private final Object input;\n\n"
+        "private final Object output;\n\n"
+        "private final String nextStep;\n\n"
+        "String getOperation() { return operation; }\n\n"
+        "Object getInput() { return input; }\n\n"
+        "Object getOutput() { return output; }\n\n"
+        "String getNextStep() { return nextStep; }"
+    )
+
+    normalized, changes = _canonicalize_local_final_rebindings(source)
+
+    assert "private static String operation;" in normalized
+    assert "private static Object input;" in normalized
+    assert "private static Object output;" in normalized
+    assert "private static String nextStep;" in normalized
+    assert "private final" not in normalized
+    assert changes == (
+        "operation:blank-final->static-mutable",
+        "input:blank-final->static-mutable",
+        "output:blank-final->static-mutable",
+        "nextStep:blank-final->static-mutable",
+    )
+    _validate_first_pass_java_semantics(
+        normalized,
+        dependency_source="",
+        sibling_api=(),
+    )
+
+
+def test_static_blank_final_is_lowered_without_losing_static_storage() -> None:
+    from minecraft_mod_ai.atomic_concern_source import (
+        _canonicalize_local_final_rebindings,
+    )
+
+    source = "private static final String phase;"
+    normalized, changes = _canonicalize_local_final_rebindings(source)
+
+    assert normalized == "private static String phase;"
+    assert changes == ("phase:blank-final->mutable",)
+
 def test_local_final_without_rebinding_stays_final() -> None:
     from minecraft_mod_ai.atomic_concern_source import (
         _canonicalize_local_final_rebindings,
