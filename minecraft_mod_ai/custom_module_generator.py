@@ -2213,10 +2213,11 @@ def _run_atomic_ir_generation(
         compile_java=compile_java,
         compile_log=_compile_log,
         write_source=write_atomic_source,
-        # Keep accepted siblings fixed. A rejected candidate gets at most two
-        # diagnostic-owned corrections, with identical-output detection. This is
-        # source admission, including when the graph defers its real compilation.
-        region_attempt_limit=3,
+        # Production source admission is single-decode. Deterministic host
+        # canonicalizers repair mechanically provable Java mistakes before validation;
+        # ambiguous output fails once instead of repeatedly asking the small coder for
+        # the same region.
+        region_attempt_limit=1,
         compile_repair_limit=0,
         completion_decider=lambda payload: decide_region_completion(generator.router, payload),
     )
