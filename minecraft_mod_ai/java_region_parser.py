@@ -754,15 +754,7 @@ def _qualify_imported_jdk_names(
         if replacement is None:
             continue
 
-        replace = node.type == "type_identifier"
-        if node.type == "identifier":
-            parent = getattr(node, "parent", None)
-            if parent is not None and parent.type in {
-                "method_invocation",
-                "field_access",
-            }:
-                replace = parent.child_by_field_name("object") is node
-        if not replace:
+        if node.type != "type_identifier":
             continue
 
         start = int(node.start_byte) - prefix_size
@@ -783,7 +775,28 @@ def _canonicalize_member_jdk_imports(region: str) -> str | None:
         return None
     body, imports = split
     canonical = _qualify_imported_jdk_names(body, imports)
-    _parse("final class __MMMRegionHost {\n" + canonical + "\n}\n")
+
+    prefix = "final class __MMMRegionHost {\n"
+    source, root = _parse(prefix + canonical + "\n}\n")
+    class_body = _class_body(root)
+    for node in _walk_named(class_body):
+        if node.type not in {"identifier", "type_identifier"}:
+            continue
+        rendered = _text(source, node).strip()
+        if rendered not in imports:
+            continue
+        parent = getattr(node, "parent", None)
+        if parent is not None and parent.type in {
+            "scoped_identifier",
+            "scoped_type_identifier",
+        }:
+            scoped = _text(source, parent).strip()
+            if scoped.startswith(imports[rendered] + ".") or scoped == imports[rendered]:
+                continue
+        raise JavaRegionParseError(
+            f"JDK import {imports[rendered]!r} has an unqualified use that "
+            "cannot be safely canonicalized inside a member region"
+        )
     return canonical
 
 

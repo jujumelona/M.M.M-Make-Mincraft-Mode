@@ -88,13 +88,13 @@ def test_tree_sitter_canonicalizes_leading_jdk_imports_in_member_region() -> Non
     assert "new java.util.ArrayList<>()" in admitted
 
 
-def test_tree_sitter_qualifies_imported_jdk_static_class_receiver() -> None:
-    admitted = admit_member_region(
-        "import java.util.Objects;\n"
-        "private static boolean same(Object left, Object right) { "
-        "return Objects.equals(left, right); }"
-    )
-    assert "java.util.Objects.equals(left, right)" in admitted
+def test_tree_sitter_rejects_jdk_import_with_unresolved_static_receiver() -> None:
+    with pytest.raises(JavaRegionParseError):
+        admit_member_region(
+            "import java.util.Objects;\n"
+            "private static boolean same(Object left, Object right) { "
+            "return Objects.equals(left, right); }"
+        )
 
 
 @pytest.mark.parametrize(
