@@ -793,7 +793,7 @@ def _split_leading_jdk_imports(
     return body, imports
 
 
-def _imported_jdk_use_role(node: Any) -> str:
+def _imported_jdk_use_role(node: Any, source: bytes) -> str:
     """Classify an imported simple name by AST position, including receiver chains."""
 
     if node.type == "type_identifier":
@@ -807,25 +807,28 @@ def _imported_jdk_use_role(node: Any) -> str:
     if node.type != "identifier":
         return ""
 
+    parent = getattr(node, "parent", None)
     current = node
-    parent = getattr(current, "parent", None)
+    structural_receiver = False
     while parent is not None and parent.type in {
         "field_access",
         "method_invocation",
         "scoped_identifier",
         "scoped_type_identifier",
     }:
-        receiver = (
-            parent.child_by_field_name("object")
-            or parent.child_by_field_name("scope")
-            or (parent.named_children[0] if parent.named_children else None)
-        )
-        if receiver is None:
+        first = parent.named_children[0] if parent.named_children else None
+        if first is None or int(current.start_byte) != int(first.start_byte):
             break
-        if int(current.start_byte) != int(receiver.start_byte):
-            break
-        if int(current.end_byte) > int(receiver.end_byte):
-            break
+        structural_receiver = True
+        current = parent
+        parent = getattr(current, "parent", None)
+
+    tail = source[int(node.end_byte):]
+    next_nonspace = next(
+        (byte for byte in tail if not chr(byte).isspace()),
+        None,
+    )
+    if structural_receiver or next_nonspace == ord("."):
         return "static_receiver"
     return ""
 
@@ -849,7 +852,7 @@ def _qualify_imported_jdk_names(
         if replacement is None:
             continue
 
-        role = _imported_jdk_use_role(node)
+        role = _imported_jdk_use_role(node, source)
         if not imported_jdk_use_can_be_qualified(role):
             continue
 
@@ -897,7 +900,7 @@ def _qualify_imported_jdk_names_in_initialize(
         replacement = imports.get(rendered)
         if replacement is None:
             continue
-        role = _imported_jdk_use_role(node)
+        role = _imported_jdk_use_role(node, source)
         if not imported_jdk_use_can_be_qualified(role):
             continue
         start = int(node.start_byte) - prefix_size

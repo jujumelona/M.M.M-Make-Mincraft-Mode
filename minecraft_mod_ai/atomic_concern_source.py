@@ -955,12 +955,14 @@ def _canonicalize_tree_sitter_jdk_types(
 
 def _canonicalize_local_final_rebindings(
     value: str,
+    *,
+    lower_blank_finals: bool = True,
 ) -> tuple[str, tuple[str, ...]]:
-    """Drop final only for initialized concern-local fields that are actually rebound.
+    """Normalize mechanically impossible concern-local final field shapes.
 
-    Blank finals are not mechanically equivalent to mutable backing state: accepting
-    that rewrite can turn an incomplete model answer into a false successful concern.
-    They remain validator-visible and must be corrected by the bounded semantic path.
+    Initialized fields rebound by the same region lose only final. Blank outer
+    finals may also be lowered to static mutable backing state when the caller
+    explicitly permits that production canonicalization.
     """
 
     source = str(value or "").strip()
@@ -968,9 +970,6 @@ def _canonicalize_local_final_rebindings(
         return source, ()
 
     assigned = set(class_body_assignment_targets(source))
-    if not assigned:
-        return source, ()
-
     chunks = class_body_chunks(source)
     kinds = class_body_member_kinds(source)
     if len(chunks) != len(kinds):
@@ -982,7 +981,6 @@ def _canonicalize_local_final_rebindings(
         if kind != "field_declaration":
             rendered.append(chunk)
             continue
-
         try:
             fields = tuple(
                 row
@@ -998,12 +996,13 @@ def _canonicalize_local_final_rebindings(
 
         field = fields[0]
         symbol = str(field.get("symbol") or "").strip()
-        if (
-            not symbol
-            or symbol not in assigned
-            or field.get("mutable") is not False
-            or field.get("initialized") is not True
-        ):
+        is_final = field.get("mutable") is False
+        initialized = field.get("initialized") is True
+        rebound = bool(symbol and initialized and symbol in assigned)
+        blank_final = bool(
+            lower_blank_finals and symbol and is_final and not initialized
+        )
+        if not is_final or not (rebound or blank_final):
             rendered.append(chunk)
             continue
 
@@ -1011,8 +1010,26 @@ def _canonicalize_local_final_rebindings(
         if normalized == chunk:
             rendered.append(chunk)
             continue
+        if blank_final and field.get("static") is not True:
+            visibility = re.match(
+                r"^\s*(?:(?:public|protected|private)\s+)",
+                normalized,
+            )
+            if visibility is not None:
+                insert_at = visibility.end()
+                normalized = (
+                    normalized[:insert_at]
+                    + "static "
+                    + normalized[insert_at:]
+                )
+            else:
+                normalized = "static " + normalized.lstrip()
+            changes.append(f"{symbol}:blank-final->static-mutable")
+        elif blank_final:
+            changes.append(f"{symbol}:blank-final->mutable")
+        else:
+            changes.append(f"{symbol}:final->mutable")
         rendered.append(normalized)
-        changes.append(f"{symbol}:final->mutable")
 
     if not changes:
         return source, ()
@@ -4294,9 +4311,7 @@ class AtomicConcernExecutor:
     write_source: Callable[[Path, str], None]
     region_attempt_limit: int | None = None
     retry_structural_rejections: bool = True
-    canonicalize_local_final_rebindings: bool = (
-        PRODUCTION_CANONICALIZE_LOCAL_FINAL_REBINDINGS
-    )
+    canonicalize_local_final_rebindings: bool = False
     compile_repair_limit: int | None = None
     completion_decider: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None
     ordered: tuple[dict[str, Any], ...] = field(init=False)
@@ -4606,7 +4621,10 @@ class AtomicConcernExecutor:
                     parsed = canonical
                     if self.canonicalize_local_final_rebindings:
                         parsed, final_rebinding_changes = (
-                            _canonicalize_local_final_rebindings(parsed)
+                            _canonicalize_local_final_rebindings(
+                                parsed,
+                                lower_blank_finals=self.canonicalize_local_final_rebindings,
+                            )
                         )
                         if final_rebinding_changes:
                             from .root_cause_trace import emit_root_cause
