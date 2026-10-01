@@ -3874,6 +3874,7 @@ class AtomicConcernExecutor:
     write_source: Callable[[Path, str], None]
     region_attempt_limit: int | None = None
     compile_repair_limit: int | None = None
+    completion_decider: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None
     ordered: tuple[dict[str, Any], ...] = field(init=False)
     source: str = field(init=False)
     state: dict[str, tuple[str, str]] = field(default_factory=dict, init=False)
@@ -4077,7 +4078,9 @@ class AtomicConcernExecutor:
                             "the listed selected declarations. The host retains all others."
                         )
                     messages[-1]["content"] = json.dumps(payload, ensure_ascii=False)
-                output = generate_region(self.call_coder, messages)
+                output = generate_region(
+                    self.call_coder, messages, completion_decider=self.completion_decider,
+                )
                 output_text = str(output or "")
                 output_sha = hashlib.sha256(output_text.encode("utf-8")).hexdigest()
                 parsed = _parse_region_content(

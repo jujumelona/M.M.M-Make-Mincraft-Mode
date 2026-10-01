@@ -324,6 +324,7 @@ class ModelRouter:
         parameters: Mapping[str, Any],
         description: str = "",
         output_token_ceiling: int | None = None,
+        force_non_thinking: bool = False,
     ) -> dict[str, Any]:
         if role == "planner":
             return json.loads(
@@ -339,6 +340,7 @@ class ModelRouter:
         return self._generate_tool_decision_impl(
             role, messages, tool_name=tool_name, parameters=parameters, description=description,
             output_token_ceiling=output_token_ceiling,
+            **({"force_non_thinking": True} if force_non_thinking else {}),
         )
 
     def generate_tool_decisions(
@@ -390,6 +392,7 @@ class ModelRouter:
         parameters: Mapping[str, Any],
         description: str = "",
         output_token_ceiling: int | None = None,
+        force_non_thinking: bool = False,
     ) -> dict[str, Any]:
         values = self._generate_tool_decisions_impl(
             role,
@@ -399,6 +402,7 @@ class ModelRouter:
             description=description,
             output_token_ceiling=output_token_ceiling,
             allow_multiple=False,
+            **({"force_non_thinking": True} if force_non_thinking else {}),
         )
         return values[0]
 
@@ -412,6 +416,7 @@ class ModelRouter:
         description: str = "",
         output_token_ceiling: int | None = None,
         allow_multiple: bool,
+        force_non_thinking: bool = False,
     ) -> tuple[dict[str, Any], ...]:
         """Return host-validated native function calls from one assistant turn."""
 
@@ -485,6 +490,7 @@ class ModelRouter:
                     if output_token_ceiling is not None
                     else {}
                 ),
+                **({"mmm_force_non_thinking": True} if force_non_thinking else {}),
             },
         )
         with self._generation_scope(config):

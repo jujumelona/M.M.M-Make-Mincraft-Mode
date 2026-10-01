@@ -390,6 +390,8 @@ def _install_router_boundary(model_router_module: Any) -> None:
             tool_name: str,
             parameters: Mapping[str, Any],
             description: str = "",
+            output_token_ceiling: int | None = None,
+            force_non_thinking: bool = False,
         ) -> dict[str, Any]:
             if not isinstance(parameters, Mapping):
                 raise _configuration_error(
@@ -410,6 +412,11 @@ def _install_router_boundary(model_router_module: Any) -> None:
                 tool_name=tool_name,
                 parameters=parameters,
                 description=description,
+                **(
+                    {"output_token_ceiling": output_token_ceiling}
+                    if output_token_ceiling is not None else {}
+                ),
+                **({"force_non_thinking": True} if force_non_thinking else {}),
             )
 
         setattr(generate_tool_decision, _TOOL_MARKER, True)

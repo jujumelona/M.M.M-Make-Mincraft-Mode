@@ -2151,6 +2151,7 @@ def _run_atomic_ir_generation(
     generator: Any, context: _AtomicGenerationContext
 ) -> dict[str, Any]:
     from .atomic_concern_source import AtomicConcernExecutor
+    from .atomic_region_paging import decide_region_completion
     from .implementation_graph_execution import public_api_errors
 
     graph_compile_deferred = (
@@ -2217,6 +2218,7 @@ def _run_atomic_ir_generation(
         # source admission, including when the graph defers its real compilation.
         region_attempt_limit=3,
         compile_repair_limit=0,
+        completion_decider=lambda payload: decide_region_completion(generator.router, payload),
     )
 
     def execute() -> dict[str, Any]:
