@@ -46,28 +46,18 @@ def public_api_errors(source: str, node: Mapping[str, Any]) -> tuple[str, ...]:
 
 
 def _required_atomic_leaf_contract(symbol: str) -> tuple[str, list[dict[str, Any]]]:
-    from .authored_execution_schema import concern_contracts, section_for_symbol
+    from .authored_atomic_contract import required_atomic_leaf_contract
 
-    section = section_for_symbol(symbol)
-    concerns = list(concern_contracts(section)) if section else []
-    if not section or not concerns:
-        raise ImplementationGraphError(
-            f"IMPLEMENTATION_IR_NONCANONICAL_LEAF: {symbol}"
-        )
-    return section, concerns
+    try:
+        return required_atomic_leaf_contract(symbol)
+    except ValueError as exc:
+        raise ImplementationGraphError(str(exc)) from exc
 
 
 def _decode_atomic_obligation(raw: Any) -> tuple[dict[str, Any], dict[str, Any]] | None:
-    if not isinstance(raw, str):
-        return None
-    try:
-        payload = json.loads(raw)
-        instruction = json.loads(str(payload.get("instruction") or ""))
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return None
-    if not isinstance(payload, dict) or not isinstance(instruction, dict):
-        return None
-    return payload, instruction
+    from .authored_atomic_contract import decode_atomic_obligation
+
+    return decode_atomic_obligation(raw)
 
 
 def _canonical_atomic_obligations(
@@ -79,117 +69,21 @@ def _canonical_atomic_obligations(
     structured_sections: Mapping[str, Any] | None = None,
     production_state_section: Mapping[str, Any] | None = None,
 ) -> tuple[list[str], list[str], list[dict[str, Any]]]:
-    """Materialize only authored concerns that own source in the final node."""
-    from .authored_execution_schema import section_spec
-    from .authored_ir_parser import slice_concern_requirements
+    from .authored_atomic_contract import build_authored_atomic_contract
 
-    expected = {str(item["concern"]): item for item in concerns}
-    existing: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
-    extras: list[str] = []
-    for raw in raw_obligations:
-        decoded = _decode_atomic_obligation(raw)
-        if decoded is None:
-            extras.append(raw)
-            continue
-        payload, instruction = decoded
-        name = str(instruction.get("concern") or "").strip()
-        if str(instruction.get("section") or "").strip() == section and name in expected:
-            existing.setdefault(name, (payload, instruction))
-            continue
-        extras.append(raw)
-
-    from .authored_structured_design import active_concern_records
-
-    structured_records = active_concern_records(structured_sections, section)
-    section_is_structured = bool(
-        isinstance(structured_sections, Mapping)
-        and section in structured_sections
+    contract = build_authored_atomic_contract(
+        section=section,
+        concerns=concerns,
+        requirements=requirements,
+        raw_obligations=raw_obligations,
+        structured_sections=structured_sections,
+        production_state_section=production_state_section,
     )
-    if section == "state_model" and isinstance(production_state_section, Mapping):
-        raw_specification = production_state_section.get("specification")
-        if isinstance(raw_specification, Mapping):
-            structured_records = {
-                str(name): [
-                    deepcopy(dict(row))
-                    for row in rows
-                    if isinstance(row, Mapping)
-                ]
-                for name, rows in raw_specification.items()
-                if isinstance(rows, list) and rows
-            }
-            structured_records.pop("inapplicable_concerns", None)
-            section_is_structured = True
-    exact_sources: dict[str, dict[str, str]] = {}
-    for concern in concerns:
-        name = str(concern["concern"])
-        if section_is_structured:
-            if name not in structured_records:
-                continue
-            # Structured records are the semantic authority. Prose is projection/
-            # provenance only and must not be reinterpreted into production facts.
-            exact_sources[name] = {}
-            continue
-        source = slice_concern_requirements(
-            requirements,
-            concern=name,
-            require_anchor=True,
-        )
-        if source:
-            exact_sources[name] = source
-
-    # Legacy/free-form sections have no canonical concern anchors. Preserve one
-    # already-admitted owner rather than manufacturing every schema concern.
-    if not exact_sources and existing:
-        first_name = next(
-            (str(item["concern"]) for item in concerns if str(item["concern"]) in existing),
-            "",
-        )
-        if first_name:
-            payload, _instruction = existing[first_name]
-            raw_sources = payload.get("source_requirements")
-            if isinstance(raw_sources, Mapping):
-                exact_sources[first_name] = {
-                    str(key): str(value)
-                    for key, value in raw_sources.items()
-                    if str(key) in requirements
-                }
-
-    spec = section_spec(section) or {}
-    rebound: list[str] = []
-    drifted: list[str] = []
-    active: list[dict[str, Any]] = []
-    for concern in concerns:
-        name = str(concern["concern"])
-        if name not in exact_sources:
-            continue
-        host_sources = exact_sources[name]
-        active.append({**concern, "sequence": len(active)})
-        if name in existing:
-            payload, instruction = deepcopy(existing[name])
-            if payload.get("source_requirements") != host_sources:
-                drifted.append(name)
-        else:
-            payload, instruction = {}, {}
-
-        instruction.update({
-            "concern": name,
-            "concern_template": str(concern["identifier"]),
-            "rules": list(concern.get("rules") or []),
-            "section": section,
-            "section_instruction": str(spec.get("instruction") or ""),
-            "task": str(concern["task"]),
-        })
-        payload["instruction"] = json.dumps(
-            instruction, ensure_ascii=False, sort_keys=True
-        )
-        payload["source_requirements"] = host_sources
-        if name in structured_records:
-            payload["structured_records"] = deepcopy(structured_records[name])
-        else:
-            payload.pop("structured_records", None)
-        rebound.append(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-
-    return rebound + extras, drifted, active
+    return (
+        list(contract["implementation_obligations"]),
+        list(contract["drifted_concerns"]),
+        deepcopy(contract["active_concerns"]),
+    )
 
 
 def _bind_atomic_leaf_contract(
@@ -199,20 +93,20 @@ def _bind_atomic_leaf_contract(
     structured_sections: Mapping[str, Any] | None = None,
     production_state_section: Mapping[str, Any] | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
+    from .authored_atomic_contract import bind_task_authored_atomic_contract
     from .authored_production import _task_sha
 
-    section, concerns = _required_atomic_leaf_contract(
-        str(node.get("symbol") or "")
-    )
-    obligations, drifted, active = _canonical_atomic_obligations(
-        section=section,
-        concerns=concerns,
-        requirements=requirements,
-        raw_obligations=list(node["obligations"]),
-        structured_sections=structured_sections,
-        production_state_section=production_state_section,
-    )
-    task["implementation_obligations"] = obligations
+    try:
+        section, active, drifted = bind_task_authored_atomic_contract(
+            task,
+            symbol=str(node.get("symbol") or ""),
+            requirements=requirements,
+            raw_obligations=list(node["obligations"]),
+            structured_sections=structured_sections,
+            production_state_section=production_state_section,
+        )
+    except ValueError as exc:
+        raise ImplementationGraphError(str(exc)) from exc
     task["task_sha256"] = _task_sha(task)
     if drifted:
         emit_root_cause(
@@ -224,6 +118,7 @@ def _bind_atomic_leaf_contract(
             details={"symbol": node.get("symbol"), "concerns": drifted},
         )
     return section, active
+
 
 def _leaf_module(
     node: dict[str, Any],

@@ -1834,34 +1834,13 @@ def _concern_source_requirements(
 def _concern_authority(
     task: Mapping[str, Any], concern: Mapping[str, Any]
 ) -> dict[str, Any]:
+    from .authored_atomic_contract import task_concern_authority
+
     name = _slug(concern.get("concern"))
-    requirement_payload: dict[str, Any] = {}
-    raw_obligations = task.get("implementation_obligations")
-    if isinstance(raw_obligations, Sequence) and not isinstance(
-        raw_obligations, (str, bytes, bytearray)
-    ):
-        for raw in raw_obligations:
-            try:
-                outer = json.loads(str(raw))
-                instruction = json.loads(str(outer.get("instruction") or "{}"))
-            except (TypeError, ValueError, json.JSONDecodeError):
-                continue
-            if str(instruction.get("concern") or "").strip() == name:
-                requirement_payload = {
-                    "source_requirements": _concern_source_requirements(
-                        dict(outer.get("source_requirements") or {}),
-                        concern=name,
-                    ),
-                    "structured_records": deepcopy(
-                        outer.get("structured_records") or []
-                    ),
-                }
-                break
-    return {
-        "task_id": str(task.get("task_id") or ""),
-        "concern": name,
-        **requirement_payload,
-    }
+    try:
+        return task_concern_authority(task, name)
+    except ValueError as exc:
+        raise CustomModuleGenerationError(str(exc)) from exc
 
 
 

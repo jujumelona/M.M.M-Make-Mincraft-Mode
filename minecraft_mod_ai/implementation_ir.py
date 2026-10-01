@@ -716,69 +716,20 @@ def _stable_union(left: list[str], right: list[str]) -> list[str]:
 
 
 def _authored_obligation_record(value: str) -> tuple[tuple[str, str], dict[str, Any], dict[str, Any]] | None:
-    """Parse the host-authored concern identity carried inside one obligation string."""
-    if not isinstance(value, str):
-        return None
-    try:
-        payload = json.loads(value)
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return None
-    if not isinstance(payload, dict):
-        return None
-    instruction_raw = payload.get("instruction")
-    if not isinstance(instruction_raw, str):
-        return None
-    try:
-        instruction = json.loads(instruction_raw)
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return None
-    if not isinstance(instruction, dict):
-        return None
-    section = str(instruction.get("section") or "").strip()
-    concern = str(
-        instruction.get("concern_template")
-        or instruction.get("concern")
-        or ""
-    ).strip()
-    if not section or not concern:
-        return None
-    return (section, concern), payload, instruction
+    """Read authored obligation identity through the central atomic contract."""
+    from .authored_atomic_contract import authored_obligation_record
+
+    return authored_obligation_record(value)
 
 
 def _merge_authored_obligation_value(existing: str, proposed: str) -> str | None:
-    """Merge one repeated authored concern without multiplying its provenance record."""
-    left = _authored_obligation_record(existing)
-    right = _authored_obligation_record(proposed)
-    if left is None or right is None or left[0] != right[0]:
-        return None
-    _identity, left_payload, left_instruction = left
-    _right_identity, right_payload, right_instruction = right
-    if left_instruction != right_instruction:
-        return None
+    """Merge authored obligations through the central atomic contract."""
+    from .authored_atomic_contract import merge_authored_obligation_value
 
-    left_sources = left_payload.get("source_requirements")
-    right_sources = right_payload.get("source_requirements")
-    if not isinstance(left_sources, dict) or not isinstance(right_sources, dict):
-        return None
-
-    merged_sources = deepcopy(left_sources)
-    changed = False
-    for requirement_id, source_text in right_sources.items():
-        if requirement_id in merged_sources:
-            if merged_sources[requirement_id] != source_text:
-                raise ImplementationGraphError(
-                    "IMPLEMENTATION_IR_SOURCE_REQUIREMENT_CONFLICT: "
-                    + str(requirement_id)
-                )
-            continue
-        merged_sources[requirement_id] = source_text
-        changed = True
-
-    if not changed:
-        return existing
-    merged_payload = deepcopy(left_payload)
-    merged_payload["source_requirements"] = merged_sources
-    return json.dumps(merged_payload, ensure_ascii=False, sort_keys=True)
+    try:
+        return merge_authored_obligation_value(existing, proposed)
+    except ValueError as exc:
+        raise ImplementationGraphError(str(exc)) from exc
 
 
 def _merge_obligation_lists(left: list[str], right: list[str]) -> list[str]:

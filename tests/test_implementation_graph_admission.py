@@ -747,6 +747,72 @@ def test_repeated_authored_concern_obligations_merge_source_provenance():
     assert payload["source_requirements"] == requirements
 
 
+def test_atomic_contract_resolves_markdown_concern_headings_without_bullet_anchor():
+    from minecraft_mod_ai.authored_atomic_contract import concern_source_requirements
+
+    requirements = {
+        "R1": "## behavior_contract",
+        "R2": "### actors",
+        "R3": "- **Player:** controls the ship.",
+        "R4": "- **Game System:** validates server state.",
+        "R5": "### inputs",
+        "R6": "- CraftShipAction",
+    }
+
+    resolved = concern_source_requirements(requirements, concern="actors")
+
+    assert resolved == {
+        "R1": "## behavior_contract",
+        "R2": "### actors",
+        "R3": "- **Player:** controls the ship.",
+        "R4": "- **Game System:** validates server state.",
+    }
+
+
+def test_atomic_contract_producer_and_consumer_share_one_first_class_contract():
+    from minecraft_mod_ai.authored_atomic_contract import (
+        bind_task_authored_atomic_contract,
+        task_concern_authority,
+    )
+
+    requirements = {
+        "R1": "## behavior_contract",
+        "R2": "### actors",
+        "R3": "- **Player:** controls the ship.",
+        "R4": "### inputs",
+        "R5": "- CraftShipAction",
+    }
+    task = {
+        "task_id": "ir_authoredbehaviorcontract",
+        "implementation_obligations": ["legacy free-form obligation"],
+    }
+
+    section, active, _drifted = bind_task_authored_atomic_contract(
+        task,
+        symbol="AuthoredBehaviorContract",
+        requirements=requirements,
+        raw_obligations=task["implementation_obligations"],
+        structured_sections={},
+    )
+
+    authority = task_concern_authority(task, "actors")
+
+    assert section == "behavior_contract"
+    assert active[0]["concern"] == "actors"
+    assert task["authored_atomic_contract"]["schema_version"] == (
+        "mmm/authored-atomic-contract-v1"
+    )
+    assert authority["source_requirements"] == {
+        "R1": "## behavior_contract",
+        "R2": "### actors",
+        "R3": "- **Player:** controls the ship.",
+    }
+    assert any(
+        "source_requirements" in item
+        for item in task["implementation_obligations"]
+    )
+
+
 def test_implementation_graph_accepts_markdown_authority_when_structured_sections_are_empty():
     request = {
         "text": DESIGN,
