@@ -339,6 +339,95 @@ def test_state_variable_spellings_resolve_to_declared_identity():
     assert camel == "fuel_amount >= 10"
 
 
+def test_unsupported_domain_function_fails_closed_before_java_lowering():
+    variables = {
+        "Ship_Status": {
+            "name": "Ship_Status",
+            "owner": "server",
+            "type": "string",
+            "unit": "status",
+            "default": "WAITING",
+            "domain": "status",
+        }
+    }
+
+    normalized = _normalize_expression(
+        'Ship_Position_DistFromCenter ( Planet_Earth ) <= 10.0 && '
+        'Ship_Status == "WAITING"',
+        aliases={},
+        variables=variables,
+        fallback="false",
+    )
+
+    assert normalized == "false"
+
+
+def test_structured_state_section_rejects_unknown_function_semantics():
+    import pytest
+    from minecraft_mod_ai.structured_state_runtime import validate_structured_state_section
+
+    section = {
+        "specification": {
+            "variables": [],
+            "transitions": [],
+            "invariants": [
+                {
+                    "condition": "Ship_Position_DistFromCenter(Planet_Earth) <= 10.0",
+                    "enforcement": "hold position",
+                }
+            ],
+            "initialization": [],
+            "updates": [],
+            "cleanup": [],
+            "concurrency": [],
+        }
+    }
+
+    with pytest.raises(ValueError, match="unsupported function 'Ship_Position_DistFromCenter'"):
+        validate_structured_state_section(section)
+
+
+def test_normalized_unknown_function_invariant_renders_without_crashing():
+    raw = {
+        "specification": {
+            "variables": [],
+            "transitions": [],
+            "invariants": [
+                {
+                    "condition": "Ship_Position_DistFromCenter(Planet_Earth) <= 10.0",
+                    "enforcement": "hold position",
+                }
+            ],
+            "initialization": [],
+            "updates": [],
+            "cleanup": [],
+            "concurrency": [],
+            "inapplicable_concerns": [],
+        },
+        "constraint_evidence_refs": [],
+    }
+
+    normalized = normalize_structured_state_section(raw)
+    assert normalized["specification"]["invariants"][0]["condition"] == "false"
+
+    obligations = [
+        json.dumps({
+            "instruction": json.dumps(
+                {"section": "state_model", "concern": "invariants"}
+            ),
+            "structured_records": normalized["specification"]["invariants"],
+        })
+    ]
+    java = render_state_model_concern(
+        {"implementation_obligations": obligations},
+        "invariants",
+        include_runtime=True,
+    )
+
+    assert java is not None
+    assert "context -> ($mmmTruthy(Boolean.FALSE))" in java
+
+
 def test_irreducible_state_condition_fails_closed_instead_of_crashing():
     variables = {
         "fuel_amount": {

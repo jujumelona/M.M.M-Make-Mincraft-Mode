@@ -311,6 +311,37 @@ class _StateDslTransformer(Transformer):
 
 _STATE_DSL_TRANSFORMER = _StateDslTransformer()
 
+_SUPPORTED_STATE_FUNCTIONS = frozenset({
+    "sum",
+    "min",
+    "max",
+    "abs",
+    "count",
+    "size",
+    "len",
+})
+
+
+def _validate_state_ast(node: tuple) -> None:
+    """Validate semantic nodes accepted by the host state-expression compiler."""
+    kind = node[0]
+    if kind == "call":
+        name = str(node[1]).casefold()
+        if name not in _SUPPORTED_STATE_FUNCTIONS:
+            raise ValueError(
+                f"STRUCTURED_STATE_EXPRESSION: unsupported function {node[1]!r}"
+            )
+        for argument in node[2]:
+            _validate_state_ast(argument)
+        return
+    if kind == "unary":
+        _validate_state_ast(node[2])
+        return
+    if kind == "binary":
+        _validate_state_ast(node[2])
+        _validate_state_ast(node[3])
+        return
+
 
 def _state_dsl_error(source: str, exc: BaseException) -> ValueError:
     if isinstance(exc, UnexpectedInput):
@@ -379,7 +410,7 @@ def _value(node: tuple, context: str = "context") -> str:
         return "new java.util.ArrayList<>()"
     if kind == "call":
         name = str(node[1]).casefold()
-        if name not in {"sum", "min", "max", "abs", "count", "size", "len"}:
+        if name not in _SUPPORTED_STATE_FUNCTIONS:
             raise ValueError(
                 f"STRUCTURED_STATE_EXPRESSION: unsupported function {node[1]!r}"
             )
@@ -429,9 +460,10 @@ def _condition(node: tuple, context: str = "context") -> str:
 
 
 def validate_state_expression(text: str) -> None:
-    """Validate the canonical host expression DSL without generating Java."""
+    """Validate the exact semantic subset that the Java lowering can compile."""
 
-    _Expression(str(text or "")).parse()
+    node = _Expression(str(text or "")).parse()
+    _validate_state_ast(node)
 
 
 def _compile_condition(text: str, context: str = "context") -> str:
@@ -536,14 +568,14 @@ def validate_structured_state_section(section: Mapping[str, Any]) -> None:
     for record in specification.get("transitions", []) or []:
         if not isinstance(record, Mapping):
             continue
-        _Expression(str(record.get("guard") or "")).parse()
+        validate_state_expression(str(record.get("guard") or ""))
         _compile_mutation(
             str(record.get("mutation") or ""),
             declared=declared,
         )
     for record in specification.get("invariants", []) or []:
         if isinstance(record, Mapping):
-            _Expression(str(record.get("condition") or "")).parse()
+            validate_state_expression(str(record.get("condition") or ""))
     for concern, field in (
         ("initialization", "initial_state"),
         ("updates", "mutation"),
