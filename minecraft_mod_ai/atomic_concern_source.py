@@ -3075,6 +3075,8 @@ def _validate_first_pass_java_semantics(
         sibling_api=sibling_api,
     )
     _validate_jdk_object_creations(value)
+    violations: list[str] = []
+
     def declared_final(item: Mapping[str, Any]) -> bool:
         if item.get("final") is True:
             return True
@@ -3097,8 +3099,8 @@ def _validate_first_pass_java_semantics(
         and str(item.get("symbol") or "")
     )
     if blank_finals:
-        raise CustomModuleGenerationError(
-            "ATOMIC_CONCERN_RESPONSE_INVALID: blank final field(s) have no legal "
+        violations.append(
+            "blank final field(s) have no legal "
             "concern-owned initialization path: " + ", ".join(blank_finals)
         )
 
@@ -3113,8 +3115,8 @@ def _validate_first_pass_java_semantics(
     assigned = set(class_body_assignment_targets(value))
     rebound = sorted(final_fields & assigned)
     if rebound:
-        raise CustomModuleGenerationError(
-            "ATOMIC_CONCERN_RESPONSE_INVALID: generated executable code reassigns "
+        violations.append(
+            "generated executable code reassigns "
             "final field(s): " + ", ".join(rebound)
         )
 
@@ -3130,11 +3132,12 @@ def _validate_first_pass_java_semantics(
                 continue
             candidates = owner_methods.get(name)
             if not candidates:
-                raise CustomModuleGenerationError(
-                    "ATOMIC_CONCERN_RESPONSE_INVALID: dependency API "
+                violations.append(
+                    "dependency API "
                     f"{receiver}.{name}(...) does not exist in the Tree-sitter-derived "
                     "authoritative dependency source."
                 )
+                continue
             matching = [
                 item
                 for item in candidates
@@ -3144,14 +3147,15 @@ def _validate_first_pass_java_semantics(
                 expected = sorted(
                     {len(item.get("parameters") or ()) for item in candidates}
                 )
-                raise CustomModuleGenerationError(
-                    "ATOMIC_CONCERN_RESPONSE_INVALID: dependency API "
+                violations.append(
+                    "dependency API "
                     f"{receiver}.{name} called with {arity} argument(s); authoritative "
                     f"arity is {expected}."
                 )
+                continue
             if not any(item.get("static") is True for item in matching):
-                raise CustomModuleGenerationError(
-                    "ATOMIC_CONCERN_RESPONSE_INVALID: dependency API "
+                violations.append(
+                    "dependency API "
                     f"{receiver}.{name}(...) is instance-owned, not a static class call."
                 )
 
@@ -3200,12 +3204,19 @@ def _validate_first_pass_java_semantics(
             and target_type
             and not _simple_object_type(target_type)
         ):
-            raise CustomModuleGenerationError(
-                "ATOMIC_CONCERN_RESPONSE_INVALID: method "
+            violations.append(
+                "method "
                 f"{returned.get('method')!r} returns {target_type} but directly "
                 f"returns Object-valued {origin}; perform explicit runtime type "
                 "narrowing first."
             )
+
+    if violations:
+        # A missing method must not hide the next missing method or an incompatible
+        # return. One bounded correction receives all facts from this candidate.
+        raise CustomModuleGenerationError(
+            "ATOMIC_CONCERN_RESPONSE_INVALID: " + "\n".join(dict.fromkeys(violations))
+        )
 
 
 def _region_content(source: str, *, concern: str, region: str) -> str:
@@ -3582,8 +3593,8 @@ def _messages(
                 " This is a declaration-only data concern. Emit at least one concern-owned "
                 "field and/or private nested data type. Do not emit methods, initialize(), "
                 "onInitialize(), registration hooks, load/save lifecycle methods, or calls whose "
-                "only purpose is to invoke another class lifecycle. Encode the supplied semantic "
-                "fields and task authority as data declarations in this region."
+                "only purpose is to invoke another class lifecycle. Encode the authored runtime "
+                "data requirements in task_authority as data declarations in this region."
             )
     elif response_region == "initialize":
         response_contract = (
@@ -3648,13 +3659,9 @@ def _messages(
             "sequence": concern.get("sequence"),
             "identifier": concern.get("identifier"),
             "name": name,
-            "task": str(concern.get("task") or ""),
-            "rules": list(concern.get("rules") or []),
-            "semantic_fields": list(
-                (concern.get("record_schema") or {}).get("required") or []
-            )
-            if isinstance(concern.get("record_schema"), Mapping)
-            else [],
+            # Planning templates describe record extraction, not runtime Java.
+            # Authored requirements/records remain in task_authority; never send
+            # the planner's "return the next record/done" instructions to a coder.
             "implementation_goal": (
                 f"Implement only the {name} semantics stated in "
                 "task_authority.source_requirements inside the selected Java class."
@@ -4214,7 +4221,7 @@ class AtomicConcernExecutor:
                 if isinstance(exc, AtomicJavaDecisionError) and exc.response_text is not None:
                     output_text = exc.response_text
                     output_sha = exc.response_sha256 or ""
-                reason = str(exc).split("\n", 1)[0]
+                reason = str(exc)
                 rejected_response = (
                     exc.response_text
                     if isinstance(exc, AtomicJavaDecisionError) and exc.response_text is not None
@@ -4303,7 +4310,14 @@ class AtomicConcernExecutor:
                     if response_region == "members":
                         from .atomic_region_correction import RegionCorrection
 
-                        correction = RegionCorrection.for_diagnostic(parsed, reason)
+                        correction = RegionCorrection.for_diagnostic(
+                            parsed,
+                            reason,
+                            allow_private_restructure=(
+                                not failure and name not in self.state
+                                and ("dependency API " in reason or "Object-valued " in reason)
+                            ),
+                        )
                 elif not rejected_region:
                     rejected_region = output_text
 
