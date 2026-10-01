@@ -140,6 +140,74 @@ def test_real_member_scope_escape_fails_first_pass_without_regeneration(bad: str
         executor.run()
 
 
+def test_persistence_initialize_wrapper_is_canonicalized_without_retry() -> None:
+    output = (
+        "```java\n"
+        "public static void initialize() {\n"
+        "    java.util.Map<java.lang.String, java.lang.Object> context = "
+        "new java.util.HashMap<>();\n"
+        "    context.put(\"event\", \"LoadShipState\");\n"
+        "    context.put(\"action\", \"ServerTick\");\n"
+        "    AuthoredStateModel.initializeState(\"LoadShipState\", context);\n"
+        "}\n"
+        "```"
+    )
+    remaining = [output]
+    calls = {"count": 0}
+
+    def call_coder(_messages):
+        calls["count"] += 1
+        if not remaining:
+            raise AssertionError("unexpected retry")
+        return remaining.pop(0)
+
+    executor = AtomicConcernExecutor(
+        root=Path("."),
+        target=Path("src/main/java/example/Test.java"),
+        relative="src/main/java/example/Test.java",
+        symbol="Test",
+        original="package example;\n// MMM_AUTHORED_FEATURE_BODY\n",
+        task={"task_id": "t", "semantic_outcome": "persistence"},
+        section="persistence",
+        concerns=(
+            {
+                "sequence": 0,
+                "identifier": "feature/persistence/load_behavior",
+                "concern": "load_behavior",
+                "task": "Load persisted ship state.",
+                "rules": [],
+            },
+        ),
+        grounding={},
+        dependency_source=json.dumps(
+            {
+                "symbol": "AuthoredStateModel",
+                "source": (
+                    "public final class AuthoredStateModel { "
+                    "public static synchronized void initializeState("
+                    "String trigger, java.util.Map<String, Object> context) {}"
+                    "}"
+                ),
+            }
+        ),
+        require_initialize=False,
+        call_coder=call_coder,
+        compile_java=lambda _root: SimpleNamespace(status="PASS"),
+        compile_log=lambda _report: "",
+        write_source=lambda _path, _source: None,
+        region_attempt_limit=1,
+        compile_repair_limit=0,
+    )
+
+    result = executor.run()
+
+    assert calls["count"] == 1
+    assert "public static void initialize()" not in result["source"]
+    assert "private static void _mmm_load_behavior()" in result["source"]
+    assert "AuthoredStateModel.initializeState(\"LoadShipState\", context);" in result["source"]
+    assert result["first_pass_rejection_count"] == 0
+
+
 def test_invalid_region_output_is_terminal_on_the_first_production_decode() -> None:
     executor = _executor(["package example;"])
     with pytest.raises(
