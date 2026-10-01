@@ -55,6 +55,30 @@ def test_production_compiler_is_host_owned_and_model_free():
     assert all(not symbol.startswith("AuthoredGeneric") for symbol in symbols)
 
 
+def test_only_integration_owns_authored_lifecycle_activation():
+    from minecraft_mod_ai.implementation_lifecycle import ACTIVATION_API
+
+    router = NoPlanningModelRouter()
+    graph = compile_with(router, text=STRICT_DESIGN, authored_schema=True)
+    by_symbol = {node["symbol"]: node for node in graph["nodes"]}
+
+    active = [node["symbol"] for node in graph["nodes"] if node["activation"]]
+    assert active == ["AuthoredIntegration"]
+    assert ACTIVATION_API in by_symbol["AuthoredIntegration"]["public_api"]
+
+    for symbol, node in by_symbol.items():
+        if symbol == "AuthoredIntegration":
+            continue
+        assert node["activation"] is False
+        assert ACTIVATION_API not in node["public_api"]
+
+    # Internal authored units are valid without a fake lifecycle API. This is the
+    # contract that prevents failure_and_limits/persistence/etc. from being told
+    # to implement initialize() and then being rejected for doing exactly that.
+    assert by_symbol["AuthoredFailureLimits"]["public_api"] == []
+    assert by_symbol["AuthoredPersistence"]["public_api"] == []
+
+
 def test_peer_behavior_packets_extend_one_named_owner_without_model_semantics():
     router = NoPlanningModelRouter()
     text = STRICT_DESIGN.replace(
