@@ -1217,56 +1217,6 @@ def _project_declaration_only_members(value: str) -> tuple[str, tuple[str, ...]]
     return projected, dropped
 
 
-def _canonicalize_accidental_lifecycle_wrapper(
-    value: str,
-    *,
-    concern: str,
-) -> tuple[str, bool]:
-    """Convert one accidental initialize() wrapper into concern-local Java.
-
-    Lifecycle naming is host-owned. Small coders sometimes put otherwise usable
-    concern logic inside a zero-argument static initialize() method for ordinary
-    non-integration concerns. When that wrapper is the only Java member and has a
-    non-empty body, preserve the body and deterministically rename only the host-owned
-    method declaration. No model retry or regeneration is involved.
-    """
-
-    normalized = _normalize_region_text(value)
-    try:
-        chunks = class_body_chunks(normalized)
-        contracts = class_body_member_contracts(normalized)
-    except JavaRegionParseError:
-        return value, False
-    if len(chunks) != 1 or len(contracts) != 1:
-        return value, False
-
-    contract = contracts[0]
-    if not (
-        contract.get("kind") == "method"
-        and str(contract.get("symbol") or "") == "initialize"
-        and str(contract.get("return_type") or "") == "void"
-        and contract.get("static") is True
-        and not list(contract.get("parameters") or [])
-    ):
-        return value, False
-
-    chunk = chunks[0]
-    body_start = chunk.find("{")
-    body_end = chunk.rfind("}")
-    if body_start < 0 or body_end <= body_start or not chunk[body_start + 1:body_end].strip():
-        return value, False
-
-    declaration = re.compile(
-        r"(?m)^\s*(?:(?:public|protected|private|static|final|synchronized|strictfp)\s+)*"
-        r"void\s+initialize\s*\(\s*\)"
-    )
-    replacement = f"private static void _mmm_{_slug(concern)}()"
-    rewritten, count = declaration.subn(replacement, chunk, count=1)
-    if count != 1:
-        return value, False
-    return rewritten, True
-
-
 def _parse_region_content(text: str, *, response_region: str) -> str:
     """Admit one host-selected region through Markdown and Java parsers in order."""
     raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
@@ -4107,36 +4057,8 @@ class AtomicConcernExecutor:
                 ))
                 output_text = str(output or "")
                 output_sha = hashlib.sha256(output_text.encode("utf-8")).hexdigest()
-                parse_input = output
-                lifecycle_wrapper_canonicalized = False
-                if (
-                    response_region == "members"
-                    and str(self.section or "").strip() != "integration"
-                    and name not in _DECLARATION_ONLY_CONCERNS
-                ):
-                    parse_input, lifecycle_wrapper_canonicalized = (
-                        _canonicalize_accidental_lifecycle_wrapper(
-                            output_text,
-                            concern=name,
-                        )
-                    )
-                if lifecycle_wrapper_canonicalized:
-                    from .root_cause_trace import emit_root_cause
-
-                    emit_root_cause(
-                        "atomic_concern_lifecycle_wrapper_canonicalized",
-                        stage="production",
-                        operation="atomic_concern_region",
-                        gate="host_lifecycle_ownership",
-                        result="PASS",
-                        details={
-                            "concern": name,
-                            "model_output_sha256": output_sha,
-                            "canonical_method": f"_mmm_{name}",
-                        },
-                    )
                 parsed = _parse_region_content(
-                    parse_input,
+                    output,
                     response_region=response_region,
                 )
                 parsed, lifecycle_changes = (
