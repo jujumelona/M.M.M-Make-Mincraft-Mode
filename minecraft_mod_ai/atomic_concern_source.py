@@ -1038,7 +1038,7 @@ def _canonicalize_local_final_rebindings(
         if (
             not symbol
             or symbol not in assigned
-            or field.get("final") is not True
+            or field.get("mutable") is not False
             or field.get("initialized") is not True
         ):
             rendered.append(chunk)
