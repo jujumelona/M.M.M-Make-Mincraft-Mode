@@ -3191,6 +3191,69 @@ Module: other
     assert "Hidden" not in index
 
 
+def test_javap_same_type_static_factory_parser() -> None:
+    from minecraft_mod_ai.jdk_type_index import _static_factory_shapes_from_javap
+
+    shapes = _static_factory_shapes_from_javap(
+        (
+            "public class java.example.Sample {\n"
+            "  public static java.example.Sample current();\n"
+            "  public static java.lang.String name();\n"
+            "}\n"
+        ),
+        "java.example.Sample",
+    )
+
+    assert shapes == (
+        {
+            "name": "current",
+            "arity": 0,
+            "varargs": False,
+            "return_type": "java.example.Sample",
+        },
+    )
+
+
+def test_thread_local_random_constructor_is_host_lowered_to_current() -> None:
+    from minecraft_mod_ai.atomic_concern_source import (
+        _canonicalize_generated_jdk_semantics,
+        _validate_first_pass_java_semantics,
+    )
+
+    source = (
+        "private static final java.util.concurrent.ThreadLocalRandom random = "
+        "new java.util.concurrent.ThreadLocalRandom();"
+    )
+
+    normalized, changes = _canonicalize_generated_jdk_semantics(source)
+
+    assert (
+        "java.util.concurrent.ThreadLocalRandom.current()"
+        in normalized
+    )
+    assert "new java.util.concurrent.ThreadLocalRandom()" not in normalized
+    assert any(
+        "java.util.concurrent.ThreadLocalRandom:constructor->current" == item
+        for item in changes
+    )
+    _validate_first_pass_java_semantics(
+        normalized,
+        dependency_source="",
+        sibling_api=(),
+    )
+
+
+def test_ambiguous_or_unavailable_jdk_factory_is_not_guessed() -> None:
+    from minecraft_mod_ai.atomic_concern_source import (
+        _canonicalize_generated_jdk_semantics,
+    )
+
+    source = "private static Object value = new java.lang.Object(1);"
+    normalized, _changes = _canonicalize_generated_jdk_semantics(source)
+
+    assert "new java.lang.Object(1)" in normalized
+
+
 def test_first_pass_rejects_invalid_installed_jdk_constructor_arity() -> None:
     from minecraft_mod_ai.atomic_concern_source import _validate_first_pass_java_semantics
 

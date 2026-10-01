@@ -1062,6 +1062,95 @@ def _canonicalize_local_final_rebindings(
     return normalized, tuple(changes)
 
 
+def _canonicalize_jdk_construction_semantics(
+    value: str,
+) -> tuple[str, tuple[str, ...]]:
+    """Lower impossible JDK constructor calls to unambiguous same-type factories.
+
+    Authority comes from the installed JDK via javap. Rewriting occurs only when
+    the requested constructor is not public/valid and exactly one public static
+    factory method returning the same type accepts the same argument count.
+    Ambiguous cases remain untouched for the semantic validator.
+    """
+
+    source = str(value or "").strip()
+    if not source:
+        return source, ()
+
+    try:
+        from .jdk_type_index import (
+            is_public_jdk_type,
+            public_jdk_constructor_shapes,
+            public_jdk_static_factory_shapes,
+        )
+    except ImportError:
+        return source, ()
+
+    replacements: list[tuple[int, int, str, str]] = []
+    for creation in class_body_object_creations(source):
+        raw_type = str(creation.get("type") or "").strip()
+        fqcn = _canonical_jdk_class_name(raw_type)
+        if not fqcn.startswith(("java.", "javax.")):
+            continue
+        try:
+            if not is_public_jdk_type(fqcn):
+                continue
+            constructors = public_jdk_constructor_shapes(fqcn)
+            factories = public_jdk_static_factory_shapes(fqcn)
+        except (OSError, RuntimeError, ValueError):
+            continue
+
+        argument_count = int(creation.get("argument_count") or 0)
+        if constructors and _jdk_constructor_accepts_arity(
+            constructors, argument_count
+        ):
+            continue
+
+        matching = {
+            str(factory.get("name") or "").strip()
+            for factory in factories
+            if str(factory.get("name") or "").strip()
+            and _jdk_constructor_accepts_arity((factory,), argument_count)
+        }
+        if len(matching) != 1:
+            continue
+
+        start = int(creation.get("start_byte", -1))
+        end = int(creation.get("end_byte", -1))
+        if start < 0 or end <= start:
+            continue
+        method = next(iter(matching))
+        arguments = ", ".join(
+            str(item) for item in creation.get("arguments") or ()
+        )
+        replacement = f"{fqcn}.{method}({arguments})"
+        replacements.append(
+            (
+                start,
+                end,
+                replacement,
+                f"{fqcn}:constructor->{method}",
+            )
+        )
+
+    if not replacements:
+        return source, ()
+
+    raw = source.encode("utf-8")
+    changes: list[str] = []
+    for start, end, replacement, change in sorted(
+        replacements, key=lambda item: item[0], reverse=True
+    ):
+        raw = raw[:start] + replacement.encode("utf-8") + raw[end:]
+        changes.append(change)
+    normalized = raw.decode("utf-8")
+    try:
+        class_body_member_contracts(normalized)
+    except JavaRegionParseError:
+        return source, ()
+    return normalized, tuple(reversed(changes))
+
+
 def _canonicalize_generated_jdk_semantics(
     value: str,
     *,
@@ -1080,6 +1169,7 @@ def _canonicalize_generated_jdk_semantics(
         source,
         protected_simple_types=protected_simple_types,
     )
+    source, construction_changes = _canonicalize_jdk_construction_semantics(source)
     chunks = class_body_chunks(source)
     kinds = class_body_member_kinds(source)
     if len(chunks) != len(kinds):
@@ -1087,7 +1177,7 @@ def _canonicalize_generated_jdk_semantics(
             "ATOMIC_CONCERN_JAVA_PARSE_INVALID: member chunk/kind cardinality drift"
         )
 
-    changes: list[str] = list(type_changes)
+    changes: list[str] = [*type_changes, *construction_changes]
     rendered: list[str] = []
     for chunk, kind in zip(chunks, kinds, strict=True):
         if kind != "field_declaration":
@@ -4100,8 +4190,9 @@ def _messages(
                 "For every field or local receiver.method(...), verify the method exists on the receiver's declared type.",
                 "For every generic projection, preserve exact invariant type arguments from available_sibling_api.",
                 "For every return statement, verify the expression type is assignable to the declared return type.",
-                "For every constructor call, verify the canonical JDK/package owner and constructor arguments.",
-                "Only after all five checks pass, emit the final Java region with no reasoning prose.",
+                "For every constructor call, verify the canonical JDK/package owner and constructor arguments. If a JDK type is factory-owned (for example singleton/current-instance APIs), use its public static factory instead of inventing a constructor.",
+                "The installed-JDK javap contract is authoritative; never assume that a public JDK class has a public constructor.",
+                "Only after all checks pass, emit the final Java region with no reasoning prose.",
             ],
             "compile_ready_examples": [
                 {

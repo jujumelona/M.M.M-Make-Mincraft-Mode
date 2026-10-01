@@ -176,6 +176,74 @@ def public_jdk_constructor_shapes(value: str) -> tuple[dict[str, object], ...]:
     )
 
 
+def _erase_generic_type(value: str) -> str:
+    text = str(value or "").strip()
+    out: list[str] = []
+    depth = 0
+    for char in text:
+        if char == "<":
+            depth += 1
+            continue
+        if char == ">":
+            depth = max(0, depth - 1)
+            continue
+        if depth == 0:
+            out.append(char)
+    return "".join(out).strip()
+
+
+def _static_factory_shapes_from_javap(
+    text: str,
+    fqcn: str,
+) -> tuple[dict[str, object], ...]:
+    """Return public static methods that construct/return the same JDK type."""
+
+    rows: list[dict[str, object]] = []
+    for raw in str(text or "").splitlines():
+        line = raw.strip()
+        if not line.startswith("public static ") or not line.endswith(";"):
+            continue
+        match = re.match(
+            r"public\s+static\s+"
+            r"(?:(?:final|synchronized|native|strictfp)\s+)*"
+            r"(?:<[^;]+?>\s+)?"
+            r"(?P<return>[^\s(]+)\s+"
+            r"(?P<name>[A-Za-z_$][A-Za-z0-9_$]*)"
+            r"\((?P<parameters>.*)\);$",
+            line,
+        )
+        if match is None:
+            continue
+        return_type = _erase_generic_type(match.group("return"))
+        if return_type != fqcn:
+            continue
+        arity, varargs = _parameter_arity(match.group("parameters"))
+        rows.append(
+            {
+                "name": match.group("name"),
+                "arity": arity,
+                "varargs": varargs,
+                "return_type": return_type,
+            }
+        )
+    return tuple(rows)
+
+
+def public_jdk_static_factory_shapes(value: str) -> tuple[dict[str, object], ...]:
+    """Return same-type public static factory shapes for one installed-JDK type."""
+
+    fqcn = str(value or "").strip()
+    if not fqcn.startswith(("java.", "javax.")):
+        return ()
+    home = _java_home()
+    if home is None or not _public_type(str(home), fqcn):
+        return ()
+    return _static_factory_shapes_from_javap(
+        _javap_public_output(str(home), fqcn),
+        fqcn,
+    )
+
+
 def public_jdk_type_candidates(simple_name: str) -> tuple[str, ...]:
     """Return public java./javax. top-level types with this simple name."""
 
@@ -240,5 +308,6 @@ __all__ = [
     "canonical_public_jdk_type",
     "is_public_jdk_type",
     "public_jdk_constructor_shapes",
+    "public_jdk_static_factory_shapes",
     "public_jdk_type_candidates",
 ]

@@ -527,12 +527,19 @@ def class_body_object_creations(value: str) -> tuple[dict[str, Any], ...]:
             )
         if type_node is None:
             continue
+        prefix_bytes = len(prefix.encode("utf-8"))
+        start_byte = int(node.start_byte) - prefix_bytes
+        end_byte = int(node.end_byte) - prefix_bytes
+        argument_nodes = tuple(arguments.named_children) if arguments is not None else ()
         rows.append(
             {
                 "type": _text(source, type_node).strip(),
-                "argument_count": (
-                    len(arguments.named_children) if arguments is not None else 0
+                "argument_count": len(argument_nodes),
+                "arguments": tuple(
+                    _text(source, item).strip() for item in argument_nodes
                 ),
+                "start_byte": start_byte,
+                "end_byte": end_byte,
             }
         )
     return tuple(rows)
