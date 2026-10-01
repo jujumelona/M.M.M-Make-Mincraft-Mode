@@ -907,6 +907,74 @@ def test_free_markdown_nested_state_values_lower_at_production_boundary():
     assert section["specification"]["variables"][0]["owner"] == "player"
 
 
+def test_logged_free_markdown_state_lowers_without_model_cooperation():
+    class EmptyRouter:
+        def __init__(self):
+            self.calls = []
+
+        def generate_text(self, role, messages, **kwargs):
+            payload = json.loads(messages[-1]["content"])
+            self.calls.append(payload["concern"])
+            return "STATUS=EMPTY"
+
+    plan = AuthoredPlan(
+        "space mod",
+        (
+            "## state_model\n\n"
+            "모드 내 상태 모델은 플레이어의 경제력, 우주선 구축 현황, 위치 정보를 저장하는 변수와 전이 규칙으로 구성됩니다.\n\n"
+            "- **variables**:\n"
+            "    - `star_balance`: `player` 소유, `long`, 기본값 `0L`, 범위 `0 ~ 2^63-1` (화석 크레딧)\n"
+            "    - `ship_blueprint`: `player` 또는 `world_chunk` 소유, `Map<SlotType, Item>`, 기본값 `{}`\n"
+            "    - `dimension_id`: `entity`, `int`, 기본값 `-1` (지상 모드), 우주 진입 시 `-9999` (StarForge 차원)\n"
+            "- **transitions**:\n"
+            "    - `from_state`: `ground_mode` -> `dock_building` (도크 사용 시), `flying_disabled` -> `flying_capable` (연료 충전 완료 시)\n"
+            "    - `trigger`: `player_interaction`, `fuel_consumption` (추진소 연료 소모)\n"
+            "    - `guard`: `credits >= cost` (구매 조건), `inventory_slots >= count` (공간 조건)\n"
+            "    - `mutation`: `ship_blueprint.put(slot, item)`, `star_balance -= cost`\n"
+            "    - `to_state`: `building_complete`, `in_space_active`\n"
+            "- **invariants**:\n"
+            "    - `condition_enforcement`: 항상 `ship_strength <= 100%` (최대 성능 제한), `credits >= 0`\n"
+            "- **initialization**:\n"
+            "    - `owner`: `world_gen`\n"
+            "    - `trigger`: `server_load` 및 `player_first_login`\n"
+            "    - `initial_state`: 플레이어는 `ground_mode`, 크레딧은 0, 우주선 없음 상태 유지\n"
+            "- **updates**:\n"
+            "    - `trigger`: `tick_event` (우주선 연료 감수), `trade_complete` (매각 완료 시)\n"
+            "    - `owner`: `state_manager`\n"
+            "- **cleanup**:\n"
+            "    - `event`: `player_logout` 또는 `server_shutdown`\n"
+            "    - `action`: 모든 불완전한 `ship_blueprint` 제거 및 보상 처리\n"
+            "    - `retained_state`: `star_balance`는 반드시 저장됨\n"
+            "- **concurrency**:\n"
+            "    - `entry_path`: 각 `PlayerEntity` 는 독립적인 상태 관리 경로 사용\n"
+            "    - `ownership`: `server_authoritative`, 클라이언트는 읽기 전용 미리보기 권한만 가짐\n"
+            "    - `reentrancy_rule`: 동시 호출은 1 개만 허용, 나머지는 큐에 대기\n"
+            "## algorithm\n"
+            "- steps: launch flow\n"
+        ),
+    )
+    router = EmptyRouter()
+
+    section = compile_production_state_section(router, plan)
+    spec = section["specification"]
+
+    assert [row["name"] for row in spec["variables"]] == [
+        "star_balance",
+        "ship_blueprint",
+        "dimension_id",
+    ]
+    assert spec["variables"][0]["default"] == "0"
+    assert spec["transitions"][0]["mutation"] == "star_balance -= cost"
+    assert "credits >= cost" in spec["transitions"][0]["guard"]
+    assert "inventory_slots >= count" in spec["transitions"][0]["guard"]
+    assert "100%" not in spec["invariants"][0]["condition"]
+    assert spec["concurrency"]
+    assert "variables" not in router.calls
+    assert "transitions" not in router.calls
+    assert "invariants" not in router.calls
+    assert "concurrency" not in router.calls
+
+
 def test_production_state_extractor_rejects_false_empty_for_explicit_authored_values():
     class EmptyRouter:
         def generate_text(self, role, messages, **kwargs):
