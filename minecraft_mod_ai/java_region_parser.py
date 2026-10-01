@@ -459,6 +459,43 @@ def class_body_method_invocations(value: str) -> tuple[dict[str, Any], ...]:
             rows.append(row)
     return tuple(rows)
 
+def class_body_method_invocation_details(value: str) -> tuple[dict[str, Any], ...]:
+    """Return invocation arguments and method-name byte spans relative to the class body."""
+    region = str(value or "").strip()
+    if not region:
+        return ()
+    prefix = "final class __MMMRegionHost {\n"
+    prefix_bytes = len(prefix.encode("utf-8"))
+    source, root = _parse(prefix + region + "\n}\n")
+    body = _class_body(root)
+    region_size = len(region.encode("utf-8"))
+    rows: list[dict[str, Any]] = []
+    for node in _walk_named(body):
+        if node.type != "method_invocation":
+            continue
+        name = node.child_by_field_name("name")
+        arguments = node.child_by_field_name("arguments")
+        receiver = node.child_by_field_name("object")
+        if name is None:
+            continue
+        name_start = int(name.start_byte) - prefix_bytes
+        name_end = int(name.end_byte) - prefix_bytes
+        if name_start < 0 or name_end < name_start or name_end > region_size:
+            continue
+        argument_nodes = tuple(arguments.named_children) if arguments is not None else ()
+        rows.append(
+            {
+                "receiver": _text(source, receiver).strip() if receiver is not None else "",
+                "symbol": _text(source, name).strip(),
+                "argument_count": len(argument_nodes),
+                "arguments": tuple(_text(source, item).strip() for item in argument_nodes),
+                "name_start_byte": name_start,
+                "name_end_byte": name_end,
+            }
+        )
+    return tuple(rows)
+
+
 def class_body_object_creations(value: str) -> tuple[dict[str, Any], ...]:
     """Return constructed type spelling and argument count for object creation expressions."""
 

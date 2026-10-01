@@ -9,6 +9,7 @@ from minecraft_mod_ai.java_region_parser import (
     class_body_chunks,
     class_body_direct_return_calls,
     class_body_member_contracts,
+    class_body_method_invocation_details,
     class_body_object_creations,
     public_source_member_contracts,
     strict_member_chunks,
@@ -295,6 +296,20 @@ def test_tree_sitter_extracts_parenthesized_direct_return_call() -> None:
 
     assert calls[0]["method"] == "value"
     assert calls[0]["symbol"] == "readState"
+
+
+def test_tree_sitter_method_invocation_details_preserve_arguments_and_name_span() -> None:
+    source = (
+        'private static void edge(java.util.Map<String, Object> context) { '
+        'AuthoredStateModel.applyUpdate("drift_action", "left", context); }'
+    )
+    calls = class_body_method_invocation_details(source)
+    target = next(call for call in calls if call["symbol"] == "applyUpdate")
+
+    assert target["receiver"] == "AuthoredStateModel"
+    assert target["arguments"] == ('"drift_action"', '"left"', "context")
+    encoded = source.encode("utf-8")
+    assert encoded[target["name_start_byte"]:target["name_end_byte"]].decode("utf-8") == "applyUpdate"
 
 
 def test_tree_sitter_extracts_object_creation_type_and_arity() -> None:

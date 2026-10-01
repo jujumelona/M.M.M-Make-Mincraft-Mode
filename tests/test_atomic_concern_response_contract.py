@@ -44,6 +44,7 @@ def _executor(
     *,
     section: str = "algorithm",
     require_initialize: bool = False,
+    dependency_source: str = "",
 ) -> AtomicConcernExecutor:
     remaining = list(outputs)
 
@@ -70,7 +71,7 @@ def _executor(
             },
         ),
         grounding={},
-        dependency_source="",
+        dependency_source=dependency_source,
         require_initialize=require_initialize,
         call_coder=call_coder,
         compile_java=lambda _root: SimpleNamespace(status="PASS"),
@@ -93,6 +94,72 @@ def _executor(
 def test_executor_members_region_does_not_require_response_markers(output: str) -> None:
     result = _executor([output]).run()
     assert "private static final int COST = 10;" in result["source"]
+
+
+def _state_dependency_source() -> str:
+    source = """
+public final class AuthoredStateModel {
+    public static synchronized Object getState(
+            String name, java.util.Map<String, Object> context) { return null; }
+    public static synchronized void setState(
+            String name, Object value, java.util.Map<String, Object> context) {}
+    public static synchronized void applyUpdate(
+            String trigger, java.util.Map<String, Object> context) {}
+}
+""".strip()
+    return json.dumps({
+        "symbol": "AuthoredStateModel",
+        "path": "AuthoredStateModel.java",
+        "responsibility": "structured state runtime",
+        "source": source,
+    })
+
+
+def test_dependency_trigger_dispatch_misuse_is_canonicalized_without_retry() -> None:
+    executor = _executor(
+        [
+            (
+                "private static void handle(java.util.Map<String, Object> context) {\n"
+                '    AuthoredStateModel.applyUpdate("drift_action", "left", context);\n'
+                "}"
+            ),
+        ],
+        dependency_source=_state_dependency_source(),
+    )
+
+    result = executor.run()
+
+    assert 'AuthoredStateModel.setState("drift_action", "left", context);' in result["source"]
+    assert "AuthoredStateModel.applyUpdate(" not in result["source"]
+
+
+def test_dependency_call_contract_exposes_semantic_parameter_roles() -> None:
+    messages = _messages(
+        section="algorithm",
+        concern={
+            "sequence": 0,
+            "identifier": "edge",
+            "concern": "edge_cases",
+            "task": "set drift_action to left",
+            "rules": [],
+        },
+        task={"task_id": "t", "semantic_outcome": "x"},
+        grounding={},
+        dependency_source=_state_dependency_source(),
+        current_source="",
+        response_region="members",
+    )
+    payload = json.loads(messages[-1]["content"])
+    calls = payload["dependency_call_contract"]
+    apply_update = next(row for row in calls if row["method"] == "applyUpdate")
+    set_state = next(row for row in calls if row["method"] == "setState")
+
+    assert apply_update["parameter_names"] == ["trigger", "context"]
+    assert apply_update["semantic_role"] == "trigger_dispatch"
+    assert apply_update["invocation_shape"].endswith("applyUpdate(trigger, context)")
+    assert set_state["parameter_names"] == ["name", "value", "context"]
+    assert set_state["semantic_role"] == "direct_state_write"
+    assert set_state["invocation_shape"].endswith("setState(name, value, context)")
 
 
 def test_integration_members_and_initialize_are_generated_as_separate_regions() -> None:

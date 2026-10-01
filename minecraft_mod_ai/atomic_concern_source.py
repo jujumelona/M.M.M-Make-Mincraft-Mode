@@ -25,6 +25,7 @@ from .java_region_parser import (
     class_body_direct_return_calls,
     class_body_member_contracts,
     class_body_member_kinds,
+    class_body_method_invocation_details,
     class_body_method_invocations,
     class_body_object_creations,
     class_body_simple_type_occurrences,
@@ -2778,8 +2779,59 @@ def _typed_dependency_method_contracts(
     }
 
 
+def _dependency_parameter_names(contract: Mapping[str, Any]) -> tuple[str, ...]:
+    return tuple(
+        str(item.get("name") or "").strip()
+        for item in contract.get("parameters") or ()
+        if isinstance(item, Mapping)
+    )
+
+
+def _dependency_semantic_role(contract: Mapping[str, Any]) -> str:
+    """Infer only high-confidence API roles from authoritative parameter names."""
+    names = tuple(name.casefold() for name in _dependency_parameter_names(contract))
+    if names == ("name", "value", "context"):
+        return "direct_state_write"
+    if names == ("name", "context"):
+        return "contextual_state_read"
+    if names == ("name", "value"):
+        return "direct_state_write"
+    if names == ("name",):
+        return "state_read"
+    if names == ("trigger", "context"):
+        return "trigger_dispatch"
+    if names == ("event", "context"):
+        return "event_dispatch"
+    if names == ("fromstate", "trigger", "context"):
+        return "transition_dispatch"
+    return ""
+
+
+def _dependency_usage_rule(role: str) -> str:
+    return {
+        "direct_state_write": (
+            "Direct key/value state assignment. Use this role when authored logic sets "
+            "a named state value; the value is not a trigger."
+        ),
+        "contextual_state_read": "Read a named state value using the supplied context overlay.",
+        "state_read": "Read a named persistent state value.",
+        "trigger_dispatch": (
+            "Dispatch registered actions by trigger. The context argument is execution "
+            "context; this is not a key/value setter and never accepts a state value."
+        ),
+        "event_dispatch": (
+            "Dispatch registered cleanup/event actions by event. This is not a direct "
+            "key/value state mutation."
+        ),
+        "transition_dispatch": (
+            "Evaluate registered transition rules from a concrete fromState under a trigger. "
+            "This does not assign an arbitrary state key/value."
+        ),
+    }.get(role, "")
+
+
 def _dependency_call_contracts(raw: str) -> list[dict[str, Any]]:
-    """Flatten exact dependency call signatures for small-model source generation."""
+    """Flatten exact dependency call signatures plus semantic parameter roles."""
 
     rows: list[dict[str, Any]] = []
     for owner, methods in sorted(_typed_dependency_method_contracts(raw).items()):
@@ -2790,18 +2842,143 @@ def _dependency_call_contracts(raw: str) -> list[dict[str, Any]]:
                     for item in contract.get("parameters") or ()
                     if isinstance(item, Mapping)
                 ]
-                rows.append(
-                    {
-                        "owner": owner,
-                        "method": name,
-                        "arity": len(parameters),
-                        "parameter_types": parameters,
-                        "return_type": str(contract.get("return_type") or "").strip(),
-                        "static": bool(contract.get("static") is True),
-                        "call_shape": f"{owner}.{name}(" + ", ".join(parameters) + ")",
-                    }
-                )
+                parameter_names = list(_dependency_parameter_names(contract))
+                semantic_role = _dependency_semantic_role(contract)
+                row = {
+                    "owner": owner,
+                    "method": name,
+                    "arity": len(parameters),
+                    "parameter_types": parameters,
+                    "parameter_names": parameter_names,
+                    "return_type": str(contract.get("return_type") or "").strip(),
+                    "static": bool(contract.get("static") is True),
+                    "call_shape": f"{owner}.{name}(" + ", ".join(parameters) + ")",
+                    "invocation_shape": (
+                        f"{owner}.{name}(" + ", ".join(parameter_names) + ")"
+                    ),
+                }
+                usage_rule = _dependency_usage_rule(semantic_role)
+                if semantic_role:
+                    row["semantic_role"] = semantic_role
+                if usage_rule:
+                    row["usage_rule"] = usage_rule
+                rows.append(row)
     return rows
+
+
+def _canonicalize_dependency_call_semantics(
+    value: str,
+    *,
+    dependency_source: str,
+) -> tuple[str, tuple[str, ...]]:
+    """Repair only mechanically determined dispatcher-as-setter dependency misuse.
+
+    A small coder can confuse a two-argument trigger dispatcher with a three-argument
+    key/value setter. The host rewrites only when authoritative parameter roles prove
+    that mismatch, the final argument is the exact context variable, and the same
+    owner exposes exactly one static direct-state-write signature with arity three.
+    Every ambiguous case remains validator-owned and is never guessed.
+    """
+
+    source = str(value or "").strip()
+    if not source or not dependency_source:
+        return source, ()
+    dependencies = _typed_dependency_method_contracts(dependency_source)
+    if not dependencies:
+        return source, ()
+
+    edits: list[tuple[int, int, str, str]] = []
+    for call in class_body_method_invocation_details(source):
+        receiver = str(call.get("receiver") or "").strip()
+        symbol = str(call.get("symbol") or "").strip()
+        arguments = tuple(str(arg or "").strip() for arg in call.get("arguments") or ())
+        owner_methods = dependencies.get(receiver)
+        if not owner_methods or not symbol:
+            continue
+
+        current_contracts = tuple(owner_methods.get(symbol) or ())
+        if not current_contracts:
+            continue
+        arity = len(arguments)
+        if any(
+            item.get("static") is True
+            and len(item.get("parameters") or ()) == arity
+            for item in current_contracts
+        ):
+            continue
+
+        current_roles = {
+            _dependency_semantic_role(item)
+            for item in current_contracts
+            if item.get("static") is True
+        }
+        if not current_roles.intersection({"trigger_dispatch", "event_dispatch"}):
+            continue
+        if arity != 3 or not arguments or arguments[-1] != "context":
+            continue
+
+        replacements: set[str] = set()
+        for candidate_name, candidate_contracts in owner_methods.items():
+            for contract in candidate_contracts:
+                if (
+                    contract.get("static") is True
+                    and len(contract.get("parameters") or ()) == arity
+                    and _dependency_semantic_role(contract) == "direct_state_write"
+                ):
+                    replacements.add(candidate_name)
+        if len(replacements) != 1:
+            continue
+        replacement = next(iter(replacements))
+        if replacement == symbol:
+            continue
+        edits.append(
+            (
+                int(call["name_start_byte"]),
+                int(call["name_end_byte"]),
+                replacement,
+                f"{receiver}.{symbol}/{arity}->{receiver}.{replacement}/{arity}",
+            )
+        )
+
+    if not edits:
+        return source, ()
+
+    encoded = source.encode("utf-8")
+    for start, end, replacement, _description in sorted(edits, reverse=True):
+        encoded = encoded[:start] + replacement.encode("utf-8") + encoded[end:]
+    return encoded.decode("utf-8"), tuple(item[3] for item in edits)
+
+
+def _dependency_repair_contract(raw: str, diagnostic: str) -> dict[str, Any] | None:
+    """Project one dependency diagnostic to the exact owner-local callable surface."""
+    match = re.search(
+        r"dependency API\s+([A-Za-z_$][A-Za-z0-9_$.]*)\."
+        r"([A-Za-z_$][A-Za-z0-9_$]*)\s+called with\s+(\d+)\s+argument",
+        str(diagnostic or ""),
+    )
+    if match is None:
+        return None
+    owner, method, arity_text = match.groups()
+    owner_rows = [
+        row for row in _dependency_call_contracts(raw)
+        if row.get("owner") == owner
+    ]
+    if not owner_rows:
+        return None
+    return {
+        "owner": owner,
+        "rejected_method": method,
+        "rejected_arity": int(arity_text),
+        "authoritative_calls": owner_rows,
+        "rules": (
+            "Use only one authoritative call listed here. parameter_names are semantic "
+            "roles, not decoration. A trigger_dispatch/event_dispatch call consumes a "
+            "trigger/event plus context and must never be used as a key/value setter. "
+            "For a direct state assignment choose a direct_state_write signature. "
+            "Do not add, remove, reorder, or invent dependency arguments outside an "
+            "authoritative invocation_shape."
+        ),
+    }
 
 
 def _simple_object_type(value: Any) -> bool:
@@ -3662,9 +3839,11 @@ def _messages(
         )
         + "Use only supplied host grounding and dependency APIs; never invent a Minecraft/Fabric API. "
         "dependency_call_contract is exhaustive for dependency method calls: match owner, method, "
-        "static=true, arity, and parameter types exactly. If no exact row exists, do not emit the call. "
-        "Never add arguments to a zero-arity method. Never call a dependency initialize/onInitialize "
-        "lifecycle hook from a concern region."
+        "static=true, arity, parameter types, and parameter_names exactly. parameter_names are semantic "
+        "roles: never use a trigger_dispatch/event_dispatch method as a key/value setter; use an exact "
+        "direct_state_write signature for direct named-state assignment. If no exact row exists, do not "
+        "emit the call. Never add arguments to a zero-arity method. Never call a dependency initialize/"
+        "onInitialize lifecycle hook from a concern region."
     )
     payload = {
         "phase": "implement_atomic_concern_region",
@@ -3724,10 +3903,12 @@ def _messages(
             "sibling_api_is_authoritative": True,
             "dependency_call_contract_is_exhaustive": True,
             "dependency_call_rule": (
-                "Before emitting Owner.method(...), match owner, method, arity, and static=true "
-                "against dependency_call_contract. If no exact row exists, do not emit that call. "
-                "Never add arguments to a zero-arity method. Dependency initialize/onInitialize "
-                "hooks are host-orchestrated; concern regions must not call them."
+                "Before emitting Owner.method(...), match owner, method, arity, static=true, and "
+                "parameter_names against dependency_call_contract. Treat parameter_names as semantic "
+                "roles. trigger_dispatch/event_dispatch methods are not key/value setters; direct "
+                "state assignment requires a direct_state_write signature. If no exact row exists, "
+                "do not emit that call. Dependency initialize/onInitialize hooks are host-orchestrated; "
+                "concern regions must not call them."
             ),
             "never_mutate_final_sibling_fields": True,
             "declare_missing_concern_local_state": (
@@ -3967,6 +4148,7 @@ class AtomicConcernExecutor:
         seen_violations: set[tuple[str, str]] = set()
         repair_failure = failure
         correction = None
+        dependency_repair = None
         rejected_region = ""
         attempt_limit = (
             _region_attempt_limit()
@@ -4100,6 +4282,13 @@ class AtomicConcernExecutor:
                             "\nCORRECTION TURN: region_correction narrows this response to "
                             "the listed selected declarations. The host retains all others."
                         )
+                    if dependency_repair is not None:
+                        payload["dependency_repair_contract"] = dependency_repair
+                        messages[0]["content"] += (
+                            "\nDEPENDENCY CORRECTION TURN: dependency_repair_contract is "
+                            "authoritative. Select only a listed invocation_shape and preserve "
+                            "its parameter roles exactly."
+                        )
                     messages[-1]["content"] = json.dumps(payload, ensure_ascii=False)
                 output = generate_region(
                     self.call_coder, messages, completion_decider=self.completion_decider,
@@ -4141,6 +4330,27 @@ class AtomicConcernExecutor:
                         },
                     )
                 if response_region == "members":
+                    dependency_canonical, dependency_changes = (
+                        _canonicalize_dependency_call_semantics(
+                            parsed,
+                            dependency_source=self.dependency_source,
+                        )
+                    )
+                    if dependency_changes:
+                        from .root_cause_trace import emit_root_cause
+
+                        emit_root_cause(
+                            "atomic_concern_dependency_call_canonicalized",
+                            stage="production",
+                            operation="atomic_concern_region",
+                            gate="dependency_call_semantic_canonicalization",
+                            result="PASS",
+                            details={
+                                "concern": name,
+                                "changes": list(dependency_changes),
+                            },
+                        )
+                    parsed = dependency_canonical
                     sibling_names = tuple(
                         _slug(item["concern"])
                         for item in self.ordered
@@ -4326,6 +4536,10 @@ class AtomicConcernExecutor:
                 else:
                     self.first_pass_rejections += 1
 
+                dependency_repair = _dependency_repair_contract(
+                    self.dependency_source,
+                    reason,
+                )
                 if candidate_merged:
                     # Preserve the actual rejected source; do not ask the model to
                     # recreate it from the original blank scaffold and an error name.
