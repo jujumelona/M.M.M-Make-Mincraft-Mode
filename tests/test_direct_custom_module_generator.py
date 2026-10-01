@@ -1331,10 +1331,13 @@ def test_graph_owned_atomic_leaf_defers_gradle_until_graph_boundary(
         == "host_semantic_validation_deferred_to_implementation_graph"
     )
 
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
 def test_pipeline_deferred_whole_file_generation_skips_gradle_but_commits_source(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, newline
 ) -> None:
     root, path, symbol = _project(tmp_path)
+    target = root / path
+    target.write_bytes(target.read_text(encoding="utf-8").replace("\n", newline).encode("utf-8"))
     source = (
         "package example;\n\n"
         "public final class AuthoredFeature001 {\n"
@@ -1391,4 +1394,3 @@ def test_pipeline_deferred_whole_file_generation_skips_gradle_but_commits_source
         result["generation_verification"]["mode"]
         == "host_source_validation_deferred_to_pipeline"
     )
-

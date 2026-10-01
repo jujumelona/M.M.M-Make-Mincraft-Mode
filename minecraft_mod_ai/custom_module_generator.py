@@ -2530,23 +2530,23 @@ class CustomModuleGenerator:
                     with project_path_write_locks(root, (relative,)):
                         if target_existed:
                             try:
-                                current = target.read_text(encoding="utf-8")
-                            except (OSError, UnicodeError) as exc:
+                                current_bytes = target.read_bytes()
+                            except OSError as exc:
                                 raise CustomModuleGenerationError(
                                     f"DIRECT_CODER_TARGET_DRIFT: {relative}: {exc}"
                                 ) from exc
-                            if _sha256_text(current) != before_sha:
+                            if "sha256:" + hashlib.sha256(current_bytes).hexdigest() != before_sha:
                                 raise CustomModuleGenerationError(
                                     f"DIRECT_CODER_TARGET_DRIFT: {relative} changed during generation."
                                 )
                         elif target.exists():
                             try:
-                                current = target.read_text(encoding="utf-8")
-                            except (OSError, UnicodeError) as exc:
+                                current_bytes = target.read_bytes()
+                            except OSError as exc:
                                 raise CustomModuleGenerationError(
                                     f"DIRECT_CODER_TARGET_DRIFT: {relative}: {exc}"
                                 ) from exc
-                            if _sha256_text(current) != before_sha:
+                            if "sha256:" + hashlib.sha256(current_bytes).hexdigest() != before_sha:
                                 raise CustomModuleGenerationError(
                                     f"DIRECT_CODER_TARGET_DRIFT: {relative} appeared with different content during generation."
                                 )

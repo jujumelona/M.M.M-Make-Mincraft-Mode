@@ -4039,7 +4039,9 @@ class AtomicConcernExecutor:
             output_text = ""
             output_sha = ""
             try:
-                output = self.call_coder(_messages(
+                from .atomic_region_paging import generate_region
+
+                output = generate_region(self.call_coder, _messages(
                     section=self.section,
                     concern=concern,
                     task=self.task,

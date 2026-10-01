@@ -3274,8 +3274,11 @@ def test_host_removes_only_standalone_dependency_lifecycle_calls() -> None:
     assert "AuthoredStateModel.getState(\"credits\")" in repaired
 
 
-def test_output_budget_exhaustion_escapes_atomic_executor_for_graph_decomposition() -> None:
+def test_exhausted_single_member_stops_without_changing_graph_ownership() -> None:
+    calls = []
+
     def exhausted(_messages):
+        calls.append(_messages)
         raise OutputBudgetExhausted(
             "OUTPUT_BUDGET_EXHAUSTED: return to implementation decomposition"
         )
@@ -3310,5 +3313,7 @@ def test_output_budget_exhaustion_escapes_atomic_executor_for_graph_decompositio
         compile_repair_limit=0,
     )
 
-    with pytest.raises(OutputBudgetExhausted):
+    with pytest.raises(CustomModuleGenerationError, match="ATOMIC_REGION_UNIT_TOO_LARGE"):
         executor.run()
+    assert len(calls) == 2
+    assert "region_page" in json.loads(calls[-1][-1]["content"])

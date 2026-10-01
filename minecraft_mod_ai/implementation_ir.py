@@ -17,7 +17,7 @@ from .custom_module_errors import CustomModuleGenerationError
 from .implementation_lifecycle import activation_public_api
 
 IMPLEMENTATION_IR_DRAFT_SCHEMA_VERSION = "mmm/implementation-ir-draft-v16"
-IMPLEMENTATION_IR_SCHEMA_VERSION = "mmm/implementation-ir-v3"
+IMPLEMENTATION_IR_SCHEMA_VERSION = "mmm/implementation-ir-v4"
 
 
 class ImplementationGraphError(CustomModuleGenerationError):
@@ -84,12 +84,6 @@ PAGE_SCHEMA = {
 }
 
 
-def _canonical_authored_role(value: Any) -> bool:
-    from .authored_execution_schema import section_spec
-
-    return section_spec(str(value or "").strip()) is not None
-
-
 def _canonical_authored_internal_node(raw: Any) -> bool:
     if not isinstance(raw, Mapping):
         return False
@@ -98,6 +92,13 @@ def _canonical_authored_internal_node(raw: Any) -> bool:
     from .authored_execution_schema import section_for_symbol
 
     return bool(section_for_symbol(str(raw.get("symbol") or "").strip()))
+
+
+def uses_atomic_regions(node: Mapping[str, Any]) -> bool:
+    """Canonical Java owners decode per concern/member, never as one whole file."""
+    from .authored_execution_schema import section_for_symbol
+
+    return node.get("kind") == "java" and bool(section_for_symbol(str(node.get("symbol") or "")))
 
 
 def _allow_empty_internal_public_api(schema: dict[str, Any]) -> dict[str, Any]:
@@ -124,14 +125,16 @@ def _allow_empty_internal_public_api(schema: dict[str, Any]) -> dict[str, Any]:
 def _page_schema(payload: Mapping[str, Any]) -> dict[str, Any]:
     schema = deepcopy(PAGE_SCHEMA)
     item = schema["properties"]["nodes"]["items"]
-    current_units = payload.get("current_units") or ()
-    if (
-        isinstance(current_units, (list, tuple))
-        and current_units
-        and _canonical_authored_role(current_units[0])
-    ):
-        item = _allow_empty_internal_public_api(item)
-        schema["properties"]["nodes"]["items"] = item
+    from .authored_execution_schema import SECTION_SPECS
+
+    canonical_pattern = "^(?:" + "|".join(
+        re.escape(str(spec["symbol"])) for spec in SECTION_SPECS.values()
+    ) + r")(?:Part[1-9][0-9]*)*$"
+    # Page and final-node admission must agree even outside a current_units
+    # compilation page (refinement/checkpoint paths). Generic owners remain strict.
+    item["allOf"][1]["if"]["not"] = {
+        "properties": {"symbol": {"pattern": canonical_pattern}}
+    }
     reqs = list(payload.get("requirements", {}))
     if reqs:
         item["properties"]["requirements"]["items"] = {"type": "string", "enum": reqs}
@@ -1305,7 +1308,8 @@ def compile_graph(router: Any, *, text: str, package: str, mod_id: str,
     if runtime_budget is not None:
         while True:
             oversized = next(
-                (node for node in nodes if node_cost(node) > runtime_budget),
+                (node for node in nodes if not uses_atomic_regions(node)
+                 and node_cost(node) > runtime_budget),
                 None,
             )
             if oversized is None:

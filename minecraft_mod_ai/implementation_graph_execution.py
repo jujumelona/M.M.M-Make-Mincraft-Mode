@@ -4,8 +4,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from contextlib import nullcontext
 from collections.abc import Mapping
+from contextlib import nullcontext
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -21,6 +21,7 @@ from .implementation_ir import (
     node_cost,
     ordered_nodes,
     refine_node,
+    uses_atomic_regions,
     validate_node,
 )
 from .implementation_lifecycle import ACTIVATION_API, activation_call
@@ -485,7 +486,8 @@ def execute_implementation_graph(generator: Any, project_root: str | Path, *,
                 reason = ""
                 if fingerprint in state["blocked_decodes"]:
                     reason = "OUTPUT_BUDGET_EXHAUSTED"
-                elif runtime_budget is not None and node_cost(node) > runtime_budget:
+                elif (not uses_atomic_regions(node) and runtime_budget is not None
+                      and node_cost(node) > runtime_budget):
                     reason = "preflight_output_budget"
                 if not reason:
                     if node["path"] == request["entrypoint_path"]:
