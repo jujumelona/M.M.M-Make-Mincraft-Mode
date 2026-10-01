@@ -955,13 +955,19 @@ def _canonicalize_tree_sitter_jdk_types(
 def _canonicalize_local_final_rebindings(
     value: str,
 ) -> tuple[str, tuple[str, ...]]:
-    """Remove final only from concern-local initialized fields that this region rebinds.
+    """Normalize mechanically impossible concern-local final field shapes.
 
-    The model can emit an initialized private static final backing field together
-    with a setter that reassigns the field. Because both declaration and assignment
-    are owned by the same atomic region, the host preserves the authored rebinding
-    semantics by dropping only that local final modifier. Sibling/dependency fields
-    are never rewritten here.
+    The host-owned outer class has a private constructor and atomic concerns are
+    forbidden from declaring another outer constructor. Two cases are therefore
+    safe to canonicalize before semantic validation:
+
+    * an initialized concern-local final field that the same region rebinds: drop
+      only final and preserve the authored rebinding;
+    * an uninitialized (blank) final outer field: it has no legal concern-owned
+      definite-assignment path, so lower it to the production backing-state shape:
+      static and non-final.
+
+    Sibling/dependency fields are never rewritten here.
     """
 
     source = str(value or "").strip()
@@ -969,9 +975,6 @@ def _canonicalize_local_final_rebindings(
         return source, ()
 
     assigned = set(class_body_assignment_targets(source))
-    if not assigned:
-        return source, ()
-
     chunks = class_body_chunks(source)
     kinds = class_body_member_kinds(source)
     if len(chunks) != len(kinds):
@@ -994,18 +997,19 @@ def _canonicalize_local_final_rebindings(
             rendered.append(chunk)
             continue
 
+        # Keep rewriting narrowly mechanical. Multi-declarator fields can mix
+        # initialization states, so leave those to validator/model correction.
         if len(fields) != 1:
             rendered.append(chunk)
             continue
 
         field = fields[0]
         symbol = str(field.get("symbol") or "").strip()
-        if (
-            not symbol
-            or symbol not in assigned
-            or field.get("mutable") is not False
-            or field.get("initialized") is not True
-        ):
+        is_final = field.get("mutable") is False
+        initialized = field.get("initialized") is True
+        rebound = bool(symbol and initialized and symbol in assigned)
+        blank_final = bool(symbol and is_final and not initialized)
+        if not is_final or not (rebound or blank_final):
             rendered.append(chunk)
             continue
 
@@ -1013,8 +1017,28 @@ def _canonicalize_local_final_rebindings(
         if normalized == chunk:
             rendered.append(chunk)
             continue
+
+        if blank_final and field.get("static") is not True:
+            visibility = re.match(
+                r"^\s*(?:(?:public|protected|private)\s+)",
+                normalized,
+            )
+            if visibility is not None:
+                insert_at = visibility.end()
+                normalized = (
+                    normalized[:insert_at]
+                    + "static "
+                    + normalized[insert_at:]
+                )
+            else:
+                normalized = "static " + normalized.lstrip()
+            changes.append(f"{symbol}:blank-final->static-mutable")
+        elif blank_final:
+            changes.append(f"{symbol}:blank-final->mutable")
+        else:
+            changes.append(f"{symbol}:final->mutable")
+
         rendered.append(normalized)
-        changes.append(f"{symbol}:final->mutable")
 
     normalized = "\n\n".join(
         item.strip() for item in rendered if item.strip()
@@ -1025,7 +1049,6 @@ def _canonicalize_local_final_rebindings(
         except JavaRegionParseError:
             return source, ()
     return normalized, tuple(changes)
-
 
 def _canonicalize_jdk_construction_semantics(
     value: str,
@@ -4017,9 +4040,12 @@ def _messages(
             "only concern-owned private nested runtime types when genuinely required. "
             "Reuse available_sibling_api/dependency_api exactly; do not redeclare sibling state. "
             "If this concern needs state not present in available_sibling_api, declare the minimal "
-            "private static concern-local backing field. Use fully-qualified JDK/external types "
-            "when imports would otherwise be required. The existing outer class constructor and "
-            "lifecycle are host-owned. Keep methods bounded and concern-local."
+            "private static concern-local backing field. Outer concern fields must not depend on "
+            "constructor assignment: the host-owned outer constructor is private, so never emit a "
+            "blank final outer field. Use an initialized constant or private static non-final backing "
+            "state instead. Use fully-qualified JDK/external types when imports would otherwise be "
+            "required. The existing outer class constructor and lifecycle are host-owned. Keep "
+            "methods bounded and concern-local."
         )
         if name in _DECLARATION_ONLY_CONCERNS:
             response_contract += (
