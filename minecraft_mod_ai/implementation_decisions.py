@@ -260,6 +260,7 @@ def compile_contribution(router: Any, name: str, payload: dict[str, Any],
     packet = work_packet(
         payload["requirements"], payload.get("unit_context") or payload["requirements"]
     )
+    role, _section_contract = _required_section_contract(payload)
     owners = {node["symbol"]: node for node in payload.get("accepted_nodes", [])}
     symbol = _host_owner_symbol(payload)
     owner = owners.get(symbol)
@@ -277,7 +278,10 @@ def compile_contribution(router: Any, name: str, payload: dict[str, Any],
         "obligations": obligations,
         "public_api": _host_public_api(payload),
         "depends_on": _role_dependencies(payload),
-        "activation": True,
+        # Lifecycle activation belongs only to the canonical integration unit.
+        # Ordinary authored sections are dependency/library units and must never be
+        # given the host initialize() ABI merely to satisfy a source-generation shape.
+        "activation": role == "integration",
         "estimated_tokens": estimated_tokens,
     }
     return {"nodes": [node]}
