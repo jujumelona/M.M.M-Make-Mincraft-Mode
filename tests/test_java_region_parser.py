@@ -88,6 +88,30 @@ def test_tree_sitter_canonicalizes_leading_jdk_imports_in_member_region() -> Non
     assert "new java.util.ArrayList<>()" in admitted
 
 
+def test_tree_sitter_rejects_raw_package_declaration_as_member_structure() -> None:
+    with pytest.raises(JavaRegionParseError, match="package declaration"):
+        admit_member_region("package escaped;")
+
+
+def test_tree_sitter_recovers_package_outer_class_and_jdk_imports() -> None:
+    admitted = admit_member_region(
+        """
+package accidental;
+import java.util.concurrent.atomic.AtomicLong;
+
+public class WrongOuter {
+    private static final AtomicLong VALUE = new AtomicLong(0L);
+    public static long next() { return VALUE.incrementAndGet(); }
+}
+"""
+    )
+
+    assert "package accidental" not in admitted
+    assert "class WrongOuter" not in admitted
+    assert "java.util.concurrent.atomic.AtomicLong VALUE" in admitted
+    assert "VALUE.incrementAndGet()" in admitted
+
+
 def test_tree_sitter_canonicalizes_jdk_import_static_receiver() -> None:
     admitted = admit_member_region(
         "import java.util.Objects;\n"

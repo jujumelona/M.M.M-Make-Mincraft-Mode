@@ -652,7 +652,30 @@ def _unwrap_single_outer_class(value: str) -> tuple[str, ...]:
         raise JavaRegionParseError(
             "outer-class envelope contained no admissible concern members after host lifecycle removal"
         )
-    return chunks
+
+    imports: dict[str, str] = {}
+    for node in root.named_children:
+        if node.type != "import_declaration":
+            continue
+        rendered = _text(source, node).strip()
+        match = _EXPLICIT_JDK_IMPORT.fullmatch(rendered)
+        if match is None or not member_jdk_import_allowed(match.group(1)):
+            raise JavaRegionParseError(
+                "outer-class member recovery only admits explicit java.* imports"
+            )
+        fqcn = match.group(1)
+        simple = fqcn.rsplit(".", 1)[-1]
+        existing = imports.get(simple)
+        if existing is not None and existing != fqcn:
+            raise JavaRegionParseError(
+                f"ambiguous JDK imports for simple type {simple!r}"
+            )
+        imports[simple] = fqcn
+
+    if not imports:
+        return chunks
+    canonical = _qualify_imported_jdk_names("\n\n".join(chunks), imports)
+    return strict_member_chunks(canonical)
 
 
 def _fence_language(info: object) -> str:
@@ -924,31 +947,72 @@ def _host_initialize_only_member_candidate(region: str) -> bool:
     return bool(nodes) and all(_is_host_initialize(node, source) for node in nodes)
 
 
+def _raw_compilation_unit_envelope_kinds(region: str) -> frozenset[str]:
+    """Return host-envelope node kinds from raw Java without lexical guessing."""
+
+    source = str(region or "").encode("utf-8")
+    tree = _parser().parse(source)
+    return frozenset(
+        child.type
+        for child in tree.root_node.named_children
+        if child.type in {
+            "package_declaration",
+            "import_declaration",
+            "class_declaration",
+            "interface_declaration",
+            "enum_declaration",
+            "record_declaration",
+        }
+    )
+
+
 def _admit_member_candidate(region: str) -> tuple[str, ...]:
     """Admit one candidate Java payload; host-owned lifecycle nodes are discarded."""
     candidate = str(region or "").strip()
     if not candidate:
         return ()
     prefix = "final class __MMMRegionHost {\n"
-    try:
-        source, root = _parse(prefix + candidate + "\n}\n")
-        body = _class_body(root)
-        chunks = _chunks_from_body(body, source, drop_host_lifecycle=True)
-        if chunks:
-            return chunks
-    except JavaRegionParseError:
-        pass
+    envelope_kinds = _raw_compilation_unit_envelope_kinds(candidate)
+    has_outer_type = bool(
+        envelope_kinds
+        & {
+            "class_declaration",
+            "interface_declaration",
+            "enum_declaration",
+            "record_declaration",
+        }
+    )
 
-    try:
-        canonical = _canonicalize_member_jdk_imports(candidate)
-        if canonical is not None:
-            source, root = _parse(prefix + canonical + "\n}\n")
+    # A package/import/type envelope is compilation-unit structure, never a class
+    # member. Do not feed it through the class-body parser where tolerant parsing
+    # can reinterpret keywords as identifiers. Recovery below handles JDK imports
+    # and one accidental outer class structurally.
+    if not envelope_kinds:
+        try:
+            source, root = _parse(prefix + candidate + "\n}\n")
             body = _class_body(root)
             chunks = _chunks_from_body(body, source, drop_host_lifecycle=True)
             if chunks:
                 return chunks
-    except JavaRegionParseError:
-        pass
+        except JavaRegionParseError:
+            pass
+
+    if "package_declaration" in envelope_kinds and not has_outer_type:
+        raise JavaRegionParseError(
+            "package declaration is compilation-unit structure and cannot be a concern member"
+        )
+
+    if "package_declaration" not in envelope_kinds and not has_outer_type:
+        try:
+            canonical = _canonicalize_member_jdk_imports(candidate)
+            if canonical is not None:
+                source, root = _parse(prefix + canonical + "\n}\n")
+                body = _class_body(root)
+                chunks = _chunks_from_body(body, source, drop_host_lifecycle=True)
+                if chunks:
+                    return chunks
+        except JavaRegionParseError:
+            pass
 
     return _unwrap_single_outer_class(candidate)
 
