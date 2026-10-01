@@ -79,6 +79,34 @@ def test_only_integration_owns_authored_lifecycle_activation():
     assert by_symbol["AuthoredPersistence"]["public_api"] == []
 
 
+def test_empty_public_api_exception_is_scoped_to_canonical_authored_internal_nodes():
+    router = NoPlanningModelRouter()
+    graph = compile_with(router, text=STRICT_DESIGN, authored_schema=True)
+    failure = next(
+        node for node in graph["nodes"]
+        if node["symbol"] == "AuthoredFailureLimits"
+    )
+    assert failure["activation"] is False
+    assert failure["public_api"] == []
+
+    generic = {
+        "symbol": "GenericInternal",
+        "kind": "java",
+        "resource_path": "",
+        "responsibility": "generic internal",
+        "requirements": ["R1"],
+        "obligations": ["implement generic internal"],
+        "public_api": [],
+        "depends_on": [],
+        "activation": False,
+        "estimated_tokens": 128,
+    }
+    import pytest
+
+    with pytest.raises(ir.ImplementationGraphError, match="IMPLEMENTATION_IR_INVALID_NODE"):
+        ir.validate_node(generic, package="example", mod_id="test", refs={"R1"})
+
+
 def test_peer_behavior_packets_extend_one_named_owner_without_model_semantics():
     router = NoPlanningModelRouter()
     text = STRICT_DESIGN.replace(
