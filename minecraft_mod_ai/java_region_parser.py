@@ -1241,8 +1241,11 @@ def admit_initialize_region(value: str) -> str:
         for shape in shapes:
             try:
                 recovered = _recover_initialize_shape(candidate, shape)
-                if recovered or not candidate.strip():
-                    return recovered
+                # A successfully parsed initialize region may intentionally lower
+                # to no statements (for example, an initialize() wrapper whose
+                # body contains comments only). Empty is therefore a valid no-op,
+                # not evidence that recovery failed.
+                return recovered
             except JavaRegionParseError as exc:
                 detail = f"{shape}: {exc}"
                 if detail not in errors:
