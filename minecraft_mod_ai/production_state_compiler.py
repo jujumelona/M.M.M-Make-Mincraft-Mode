@@ -92,12 +92,19 @@ def _concern_source(source: str, concern: str) -> str:
 
 
 def _concern_has_explicit_payload(source: str, concern: str) -> bool:
-    """Detect canonical template rows that visibly contain authored values."""
+    """Detect authored state values across canonical and free-Markdown shapes.
+
+    The free planner writes readable Markdown, so a concern can carry its values in
+    nested bullets instead of on the concern header or as field=value records. Treat
+    those child bullets as authored payload; otherwise production can silently classify
+    real state requirements as EMPTY and the host-only state compiler rejects the job.
+    """
 
     block = _concern_source(source, concern)
     if not block:
         return False
-    first = block.splitlines()[0]
+    lines = block.splitlines()
+    first = lines[0]
     match = re.match(
         rf"^\s*-\s*(?:\*\*|__)?{re.escape(concern)}(?:\*\*|__)?\s*:\s*(.*)$",
         first,
@@ -107,21 +114,33 @@ def _concern_has_explicit_payload(source: str, concern: str) -> bool:
     body = match.group(1).strip()
     fields = tuple(DETAIL_RECORDS["state_model"][concern].split())
     if not fields:
-        return bool(body)
+        return bool(body or any(line.strip() for line in lines[1:]))
 
-    # The planner template starts with the fixed field descriptor. A completed
-    # authored row normally appends another ':' followed by concrete values.
     field_pattern = r"\s+".join(re.escape(field) for field in fields)
-    descriptor = re.match(rf"^{field_pattern}\s*:\s*(.+)$", body)
-    if descriptor is not None:
-        return bool(descriptor.group(1).strip())
+    normalized_body = " ".join(body.split())
+    normalized_descriptor = " ".join(fields)
 
-    # Structured Markdown projections use field=value rows under the concern.
-    return any(
+    # A bare field descriptor is only the planner template. Any other inline text is
+    # authored state content, including natural-language shorthand.
+    if normalized_body and normalized_body != normalized_descriptor:
+        descriptor = re.match(rf"^{field_pattern}\s*:\s*(.+)$", body)
+        if descriptor is not None:
+            return bool(descriptor.group(1).strip())
+        return True
+
+    # Structured projections use field=value rows. Free Markdown plans instead use
+    # nested list items such as "- **variables**:" followed by "- `credits`: ...".
+    if any(
         re.search(rf"(?<![A-Za-z0-9_]){re.escape(field)}\s*=", block)
         for field in fields
-    )
+    ):
+        return True
 
+    return any(
+        re.match(r"^(?:[-*+]\s+|\d+[.)]\s+)\S", line.strip())
+        for line in lines[1:]
+        if line.strip()
+    )
 
 def _json_key(value: Mapping[str, Any]) -> str:
     return json.dumps(dict(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -225,8 +244,11 @@ def _generate_concern_records(
         "String/state literals must be quoted. Never use Java enum/member syntax such "
         "as ShipStatus.COMPLETE; write a quoted literal such as \"COMPLETE\". "
         "The host supplies only the selected concern when it can isolate it. "
+        "Approved authored values may be written as nested Markdown bullets rather than "
+        "field=value rows. Map those bullets semantically into the supplied fields; a "
+        "noncanonical Markdown shape is never a reason to return EMPTY. "
         "The user payload contains contains_authored_values, computed deterministically by "
-        "the host from the fixed concern descriptor. When it is true, STATUS=EMPTY is invalid "
+        "the host from the authored concern block. When it is true, STATUS=EMPTY is invalid "
         "and at least one RECORD must be emitted. "
         "If this concern truly has no concrete requirement in the approved plan, output only "
         "STATUS=EMPTY. Otherwise output at most the host record_limit records. "
