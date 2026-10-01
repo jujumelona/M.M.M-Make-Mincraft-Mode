@@ -1,9 +1,20 @@
 from __future__ import annotations
 
+import inspect
+
 import pytest
 
 from minecraft_mod_ai.execution_contract_policy import (
+    RECOVERABLE_ATOMIC_ERROR_PREFIXES,
+    TERMINAL_AFTER_NORMALIZATION_PREFIXES,
     DEFAULT_ATOMIC_SCHEMA_LIMITS,
+    JAVA_NESTED_TYPE_REQUIRED_VISIBILITY,
+    assert_execution_contract_consistent,
+    atomic_error_recoverable,
+    atomic_error_terminal_after_normalization,
+    authorized_concern_nested_type_symbols,
+    java_generation_recipe_contract,
+    java_region_system_prompt_contract,
     PRODUCTION_COMPILE_REPAIR_LIMIT,
     PRODUCTION_RETRY_STRUCTURAL_REJECTIONS,
     SCHEMA_CONTRACT_PROFILE_KEY,
@@ -105,3 +116,59 @@ def test_host_contract_annotations_do_not_leak_to_model_tool_schema() -> None:
     rendered = repr(transport)
     assert SCHEMA_STRING_CLASS_KEY not in rendered
     assert transport["properties"]["operations"]["items"]["anyOf"][0]["properties"]["content"]["maxLength"] == SOURCE_REPAIR_MAX_SOURCE_CHARS
+
+
+
+def test_execution_contract_self_check_and_error_taxonomy_are_central() -> None:
+    assert_execution_contract_consistent()
+    assert set(TERMINAL_AFTER_NORMALIZATION_PREFIXES) <= set(
+        RECOVERABLE_ATOMIC_ERROR_PREFIXES
+    )
+    for prefix in TERMINAL_AFTER_NORMALIZATION_PREFIXES:
+        assert atomic_error_recoverable(prefix + " detail")
+        assert atomic_error_terminal_after_normalization(prefix + " detail")
+
+
+def test_nested_type_authority_recognizes_logged_error_label() -> None:
+    authority = {
+        "source_requirements": {
+            "diagnostics": "ERROR: ShipFuelCalculationException",
+        }
+    }
+    assert authorized_concern_nested_type_symbols(authority) == (
+        "ShipFuelCalculationException",
+    )
+    assert JAVA_NESTED_TYPE_REQUIRED_VISIBILITY == "private"
+
+
+def test_coder_prompt_and_recipe_are_derived_from_canonical_contract() -> None:
+    system = java_region_system_prompt_contract(
+        section="failure_and_limits",
+        concern_name="diagnostics",
+        response_region="members",
+        platform_api_policy="forbidden",
+    )
+    recipe = java_generation_recipe_contract("diagnostics")
+
+    assert "only concern-owned private nested runtime types" in system
+    assert "Do not reference net.minecraft.*" in system
+    assert any(
+        "Nested runtime types live inside a host-owned outer class" in rule
+        for rule in recipe["compiler_first_rules"]
+    )
+
+
+def test_consumers_do_not_redefine_canonical_contract_literals() -> None:
+    import minecraft_mod_ai.atomic_concern_source as concern_source
+    import minecraft_mod_ai.java_generation_policy as generation_policy
+    import minecraft_mod_ai.java_region_parser as region_parser
+
+    generation_source = inspect.getsource(generation_policy)
+    concern_source_text = inspect.getsource(concern_source)
+    parser_source = inspect.getsource(region_parser)
+
+    assert "RECOVERABLE_ATOMIC_ERROR_PREFIXES = (" not in generation_source
+    assert "TERMINAL_AFTER_NORMALIZATION_PREFIXES = (" not in generation_source
+    assert "COMPILER_FIRST_RULES = (" not in generation_source
+    assert "Return only compile-ready Java class-body source" not in concern_source_text
+    assert "must be private because outer type ownership is host-owned" not in parser_source

@@ -15,15 +15,19 @@ from .authored_ir_parser import section_slug, slice_concern_requirements
 from .custom_module_errors import AtomicJavaDecisionError, CustomModuleGenerationError
 from .authored_execution_schema import section_spec
 from .generation_implementation_grounding import render_generation_implementation_authority_prompt
-from .java_generation_policy import (
+from .execution_contract_policy import (
     DEFAULT_COMPILE_REPAIR_LIMIT as _DEFAULT_COMPILE_REPAIR_LIMIT,
     DEFAULT_REGION_ATTEMPT_LIMIT as _DEFAULT_REGION_ATTEMPT_LIMIT,
+    JAVA_DECLARATION_ONLY_CONCERNS,
+    JAVA_DECLARATION_ONLY_MEMBER_KINDS,
     MAX_COMPILE_REPAIR_LIMIT as _MAX_COMPILE_REPAIR_LIMIT,
     MAX_REGION_ATTEMPT_LIMIT as _MAX_REGION_ATTEMPT_LIMIT,
     atomic_error_recoverable,
     atomic_error_terminal_after_normalization,
     authorized_concern_nested_type_symbols,
-    production_java_generation_recipe_policy,
+    java_generation_recipe_contract,
+    java_region_scope_policy,
+    java_region_system_prompt_contract,
 )
 from .java_region_parser import (
     JavaRegionParseError,
@@ -47,17 +51,9 @@ from .java_region_parser import (
 MEMBERS_MARKER = "<<<MMM_CONCERN_MEMBERS>>>"
 INITIALIZE_MARKER = "<<<MMM_CONCERN_INITIALIZE>>>"
 END_MARKER = "<<<MMM_CONCERN_END>>>"
-_DECLARATION_ONLY_CONCERNS = frozenset({"stored_state"})
-_DECLARATION_ONLY_MEMBER_KINDS = frozenset(
-    {
-        "field_declaration",
-        "annotation_type_declaration",
-        "class_declaration",
-        "enum_declaration",
-        "interface_declaration",
-        "record_declaration",
-    }
-)
+_DECLARATION_ONLY_CONCERNS = JAVA_DECLARATION_ONLY_CONCERNS
+_DECLARATION_ONLY_MEMBER_KINDS = JAVA_DECLARATION_ONLY_MEMBER_KINDS
+
 
 
 def _region_attempt_limit() -> int:
@@ -4034,92 +4030,27 @@ def _messages(
     host_symbol: str = "",
 ) -> list[dict[str, str]]:
     name = _slug(concern.get("concern"))
-    if response_region == "members":
-        response_contract = (
-            "Return only compile-ready Java class-body source for this selected concern region. "
-            "Do not return JSON, tool calls, Markdown, prose, package/import declarations, or the "
-            "outer class wrapper. Emit complete semantic Java declarations: fields, methods, and "
-            "only concern-owned private nested runtime types when genuinely required. "
-            "Reuse available_sibling_api/dependency_api exactly; do not redeclare sibling state. "
-            "If this concern needs state not present in available_sibling_api, declare the minimal "
-            "private static concern-local backing field. Outer concern fields must not depend on "
-            "constructor assignment: the host-owned outer constructor is private, so never emit a "
-            "blank final outer field. Use an initialized constant or private static non-final backing "
-            "state instead. Use fully-qualified JDK/external types when imports would otherwise be "
-            "required. The existing outer class constructor and lifecycle are host-owned. Keep "
-            "methods bounded and concern-local."
-        )
-        if name in _DECLARATION_ONLY_CONCERNS:
-            response_contract += (
-                " This is a declaration-only data concern. Emit at least one concern-owned "
-                "field and/or private nested data type. Do not emit methods, initialize(), "
-                "onInitialize(), registration hooks, load/save lifecycle methods, or calls whose "
-                "only purpose is to invoke another class lifecycle. Encode the authored runtime "
-                "data requirements in task_authority as data declarations in this region."
-            )
-        if str(section or "").strip() == "integration":
-            response_contract += (
-                " Initialization statements are generated in a separate host-owned initialize "
-                "region. Never emit an initialize() wrapper in members. If this concern needs no "
-                "class-body declarations or helper methods, return exactly "
-                "'// no members required'."
-            )
-    elif response_region == "initialize":
-        response_contract = (
-            "Return only compile-ready Java statements or balanced control-flow blocks that belong "
-            "inside the host-owned initialize() body. Do not return JSON, tool calls, Markdown, "
-            "prose, package/import declarations, an initialize() wrapper, or the outer class. "
-            "When no initialization is required, return exactly '// no initialization required'."
-        )
-    else:
+    if response_region not in {"members", "initialize"}:
         raise CustomModuleGenerationError(
             f"ATOMIC_CONCERN_RESPONSE_REGION_INVALID: {response_region!r}"
         )
-    system = (
-        "Emit one final Java region only. Do not think aloud, explain, draft, reconsider, "
-        "or emit multiple candidate implementations. "
-        "Implement exactly one host-selected concern inside one already-selected Java class. "
-        "Planning record schemas, planning task labels, and concern cardinality are host-owned "
-        "metadata and are deliberately not exposed as Java source shapes. Source requirement labels "
-        "such as owner/type/unit/default/domain/from_state/trigger/guard describe semantics; they "
-        "are not a request to create a Java metadata record with those labels as components. "
-        "Create a record/class only when the runtime gameplay implementation itself needs that data object. "
-        "You do not choose files, classes, dependencies, architecture, tools, search routes, APIs, or sibling work. "
-        + response_contract + " "
-        "The task_authority source requirements are already host-sliced to this concern; "
-        "current_selected_region_source is the only region you may replace. "
-        "available_sibling_api contains authoritative compiled Java declarations from "
-        "earlier concerns: use their exact symbol spelling, declared type, signature, "
-        "generic arguments, and mutability. Generic arguments are invariant authority: "
-        "never narrow Map<K,Object> to Map<K,String> or otherwise substitute a different "
-        "generic argument. For Map<K,V>.entrySet(), Map.Entry is exactly Map.Entry<K,V>, "
-        "getKey() is exactly K, and getValue() is exactly V. Never treat an object/record "
-        "field as a primitive, never assign "
-        "to a field declared final, and never invent a sibling symbol that is not listed. "
-        "This candidate must pass host semantic validation and compilation. "
-        "If repair_failure or region_correction is supplied, correct the actual rejected "
-        "candidate using those diagnostics and preserve unrelated declarations. "
-        "Resolve every supplied semantic/API fact before emitting source, and do not implement sibling concerns. "
-        + (
-            "This section is pure Java domain logic. Do not reference net.minecraft.*, "
-            "net.fabricmc.*, registries, resource identifiers, packets, lifecycle hooks, or "
-            "game registration APIs. "
-            if _section_platform_api_policy(section) == "forbidden"
-            else (
-                "This is a platform-bound section. You may reference net.minecraft.* or "
-                "net.fabricmc.* only when the exact owner is present in implementation_authority "
-                "or host_grounding. If no such owner is supplied, keep this concern platform-neutral "
-                "and use only JDK/dependency APIs. "
-            )
-        )
-        + "Use only supplied host grounding and dependency APIs; never invent a Minecraft/Fabric API. "
-        "dependency_call_contract is exhaustive for dependency method calls: match owner, method, "
-        "static=true, arity, parameter types, and parameter_names exactly. parameter_names are semantic "
-        "roles: never use a trigger_dispatch/event_dispatch method as a key/value setter; use an exact "
-        "direct_state_write signature for direct named-state assignment. If no exact row exists, do not "
-        "emit the call. Never add arguments to a zero-arity method. Never call a dependency initialize/"
-        "onInitialize lifecycle hook from a concern region."
+
+    system = java_region_system_prompt_contract(
+        section=section,
+        concern_name=name,
+        response_region=response_region,
+        platform_api_policy=_section_platform_api_policy(section),
     )
+    scope = java_region_scope_policy(
+        failure=bool(failure),
+        sibling_concerns=sibling_concerns,
+    )
+    scope["selected_region"] = _marker(
+        name,
+        "INIT" if response_region == "initialize" else "MEMBERS",
+        "START",
+    )
+
     payload = {
         "phase": "implement_atomic_concern_region",
         "section": section,
@@ -4136,9 +4067,6 @@ def _messages(
                 if str(item).strip()
             ],
             "semantic_fields": _concern_semantic_fields(concern),
-            # Planning templates describe record extraction, not runtime Java.
-            # Authored requirements/records remain in task_authority; never send
-            # the planner's "return the next record/done" instructions to a coder.
             "implementation_goal": (
                 f"Implement only the {name} semantics stated in "
                 "task_authority.source_requirements inside the selected Java class."
@@ -4176,89 +4104,8 @@ def _messages(
             sibling_concerns=sibling_concerns,
         ),
         "repair_failure": failure or None,
-        "generation_recipe": {
-            "first_pass_goal": (
-                "produce the smallest compile-ready semantic Java source region in one response "
-                "and finish well inside the finite output page"
-            ),
-            "declare_local_domain_types_first": True,
-            "require_fully_qualified_external_types": True,
-            "output_language": "java_source_region",
-            "no_json_ast_protocol": True,
-            "sibling_api_is_authoritative": True,
-            "dependency_call_contract_is_exhaustive": True,
-            "dependency_call_rule": (
-                "Before emitting Owner.method(...), match owner, method, arity, static=true, and "
-                "parameter_names against dependency_call_contract. Treat parameter_names as semantic "
-                "roles. trigger_dispatch/event_dispatch methods are not key/value setters; direct "
-                "state assignment requires a direct_state_write signature. If no exact row exists, "
-                "do not emit that call. Dependency initialize/onInitialize hooks are host-orchestrated; "
-                "concern regions must not call them."
-            ),
-            "never_mutate_final_sibling_fields": True,
-            "declare_missing_concern_local_state": (
-                "When this concern reads or writes state absent from available_sibling_api, "
-                "declare a private static non-final backing field with a compatible runtime "
-                "value type instead of referencing an undeclared symbol or inventing a metadata DTO."
-            ),
-            **production_java_generation_recipe_policy(),
-            "compile_ready_examples": [
-                {
-                    "bad": "java.util.Map<String,Object> lock = new java.util.ReentrantLock();",
-                    "good": "java.util.concurrent.locks.Lock lock = new java.util.concurrent.locks.ReentrantLock();",
-                },
-                {
-                    "bad": "java.util.Map<String,String> value = entry.getValue(); // entry is Map.Entry<String,Map<String,Object>>",
-                    "good": "java.util.Map<String,Object> value = entry.getValue();",
-                },
-                {
-                    "bad": "String value = objectMap.get(key);",
-                    "good": "Object raw = objectMap.get(key); String value = raw instanceof String s ? s : \"\";",
-                },
-            ],
-            "preferred_shape": (
-                "fields_and_local_types"
-                if name in {"variables", "inputs", "outputs", "stored_state", "payloads"}
-                else "methods_and_constants"
-                if name in {
-                    "transitions",
-                    "invariants",
-                    "initialization",
-                    "updates",
-                    "cleanup",
-                    "concurrency",
-                    "preconditions",
-                    "success_postconditions",
-                    "rejection_postconditions",
-                    "security_checks",
-                    "synchronization",
-                    "bounds",
-                }
-                else "smallest_components_that_satisfy_this_concern"
-            ),
-        },
-        "scope": {
-            "selected_region": _marker(
-                name,
-                "INIT" if response_region == "initialize" else "MEMBERS",
-                "START",
-            ),
-            "sibling_regions_immutable": True,
-            "required_output_format": "plain_java_source",
-            "model_tools_enabled": False,
-            "sibling_concerns_out_of_scope": list(sibling_concerns),
-            "scope_rule": (
-                "Implement only the selected concern and only the lines in "
-                "task_authority.source_requirements. Do not pre-implement sibling concerns. "
-                "The host owns declaration ownership and sibling bookkeeping; earlier declarations are immutable."
-            ),
-            "repair_structure_rule": (
-                "Compiler repair may remove or edit existing nested types but must not add, "
-                "rename, or change the kind of nested types."
-                if failure
-                else None
-            ),
-        },
+        "generation_recipe": java_generation_recipe_contract(name),
+        "scope": scope,
     }
     return [
         {"role": "system", "content": system},

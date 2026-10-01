@@ -14,6 +14,15 @@ import tree_sitter_java
 from markdown_it import MarkdownIt
 from tree_sitter import Language, Parser
 
+from .execution_contract_policy import (
+    JAVA_CONCERN_MEMBER_NODE_TYPES,
+    JAVA_HOST_OWNED_MEMBER_NODE_TYPES,
+    JAVA_NESTED_TYPE_CANONICALIZABLE_VISIBILITIES,
+    JAVA_NESTED_TYPE_NODE_TYPES,
+    JAVA_NESTED_TYPE_REQUIRED_VISIBILITY,
+    java_host_initialize_signature,
+    java_nested_type_scope_error,
+)
 from .java_generation_policy import (
     EXPLICIT_JDK_IMPORT_PATTERN,
     JAVA_FENCE_LANGUAGES,
@@ -39,19 +48,9 @@ def _scope_error(message: str) -> JavaRegionParseError:
 
 _JAVA = Language(tree_sitter_java.language())
 _THREAD = local()
-_NESTED_TYPES = frozenset(
-    {
-        "annotation_type_declaration",
-        "class_declaration",
-        "enum_declaration",
-        "interface_declaration",
-        "record_declaration",
-    }
-)
-_MEMBER_TYPES = frozenset({"field_declaration", "method_declaration"}) | _NESTED_TYPES
-_HOST_OWNED_MEMBER_TYPES = frozenset(
-    {"block", "constructor_declaration", "compact_constructor_declaration", "static_initializer"}
-)
+_NESTED_TYPES = JAVA_NESTED_TYPE_NODE_TYPES
+_MEMBER_TYPES = JAVA_CONCERN_MEMBER_NODE_TYPES
+_HOST_OWNED_MEMBER_TYPES = JAVA_HOST_OWNED_MEMBER_NODE_TYPES
 _COMMENT_TYPES = frozenset({"line_comment", "block_comment"})
 
 
@@ -107,16 +106,15 @@ def _name(node: Any, source: bytes) -> str:
 
 
 def _is_host_initialize(node: Any, source: bytes) -> bool:
-    if node.type != "method_declaration" or _name(node, source) != "initialize":
+    if node.type != "method_declaration":
         return False
     return_type = node.child_by_field_name("type")
     parameters = node.child_by_field_name("parameters")
-    return (
-        return_type is not None
-        and _text(source, return_type).strip() == "void"
-        and parameters is not None
-        and _text(source, parameters).strip() == "()"
-        and "static" in _modifiers(node, source)
+    return java_host_initialize_signature(
+        _name(node, source),
+        _text(source, return_type).strip() if return_type is not None else "",
+        _text(source, parameters).strip() if parameters is not None else "",
+        _modifiers(node, source),
     )
 
 
@@ -129,10 +127,11 @@ def _validate_member_node(node: Any, source: bytes) -> None:
         raise _scope_error(
             f"Java class-body node {node.type!r} is not an admissible concern member"
         )
-    if node.type in _NESTED_TYPES and "private" not in _modifiers(node, source):
-        raise _scope_error(
-            f"nested type {_name(node, source)!r} must be private because outer type ownership is host-owned"
-        )
+    if (
+        node.type in _NESTED_TYPES
+        and JAVA_NESTED_TYPE_REQUIRED_VISIBILITY not in _modifiers(node, source)
+    ):
+        raise _scope_error(java_nested_type_scope_error(_name(node, source)))
     if _is_host_initialize(node, source):
         raise _scope_error(
             "static void initialize() is host-owned lifecycle structure and cannot be declared by a concern"
@@ -158,7 +157,7 @@ def _canonical_private_nested_chunk(
     if node.type not in _NESTED_TYPES:
         _validate_member_node(node, source)
         return rendered
-    if "private" in _modifiers(node, source):
+    if JAVA_NESTED_TYPE_REQUIRED_VISIBILITY in _modifiers(node, source):
         _validate_member_node(node, source)
         return rendered
 
@@ -179,7 +178,11 @@ def _canonical_private_nested_chunk(
 
     modifier_text = _text(source, modifiers)
     visibility = next(
-        (token for token in ("public", "protected") if token in modifier_text.split()),
+        (
+            token
+            for token in JAVA_NESTED_TYPE_CANONICALIZABLE_VISIBILITIES
+            if token in modifier_text.split()
+        ),
         "",
     )
     if not visibility:
@@ -195,7 +198,9 @@ def _canonical_private_nested_chunk(
         _validate_member_node(node, source)
         return rendered
     replaced_mods = (
-        mods[:token_at] + "private" + mods[token_at + len(visibility):]
+        mods[:token_at]
+        + JAVA_NESTED_TYPE_REQUIRED_VISIBILITY
+        + mods[token_at + len(visibility):]
     )
     normalized = (
         raw[:relative_start]
