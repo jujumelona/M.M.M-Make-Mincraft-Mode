@@ -2692,8 +2692,8 @@ def test_map_entry_wildcards_never_become_standalone_local_types() -> None:
 
     assert "? key = entry.getKey()" not in normalized
     assert "? value = entry.getValue()" not in normalized
-    assert "java.lang.Object key = entry.getKey();" in normalized
-    assert "java.lang.Object value = entry.getValue();" in normalized
+    assert "Object key = entry.getKey();" in normalized
+    assert "Object value = entry.getValue();" in normalized
     class_body_member_contracts(normalized)
 
 
