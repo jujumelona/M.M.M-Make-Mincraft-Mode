@@ -20,7 +20,6 @@ from .java_generation_policy import (
     DEFAULT_REGION_ATTEMPT_LIMIT as _DEFAULT_REGION_ATTEMPT_LIMIT,
     MAX_COMPILE_REPAIR_LIMIT as _MAX_COMPILE_REPAIR_LIMIT,
     MAX_REGION_ATTEMPT_LIMIT as _MAX_REGION_ATTEMPT_LIMIT,
-    PRODUCTION_CANONICALIZE_LOCAL_FINAL_REBINDINGS,
     atomic_error_recoverable,
     atomic_error_terminal_after_normalization,
     production_java_generation_recipe_policy,
