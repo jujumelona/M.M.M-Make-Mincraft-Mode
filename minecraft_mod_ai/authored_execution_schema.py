@@ -24,7 +24,9 @@ SECTION_SPECS: dict[str, dict[str, Any]] = {
         "depends_on": (),
         "public_api": (
             "public static synchronized Object getState(String name)",
+            "public static synchronized Object getState(String name, java.util.Map<String, Object> context)",
             "public static synchronized void setState(String name, Object value)",
+            "public static synchronized void setState(String name, Object value, java.util.Map<String, Object> context)",
             "public static synchronized String transition(String fromState, String trigger, java.util.Map<String, Object> context)",
             "public static synchronized boolean invariantsHold(java.util.Map<String, Object> context)",
             "public static synchronized java.util.List<String> invariantFailures(java.util.Map<String, Object> context)",
