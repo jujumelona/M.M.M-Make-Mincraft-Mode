@@ -846,6 +846,67 @@ def test_production_state_extractor_receives_only_selected_concern_block():
     assert "- transitions:" not in supplied
 
 
+def test_free_markdown_nested_state_bullets_are_explicit_payload():
+    from minecraft_mod_ai.production_state_compiler import (
+        _concern_has_explicit_payload,
+        _concern_source,
+    )
+
+    source = (
+        "## state_model\n"
+        "- **variables**:\n"
+        "    - `star_balance`: `player` 소유, `long`, 기본값 `0L`, 범위 `0 ~ 2^63-1`\n"
+        "- **transitions**:\n"
+        "    - `from_state`: `ground_mode` -> `dock_building`\n"
+        "    - `trigger`: `player_interaction`\n"
+    )
+
+    variables = _concern_source(source, "variables")
+    transitions = _concern_source(source, "transitions")
+
+    assert "`star_balance`" in variables
+    assert "`from_state`" not in variables
+    assert "`from_state`" in transitions
+    assert _concern_has_explicit_payload(source, "variables") is True
+    assert _concern_has_explicit_payload(source, "transitions") is True
+
+
+def test_free_markdown_nested_state_values_lower_at_production_boundary():
+    class Router:
+        def __init__(self):
+            self.saw_explicit_variables = False
+
+        def generate_text(self, role, messages, **kwargs):
+            payload = json.loads(messages[-1]["content"])
+            if payload["concern"] == "variables":
+                self.saw_explicit_variables = payload["contains_authored_values"] is True
+                assert "`star_balance`" in payload["approved_state_model"]
+                return (
+                    "STATUS=DONE\nRECORD\n"
+                    "name=star_balance\nowner=player\ntype=long\nunit=credits\n"
+                    "default=0\ndomain=integer >= 0\nEND"
+                )
+            return "STATUS=EMPTY"
+
+    plan = AuthoredPlan(
+        "make a space mod",
+        (
+            "## state_model\n"
+            "- **variables**:\n"
+            "    - `star_balance`: `player` 소유, `long`, 기본값 `0L`, 범위 `0 ~ 2^63-1`\n"
+            "## algorithm\n"
+            "- steps: launch flow\n"
+        ),
+    )
+    router = Router()
+
+    section = compile_production_state_section(router, plan)
+
+    assert router.saw_explicit_variables is True
+    assert section["specification"]["variables"][0]["name"] == "star_balance"
+    assert section["specification"]["variables"][0]["owner"] == "player"
+
+
 def test_production_state_extractor_rejects_false_empty_for_explicit_authored_values():
     class EmptyRouter:
         def generate_text(self, role, messages, **kwargs):
