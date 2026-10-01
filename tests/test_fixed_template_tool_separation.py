@@ -31,7 +31,7 @@ class _Registry:
 
     def role(self, profile: str, role: str):
         assert profile == "local"
-        assert role == "coder"
+        assert role in {"coder", "planner"}
         return SimpleNamespace(adapter=self.adapter)
 
 
@@ -93,6 +93,24 @@ def test_tools_disabled_real_router_still_uses_fixed_template_tool_transport() -
     router = _ToolCapableRouter()
 
     assert _generate(router, enable_tools=False) == _RESULT
+    assert router.text_calls == 0
+    assert len(router.tool_calls) == 1
+    assert router.tool_calls[0]["parameters"] == _SCHEMA
+
+
+def test_planner_uses_native_fixed_template_transport_when_available() -> None:
+    router = _ToolCapableRouter()
+
+    result = generate_fixed_template_value(
+        router,
+        "planner",
+        [{"role": "user", "content": "Fill the planner record."}],
+        response_schema=_SCHEMA,
+        enable_tools=False,
+        tool_name="submit_planner_record",
+    )
+
+    assert result == _RESULT
     assert router.text_calls == 0
     assert len(router.tool_calls) == 1
     assert router.tool_calls[0]["parameters"] == _SCHEMA
