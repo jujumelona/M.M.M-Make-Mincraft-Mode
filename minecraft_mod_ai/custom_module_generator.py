@@ -30,6 +30,12 @@ from .generation_implementation_grounding import (
 )
 from .host_grounding import custom_module_path_allowed
 from .implementation_ir import OutputBudgetExhausted
+from .java_generation_policy import (
+    PRODUCTION_CANONICALIZE_LOCAL_FINAL_REBINDINGS,
+    PRODUCTION_COMPILE_REPAIR_LIMIT,
+    PRODUCTION_REGION_ATTEMPT_LIMIT,
+    PRODUCTION_RETRY_STRUCTURAL_REJECTIONS,
+)
 from .llama_finish_reason_contract import OUTPUT_EXHAUSTED, completion_boundary_error
 from .model_router import ModelRouter
 from .platform_catalog import adapter_for_target, adapter_from_project
@@ -2217,10 +2223,12 @@ def _run_atomic_ir_generation(
         # host canonicalizers run before this correction path, so mechanically provable
         # Java mistakes are fixed without another decode. Identical rejected output is
         # detected and terminated early by AtomicConcernExecutor.
-        region_attempt_limit=3,
-        retry_structural_rejections=False,
-        canonicalize_local_final_rebindings=True,
-        compile_repair_limit=0,
+        region_attempt_limit=PRODUCTION_REGION_ATTEMPT_LIMIT,
+        retry_structural_rejections=PRODUCTION_RETRY_STRUCTURAL_REJECTIONS,
+        canonicalize_local_final_rebindings=(
+            PRODUCTION_CANONICALIZE_LOCAL_FINAL_REBINDINGS
+        ),
+        compile_repair_limit=PRODUCTION_COMPILE_REPAIR_LIMIT,
         completion_decider=lambda payload: decide_region_completion(generator.router, payload),
     )
 

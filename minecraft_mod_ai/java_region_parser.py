@@ -15,6 +15,13 @@ import tree_sitter_java
 from markdown_it import MarkdownIt
 from tree_sitter import Language, Parser
 
+from .java_generation_policy import (
+    EXPLICIT_JDK_IMPORT_PATTERN,
+    JAVA_FENCE_LANGUAGES,
+    imported_jdk_use_can_be_qualified,
+    member_jdk_import_allowed,
+)
+
 
 class JavaRegionParseError(ValueError):
     """A Java region could not be safely admitted into the host-owned scaffold."""
@@ -674,7 +681,7 @@ def _model_java_candidates(value: str) -> tuple[str, ...]:
         if token.type != "fence":
             continue
         language = _fence_language(token.info)
-        if language not in {"", "java", "javac"}:
+        if language not in JAVA_FENCE_LANGUAGES:
             continue
         candidate = str(token.content or "").strip()
         if candidate and candidate not in fenced:
@@ -690,10 +697,7 @@ def _model_java_candidates(value: str) -> tuple[str, ...]:
 
 
 
-_EXPLICIT_JDK_IMPORT = re.compile(
-    r"import\s+(java\.[A-Za-z_$][A-Za-z0-9_$]*"
-    r"(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+)\s*;"
-)
+_EXPLICIT_JDK_IMPORT = EXPLICIT_JDK_IMPORT_PATTERN
 
 
 def _split_leading_jdk_imports(
@@ -712,6 +716,10 @@ def _split_leading_jdk_imports(
         match = _EXPLICIT_JDK_IMPORT.fullmatch(stripped)
         if match is not None:
             fqcn = match.group(1)
+            if not member_jdk_import_allowed(fqcn):
+                raise JavaRegionParseError(
+                    f"member-region JDK import is not allowed by production policy: {fqcn!r}"
+                )
             simple = fqcn.rsplit(".", 1)[-1]
             existing = imports.get(simple)
             if existing is not None and existing != fqcn:
@@ -761,7 +769,24 @@ def _qualify_imported_jdk_names(
         if replacement is None:
             continue
 
-        if node.type != "type_identifier":
+        role = ""
+        if node.type == "type_identifier":
+            role = "type"
+        elif node.type == "identifier":
+            parent = getattr(node, "parent", None)
+            receiver = (
+                parent.child_by_field_name("object")
+                if parent is not None
+                and parent.type in {"field_access", "method_invocation"}
+                else None
+            )
+            if (
+                receiver is not None
+                and int(receiver.start_byte) == int(node.start_byte)
+                and int(receiver.end_byte) == int(node.end_byte)
+            ):
+                role = "static_receiver"
+        if not imported_jdk_use_can_be_qualified(role):
             continue
 
         start = int(node.start_byte) - prefix_size

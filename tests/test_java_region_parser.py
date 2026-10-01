@@ -88,13 +88,32 @@ def test_tree_sitter_canonicalizes_leading_jdk_imports_in_member_region() -> Non
     assert "new java.util.ArrayList<>()" in admitted
 
 
-def test_tree_sitter_rejects_jdk_import_with_unresolved_static_receiver() -> None:
-    with pytest.raises(JavaRegionParseError):
-        admit_member_region(
-            "import java.util.Objects;\n"
-            "private static boolean same(Object left, Object right) { "
-            "return Objects.equals(left, right); }"
-        )
+def test_tree_sitter_canonicalizes_jdk_import_static_receiver() -> None:
+    admitted = admit_member_region(
+        "import java.util.Objects;\n"
+        "private static boolean same(Object left, Object right) { "
+        "return Objects.equals(left, right); }"
+    )
+
+    assert "import java.util.Objects" not in admitted
+    assert "java.util.Objects.equals(left, right)" in admitted
+
+
+def test_tree_sitter_normalizes_logged_fenced_import_static_receiver_shape() -> None:
+    admitted = admit_member_region(
+        """```java
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
+
+private static final long SAVE_INTERVAL_TICKS = TimeUnit.SECONDS.toSeconds(60L);
+private static final String SAVE_TRIGGER = "WorldSave";
+```
+"""
+    )
+
+    assert "```" not in admitted
+    assert "import java." not in admitted
+    assert "java.util.concurrent.TimeUnit.SECONDS.toSeconds(60L)" in admitted
 
 
 @pytest.mark.parametrize(

@@ -16,6 +16,16 @@ from .authored_ir_parser import section_slug, slice_concern_requirements
 from .custom_module_errors import AtomicJavaDecisionError, CustomModuleGenerationError
 from .authored_execution_schema import section_spec
 from .generation_implementation_grounding import render_generation_implementation_authority_prompt
+from .java_generation_policy import (
+    DEFAULT_COMPILE_REPAIR_LIMIT as _DEFAULT_COMPILE_REPAIR_LIMIT,
+    DEFAULT_REGION_ATTEMPT_LIMIT as _DEFAULT_REGION_ATTEMPT_LIMIT,
+    MAX_COMPILE_REPAIR_LIMIT as _MAX_COMPILE_REPAIR_LIMIT,
+    MAX_REGION_ATTEMPT_LIMIT as _MAX_REGION_ATTEMPT_LIMIT,
+    PRODUCTION_CANONICALIZE_LOCAL_FINAL_REBINDINGS,
+    atomic_error_recoverable,
+    atomic_error_terminal_after_normalization,
+    production_java_generation_recipe_policy,
+)
 from .java_region_parser import (
     JavaRegionParseError,
     admit_initialize_region,
@@ -37,10 +47,6 @@ from .java_region_parser import (
 MEMBERS_MARKER = "<<<MMM_CONCERN_MEMBERS>>>"
 INITIALIZE_MARKER = "<<<MMM_CONCERN_INITIALIZE>>>"
 END_MARKER = "<<<MMM_CONCERN_END>>>"
-_DEFAULT_REGION_ATTEMPT_LIMIT = 1
-_MAX_REGION_ATTEMPT_LIMIT = 4
-_DEFAULT_COMPILE_REPAIR_LIMIT = 0
-_MAX_COMPILE_REPAIR_LIMIT = 16
 _DECLARATION_ONLY_CONCERNS = frozenset({"stored_state"})
 _DECLARATION_ONLY_MEMBER_KINDS = frozenset(
     {
@@ -3327,6 +3333,95 @@ def _jdk_constructor_accepts_arity(
     return False
 
 
+def _validate_jdk_method_invocations(value: str) -> None:
+    """Reject provably nonexistent installed-JDK methods before Gradle compile.
+
+    Exact JDK class receivers and enum-constant receivers are authoritative enough
+    to validate without guessing local expression types.
+    """
+
+    try:
+        from .jdk_type_index import (
+            is_public_jdk_type,
+            public_jdk_method_shapes,
+        )
+    except ImportError:
+        return
+
+    for call in class_body_method_invocations(value):
+        receiver = str(call.get("receiver") or "").strip()
+        method = str(call.get("symbol") or "").strip()
+        if not receiver or not method:
+            continue
+
+        owner = ""
+        require_static: bool | None = None
+        candidate = _canonical_jdk_class_name(receiver)
+        try:
+            if candidate.startswith(("java.", "javax.")) and is_public_jdk_type(candidate):
+                owner = candidate
+                require_static = True
+            else:
+                parts = receiver.split(".")
+                for cut in range(len(parts) - 1, 1, -1):
+                    prefix = ".".join(parts[:cut])
+                    suffix = parts[cut:]
+                    if (
+                        len(suffix) == 1
+                        and re.fullmatch(r"[A-Z][A-Z0-9_]*", suffix[0])
+                        and is_public_jdk_type(prefix)
+                    ):
+                        owner = prefix
+                        require_static = False
+                        break
+        except (OSError, RuntimeError, ValueError):
+            continue
+
+        if not owner:
+            continue
+
+        try:
+            shapes = public_jdk_method_shapes(owner, method)
+        except (OSError, RuntimeError, ValueError):
+            continue
+        if not shapes:
+            raise CustomModuleGenerationError(
+                "ATOMIC_CONCERN_RESPONSE_INVALID: installed-JDK type "
+                f"{owner} has no public method {method}(...)."
+            )
+
+        argument_count = int(call.get("argument_count") or 0)
+        matching = [
+            shape
+            for shape in shapes
+            if _jdk_constructor_accepts_arity((shape,), argument_count)
+            and (
+                require_static is not True
+                or shape.get("static") is True
+            )
+        ]
+        if matching:
+            continue
+
+        allowed = sorted(
+            {
+                (
+                    f"{int(shape.get('arity', 0)) - 1}+"
+                    if shape.get("varargs") is True
+                    else str(int(shape.get("arity", 0)))
+                )
+                for shape in shapes
+                if require_static is not True or shape.get("static") is True
+            }
+        )
+        qualifier = " static" if require_static is True else ""
+        raise CustomModuleGenerationError(
+            "ATOMIC_CONCERN_RESPONSE_INVALID: installed-JDK"
+            f"{qualifier} method {owner}.{method}(...) called with "
+            f"{argument_count} argument(s); authoritative public arity is {allowed}."
+        )
+
+
 def _validate_jdk_object_creations(value: str) -> None:
     try:
         from .jdk_type_index import (
@@ -3441,6 +3536,7 @@ def _validate_first_pass_java_semantics(
         sibling_api=sibling_api,
     )
     _validate_jdk_object_creations(value)
+    _validate_jdk_method_invocations(value)
     violations: list[str] = []
 
     def declared_final(item: Mapping[str, Any]) -> bool:
@@ -4145,55 +4241,7 @@ def _messages(
                 "declare a private static non-final backing field with a compatible runtime "
                 "value type instead of referencing an undeclared symbol or inventing a metadata DTO."
             ),
-            "compiler_first_rules": [
-                "The first answer must compile as Java for the selected host JDK; do not rely on a later repair pass.",
-                "Never guess a package or fully-qualified class name. Use only a JDK/external type whose canonical package and API are known from the supplied authority.",
-                "For non-java.lang JDK types, use canonical fully-qualified names because imports are not allowed in an atomic region.",
-                "A field declaration type must be assignment-compatible with its initializer, and every receiver method call must exist on that declared type. Never use Map/List/Object as a lock holder merely because the field also guards cached state.",
-                "Every concern-local final field must be definitely assigned before any read. Prefer initialization at the declaration; use a blank final only when the same region performs exactly one unconditional assignment in a static initializer.",
-                "Never reassign a final field. If the binding must change, declare a non-final field; if a final field holds a mutable container, mutate the container rather than rebinding the field.",
-                "Respect available_sibling_api types, generic arguments, and mutability exactly; final sibling fields are read-only after declaration.",
-                "Java generics are invariant. Never narrow Map<K,Object> to Map<K,String>, List<Object> to List<String>, or any sibling generic declaration to a different type argument.",
-                "For Map<K,V>.entrySet(), declare the iterator element as Map.Entry<K,V>; entry.getKey() has exact type K and entry.getValue() has exact type V. Preserve those exact types in local variables.",
-                "Keep generic types exact. When an API returns Object, never return it directly from a method with a narrower generic/container return type and never use an unchecked cast as a shortcut; narrow the individual Object value with instanceof/pattern matching and provide a type-compatible fallback.",
-                "Avoid raw collections and unchecked operations when a parameterized type or runtime type check can express the contract.",
-                "For java.util.concurrent locks, Lock and ReentrantLock are in java.util.concurrent.locks, not java.util.concurrent.",
-            ],
-            "jdk_package_anchors": {
-                "collections_and_core_util": "java.util",
-                "concurrency_executors_and_concurrent_collections": "java.util.concurrent",
-                "locks": "java.util.concurrent.locks",
-                "lock_interface": "java.util.concurrent.locks.Lock",
-                "reentrant_lock": "java.util.concurrent.locks.ReentrantLock",
-                "atomics": "java.util.concurrent.atomic",
-                "time": "java.time",
-            },
-            "jdk_runtime_patterns": {
-                "exclusive_lock": {
-                    "declared_type": "java.util.concurrent.locks.Lock",
-                    "initializer": "new java.util.concurrent.locks.ReentrantLock()",
-                    "receiver_methods": ["lock", "unlock", "tryLock"],
-                },
-                "map": {
-                    "declared_type": "java.util.Map<K,V>",
-                    "initializer_example": "new java.util.HashMap<>()",
-                    "receiver_methods": ["get", "put", "remove", "containsKey"],
-                },
-                "atomic_counter": {
-                    "declared_type": "java.util.concurrent.atomic.AtomicLong",
-                    "initializer_example": "new java.util.concurrent.atomic.AtomicLong(0L)",
-                    "receiver_methods": ["get", "set", "incrementAndGet", "compareAndSet"],
-                },
-            },
-            "pre_emit_compile_checklist": [
-                "Before emitting Java, internally type-check every assignment: declared_type <- expression_type.",
-                "For every field or local receiver.method(...), verify the method exists on the receiver's declared type.",
-                "For every generic projection, preserve exact invariant type arguments from available_sibling_api.",
-                "For every return statement, verify the expression type is assignable to the declared return type.",
-                "For every constructor call, verify the canonical JDK/package owner and constructor arguments. If a JDK type is factory-owned (for example singleton/current-instance APIs), use its public static factory instead of inventing a constructor.",
-                "The installed-JDK javap contract is authoritative; never assume that a public JDK class has a public constructor.",
-                "Only after all checks pass, emit the final Java region with no reasoning prose.",
-            ],
+            **production_java_generation_recipe_policy(),
             "compile_ready_examples": [
                 {
                     "bad": "java.util.Map<String,Object> lock = new java.util.ReentrantLock();",
@@ -4308,7 +4356,9 @@ class AtomicConcernExecutor:
     write_source: Callable[[Path, str], None]
     region_attempt_limit: int | None = None
     retry_structural_rejections: bool = True
-    canonicalize_local_final_rebindings: bool = False
+    canonicalize_local_final_rebindings: bool = (
+        PRODUCTION_CANONICALIZE_LOCAL_FINAL_REBINDINGS
+    )
     compile_repair_limit: int | None = None
     completion_decider: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None
     ordered: tuple[dict[str, Any], ...] = field(init=False)
@@ -4710,18 +4760,7 @@ class AtomicConcernExecutor:
                     if isinstance(exc, AtomicJavaDecisionError) and exc.response_text is not None
                     else (output_text or None)
                 )
-                recoverable = reason.startswith(
-                    (
-                        "ATOMIC_CONCERN_RESPONSE_INVALID:",
-                        "ATOMIC_CONCERN_SCOPE_ESCAPE:",
-                        "ATOMIC_CONCERN_REPAIR_STRUCTURE_ESCAPE:",
-                        "ATOMIC_CONCERN_SYMBOL_COLLISION:",
-                        "ATOMIC_CONCERN_OUTPUT_EXHAUSTED:",
-                        "ATOMIC_CONCERN_SEMANTIC_SHAPE_INVALID:",
-                        "ATOMIC_CONCERN_PLATFORM_API_FORBIDDEN:",
-                        "ATOMIC_CONCERN_UNGROUNDED_PLATFORM_API:",
-                    )
-                )
+                recoverable = atomic_error_recoverable(reason)
                 if not recoverable:
                     _trace_region_generation(
                         "atomic_concern_region_rejected",
@@ -4739,14 +4778,7 @@ class AtomicConcernExecutor:
 
                 structural_terminal = (
                     not self.retry_structural_rejections
-                    and reason.startswith(
-                        (
-                            "ATOMIC_CONCERN_SCOPE_ESCAPE:",
-                            "ATOMIC_CONCERN_SYMBOL_COLLISION:",
-                            "ATOMIC_CONCERN_PLATFORM_API_FORBIDDEN:",
-                            "ATOMIC_CONCERN_UNGROUNDED_PLATFORM_API:",
-                        )
-                    )
+                    and atomic_error_terminal_after_normalization(reason)
                 )
                 if structural_terminal:
                     _trace_region_generation(

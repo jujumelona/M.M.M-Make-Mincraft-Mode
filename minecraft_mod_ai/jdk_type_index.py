@@ -244,6 +244,67 @@ def public_jdk_static_factory_shapes(value: str) -> tuple[dict[str, object], ...
     )
 
 
+def _method_shapes_from_javap(
+    text: str,
+    fqcn: str,
+    method_name: str = "",
+) -> tuple[dict[str, object], ...]:
+    """Return public method name/static/arity facts from javap output."""
+
+    rows: list[dict[str, object]] = []
+    simple = fqcn.rsplit(".", 1)[-1]
+    wanted = str(method_name or "").strip()
+    for raw in str(text or "").splitlines():
+        line = raw.strip()
+        if not line.startswith("public ") or not line.endswith(";") or "(" not in line:
+            continue
+        signature = line[:-1]
+        head, parameters = signature.split("(", 1)
+        parameters = parameters.rsplit(")", 1)[0]
+        name_match = re.search(r"([A-Za-z_$][A-Za-z0-9_$]*)\s*$", head)
+        if name_match is None:
+            continue
+        name = name_match.group(1)
+        constructor_heads = {
+            f"public {fqcn}",
+            f"public {simple}",
+        }
+        if head.strip() in constructor_heads:
+            continue
+        if wanted and name != wanted:
+            continue
+        arity, varargs = _parameter_arity(parameters)
+        rows.append(
+            {
+                "name": name,
+                "static": bool(re.search(r"\bstatic\b", head)),
+                "arity": arity,
+                "varargs": varargs,
+            }
+        )
+    return tuple(rows)
+
+
+def public_jdk_method_shapes(
+    value: str,
+    method_name: str,
+) -> tuple[dict[str, object], ...]:
+    """Return public method shapes for one exact installed-JDK type."""
+
+    fqcn = str(value or "").strip()
+    name = str(method_name or "").strip()
+    if not fqcn.startswith(("java.", "javax.")) or not name:
+        return ()
+    home = _java_home()
+    if home is None or not _public_type(str(home), fqcn):
+        return ()
+    return _method_shapes_from_javap(
+        _javap_public_output(str(home), fqcn),
+        fqcn,
+        name,
+    )
+
+
 def public_jdk_type_candidates(simple_name: str) -> tuple[str, ...]:
     """Return public java./javax. top-level types with this simple name."""
 
@@ -309,5 +370,6 @@ __all__ = [
     "is_public_jdk_type",
     "public_jdk_constructor_shapes",
     "public_jdk_static_factory_shapes",
+    "public_jdk_method_shapes",
     "public_jdk_type_candidates",
 ]

@@ -3254,6 +3254,36 @@ def test_ambiguous_or_unavailable_jdk_factory_is_not_guessed() -> None:
     assert "new java.lang.Object(1)" in normalized
 
 
+def test_first_pass_rejects_nonexistent_installed_jdk_enum_method() -> None:
+    from minecraft_mod_ai.atomic_concern_source import _validate_first_pass_java_semantics
+
+    with pytest.raises(
+        CustomModuleGenerationError,
+        match=r"java\.util\.concurrent\.TimeUnit has no public method toTicks",
+    ):
+        _validate_first_pass_java_semantics(
+            (
+                "private static final long SAVE_INTERVAL_TICKS = "
+                "java.util.concurrent.TimeUnit.SECONDS.toTicks(60L);"
+            ),
+            dependency_source="",
+            sibling_api=(),
+        )
+
+
+def test_first_pass_accepts_existing_installed_jdk_enum_method() -> None:
+    from minecraft_mod_ai.atomic_concern_source import _validate_first_pass_java_semantics
+
+    _validate_first_pass_java_semantics(
+        (
+            "private static final long SAVE_INTERVAL_SECONDS = "
+            "java.util.concurrent.TimeUnit.MINUTES.toSeconds(1L);"
+        ),
+        dependency_source="",
+        sibling_api=(),
+    )
+
+
 def test_first_pass_rejects_invalid_installed_jdk_constructor_arity() -> None:
     from minecraft_mod_ai.atomic_concern_source import _validate_first_pass_java_semantics
 
@@ -3295,6 +3325,41 @@ def test_javap_constructor_shape_parser_handles_varargs() -> None:
         {"arity": 0, "varargs": False},
         {"arity": 2, "varargs": True},
     )
+
+
+def test_atomic_prompt_uses_single_java_generation_policy_payload() -> None:
+    from minecraft_mod_ai.java_generation_policy import (
+        production_java_generation_recipe_policy,
+    )
+
+    concern = {
+        "sequence": 0,
+        "identifier": "feature/failure_and_limits/diagnostics",
+        "concern": "diagnostics",
+        "task": "emit diagnostics",
+        "rules": [],
+    }
+    messages = _messages(
+        section="failure_and_limits",
+        concern=concern,
+        task={"task_id": "t", "implementation_obligations": []},
+        grounding={},
+        dependency_source="",
+        current_source=(
+            "package example;\n"
+            "public final class Test {\n"
+            "// MMM_AUTHORED_FEATURE_BODY\n"
+            "}\n"
+        ),
+        sibling_concerns=(),
+        response_region="members",
+        host_symbol="Test",
+    )
+    payload = __import__("json").loads(messages[-1]["content"])
+    shared = production_java_generation_recipe_policy()
+
+    for key, value in shared.items():
+        assert payload["generation_recipe"][key] == value
 
 
 def test_small_model_prompt_exposes_exact_dependency_calls_and_drops_irrelevant_grounding() -> None:
