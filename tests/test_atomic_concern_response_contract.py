@@ -20,6 +20,7 @@ from minecraft_mod_ai.custom_module_generator import (
     _call_coder,
 )
 from minecraft_mod_ai.implementation_ir import OutputBudgetExhausted
+from minecraft_mod_ai.java_region_parser import class_body_member_contracts
 
 
 def _response(members: str = "", initialize: str = "") -> str:
