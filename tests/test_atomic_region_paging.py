@@ -223,7 +223,9 @@ def test_page_limit_requires_completion_without_compiling_partial_work(monkeypat
 
 
 @pytest.mark.parametrize('reject_page', [False, True])
-def test_production_graph_output_pressure_preserves_siblings_and_rolls_back(tmp_path, monkeypatch, reject_page):
+def test_production_graph_output_pressure_preserves_siblings_and_rolls_back(
+    tmp_path, monkeypatch, reject_page
+):
     from types import SimpleNamespace
 
     from test_direct_custom_module_generator import _adapter
@@ -264,42 +266,92 @@ def test_production_graph_output_pressure_preserves_siblings_and_rolls_back(tmp_
         implementation_output_budget = 100
 
         def __init__(self):
-            self.calls = []
+            self.pressure_raised = False
 
         def generate_implementation_decision(self, name, payload, *, state=None, checkpoint=None):
             from minecraft_mod_ai.implementation_decisions import compile_contribution
 
             return compile_contribution(self, name, payload, state or {}, checkpoint or (lambda: None))
 
-        def generate_tool_decision(self, role, messages, **kwargs):
+        def _decision(self, role, messages, kwargs):
             assert role == 'coder'
-            assert kwargs['tool_name'] == 'report_java_region_completion'
+            tool_name = kwargs['tool_name']
             payload = json.loads(messages[-1]['content'])
-            if payload.get('completion_phase') == 'select_next_unit':
-                return {'done': False, 'next_work': 'declare LIMIT = 100'}
-            page = payload['current_page_source']
-            if 'LIMIT = 100' in page:
-                return {'done': False, 'next_work': 'implement allowed(int count)'}
-            return {'done': True, 'next_work': ''}
+            if tool_name == 'report_java_region_completion':
+                if payload.get('completion_phase') == 'select_next_unit':
+                    return {'next_work': 'materialize the remaining structured concern'}
+                return {'next_work': ''}
 
-        def generate_text(self, role, messages, **kwargs):
-            payload = json.loads(messages[-1]['content'])
-            calls.append((payload, kwargs))
-            assert role == 'coder'
-            assert kwargs['enable_tools'] is False
-            assert kwargs['force_non_thinking'] is True
-            if payload['concern']['name'] == 'invalid_inputs':
-                return 'public static boolean valid(int count) { return count >= 0; }'
-            if 'region_page' not in payload:
+            assert tool_name in {'emit_java_part', 'emit_java_statement'}
+            request_payload = payload.get('request') or {}
+            concern = str((request_payload.get('concern') or {}).get('name') or '')
+            path = list(payload.get('path') or [])
+            calls.append((concern, tuple(path), tool_name))
+
+            if (
+                concern == 'missing_dependencies'
+                and not self.pressure_raised
+                and not path
+                and tool_name == 'emit_java_part'
+            ):
+                self.pressure_raised = True
                 raise LlamaCompletionBoundaryError(
-                    'limit', kind=OUTPUT_EXHAUSTED, completion_tokens=4096, max_tokens=4096,
+                    'limit',
+                    kind=OUTPUT_EXHAUSTED,
+                    completion_tokens=4096,
+                    max_tokens=4096,
                 )
-            assert any(row['symbol'] == 'valid' for row in payload['available_sibling_api'])
-            if payload['region_page']['index'] == 0:
-                return 'private static final int LIMIT = 100;'
-            if reject_page:
-                return 'private static final int LIMIT = 200;'
-            return 'public static boolean allowed(int count) { return valid(count) && count <= LIMIT; }'
+
+            schema = kwargs['parameters']
+            properties = schema.get('properties', {})
+            if 'part' in properties:
+                choices = properties['part'].get('enum') or []
+                if not path:
+                    if concern == 'missing_dependencies' and 'fields' in choices:
+                        return {'part': 'fields'}
+                    if 'methods' in choices:
+                        return {'part': 'methods'}
+                    return {'part': 'done'}
+                if 'parameters' in choices:
+                    return {'part': 'parameters'}
+                if 'body' in choices:
+                    return {'part': 'body'}
+                return {'part': 'done'}
+
+            if 'statement' in properties:
+                if concern == 'invalid_inputs':
+                    return {'statement': 'return count >= 0;'}
+                return {'statement': 'return valid(count) && count <= LIMIT;'}
+
+            if 'type' in properties and 'name' in properties:
+                tail = path[-1] if path else ''
+                if tail == 'fields':
+                    return {'type': 'int', 'name': 'LIMIT', 'initializer': '100'}
+                if tail == 'methods':
+                    return {
+                        'return_type': 'boolean',
+                        'name': 'valid' if concern == 'invalid_inputs' else 'allowed',
+                    }
+                if tail == 'parameters':
+                    return {'type': 'int', 'name': 'count'}
+
+            raise AssertionError(f'unhandled structured schema at {path}: {schema}')
+
+        def generate_tool_decision(self, role, messages, **kwargs):
+            return self._decision(role, messages, kwargs)
+
+        def generate_tool_decisions(self, role, messages, **kwargs):
+            value = self._decision(role, messages, kwargs)
+            payload = json.loads(messages[-1]['content'])
+            request_payload = payload.get('request') or {}
+            concern = str((request_payload.get('concern') or {}).get('name') or '')
+            path = list(payload.get('path') or [])
+            if reject_page and concern == 'missing_dependencies' and path == ['fields']:
+                return [value, dict(value)]
+            return [value]
+
+        def generate_text(self, *_args, **_kwargs):
+            raise AssertionError('atomic production must not use free-form Java text')
 
     class Runner:
         def __init__(self, _cache):
@@ -310,8 +362,12 @@ def test_production_graph_output_pressure_preserves_siblings_and_rolls_back(tmp_
             javac = shutil.which('javac')
             if not javac:
                 pytest.skip('JDK required')
-            subprocess.run([javac, '-d', str(tmp_path / 'classes'),
-                            *map(str, (root / 'src/main/java').rglob('*.java'))], check=True, capture_output=True)
+            subprocess.run(
+                [javac, '-d', str(tmp_path / 'classes'),
+                 *map(str, (root / 'src/main/java').rglob('*.java'))],
+                check=True,
+                capture_output=True,
+            )
             return SimpleNamespace(status='PASS', error='', commands=())
 
     monkeypatch.setattr(direct, 'adapter_for_target', lambda *_: _adapter())
@@ -319,33 +375,46 @@ def test_production_graph_output_pressure_preserves_siblings_and_rolls_back(tmp_
     router = Router()
     generator = direct.CustomModuleGenerator(router)
     if reject_page:
-        with pytest.raises(CustomModuleGenerationError, match='OWNERSHIP_VIOLATION'):
-            generator.generate(tmp_path, module=modules[0], minecraft_version='1.21.1', loader='fabric')
+        with pytest.raises(CustomModuleGenerationError, match='ATOMIC_JAVA_ASSEMBLY_INVALID'):
+            generator.generate(
+                tmp_path, module=modules[0],
+                minecraft_version='1.21.1', loader='fabric',
+            )
         assert main.read_bytes() == original_main
         assert owner.read_bytes() == original_owner
         assert not compiles
     else:
-        generator.generate(tmp_path, module=modules[0], minecraft_version='1.21.1', loader='fabric')
+        generator.generate(
+            tmp_path, module=modules[0],
+            minecraft_version='1.21.1', loader='fabric',
+        )
         assert len(compiles) == 1
         source = owner.read_text(encoding='utf-8')
         assert source.count('boolean valid(') == 1
         assert source.count('LIMIT = 100') == 1
+        assert source.count('boolean allowed(') == 1
         harness = tmp_path / 'Probe.java'
         harness.write_text(
             'package example; public class Probe { public static void main(String[] args) {'
             'if (AuthoredFailureLimits.allowed(-1) || !AuthoredFailureLimits.allowed(100) '
-            '|| AuthoredFailureLimits.allowed(101)) throw new AssertionError(); }}', encoding='utf-8',
+            '|| AuthoredFailureLimits.allowed(101)) throw new AssertionError(); }}',
+            encoding='utf-8',
         )
-        subprocess.run([shutil.which('javac'), '-cp', str(tmp_path / 'classes'), '-d',
-                        str(tmp_path / 'classes'), str(harness)], check=True, capture_output=True)
-        subprocess.run([shutil.which('java'), '-cp', str(tmp_path / 'classes'), 'example.Probe'],
-                       check=True, capture_output=True)
-    assert len(calls) == (5 if reject_page else 4)
-    assert all(p['host_selected_class'] == 'AuthoredFailureLimits' for p, _ in calls)
+        subprocess.run(
+            [shutil.which('javac'), '-cp', str(tmp_path / 'classes'), '-d',
+             str(tmp_path / 'classes'), str(harness)],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            [shutil.which('java'), '-cp', str(tmp_path / 'classes'), 'example.Probe'],
+            check=True,
+            capture_output=True,
+        )
+    assert router.pressure_raised
+    assert calls
     assert request == original_request
     assert not list(main.parent.glob('*Part*.java'))
-    assert not router.calls
-
 
 @pytest.mark.parametrize('native_completion', [False, True])
 def test_real_adapter_sse_output_limit_enters_same_owner_java_paging(monkeypatch, native_completion):
@@ -471,7 +540,7 @@ def test_colab_six_declarations_are_preserved_before_executable_completion(tmp_p
             raise ir.OutputBudgetExhausted('OUTPUT_BUDGET_EXHAUSTED')
         assert payload['region_page']['next_work']
         if payload['region_page']['index'] == 0:
-            return '```java\n' + DECISION_CONSTANTS + '\n```'
+            return DECISION_CONSTANTS
         assert len(payload['region_page']['accepted_api']) == 6
         return '''public static String authority(String trigger, String state) {
             if (DECISION_SHIP_POSITION_TRIGGER.equals(trigger)
