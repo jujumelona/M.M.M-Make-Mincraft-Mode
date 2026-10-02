@@ -306,16 +306,16 @@ def test_production_graph_output_pressure_preserves_siblings_and_rolls_back(
             properties = schema.get('properties', {})
             if 'part' in properties:
                 choices = properties['part'].get('enum') or []
-                if not path:
-                    if concern == 'missing_dependencies' and 'fields' in choices:
-                        return {'part': 'fields'}
-                    if 'methods' in choices:
-                        return {'part': 'methods'}
-                    return {'part': 'done'}
+                if concern == 'missing_dependencies' and 'fields' in choices:
+                    return {'part': 'fields'}
+                if 'methods' in choices:
+                    return {'part': 'methods'}
                 if 'parameters' in choices:
                     return {'part': 'parameters'}
                 if 'body' in choices:
                     return {'part': 'body'}
+                if 'statements' in choices:
+                    return {'part': 'statements'}
                 return {'part': 'done'}
 
             if 'statement' in properties:
