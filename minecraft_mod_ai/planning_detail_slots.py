@@ -15,7 +15,7 @@ def record_field_schema(section: str, concern: str, field: str) -> dict:
         and concern == "initialization_order"
         and field == "prerequisite"
     ):
-        return {"type": ["string", "null"], "minLength": 1}
+        return {"type": ["string", "null"], "minLength": 1, "maxLength": 512}
     if (
         section == "authority_and_network"
         and concern == "synchronization"
@@ -39,7 +39,7 @@ def record_field_schema(section: str, concern: str, field: str) -> dict:
             "maxItems": 4,
             "items": {"type": "string", "maxLength": 256},
         }
-    return {"type": "string", "minLength": 1}
+    return {"type": "string", "minLength": 1, "maxLength": 512}
 
 
 def specification_schema(section):
@@ -58,15 +58,17 @@ def specification_schema(section):
         }
         properties[concern] = {
             "type": "array",
+            "maxItems": 4,
             "items": item_schema,
         }
     properties["inapplicable_concerns"] = {
         "type": "array",
+        "maxItems": max(1, len(records)),
         "items": {
             "type": "object",
             "properties": {
                 "concern": {"type": "string", "enum": list(records)},
-                "reason": {"type": "string", "minLength": 1},
+                "reason": {"type": "string", "minLength": 1, "maxLength": 512},
             },
             "required": ["concern", "reason"],
             "additionalProperties": False,
