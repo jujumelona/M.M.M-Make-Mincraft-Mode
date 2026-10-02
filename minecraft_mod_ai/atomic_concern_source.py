@@ -3722,10 +3722,8 @@ def _rewrite_map_entry_projection_types(
             ("getValue", value_type),
         ):
             pattern = re.compile(
-                rf"(?P<prefix>(?:^|[{{;]))(?P<spacing>[ \t]*)"
-                rf"(?P<declared>(?:final[ \t]+)?"
-                rf"[A-Za-z_$][A-Za-z0-9_$.<>,? \t]+?)\s+"
-                rf"(?P<local>[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
+                rf"(?P<prefix>(?:^|[{{;]))(?P<spacing>[ \t]*)(?P<declared>(?:final[ \t]+)?"
+                rf"[A-Za-z_$][A-Za-z0-9_$.<>,? \t]+?)\s+(?P<local>[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
                 rf"{re.escape(entry_var)}\s*\.\s*{accessor}\s*\(\s*\)\s*;",
                 re.MULTILINE,
             )
