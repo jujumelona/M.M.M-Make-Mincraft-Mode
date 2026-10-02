@@ -5,6 +5,7 @@ import os
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
+from copy import deepcopy
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
@@ -47,6 +48,18 @@ _TARGET_NEUTRAL_RESEARCH: ContextVar[bool] = ContextVar(
 )
 _COMPACT_CONTEXT_MARKER = "_mmm_compact_skill_context_v1"
 _MAX_SKILL_DESCRIPTION_CHARS = 32
+_MODEL_TOOL_DEFAULT_STRING_MAX_CHARS = 1024
+_MODEL_TOOL_DEFAULT_ARRAY_MAX_ITEMS = 16
+_MODEL_TOOL_EXPANSIVE_STRING_MAX_CHARS = 16_384
+_MODEL_TOOL_EXPANSIVE_ARRAY_MAX_ITEMS = 32
+_MODEL_TOOL_EXPANSIVE_EFFECTS = frozenset({
+    "project_changed",
+    "source_generated",
+    "assets_generated",
+    "generated",
+    "repaired",
+    "packaged",
+})
 
 
 @dataclass(frozen=True)
@@ -543,6 +556,82 @@ def project_agent_capability_context(
     return prefix + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
+def _bound_model_tool_value(
+    value: Any,
+    *,
+    string_max: int,
+    array_max: int,
+) -> Any:
+    """Project provider schemas into finite model-authored argument contracts."""
+
+    if isinstance(value, Mapping):
+        bounded = {
+            str(key): _bound_model_tool_value(
+                child,
+                string_max=string_max,
+                array_max=array_max,
+            )
+            for key, child in value.items()
+        }
+        raw_type = value.get("type")
+        types = (
+            {str(raw_type)}
+            if isinstance(raw_type, str)
+            else {
+                str(item)
+                for item in raw_type
+                if isinstance(item, str)
+            }
+            if isinstance(raw_type, Sequence)
+            and not isinstance(raw_type, (str, bytes, bytearray))
+            else set()
+        )
+        if "string" in types and "enum" not in value and "const" not in value:
+            bounded.setdefault("maxLength", string_max)
+        if "array" in types or "items" in value:
+            bounded.setdefault("maxItems", array_max)
+        return bounded
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [
+            _bound_model_tool_value(
+                child,
+                string_max=string_max,
+                array_max=array_max,
+            )
+            for child in value
+        ]
+    return deepcopy(value)
+
+
+def _bound_model_tool_schema(schema: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Return a finite model-visible copy while preserving stricter explicit bounds."""
+
+    name = _schema_tool_name(schema)
+    try:
+        from .tool_transition_registry import reviewed_transition
+
+        transition = reviewed_transition(name)
+    except Exception:
+        transition = None
+    expansive = bool(
+        transition is not None
+        and transition.effects.intersection(_MODEL_TOOL_EXPANSIVE_EFFECTS)
+    )
+    return _bound_model_tool_value(
+        schema,
+        string_max=(
+            _MODEL_TOOL_EXPANSIVE_STRING_MAX_CHARS
+            if expansive
+            else _MODEL_TOOL_DEFAULT_STRING_MAX_CHARS
+        ),
+        array_max=(
+            _MODEL_TOOL_EXPANSIVE_ARRAY_MAX_ITEMS
+            if expansive
+            else _MODEL_TOOL_DEFAULT_ARRAY_MAX_ITEMS
+        ),
+    )
+
+
 def prepare_agent_tool_surface(
     stage: str,
     model_role: str,
@@ -557,13 +646,14 @@ def prepare_agent_tool_surface(
         tool_schemas,
         policy,
     )
+    model_visible = tuple(_bound_model_tool_schema(schema) for schema in filtered)
     context = _build_agent_capability_context_with_policy(
         stage,
-        filtered,
+        model_visible,
         model_role=model_role,
         policy=policy,
     )
-    return filtered, context
+    return model_visible, context
 
 
 setattr(build_agent_capability_context, _COMPACT_CONTEXT_MARKER, True)
