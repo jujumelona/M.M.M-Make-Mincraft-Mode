@@ -1827,18 +1827,14 @@ def _production_atomic_coder(
                 structured_java_region=True,
                 tool_stage="atomic_java_structured",
             )
-        except AtomicJavaDecisionError as exc:
+        except Exception as exc:
+            # Structured materialization is an optimization/safety path, not a new
+            # single point of failure. If a backend lacks native tool support, rejects
+            # a scalar contract, or cannot represent a complex region, preserve the
+            # proven direct-source path for that concern.
             print(
-                "custom generation: structured Java materialization fell back to direct source "
-                f"({str(exc).splitlines()[0]})",
-                flush=True,
-            )
-        except CustomModuleGenerationError as exc:
-            # Structure/schema failures are local materialization failures, not semantic
-            # proof that direct source cannot implement the concern.
-            print(
-                "custom generation: structured Java contract fell back to direct source "
-                f"({str(exc).splitlines()[0]})",
+                "custom generation: structured Java unavailable; using direct source "
+                f"({type(exc).__name__}: {str(exc).splitlines()[0]})",
                 flush=True,
             )
 
