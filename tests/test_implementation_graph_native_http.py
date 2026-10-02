@@ -97,8 +97,9 @@ def test_host_graph_reaches_java_execution_without_planner_http(tmp_path, monkey
                 )
             else:
                 # Production atomic generation emits one complete concern-local
-                # Java region as text. Completion is decided in a separate native
-                # tool turn above; implementation planning itself performs no HTTP.
+                # Java region as text. A separate completion tool is needed only
+                # after output-pressure paging; this smoke path fits in one page.
+                # Implementation planning itself performs no model HTTP.
                 user_message = next(
                     message["content"]
                     for message in reversed(payload["messages"])
@@ -210,11 +211,8 @@ def test_host_graph_reaches_java_execution_without_planner_http(tmp_path, monkey
         region_requests = [request for request in requests if not request.get("tools")]
         completion_requests = [request for request in requests if request.get("tools")]
         assert len(region_requests) == expected_region_requests
-        assert len(completion_requests) == expected_region_requests
-        assert all(
-            request["tools"][0]["function"]["name"] == "report_java_region_completion"
-            for request in completion_requests
-        )
+        assert completion_requests == []
+        assert all(not request.get("tools") for request in region_requests)
         assert all("response_format" not in request for request in requests)
         graph = result["implementation_ir"]
         symbols = {node["symbol"] for node in graph["nodes"]}
