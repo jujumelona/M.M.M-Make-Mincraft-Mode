@@ -79,8 +79,5 @@ __version__ = "0.8.0"
 
 
 # Installer-backed cross-cutting contracts have exactly one package-level owner.
-# Source-owned contracts are intentionally absent from runtime_bootstrap.
-from .runtime_bootstrap import initialize_runtime as _initialize_runtime
-
-_initialize_runtime()
-del _initialize_runtime
+# Runtime contracts are source-owned. Importing the package must not mutate or
+# rebind production functions through an installer/bootstrap phase.
