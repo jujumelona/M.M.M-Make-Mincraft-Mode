@@ -1254,7 +1254,12 @@ def admit_member_region(
         f"{len(candidates)} model Java candidate(s) were structurally inadmissible"
     )
     if errors:
-        detail += f"; last candidate error: {errors[-1]}"
+        # Candidates are ordered best-first: extracted Java fences first, raw envelope
+        # last. Report the first candidate's parser error so repair feedback describes
+        # the actual Java defect instead of a secondary Markdown-envelope failure.
+        detail += f"; primary Java candidate error: {errors[0]}"
+        if len(errors) > 1 and str(errors[-1]) != str(errors[0]):
+            detail += f"; raw-envelope fallback error: {errors[-1]}"
     category = (
         "syntax"
         if any(exc.category == "syntax" for exc in errors)
