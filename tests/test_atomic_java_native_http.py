@@ -25,11 +25,6 @@ def test_native_http_assembles_java_without_nested_json_or_repair(monkeypatch):
             {"type": "int", "name": "reputation_score", "initializer": 0},
         ],
         {"part": "done"},
-        {"part": "done"},
-        {"part": "classes"},
-        {"name": "ShipData"},
-        {"part": "done"},
-        {"part": "done"},
     ]
 
     class Handler(BaseHTTPRequestHandler):
@@ -97,11 +92,13 @@ def test_native_http_assembles_java_without_nested_json_or_repair(monkeypatch):
     assert "static float fuel = 100.0f;" in source
     assert "static boolean current_planet_surface = true;" in source
     assert "static int reputation_score = 0;" in source
-    assert "class ShipData" in source
+    # No nested runtime type is authorized by this payload. Closing after the
+    # state fields is the correct fail-closed result; the model must not invent ShipData.
+    assert "class ShipData" not in source
     assert len(requests) == len(responses)
     assert all(r["tools"][0]["function"]["name"] == "emit_java_part" for r in requests)
     assert [r["parallel_tool_calls"] for r in requests] == [
-        False, True, False, False, False, True, False, False,
+        False, True, False,
     ]
     assert all(r["tool_choice"] == "required" for r in requests)
     assert all("response_format" not in r for r in requests)

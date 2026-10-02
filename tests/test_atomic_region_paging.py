@@ -271,6 +271,15 @@ def test_production_graph_output_pressure_preserves_siblings_and_rolls_back(tmp_
 
             return compile_contribution(self, name, payload, state or {}, checkpoint or (lambda: None))
 
+        def generate_tool_decision(self, role, messages, **kwargs):
+            assert role == 'coder'
+            assert kwargs['tool_name'] == 'report_java_region_completion'
+            payload = json.loads(messages[-1]['content'])
+            page = payload['current_page_source']
+            if 'LIMIT = 100' in page:
+                return {'done': False, 'next_work': 'implement allowed(int count)'}
+            return {'done': True, 'next_work': ''}
+
         def generate_text(self, role, messages, **kwargs):
             payload = json.loads(messages[-1]['content'])
             calls.append((payload, kwargs))
@@ -285,10 +294,10 @@ def test_production_graph_output_pressure_preserves_siblings_and_rolls_back(tmp_
                 )
             assert any(row['symbol'] == 'valid' for row in payload['available_sibling_api'])
             if payload['region_page']['index'] == 0:
-                return 'private static final int LIMIT = 100;\n// MMM_REGION_MORE'
+                return 'private static final int LIMIT = 100;'
             if reject_page:
-                return 'private static final int LIMIT = 200;\n// MMM_REGION_DONE'
-            return 'public static boolean allowed(int count) { return valid(count) && count <= LIMIT; }\n// MMM_REGION_DONE'
+                return 'private static final int LIMIT = 200;'
+            return 'public static boolean allowed(int count) { return valid(count) && count <= LIMIT; }'
 
     class Runner:
         def __init__(self, _cache):

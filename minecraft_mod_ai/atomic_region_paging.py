@@ -215,14 +215,25 @@ def _generate_pages(call_coder, messages, *, completion_decider=None) -> str:
                 if done and parts:
                     return "\n\n".join(parts)
                 raise CustomModuleGenerationError("ATOMIC_REGION_NO_PROGRESS: empty page")
-            parsed = _parse_region_content(body, response_region=region)
+            try:
+                parsed = _parse_region_content(body, response_region=region)
+            except CustomModuleGenerationError as exc:
+                # A paged turn promises one complete Java unit. Any parser rejection
+                # is therefore a page-scope violation rather than a generic response
+                # formatting error; keep the public taxonomy stable for recovery.
+                raise CustomModuleGenerationError(
+                    "ATOMIC_REGION_SCOPE_ESCAPE: page is not one admissible Java unit: "
+                    + str(exc)
+                ) from exc
             chunks = (strict_member_chunks(parsed) if region == "members"
                       else strict_initialize_statements(parsed))
             if not chunks:
                 raise CustomModuleGenerationError("ATOMIC_REGION_NO_PROGRESS: page contains no executable unit")
-            # A successful bounded response may contain several complete members.
-            # Admit their AST units individually instead of rejecting valid Java
-            # solely because the model grouped a field with its accessor.
+            if len(chunks) != 1:
+                raise CustomModuleGenerationError(
+                    "ATOMIC_REGION_UNIT_CARDINALITY: region_page must contain exactly one "
+                    f"complete semantic unit, got {len(chunks)}"
+                )
             page_symbols: set[str] = set()
             if region == "members":
                 for chunk in chunks:
