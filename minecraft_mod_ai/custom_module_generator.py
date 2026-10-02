@@ -1747,16 +1747,9 @@ def _call_coder(
     *,
     output_token_ceiling: int | None = None,
     force_non_thinking: bool = False,
-    structured_java_region: bool = False,
     tool_stage: str = "generation",
 ) -> str:
-    if structured_java_region:
-        return _call_atomic_java_region(
-            router,
-            messages,
-            output_token_ceiling=output_token_ceiling,
-        )
-
+    """Generic non-atomic text coder. Atomic Java never enters this path."""
     callback = getattr(router, "generate_text", None)
     if not callable(callback):
         raise CustomModuleGenerationError(
@@ -1802,50 +1795,6 @@ def _call_coder(
                 continue
             raise
         return _plain_coder_output(text)
-
-
-def _production_atomic_coder(
-    router: Any,
-    messages: Sequence[Mapping[str, str]],
-    *,
-    output_token_ceiling: int | None,
-) -> str:
-    """Prefer host-rendered structured Java, then fall back to direct source.
-
-    Small coders are substantially more reliable when they choose semantic Java
-    components and the host owns syntax/identifier rendering. Complex regions can still
-    use direct Java when the structured assembler cannot represent the intent.
-    """
-    payload = _atomic_request_payload(messages)
-    response_region = str(payload.get("response_region") or "members").strip()
-    if response_region == "members":
-        try:
-            return _call_coder(
-                router,
-                messages,
-                output_token_ceiling=output_token_ceiling,
-                structured_java_region=True,
-                tool_stage="atomic_java_structured",
-            )
-        except Exception as exc:
-            # Structured materialization is an optimization/safety path, not a new
-            # single point of failure. If a backend lacks native tool support, rejects
-            # a scalar contract, or cannot represent a complex region, preserve the
-            # proven direct-source path for that concern.
-            print(
-                "custom generation: structured Java unavailable; using direct source "
-                f"({type(exc).__name__}: {str(exc).splitlines()[0]})",
-                flush=True,
-            )
-
-    return _call_coder(
-        router,
-        messages,
-        output_token_ceiling=output_token_ceiling,
-        force_non_thinking=True,
-        structured_java_region=False,
-        tool_stage="atomic_java",
-    )
 
 
 def _compile_log(report: Any) -> str:
@@ -2053,10 +2002,9 @@ def _run_atomic_ir_generation(
         grounding=context.host_grounding,
         dependency_source=context.dependency_context,
         require_initialize=context.require_initialize,
-        # Prefer semantic structured decisions so the host owns Java syntax,
-        # modifiers and identifier spelling. Complex regions retain a direct-source
-        # fallback, but free-form Java is no longer the first production path.
-        call_coder=lambda messages: _production_atomic_coder(
+        # Atomic production has one model->source path only:
+        # native structured decisions -> host Java renderer -> AST/compiler admission.
+        call_coder=lambda messages: _call_atomic_java_region(
             generator.router,
             messages,
             output_token_ceiling=_ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING,
