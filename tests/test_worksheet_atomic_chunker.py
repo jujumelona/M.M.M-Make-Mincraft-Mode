@@ -70,53 +70,32 @@ def test_deterministic_merge_reconstructs_canonical_section(section: str):
     assert validate_worksheet_section(merged, allowed_refs, section) == canonical
 
 
-def test_repeated_concern_field_pages_freeze_host_owned_record_count():
+def test_each_concern_is_generated_once_without_cross_page_count_identity():
     chunks = pack_section_concerns("behavior_contract")
-    repeated = None
-    repeated_pages = []
-    for chunk in chunks:
-        for concern in chunk:
-            pages = [
-                candidate
-                for candidate in chunks
-                if concern in candidate
-            ]
-            if len(pages) > 1:
-                repeated = concern
-                repeated_pages = pages
-                break
-        if repeated is not None:
-            break
+    occurrences = {
+        concern: sum(concern in chunk for chunk in chunks)
+        for concern in DETAIL_RECORDS["behavior_contract"]
+    }
+    assert set(occurrences.values()) == {1}
 
-    assert repeated is not None
-    assert len(repeated_pages) >= 2
-
-    unconstrained = worksheet_chunk_schema(
+    target = next(chunk for chunk in chunks if "actors" in chunk)
+    unconstrained = worksheet_chunk_schema("behavior_contract", target)
+    compatible = worksheet_chunk_schema(
         "behavior_contract",
-        repeated_pages[0],
+        target,
+        record_counts={"actors": 3},
     )
-    first_array = unconstrained["properties"][repeated]
-    assert first_array["maxItems"] == 4
-    assert "minItems" not in first_array
-
-    constrained = worksheet_chunk_schema(
-        "behavior_contract",
-        repeated_pages[1],
-        record_counts={repeated: 3},
-    )
-    next_array = constrained["properties"][repeated]
-    assert next_array["minItems"] == 3
-    assert next_array["maxItems"] == 3
+    assert compatible == unconstrained
 
     prompt = worksheet_chunk_prompt(
         "behavior_contract",
-        2,
+        1,
         len(chunks),
-        repeated_pages[1],
-        record_counts={repeated: 3},
+        target,
+        record_counts={"actors": 3},
     )
-    assert f"Host-fixed Record Counts: {repeated}=3" in prompt
-    assert "emit exactly that many records" in prompt
+    assert "Host-fixed Record Counts" not in prompt
+    assert "record indices from another call" in prompt
 
 
 def test_root_integration_prerequisite_accepts_null_and_canonicalizes():
