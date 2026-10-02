@@ -10,6 +10,13 @@ from functools import wraps
 from typing import Any
 
 from .deadline_executor import iter_completed_with_deadlines
+from .execution_contract_policy import (
+    CENTRAL_RESEARCH_SCHEMA_PROFILE,
+    SCHEMA_CONTRACT_PROFILE_KEY,
+    STRING_CLASS_GENERIC,
+    atomic_schema_limits,
+    string_limit_for_schema_class,
+)
 from .fixed_template_generation import generate_fixed_template_text
 
 _MARKER = "_mmm_central_intelligence_amplifier_v1"
@@ -33,33 +40,37 @@ _TRANSIENT_PARALLEL_RESEARCH_MARKERS = (
     "http 504",
 )
 _TRANSIENT_OS_ERRNOS = frozenset({32, 104, 110, 111, 113})
+_RESEARCH_LIMITS = atomic_schema_limits(CENTRAL_RESEARCH_SCHEMA_PROFILE)
+_RESEARCH_STRING_MAX = string_limit_for_schema_class(
+    CENTRAL_RESEARCH_SCHEMA_PROFILE,
+    STRING_CLASS_GENERIC,
+)
+
+
+def _research_string_list_schema() -> dict[str, Any]:
+    return {
+        "type": "array",
+        "maxItems": _RESEARCH_LIMITS.max_array_items,
+        "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": _RESEARCH_STRING_MAX,
+        },
+    }
+
 
 _COUNCIL_SCHEMA: dict[str, Any] = {
+    SCHEMA_CONTRACT_PROFILE_KEY: CENTRAL_RESEARCH_SCHEMA_PROFILE,
     "type": "object",
     "properties": {
         "analysis": {
             "type": "object",
             "properties": {
-                "must_preserve": {
-                    "type": "array",
-                    "items": {"type": "string", "minLength": 1},
-                },
-                "must_not_invent": {
-                    "type": "array",
-                    "items": {"type": "string", "minLength": 1},
-                },
-                "subproblems": {
-                    "type": "array",
-                    "items": {"type": "string", "minLength": 1},
-                },
-                "risks": {
-                    "type": "array",
-                    "items": {"type": "string", "minLength": 1},
-                },
-                "research_questions": {
-                    "type": "array",
-                    "items": {"type": "string", "minLength": 1},
-                },
+                "must_preserve": _research_string_list_schema(),
+                "must_not_invent": _research_string_list_schema(),
+                "subproblems": _research_string_list_schema(),
+                "risks": _research_string_list_schema(),
+                "research_questions": _research_string_list_schema(),
                 "confidence": {"type": "number", "minimum": 0, "maximum": 1},
             },
             "required": [
@@ -78,31 +89,17 @@ _COUNCIL_SCHEMA: dict[str, Any] = {
 }
 
 _CHAIR_SCHEMA: dict[str, Any] = {
+    SCHEMA_CONTRACT_PROFILE_KEY: CENTRAL_RESEARCH_SCHEMA_PROFILE,
     "type": "object",
     "properties": {
         "synthesis": {
             "type": "object",
             "properties": {
-                "requirements": {
-                    "type": "array",
-                    "items": {"type": "string", "minLength": 1},
-                },
-                "negative_constraints": {
-                    "type": "array",
-                    "items": {"type": "string", "minLength": 1},
-                },
-                "subproblem_order": {
-                    "type": "array",
-                    "items": {"type": "string", "minLength": 1},
-                },
-                "acceptance_observables": {
-                    "type": "array",
-                    "items": {"type": "string", "minLength": 1},
-                },
-                "unresolved_questions": {
-                    "type": "array",
-                    "items": {"type": "string", "minLength": 1},
-                },
+                "requirements": _research_string_list_schema(),
+                "negative_constraints": _research_string_list_schema(),
+                "subproblem_order": _research_string_list_schema(),
+                "acceptance_observables": _research_string_list_schema(),
+                "unresolved_questions": _research_string_list_schema(),
             },
             "required": [
                 "requirements",
@@ -119,31 +116,17 @@ _CHAIR_SCHEMA: dict[str, Any] = {
 }
 
 _REVIEW_SCHEMA: dict[str, Any] = {
+    SCHEMA_CONTRACT_PROFILE_KEY: CENTRAL_RESEARCH_SCHEMA_PROFILE,
     "type": "object",
     "properties": {
         "review": {
             "type": "object",
             "properties": {
-                "missing_requirements": {
-                    "type": "array",
-                    "items": {"type": "string", "minLength": 1},
-                },
-                "unsupported_additions": {
-                    "type": "array",
-                    "items": {"type": "string", "minLength": 1},
-                },
-                "contradictions": {
-                    "type": "array",
-                    "items": {"type": "string", "minLength": 1},
-                },
-                "research_gaps": {
-                    "type": "array",
-                    "items": {"type": "string", "minLength": 1},
-                },
-                "affected_sections": {
-                    "type": "array",
-                    "items": {"type": "string", "minLength": 1},
-                },
+                "missing_requirements": _research_string_list_schema(),
+                "unsupported_additions": _research_string_list_schema(),
+                "contradictions": _research_string_list_schema(),
+                "research_gaps": _research_string_list_schema(),
+                "affected_sections": _research_string_list_schema(),
                 "severity": {
                     "type": "string",
                     "enum": ["none", "low", "medium", "high", "critical"],
