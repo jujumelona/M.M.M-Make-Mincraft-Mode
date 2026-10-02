@@ -21,6 +21,8 @@ from .root_cause_trace import emit_root_cause
 
 _REQUIREMENT_TOOL = "submit_researched_requirements"
 _REQUIREMENT_PARAMETERS: dict[str, Any] = SUBMIT_RESEARCHED_REQUIREMENTS_SCHEMA
+_MAX_REQUIREMENT_PAGES = 16
+_MAX_COMPILED_REQUIREMENTS = 64
 
 
 def _text(value: Any) -> str:
@@ -320,6 +322,11 @@ def _generate_requirement_pages(router: Any, messages: list[dict[str, str]], bud
     payload = json.loads(messages[1]["content"])
     page_index = 0
     while True:
+        if page_index >= _MAX_REQUIREMENT_PAGES or len(collected) >= _MAX_COMPILED_REQUIREMENTS:
+            raise ModelConfigurationError(
+                "REQUIREMENT_PAGINATION_LIMIT: semantic requirement compilation exceeded "
+                "the finite host page/requirement budget without reaching a partial page."
+            )
         current_messages = deepcopy(messages)
         if collected:
             current_messages[1]["content"] = json.dumps(
@@ -397,6 +404,11 @@ def _generate_requirement_pages(router: Any, messages: list[dict[str, str]], bud
 
         seen.update(page_seen)
         collected.extend(page_rows)
+        if len(collected) > _MAX_COMPILED_REQUIREMENTS:
+            raise ModelConfigurationError(
+                "REQUIREMENT_PAGINATION_LIMIT: compiled requirement count exceeded "
+                f"{_MAX_COMPILED_REQUIREMENTS}."
+            )
         page_full = len(rows) >= page_size
         emit_root_cause(
             "planner_requirement_page",
