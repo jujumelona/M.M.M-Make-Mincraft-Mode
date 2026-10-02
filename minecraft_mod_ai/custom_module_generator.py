@@ -637,8 +637,12 @@ def _canonical_java_identifier(value: Any) -> str:
     return cleaned
 
 
-def _java_identifier_renames(decision: Mapping[str, Any]) -> dict[str, str]:
-    """Build one deterministic spelling map for model-declared Java identifiers."""
+def _java_identifier_renames(
+    decision: Mapping[str, Any],
+    *,
+    reserved_identifiers: Sequence[str] = (),
+) -> dict[str, str]:
+    """Build host-owned, collision-free Java spellings for semantic labels."""
 
     names: set[str] = set()
 
@@ -688,16 +692,21 @@ def _java_identifier_renames(decision: Mapping[str, Any]) -> dict[str, str]:
     # Preserve already-valid names first, then canonicalize malformed semantic
     # spellings without colliding with them. Distinct raw names that collapse to the
     # same Java spelling receive a stable numeric suffix.
-    reserved = {
+    externally_reserved = {
+        _canonical_java_identifier(value)
+        for value in reserved_identifiers
+        if str(value or "").strip()
+    }
+    already_valid = {
         raw
         for raw in names
-        if _canonical_java_identifier(raw) == raw
+        if _canonical_java_identifier(raw) == raw and raw not in externally_reserved
     }
-    used = set(reserved)
+    used = set(externally_reserved) | set(already_valid)
     renames: dict[str, str] = {}
     for raw in sorted(names):
         canonical = _canonical_java_identifier(raw)
-        if canonical == raw:
+        if canonical == raw and canonical not in externally_reserved:
             continue
         base = canonical
         suffix = 2
@@ -1284,12 +1293,14 @@ def _validate_atomic_type_namespace(
     decision: Mapping[str, Any],
     *,
     reserved_type_names: Sequence[str] = (),
+    renames: Mapping[str, str] | None = None,
 ) -> None:
     reserved = {
         _canonical_java_identifier(value)
         for value in reserved_type_names
         if str(value or "").strip()
     }
+    active = renames or {}
     seen: dict[str, str] = {}
     for category, kind in (
         ("records", "record"),
@@ -1299,7 +1310,8 @@ def _validate_atomic_type_namespace(
         for item in decision.get(category) or []:
             if not isinstance(item, Mapping):
                 continue
-            name = _canonical_java_identifier(item.get("name"))
+            raw_name = str(item.get("name") or "").strip()
+            name = active.get(raw_name, _canonical_java_identifier(raw_name))
             if name in reserved:
                 raise CustomModuleGenerationError(
                     "ATOMIC_CONCERN_SCOPE_ESCAPE: nested type "
@@ -1656,11 +1668,16 @@ def _render_atomic_java_structure(
             _java_body_lines(decision.get("statements") or [], indent="")
         ).strip()
 
+    reserved_type_names = (host_symbol,) if host_symbol else ()
+    renames = _java_identifier_renames(
+        decision,
+        reserved_identifiers=reserved_type_names,
+    )
     _validate_atomic_type_namespace(
         decision,
-        reserved_type_names=(host_symbol,) if host_symbol else (),
+        reserved_type_names=reserved_type_names,
+        renames=renames,
     )
-    renames = _java_identifier_renames(decision)
     rows: list[str] = []
     rows.extend(
         _render_record(item, renames=renames)
