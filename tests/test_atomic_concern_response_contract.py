@@ -18,9 +18,14 @@ from minecraft_mod_ai.atomic_concern_source import (
 from minecraft_mod_ai.custom_module_errors import CustomModuleGenerationError
 from minecraft_mod_ai.custom_module_generator import (
     _call_coder,
+    _production_atomic_coder,
 )
 from minecraft_mod_ai.implementation_ir import OutputBudgetExhausted
-from minecraft_mod_ai.java_region_parser import class_body_member_contracts
+from minecraft_mod_ai.java_region_parser import (
+    JavaRegionParseError,
+    admit_member_region,
+    class_body_member_contracts,
+)
 
 
 def _response(members: str = "", initialize: str = "") -> str:
@@ -132,6 +137,42 @@ def test_dependency_trigger_dispatch_misuse_is_canonicalized_without_retry() -> 
 
     assert 'AuthoredStateModel.setState("drift_action", "left", context);' in result["source"]
     assert "AuthoredStateModel.applyUpdate(" not in result["source"]
+
+
+def test_fail_closed_prompt_exposes_host_safe_field_symbols_and_hides_platform_noise() -> None:
+    messages = _messages(
+        section="failure_and_limits",
+        concern={
+            "sequence": 0,
+            "identifier": "feature/failure_and_limits/fail_closed",
+            "concern": "fail_closed",
+            "task": "implement fail closed behavior",
+            "rules": [],
+            "record_schema": {
+                "type": "object",
+                "properties": {
+                    "condition": {"type": "string"},
+                    "stop_reason": {"type": "string"},
+                },
+                "required": ["condition", "stop_reason"],
+                "additionalProperties": False,
+            },
+        },
+        task={"task_id": "t", "semantic_outcome": "fail closed"},
+        grounding={"irrelevant_platform_noise": "must not reach pure Java coder"},
+        dependency_source="",
+        current_source="",
+        response_region="members",
+    )
+    payload = json.loads(messages[-1]["content"])
+
+    assert payload["concern"]["java_symbol_plan"]["authored_field_symbols"] == {
+        "condition": "CONDITION",
+        "stop_reason": "STOP_REASON",
+    }
+    assert payload["concern"]["java_symbol_plan"]["value_to_identifier_forbidden"] is True
+    assert payload["host_grounding"] == {}
+    assert payload["implementation_authority"] == ""
 
 
 def test_dependency_call_contract_exposes_semantic_parameter_roles() -> None:
@@ -564,6 +605,116 @@ def test_atomic_region_uses_required_structured_tool_not_free_text() -> None:
     assert captured["role"] == "coder"
     assert captured["tool_name"] == "emit_java_part"
     assert captured["output_token_ceiling"] == 1536
+
+
+def test_structured_renderer_canonicalizes_natural_language_member_names() -> None:
+    from minecraft_mod_ai.custom_module_generator import _render_atomic_java_structure
+
+    rendered = _render_atomic_java_structure(
+        {
+            "fields": [
+                {
+                    "type": "String",
+                    "name": "STOP PROPULSION-IMMEDIATELY EMERGENCY BRAKE APPLIED",
+                    "initializer": '"stop_propulsion_immediately_emergency_brake_applied"',
+                }
+            ],
+            "methods": [
+                {
+                    "return_type": "String",
+                    "name": "read stop reason",
+                    "body": [
+                        "return STOP PROPULSION-IMMEDIATELY EMERGENCY BRAKE APPLIED"
+                    ],
+                }
+            ],
+        },
+        response_region="members",
+    )
+
+    assert "STOP_PROPULSION_IMMEDIATELY_EMERGENCY_BRAKE_APPLIED" in rendered
+    assert "read_stop_reason" in rendered
+    assert "STOP PROPULSION" not in rendered
+    assert "EMERGENCY BRAKE" not in rendered
+
+
+def test_production_atomic_coder_prefers_host_rendered_structured_members() -> None:
+    responses = iter([
+        {"part": "fields"},
+        {
+            "type": "String",
+            "name": "STOP PROPULSION IMMEDIATELY EMERGENCY BRAKE APPLIED",
+            "initializer": '"stop_propulsion_immediately_emergency_brake_applied"',
+        },
+        {"part": "done"},
+        {"part": "done"},
+    ])
+
+    class _Router:
+        def generate_tool_decision(self, role, messages, **kwargs):
+            return next(responses)
+
+        def generate_text(self, *args, **kwargs):
+            raise AssertionError("valid structured members must not fall back to free text")
+
+    result = _production_atomic_coder(
+        _Router(),
+        (
+            {"role": "system", "content": "atomic"},
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "response_region": "members",
+                        "concern": {"name": "fail_closed"},
+                    }
+                ),
+            },
+        ),
+        output_token_ceiling=1536,
+    )
+
+    assert "STOP_PROPULSION_IMMEDIATELY_EMERGENCY_BRAKE_APPLIED" in result
+
+
+def test_production_atomic_coder_falls_back_when_structured_transport_cannot_materialize() -> None:
+    class _Router:
+        def generate_tool_decision(self, role, messages, **kwargs):
+            return {"part": "done", "reasoning": "invalid extra transport field"}
+
+        def generate_text(self, role, messages, **kwargs):
+            return 'private static final String STOP_REASON = "engine_overheated";'
+
+    result = _production_atomic_coder(
+        _Router(),
+        (
+            {"role": "system", "content": "atomic"},
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "response_region": "members",
+                        "concern": {"name": "fail_closed"},
+                    }
+                ),
+            },
+        ),
+        output_token_ceiling=1536,
+    )
+
+    assert result == 'private static final String STOP_REASON = "engine_overheated";\n'
+
+
+def test_member_parser_reports_primary_fenced_java_error_not_only_markdown_fallback() -> None:
+    bad = """```java
+private static final String STOP_PROPULSION EMERGENCY_BRAKE = "stop";
+```"""
+    with pytest.raises(JavaRegionParseError) as captured:
+        admit_member_region(bad)
+
+    message = str(captured.value)
+    assert "primary Java candidate error:" in message
+    assert "raw-envelope fallback error:" in message
 
 
 def test_atomic_structured_tool_allows_intentional_empty_region() -> None:
