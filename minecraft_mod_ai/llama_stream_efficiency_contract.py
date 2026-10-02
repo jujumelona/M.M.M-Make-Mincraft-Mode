@@ -37,11 +37,63 @@ _REPORTED_SERVER_URLS: set[str] = set()
 _DEFAULT_STREAM_IDLE_TIMEOUT_SECONDS = 120.0
 _DEFAULT_TOOL_IDLE_TIMEOUT_SECONDS = 120.0
 _DEFAULT_REQUIRED_TOOL_PREFACE_MAX_CHARS = 1024
+_DEFAULT_STRUCTURED_TOOL_REPETITION_GUARD_MAX_TOKENS = 2048
 _REQUIRED_TOOL_MARKUP_PREFIXES = ("<tool_call>", "<function=")
 
 
 class LlamaToolLivenessTimeout(TimeoutError):
     """A streamed native tool response produced no readable transport progress in time."""
+
+
+class LlamaToolRepetitionDetected(RuntimeError):
+    """A bounded required-tool stream entered an exact repeating suffix loop."""
+
+
+def _bounded_required_tool_repetition_guard(payload: Mapping[str, Any]) -> bool:
+    if not _tool_choice_requires_execution(payload.get("tool_choice")):
+        return False
+    try:
+        max_tokens = int(payload.get("max_tokens", 0) or 0)
+    except (TypeError, ValueError):
+        return False
+    return 0 < max_tokens <= _DEFAULT_STRUCTURED_TOOL_REPETITION_GUARD_MAX_TOKENS
+
+
+def _repetitive_tail(text: str, *, copies: int = 4) -> bool:
+    """Detect exact repeated suffix blocks without penalizing ordinary repeated keys."""
+
+    if copies < 2:
+        raise ValueError("copies must be at least 2")
+    tail = text[-4096:]
+    if len(tail) < 128:
+        return False
+    max_period = min(512, len(tail) // copies)
+    for period in range(32, max_period + 1):
+        unit = tail[-period:]
+        if not unit.strip():
+            continue
+        if tail.endswith(unit * copies):
+            return True
+    return False
+
+
+def _required_tool_repetition_detected(message: Mapping[str, Any]) -> bool:
+    content = message.get("content")
+    if isinstance(content, str) and _repetitive_tail(content):
+        return True
+    calls = message.get("tool_calls")
+    if not isinstance(calls, list):
+        return False
+    for call in calls:
+        if not isinstance(call, Mapping):
+            continue
+        function = call.get("function")
+        if not isinstance(function, Mapping):
+            continue
+        arguments = function.get("arguments")
+        if isinstance(arguments, str) and _repetitive_tail(arguments):
+            return True
+    return False
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -363,6 +415,9 @@ class _StreamingCompletionClient:
 
         has_tools = bool(payload.get("tools"))
         requires_tool = has_tools and _tool_choice_requires_execution(payload.get("tool_choice"))
+        repetition_guard = bool(
+            has_tools and _bounded_required_tool_repetition_guard(payload)
+        )
         if has_tools and not hasattr(self._client, "stream"):
             return _post_native_tool_completion(self._client, url, kwargs)
 
@@ -459,6 +514,14 @@ class _StreamingCompletionClient:
                             message=message,
                             delta=delta,
                         )
+                        if (
+                            repetition_guard
+                            and required_tool_started
+                            and _required_tool_repetition_detected(message)
+                        ):
+                            raise LlamaToolRepetitionDetected(
+                                "bounded required-tool stream entered an exact repetition loop"
+                            )
                         if rejected:
                             host_rejected_required_tool_preface = True
                             finish_reason = "stop"
