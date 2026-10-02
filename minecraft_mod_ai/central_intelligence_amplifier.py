@@ -10,13 +10,7 @@ from functools import wraps
 from typing import Any
 
 from .deadline_executor import iter_completed_with_deadlines
-from .execution_contract_policy import (
-    CENTRAL_RESEARCH_SCHEMA_PROFILE,
-    SCHEMA_CONTRACT_PROFILE_KEY,
-    STRING_CLASS_GENERIC,
-    atomic_schema_limits,
-    string_limit_for_schema_class,
-)
+from .execution_contract_policy import DEFAULT_ATOMIC_SCHEMA_LIMITS
 from .fixed_template_generation import generate_fixed_template_text
 
 _MARKER = "_mmm_central_intelligence_amplifier_v1"
@@ -40,11 +34,8 @@ _TRANSIENT_PARALLEL_RESEARCH_MARKERS = (
     "http 504",
 )
 _TRANSIENT_OS_ERRNOS = frozenset({32, 104, 110, 111, 113})
-_RESEARCH_LIMITS = atomic_schema_limits(CENTRAL_RESEARCH_SCHEMA_PROFILE)
-_RESEARCH_STRING_MAX = string_limit_for_schema_class(
-    CENTRAL_RESEARCH_SCHEMA_PROFILE,
-    STRING_CLASS_GENERIC,
-)
+_RESEARCH_LIMITS = DEFAULT_ATOMIC_SCHEMA_LIMITS
+_RESEARCH_STRING_MAX = DEFAULT_ATOMIC_SCHEMA_LIMITS.max_string_chars
 
 
 def _research_string_list_schema() -> dict[str, Any]:
@@ -60,7 +51,6 @@ def _research_string_list_schema() -> dict[str, Any]:
 
 
 _COUNCIL_SCHEMA: dict[str, Any] = {
-    SCHEMA_CONTRACT_PROFILE_KEY: CENTRAL_RESEARCH_SCHEMA_PROFILE,
     "type": "object",
     "properties": {
         "analysis": {
@@ -148,6 +138,49 @@ _REVIEW_SCHEMA: dict[str, Any] = {
     "required": ["review"],
     "additionalProperties": False,
 }
+
+def _generate_atomic_research_object(
+    router: Any,
+    role: str,
+    messages: Sequence[Mapping[str, Any]],
+    *,
+    schema: Mapping[str, Any],
+    wrapper: str,
+) -> dict[str, Any]:
+    """Generate one advisory object through host-owned atomic field batches."""
+
+    outer_properties = schema.get("properties", {})
+    inner = outer_properties.get(wrapper) if isinstance(outer_properties, Mapping) else None
+    if not isinstance(inner, Mapping):
+        raise ValueError(f"research schema missing wrapper {wrapper!r}")
+    properties = inner.get("properties", {})
+    required = tuple(inner.get("required", ()))
+    if not isinstance(properties, Mapping):
+        raise ValueError(f"research schema {wrapper!r} properties are invalid")
+
+    merged: dict[str, Any] = {}
+    width = DEFAULT_ATOMIC_SCHEMA_LIMITS.max_fields
+    for start in range(0, len(required), width):
+        names = required[start : start + width]
+        part_schema = {
+            "type": "object",
+            "properties": {name: properties[name] for name in names},
+            "required": list(names),
+            "additionalProperties": False,
+        }
+        raw = generate_fixed_template_text(
+            router,
+            role,
+            messages,
+            response_schema=part_schema,
+            enable_tools=False,
+        )
+        value = json.loads(raw)
+        if not isinstance(value, Mapping):
+            raise ValueError(f"research batch for {wrapper!r} was not an object")
+        merged.update({name: value[name] for name in names})
+    return merged
+
 
 _LENSES: tuple[tuple[str, str], ...] = (
     (
@@ -788,13 +821,13 @@ def build_central_committee(router: Any, prompt: str) -> dict[str, Any]:
                 ),
             },
         ]
-        raw = generate_fixed_template_text(router,
+        return lens_id, _generate_atomic_research_object(
+            router,
             "planner",
             messages,
-            response_schema=_COUNCIL_SCHEMA,
-            enable_tools=False,
+            schema=_COUNCIL_SCHEMA,
+            wrapper="analysis",
         )
-        return lens_id, _parse(raw, "analysis")
 
     def run_specialist(
         job: tuple[tuple[str, str], Any],
@@ -992,13 +1025,13 @@ def _parallel_reviews(
                 ),
             },
         ]
-        raw = generate_fixed_template_text(router,
+        return reviewer_id, _generate_atomic_research_object(
+            router,
             "coder_safe",
             messages,
-            response_schema=_REVIEW_SCHEMA,
-            enable_tools=False,
+            schema=_REVIEW_SCHEMA,
+            wrapper="review",
         )
-        return reviewer_id, _parse(raw, "review")
 
     def run_reviewer(
         job: tuple[tuple[str, str], Any],
@@ -1038,9 +1071,7 @@ def _chair_synthesis(
     specialists: Sequence[Mapping[str, Any]],
     disagreement: float,
 ) -> dict[str, Any]:
-    raw = generate_fixed_template_text(router,
-        "planner",
-        [
+    messages = [
             {
                 "role": "system",
                 "content": (
@@ -1062,12 +1093,15 @@ def _chair_synthesis(
                     sort_keys=True,
                 ),
             },
-        ],
-        response_schema=_CHAIR_SCHEMA,
-        enable_tools=False,
-    )
+        ]
     try:
-        return _parse(raw, "synthesis")
+        return _generate_atomic_research_object(
+            router,
+            "planner",
+            messages,
+            schema=_CHAIR_SCHEMA,
+            wrapper="synthesis",
+        )
     except Exception as exc:
         return {
             "requirements": _stable_unique(
@@ -1104,34 +1138,35 @@ def _extra_disagreement_specialist(
     prompt: str,
     specialists: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
-    raw = generate_fixed_template_text(router,
-        "planner",
-        [
-            {
-                "role": "system",
-                "content": (
-                    "The specialist council disagreed materially. Resolve only the disagreement "
-                    "by re-reading the authoritative request. Prefer uncertainty over invention. "
-                    "Fill the supplied analysis fixed template; no chain-of-thought."
-                ),
-            },
-            {
-                "role": "user",
-                "content": json.dumps(
-                    {
-                        "authoritative_request": prompt,
-                        "disagreeing_specialists": specialists,
-                    },
-                    ensure_ascii=False,
-                    sort_keys=True,
-                ),
-            },
-        ],
-        response_schema=_COUNCIL_SCHEMA,
-        enable_tools=False,
-    )
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "The specialist council disagreed materially. Resolve only the disagreement "
+                "by re-reading the authoritative request. Prefer uncertainty over invention. "
+                "Fill the supplied analysis fixed template; no chain-of-thought."
+            ),
+        },
+        {
+            "role": "user",
+            "content": json.dumps(
+                {
+                    "authoritative_request": prompt,
+                    "disagreeing_specialists": specialists,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+        },
+    ]
     try:
-        return _parse(raw, "analysis")
+        return _generate_atomic_research_object(
+            router,
+            "planner",
+            messages,
+            schema=_COUNCIL_SCHEMA,
+            wrapper="analysis",
+        )
     except Exception as exc:
         return {
             "must_preserve": [],
