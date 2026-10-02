@@ -6,6 +6,7 @@ The model authors fixed concern records. Markdown is a deterministic projection 
 human review and provenance only; executable production consumes the records.
 """
 
+import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
@@ -50,6 +51,24 @@ def normalize_structured_sections(raw: Mapping[str, Any] | None) -> dict[str, An
             )
         normalized[section] = deepcopy(dict(value))
     return normalized
+
+
+def structured_sections_sha256(
+    sections: Mapping[str, Any] | None,
+) -> str:
+    """Hash the canonical structured authored-design authority.
+
+    Producers, consumers, and tests must use this helper so normalization and
+    serialization cannot drift independently.
+    """
+    normalized = normalize_structured_sections(sections)
+    payload = json.dumps(
+        normalized,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
 def active_concern_records(

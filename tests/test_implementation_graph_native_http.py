@@ -25,7 +25,11 @@ from minecraft_mod_ai.authored_execution_schema import (
     EXECUTION_SECTION_ORDER,
     concern_contracts,
 )
-from minecraft_mod_ai.authored_structured_design import render_structured_sections
+from minecraft_mod_ai.authored_structured_design import (
+    normalize_structured_sections,
+    render_structured_sections,
+    structured_sections_sha256,
+)
 from minecraft_mod_ai.model_adapters.base import AdapterConfig
 from minecraft_mod_ai.model_adapters.llama_cpp_adapter import LlamaCppAdapter
 from minecraft_mod_ai.model_router import ModelRouter
@@ -51,8 +55,11 @@ def test_host_graph_reaches_java_execution_without_planner_http(tmp_path, monkey
             for name in DETAIL_RECORDS["state_model"] if name != "variables"
         ],
     }
+    structured = normalize_structured_sections(structured)
     module.config["implementation_graph_request"].update({
-        "text": render_structured_sections(structured), "structured_sections": structured,
+        "text": render_structured_sections(structured),
+        "structured_sections": structured,
+        "structured_sections_sha256": structured_sections_sha256(structured),
     })
     requests = []
 

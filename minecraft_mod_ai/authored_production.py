@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from .authored_plan import AuthoredPlan
+from .authored_structured_design import structured_sections_sha256
 from .complete_spec import (
     CompleteProposal,
     ProductionModule,
@@ -622,7 +623,7 @@ def _compile_new_authored_modules(
         "target": dict(target), "entrypoint_path": main_path,
         "entrypoint_symbol": main_symbol,
         "structured_sections": structured_sections,
-        "structured_sections_sha256": _sha256_json(structured_sections),
+        "structured_sections_sha256": structured_sections_sha256(structured_sections),
     }
     if production_state_section is not None:
         # Compatibility sidecar for legacy prose-only plans. Structured plans omit

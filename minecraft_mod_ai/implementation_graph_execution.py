@@ -1,7 +1,6 @@
 """Transactional execution of host-admitted implementation source units."""
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from collections.abc import Mapping
@@ -210,7 +209,10 @@ def _trace_authored_document_normalization(report: Mapping[str, Any] | None) -> 
 
 def _normalize_implementation_graph_request(raw_request: Mapping[str, Any]) -> dict[str, Any]:
     from .authored_document_contract import normalize_authored_document
-    from .authored_structured_design import normalize_structured_sections
+    from .authored_structured_design import (
+        normalize_structured_sections,
+        structured_sections_sha256,
+    )
 
     request = dict(raw_request)
     structured = normalize_structured_sections(
@@ -219,14 +221,7 @@ def _normalize_implementation_graph_request(raw_request: Mapping[str, Any]) -> d
         else None
     )
     supplied_sha = str(request.get("structured_sections_sha256") or "").strip()
-    actual_sha = "sha256:" + hashlib.sha256(
-        json.dumps(
-            structured,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()
+    actual_sha = structured_sections_sha256(structured)
     if structured:
         if supplied_sha != actual_sha:
             raise ImplementationGraphError(
