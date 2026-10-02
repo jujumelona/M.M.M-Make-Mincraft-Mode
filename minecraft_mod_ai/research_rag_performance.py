@@ -479,6 +479,16 @@ def _semantic_lsh_ready(connection: sqlite3.Connection) -> bool:
     ).fetchone()
     if table is None:
         return False
+    required_indexes = {"mmm_semantic_lsh_a", "mmm_semantic_lsh_b"}
+    present_indexes = {
+        str(row[0])
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'index' "
+            "AND name IN ('mmm_semantic_lsh_a', 'mmm_semantic_lsh_b')"
+        ).fetchall()
+    }
+    if present_indexes != required_indexes:
+        return False
     missing = connection.execute(
         """
         SELECT 1
