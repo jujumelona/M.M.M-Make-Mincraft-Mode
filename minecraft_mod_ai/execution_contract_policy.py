@@ -604,12 +604,10 @@ def java_atomic_parameters_for_request(
             if not isinstance(category_schema, Mapping):
                 continue
             name_schema = category_schema["items"]["properties"]["name"]
-            if authorized_nested:
-                name_schema["enum"] = list(authorized_nested)
             name_schema["description"] = (
                 "Semantic label for a requirement-owned nested runtime helper. "
-                "The host owns the final Java identifier, collision handling, and outer/nested placement. "
-                "Place outer fields in fields, not in a class wrapper."
+                "The host maps it to any exact requirement-owned type name, owns collision handling, "
+                "and owns outer/nested placement. Place outer fields in fields, not in a class wrapper."
             )
     return parameters, shape
 
