@@ -6,22 +6,17 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from .execution_contract_policy import (
-    DEFAULT_ATOMIC_SCHEMA_LIMITS,
-    SOURCE_REPAIR_MAX_SPAN_CHARS,
-)
+from .execution_contract_policy import SOURCE_REPAIR_MAX_SPAN_CHARS
 
 MAX_REPAIR_WINDOW_CHARS = SOURCE_REPAIR_MAX_SPAN_CHARS
-MIN_REPAIR_REPLACEMENT_CHARS = DEFAULT_ATOMIC_SCHEMA_LIMITS.max_string_chars
+# Compatibility export: there is no smaller model-output ceiling anymore.
+MIN_REPAIR_REPLACEMENT_CHARS = SOURCE_REPAIR_MAX_SPAN_CHARS
 
 
 def repair_replacement_max_chars(old_text: Any) -> int:
-    if not isinstance(old_text, str) or not old_text:
-        return MIN_REPAIR_REPLACEMENT_CHARS
-    return min(
-        MAX_REPAIR_WINDOW_CHARS,
-        max(MIN_REPAIR_REPLACEMENT_CHARS, (len(old_text) * 2) + 128),
-    )
+    """Use the host repair-window budget, never an arbitrary model-size ceiling."""
+    del old_text
+    return MAX_REPAIR_WINDOW_CHARS
 
 
 def normalize_model_repair_replacement(
