@@ -221,17 +221,11 @@ def validate_worksheet_chunk_signal(
     for concern in active:
         if concern not in records:
             raise ValueError(f"Unknown concern {concern!r} for section {key!r}")
-        if concern not in data:
-            continue
-        value = data.get(concern)
-        if isinstance(value, (Mapping, list)):
-            # Empty and placeholder records are intentionally admitted here. The
-            # deterministic merge below owns semantic cleanup and applicability.
+        if concern in data:
+            # Presence of an active concern key is sufficient transport signal.
+            # The deterministic merge owns shape salvage, semantic cleanup and
+            # applicability; malformed scalar values are normalized to no records.
             return dict(chunk)
-        raise ValueError(
-            "DETAILED_PLAN_WORKSHEET_CHUNK: "
-            f"{key}.{concern} must be an object or array for host reconciliation"
-        )
 
     raw_inapplicable = data.get("inapplicable_concerns")
     candidates = (
