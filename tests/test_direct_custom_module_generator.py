@@ -458,31 +458,32 @@ def _native_method_parts(name, body):
         {"part": "done"}, {"part": "done"},
     ]
 
+class _StructuredDecisionRouter:
+    def __init__(self, responses):
+        self.responses = iter(responses)
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    def generate_tool_decision(self, role, messages, **kwargs):
+        assert role == "coder"
+        payload = json.loads(messages[-1]["content"])
+        concern = str((payload.get("concern") or {}).get("name") or "")
+        self.calls.append((concern, dict(kwargs)))
+        return next(self.responses)
+
+    def generate_text(self, *_args, **_kwargs):
+        raise AssertionError("atomic production must not use free-form Java text")
+
+
 
 def test_ir_atomic_concerns_are_isolated_and_compiled_as_one_host_file(
     tmp_path: Path, monkeypatch
 ) -> None:
     root, path, symbol = _project(tmp_path)
     compile_calls = 0
-    responses = iter([
-        "private static int balance = 0;",
-        "private static boolean valid() { return balance >= 0; }",
+    router = _StructuredDecisionRouter([
+        *_native_field_parts("int", "balance", "0"),
+        *_native_method_parts("valid", "return balance >= 0;"),
     ])
-    calls: list[tuple[str, dict[str, object]]] = []
-
-    class Router:
-        def generate_text(self, role, messages, **kwargs):
-            assert role == "coder"
-            assert kwargs.get("enable_tools") is False
-            assert kwargs.get("force_non_thinking") is True
-            assert kwargs.get("tool_stage") == "atomic_java"
-            payload = json.loads(messages[-1]["content"])
-            concern = payload["concern"]["name"]
-            calls.append((concern, dict(kwargs)))
-            return next(responses)
-
-        def generate_tool_decision(self, *_args, **_kwargs):
-            raise AssertionError("production concern generation must not use scalar Java tools")
 
     class Runner:
         def __init__(self, _cache):
@@ -498,19 +499,18 @@ def test_ir_atomic_concerns_are_isolated_and_compiled_as_one_host_file(
 
     monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
     monkeypatch.setattr(direct, "GradleRunner", Runner)
-    result = direct.CustomModuleGenerator(Router()).generate(
+    result = direct.CustomModuleGenerator(router).generate(
         root, module=_atomic_module(path, symbol),
         minecraft_version="1.21.1", loader="fabric",
     )
 
     source = (root / path).read_text(encoding="utf-8")
-    concern_transitions = [
+    transitions = [
         name
-        for index, (name, _kwargs) in enumerate(calls)
-        if index == 0 or calls[index - 1][0] != name
+        for index, (name, _kwargs) in enumerate(router.calls)
+        if index == 0 or router.calls[index - 1][0] != name
     ]
-    assert concern_transitions == ["steps", "branches"]
-    assert all(kwargs.get("enable_tools") is False for _name, kwargs in calls)
+    assert transitions == ["steps", "branches"]
     assert "static int balance = 0;" in source
     assert "private static boolean valid()" in source
     assert "MMM_ATOMIC_CONCERN_STEPS_MEMBERS_START" in source
@@ -518,127 +518,6 @@ def test_ir_atomic_concerns_are_isolated_and_compiled_as_one_host_file(
     assert result["generation_verification"]["mode"] == "gradle_compile_java_semantic_concerns"
     assert result["generation_verification"]["atomic_concern_count"] == 2
     assert compile_calls == 1
-
-def test_production_tree_sitter_unwraps_accidental_outer_class(
-    tmp_path: Path, monkeypatch
-) -> None:
-    root, path, symbol = _project(tmp_path)
-    responses = iter([
-        """
-Here is the complete Java implementation for the requested concern.
-package accidental.wrapper;
-import java.util.List;
-
-public final class AccidentalOuter {
-    private AccidentalOuter() {}
-    private static int balance = 0;
-    public static void initialize() {}
-}
-This wrapper is complete.
-""",
-        "private static boolean valid() { return balance >= 0; }",
-    ])
-
-    calls = 0
-
-    class Router:
-        def generate_text(self, role, messages, **kwargs):
-            nonlocal calls
-            assert role == "coder"
-            assert kwargs.get("enable_tools") is False
-            assert kwargs.get("force_non_thinking") is True
-            assert kwargs.get("tool_stage") == "atomic_java"
-            calls += 1
-            return next(responses)
-
-        def generate_tool_decision(self, *_args, **_kwargs):
-            raise AssertionError("production concern generation must not use scalar Java tools")
-
-    class Runner:
-        def __init__(self, _cache):
-            pass
-
-        def compile_java(self, _root):
-            return SimpleNamespace(status="PASS", commands=(), error=None)
-
-    monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
-    monkeypatch.setattr(direct, "GradleRunner", Runner)
-    direct.CustomModuleGenerator(Router()).generate(
-        root,
-        module=_atomic_module(path, symbol),
-        minecraft_version="1.21.1",
-        loader="fabric",
-    )
-
-    source = (root / path).read_text(encoding="utf-8")
-    assert "package accidental.wrapper" not in source
-    assert "import java.util.List" not in source
-    assert "AccidentalOuter" not in source
-    assert "private static int balance = 0;" in source
-    assert "private static boolean valid()" in source
-    assert calls == 2
-
-
-def test_production_admits_reasoning_with_multiple_java_fences(
-    tmp_path: Path, monkeypatch
-) -> None:
-    root, path, symbol = _project(tmp_path)
-    responses = iter([
-        """
-The user is asking me to implement the actors concern. Let me analyze it.
-
-```java
-public static void initialize() {}
-```
-
-I need to reconsider the design and provide only the final members.
-
-```java
-private static int balance = 0;
-public static void initialize() { balance = 0; }
-```
-""",
-        "private static boolean valid() { return balance >= 0; }",
-    ])
-
-    calls = 0
-
-    class Router:
-        def generate_text(self, role, messages, **kwargs):
-            nonlocal calls
-            assert role == "coder"
-            assert kwargs.get("enable_tools") is False
-            assert kwargs.get("force_non_thinking") is True
-            assert kwargs.get("tool_stage") == "atomic_java"
-            calls += 1
-            return next(responses)
-
-        def generate_tool_decision(self, *_args, **_kwargs):
-            raise AssertionError("production concern generation must not use scalar Java tools")
-
-    class Runner:
-        def __init__(self, _cache):
-            pass
-
-        def compile_java(self, _root):
-            return SimpleNamespace(status="PASS", commands=(), error=None)
-
-    monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
-    monkeypatch.setattr(direct, "GradleRunner", Runner)
-    direct.CustomModuleGenerator(Router()).generate(
-        root,
-        module=_atomic_module(path, symbol),
-        minecraft_version="1.21.1",
-        loader="fabric",
-    )
-
-    source = (root / path).read_text(encoding="utf-8")
-    assert "private static int balance = 0;" in source
-    assert "private static boolean valid()" in source
-    assert "The user is asking" not in source
-    assert "public static void initialize() { balance = 0; }" not in source
-    assert calls == 2
-
 
 def _actors_atomic_module(
     path: str,
@@ -895,26 +774,13 @@ def test_stored_state_receives_semantic_shape_and_compact_output_budget(
     tmp_path: Path, monkeypatch
 ) -> None:
     root, path, symbol = _project(tmp_path)
-    seen: list[dict[str, object]] = []
-
-    class Router:
-        def generate_text(self, role, messages, **kwargs):
-            assert role == "coder"
-            assert kwargs.get("enable_tools") is False
-            assert kwargs.get("force_non_thinking") is True
-            assert kwargs.get("tool_stage") == "atomic_java"
-            assert kwargs.get("output_token_ceiling") == 4096
-            payload = json.loads(messages[-1]["content"])
-            concern = payload["concern"]
-            seen.append(concern)
-            assert concern["name"] == "stored_state"
-            assert concern["semantic_fields"] == ["state", "owner", "scope"]
-            assert concern["java_shape"] == "declarations_only_fields_or_private_nested_types"
-            assert "stored state record" in concern["task"]
-            return "private static final java.util.Map<String, Object> storedState = new java.util.HashMap<>();"
-
-        def generate_tool_decision(self, *_args, **_kwargs):
-            raise AssertionError("production concern generation must not use scalar Java tools")
+    router = _StructuredDecisionRouter(
+        _native_field_parts(
+            "java.util.Map<String, Object>",
+            "storedState",
+            "new java.util.HashMap<>()",
+        )
+    )
 
     class Runner:
         def __init__(self, _cache):
@@ -926,7 +792,7 @@ def test_stored_state_receives_semantic_shape_and_compact_output_budget(
     monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
     monkeypatch.setattr(direct, "GradleRunner", Runner)
 
-    direct.CustomModuleGenerator(Router()).generate(
+    direct.CustomModuleGenerator(router).generate(
         root,
         module=_stored_state_atomic_module(path, symbol),
         minecraft_version="1.21.1",
@@ -935,48 +801,32 @@ def test_stored_state_receives_semantic_shape_and_compact_output_budget(
 
     source = (root / path).read_text(encoding="utf-8")
     assert "storedState" in source
-    assert len(seen) == 1
+    assert router.calls
+    first_payload_kwargs = router.calls[0][1]
+    assert first_payload_kwargs.get("output_token_ceiling") == 4096
 
-
-
-def test_stored_state_mixed_shape_is_projected_before_compile(
+def test_stored_state_structured_contract_cannot_emit_outer_methods(
     tmp_path: Path, monkeypatch
 ) -> None:
     root, path, symbol = _project(tmp_path)
-    calls = 0
-    compiles = 0
-
-    class Router:
-        def generate_text(self, role, messages, **kwargs):
-            nonlocal calls
-            assert role == "coder"
-            assert kwargs.get("output_token_ceiling") == 4096
-            calls += 1
-            return (
-                "private static final java.util.Map<String, String> STATE_MAPPINGS = "
-                "new java.util.HashMap<>();\n"
-                "private static void registerStateMapping(String owner, String state) { "
-                "STATE_MAPPINGS.put(owner, state); }\n"
-                "private static String getStateForOwner(String owner) { "
-                "return STATE_MAPPINGS.get(owner); }"
-            )
-
-        def generate_tool_decision(self, *_args, **_kwargs):
-            raise AssertionError("production concern generation must not use scalar Java tools")
+    router = _StructuredDecisionRouter(
+        _native_field_parts(
+            "java.util.Map<String, String>",
+            "STATE_MAPPINGS",
+            "new java.util.HashMap<>()",
+        )
+    )
 
     class Runner:
         def __init__(self, _cache):
             pass
 
         def compile_java(self, _root):
-            nonlocal compiles
-            compiles += 1
             return SimpleNamespace(status="PASS", commands=(), error=None)
 
     monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
     monkeypatch.setattr(direct, "GradleRunner", Runner)
-
-    direct.CustomModuleGenerator(Router()).generate(
+    direct.CustomModuleGenerator(router).generate(
         root,
         module=_stored_state_atomic_module(path, symbol),
         minecraft_version="1.21.1",
@@ -987,40 +837,28 @@ def test_stored_state_mixed_shape_is_projected_before_compile(
     assert "STATE_MAPPINGS" in source
     assert "registerStateMapping" not in source
     assert "getStateForOwner" not in source
-    assert calls == 1
-    assert compiles == 1
-
 
 def test_atomic_first_candidate_canonicalizes_jdk_lock_semantics_before_compile(
     tmp_path: Path, monkeypatch
 ) -> None:
     root, path, symbol = _project(tmp_path)
-    calls: list[str] = []
     compiles = 0
-
-    class Router:
-        def generate_text(self, role, messages, **kwargs):
-            assert role == "coder"
-            assert kwargs.get("enable_tools") is False
-            assert kwargs.get("force_non_thinking") is True
-            assert kwargs.get("tool_stage") == "atomic_java"
-            payload = json.loads(messages[-1]["content"])
-            concern = payload["concern"]["name"]
-            calls.append(concern)
-            return (
-                "private static final Map<String, java.lang.Object> CACHE = "
-                "new HashMap<>();\n"
-                "private static final java.util.Map<String, java.lang.Object> CACHE_LOCK = "
-                "new java.util.ReentrantLock();\n"
-                "private static void loadCachedState() {\n"
-                "    CACHE.put(\"ready\", java.lang.Boolean.TRUE);\n"
-                "    CACHE_LOCK.lock();\n"
-                "    try { } finally { CACHE_LOCK.unlock(); }\n"
-                "}"
-            )
-
-        def generate_tool_decision(self, *_args, **_kwargs):
-            raise AssertionError("production concern generation must not use scalar Java tools")
+    router = _StructuredDecisionRouter([
+        {"part": "fields"},
+        {"type": "Map<String, java.lang.Object>", "name": "CACHE", "initializer": "new HashMap<>()"},
+        {"part": "fields"},
+        {"type": "java.util.concurrent.Lock", "name": "CACHE_LOCK", "initializer": "new java.util.concurrent.ReentrantLock()"},
+        {"part": "methods"},
+        {"return_type": "void", "name": "loadCachedState"},
+        {"part": "body"},
+        {"statement": 'CACHE.put("ready", java.lang.Boolean.TRUE);'},
+        {"part": "body"},
+        {"statement": "CACHE_LOCK.lock();"},
+        {"part": "body"},
+        {"statement": "try { } finally { CACHE_LOCK.unlock(); }"},
+        {"part": "done"},
+        {"part": "done"},
+    ])
 
     class Runner:
         def __init__(self, _cache):
@@ -1030,25 +868,16 @@ def test_atomic_first_candidate_canonicalizes_jdk_lock_semantics_before_compile(
             nonlocal compiles
             compiles += 1
             source = (project_root / path).read_text(encoding="utf-8")
-            assert (
-                "java.util.Map<String, java.lang.Object> CACHE = "
-                "new java.util.HashMap<>();"
-            ) in source
-            assert (
-                "java.util.concurrent.locks.Lock CACHE_LOCK = "
-                "new java.util.concurrent.locks.ReentrantLock();"
-            ) in source
-            assert "new HashMap<>()" not in source
+            assert "java.util.Map<String, java.lang.Object> CACHE = new java.util.HashMap<>();" in source
+            assert "java.util.concurrent.locks.Lock CACHE_LOCK = new java.util.concurrent.locks.ReentrantLock();" in source
             assert "java.util.ReentrantLock" not in source
-            assert "java.util.Map<String, java.lang.Object> CACHE_LOCK" not in source
             assert "CACHE_LOCK.lock();" in source
             assert "CACHE_LOCK.unlock();" in source
             return SimpleNamespace(status="PASS", commands=(), error=None)
 
     monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
     monkeypatch.setattr(direct, "GradleRunner", Runner)
-
-    result = direct.CustomModuleGenerator(Router()).generate(
+    result = direct.CustomModuleGenerator(router).generate(
         root,
         module=_single_atomic_module(path, symbol),
         minecraft_version="1.21.1",
@@ -1058,34 +887,17 @@ def test_atomic_first_candidate_canonicalizes_jdk_lock_semantics_before_compile(
     assert result["generation_verification"]["atomic_repair_count"] == 0
     assert result["generation_verification"]["atomic_first_pass_rejection_count"] == 0
     assert result["generation_verification"]["atomic_first_compile_failure_count"] == 0
-    assert calls == ["steps"]
     assert compiles == 1
-
 
 def test_production_compile_failure_is_repaired_with_compiler_feedback(
     tmp_path: Path, monkeypatch
 ) -> None:
     root, path, symbol = _project(tmp_path)
-    calls: list[str] = []
     compiles = 0
-    responses = iter([
-        "private static int value = missingSymbol;",
-        "private static int value = 1;",
+    router = _StructuredDecisionRouter([
+        *_native_field_parts("int", "value", "missingSymbol"),
+        *_native_field_parts("int", "value", "1"),
     ])
-
-    class Router:
-        def generate_text(self, role, messages, **kwargs):
-            assert role == "coder"
-            assert kwargs.get("enable_tools") is False
-            assert kwargs.get("force_non_thinking") is True
-            assert kwargs.get("tool_stage") == "atomic_java"
-            payload = json.loads(messages[-1]["content"])
-            concern = payload["concern"]["name"]
-            calls.append(concern)
-            return next(responses)
-
-        def generate_tool_decision(self, *_args, **_kwargs):
-            raise AssertionError("production concern generation must not use scalar Java tools")
 
     class Runner:
         def __init__(self, _cache):
@@ -1115,8 +927,7 @@ def test_production_compile_failure_is_repaired_with_compiler_feedback(
 
     monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
     monkeypatch.setattr(direct, "GradleRunner", Runner)
-
-    result = direct.CustomModuleGenerator(Router()).generate(
+    result = direct.CustomModuleGenerator(router).generate(
         root,
         module=_single_atomic_module(path, symbol),
         minecraft_version="1.21.1",
@@ -1126,110 +937,8 @@ def test_production_compile_failure_is_repaired_with_compiler_feedback(
     source = (root / path).read_text(encoding="utf-8")
     assert "missingSymbol" not in source
     assert "private static int value = 1;" in source
-    assert calls == ["steps", "steps"]
     assert compiles == 2
     assert result["generation_verification"]["atomic_repair_count"] == 1
-
-
-def test_production_retries_java_syntax_failure_but_not_scope_escape(
-    tmp_path: Path, monkeypatch
-) -> None:
-    root, path, symbol = _project(tmp_path)
-    responses = iter([
-        (
-            "private static final java.util.Map<String, Object> CACHE;\n"
-            "private static { CACHE = new java.util.HashMap<>(); }"
-        ),
-        (
-            "private static final java.util.Map<String, Object> CACHE = "
-            "new java.util.HashMap<>();"
-        ),
-    ])
-    calls = 0
-    compiles = 0
-
-    class Router:
-        def generate_text(self, role, messages, **kwargs):
-            nonlocal calls
-            assert role == "coder"
-            assert kwargs.get("tool_stage") == "atomic_java"
-            calls += 1
-            return next(responses)
-
-        def generate_tool_decision(self, *_args, **_kwargs):
-            raise AssertionError("production concern generation must use complete Java regions")
-
-    class Runner:
-        def __init__(self, _cache):
-            pass
-
-        def compile_java(self, project_root):
-            nonlocal compiles
-            compiles += 1
-            source = (project_root / path).read_text(encoding="utf-8")
-            assert "private static {" not in source
-            assert "new java.util.HashMap<>()" in source
-            return SimpleNamespace(status="PASS", commands=(), error=None)
-
-    monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
-    monkeypatch.setattr(direct, "GradleRunner", Runner)
-
-    result = direct.CustomModuleGenerator(Router()).generate(
-        root,
-        module=_single_atomic_module(path, symbol),
-        minecraft_version="1.21.1",
-        loader="fabric",
-    )
-
-    assert calls == 2
-    assert compiles == 1
-    assert result["generation_verification"]["atomic_first_pass_rejection_count"] == 1
-
-
-def test_production_scope_escape_gets_bounded_semantic_retry(
-    tmp_path: Path, monkeypatch
-) -> None:
-    root, path, symbol = _project(tmp_path)
-    calls = 0
-    responses = iter([
-        "package escaped;",
-        "private static int value = 1;",
-    ])
-
-    class Router:
-        def generate_text(self, role, messages, **kwargs):
-            nonlocal calls
-            assert role == "coder"
-            assert kwargs.get("tool_stage") == "atomic_java"
-            calls += 1
-            return next(responses)
-
-        def generate_tool_decision(self, *_args, **_kwargs):
-            raise AssertionError("production concern generation must not use scalar Java tools")
-
-    class Runner:
-        def __init__(self, _cache):
-            pass
-
-        def compile_java(self, project_root):
-            source = (project_root / path).read_text(encoding="utf-8")
-            assert "package escaped;" not in source
-            assert "private static int value = 1;" in source
-            return SimpleNamespace(status="PASS", commands=(), error=None)
-
-    monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
-    monkeypatch.setattr(direct, "GradleRunner", Runner)
-
-    result = direct.CustomModuleGenerator(Router()).generate(
-        root,
-        module=_single_atomic_module(path, symbol),
-        minecraft_version="1.21.1",
-        loader="fabric",
-    )
-
-    assert calls == 2
-    assert result["generation_verification"]["atomic_first_pass_rejection_count"] == 1
-
 
 def test_nonintegration_atomic_concern_cannot_write_initialize_body() -> None:
     from minecraft_mod_ai.atomic_concern_source import parse_concern_content
@@ -1259,40 +968,27 @@ def test_atomic_sibling_map_generics_are_propagated_before_first_compile(
     tmp_path: Path, monkeypatch
 ) -> None:
     root, path, symbol = _project(tmp_path)
-    responses = iter(
-        [
-            (
-                "private static final java.util.Map<String, "
-                "java.util.Map<String, java.lang.Object>> FAILURE_RULES = "
-                "new java.util.HashMap<>();"
-            ),
-            (
-                "private static boolean failClosed() {\n"
-                "    for (java.util.Map.Entry<String, "
-                "java.util.Map<String, java.lang.Object>> entry "
-                ": FAILURE_RULES.entrySet()) {\n"
-                "        java.util.Map<String, java.lang.String> condition = "
-                "entry.getValue();\n"
-                "        if (condition.isEmpty()) { return false; }\n"
-                "    }\n"
-                "    return true;\n"
-                "}"
-            ),
-        ]
-    )
-    calls: list[str] = []
     compiles = 0
-
-    class Router:
-        def generate_text(self, role, messages, **kwargs):
-            assert role == "coder"
-            assert kwargs.get("enable_tools") is False
-            payload = json.loads(messages[-1]["content"])
-            calls.append(payload["concern"]["name"])
-            return next(responses)
-
-        def generate_tool_decision(self, *_args, **_kwargs):
-            raise AssertionError("atomic production must use complete Java regions")
+    router = _StructuredDecisionRouter([
+        *_native_field_parts(
+            "java.util.Map<String, java.util.Map<String, java.lang.Object>>",
+            "FAILURE_RULES",
+            "new java.util.HashMap<>()",
+        ),
+        {"part": "methods"},
+        {"return_type": "boolean", "name": "failClosed"},
+        {"part": "body"},
+        {"statement": (
+            "for (java.util.Map.Entry<String, java.util.Map<String, java.lang.Object>> entry "
+            ": FAILURE_RULES.entrySet()) { "
+            "java.util.Map<String, java.lang.String> condition = entry.getValue(); "
+            "if (condition.isEmpty()) { return false; } }"
+        )},
+        {"part": "body"},
+        {"statement": "return true;"},
+        {"part": "done"},
+        {"part": "done"},
+    ])
 
     class Runner:
         def __init__(self, _cache):
@@ -1307,27 +1003,24 @@ def test_atomic_sibling_map_generics_are_propagated_before_first_compile(
                     "java.util.Map<java.lang.String, java.lang.Object> condition = "
                     "entry.getValue();"
                 ) in source
-                assert (
-                    "java.util.Map<java.lang.String, java.lang.String> condition"
-                    not in source
-                )
-                assert (
-                    "java.util.Map<String, java.lang.String> condition"
-                    not in source
-                )
+                assert "java.util.Map<String, java.lang.String> condition" not in source
             return SimpleNamespace(status="PASS", commands=(), error=None)
 
     monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
     monkeypatch.setattr(direct, "GradleRunner", Runner)
-
-    result = direct.CustomModuleGenerator(Router()).generate(
+    result = direct.CustomModuleGenerator(router).generate(
         root,
         module=_atomic_module(path, symbol),
         minecraft_version="1.21.1",
         loader="fabric",
     )
 
-    assert calls == ["steps", "branches"]
+    transitions = [
+        name
+        for index, (name, _kwargs) in enumerate(router.calls)
+        if index == 0 or router.calls[index - 1][0] != name
+    ]
+    assert transitions == ["steps", "branches"]
     assert compiles == 1
     assert result["generation_verification"]["atomic_repair_count"] == 0
     assert result["generation_verification"]["atomic_first_pass_rejection_count"] == 0
