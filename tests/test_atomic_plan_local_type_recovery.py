@@ -30,8 +30,9 @@ def _task() -> dict[str, object]:
             "concerns": {
                 "responsibilities": {
                     "source_requirements": {
-                        "R1": (
-                            "- caller callee contract: player calls build_ship(), "
+                        "R1": "- responsibilities:",
+                        "R2": (
+                            "  - caller callee contract: player calls build_ship(), "
                             "system returns ShipObject."
                         )
                     },
@@ -63,7 +64,7 @@ def _executor(
         symbol="Test",
         original="package example;\n// MMM_AUTHORED_FEATURE_BODY\n",
         task=_task(),
-        section="algorithm",
+        section="integration",
         concerns=(
             {
                 "sequence": 0,
