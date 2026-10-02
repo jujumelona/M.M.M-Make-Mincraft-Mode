@@ -5,13 +5,16 @@ from typing import Any
 import minecraft_mod_ai.planning_state_adaptive_implementation as adaptive
 from minecraft_mod_ai.planning_detail_template import WORKSHEET_SECTIONS
 from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
+from worksheet_fixtures import _fixture_value, specification
 
 
 def authored(section, description):
-    spec = {concern: [{field: description for field in columns.split()}]
-            for concern, columns in DETAIL_RECORDS[section].items()}
-    spec["inapplicable_concerns"] = []
-    return {"section": section, "specification": spec, "constraint_evidence_refs": []}
+    del description
+    return {
+        "section": section,
+        "specification": specification(section),
+        "constraint_evidence_refs": [],
+    }
 
 
 def test_missing_worksheet_section_repairs_expose_only_each_missing_section(monkeypatch) -> None:
@@ -186,16 +189,33 @@ def test_section_repair_resumes_an_interrupted_concern(monkeypatch):
     monkeypatch.setattr(adaptive, '_merge_completed_details', lambda value, **kw: value)
     monkeypatch.setattr(adaptive, '_assemble_requirement_plan', lambda *args: {})
 
+    def schema_value(schema, label):
+        enum = schema.get('enum')
+        if isinstance(enum, list) and enum:
+            return enum[0]
+        any_of = schema.get('anyOf')
+        if isinstance(any_of, list):
+            branch = next(
+                (item for item in any_of if isinstance(item, dict) and item.get('type') != 'null'),
+                any_of[0],
+            )
+            return schema_value(branch, label)
+        if schema.get('type') == 'object':
+            properties = schema.get('properties', {})
+            return {
+                field: schema_value(properties[field], f'{label} {field}')
+                for field in schema.get('required', [])
+            }
+        if schema.get('type') == 'array':
+            count = max(1, int(schema.get('minItems', 1) or 1))
+            return [schema_value(schema.get('items', {}), f'{label} item') for _ in range(count)]
+        return _fixture_value(schema, label)
+
     def generate(*args, response_schema, tool_name, **kwargs):
         calls.append(tool_name)
         if len(calls) == 2:
             raise TimeoutError('repair interrupted')
-        if 'count' in response_schema.get('properties', {}):
-            return {'count': 1}
-        return {
-            field: f'authored {field}'
-            for field in response_schema['required']
-        }
+        return schema_value(response_schema, 'authored')
 
     monkeypatch.setattr(bounded, 'generate_fixed_template_value', generate)
     kwargs = dict(requirement_order=('req',), completed_details={}, checkpoint=snapshots.append)
