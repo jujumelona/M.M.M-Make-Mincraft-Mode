@@ -335,6 +335,49 @@ def test_initialize_recovery_localizes_field_only_modifiers() -> None:
     assert "state.clear();" in admitted
 
 
+def test_initialize_recovery_handles_logged_repeated_members_plus_static_block() -> None:
+    members = (
+        'private static final String BOUNDARY = "Boundary";\n'
+        'private static final String TRIGGER = "RightClick";\n'
+        'private static final String OWNER = "ModLoader";\n'
+        'private static final java.util.Map<String, String> ENTRY_POINTS = '
+        'new java.util.HashMap<>();'
+    )
+    output = """```java
+private static final String BOUNDARY = "Boundary";
+private static final String TRIGGER = "RightClick";
+private static final String OWNER = "ModLoader";
+private static final java.util.Map<String, String> ENTRY_POINTS = new java.util.HashMap<>();
+static {
+    ENTRY_POINTS.put(BOUNDARY, TRIGGER);
+    ENTRY_POINTS.put(OWNER, BOUNDARY);
+}
+```
+"""
+
+    admitted = admit_initialize_region(
+        output,
+        known_member_source=members,
+    )
+
+    assert "private static" not in admitted
+    assert "static {" not in admitted
+    assert "```" not in admitted
+    assert "ENTRY_POINTS.put(BOUNDARY, TRIGGER);" in admitted
+    assert "ENTRY_POINTS.put(OWNER, BOUNDARY);" in admitted
+
+
+def test_initialize_recovery_refuses_to_drop_unowned_static_field_declaration() -> None:
+    with pytest.raises(JavaRegionParseError, match="not owned by current_concern_member_api"):
+        admit_initialize_region(
+            (
+                'private static final String INVENTED = "value";\n'
+                'static { consume(INVENTED); }'
+            ),
+            known_member_source='private static final String KNOWN = "value";',
+        )
+
+
 def test_initialize_recovery_handles_fenced_jdk_imports_and_static_receiver() -> None:
     admitted = admit_initialize_region(
         """```java
