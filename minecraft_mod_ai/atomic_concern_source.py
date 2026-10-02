@@ -3260,8 +3260,166 @@ def _validate_declared_type_authority(
             "ATOMIC_CONCERN_RESPONSE_INVALID: ungrounded simple Java type name(s): "
             + ", ".join(sorted(unknown))
             + ". Use an authoritative sibling/dependency type, a known JDK type, "
-            "or the exact fully-qualified external type."
+            "the exact fully-qualified external type, or declare the exact private "
+            "concern-local nested type when the authored requirement names a local "
+            "domain object."
         )
+
+
+def _type_authority_unknown_names(diagnostic: str) -> tuple[str, ...]:
+    prefix = "ATOMIC_CONCERN_RESPONSE_INVALID: ungrounded simple Java type name(s): "
+    text = str(diagnostic or "").strip()
+    if not text.startswith(prefix):
+        return ()
+    body = text[len(prefix):]
+    marker = ". Use an authoritative sibling/dependency type"
+    if marker in body:
+        body = body.split(marker, 1)[0]
+    return tuple(
+        item.strip()
+        for item in body.split(",")
+        if item.strip()
+    )
+
+
+def _type_authority_repair_contract(diagnostic: str) -> dict[str, Any] | None:
+    names = tuple(
+        name for name in _type_authority_unknown_names(diagnostic)
+        if "." not in name
+        and re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", name)
+    )
+    if not names:
+        return None
+    return {
+        "unknown_simple_types": list(names),
+        "rules": (
+            "Resolve every unknown_simple_type before returning Java. Prefer an exact "
+            "available_sibling_api or dependency_api type when one owns the concept. "
+            "If the authored source requirement itself names a concern-local runtime "
+            "domain object and no external authority owns it, declare the smallest "
+            "private static nested class/record with that exact name in this selected "
+            "concern region, then use it consistently. Never leave an undeclared simple "
+            "type, never invent an external package, and never add a nested type for a "
+            "misspelled JDK/dependency/platform symbol."
+        ),
+    }
+
+
+def _authority_requirement_text(authority: Mapping[str, Any]) -> str:
+    sources = authority.get("source_requirements")
+    if not isinstance(sources, Mapping):
+        return ""
+    return "\n".join(str(value or "") for value in sources.values())
+
+
+def _contract_declared_type_values(contract: Mapping[str, Any]) -> tuple[Any, ...]:
+    values: list[Any] = []
+    if contract.get("kind") == "field":
+        values.append(contract.get("declared_type"))
+    elif contract.get("kind") == "method":
+        values.append(contract.get("return_type"))
+        values.extend(
+            parameter.get("type")
+            for parameter in contract.get("parameters") or ()
+            if isinstance(parameter, Mapping)
+        )
+    elif contract.get("kind") == "constructor":
+        values.extend(
+            parameter.get("type")
+            for parameter in contract.get("parameters") or ()
+            if isinstance(parameter, Mapping)
+        )
+    return tuple(values)
+
+
+def _canonicalize_plan_local_zero_arg_domain_types(
+    value: str,
+    *,
+    concern_authority: Mapping[str, Any],
+    dependency_source: str,
+    sibling_api: Sequence[Mapping[str, Any]],
+) -> tuple[str, tuple[str, ...]]:
+    """Materialize only provably concern-local zero-arg carrier types.
+
+    This is intentionally narrow. It activates only after the ordinary type-authority
+    validator identifies an ungrounded simple type, only when the exact type token is
+    present in the authored requirement for this concern, every declaration use is
+    private, and the candidate itself directly constructs that type with zero arguments.
+    Misspelled JDK/dependency/platform types therefore remain hard failures.
+    """
+
+    source = str(value or "").strip()
+    if not source:
+        return source, ()
+
+    try:
+        contracts = class_body_member_contracts(source)
+    except JavaRegionParseError:
+        return source, ()
+
+    try:
+        _validate_declared_type_authority(
+            contracts,
+            dependency_source=dependency_source,
+            sibling_api=sibling_api,
+        )
+        return source, ()
+    except CustomModuleGenerationError as exc:
+        unknown = _type_authority_unknown_names(str(exc))
+
+    requirement_text = _authority_requirement_text(concern_authority)
+    if not requirement_text or not unknown:
+        return source, ()
+
+    creations = tuple(class_body_object_creations(source))
+    additions: list[str] = []
+    changes: list[str] = []
+    for name in unknown:
+        if (
+            "." in name
+            or re.fullmatch(r"[A-Z][A-Za-z0-9_$]*", name) is None
+            or re.search(rf"\b{re.escape(name)}\b", requirement_text) is None
+        ):
+            continue
+
+        usages = [
+            contract
+            for contract in contracts
+            if any(
+                name in _type_leaf_names(type_value)
+                for type_value in _contract_declared_type_values(contract)
+            )
+        ]
+        if not usages or any(
+            str(contract.get("visibility") or "").strip() != "private"
+            for contract in usages
+        ):
+            continue
+
+        direct_creations = [
+            creation
+            for creation in creations
+            if name in _type_leaf_names(creation.get("type"))
+        ]
+        if not direct_creations or any(
+            int(creation.get("argument_count") or 0) != 0
+            for creation in direct_creations
+        ):
+            continue
+
+        # A static receiver is evidence that the model intended an existing API,
+        # not a local value carrier. Do not hide that mistake behind an empty type.
+        if re.search(rf"\b{re.escape(name)}\s*\.", _structure_scan(source)):
+            continue
+
+        additions.append(f"private static final class {name} {{}}")
+        changes.append(f"{name}:materialized_private_zero_arg_domain_type")
+
+    if not additions:
+        return source, ()
+
+    repaired = source.rstrip() + "\n\n" + "\n\n".join(additions)
+    return repaired, tuple(changes)
 
 
 def _jdk_constructor_accepts_arity(
@@ -4236,6 +4394,7 @@ class AtomicConcernExecutor:
         repair_failure = failure
         correction = None
         dependency_repair = None
+        type_authority_repair = None
         rejected_region = ""
         attempt_limit = (
             _region_attempt_limit()
@@ -4392,6 +4551,22 @@ class AtomicConcernExecutor:
                             "authoritative. Select only a listed invocation_shape and preserve "
                             "its parameter roles exactly."
                         )
+                    if type_authority_repair is not None:
+                        payload["type_authority_repair_contract"] = type_authority_repair
+                        scope_payload = payload.get("scope")
+                        if isinstance(scope_payload, dict):
+                            scope_payload["repair_structure_rule"] = (
+                                "This is a pre-compilation type-authority correction. You may "
+                                "add the smallest private concern-local nested class/record named "
+                                "by type_authority_repair_contract when the authored requirement "
+                                "owns that runtime domain object. Do not add unrelated nested types."
+                            )
+                        messages[0]["content"] += (
+                            "\nTYPE AUTHORITY CORRECTION TURN: resolve every listed unknown "
+                            "simple type. A requirement-owned local runtime domain type may be "
+                            "declared as a private nested class/record in this selected region; "
+                            "do not fabricate an external package."
+                        )
                     messages[-1]["content"] = json.dumps(payload, ensure_ascii=False)
                 output = generate_region(
                     self.call_coder, messages, completion_decider=self.completion_decider,
@@ -4509,13 +4684,36 @@ class AtomicConcernExecutor:
                                     "changes": list(final_rebinding_changes),
                                 },
                             )
+                    sibling_api = _sibling_symbol_inventory(
+                        self.source,
+                        sibling_concerns=sibling_names,
+                    )
+                    parsed, local_type_changes = (
+                        _canonicalize_plan_local_zero_arg_domain_types(
+                            parsed,
+                            concern_authority=concern_authority,
+                            dependency_source=self.dependency_source,
+                            sibling_api=sibling_api,
+                        )
+                    )
+                    if local_type_changes:
+                        from .root_cause_trace import emit_root_cause
+
+                        emit_root_cause(
+                            "atomic_concern_plan_local_type_materialized",
+                            stage="production",
+                            operation="atomic_concern_region",
+                            gate="first_pass_semantic_canonicalization",
+                            result="PASS",
+                            details={
+                                "concern": name,
+                                "changes": list(local_type_changes),
+                            },
+                        )
                     _validate_first_pass_java_semantics(
                         parsed,
                         dependency_source=self.dependency_source,
-                        sibling_api=_sibling_symbol_inventory(
-                            self.source,
-                            sibling_concerns=sibling_names,
-                        ),
+                        sibling_api=sibling_api,
                     )
                 if response_region == "members" and name in _DECLARATION_ONLY_CONCERNS:
                     kinds = class_body_member_kinds(parsed)
@@ -4677,6 +4875,7 @@ class AtomicConcernExecutor:
                     self.dependency_source,
                     reason,
                 )
+                type_authority_repair = _type_authority_repair_contract(reason)
                 if candidate_merged:
                     # A repair candidate that violates the frozen type structure is
                     # not allowed to become the next correction authority. Keep the
@@ -4697,18 +4896,23 @@ class AtomicConcernExecutor:
                     if response_region == "members":
                         from .atomic_region_correction import RegionCorrection
 
+                        allow_private_restructure = (
+                            not failure
+                            and name not in self.state
+                            and reason.startswith(
+                                (
+                                    "ATOMIC_CONCERN_RESPONSE_INVALID:",
+                                    "ATOMIC_CONCERN_SEMANTIC_SHAPE_INVALID:",
+                                )
+                            )
+                        )
                         correction = RegionCorrection.for_diagnostic(
                             correction_source,
                             reason,
-                            allow_private_restructure=(
-                                not failure
-                                and name not in self.state
-                                and reason.startswith(
-                                    (
-                                        "ATOMIC_CONCERN_RESPONSE_INVALID:",
-                                        "ATOMIC_CONCERN_SEMANTIC_SHAPE_INVALID:",
-                                    )
-                                )
+                            allow_private_restructure=allow_private_restructure,
+                            allow_private_type_additions=(
+                                allow_private_restructure
+                                and type_authority_repair is not None
                             ),
                         )
                 elif not rejected_region:
@@ -4721,6 +4925,20 @@ class AtomicConcernExecutor:
                     and name in _DECLARATION_ONLY_CONCERNS
                     else ""
                 )
+                nested_type_repair_rule = (
+                    " This failure is an ungrounded simple-type error. For an exact "
+                    "type named by type_authority_repair_contract that is owned by this "
+                    "authored concern rather than a sibling/dependency/JDK/platform API, "
+                    "you may add the smallest private nested class/record needed to make "
+                    "that runtime type real. Do not add unrelated nested types."
+                    if type_authority_repair is not None
+                    and not failure
+                    and response_region == "members"
+                    else (
+                        " Do not introduce, rename, or change the kind of nested types "
+                        "during bounded regeneration."
+                    )
+                )
                 validation_failure = (
                     "HOST REGION VALIDATION FAILED BEFORE COMPILATION:\n"
                     + reason
@@ -4728,8 +4946,8 @@ class AtomicConcernExecutor:
                     + " When region_correction is present, emit only its selected declarations."
                     + declaration_only_rule
                     + " Do not emit response markers, prose, package/import/top-level/lifecycle declarations. "
-                    "Do not introduce, rename, or change the kind of nested types during bounded regeneration. "
-                    "Fix only the rejected concern region and preserve valid sibling declarations. "
+                    + nested_type_repair_rule
+                    + " Fix only the rejected concern region and preserve valid sibling declarations. "
                     "Implement only this concern; do not add declarations for sibling concerns. "
                     "Earlier sibling declarations are immutable and cannot be redeclared. "
                     "Emit executable Java only; no analysis, reasoning, plans, or Markdown commentary."

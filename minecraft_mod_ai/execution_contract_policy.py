@@ -721,6 +721,14 @@ def java_generation_recipe_contract(concern_name: str) -> dict[str, Any]:
             "and finish well inside the finite output page"
         ),
         "declare_local_domain_types_first": True,
+        "declare_plan_local_domain_type_rule": (
+            "Never emit an undeclared simple Java type. If this concern genuinely needs "
+            "a runtime domain object named by task_authority.source_requirements and no "
+            "available_sibling_api/dependency/JDK/platform authority owns that type, "
+            "declare the smallest private static nested class/record with that exact name "
+            "inside this selected concern before first use. Otherwise use an authoritative "
+            "existing type or a suitable JDK representation; never guess an external package."
+        ),
         "require_fully_qualified_external_types": True,
         "output_language": "java_source_region",
         "no_json_ast_protocol": True,
@@ -820,6 +828,11 @@ def java_region_system_prompt_contract(
         "such as owner/type/unit/default/domain/from_state/trigger/guard describe semantics; they "
         "are not a request to create a Java metadata record with those labels as components. "
         "Create a record/class only when the runtime gameplay implementation itself needs that data object. "
+        "Never emit an undeclared simple Java type. If you choose to represent an authored "
+        "concern-local runtime concept as a simple Java type and no available sibling/dependency/"
+        "JDK/platform authority owns it, declare the smallest private static nested class/record "
+        "with that exact name in this selected concern before first use. Do not guess an external "
+        "package to make a type look grounded. "
         "You do not choose files, classes, dependencies, architecture, tools, search routes, APIs, or sibling work. "
         + response_contract + " "
         "The task_authority source requirements are already host-sliced to this concern; "
