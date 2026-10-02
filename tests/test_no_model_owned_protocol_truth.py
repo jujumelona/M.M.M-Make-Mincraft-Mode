@@ -25,6 +25,8 @@ def test_record_generation_has_no_model_owned_cardinality_prepass() -> None:
     assert '"done"' not in bounded
     assert "design/content_entity_count" not in design
     assert "design/content_relation_count" not in design
+    assert not (PACKAGE / "templates/design/content_entity_count.yaml").exists()
+    assert not (PACKAGE / "templates/design/content_relation_count.yaml").exists()
 
 
 def test_worksheet_does_not_use_model_count_or_array_index_as_cross_call_identity() -> None:
@@ -59,6 +61,8 @@ def test_structured_output_correctness_has_no_global_3_4_3_256_size_gate() -> No
     assert "MAX_MODEL_FIELDS" not in single
     assert "DEFAULT_ATOMIC_SCHEMA_LIMITS" not in assembly
     assert "DEFAULT_ATOMIC_SCHEMA_LIMITS" not in central
+    verifier = _source("verifier_repair_window.py")
+    assert "DEFAULT_ATOMIC_SCHEMA_LIMITS" not in verifier
 
 
 def test_java_paging_completion_uses_semantic_next_work_only() -> None:
@@ -78,3 +82,10 @@ def test_harmless_json_wrapping_is_host_recoverable_but_schema_truth_remains_str
 
     assert "_extract_schema_valid_embedded_value" in structured
     assert "len(valid) == 1" in structured
+
+
+def test_design_text_is_not_rejected_by_phrase_blacklist() -> None:
+    meta = _source("model_meta_output_contract.py")
+    guarded = meta.split("def assert_design_field_clean", 1)[1]
+    assert "contains_internal_model_meta(value)" not in guarded
+    assert "contradicts_grounded_research(value)" in guarded
