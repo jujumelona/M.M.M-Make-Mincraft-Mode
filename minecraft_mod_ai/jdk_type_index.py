@@ -334,8 +334,14 @@ def canonical_public_jdk_type(value: str) -> str:
 
     index = _runtime_index(str(home))
     if raw.startswith(("java.", "javax.")):
+        # This index contains top-level classes only. Do not collapse a nested
+        # owner (Map.Entry, Thread.State, etc.) to an unrelated top-level name.
+        if "$" in raw or any(part[:1].isupper() for part in raw.split(".")[:-1]):
+            return raw
         simple = raw.rsplit(".", 1)[-1]
-        if raw in index.get(simple, ()) and _public_type(str(home), raw):
+        if raw in index.get(simple, ()):
+            # An existing but inaccessible type must fail admission as itself;
+            # accessibility is not permission to change the selected type.
             return raw
         candidates = tuple(
             fqcn

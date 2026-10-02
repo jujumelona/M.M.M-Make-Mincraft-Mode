@@ -607,3 +607,24 @@ def test_tree_sitter_extracts_object_creation_type_and_arity() -> None:
         {"type": "Object", "argument_count": 0},
         {"type": "String", "argument_count": 1},
     )
+
+
+def test_qualified_type_occurrences_are_nonoverlapping_utf8_spans() -> None:
+    from minecraft_mod_ai.java_region_parser import class_body_simple_type_occurrences
+
+    source = (
+        'private static String label = "한글 java.util.String";\n'
+        '// java.util.String in a comment\n'
+        'private static java.util.List<java.util.String[]> values;\n'
+        'private static Object build() { return new java.util.String[]{"x"}; }'
+    )
+    simple = class_body_simple_type_occurrences(source)
+    assert all('.' not in row['name'] for row in simple)
+    rows = class_body_simple_type_occurrences(source, include_qualified=True)
+    assert [row['name'] for row in rows].count('java.util.String') == 2
+    encoded = source.encode('utf-8')
+    previous_end = 0
+    for row in sorted(rows, key=lambda item: item['start_byte']):
+        assert row['start_byte'] >= previous_end
+        assert encoded[row['start_byte']:row['end_byte']].decode('utf-8') == row['name']
+        previous_end = row['end_byte']

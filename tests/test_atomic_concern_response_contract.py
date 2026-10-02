@@ -3266,6 +3266,59 @@ def test_first_pass_type_authority_rejects_nonexistent_java_fqcn() -> None:
         )
 
 
+def test_wrong_jdk_package_is_normalized_in_generic_array_and_creation() -> None:
+    from minecraft_mod_ai.atomic_concern_source import (
+        _canonicalize_generated_jdk_semantics,
+        _validate_first_pass_java_semantics,
+    )
+
+    source, changes = _canonicalize_generated_jdk_semantics(
+        'private static String label = "java.util.String 한글";\n'
+        '// java.util.String is a quoted spelling, not a type here\n'
+        'static java.util.List<java.util.String[]> concurrencyRules() {\n'
+        '    return java.util.Collections.singletonList(new java.util.String[]{\n'
+        '        "state_recipients=online_players", "trigger=state_change"\n'
+        '    });\n'
+        '}'
+    )
+
+    assert 'java.util.List<java.lang.String[]>' in source
+    assert 'new java.lang.String[]' in source
+    assert '"java.util.String 한글"' in source
+    assert '"state_recipients=online_players", "trigger=state_change"' in source
+    assert any('java.util.String->java.lang.String' in change for change in changes)
+    _validate_first_pass_java_semantics(source, dependency_source="", sibling_api=())
+
+
+def test_jdk_qualified_canonicalization_preserves_external_and_ambiguous_names() -> None:
+    from minecraft_mod_ai.atomic_concern_source import _canonicalize_generated_jdk_semantics
+
+    source, _changes = _canonicalize_generated_jdk_semantics(
+        'private static com.example.String external;\n'
+        'private static java.missing.Date ambiguous;\n'
+        'private static java.util.Map.Entry<String, Object> entry;\n'
+        'private static java.util.DoesNotExist unknown;'
+    )
+
+    assert 'com.example.String external' in source
+    assert 'java.missing.Date ambiguous' in source
+    assert 'java.util.Map.Entry<String, Object> entry' in source
+    assert 'java.util.DoesNotExist unknown' in source
+
+
+def test_jdk_index_does_not_redirect_existing_inaccessible_or_nested_type(monkeypatch, tmp_path) -> None:
+    from minecraft_mod_ai import jdk_type_index as index
+
+    monkeypatch.setattr(index, '_java_home', lambda: tmp_path)
+    monkeypatch.setattr(index, '_runtime_index', lambda _: {
+        'Hidden': ('java.internal.Hidden', 'java.publicapi.Hidden'),
+        'Entry': ('java.other.Entry',),
+    })
+    monkeypatch.setattr(index, '_public_type', lambda _home, name: name != 'java.internal.Hidden')
+    assert index.canonical_public_jdk_type('java.internal.Hidden') == 'java.internal.Hidden'
+    assert index.canonical_public_jdk_type('java.util.Map.Entry') == 'java.util.Map.Entry'
+
+
 def test_jdk_type_index_prefers_project_toolchain(tmp_path, monkeypatch) -> None:
     from minecraft_mod_ai.jdk_type_index import _java_home
 

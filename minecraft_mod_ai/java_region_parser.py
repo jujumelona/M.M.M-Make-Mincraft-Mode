@@ -459,12 +459,15 @@ def class_body_member_contracts(value: str) -> tuple[dict[str, Any], ...]:
     return tuple(rows)
 
 
-def class_body_simple_type_occurrences(value: str) -> tuple[dict[str, Any], ...]:
-    """Return byte ranges of unqualified simple type identifiers in one class body.
+def class_body_simple_type_occurrences(
+    value: str, *, include_qualified: bool = False,
+) -> tuple[dict[str, Any], ...]:
+    """Return exact type-reference byte ranges in one class body.
 
-    Only Tree-sitter type_identifier nodes are returned. Identifiers nested inside
-    scoped_type_identifier are omitted so already-qualified FQCNs are never doubled.
-    Byte ranges are relative to the original class-body region.
+    By default only unqualified names are returned. JDK canonicalization may
+    also request complete qualified names, including those inside generic
+    arguments and array creations. Never return both a qualified name and its
+    component identifiers, or expression/literal occurrences of the same text.
     """
 
     region = str(value or "").strip()
@@ -477,7 +480,7 @@ def class_body_simple_type_occurrences(value: str) -> tuple[dict[str, Any], ...]
     body = _class_body(root)
     rows: list[dict[str, Any]] = []
     for node in _walk_named(body):
-        if node.type != "type_identifier":
+        if node.type not in {"type_identifier", "scoped_type_identifier"}:
             continue
         parent = getattr(node, "parent", None)
         if parent is not None and parent.type in {
@@ -485,13 +488,21 @@ def class_body_simple_type_occurrences(value: str) -> tuple[dict[str, Any], ...]
             "scoped_identifier",
         }:
             continue
+        name = _text(source, node).strip()
+        if node.type == "scoped_type_identifier":
+            if not include_qualified or not re.fullmatch(
+                r"[A-Za-z_$][A-Za-z0-9_$]*(?:\s*\.\s*[A-Za-z_$][A-Za-z0-9_$]*)+", name
+            ):
+                # Parameterized outer types carry their own arguments; replacing
+                # the enclosing node with a raw name would erase that contract.
+                continue
         start = node.start_byte - len(prefix_bytes)
         end = node.end_byte - len(prefix_bytes)
         if start < 0 or end > len(region_bytes) or start >= end:
             continue
         rows.append(
             {
-                "name": _text(source, node).strip(),
+                "name": name,
                 "start_byte": start,
                 "end_byte": end,
             }

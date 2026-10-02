@@ -720,9 +720,11 @@ def _canonical_jdk_class_name(value: str) -> str:
         return _JDK_FQCN_ALIASES[raw]
     if raw in _JDK_CANONICAL_SIMPLE_TYPES:
         return _JDK_CANONICAL_SIMPLE_TYPES[raw]
-    # Only consult the installed JDK image for a previously unknown simple name.
-    # Exact FQCN validation is handled by the declaration-authority gate below.
-    if "." in raw or "$" in raw:
+    if raw in _KNOWN_CANONICAL_JDK_TYPES:
+        return raw
+    # Qualified misspellings need the same installed-JDK authority as simple
+    # names. Never reinterpret a project/dependency namespace as a JDK class.
+    if "$" in raw or ("." in raw and not raw.startswith(("java.", "javax."))):
         return raw
     try:
         from .jdk_type_index import canonical_public_jdk_type
@@ -902,7 +904,7 @@ def _canonicalize_tree_sitter_jdk_types(
     *,
     protected_simple_types: Sequence[str] = (),
 ) -> tuple[str, tuple[str, ...]]:
-    """Rewrite only AST-proven simple JDK type identifiers to canonical FQCNs."""
+    """Canonicalize AST-proven JDK type references, including wrong packages."""
 
     source = str(value or "")
     if not source.strip():
@@ -923,14 +925,14 @@ def _canonicalize_tree_sitter_jdk_types(
     )
 
     replacements: list[tuple[int, int, str, str]] = []
-    for occurrence in class_body_simple_type_occurrences(source):
+    for occurrence in class_body_simple_type_occurrences(source, include_qualified=True):
         name = str(occurrence.get("name") or "").strip()
         if not name or name in protected:
             continue
         canonical = _canonical_jdk_class_name(name)
         if (
             canonical == name
-            or canonical.startswith("java.lang.")
+            or ("." not in name and canonical.startswith("java.lang."))
             or "." not in canonical
         ):
             continue
