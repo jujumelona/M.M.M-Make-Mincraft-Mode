@@ -3722,7 +3722,8 @@ def _rewrite_map_entry_projection_types(
             ("getValue", value_type),
         ):
             pattern = re.compile(
-                rf"(?P<indent>^[ \t]*)(?P<declared>[^\n;=]+?)\s+"
+                rf"(?P<prefix>(?:^[ \t]*|(?<=[{{;])[ \t]*))"
+                rf"(?P<declared>[^\n;=]+?)\s+"
                 rf"(?P<local>[A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*"
                 rf"{re.escape(entry_var)}\s*\.\s*{accessor}\s*\(\s*\)\s*;",
                 re.MULTILINE,
@@ -3756,7 +3757,7 @@ def _rewrite_map_entry_projection_types(
                     f"{actual}->{expected}"
                 )
                 return (
-                    match.group("indent")
+                    match.group("prefix")
                     + modifier_prefix
                     + expected
                     + " "
