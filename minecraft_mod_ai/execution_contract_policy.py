@@ -606,16 +606,10 @@ def java_atomic_parameters_for_request(
             name_schema = category_schema["items"]["properties"]["name"]
             if authorized_nested:
                 name_schema["enum"] = list(authorized_nested)
-            if host_symbol:
-                name_schema["not"] = {"enum": [host_symbol]}
             name_schema["description"] = (
-                "Name of a requirement-owned nested runtime helper. "
-                + (
-                    f"{host_symbol} is the existing outer class and must not be declared again. "
-                    if host_symbol
-                    else ""
-                )
-                + "Place outer fields in fields, not in a class wrapper."
+                "Semantic label for a requirement-owned nested runtime helper. "
+                "The host owns the final Java identifier, collision handling, and outer/nested placement. "
+                "Place outer fields in fields, not in a class wrapper."
             )
     return parameters, shape
 
