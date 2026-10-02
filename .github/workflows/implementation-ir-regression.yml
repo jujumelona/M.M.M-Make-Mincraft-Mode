@@ -62,8 +62,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  implementation-ir:
-    name: Implementation IR contract
+  structured-state:
+    name: Structured state planning contract
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -86,27 +86,55 @@ jobs:
           tests/test_planning_structured_worksheet_execution.py
           tests/test_authored_state_lowering_regression.py
           tests/test_production_state_compiler.py
-      - name: Run implementation IR regressions
-        shell: bash
+
+  implementation-ir:
+    name: Implementation IR contract / ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: graph-core
+            tests: >-
+              tests/test_implementation_graph_admission.py
+              tests/test_authored_heading_contract.py
+              tests/test_implementation_ir.py
+              tests/test_implementation_contract_ownership.py
+          - name: authored-production
+            tests: >-
+              tests/test_authored_production.py
+              tests/test_small_model_implementation_decisions.py
+              tests/test_implementation_graph_native_http.py
+          - name: atomic-generation
+            tests: >-
+              tests/test_atomic_concern_response_contract.py
+              tests/test_authored_state_lowering_regression.py
+              tests/test_atomic_java_component_admission.py
+              tests/test_atomic_java_native_http.py
+          - name: direct-contracts
+            tests: >-
+              tests/test_direct_custom_module_generator.py
+              tests/test_execution_contract_policy.py
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - run: python -m pip install --prefer-binary -e '.[dev,ui]'
+      - name: Run implementation IR regression shard
         env:
           PYTHONUNBUFFERED: "1"
+          TEST_FILES: ${{ matrix.tests }}
+        shell: bash
         run: |
           set -euo pipefail
-          tests=(
-            tests/test_implementation_graph_admission.py
-            tests/test_authored_heading_contract.py
-            tests/test_implementation_ir.py
-            tests/test_implementation_contract_ownership.py
-            tests/test_authored_production.py
-            tests/test_small_model_implementation_decisions.py
-            tests/test_implementation_graph_native_http.py
-            tests/test_atomic_concern_response_contract.py
-            tests/test_authored_state_lowering_regression.py
-            tests/test_atomic_java_component_admission.py
-            tests/test_atomic_java_native_http.py
-            tests/test_direct_custom_module_generator.py
-            tests/test_execution_contract_policy.py
-          )
+          read -r -a tests <<< "$TEST_FILES"
           for test_file in "${tests[@]}"; do
             echo "::group::IR regression: $test_file"
             python -m pytest -vv --tb=short "$test_file"
