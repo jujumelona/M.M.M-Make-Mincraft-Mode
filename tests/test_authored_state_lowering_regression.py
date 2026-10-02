@@ -21,6 +21,7 @@ from minecraft_mod_ai.custom_module_generator import (
     _atomic_parameters_for_request,
     _call_atomic_java_region,
 )
+from minecraft_mod_ai.execution_contract_policy import JAVA_ATOMIC_METHOD_NAME_PATTERN
 from minecraft_mod_ai.implementation_graph_execution import _bind_atomic_leaf_contract
 from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
 from minecraft_mod_ai.worksheet_atomic_chunker import worksheet_chunk_schema
