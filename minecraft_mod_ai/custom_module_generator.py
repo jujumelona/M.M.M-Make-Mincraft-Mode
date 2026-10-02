@@ -715,6 +715,17 @@ def _rewrite_java_identifiers(value: Any, renames: Mapping[str, str]) -> str:
     source = str(value or "")
     if not renames:
         return source
+    compound_aliases = tuple(
+        sorted(
+            (
+                (raw, canonical)
+                for raw, canonical in renames.items()
+                if _IDENTIFIER_TOKEN.fullmatch(raw) is None
+            ),
+            key=lambda item: len(item[0]),
+            reverse=True,
+        )
+    )
     out: list[str] = []
     index = 0
     quote = ""
@@ -762,6 +773,19 @@ def _rewrite_java_identifiers(value: Any, renames: Mapping[str, str]) -> str:
             out.extend((ch, nxt))
             index += 2
             block_comment = True
+            continue
+        semantic_match = next(
+            (
+                (raw, canonical)
+                for raw, canonical in compound_aliases
+                if source.startswith(raw, index)
+            ),
+            None,
+        )
+        if semantic_match is not None:
+            raw, canonical = semantic_match
+            out.append(canonical)
+            index += len(raw)
             continue
         alias_match = next(
             (
