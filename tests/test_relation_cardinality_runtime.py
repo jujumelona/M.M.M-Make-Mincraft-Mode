@@ -25,16 +25,15 @@ class RelationRouter:
         target_id = context["target_id"]
         pair_edges = self.edges if (source_id, target_id) == ("source", "target") else []
 
-        if tool_name == "submit_one_design_content_relation_count":
-            return {"count": len(pair_edges)}
-        if tool_name == "submit_one_design_content_relation":
-            index = int(context["record_index"])
-            assert context["record_count"] == len(pair_edges)
-            return {"relation_type": pair_edges[index]}
-        raise AssertionError(tool_name)
+        assert tool_name == "submit_next_design_content_relation"
+        accepted = context.get("accepted_records", [])
+        index = len(accepted)
+        if index >= len(pair_edges):
+            return {"record": None}
+        return {"record": {"relation_type": pair_edges[index]}}
 
 
-def test_relation_cardinality_is_host_owned_without_array_truncation():
+def test_relation_cardinality_is_derived_from_accepted_records_without_count_prepass():
     router = RelationRouter()
     result = run_record_template(
         router,
@@ -50,6 +49,7 @@ def test_relation_cardinality_is_host_owned_without_array_truncation():
         {"relation_type": relation_type, "source_id": "source", "target_id": "target"}
         for relation_type in router.edges
     ]
-    assert router.calls.count("submit_one_design_content_relation_count") == 2
-    assert router.calls.count("submit_one_design_content_relation") == 5
-    assert "submit_one_design_relation_set" not in router.calls
+    assert all("count" not in call for call in router.calls)
+    # Five accepted relations + one null convergence call for source->target,
+    # and one null convergence call for target->source.
+    assert router.calls.count("submit_next_design_content_relation") == 7
