@@ -59,15 +59,19 @@ def serialize_response(name, value):
 
 
 def parse_response_text(name, text):
-    """Parse exactly one JSON value and validate it against the named fixed contract."""
+    """Recover transport wrapping, then validate the concrete value against the contract."""
 
     if not isinstance(text, str):
         raise ValueError(f"RESPONSE_TEMPLATE: {name} output must be text")
-    try:
-        value = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"RESPONSE_TEMPLATE: {name} output is not exactly one JSON value") from exc
-    return validate_response_value(name, value)
+    from .structured_output import validate_structured_output
+
+    schema = response_schema(name)
+    validated = validate_structured_output(
+        text,
+        response_format="json",
+        response_schema=schema,
+    )
+    return json.loads(validated)
 
 
 __all__ = [
