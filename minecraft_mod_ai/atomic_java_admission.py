@@ -154,11 +154,6 @@ def admit_components(
                 path = semantic_path if semantic_reason else (
                     list(errors[0].absolute_path) if errors else []
                 )
-                if not reason and category in {"classes", "records", "enums"}:
-                    name = canonical_name(component.get("name", ""))
-                    if name in type_names:
-                        reason = f"Nested type {name!r} collides with an existing or host-owned type."
-                        path = ["name"]
                 if not reason:
                     try:
                         render({category: [component]})
@@ -212,13 +207,6 @@ def admit_components(
                     "required": ["value"],
                     "additionalProperties": False,
                 }
-                if category in {"classes", "records", "enums"}:
-                    if path == ["name"]:
-                        repair_schema["properties"]["value"]["not"] = {"enum": sorted(type_names)}
-                    elif not path:
-                        repair_schema["properties"]["value"]["properties"]["name"]["not"] = {
-                            "enum": sorted(type_names),
-                        }
                 context = {
                     "category": category,
                     "index": index,
@@ -226,7 +214,7 @@ def admit_components(
                     "rejected_value": rejected_value,
                     "component_declaration": _declaration(component),
                     "validation_error": reason,
-                    "reserved_type_names": sorted(type_names),
+                    "host_owned_type_names": sorted(type_names),
                     "accepted_components": accepted,
                     "other_component_declarations": [
                         {"category": other_category, "index": other_index,
@@ -239,7 +227,8 @@ def admit_components(
                         "Return only the replacement value at selected_path. An empty path selects "
                         "the whole component. Preserve its runtime responsibility. "
                         "Accepted components and the host outer class are immutable. "
-                        "A nested helper must have its own name, never the outer class name."
+                        "The host owns final Java naming and collision resolution; repair only the "
+                        "selected semantic/type/body defect."
                     ),
                 }
                 from .root_cause_trace import emit_root_cause
