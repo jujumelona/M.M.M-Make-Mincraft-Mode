@@ -3976,6 +3976,55 @@ def _prompt_sibling_api(
     ]
 
 
+_JAVA_KEYWORDS = frozenset({
+    "abstract", "assert", "boolean", "break", "byte", "case", "catch", "char",
+    "class", "const", "continue", "default", "do", "double", "else", "enum",
+    "extends", "final", "finally", "float", "for", "goto", "if", "implements",
+    "import", "instanceof", "int", "interface", "long", "native", "new",
+    "package", "private", "protected", "public", "return", "short", "static",
+    "strictfp", "super", "switch", "synchronized", "this", "throw", "throws",
+    "transient", "try", "void", "volatile", "while", "true", "false", "null",
+    "record", "sealed", "permits", "yield", "var",
+})
+
+
+def _java_constant_identifier(value: str) -> str:
+    """Canonical host-owned Java identifier derived only from a semantic field name."""
+    raw = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", str(value or "").strip())
+    token = re.sub(r"[^A-Za-z0-9_$]+", "_", raw).strip("_").upper()
+    if not token:
+        token = "VALUE"
+    if token[0].isdigit():
+        token = "FIELD_" + token
+    if token.casefold() in _JAVA_KEYWORDS:
+        token += "_VALUE"
+    return token
+
+
+def _java_symbol_plan(concern: Mapping[str, Any]) -> dict[str, Any]:
+    """Give the coder exact safe member symbols before it writes any Java.
+
+    Only schema field names can become canonical authored-data member names. Authored
+    values are data and must never be transformed into identifiers.
+    """
+    fields = _concern_semantic_fields(concern)
+    members = {
+        field: _java_constant_identifier(field)
+        for field in fields
+    }
+    return {
+        "authored_field_symbols": members,
+        "identifier_pattern": r"[A-Za-z_$][A-Za-z0-9_$]*",
+        "value_to_identifier_forbidden": True,
+        "rule": (
+            "When representing authored record fields as Java fields/constants, use only "
+            "authored_field_symbols. Never derive a Java identifier from an authored value. "
+            "Authored values such as stop reasons, messages, paths, labels or prose remain "
+            "literals/data. Do not concatenate or uppercase raw authored values into member names."
+        ),
+    }
+
+
 def _concern_semantic_fields(concern: Mapping[str, Any]) -> list[str]:
     schema = concern.get("record_schema")
     if not isinstance(schema, Mapping):
@@ -4048,9 +4097,12 @@ def _messages(
                 if str(item).strip()
             ],
             "semantic_fields": _concern_semantic_fields(concern),
+            "java_symbol_plan": _java_symbol_plan(concern),
             "implementation_goal": (
                 f"Implement only the {name} semantics stated in "
-                "task_authority.source_requirements inside the selected Java class."
+                "task_authority.source_requirements inside the selected Java class. "
+                "Use concern.java_symbol_plan for authored field/member names; authored "
+                "values are data, never identifier source material."
             ),
             "java_shape": (
                 "declarations_only_fields_or_private_nested_types"
