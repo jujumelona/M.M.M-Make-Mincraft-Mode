@@ -56,7 +56,7 @@ def test_exhausted_concern_keeps_owner_and_assembles_executable_members(tmp_path
     ('private static int value = 1;', 'COMPLETION_REQUIRED'),
     ('private static void broken( {\n// MMM_REGION_DONE', 'SCOPE_ESCAPE'),
     ('// MMM_REGION_MORE', 'NO_PROGRESS'),
-    ('private static int a; private static int b;\n// MMM_REGION_DONE', 'UNIT_CARDINALITY'),
+    ('\n'.join(f'private static int v{i};' for i in range(65)) + '\n// MMM_REGION_DONE', 'UNIT_LIMIT'),
 ])
 def test_page_admission_rejects_incomplete_or_unbounded_work(page, code):
     calls = 0
@@ -243,7 +243,7 @@ def test_production_graph_output_pressure_preserves_siblings_and_rolls_back(tmp_
     )
     modules, _ = _compile_new_authored_modules(
         AuthoredPlan('limits', text), mod_id='test', package_name='example',
-        target={'minecraft_version': '1.21.1', 'loader': 'fabric', 'mappings': ''},
+        target={'minecraft_version': '1.21.1', 'loader': 'fabric', 'mappings': '1.21.1+build.3'},
     )
     request = modules[0].config['implementation_graph_request']
     original_request = deepcopy(request)
@@ -275,6 +275,8 @@ def test_production_graph_output_pressure_preserves_siblings_and_rolls_back(tmp_
             assert role == 'coder'
             assert kwargs['tool_name'] == 'report_java_region_completion'
             payload = json.loads(messages[-1]['content'])
+            if payload.get('completion_phase') == 'select_next_unit':
+                return {'done': False, 'next_work': 'declare LIMIT = 100'}
             page = payload['current_page_source']
             if 'LIMIT = 100' in page:
                 return {'done': False, 'next_work': 'implement allowed(int count)'}
@@ -345,7 +347,8 @@ def test_production_graph_output_pressure_preserves_siblings_and_rolls_back(tmp_
     assert not router.calls
 
 
-def test_real_adapter_sse_output_limit_enters_same_owner_java_paging(monkeypatch):
+@pytest.mark.parametrize('native_completion', [False, True])
+def test_real_adapter_sse_output_limit_enters_same_owner_java_paging(monkeypatch, native_completion):
     """Controlled transport evidence; this does not run a live Qwen model."""
     import threading
     from contextlib import nullcontext
@@ -353,6 +356,7 @@ def test_real_adapter_sse_output_limit_enters_same_owner_java_paging(monkeypatch
 
     from minecraft_mod_ai import llama_exact_context, llama_lora_runtime
     from minecraft_mod_ai import llama_stream_efficiency_contract as streaming
+    from minecraft_mod_ai.atomic_region_paging import decide_region_completion
     from minecraft_mod_ai.custom_module_generator import _call_coder
     from minecraft_mod_ai.model_adapters.base import AdapterConfig
     from minecraft_mod_ai.model_adapters.llama_cpp_adapter import LlamaCppAdapter
@@ -364,6 +368,15 @@ def test_real_adapter_sse_output_limit_enters_same_owner_java_paging(monkeypatch
         ('private static final int LIMIT = 100;\n// MMM_REGION_MORE', 'stop'),
         ('public static boolean allowed(int count) { return count <= LIMIT; }\n// MMM_REGION_DONE', 'stop'),
     ]
+    if native_completion:
+        responses = [
+            ('private static int unfinished(', 'length'),
+            ({'done': False, 'next_work': 'declare limit constants'}, 'tool_calls'),
+            ('private static final int LIMIT = 100; private static final int FLOOR = 0;', 'stop'),
+            ({'done': False, 'next_work': 'implement allowed(int count)'}, 'tool_calls'),
+            ('public static boolean allowed(int count) { return count >= FLOOR && count <= LIMIT; }', 'stop'),
+            ({'done': True, 'next_work': ''}, 'tool_calls'),
+        ]
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):
@@ -378,8 +391,14 @@ def test_real_adapter_sse_output_limit_enters_same_owner_java_paging(monkeypatch
             self.send_header('Content-Type', 'text/event-stream')
             self.send_header('Connection', 'close')
             self.end_headers()
+            if isinstance(text, dict):
+                tool_name = request['tools'][0]['function']['name']
+                delta = {'tool_calls': [{'index': 0, 'id': f'call_{index}', 'type': 'function',
+                                        'function': {'name': tool_name, 'arguments': json.dumps(text)}}]}
+            else:
+                delta = {'content': text}
             for event in (
-                {'choices': [{'delta': {'content': text}}]},
+                {'choices': [{'delta': delta}]},
                 {'choices': [{'delta': {}, 'finish_reason': finish}],
                  'usage': {'completion_tokens': 4096 if finish == 'length' else 40}},
             ):
@@ -412,6 +431,8 @@ def test_real_adapter_sse_output_limit_enters_same_owner_java_paging(monkeypatch
         executor.call_coder = lambda messages: _call_coder(
             router, messages, output_token_ceiling=4096, force_non_thinking=True, tool_stage='atomic_java',
         )
+        if native_completion:
+            executor.completion_decider = lambda payload: decide_region_completion(router, payload)
         source = executor.run()['source']
     finally:
         server.shutdown()
@@ -420,8 +441,221 @@ def test_real_adapter_sse_output_limit_enters_same_owner_java_paging(monkeypatch
         client = streaming._CLIENTS.pop(endpoint, None)
         if client:
             client.close()
-    assert len(requests) == 3
-    assert all(not request.get('tools') for request in requests)
+    assert len(requests) == (6 if native_completion else 3)
+    if native_completion:
+        assert [bool(request.get('tools')) for request in requests] == [False, True, False, True, False, True]
+        assert 'FLOOR = 0' in source
+    else:
+        assert all(not request.get('tools') for request in requests)
     assert 'unfinished' not in source
     assert source.count('LIMIT = 100') == 1
     assert 'boolean allowed(' in source
+
+
+# Exact six-declaration response retained from the supplied Colab failure.
+DECISION_CONSTANTS = '''private static final String DECISION_SHIP_POSITION_AUTHORITATIVE_SIDE = "Server";
+private static final String DECISION_ECONOMY_BALANCE_AUTHORITATIVE_SIDE = "Server";
+private static final String DECISION_SHIP_POSITION_TRIGGER = "ShipPosition";
+private static final String DECISION_ECONOMY_BALANCE_TRIGGER = "EconomyBalance";
+private static final String DECISION_SHIP_POSITION_FROM_STATE = "Idle";
+private static final String DECISION_ECONOMY_BALANCE_FROM_STATE = "Idle";'''
+
+
+def test_colab_six_declarations_are_preserved_before_executable_completion(tmp_path):
+    calls, decisions = [], []
+
+    def coder(messages):
+        payload = json.loads(messages[-1]['content'])
+        calls.append(payload)
+        if 'region_page' not in payload:
+            raise ir.OutputBudgetExhausted('OUTPUT_BUDGET_EXHAUSTED')
+        assert payload['region_page']['next_work']
+        if payload['region_page']['index'] == 0:
+            return '```java\n' + DECISION_CONSTANTS + '\n```'
+        assert len(payload['region_page']['accepted_api']) == 6
+        return '''public static String authority(String trigger, String state) {
+            if (DECISION_SHIP_POSITION_TRIGGER.equals(trigger)
+                    && DECISION_SHIP_POSITION_FROM_STATE.equals(state))
+                return DECISION_SHIP_POSITION_AUTHORITATIVE_SIDE;
+            if (DECISION_ECONOMY_BALANCE_TRIGGER.equals(trigger)
+                    && DECISION_ECONOMY_BALANCE_FROM_STATE.equals(state))
+                return DECISION_ECONOMY_BALANCE_AUTHORITATIVE_SIDE;
+            return "Rejected";
+        }'''
+
+    def decide(payload):
+        decisions.append(deepcopy(payload))
+        if payload['completion_phase'] == 'select_next_unit':
+            return {'done': False, 'next_work': 'declare backing decision constants'}
+        if payload['page_index'] == 0:
+            return {'done': False, 'next_work': 'implement authority(String trigger, String state)'}
+        return {'done': True, 'next_work': ''}
+
+    executor = _executor([])
+    executor.call_coder = coder
+    executor.completion_decider = decide
+    source = executor.run()['source']
+    for declaration in DECISION_CONSTANTS.splitlines():
+        assert source.count(declaration) == 1
+    assert len(calls) == 3
+    assert [p['completion_phase'] for p in decisions] == [
+        'select_next_unit', 'assess_completion', 'assess_completion',
+    ]
+    assert all(p['task_authority'] == calls[0]['task_authority'] for p in calls + decisions)
+    javac, java = shutil.which('javac'), shutil.which('java')
+    if not javac or not java:
+        pytest.skip('JDK required for executable verification')
+    (tmp_path / 'Test.java').write_text(source, encoding='utf-8')
+    (tmp_path / 'Probe.java').write_text('''package example;
+        public class Probe { public static void main(String[] args) {
+            if (!Test.authority("ShipPosition", "Idle").equals("Server")
+                || !Test.authority("EconomyBalance", "Idle").equals("Server")
+                || !Test.authority("Unknown", "Idle").equals("Rejected")
+                || !Test.authority("ShipPosition", "Running").equals("Rejected"))
+                throw new AssertionError();
+        }}''', encoding='utf-8')
+    subprocess.run([javac, '-d', str(tmp_path), str(tmp_path / 'Test.java'),
+                    str(tmp_path / 'Probe.java')], check=True, capture_output=True)
+    subprocess.run([java, '-cp', str(tmp_path), 'example.Probe'], check=True, capture_output=True)
+
+
+def test_exhausted_unit_refines_only_pending_work_and_retains_accepted_members():
+    calls, decisions = [], []
+    responses = iter([
+        ir.OutputBudgetExhausted('OUTPUT_BUDGET_EXHAUSTED'),
+        'private static int value = 7;',
+        ir.OutputBudgetExhausted('OUTPUT_BUDGET_EXHAUSTED'),
+        'private static int read() { return value; }',
+        'public static int result() { return read(); }',
+    ])
+
+    def coder(messages):
+        calls.append(json.loads(messages[-1]['content']))
+        response = next(responses)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    def decide(payload):
+        decisions.append(deepcopy(payload))
+        phase = payload['completion_phase']
+        if phase == 'select_next_unit':
+            return {'done': False, 'next_work': 'declare value'}
+        if phase == 'refine_next_unit':
+            return {'done': False, 'next_work': 'implement private read() helper'}
+        if 'int result()' in payload['current_page_source']:
+            return {'done': True, 'next_work': ''}
+        return {'done': False, 'next_work': 'implement result()'}
+
+    executor = _executor([])
+    executor.call_coder, executor.completion_decider = coder, decide
+    source = executor.run()['source']
+    assert source.count('int value = 7') == 1
+    assert 'int read()' in source and 'int result()' in source
+    assert calls[2]['region_page']['accepted_sha256'] == calls[3]['region_page']['accepted_sha256']
+    assert calls[3]['region_page']['next_work'] == 'implement private read() helper'
+    assert calls[3]['region_page']['exhausted_work'] == ['implement result()']
+    assert all(p['host_selected_class'] == 'Test' for p in calls + decisions)
+
+
+@pytest.mark.parametrize('decision', [
+    {'done': True, 'next_work': ''},
+    {'done': False, 'next_work': ''},
+    {'done': 'false', 'next_work': 'declare value'},
+    {'done': False, 'next_work': 'x' * 257},
+])
+def test_unit_selection_cannot_claim_completion_or_bypass_native_contract(decision):
+    calls = []
+
+    def coder(messages):
+        calls.append(messages)
+        raise ir.OutputBudgetExhausted('OUTPUT_BUDGET_EXHAUSTED')
+
+    executor = _executor([])
+    executor.call_coder = coder
+    executor.completion_decider = lambda _: decision
+    executor.write_source = lambda *_: pytest.fail('invalid selection must not mutate source')
+    with pytest.raises(CustomModuleGenerationError, match='COMPLETION_DECISION_INVALID'):
+        executor.run()
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize('repeat', [True, False])
+def test_unit_refinement_is_bounded_and_never_retries_identical_work(repeat):
+    calls, decisions = [], []
+
+    def coder(messages):
+        calls.append(json.loads(messages[-1]['content']))
+        raise ir.OutputBudgetExhausted('OUTPUT_BUDGET_EXHAUSTED')
+
+    def decide(payload):
+        decisions.append(payload)
+        return {'done': False, 'next_work': 'same work' if repeat else f'helper {len(decisions)}'}
+
+    executor = _executor([])
+    executor.call_coder, executor.completion_decider = coder, decide
+    executor.write_source = lambda *_: pytest.fail('exhausted source must not be written')
+    with pytest.raises(CustomModuleGenerationError, match='NO_PROGRESS' if repeat else 'UNIT_TOO_LARGE'):
+        executor.run()
+    assert len(calls) == (2 if repeat else 4)
+    assert executor.state == {}
+
+
+@pytest.mark.parametrize('bad_tail', [
+    'private static int stable = 99;',
+    'package escaped; public class Other {}',
+    'private static void broken( {',
+])
+def test_multi_unit_page_is_transactional_and_keeps_ownership_guards(bad_tail):
+    responses = iter([
+        ir.OutputBudgetExhausted('OUTPUT_BUDGET_EXHAUSTED'),
+        'private static int stable = 7;\n// MMM_REGION_MORE',
+        'private static int newValue = 3;\n' + bad_tail + '\n// MMM_REGION_DONE',
+    ])
+
+    def coder(_):
+        response = next(responses)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    executor = _executor([])
+    executor.call_coder = coder
+    executor.write_source = lambda *_: pytest.fail('rejected batch must not be written')
+    with pytest.raises(CustomModuleGenerationError, match='OWNERSHIP_VIOLATION|SCOPE_ESCAPE'):
+        executor.run()
+    assert executor.state == {}
+
+
+def test_initialize_batch_preserves_local_scope_order_and_repeated_side_effects(tmp_path):
+    responses = iter([
+        'public static int value;',
+        ir.OutputBudgetExhausted('OUTPUT_BUDGET_EXHAUSTED'),
+        'int initial = 4; value = initial; value++;\n// MMM_REGION_MORE',
+        'value++; value += initial;\n// MMM_REGION_DONE',
+    ])
+    calls = []
+
+    def coder(messages):
+        calls.append(json.loads(messages[-1]['content']))
+        response = next(responses)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    executor = _executor([], section='integration', require_initialize=True)
+    executor.call_coder = coder
+    source = executor.run()['source']
+    assert 'int initial = 4;' in calls[-1]['region_page']['accepted_source']
+    assert source.count('value++;') == 2
+    javac, java = shutil.which('javac'), shutil.which('java')
+    if not javac or not java:
+        pytest.skip('JDK required')
+    (tmp_path / 'Test.java').write_text(source, encoding='utf-8')
+    (tmp_path / 'Probe.java').write_text(
+        'package example; public class Probe { public static void main(String[] a) {'
+        'Test.initialize(); if (Test.value != 10) throw new AssertionError(Test.value); }}', encoding='utf-8',
+    )
+    subprocess.run([javac, '-d', str(tmp_path), str(tmp_path / 'Test.java'),
+                    str(tmp_path / 'Probe.java')], check=True, capture_output=True)
+    subprocess.run([java, '-cp', str(tmp_path), 'example.Probe'], check=True, capture_output=True)

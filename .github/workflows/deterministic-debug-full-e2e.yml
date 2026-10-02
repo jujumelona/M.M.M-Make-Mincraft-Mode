@@ -6,6 +6,7 @@ on:
     paths:
       - 'minecraft_mod_ai/custom_module_generator.py'
       - 'minecraft_mod_ai/execution_contract_policy.py'
+      - 'minecraft_mod_ai/atomic_region_paging.py'
       - 'minecraft_mod_ai/atomic_java_assembly.py'
       - 'minecraft_mod_ai/central_atomic_generation_contract.py'
       - 'minecraft_mod_ai/java_generation_policy.py'
@@ -47,6 +48,7 @@ on:
     paths:
       - 'minecraft_mod_ai/custom_module_generator.py'
       - 'minecraft_mod_ai/execution_contract_policy.py'
+      - 'minecraft_mod_ai/atomic_region_paging.py'
       - 'minecraft_mod_ai/atomic_java_assembly.py'
       - 'minecraft_mod_ai/central_atomic_generation_contract.py'
       - 'minecraft_mod_ai/java_generation_policy.py'

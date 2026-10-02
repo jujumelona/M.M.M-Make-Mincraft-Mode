@@ -6,6 +6,7 @@ on:
     paths:
       - "minecraft_mod_ai/custom_module_generator.py"
       - "minecraft_mod_ai/execution_contract_policy.py"
+      - "minecraft_mod_ai/atomic_region_paging.py"
       - "minecraft_mod_ai/atomic_java_assembly.py"
       - "minecraft_mod_ai/central_atomic_generation_contract.py"
       - "minecraft_mod_ai/java_generation_policy.py"
@@ -13,6 +14,7 @@ on:
       - "minecraft_mod_ai/verifier_repair_window.py"
       - "minecraft_mod_ai/generation_diagnostic_repair.py"
       - "tests/test_execution_contract_policy.py"
+      - "tests/test_atomic_region_paging.py"
       - "minecraft_mod_ai/atomic_concern_source.py"
       - "minecraft_mod_ai/production_local_type_recovery.py"
       - "tests/test_atomic_plan_local_type_recovery.py"
@@ -35,6 +37,7 @@ on:
     paths:
       - "minecraft_mod_ai/custom_module_generator.py"
       - "minecraft_mod_ai/execution_contract_policy.py"
+      - "minecraft_mod_ai/atomic_region_paging.py"
       - "minecraft_mod_ai/atomic_java_assembly.py"
       - "minecraft_mod_ai/central_atomic_generation_contract.py"
       - "minecraft_mod_ai/java_generation_policy.py"
@@ -42,6 +45,7 @@ on:
       - "minecraft_mod_ai/verifier_repair_window.py"
       - "minecraft_mod_ai/generation_diagnostic_repair.py"
       - "tests/test_execution_contract_policy.py"
+      - "tests/test_atomic_region_paging.py"
       - "minecraft_mod_ai/atomic_concern_source.py"
       - "minecraft_mod_ai/production_local_type_recovery.py"
       - "tests/test_atomic_plan_local_type_recovery.py"
@@ -83,6 +87,7 @@ jobs:
           - tests/test_deterministic_debug_full_pipeline_e2e.py
           - tests/test_final_artifact_boundaries.py
           - tests/test_execution_contract_policy.py
+          - tests/test_atomic_region_paging.py
     steps:
       - name: Checkout
         uses: actions/checkout@v6

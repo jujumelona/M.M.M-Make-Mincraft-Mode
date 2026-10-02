@@ -14,7 +14,6 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
 
-
 SCHEMA_CONTRACT_PROFILE_KEY = "x-mmm-contract-profile"
 SCHEMA_STRING_CLASS_KEY = "x-mmm-string-class"
 
@@ -86,6 +85,21 @@ PRODUCTION_RETRY_STRUCTURAL_REJECTIONS = True
 PRODUCTION_CANONICALIZE_LOCAL_FINAL_REBINDINGS = True
 PRODUCTION_COMPILE_REPAIR_LIMIT = 2
 ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING = 4_096
+# A response is a transport page, not a Java ownership boundary. The host
+# admits complete AST units transactionally and bounds total work separately.
+ATOMIC_REGION_MAX_PAGES = 64
+ATOMIC_REGION_MAX_UNITS = 64
+ATOMIC_REGION_MAX_ACCEPTED_CONTEXT_CHARS = 8_192
+ATOMIC_REGION_MAX_UNIT_REFINEMENTS = 2
+ATOMIC_REGION_COMPLETION_PARAMETERS = {
+    "type": "object",
+    "properties": {
+        "done": {"type": "boolean"},
+        "next_work": {"type": "string", "maxLength": 256},
+    },
+    "required": ["done", "next_work"],
+    "additionalProperties": False,
+}
 JAVA_ATOMIC_ASSEMBLY_MAX_CALLS = 128
 JAVA_ATOMIC_ASSEMBLY_MAX_PART_ITEMS = 32
 JAVA_ATOMIC_ASSEMBLY_CONTEXT_MARGIN_BYTES = 2_048
@@ -940,15 +954,21 @@ assert_execution_contract_consistent()
 __all__ = [
     "ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING",
     "ATOMIC_ERROR_RECOVERY_RULES",
+    "ATOMIC_REGION_COMPLETION_PARAMETERS",
+    "ATOMIC_REGION_MAX_ACCEPTED_CONTEXT_CHARS",
+    "ATOMIC_REGION_MAX_PAGES",
+    "ATOMIC_REGION_MAX_UNITS",
+    "ATOMIC_REGION_MAX_UNIT_REFINEMENTS",
     "ATOMIC_SCHEMA_PROFILES",
-    "AtomicErrorRecoveryRule",
-    "AtomicSchemaLimits",
     "DEFAULT_ATOMIC_SCHEMA_LIMITS",
     "DEFAULT_COMPILE_REPAIR_LIMIT",
-    "DIAGNOSTIC_REPAIR_INLINE_SOURCE_MAX_BYTES",
     "DEFAULT_REGION_ATTEMPT_LIMIT",
     "DEFAULT_SCHEMA_PROFILE",
+    "DIAGNOSTIC_REPAIR_INLINE_SOURCE_MAX_BYTES",
     "JAVA_ATOMIC_ASSEMBLY_CONTEXT_MARGIN_BYTES",
+    "JAVA_ATOMIC_ASSEMBLY_MAX_CALLS",
+    "JAVA_ATOMIC_ASSEMBLY_MAX_PART_ITEMS",
+    "JAVA_ATOMIC_ASSEMBLY_SYSTEM_PROMPT",
     "JAVA_ATOMIC_CLASS_SCHEMA",
     "JAVA_ATOMIC_CONSTRUCTOR_SCHEMA",
     "JAVA_ATOMIC_DECLARATION_MEMBERS_PARAMETERS",
@@ -963,14 +983,10 @@ __all__ = [
     "JAVA_ATOMIC_OUTER_METHOD_SCHEMA",
     "JAVA_ATOMIC_PARAMETER_SCHEMA",
     "JAVA_ATOMIC_RECORD_SCHEMA",
-    "JAVA_ATOMIC_ASSEMBLY_MAX_CALLS",
-    "JAVA_ATOMIC_ASSEMBLY_MAX_PART_ITEMS",
-    "JAVA_ATOMIC_ASSEMBLY_SYSTEM_PROMPT",
     "JAVA_COMPILER_FIRST_RULES",
     "JAVA_CONCERN_MEMBER_NODE_TYPES",
     "JAVA_DECLARATION_ONLY_CONCERNS",
     "JAVA_DECLARATION_ONLY_MEMBER_KINDS",
-    "JAVA_TYPE_OWNING_CONCERNS",
     "JAVA_EXPLICIT_JDK_IMPORT_PATTERN",
     "JAVA_FENCE_LANGUAGES",
     "JAVA_HOST_INITIALIZE_NAME",
@@ -988,6 +1004,7 @@ __all__ = [
     "JAVA_PRE_EMIT_COMPILE_CHECKLIST",
     "JAVA_QUALIFIABLE_JDK_IMPORT_USE_ROLES",
     "JAVA_REGION_RECOVERY_SHAPES",
+    "JAVA_TYPE_OWNING_CONCERNS",
     "MAX_COMPILE_REPAIR_LIMIT",
     "MAX_REGION_ATTEMPT_LIMIT",
     "MODEL_MAX_COMPLETION_TOKENS",
@@ -1009,6 +1026,8 @@ __all__ = [
     "STRING_CLASS_REPAIR_SPAN",
     "STRING_CLASS_SOURCE",
     "TERMINAL_AFTER_NORMALIZATION_PREFIXES",
+    "AtomicErrorRecoveryRule",
+    "AtomicSchemaLimits",
     "assert_execution_contract_consistent",
     "atomic_error_recoverable",
     "atomic_error_terminal_after_normalization",
@@ -1018,11 +1037,11 @@ __all__ = [
     "java_atomic_parameters_for_request",
     "java_generation_recipe_contract",
     "java_generation_shared_recipe_policy",
+    "java_host_initialize_signature",
     "java_imported_jdk_use_can_be_qualified",
     "java_initialize_wrapper_allowed",
     "java_localize_initialize_field_modifiers",
     "java_member_jdk_import_allowed",
-    "java_host_initialize_signature",
     "java_nested_type_scope_error",
     "java_region_recovery_shapes",
     "java_region_response_contract",

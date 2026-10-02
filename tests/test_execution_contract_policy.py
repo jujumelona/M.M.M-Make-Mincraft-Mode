@@ -7,8 +7,6 @@ from pathlib import Path
 import pytest
 
 from minecraft_mod_ai.execution_contract_policy import (
-    RECOVERABLE_ATOMIC_ERROR_PREFIXES,
-    TERMINAL_AFTER_NORMALIZATION_PREFIXES,
     DEFAULT_ATOMIC_SCHEMA_LIMITS,
     DIAGNOSTIC_REPAIR_INLINE_SOURCE_MAX_BYTES,
     JAVA_ATOMIC_ASSEMBLY_CONTEXT_MARGIN_BYTES,
@@ -16,16 +14,9 @@ from minecraft_mod_ai.execution_contract_policy import (
     JAVA_ATOMIC_ASSEMBLY_MAX_PART_ITEMS,
     JAVA_NESTED_TYPE_REQUIRED_VISIBILITY,
     JAVA_TYPE_OWNING_CONCERNS,
-    assert_execution_contract_consistent,
-    atomic_error_recoverable,
-    atomic_error_terminal_after_normalization,
-    authorized_concern_nested_type_symbols,
-    java_atomic_assembly_system_prompt,
-    java_atomic_parameters_for_request,
-    java_generation_recipe_contract,
-    java_region_system_prompt_contract,
     PRODUCTION_COMPILE_REPAIR_LIMIT,
     PRODUCTION_RETRY_STRUCTURAL_REJECTIONS,
+    RECOVERABLE_ATOMIC_ERROR_PREFIXES,
     SCHEMA_CONTRACT_PROFILE_KEY,
     SCHEMA_STRING_CLASS_KEY,
     SOURCE_REPAIR_HARD_ATTEMPTS,
@@ -34,9 +25,20 @@ from minecraft_mod_ai.execution_contract_policy import (
     SOURCE_REPAIR_SCHEMA_PROFILE,
     STRING_CLASS_REPAIR_SPAN,
     STRING_CLASS_SOURCE,
+    TERMINAL_AFTER_NORMALIZATION_PREFIXES,
+    assert_execution_contract_consistent,
+    atomic_error_recoverable,
+    atomic_error_terminal_after_normalization,
+    authorized_concern_nested_type_symbols,
+    java_atomic_assembly_system_prompt,
+    java_atomic_parameters_for_request,
+    java_generation_recipe_contract,
+    java_region_system_prompt_contract,
 )
 from minecraft_mod_ai.java_generation_policy import (
     PRODUCTION_COMPILE_REPAIR_LIMIT as JAVA_PRODUCTION_COMPILE_REPAIR_LIMIT,
+)
+from minecraft_mod_ai.java_generation_policy import (
     PRODUCTION_RETRY_STRUCTURAL_REJECTIONS as JAVA_RETRY_STRUCTURAL_REJECTIONS,
 )
 from minecraft_mod_ai.model_adapters import ModelConfigurationError
@@ -269,6 +271,7 @@ def test_core_execution_contract_consumers_import_the_authority_directly() -> No
     package_root = Path(__file__).resolve().parents[1] / "minecraft_mod_ai"
     consumers = (
         "atomic_concern_source.py",
+        "atomic_region_paging.py",
         "atomic_java_assembly.py",
         "central_atomic_generation_contract.py",
         "custom_module_generator.py",

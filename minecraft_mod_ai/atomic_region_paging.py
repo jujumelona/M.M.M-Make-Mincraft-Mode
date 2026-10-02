@@ -12,12 +12,45 @@ from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 
 from .custom_module_errors import CustomModuleGenerationError
+from .execution_contract_policy import (
+    ATOMIC_REGION_COMPLETION_PARAMETERS,
+)
+from .execution_contract_policy import (
+    ATOMIC_REGION_MAX_ACCEPTED_CONTEXT_CHARS as MAX_ACCEPTED_CONTEXT_CHARS,
+)
+from .execution_contract_policy import (
+    ATOMIC_REGION_MAX_PAGES as MAX_REGION_PAGES,
+)
+from .execution_contract_policy import (
+    ATOMIC_REGION_MAX_UNIT_REFINEMENTS as MAX_UNIT_REFINEMENTS,
+)
+from .execution_contract_policy import (
+    ATOMIC_REGION_MAX_UNITS as MAX_REGION_UNITS,
+)
 from .implementation_ir import OutputBudgetExhausted
 
-MAX_REGION_PAGES = 64
-MAX_ACCEPTED_CONTEXT_CHARS = 8192
 MORE = "// MMM_REGION_MORE"
 DONE = "// MMM_REGION_DONE"
+
+
+def _validated_decision(decision: Mapping, *, selecting: bool = False) -> dict:
+    if (
+        not isinstance(decision, Mapping)
+        or set(decision) != {"done", "next_work"}
+        or type(decision.get("done")) is not bool
+        or not isinstance(decision.get("next_work"), str)
+        or len(decision["next_work"]) > ATOMIC_REGION_COMPLETION_PARAMETERS[
+            "properties"
+        ]["next_work"]["maxLength"]
+        or bool(decision["next_work"].strip()) is decision["done"]
+        or (selecting and decision["done"])
+    ):
+        raise CustomModuleGenerationError(
+            "ATOMIC_REGION_COMPLETION_DECISION_INVALID: done must be a boolean; "
+            "done=true requires empty next_work, done=false requires concrete next_work. "
+            "Selection/refinement requires done=false; unfinished Java is not accepted work."
+        )
+    return {"done": decision["done"], "next_work": decision["next_work"].strip()}
 
 
 def decide_region_completion(router, payload: Mapping) -> dict:
@@ -29,15 +62,7 @@ def decide_region_completion(router, payload: Mapping) -> dict:
     from .model_adapters.base import ModelConfigurationError, NativeToolDecisionRejected
     from .model_output_atomicity_contract import assert_atomic_model_schema
 
-    schema = {
-        "type": "object",
-        "properties": {
-            "done": {"type": "boolean"},
-            "next_work": {"type": "string", "maxLength": 256},
-        },
-        "required": ["done", "next_work"],
-        "additionalProperties": False,
-    }
+    schema = deepcopy(ATOMIC_REGION_COMPLETION_PARAMETERS)
     assert_atomic_model_schema(schema, surface="atomic region completion")
     context = deepcopy(dict(payload))
     context.pop("generation_recipe", None)
@@ -59,6 +84,14 @@ def decide_region_completion(router, payload: Mapping) -> dict:
                         "and next_work describes the next small complete declaration or statement "
                         "needed in this same class. Do not declare completion merely because a "
                         "page parses or the model response ended."
+                        " In select_next_unit phase no source has been accepted: choose the "
+                        "first small declaration/statement, with done=false. In refine_next_unit "
+                        "phase the selected work exhausted its output budget: choose a strictly "
+                        "smaller prerequisite/helper in the SAME owner, with done=false. "
+                        "Never repeat the exhausted work or move state to another owner. "
+                        "next_work must name one concrete declaration/statement and its purpose, "
+                        "using exact existing APIs. Source generation implements only that unit; "
+                        "the host retains the complete task authority for later units."
                     )},
                     {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
                 ],
@@ -76,15 +109,13 @@ def decide_region_completion(router, payload: Mapping) -> dict:
                 raise
             feedback = str(exc)
             continue
-        if (
-            isinstance(decision, Mapping)
-            and type(decision.get("done")) is bool
-            and isinstance(decision.get("next_work"), str)
-            and len(decision["next_work"]) <= 256
-            and bool(decision["next_work"].strip()) is not decision["done"]
-        ):
-            return {"done": decision["done"], "next_work": decision["next_work"].strip()}
-        feedback = "done must be a boolean; done=true requires empty next_work, done=false requires concrete next_work."
+        try:
+            return _validated_decision(
+                decision,
+                selecting=context.get("completion_phase") in {"select_next_unit", "refine_next_unit"},
+            )
+        except CustomModuleGenerationError as exc:
+            feedback = str(exc)
     raise CustomModuleGenerationError("ATOMIC_REGION_COMPLETION_DECISION_INVALID: " + feedback)
 
 
@@ -156,10 +187,24 @@ def _generate_pages(call_coder, messages, *, completion_decider=None) -> str:
                 "ATOMIC_REGION_CONTEXT_LIMIT: exact accepted declarations/statements "
                 "exceed the bounded continuation context"
             )
+        if len(parts) >= MAX_REGION_UNITS:
+            raise CustomModuleGenerationError(
+                "ATOMIC_REGION_UNIT_LIMIT: bounded generation ended without explicit completion"
+            )
+        if completion_decider is not None and not next_work:
+            decision = _validated_decision(completion_decider({
+                **payload, **accepted,
+                "completion_phase": "select_next_unit",
+                "current_page_source": "",
+                "previous_next_work": "",
+                "page_index": index,
+            }), selecting=True)
+            next_work = decision["next_work"]
         page_payload = deepcopy(payload)
         page_payload["region_page"] = {
             "index": index,
             "remaining_pages": MAX_REGION_PAGES - index,
+            "remaining_units": MAX_REGION_UNITS - len(parts),
             "next_work": next_work,
             **accepted,
             "unit": "one complete member" if region == "members" else "one complete statement or block",
@@ -175,6 +220,8 @@ def _generate_pages(call_coder, messages, *, completion_decider=None) -> str:
                 "No new class owner, facade, run() wrapper, unrelated requirements, or tool protocol. "
                 "Return the next complete Java declaration (members) or statement/block (initialize). "
                 "Follow next_work when supplied. Never return partial syntax. "
+                "The host parses complete declarations/statements in source order; if a small "
+                "cohesive response contains several, all count toward remaining_units. "
                 + (
                     "Return Java source only. Completion is collected in a separate native tool turn; "
                     "do not add completion markers, a JSON envelope or a status explanation to Java."
@@ -191,14 +238,42 @@ def _generate_pages(call_coder, messages, *, completion_decider=None) -> str:
         page_messages[-1]["content"] = json.dumps(page_payload, ensure_ascii=False)
         output = ""
         try:
-            try:
-                output = str(call_coder(page_messages) or "").strip()
-            except OutputBudgetExhausted as exc:
-                raise CustomModuleGenerationError(
-                    f"ATOMIC_REGION_UNIT_TOO_LARGE: {payload['host_selected_class']} "
-                    f"{payload['concern']['name']}:{region} page {index}; "
-                    "one semantic unit exhausted the output budget"
-                ) from exc
+            exhausted_work: set[str] = set()
+            for refinement in range(MAX_UNIT_REFINEMENTS + 1):
+                try:
+                    output = str(call_coder(page_messages) or "").strip()
+                    break
+                except OutputBudgetExhausted as exc:
+                    if completion_decider is None or refinement >= MAX_UNIT_REFINEMENTS:
+                        raise CustomModuleGenerationError(
+                            f"ATOMIC_REGION_UNIT_TOO_LARGE: {payload['host_selected_class']} "
+                            f"{payload['concern']['name']}:{region} page {index}; "
+                            "bounded same-owner unit refinement exhausted"
+                        ) from exc
+                    exhausted_work.add(next_work)
+                    decision = _validated_decision(completion_decider({
+                        **payload, **accepted,
+                        "completion_phase": "refine_next_unit",
+                        "current_page_source": "",
+                        "previous_next_work": next_work,
+                        "exhausted_work": sorted(exhausted_work),
+                        "page_index": index,
+                    }), selecting=True)
+                    if decision["next_work"] in exhausted_work:
+                        raise CustomModuleGenerationError(
+                            "ATOMIC_REGION_NO_PROGRESS: refinement repeated exhausted work"
+                        ) from exc
+                    next_work = decision["next_work"]
+                    page_payload["region_page"]["next_work"] = next_work
+                    page_payload["region_page"]["exhausted_work"] = sorted(exhausted_work)
+                    page_messages[-1]["content"] = json.dumps(page_payload, ensure_ascii=False)
+                    emit_root_cause(
+                        "atomic_concern_unit_refined", stage="production", result="RETRY",
+                        details={"owner": payload["host_selected_class"], "region": region,
+                                 "concern": payload["concern"]["name"], "page": index,
+                                 "refinement": refinement + 1, "next_work": next_work,
+                                 "accepted_units": len(parts)},
+                    )
             lines = output.splitlines()
             done = False
             if completion_decider is None:
@@ -229,10 +304,10 @@ def _generate_pages(call_coder, messages, *, completion_decider=None) -> str:
                       else strict_initialize_statements(parsed))
             if not chunks:
                 raise CustomModuleGenerationError("ATOMIC_REGION_NO_PROGRESS: page contains no executable unit")
-            if len(chunks) != 1:
+            if len(parts) + len(chunks) > MAX_REGION_UNITS:
                 raise CustomModuleGenerationError(
-                    "ATOMIC_REGION_UNIT_CARDINALITY: region_page must contain exactly one "
-                    f"complete semantic unit, got {len(chunks)}"
+                    "ATOMIC_REGION_UNIT_LIMIT: page exceeds remaining semantic unit budget; "
+                    f"got {len(chunks)}, remaining {MAX_REGION_UNITS - len(parts)}"
                 )
             page_symbols: set[str] = set()
             if region == "members":
@@ -245,13 +320,14 @@ def _generate_pages(call_coder, messages, *, completion_decider=None) -> str:
                         )
                     page_symbols.update(declared)
             if completion_decider is not None:
-                decision = completion_decider({
+                decision = _validated_decision(completion_decider({
                     **payload,
                     **accepted,
+                    "completion_phase": "assess_completion",
                     "current_page_source": parsed,
                     "previous_next_work": next_work,
                     "page_index": index,
-                })
+                }))
                 done = decision["done"]
                 next_work = decision["next_work"]
             parts.extend(chunks)

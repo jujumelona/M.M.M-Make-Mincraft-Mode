@@ -12,6 +12,7 @@ MODEL_RUNTIME_PATHS = (
 )
 EXECUTION_CONTRACT_SOURCE_PATHS = (
     "minecraft_mod_ai/execution_contract_policy.py",
+    "minecraft_mod_ai/atomic_region_paging.py",
     "minecraft_mod_ai/atomic_java_assembly.py",
     "minecraft_mod_ai/central_atomic_generation_contract.py",
     "minecraft_mod_ai/java_generation_policy.py",
