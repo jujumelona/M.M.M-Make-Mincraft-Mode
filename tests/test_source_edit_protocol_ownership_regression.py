@@ -38,6 +38,11 @@ def test_scalar_protocol_is_the_single_source_edit_schema_owner() -> None:
     }
     assert "replace_file" not in properties["operation"]["enum"]
     assert "append_file" not in properties["operation"]["enum"]
+    assert properties["path"]["maxLength"] == 512
+    assert properties["old"]["maxLength"] == 4096
+    assert properties["anchor"]["maxLength"] == 4096
+    assert properties["content"]["maxLength"] == 16384
+    assert properties["new"]["maxLength"] == 16384
 
 
 def test_agent_runtime_uses_canonical_materializer_directly() -> None:
