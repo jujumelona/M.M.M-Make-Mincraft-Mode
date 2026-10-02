@@ -77,54 +77,64 @@ def test_host_graph_reaches_java_execution_without_planner_http(tmp_path, monkey
             self.end_headers()
 
             tools = payload.get("tools") or []
-            if tools:
-                name = tools[0]["function"]["name"]
-                assert name == "report_java_region_completion"
-                arguments = json.dumps({"done": True, "next_work": ""})
-                delta = {
-                    "tool_calls": [
-                        {
-                            "index": 0,
-                            "id": f"call_{len(requests)}",
-                            "type": "function",
-                            "function": {"name": name, "arguments": arguments},
-                        }
-                    ]
-                }
-                events = (
-                    {"choices": [{"delta": delta}]},
-                    {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
-                )
-            else:
-                # Production atomic generation emits one complete concern-local
-                # Java region as text. A separate completion tool is needed only
-                # after output-pressure paging; this smoke path fits in one page.
-                # Implementation planning itself performs no model HTTP.
-                user_message = next(
-                    message["content"]
-                    for message in reversed(payload["messages"])
-                    if message.get("role") == "user"
-                )
-                region_request = json.loads(user_message)
-                concern_row = region_request["concern"]
-                concern = str(concern_row["name"])
-                identifier = re.sub(r"[^A-Za-z0-9_$]", "_", concern)
-                recipe = region_request.get("generation_recipe") or {}
-                java_shape = str(concern_row.get("java_shape") or "")
-                preferred_shape = str(recipe.get("preferred_shape") or "")
-                if region_request["response_region"] == "initialize":
-                    source = f"{identifier}Impl();"
-                elif (
-                    java_shape == "declarations_only_fields_or_private_nested_types"
-                    or preferred_shape == "fields_and_local_types"
-                ):
-                    source = f"private static int {identifier}State = 0;"
+            assert tools, "atomic production must use native structured tools only"
+            function = tools[0]["function"]
+            name = function["name"]
+            schema = function["parameters"]
+            properties = schema.get("properties", {})
+            user_message = next(
+                message["content"]
+                for message in reversed(payload["messages"])
+                if message.get("role") == "user"
+            )
+            assembly_request = json.loads(user_message)
+            request = assembly_request.get("request") or {}
+            concern_row = request.get("concern") or {}
+            concern = str(concern_row.get("name") or "concern")
+            identifier = re.sub(r"[^A-Za-z0-9_$]", "_", concern)
+
+            if "part" in properties:
+                choices = properties["part"].get("enum") or []
+                if "fields" in choices:
+                    arguments_obj = {"part": "fields"}
+                elif "statements" in choices:
+                    arguments_obj = {"part": "statements"}
                 else:
-                    source = f"private static void {identifier}Impl() {{}}"
-                events = (
-                    {"choices": [{"delta": {"role": "assistant", "content": source}}]},
-                    {"choices": [{"delta": {}, "finish_reason": "stop"}]},
-                )
+                    arguments_obj = {"part": "done"}
+            elif "statement" in properties:
+                arguments_obj = {"statement": f"{identifier}State += 0;"}
+            elif "type" in properties and "name" in properties:
+                arguments_obj = {
+                    "type": "int",
+                    "name": f"{identifier}State",
+                    "initializer": "0",
+                }
+            else:
+                arguments_obj = {}
+                for key in schema.get("required", []):
+                    spec = properties[key]
+                    if spec.get("enum"):
+                        arguments_obj[key] = spec["enum"][0]
+                    elif spec.get("type") == "boolean":
+                        arguments_obj[key] = False
+                    else:
+                        arguments_obj[key] = "value"
+
+            arguments = json.dumps(arguments_obj)
+            delta = {
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": f"call_{len(requests)}",
+                        "type": "function",
+                        "function": {"name": name, "arguments": arguments},
+                    }
+                ]
+            }
+            events = (
+                {"choices": [{"delta": delta}]},
+                {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+            )
 
             for event in events:
                 self.wfile.write(("data: " + json.dumps(event) + "\n\n").encode())
@@ -203,16 +213,14 @@ def test_host_graph_reaches_java_execution_without_planner_http(tmp_path, monkey
     try:
         generator = direct.CustomModuleGenerator(Router())
         result = generator.generate(tmp_path, module=module)
-        expected_region_requests = sum(
-            len(concern_contracts(section))
-            for section in EXECUTION_SECTION_ORDER
-            if section not in {"state_model", "behavior_contract"}
-        ) + len(concern_contracts("integration"))
-        region_requests = [request for request in requests if not request.get("tools")]
-        completion_requests = [request for request in requests if request.get("tools")]
-        assert len(region_requests) == expected_region_requests
-        assert completion_requests == []
-        assert all(not request.get("tools") for request in region_requests)
+        assert requests
+        assert all(request.get("tools") for request in requests)
+        tool_names = {
+            request["tools"][0]["function"]["name"]
+            for request in requests
+        }
+        assert tool_names <= {"emit_java_part", "emit_java_statement", "report_java_region_completion"}
+        assert "emit_java_part" in tool_names
         assert all("response_format" not in request for request in requests)
         graph = result["implementation_ir"]
         symbols = {node["symbol"] for node in graph["nodes"]}
