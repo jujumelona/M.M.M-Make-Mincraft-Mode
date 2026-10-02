@@ -421,13 +421,51 @@ def _start_server(
     variant: ServerVariant,
     port: int,
 ) -> subprocess.Popen[bytes]:
+    """Launch one source-owned runtime configuration with bounded total context."""
+
+    from . import llama_server_runtime_tuning as runtime
+
     debug = _env_bool("MMM_LLAMA_AUTOTUNE_DEBUG", False)
-    stream = None if debug else subprocess.DEVNULL
-    return subprocess.Popen(
-        _base_args(binary, model_path, config, port) + _variant_args(variant),
-        stdout=stream,
-        stderr=stream,
+    args = list(_base_args(binary, model_path, config, port))
+    slots = max(1, int(getattr(variant, "parallel", 1) or 1))
+    per_request_context = runtime._context_from_args(args, config)
+    total_context = runtime._total_context(per_request_context, slots)
+
+    runtime._replace_option(args, ("--ctx-size", "-c"), str(total_context))
+    runtime._replace_option(args, ("--parallel", "-np"), str(slots))
+    if "--cache-prompt" not in args:
+        args.append("--cache-prompt")
+
+    if runtime._is_qwen35_mtp_config(config):
+        runtime._remove_option(args, ("--cache-ram",), takes_value=True)
+    else:
+        runtime._replace_option(args, ("--cache-ram",), str(runtime._cache_ram_mib()))
+
+    if getattr(variant, "ubatch", 0) > 0:
+        runtime._replace_option(
+            args,
+            ("--ubatch-size", "-ub"),
+            str(int(variant.ubatch)),
+        )
+    if slots > 1:
+        if "--cont-batching" not in args and "-cb" not in args:
+            args.append("--cont-batching")
+        if "--kv-unified" not in args and "-kvu" not in args:
+            args.append("--kv-unified")
+
+    runtime._remove_option(args, ("--cache-reuse",), takes_value=True)
+    if getattr(variant, "cache_reuse", 0) > 0:
+        args.extend(["--cache-reuse", str(int(variant.cache_reuse))])
+    args.extend(_variant_args(variant))
+
+    process = subprocess.Popen(
+        args,
+        stdout=None if debug else subprocess.DEVNULL,
+        stderr=None if debug else subprocess.PIPE,
     )
+    if not debug:
+        runtime._attach_startup_log(process)
+    return process
 
 
 def _stop_server(process: subprocess.Popen[bytes] | None) -> None:
