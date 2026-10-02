@@ -19,6 +19,7 @@ from .base import (
     ModelBackendError,
     ModelConfigurationError,
     ToolCall,
+    request_output_token_limit,
 )
 
 _CLIENT_LOCK = threading.RLock()
@@ -139,7 +140,7 @@ class OpenAICompatibleAdapter(ModelAdapter):
                 "model": cfg.model_id,
                 "messages": messages,
                 "temperature": 0.1,
-                "max_tokens": cfg.max_new_tokens,
+                "max_tokens": request_output_token_limit(cfg, request),
             }
             if request.response_format == "json":
                 if request.response_schema is not None:
@@ -159,6 +160,14 @@ class OpenAICompatibleAdapter(ModelAdapter):
                 payload["parallel_tool_calls"] = bool(request.parallel_tool_calls)
 
             payload = apply_payload_generation_budget(payload, config=cfg)
+            # Dynamic backend budgeting may expand ordinary free-text requests, but an
+            # explicit host request ceiling (structured JSON/tool decision) is absolute.
+            metadata = request.metadata if isinstance(request.metadata, Mapping) else {}
+            if metadata.get("mmm_output_token_ceiling") is not None:
+                payload["max_tokens"] = min(
+                    int(payload.get("max_tokens", 1) or 1),
+                    request_output_token_limit(cfg, request),
+                )
             response = _http_client(base_url, purpose="completion").post(
                 f"{base_url}/chat/completions",
                 headers={
