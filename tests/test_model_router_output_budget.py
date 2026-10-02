@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from types import SimpleNamespace
 
+from minecraft_mod_ai.model_adapters.base import GenerationResponse, ToolCall
 from minecraft_mod_ai.model_router import ModelRouter
 
 
@@ -13,6 +14,22 @@ class _Adapter:
     def generate(self, request):
         self.request = request
         return "ok"
+
+    def generate_turn(self, request):
+        self.request = request
+        tool = request.tools[0]
+        name = tool["function"]["name"]
+        field = next(iter(tool["function"]["parameters"]["properties"]))
+        return GenerationResponse(
+            tool_calls=(
+                ToolCall(
+                    id="call_test",
+                    name=name,
+                    arguments={field: "ok"},
+                    raw_arguments='{"' + field + '":"ok"}',
+                ),
+            )
+        )
 
 
 class _Router(ModelRouter):
@@ -46,3 +63,23 @@ def test_generate_text_propagates_output_token_ceiling_into_request_metadata() -
 
     assert router.adapter.request is not None
     assert router.adapter.request.metadata["mmm_output_token_ceiling"] == 4096
+
+
+
+def test_generate_tool_decision_has_small_model_default_output_ceiling() -> None:
+    router = _Router()
+    result = router.generate_tool_decision(
+        "planner",
+        [{"role": "user", "content": "fill one bounded field"}],
+        tool_name="bounded_probe",
+        parameters={
+            "type": "object",
+            "properties": {"value": {"type": "string", "maxLength": 64}},
+            "required": ["value"],
+            "additionalProperties": False,
+        },
+    )
+
+    assert result == {"value": "ok"}
+    assert router.adapter.request is not None
+    assert router.adapter.request.metadata["mmm_output_token_ceiling"] == 2048
