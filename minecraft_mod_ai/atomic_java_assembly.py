@@ -19,6 +19,9 @@ from jsonschema import Draft202012Validator, ValidationError
 from .custom_module_errors import AtomicJavaDecisionError
 from .execution_contract_policy import (
     DEFAULT_ATOMIC_SCHEMA_LIMITS,
+    JAVA_ATOMIC_ASSEMBLY_CONTEXT_MARGIN_BYTES,
+    JAVA_ATOMIC_ASSEMBLY_MAX_CALLS as MAX_ASSEMBLY_CALLS,
+    JAVA_ATOMIC_ASSEMBLY_MAX_PART_ITEMS as MAX_PART_ITEMS,
     java_atomic_assembly_system_prompt,
 )
 from .implementation_ir import OutputBudgetExhausted
@@ -33,8 +36,6 @@ from .model_output_atomicity_contract import (
     assert_atomic_model_schema,
 )
 
-MAX_ASSEMBLY_CALLS = 128
-MAX_PART_ITEMS = 32
 _TYPE_PATTERN = (
     r"^(?!.*\b(?:public|protected|private|static|final|volatile|transient|"
     r"abstract|synchronized|native)\b)[A-Za-z_$][A-Za-z0-9_$.,<>?\[\] @]*$"
@@ -224,9 +225,9 @@ class JavaStructureAssembly:
         }}]
         budget = request_message_budget(self.config, tools)
         size = len(json.dumps(messages, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
-        if size + 2048 > budget:
+        if size + JAVA_ATOMIC_ASSEMBLY_CONTEXT_MARGIN_BYTES > budget:
             raise OutputBudgetExhausted(
-                f"OUTPUT_BUDGET_EXHAUSTED: Java assembly context needs decomposition ({size + 2048}>{budget})."
+                f"OUTPUT_BUDGET_EXHAUSTED: Java assembly context needs decomposition ({size + JAVA_ATOMIC_ASSEMBLY_CONTEXT_MARGIN_BYTES}>{budget})."
             )
         try:
             raw = callback("coder", messages, **kwargs)

@@ -85,6 +85,9 @@ PRODUCTION_RETRY_STRUCTURAL_REJECTIONS = True
 PRODUCTION_CANONICALIZE_LOCAL_FINAL_REBINDINGS = True
 PRODUCTION_COMPILE_REPAIR_LIMIT = 2
 ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING = 4_096
+JAVA_ATOMIC_ASSEMBLY_MAX_CALLS = 128
+JAVA_ATOMIC_ASSEMBLY_MAX_PART_ITEMS = 32
+JAVA_ATOMIC_ASSEMBLY_CONTEXT_MARGIN_BYTES = 2_048
 
 
 # ---- Java ownership and admission authority ---------------------------------
@@ -141,6 +144,9 @@ JAVA_HOST_INITIALIZE_PARAMETERS = "()"
 JAVA_HOST_INITIALIZE_REQUIRED_MODIFIER = "static"
 
 JAVA_DECLARATION_ONLY_CONCERNS = frozenset({"stored_state"})
+JAVA_TYPE_OWNING_CONCERNS = frozenset(
+    {"variables", "inputs", "outputs", "stored_state", "payloads"}
+)
 JAVA_DECLARATION_ONLY_MEMBER_KINDS = frozenset({
     "field_declaration",
     "annotation_type_declaration",
@@ -219,9 +225,7 @@ JAVA_PRE_EMIT_COMPILE_CHECKLIST = (
     "Only after all checks pass, emit the final Java region with no reasoning prose.",
 )
 
-JAVA_FIELD_SHAPE_CONCERNS = frozenset(
-    {"variables", "inputs", "outputs", "stored_state", "payloads"}
-)
+JAVA_FIELD_SHAPE_CONCERNS = JAVA_TYPE_OWNING_CONCERNS
 JAVA_METHOD_SHAPE_CONCERNS = frozenset({
     "transitions",
     "invariants",
@@ -642,6 +646,12 @@ def assert_execution_contract_consistent() -> None:
         failures.append("source repair must have at least one bounded attempt")
     if DIAGNOSTIC_REPAIR_INLINE_SOURCE_MAX_BYTES < 1:
         failures.append("diagnostic repair inline source byte bound must be positive")
+    if JAVA_ATOMIC_ASSEMBLY_MAX_CALLS < 1 or JAVA_ATOMIC_ASSEMBLY_MAX_PART_ITEMS < 1:
+        failures.append("atomic Java assembly bounds must be positive")
+    if JAVA_ATOMIC_ASSEMBLY_CONTEXT_MARGIN_BYTES < 0:
+        failures.append("atomic Java assembly context margin cannot be negative")
+    if not JAVA_DECLARATION_ONLY_CONCERNS <= JAVA_TYPE_OWNING_CONCERNS:
+        failures.append("declaration-only concerns must be type-owning concerns")
     if not (1 <= PRODUCTION_REGION_ATTEMPT_LIMIT <= MAX_REGION_ATTEMPT_LIMIT):
         failures.append("production region attempt limit is outside its hard bound")
     if not (1 <= PRODUCTION_COMPILE_REPAIR_LIMIT <= MAX_COMPILE_REPAIR_LIMIT):
@@ -682,11 +692,15 @@ __all__ = [
     "DIAGNOSTIC_REPAIR_INLINE_SOURCE_MAX_BYTES",
     "DEFAULT_REGION_ATTEMPT_LIMIT",
     "DEFAULT_SCHEMA_PROFILE",
+    "JAVA_ATOMIC_ASSEMBLY_CONTEXT_MARGIN_BYTES",
+    "JAVA_ATOMIC_ASSEMBLY_MAX_CALLS",
+    "JAVA_ATOMIC_ASSEMBLY_MAX_PART_ITEMS",
     "JAVA_ATOMIC_ASSEMBLY_SYSTEM_PROMPT",
     "JAVA_COMPILER_FIRST_RULES",
     "JAVA_CONCERN_MEMBER_NODE_TYPES",
     "JAVA_DECLARATION_ONLY_CONCERNS",
     "JAVA_DECLARATION_ONLY_MEMBER_KINDS",
+    "JAVA_TYPE_OWNING_CONCERNS",
     "JAVA_EXPLICIT_JDK_IMPORT_PATTERN",
     "JAVA_FENCE_LANGUAGES",
     "JAVA_HOST_INITIALIZE_NAME",

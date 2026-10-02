@@ -52,11 +52,10 @@ def executor(tmp_path, call):
     )
 
 
-def test_host_name_is_reserved_before_any_nested_body_is_generated(tmp_path):
+def test_host_name_is_reserved_before_any_nested_body_is_generated():
     router = Router([{"part": "classes"}, {"name": "AuthoredStateModel"}])
-    run = executor(tmp_path, lambda request: _call_atomic_java_region(router, request, output_token_ceiling=None))
     with pytest.raises(AtomicJavaDecisionError, match="ATOMIC_JAVA_ASSEMBLY_INVALID") as error:
-        run.run()
+        _call_atomic_java_region(router, messages(), output_token_ceiling=None)
     assert len(router.calls) == 2
     schema = router.calls[-1][1]["parameters"]
     assert not Draft202012Validator(schema).is_valid({"name": "AuthoredStateModel"})
@@ -70,11 +69,11 @@ def test_host_name_is_reserved_before_any_nested_body_is_generated(tmp_path):
 def test_invalid_declaration_stops_without_replacing_accepted_sibling(category, item):
     router = Router([
         {"part": "fields"}, {"name": "other", "type": "int", "initializer": "42"},
-        {"part": "done"}, {"part": category}, item,
+        {"part": category}, item,
     ])
     with pytest.raises(AtomicJavaDecisionError, match="ATOMIC_JAVA_ASSEMBLY_INVALID"):
         _call_atomic_java_region(router, messages(), output_token_ceiling=None)
-    assert len(router.calls) == 5
+    assert len(router.calls) == 4
     accepted = json.loads(router.calls[-1][0][-1]["content"])["assembly"]["accepted_structure"]
     assert accepted["fields"][0] == {"name": "other", "type": "int", "initializer": "42"}
 
@@ -115,20 +114,19 @@ def test_assembly_requires_explicit_completion_and_has_finite_budget(monkeypatch
     from minecraft_mod_ai.implementation_ir import OutputBudgetExhausted
     monkeypatch.setattr(assembly, "MAX_ASSEMBLY_CALLS", 3)
     router = Router([
-        {"part": "fields"}, {"name": "x", "type": "int"}, {"part": "done"},
+        {"part": "fields"}, {"name": "x", "type": "int"}, {"part": "fields"},
     ])
     with pytest.raises(OutputBudgetExhausted, match="OUTPUT_BUDGET_EXHAUSTED"):
         _call_atomic_java_region(router, messages(), output_token_ceiling=None)
     assert len(router.calls) == 3
 
 
-def test_native_rejection_is_terminal_and_preserves_transport_evidence(tmp_path):
+def test_native_rejection_is_terminal_and_preserves_transport_evidence():
     rejection = {"original_tool": "emit_java_part", "failure_code": "TOOL_SCHEMA_INVALID",
                  "raw_arguments": '{"methods": "invalid-array"}'}
     router = Router([NativeToolDecisionRejected("emit_java_part", [rejection])])
-    run = executor(tmp_path, lambda request: _call_atomic_java_region(router, request, output_token_ceiling=None))
     with pytest.raises(AtomicJavaDecisionError, match="ATOMIC_JAVA_ASSEMBLY_INVALID") as error:
-        run.run()
+        _call_atomic_java_region(router, messages(), output_token_ceiling=None)
     assert len(router.calls) == 1
     assert "invalid-array" in error.value.response_text
 

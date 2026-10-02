@@ -30,6 +30,8 @@ from .generation_implementation_grounding import (
 )
 from .execution_contract_policy import (
     ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING as _ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING,
+    JAVA_DECLARATION_ONLY_CONCERNS,
+    JAVA_TYPE_OWNING_CONCERNS,
     PRODUCTION_CANONICALIZE_LOCAL_FINAL_REBINDINGS,
     PRODUCTION_COMPILE_REPAIR_LIMIT,
     PRODUCTION_REGION_ATTEMPT_LIMIT,
@@ -657,10 +659,6 @@ _ATOMIC_DECLARATION_MEMBERS_PARAMETERS: dict[str, Any] = {
 }
 # Static initializer blocks are host-owned lifecycle structure. Concern models
 # may emit fields/methods/local helper types, but never class initialization blocks.
-_ATOMIC_TYPE_OWNING_CONCERNS = frozenset(
-    {"variables", "inputs", "outputs", "stored_state", "payloads"}
-)
-
 _ATOMIC_INITIALIZE_PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {"statements": {"type": "array", "items": {"type": "string"}}},
@@ -688,10 +686,10 @@ def _atomic_parameters_for_request(
         if isinstance(concern, Mapping)
         else ""
     )
-    if concern_name == "stored_state":
+    if concern_name in JAVA_DECLARATION_ONLY_CONCERNS:
         parameters = _ATOMIC_DECLARATION_MEMBERS_PARAMETERS
         shape = preferred or "declarations_only_fields_or_private_nested_types"
-    elif concern_name and concern_name not in _ATOMIC_TYPE_OWNING_CONCERNS:
+    elif concern_name and concern_name not in JAVA_TYPE_OWNING_CONCERNS:
         return (
             _ATOMIC_LOGIC_MEMBERS_PARAMETERS,
             preferred or "logic_fields_methods_only",

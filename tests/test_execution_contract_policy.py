@@ -11,7 +11,11 @@ from minecraft_mod_ai.execution_contract_policy import (
     TERMINAL_AFTER_NORMALIZATION_PREFIXES,
     DEFAULT_ATOMIC_SCHEMA_LIMITS,
     DIAGNOSTIC_REPAIR_INLINE_SOURCE_MAX_BYTES,
+    JAVA_ATOMIC_ASSEMBLY_CONTEXT_MARGIN_BYTES,
+    JAVA_ATOMIC_ASSEMBLY_MAX_CALLS,
+    JAVA_ATOMIC_ASSEMBLY_MAX_PART_ITEMS,
     JAVA_NESTED_TYPE_REQUIRED_VISIBILITY,
+    JAVA_TYPE_OWNING_CONCERNS,
     assert_execution_contract_consistent,
     atomic_error_recoverable,
     atomic_error_terminal_after_normalization,
@@ -200,6 +204,11 @@ def test_secondary_atomic_and_repair_caps_read_the_canonical_policy() -> None:
     assert DIAGNOSTIC_REPAIR_INLINE_SOURCE_MAX_BYTES > 0
 
     assert "MAX_MODEL_STRING_CHARS" not in assembly_source
+    assert "MAX_ASSEMBLY_CALLS = 128" not in assembly_source
+    assert "MAX_PART_ITEMS = 32" not in assembly_source
+    assert JAVA_ATOMIC_ASSEMBLY_MAX_CALLS > 0
+    assert JAVA_ATOMIC_ASSEMBLY_MAX_PART_ITEMS > 0
+    assert JAVA_ATOMIC_ASSEMBLY_CONTEXT_MARGIN_BYTES >= 0
     assert "java_atomic_assembly_system_prompt()" in assembly_source
     assert "Lock/ReentrantLock live in java.util.concurrent.locks" in (
         java_atomic_assembly_system_prompt()
@@ -221,6 +230,10 @@ def test_execution_contract_has_one_definition_authority_repo_wide() -> None:
         "RECOVERABLE_ATOMIC_ERROR_PREFIXES",
         "TERMINAL_AFTER_NORMALIZATION_PREFIXES",
         "JAVA_NESTED_TYPE_REQUIRED_VISIBILITY",
+        "JAVA_TYPE_OWNING_CONCERNS",
+        "JAVA_ATOMIC_ASSEMBLY_MAX_CALLS",
+        "JAVA_ATOMIC_ASSEMBLY_MAX_PART_ITEMS",
+        "JAVA_ATOMIC_ASSEMBLY_CONTEXT_MARGIN_BYTES",
     )
     definition_re = re.compile(
         r"^\s*(?:" + "|".join(map(re.escape, definition_names)) + r")\s*=",
@@ -273,3 +286,16 @@ def test_core_execution_contract_consumers_import_the_authority_directly() -> No
         if "from .execution_contract_policy import" not in source:
             missing.append(filename)
     assert not missing, f"execution contract consumer bypasses canonical policy: {missing!r}"
+
+
+
+def test_schema_selector_and_prompt_share_type_owning_concerns() -> None:
+    import minecraft_mod_ai.custom_module_generator as generator
+
+    source = inspect.getsource(generator)
+    assert "_ATOMIC_TYPE_OWNING_CONCERNS" not in source
+    assert "JAVA_TYPE_OWNING_CONCERNS" in source
+    assert "JAVA_DECLARATION_ONLY_CONCERNS" in source
+    assert {"variables", "inputs", "outputs", "stored_state", "payloads"} == set(
+        JAVA_TYPE_OWNING_CONCERNS
+    )
