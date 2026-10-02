@@ -643,8 +643,8 @@ def test_top_level_method_schema_structurally_forbids_outer_constructor() -> Non
     )
     top_level_method = parameters["properties"]["methods"]["items"]
     nested_method = parameters["properties"]["classes"]["items"]["properties"]["methods"]["items"]
-    assert "<init>" not in top_level_method["properties"]["name"]["pattern"]
-    assert "<init>" in nested_method["properties"]["name"]["pattern"]
+    assert top_level_method["properties"]["name"]["not"] == {"const": "<init>"}
+    assert nested_method["properties"]["name"]["pattern"] == JAVA_ATOMIC_METHOD_NAME_PATTERN
 
 
 def test_explicit_collection_element_types_are_preserved() -> None:
