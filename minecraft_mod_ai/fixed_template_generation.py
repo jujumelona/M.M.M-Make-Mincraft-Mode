@@ -472,8 +472,6 @@ def _architecture_impl__generate_native_template_arguments(_ctx):
             raise ValueError("fixed-template function call did not return an argument mapping")
         return _validate_native_arguments(arguments, parameters)
     except Exception as initial_error:
-        if role == "planner":
-            raise
         # A multi-field schema can enter a deterministic invalid attractor when one field is
         # repeatedly malformed. Do not regenerate the same object again. Project the failed
         # object into one-field forced calls, merge the host-validated fields, then validate
