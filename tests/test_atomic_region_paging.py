@@ -330,11 +330,9 @@ def test_production_graph_output_pressure_preserves_siblings_and_rolls_back(
                 }
 
             if 'type' in properties and 'name' in properties:
-                tail = path[-1] if path else ''
-                if tail == 'fields' or 'initializer' in properties:
+                if 'initializer' in properties:
                     return {'type': 'int', 'name': 'LIMIT', 'initializer': '100'}
-                if tail == 'parameters':
-                    return {'type': 'int', 'name': 'count'}
+                return {'type': 'int', 'name': 'count'}
 
             raise AssertionError(f'unhandled structured schema at {path}: {schema}')
 
