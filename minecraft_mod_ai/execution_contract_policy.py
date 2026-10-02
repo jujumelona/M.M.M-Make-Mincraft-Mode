@@ -730,6 +730,12 @@ def java_generation_recipe_contract(concern_name: str) -> dict[str, Any]:
             "regenerate the whole selected concern so the declaration and every use stay consistent. "
             "Otherwise use an authoritative existing type or JDK representation; never guess an external package."
         ),
+        "mechanical_type_authority_repair_rule": (
+            "When type_authority_repair_contract.mode is mechanical_copy_edit, this is "
+            "not a design or reasoning task. Copy current_selected_region_source, insert "
+            "each mechanical_edits[].exact_declaration exactly once as a sibling member, "
+            "preserve the listed existing declarations, and return the complete Java region."
+        ),
         "require_fully_qualified_external_types": True,
         "output_language": "java_source_region",
         "no_json_ast_protocol": True,

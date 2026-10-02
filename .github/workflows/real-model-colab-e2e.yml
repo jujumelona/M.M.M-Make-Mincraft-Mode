@@ -25,6 +25,8 @@ on:
       - 'minecraft_mod_ai/model_context_budget.py'
       - 'minecraft_mod_ai/model_output_atomicity_contract.py'
       - 'minecraft_mod_ai/execution_contract_policy.py'
+      - 'minecraft_mod_ai/atomic_concern_source.py'
+      - 'minecraft_mod_ai/production_local_type_recovery.py'
       - 'minecraft_mod_ai/atomic_java_assembly.py'
       - 'minecraft_mod_ai/central_atomic_generation_contract.py'
       - 'minecraft_mod_ai/java_generation_policy.py'
