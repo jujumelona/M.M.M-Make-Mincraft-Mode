@@ -319,8 +319,8 @@ def test_authorized_nested_runtime_type_reaches_structured_schema() -> None:
     class_name = parameters["properties"]["classes"]["items"]["properties"]["name"]
     assert class_name["enum"] == ["ShipFuelCalculationException"]
     assert class_name["not"] == {"enum": ["AuthoredFailureLimits"]}
-    assert parameters["properties"]["records"]["maxItems"] == 0
-    assert parameters["properties"]["enums"]["maxItems"] == 0
+    assert "records" not in parameters["properties"]
+    assert "enums" not in parameters["properties"]
 
 
 def test_atomic_java_assembly_reads_model_field_bound_directly_from_canonical_policy() -> None:
