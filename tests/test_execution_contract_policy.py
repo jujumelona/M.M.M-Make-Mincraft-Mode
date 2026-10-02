@@ -75,8 +75,8 @@ def test_repair_schema_and_atomicity_share_one_contract_profile() -> None:
     assert_atomic_model_schema(schema, surface="repair regression")
 
 
-def test_generic_atomic_schema_cannot_claim_repair_payload_limits() -> None:
-    oversized = {
+def test_generic_schema_allows_explicit_size_but_cannot_claim_repair_string_class() -> None:
+    explicit_domain_bound = {
         "type": "object",
         "properties": {
             "value": {
@@ -87,8 +87,10 @@ def test_generic_atomic_schema_cannot_claim_repair_payload_limits() -> None:
         "required": ["value"],
         "additionalProperties": False,
     }
-    with pytest.raises(ModelConfigurationError, match="MODEL_ATOMICITY_STRING_EXCEEDED"):
-        assert_atomic_model_schema(oversized, surface="generic remains bounded")
+    assert_atomic_model_schema(
+        explicit_domain_bound,
+        surface="explicit domain bound is not a global model ceiling",
+    )
 
     smuggled = {
         "type": "object",
@@ -199,8 +201,9 @@ def test_secondary_atomic_and_repair_caps_read_the_canonical_policy() -> None:
 
     assert "_MAX_ITEMS = 4" not in atomic_source
     assert "_MAX_CHARS = 256" not in atomic_source
-    assert "DEFAULT_ATOMIC_SCHEMA_LIMITS.max_array_items" in atomic_source
-    assert "DEFAULT_ATOMIC_SCHEMA_LIMITS.max_string_chars" in atomic_source
+    assert "DEFAULT_ATOMIC_SCHEMA_LIMITS" not in atomic_source
+    assert "max_array_items" not in atomic_source
+    assert "max_string_chars" not in atomic_source
 
     assert "_MAX_REPAIR_SOURCE_BYTES = 12 * 1024" not in diagnostic_source
     assert "DIAGNOSTIC_REPAIR_INLINE_SOURCE_MAX_BYTES" in diagnostic_source
@@ -273,7 +276,6 @@ def test_core_execution_contract_consumers_import_the_authority_directly() -> No
         "atomic_concern_source.py",
         "atomic_region_paging.py",
         "atomic_java_assembly.py",
-        "central_atomic_generation_contract.py",
         "custom_module_generator.py",
         "fixed_template_generation.py",
         "generation_diagnostic_repair.py",
@@ -325,12 +327,14 @@ def test_authorized_nested_runtime_type_reaches_structured_schema() -> None:
         assert name_schema["not"] == {"enum": ["AuthoredFailureLimits"]}
 
 
-def test_atomic_java_assembly_reads_model_field_bound_directly_from_canonical_policy() -> None:
+def test_atomic_java_assembly_does_not_use_arbitrary_model_size_limits() -> None:
     import minecraft_mod_ai.atomic_java_assembly as assembly
 
     source = inspect.getsource(assembly)
     assert "MAX_MODEL_FIELDS" not in source
-    assert "DEFAULT_ATOMIC_SCHEMA_LIMITS.max_fields" in source
+    assert "DEFAULT_ATOMIC_SCHEMA_LIMITS" not in source
+    assert "max_fields" not in source
+    assert "max_string_chars" not in source
 
 
 
