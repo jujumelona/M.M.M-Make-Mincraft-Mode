@@ -130,6 +130,8 @@ JAVA_REGION_RECOVERY_SHAPES = MappingProxyType({
     "initialize": (
         "direct_statements",
         "jdk_imported_statements",
+        "static_initializer_envelope",
+        "jdk_imported_static_initializer_envelope",
         "initialize_wrapper",
         "jdk_imported_initialize_wrapper",
         "outer_class_initialize",
@@ -291,9 +293,12 @@ JAVA_INTEGRATION_MEMBERS_RESPONSE_SUFFIX = (
 )
 JAVA_INITIALIZE_RESPONSE_CONTRACT = (
     "Return only compile-ready Java statements or balanced control-flow blocks that belong "
-    "inside the host-owned initialize() body. Do not return JSON, tool calls, Markdown, "
-    "prose, package/import declarations, an initialize() wrapper, or the outer class. "
-    "When no initialization is required, return exactly '// no initialization required'."
+    "inside the host-owned initialize() body. current_concern_member_api contains the exact "
+    "fields/methods already generated for this same concern: reference those declarations "
+    "instead of redeclaring fields, constants, maps, helper methods, or static initializer "
+    "blocks. Do not return JSON, tool calls, Markdown, prose, package/import declarations, "
+    "an initialize() wrapper, or the outer class. When no initialization is required, "
+    "return exactly '// no initialization required'."
 )
 
 
