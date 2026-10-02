@@ -94,7 +94,7 @@ def _server_tool_choice(request: Any) -> str:
 
 
 def _enforce_required_tool_sampling(payload: dict[str, Any]) -> dict[str, Any]:
-    """Keep forced one-tool turns deterministic and non-thinking on the wire."""
+    """Keep forced one-tool turns deterministic, non-thinking, and repetition-resistant."""
 
     if payload.get("tool_choice") != "required":
         return payload
@@ -104,10 +104,12 @@ def _enforce_required_tool_sampling(payload: dict[str, Any]) -> dict[str, Any]:
         "top_k",
         "min_p",
         "presence_penalty",
-        "repeat_penalty",
         "repetition_penalty",
     ):
         payload.pop(key, None)
+    # A modest native repeat penalty prevents small local models from getting trapped
+    # in exact argument loops while preserving repeated JSON keys across record arrays.
+    payload["repeat_penalty"] = 1.05
     payload["reasoning_effort"] = "none"
     payload["chat_template_kwargs"] = {"enable_thinking": False}
     return payload
@@ -174,20 +176,21 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
         payload["reasoning_effort"] = "none"
         payload["chat_template_kwargs"] = {"enable_thinking": False}
 
-    payload = _enforce_required_tool_sampling(payload)
-
     # Qwen family behavior is part of the direct request path now.  The legacy
     # runtime bootstrap/wrapper stack is gone, so family-specific non-thinking
     # controls and sampling must be applied here instead of by import-time mutation.
     from .qwen_agent_family_contract import _apply_family_payload_policy
 
     config = getattr(adapter, "config", None)
-    return _apply_family_payload_policy(
+    payload = _apply_family_payload_policy(
         payload,
         config=config,
         role=getattr(config, "role", ""),
         request=request,
     )
+    # Family sampling profiles may restore repeat_penalty=1.0; the host-required
+    # action boundary owns the final anti-loop sampling contract.
+    return _enforce_required_tool_sampling(payload)
 
 
 
