@@ -94,37 +94,16 @@ def _run_properties(router, identifier, context, progress, checkpoint):
 def _run_entities(router, identifier, context, progress, checkpoint):
     template = load_record_template(identifier)
     normalized = task_context(template, context)
-    cardinality = run_single_record_template(
+    result = run_bounded_record_template(
         router,
-        "design/content_entity_count",
-        context={**normalized, "accepted_records": []},
+        identifier,
+        context=normalized,
         progress=progress,
         checkpoint=checkpoint,
     )
-    target_count = int(cardinality["count"])
-    if target_count < 1:
-        raise TemplateBlocked(f"TEMPLATE_ENTITY_CARDINALITY_INVALID: {target_count}")
-
-    records: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for index in range(target_count):
-        record = run_single_record_template(
-            router,
-            identifier,
-            context={
-                **normalized,
-                "entity_ordinal": index + 1,
-                "entity_count": target_count,
-                "accepted_records": deepcopy(records),
-            },
-            progress=progress,
-            checkpoint=checkpoint,
-        )
-        key = _record_key(record)
-        if key in seen:
-            raise TemplateBlocked(f"TEMPLATE_NO_PROGRESS: repeated record in {identifier}")
-        seen.add(key)
-        records.append(record)
+    records = list(result["records"])
+    if not records:
+        raise TemplateBlocked("TEMPLATE_ENTITY_REQUIRED: no concrete content entity was produced")
     return records, normalized
 
 
@@ -143,14 +122,6 @@ def _relation_vocabulary() -> tuple[str, ...]:
     return tuple(values)
 
 
-def _max_pair_relation_count(relation_types: tuple[str, ...]) -> int:
-    ordinary = [value for value in relation_types if not value.startswith("key_")]
-    key_values = [value for value in relation_types if value.startswith("key_")]
-    if not ordinary or not key_values:
-        raise TemplateBlocked("TEMPLATE_RELATION_SCHEMA_INVALID")
-    return len(ordinary) + 1
-
-
 def _run_relations(router, identifier, context, progress, checkpoint):
     template = load_record_template(identifier)
     normalized = task_context(template, context)
@@ -161,7 +132,6 @@ def _run_relations(router, identifier, context, progress, checkpoint):
         raise TemplateBlocked("TEMPLATE_RELATION_ENTITY_IDS_DUPLICATE")
 
     relation_types = _relation_vocabulary()
-    max_pair_relations = _max_pair_relation_count(relation_types)
     allowed_relation_types = list(relation_types)
     pairs = tuple(
         (source_id, target_id)
@@ -179,38 +149,18 @@ def _run_relations(router, identifier, context, progress, checkpoint):
             "target_id": target_id,
             "allowed_relation_types": allowed_relation_types,
         }
-        cardinality = run_single_record_template(
+        batch = run_bounded_record_template(
             router,
-            "design/content_relation_count",
-            context={**pair_context, "accepted_records": []},
+            identifier,
+            context=pair_context,
             progress=progress,
             checkpoint=safe_checkpoint,
         )
-        target_count = int(cardinality["count"])
-        if target_count < 0 or target_count > max_pair_relations:
-            raise TemplateBlocked(
-                "TEMPLATE_RELATION_CARDINALITY_INVALID: "
-                f"{source_id}->{target_id}: {target_count} exceeds semantic maximum "
-                f"{max_pair_relations}"
-            )
 
-        pair_records: list[dict[str, Any]] = []
         pair_relation_types: set[str] = set()
         key_relation_seen = False
         result: list[dict[str, Any]] = []
-        for index in range(target_count):
-            decision = run_single_record_template(
-                router,
-                identifier,
-                context={
-                    **pair_context,
-                    "record_index": index,
-                    "record_count": target_count,
-                    "accepted_records": deepcopy(pair_records),
-                },
-                progress=progress,
-                checkpoint=safe_checkpoint,
-            )
+        for decision in batch["records"]:
             relation_type = decision.get("relation_type")
             if relation_type not in relation_types:
                 raise TemplateBlocked(
@@ -218,10 +168,7 @@ def _run_relations(router, identifier, context, progress, checkpoint):
                     f"{relation_type}"
                 )
             if relation_type in pair_relation_types:
-                raise TemplateBlocked(
-                    f"TEMPLATE_RELATION_DUPLICATE: {source_id}->{target_id}: "
-                    f"{relation_type}"
-                )
+                continue
             if relation_type.startswith("key_"):
                 if key_relation_seen:
                     raise TemplateBlocked(
@@ -230,7 +177,6 @@ def _run_relations(router, identifier, context, progress, checkpoint):
                 key_relation_seen = True
 
             pair_relation_types.add(relation_type)
-            pair_records.append({"relation_type": relation_type})
             result.append(
                 {
                     "relation_type": relation_type,
@@ -253,7 +199,7 @@ def _run_relations(router, identifier, context, progress, checkpoint):
         for record in pair_records:
             key = _record_key(record)
             if key in seen:
-                raise TemplateBlocked(f"TEMPLATE_RELATION_DUPLICATE: {key}")
+                continue
             seen.add(key)
             records.append(record)
     return records, normalized
