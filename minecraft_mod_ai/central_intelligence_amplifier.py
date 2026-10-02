@@ -79,7 +79,6 @@ _COUNCIL_SCHEMA: dict[str, Any] = {
 }
 
 _CHAIR_SCHEMA: dict[str, Any] = {
-    SCHEMA_CONTRACT_PROFILE_KEY: CENTRAL_RESEARCH_SCHEMA_PROFILE,
     "type": "object",
     "properties": {
         "synthesis": {
@@ -106,7 +105,6 @@ _CHAIR_SCHEMA: dict[str, Any] = {
 }
 
 _REVIEW_SCHEMA: dict[str, Any] = {
-    SCHEMA_CONTRACT_PROFILE_KEY: CENTRAL_RESEARCH_SCHEMA_PROFILE,
     "type": "object",
     "properties": {
         "review": {
