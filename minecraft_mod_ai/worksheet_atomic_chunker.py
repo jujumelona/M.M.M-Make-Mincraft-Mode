@@ -94,13 +94,6 @@ def pack_section_concerns(
     *,
     max_chunk_size: int | None = None,
 ) -> list[tuple[str, ...]]:
-    """Pack concerns and oversized record fields into atomic model-facing chunks.
-
-    Returned objects remain tupledef pack_section_concerns(
-    section: str,
-    *,
-    max_chunk_size: int | None = None,
-) -> list[tuple[str, ...]]:
     """Pack complete concerns without splitting one record across model calls."""
     key = _normalize_section_name(section)
     records = DETAIL_RECORDS[key]
