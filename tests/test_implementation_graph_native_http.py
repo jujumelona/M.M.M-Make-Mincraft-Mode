@@ -79,15 +79,26 @@ def test_host_graph_reaches_java_execution_without_planner_http(tmp_path, monkey
             name = function["name"]
             schema = function["parameters"]
             properties = schema.get("properties", {})
-            user_message = next(
-                message["content"]
-                for message in reversed(payload["messages"])
-                if message.get("role") == "user"
-            )
-            assembly_request = json.loads(user_message)
+            assembly_request = {}
+            for message in reversed(payload["messages"]):
+                if message.get("role") != "user":
+                    continue
+                try:
+                    candidate = json.loads(message.get("content") or "")
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    continue
+                if isinstance(candidate, dict) and isinstance(candidate.get("request"), dict):
+                    assembly_request = candidate
+                    break
             request = assembly_request.get("request") or {}
             concern_row = request.get("concern") or {}
-            concern = str(concern_row.get("name") or "concern")
+            concern = (
+                str(concern_row.get("name") or "")
+                if isinstance(concern_row, dict)
+                else str(concern_row or "")
+            )
+            if not concern:
+                concern = str(request.get("host_selected_class") or f"concern_{len(requests)}")
             identifier = re.sub(r"[^A-Za-z0-9_$]", "_", concern)
 
             if "part" in properties:
