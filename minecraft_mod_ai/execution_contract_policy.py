@@ -726,8 +726,9 @@ def java_generation_recipe_contract(concern_name: str) -> dict[str, Any]:
             "a runtime domain object named by task_authority.source_requirements and no "
             "available_sibling_api/dependency/JDK/platform authority owns that type, "
             "declare the smallest private static nested class/record with that exact name "
-            "inside this selected concern before first use. Otherwise use an authoritative "
-            "existing type or a suitable JDK representation; never guess an external package."
+            "inside this selected concern before first use. On a type-authority correction, "
+            "regenerate the whole selected concern so the declaration and every use stay consistent. "
+            "Otherwise use an authoritative existing type or JDK representation; never guess an external package."
         ),
         "require_fully_qualified_external_types": True,
         "output_language": "java_source_region",
