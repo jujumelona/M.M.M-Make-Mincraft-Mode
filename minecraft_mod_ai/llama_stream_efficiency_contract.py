@@ -77,9 +77,13 @@ def _repetitive_tail(text: str, *, copies: int = 4) -> bool:
     return False
 
 
-def _required_tool_repetition_detected(message: Mapping[str, Any]) -> bool:
+def _required_tool_repetition_detected(
+    message: Mapping[str, Any],
+    *,
+    copies: int = 4,
+) -> bool:
     content = message.get("content")
-    if isinstance(content, str) and _repetitive_tail(content):
+    if isinstance(content, str) and _repetitive_tail(content, copies=copies):
         return True
     calls = message.get("tool_calls")
     if not isinstance(calls, list):
@@ -91,7 +95,7 @@ def _required_tool_repetition_detected(message: Mapping[str, Any]) -> bool:
         if not isinstance(function, Mapping):
             continue
         arguments = function.get("arguments")
-        if isinstance(arguments, str) and _repetitive_tail(arguments):
+        if isinstance(arguments, str) and _repetitive_tail(arguments, copies=copies):
             return True
     return False
 
@@ -415,8 +419,9 @@ class _StreamingCompletionClient:
 
         has_tools = bool(payload.get("tools"))
         requires_tool = has_tools and _tool_choice_requires_execution(payload.get("tool_choice"))
-        repetition_guard = bool(
-            has_tools and _bounded_required_tool_repetition_guard(payload)
+        repetition_guard = bool(has_tools and requires_tool)
+        repetition_copies = (
+            4 if _bounded_required_tool_repetition_guard(payload) else 8
         )
         if has_tools and not hasattr(self._client, "stream"):
             return _post_native_tool_completion(self._client, url, kwargs)
@@ -517,7 +522,10 @@ class _StreamingCompletionClient:
                         if (
                             repetition_guard
                             and required_tool_started
-                            and _required_tool_repetition_detected(message)
+                            and _required_tool_repetition_detected(
+                                message,
+                                copies=repetition_copies,
+                            )
                         ):
                             raise LlamaToolRepetitionDetected(
                                 "bounded required-tool stream entered an exact repetition loop"
