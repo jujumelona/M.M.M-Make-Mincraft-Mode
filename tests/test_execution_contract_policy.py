@@ -349,3 +349,71 @@ def test_model_facing_java_schema_is_owned_by_canonical_contract() -> None:
     ):
         assert legacy not in source
     assert "java_atomic_parameters_for_request(" in source
+
+
+
+def test_model_facing_java_schema_factory_never_returns_shared_mutable_state() -> None:
+    from minecraft_mod_ai.execution_contract_policy import (
+        JAVA_ATOMIC_DECLARATION_MEMBERS_PARAMETERS,
+        JAVA_ATOMIC_INITIALIZE_PARAMETERS,
+        JAVA_ATOMIC_LOGIC_MEMBERS_PARAMETERS,
+        JAVA_ATOMIC_MEMBERS_PARAMETERS,
+    )
+
+    cases = (
+        (
+            {"concern": {"name": "stored_state"}},
+            "members",
+            JAVA_ATOMIC_DECLARATION_MEMBERS_PARAMETERS,
+        ),
+        (
+            {"concern": {"name": "diagnostics"}},
+            "members",
+            JAVA_ATOMIC_LOGIC_MEMBERS_PARAMETERS,
+        ),
+        (
+            {"concern": {"name": "variables"}},
+            "members",
+            JAVA_ATOMIC_MEMBERS_PARAMETERS,
+        ),
+        (
+            {"concern": {"name": "integration"}},
+            "initialize",
+            JAVA_ATOMIC_INITIALIZE_PARAMETERS,
+        ),
+    )
+    for payload, region, canonical in cases:
+        first, _ = java_atomic_parameters_for_request(payload, response_region=region)
+        second, _ = java_atomic_parameters_for_request(payload, response_region=region)
+        assert first is not canonical
+        assert second is not canonical
+        assert first is not second
+        first["properties"]["__mutation_probe__"] = {"type": "string"}
+        assert "__mutation_probe__" not in second["properties"]
+        assert "__mutation_probe__" not in canonical["properties"]
+
+
+def test_repo_has_no_legacy_java_model_schema_authority() -> None:
+    package_root = Path(__file__).resolve().parents[1] / "minecraft_mod_ai"
+    authority = package_root / "execution_contract_policy.py"
+    forbidden_definition = re.compile(
+        r"^\\s*(?:"
+        r"_ATOMIC_(?:PARAMETER|FIELD|METHOD|OUTER_METHOD|CONSTRUCTOR|RECORD|ENUM|CLASS)_SCHEMA"
+        r"|_ATOMIC_(?:MEMBERS|LOGIC_MEMBERS|DECLARATION_MEMBERS|INITIALIZE)_PARAMETERS"
+        r"|JAVA_ATOMIC_(?:PARAMETER|FIELD|METHOD|OUTER_METHOD|CONSTRUCTOR|RECORD|ENUM|CLASS)_SCHEMA"
+        r"|JAVA_ATOMIC_(?:MEMBERS|LOGIC_MEMBERS|DECLARATION_MEMBERS|INITIALIZE)_PARAMETERS"
+        r")\\s*=",
+        re.MULTILINE,
+    )
+    violations = []
+    for path in sorted(package_root.rglob("*.py")):
+        if path == authority:
+            continue
+        source = path.read_text(encoding="utf-8")
+        for match in forbidden_definition.finditer(source):
+            violations.append(
+                f"{path.relative_to(package_root)} defines {match.group(0).strip()}"
+            )
+    assert not violations, "model-facing Java schema authority escaped canonical policy:\n" + "\n".join(
+        violations
+    )
