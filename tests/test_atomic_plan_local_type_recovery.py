@@ -1,90 +1,143 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
 import pytest
 
 from minecraft_mod_ai.atomic_concern_source import (
-    _structure_scan,
-    _type_leaf_names,
-    _validate_declared_type_authority,
+    AtomicConcernExecutor,
     _validate_first_pass_java_semantics,
-)
-from minecraft_mod_ai.production_local_type_recovery import (
-    canonicalize_plan_local_zero_arg_domain_types,
-    region_correction_for_rejection,
-    type_authority_repair_contract,
 )
 from minecraft_mod_ai.custom_module_errors import CustomModuleGenerationError
 from minecraft_mod_ai.execution_contract_policy import (
     java_generation_recipe_contract,
     java_region_system_prompt_contract,
 )
+from minecraft_mod_ai.production_local_type_recovery import (
+    region_correction_for_rejection,
+    type_authority_repair_contract,
+)
 
 
-def _authority() -> dict[str, object]:
+def _task() -> dict[str, object]:
     return {
-        "source_requirements": {
-            "R1": (
-                "- responsibilities: caller callee contract: player calls "
-                "build_ship(), system returns ShipObject."
-            )
-        }
+        "task_id": "t",
+        "semantic_outcome": "build a ship",
+        "authored_atomic_contract": {
+            "schema_version": "mmm/authored-atomic-contract-v1",
+            "concerns": {
+                "responsibilities": {
+                    "source_requirements": {
+                        "R1": (
+                            "- caller callee contract: player calls build_ship(), "
+                            "system returns ShipObject."
+                        )
+                    },
+                    "structured_records": [],
+                }
+            },
+        },
     }
 
 
-def test_production_materializes_requirement_owned_zero_arg_domain_type() -> None:
-    source = (
-        "private static ShipObject buildShip() {\n"
-        "    return new ShipObject();\n"
-        "}"
-    )
+def _executor(
+    outputs: list[str],
+    captured: list[list[dict[str, str]]],
+) -> AtomicConcernExecutor:
+    remaining = list(outputs)
 
-    repaired, changes = canonicalize_plan_local_zero_arg_domain_types(
-        source,
-        concern_authority=_authority(),
+    def call_coder(messages):
+        captured.append([dict(item) for item in messages])
+        if not remaining:
+            raise AssertionError("unexpected extra model call")
+        return remaining.pop(0)
+
+    return AtomicConcernExecutor(
+        root=Path("."),
+        target=Path("src/main/java/example/Test.java"),
+        relative="src/main/java/example/Test.java",
+        symbol="Test",
+        original="package example;\n// MMM_AUTHORED_FEATURE_BODY\n",
+        task=_task(),
+        section="algorithm",
+        concerns=(
+            {
+                "sequence": 0,
+                "identifier": "responsibilities",
+                "concern": "responsibilities",
+                "task": "implement authored responsibility",
+                "rules": [],
+            },
+        ),
+        grounding={},
         dependency_source="",
-        sibling_api=(),
-        validate_declared_type_authority=_validate_declared_type_authority,
-        type_leaf_names=_type_leaf_names,
-        structure_scan=_structure_scan,
-    )
-
-    assert "private static final class ShipObject {}" in repaired
-    assert changes == ("ShipObject:materialized_private_zero_arg_domain_type",)
-    _validate_first_pass_java_semantics(
-        repaired,
-        dependency_source="",
-        sibling_api=(),
+        require_initialize=False,
+        call_coder=call_coder,
+        compile_java=lambda _root: SimpleNamespace(status="PASS"),
+        compile_log=lambda _report: "",
+        write_source=lambda _path, _source: None,
+        region_attempt_limit=2,
+        retry_structural_rejections=True,
     )
 
 
-def test_production_does_not_hide_unowned_type_typo() -> None:
-    source = (
-        "private static ReentrantLokk buildShip() {\n"
-        "    return new ReentrantLokk();\n"
-        "}"
+def test_ungrounded_plan_local_type_forces_model_concern_regeneration() -> None:
+    captured: list[list[dict[str, str]]] = []
+    executor = _executor(
+        [
+            (
+                "private static ShipObject buildShip() {\n"
+                "    return new ShipObject();\n"
+                "}"
+            ),
+            (
+                "private static final class ShipObject {}\n\n"
+                "private static ShipObject buildShip() {\n"
+                "    return new ShipObject();\n"
+                "}"
+            ),
+        ],
+        captured,
     )
 
-    repaired, changes = canonicalize_plan_local_zero_arg_domain_types(
-        source,
-        concern_authority=_authority(),
-        dependency_source="",
-        sibling_api=(),
-        validate_declared_type_authority=_validate_declared_type_authority,
-        type_leaf_names=_type_leaf_names,
-        structure_scan=_structure_scan,
-    )
+    result = executor.run()
 
-    assert repaired == source
-    assert changes == ()
+    assert len(captured) == 2
+    retry_payload = json.loads(captured[1][-1]["content"])
+    repair = retry_payload["type_authority_repair_contract"]
+    assert repair["unknown_simple_types"] == ["ShipObject"]
+    assert "current_selected_region_source" in retry_payload
+    assert "private static ShipObject buildShip()" in retry_payload[
+        "current_selected_region_source"
+    ]
+    assert "region_correction" not in retry_payload
+    assert "private static final class ShipObject {}" in result["source"]
+    assert "private static ShipObject buildShip()" in result["source"]
+
+
+def test_bad_type_is_not_silently_materialized_by_host() -> None:
+    captured: list[list[dict[str, str]]] = []
+    executor = _executor(
+        [
+            (
+                "private static ShipObject buildShip() {\n"
+                "    return new ShipObject();\n"
+                "}"
+            )
+        ],
+        captured,
+    )
+    executor.region_attempt_limit = 1
+
     with pytest.raises(
         CustomModuleGenerationError,
-        match="ungrounded simple Java type.*ReentrantLokk",
+        match="ungrounded simple Java type.*ShipObject",
     ):
-        _validate_first_pass_java_semantics(
-            repaired,
-            dependency_source="",
-            sibling_api=(),
-        )
+        executor.run()
+
+    assert len(captured) == 1
 
 
 def test_type_authority_failure_uses_full_concern_regeneration() -> None:
@@ -116,12 +169,25 @@ def test_non_type_failure_keeps_region_correction_shape_guard() -> None:
     assert correction is not None
 
 
-def test_small_model_prompt_explicitly_forbids_undeclared_simple_domain_types() -> None:
+def test_unowned_typo_is_still_rejected() -> None:
+    with pytest.raises(
+        CustomModuleGenerationError,
+        match="ungrounded simple Java type.*ReentrantLokk",
+    ):
+        _validate_first_pass_java_semantics(
+            "private static ReentrantLokk lock;",
+            dependency_source="",
+            sibling_api=(),
+        )
+
+
+def test_small_model_prompt_forbids_undeclared_simple_domain_types() -> None:
     recipe = java_generation_recipe_contract("responsibilities")
     rule = recipe["declare_plan_local_domain_type_rule"]
 
     assert "Never emit an undeclared simple Java type" in rule
     assert "private static nested class/record" in rule
+    assert "regenerate the whole selected concern" in rule
 
     system = java_region_system_prompt_contract(
         section="integration",

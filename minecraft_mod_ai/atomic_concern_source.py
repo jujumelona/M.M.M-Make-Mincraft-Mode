@@ -18,7 +18,6 @@ from .generation_implementation_grounding import render_generation_implementatio
 from .production_local_type_recovery import (
     decorate_type_authority_retry as _decorate_type_authority_retry,
     dependency_repair_contract as _dependency_repair_contract,
-    prepare_and_validate_plan_local_types as _prepare_and_validate_plan_local_types,
     region_correction_for_rejection as _region_correction_for_rejection,
     type_authority_repair_contract as _type_authority_repair_contract,
     type_authority_validation_rule as _type_authority_validation_rule,
@@ -4489,18 +4488,13 @@ class AtomicConcernExecutor:
                                     "changes": list(final_rebinding_changes),
                                 },
                             )
-                    parsed = _prepare_and_validate_plan_local_types(
+                    _validate_first_pass_java_semantics(
                         parsed,
-                        concern=name,
-                        concern_authority=concern_authority,
                         dependency_source=self.dependency_source,
                         sibling_api=_sibling_symbol_inventory(
-                            self.source, sibling_concerns=sibling_names
+                            self.source,
+                            sibling_concerns=sibling_names,
                         ),
-                        validate_declared_type_authority=_validate_declared_type_authority,
-                        validate_first_pass=_validate_first_pass_java_semantics,
-                        type_leaf_names=_type_leaf_names,
-                        structure_scan=_structure_scan,
                     )
                 if response_region == "members" and name in _DECLARATION_ONLY_CONCERNS:
                     kinds = class_body_member_kinds(parsed)
