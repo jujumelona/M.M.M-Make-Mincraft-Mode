@@ -152,6 +152,7 @@ def test_atomic_structured_router_owns_java_syntax_and_identifier_rendering() ->
 
 def test_atomic_java_names_are_host_materialized_not_model_rejected() -> None:
     assembly = _source("atomic_java_assembly.py")
+    admission = _source("atomic_java_admission.py")
     policy = _source("execution_contract_policy.py")
     generator = _source("custom_module_generator.py")
 
@@ -159,6 +160,9 @@ def test_atomic_java_names_are_host_materialized_not_model_rejected() -> None:
     assert 'item_scalars["name"]["not"]' not in assembly
     assert "duplicate or reserved" not in assembly
     assert 'name_schema["not"]' not in policy
+    assert '["name"]["not"]' not in admission
+    assert '"reserved_type_names"' not in admission
+    assert "host owns final Java naming and collision resolution" in admission
     assert "def _host_identifier_overrides(" in generator
     assert "reserved_identifiers=reserved_type_names" in generator
     assert "preferred_identifiers=identifier_overrides" in generator
