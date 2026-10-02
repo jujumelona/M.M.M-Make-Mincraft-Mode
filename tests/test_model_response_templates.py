@@ -12,6 +12,7 @@ from minecraft_mod_ai.model_response_templates import (
     response_template_prompt,
     serialize_response,
 )
+from minecraft_mod_ai.structured_output import StructuredOutputValidationError
 from minecraft_mod_ai.source_patch import TransactionalSourcePatcher, sha256_bytes
 
 
@@ -66,10 +67,19 @@ def test_fixed_response_round_trip_is_exact_and_schema_validated():
     (
         '</think>\n{"summary":"done"}',
         '{"summary":"done"} trailing',
+    ),
+)
+def test_fixed_response_parser_recovers_harmless_wrappers(text):
+    assert parse_response_text("coder_summary", text) == {"summary": "done"}
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
         '{"summary":"done","extra":true}',
         '{"summary":123}',
     ),
 )
-def test_fixed_response_parser_rejects_wrappers_and_schema_drift(text):
-    with pytest.raises(ValueError, match="RESPONSE_TEMPLATE"):
+def test_fixed_response_parser_still_rejects_schema_drift(text):
+    with pytest.raises(StructuredOutputValidationError):
         parse_response_text("coder_summary", text)
