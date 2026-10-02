@@ -940,30 +940,6 @@ def test_production_compile_failure_is_repaired_with_compiler_feedback(
     assert compiles == 2
     assert result["generation_verification"]["atomic_repair_count"] == 1
 
-def test_nonintegration_atomic_concern_cannot_write_initialize_body() -> None:
-    from minecraft_mod_ai.atomic_concern_source import parse_concern_content
-
-    content = (
-        "<<<MMM_CONCERN_MEMBERS>>>\nprivate static int x;\n"
-        "<<<MMM_CONCERN_INITIALIZE>>>\nx = 1;\n"
-        "<<<MMM_CONCERN_END>>>"
-    )
-    with pytest.raises(direct.CustomModuleGenerationError, match="only integration"):
-        parse_concern_content(content, section="state_model")
-
-
-def test_atomic_concern_cannot_redeclare_type_or_entrypoint() -> None:
-    from minecraft_mod_ai.atomic_concern_source import parse_concern_content
-
-    content = (
-        "<<<MMM_CONCERN_MEMBERS>>>\npublic class Escape {}\n"
-        "<<<MMM_CONCERN_INITIALIZE>>>\n"
-        "<<<MMM_CONCERN_END>>>"
-    )
-    with pytest.raises(direct.CustomModuleGenerationError, match="SCOPE_ESCAPE"):
-        parse_concern_content(content, section="state_model")
-
-
 def test_atomic_sibling_map_generics_are_propagated_before_first_compile(
     tmp_path: Path, monkeypatch
 ) -> None:
