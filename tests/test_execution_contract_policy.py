@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import inspect
+import re
+from pathlib import Path
 
 import pytest
 
@@ -8,11 +10,13 @@ from minecraft_mod_ai.execution_contract_policy import (
     RECOVERABLE_ATOMIC_ERROR_PREFIXES,
     TERMINAL_AFTER_NORMALIZATION_PREFIXES,
     DEFAULT_ATOMIC_SCHEMA_LIMITS,
+    DIAGNOSTIC_REPAIR_INLINE_SOURCE_MAX_BYTES,
     JAVA_NESTED_TYPE_REQUIRED_VISIBILITY,
     assert_execution_contract_consistent,
     atomic_error_recoverable,
     atomic_error_terminal_after_normalization,
     authorized_concern_nested_type_symbols,
+    java_atomic_assembly_system_prompt,
     java_generation_recipe_contract,
     java_region_system_prompt_contract,
     PRODUCTION_COMPILE_REPAIR_LIMIT,
@@ -174,3 +178,98 @@ def test_consumers_do_not_redefine_canonical_contract_literals() -> None:
     assert "must be private because outer type ownership is host-owned" not in parser_source
     assert "from .java_generation_policy import" not in parser_source
     assert "str(return_type or \"\").strip() == \"void\"" not in generation_source
+
+
+
+def test_secondary_atomic_and_repair_caps_read_the_canonical_policy() -> None:
+    import minecraft_mod_ai.atomic_java_assembly as java_assembly
+    import minecraft_mod_ai.central_atomic_generation_contract as central_atomic
+    import minecraft_mod_ai.generation_diagnostic_repair as diagnostic_repair
+
+    atomic_source = inspect.getsource(central_atomic)
+    diagnostic_source = inspect.getsource(diagnostic_repair)
+    assembly_source = inspect.getsource(java_assembly)
+
+    assert "_MAX_ITEMS = 4" not in atomic_source
+    assert "_MAX_CHARS = 256" not in atomic_source
+    assert "DEFAULT_ATOMIC_SCHEMA_LIMITS.max_array_items" in atomic_source
+    assert "DEFAULT_ATOMIC_SCHEMA_LIMITS.max_string_chars" in atomic_source
+
+    assert "_MAX_REPAIR_SOURCE_BYTES = 12 * 1024" not in diagnostic_source
+    assert "DIAGNOSTIC_REPAIR_INLINE_SOURCE_MAX_BYTES" in diagnostic_source
+    assert DIAGNOSTIC_REPAIR_INLINE_SOURCE_MAX_BYTES > 0
+
+    assert "MAX_MODEL_STRING_CHARS" not in assembly_source
+    assert "java_atomic_assembly_system_prompt()" in assembly_source
+    assert "Lock/ReentrantLock live in java.util.concurrent.locks" in (
+        java_atomic_assembly_system_prompt()
+    )
+
+
+def test_execution_contract_has_one_definition_authority_repo_wide() -> None:
+    package_root = Path(__file__).resolve().parents[1] / "minecraft_mod_ai"
+    authority = package_root / "execution_contract_policy.py"
+    definition_names = (
+        "SOURCE_REPAIR_MAX_SOURCE_CHARS",
+        "SOURCE_REPAIR_MAX_SPAN_CHARS",
+        "SOURCE_REPAIR_HARD_ATTEMPTS",
+        "DIAGNOSTIC_REPAIR_INLINE_SOURCE_MAX_BYTES",
+        "PRODUCTION_REGION_ATTEMPT_LIMIT",
+        "PRODUCTION_RETRY_STRUCTURAL_REJECTIONS",
+        "PRODUCTION_CANONICALIZE_LOCAL_FINAL_REBINDINGS",
+        "PRODUCTION_COMPILE_REPAIR_LIMIT",
+        "RECOVERABLE_ATOMIC_ERROR_PREFIXES",
+        "TERMINAL_AFTER_NORMALIZATION_PREFIXES",
+        "JAVA_NESTED_TYPE_REQUIRED_VISIBILITY",
+    )
+    definition_re = re.compile(
+        r"^\\s*(?:" + "|".join(map(re.escape, definition_names)) + r")\\s*=",
+        re.MULTILINE,
+    )
+    canonical_phrases = (
+        "Nested runtime types live inside a host-owned outer class.",
+        "Return only compile-ready Java class-body source",
+        "must be private because outer type ownership is host-owned",
+        "The host adds static to outer fields/methods and owns nested-type visibility.",
+    )
+
+    violations: list[str] = []
+    for path in sorted(package_root.rglob("*.py")):
+        if path == authority:
+            continue
+        source = path.read_text(encoding="utf-8")
+        for match in definition_re.finditer(source):
+            violations.append(f"{path.relative_to(package_root)} defines {match.group(0).strip()}")
+        for phrase in canonical_phrases:
+            if phrase in source:
+                violations.append(
+                    f"{path.relative_to(package_root)} duplicates canonical prompt/policy phrase {phrase!r}"
+                )
+
+    assert not violations, "execution contract drift outside canonical authority:\n" + "\n".join(
+        violations
+    )
+
+
+def test_core_execution_contract_consumers_import_the_authority_directly() -> None:
+    package_root = Path(__file__).resolve().parents[1] / "minecraft_mod_ai"
+    consumers = (
+        "atomic_concern_source.py",
+        "atomic_java_assembly.py",
+        "central_atomic_generation_contract.py",
+        "custom_module_generator.py",
+        "fixed_template_generation.py",
+        "generation_diagnostic_repair.py",
+        "java_region_parser.py",
+        "model_output_atomicity_contract.py",
+        "repair_engine.py",
+        "repair_response_contract.py",
+        "verifier_repair_window.py",
+    )
+
+    missing = []
+    for filename in consumers:
+        source = (package_root / filename).read_text(encoding="utf-8")
+        if "from .execution_contract_policy import" not in source:
+            missing.append(filename)
+    assert not missing, f"execution contract consumer bypasses canonical policy: {missing!r}"

@@ -13,23 +13,23 @@ from functools import wraps
 from types import ModuleType
 from typing import Any, Mapping, Sequence
 
+from .execution_contract_policy import DEFAULT_ATOMIC_SCHEMA_LIMITS
+
 _MARKER = "_mmm_central_atomic_fixed_template_generation"
-_MAX_ITEMS = 4
-_MAX_CHARS = 256
 
 
 def _bounded_property(schema: Mapping[str, Any]) -> dict[str, Any]:
     value = dict(schema)
     kind = value.get("type")
     if kind == "string":
-        value.setdefault("maxLength", _MAX_CHARS)
+        value.setdefault("maxLength", DEFAULT_ATOMIC_SCHEMA_LIMITS.max_string_chars)
     elif kind == "array":
-        value.setdefault("maxItems", _MAX_ITEMS)
+        value.setdefault("maxItems", DEFAULT_ATOMIC_SCHEMA_LIMITS.max_array_items)
         items = value.get("items")
         if isinstance(items, Mapping):
             item = dict(items)
             if item.get("type") == "string":
-                item.setdefault("maxLength", _MAX_CHARS)
+                item.setdefault("maxLength", DEFAULT_ATOMIC_SCHEMA_LIMITS.max_string_chars)
             value["items"] = item
     return value
 

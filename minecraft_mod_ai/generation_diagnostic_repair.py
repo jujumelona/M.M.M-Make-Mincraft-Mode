@@ -7,9 +7,8 @@ from typing import Any
 from urllib.parse import urlsplit
 from urllib.request import url2pathname
 
+from .execution_contract_policy import DIAGNOSTIC_REPAIR_INLINE_SOURCE_MAX_BYTES
 from .mutation_authority import MutationAuthority, MutationAuthorityMode
-
-_MAX_REPAIR_SOURCE_BYTES = 12 * 1024
 
 
 def _diagnostic_paths(error: Mapping[str, Any], root: Path) -> Iterator[Path]:
@@ -63,8 +62,8 @@ def read_authorized_diagnostic_source(
                 if not authority.authorizes(relative, operation="replace_exact"):
                     continue
                 with candidate.open("rb") as stream:
-                    data = stream.read(_MAX_REPAIR_SOURCE_BYTES + 1)
-                if not data or len(data) > _MAX_REPAIR_SOURCE_BYTES:
+                    data = stream.read(DIAGNOSTIC_REPAIR_INLINE_SOURCE_MAX_BYTES + 1)
+                if not data or len(data) > DIAGNOSTIC_REPAIR_INLINE_SOURCE_MAX_BYTES:
                     continue
                 source = data.decode("utf-8")
             except (OSError, UnicodeError, ValueError):

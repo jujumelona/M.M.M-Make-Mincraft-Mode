@@ -17,6 +17,10 @@ from typing import Any
 from jsonschema import Draft202012Validator, ValidationError
 
 from .custom_module_errors import AtomicJavaDecisionError
+from .execution_contract_policy import (
+    DEFAULT_ATOMIC_SCHEMA_LIMITS,
+    java_atomic_assembly_system_prompt,
+)
 from .implementation_ir import OutputBudgetExhausted
 from .llama_finish_reason_contract import (
     CONTEXT_PRESSURE,
@@ -26,7 +30,6 @@ from .llama_finish_reason_contract import (
 from .model_adapters.base import NativeToolDecisionRejected
 from .model_output_atomicity_contract import (
     MAX_MODEL_FIELDS,
-    MAX_MODEL_STRING_CHARS,
     assert_atomic_model_schema,
 )
 
@@ -55,8 +58,8 @@ def _scalar_schema(schema: Mapping[str, Any], key: str) -> dict[str, Any]:
     result = deepcopy(dict(schema))
     if result.get("type") == "string":
         result["maxLength"] = min(
-            result.get("maxLength", MAX_MODEL_STRING_CHARS),
-            MAX_MODEL_STRING_CHARS,
+            result.get("maxLength", DEFAULT_ATOMIC_SCHEMA_LIMITS.max_string_chars),
+            DEFAULT_ATOMIC_SCHEMA_LIMITS.max_string_chars,
         )
         if key in {"type", "return_type"}:
             result["pattern"] = _TYPE_PATTERN
@@ -211,38 +214,7 @@ class JavaStructureAssembly:
         ):
             kwargs["output_token_ceiling"] = self.output_token_ceiling
         messages = [
-            {"role": "system", "content": (
-                "Implement the host-selected concern through native emit_java_part calls. "
-                "Fill only the current assembly.path using the supplied scalar schema. "
-                "The host constructs objects/arrays; never serialize them into strings. "
-                "When the current path is a sibling batch, emit one function call per sibling item. "
-                "A batch part is single-use: when a part is selected, emit every needed sibling item "
-                "for that part in the same native turn because the host closes that part immediately. "
-                "Keep the authored requirements, dependency_api, available_sibling_api, and "
-                "compiler_contract authoritative. The target is first-pass compilable Java, not code that "
-                "expects a compiler-repair round. Reuse exact sibling declarations; do not redeclare them "
-                "or change their types/defaults. Never reassign a final sibling or concern-local final field. "
-                "If a field is final, initialize it at declaration time. If an authoritative API returns Object "
-                "but this method needs a narrower generic/container type, narrow with an explicit runtime type "
-                "check and a type-compatible fallback; never use a raw/unchecked cast as a shortcut. "
-                "Use canonical JDK packages; Lock/ReentrantLock live in java.util.concurrent.locks. "
-                "Accepted structure and enclosing declarations remain fixed. "
-                "For part selection choose a needed part or done when this enclosing object is complete. "
-                "A body value is one complete Java statement or balanced control-flow block, "
-                "not a fragment of JSON or a partial brace. Split long logic into named helper methods. "
-                "For a declaration, type/return_type contains only a Java type. "
-                "All Java declaration modifiers and visibility are host-owned; the model never emits them. "
-                "Static initializer blocks, package/import directives, outer type declarations, and lifecycle "
-                "wrappers are also host-owned and must never be emitted inside executable body values. "
-                "The host adds static to outer fields/methods and owns nested-type visibility. "
-                "Omit unnecessary optional scalar values. "
-                "A field marked final must have a declaration initializer and generated executable code must never "
-                "rebind a final field. Preserve generic types exactly. If an authoritative API returns Object, "
-                "do not directly return it from a narrower typed method; inspect/narrow the runtime value first. "
-                "For JDK locks use java.util.concurrent.locks.Lock/ReentrantLock (or simple Lock/ReentrantLock, "
-                "which the host canonicalizes), never java.util.concurrent.Lock/ReentrantLock. "
-                "Do not invent Minecraft/Fabric APIs or metadata-only gameplay implementations."
-            )},
+            {"role": "system", "content": java_atomic_assembly_system_prompt()},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False, sort_keys=True)},
         ]
         from .model_context_budget import request_message_budget

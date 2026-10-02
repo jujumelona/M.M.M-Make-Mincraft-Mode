@@ -54,6 +54,11 @@ SOURCE_REPAIR_MAX_SOURCE_CHARS = 16_384
 SOURCE_REPAIR_MAX_SPAN_CHARS = 4_096
 SOURCE_REPAIR_HARD_ATTEMPTS = 2
 
+# Complete source snapshots passed directly from verifier diagnostics to the
+# repair path are byte-bounded independently from model-facing character limits.
+# Large files fall back to retrieval/localized repair instead of being truncated.
+DIAGNOSTIC_REPAIR_INLINE_SOURCE_MAX_BYTES = 12 * 1024
+
 STRING_CLASS_LIMITS = MappingProxyType({
     STRING_CLASS_GENERIC: DEFAULT_ATOMIC_SCHEMA_LIMITS.max_string_chars,
     STRING_CLASS_SOURCE: SOURCE_REPAIR_MAX_SOURCE_CHARS,
@@ -266,6 +271,40 @@ JAVA_INITIALIZE_RESPONSE_CONTRACT = (
 )
 
 
+JAVA_ATOMIC_ASSEMBLY_SYSTEM_PROMPT = (
+    "Implement the host-selected concern through native emit_java_part calls. "
+    "Fill only the current assembly.path using the supplied scalar schema. "
+    "The host constructs objects/arrays; never serialize them into strings. "
+    "When the current path is a sibling batch, emit one function call per sibling item. "
+    "A batch part is single-use: when a part is selected, emit every needed sibling item "
+    "for that part in the same native turn because the host closes that part immediately. "
+    "Keep the authored requirements, dependency_api, available_sibling_api, and "
+    "compiler_contract authoritative. The target is first-pass compilable Java, not code that "
+    "expects a compiler-repair round. Reuse exact sibling declarations; do not redeclare them "
+    "or change their types/defaults. Never reassign a final sibling or concern-local final field. "
+    "If a field is final, initialize it at declaration time. If an authoritative API returns Object "
+    "but this method needs a narrower generic/container type, narrow with an explicit runtime type "
+    "check and a type-compatible fallback; never use a raw/unchecked cast as a shortcut. "
+    "Use canonical JDK packages; Lock/ReentrantLock live in java.util.concurrent.locks. "
+    "Accepted structure and enclosing declarations remain fixed. "
+    "For part selection choose a needed part or done when this enclosing object is complete. "
+    "A body value is one complete Java statement or balanced control-flow block, "
+    "not a fragment of JSON or a partial brace. Split long logic into named helper methods. "
+    "For a declaration, type/return_type contains only a Java type. "
+    "All Java declaration modifiers and visibility are host-owned; the model never emits them. "
+    "Static initializer blocks, package/import directives, outer type declarations, and lifecycle "
+    "wrappers are also host-owned and must never be emitted inside executable body values. "
+    "The host adds static to outer fields/methods and owns nested-type visibility. "
+    "Omit unnecessary optional scalar values. "
+    "A field marked final must have a declaration initializer and generated executable code must never "
+    "rebind a final field. Preserve generic types exactly. If an authoritative API returns Object, "
+    "do not directly return it from a narrower typed method; inspect/narrow the runtime value first. "
+    "For JDK locks use java.util.concurrent.locks.Lock/ReentrantLock (or simple Lock/ReentrantLock, "
+    "which the host canonicalizes), never java.util.concurrent.Lock/ReentrantLock. "
+    "Do not invent Minecraft/Fabric APIs or metadata-only gameplay implementations."
+)
+
+
 def atomic_schema_limits(profile: str) -> AtomicSchemaLimits:
     try:
         return ATOMIC_SCHEMA_PROFILES[str(profile)]
@@ -296,6 +335,10 @@ def atomic_error_recoverable(reason: str) -> bool:
 
 def atomic_error_terminal_after_normalization(reason: str) -> bool:
     return str(reason or "").startswith(TERMINAL_AFTER_NORMALIZATION_PREFIXES)
+
+
+def java_atomic_assembly_system_prompt() -> str:
+    return JAVA_ATOMIC_ASSEMBLY_SYSTEM_PROMPT
 
 
 def java_region_recovery_shapes(region: str) -> tuple[str, ...]:
@@ -597,6 +640,8 @@ def assert_execution_contract_consistent() -> None:
         failures.append("source/repair/generic string limits are not monotonic")
     if SOURCE_REPAIR_HARD_ATTEMPTS < 1:
         failures.append("source repair must have at least one bounded attempt")
+    if DIAGNOSTIC_REPAIR_INLINE_SOURCE_MAX_BYTES < 1:
+        failures.append("diagnostic repair inline source byte bound must be positive")
     if not (1 <= PRODUCTION_REGION_ATTEMPT_LIMIT <= MAX_REGION_ATTEMPT_LIMIT):
         failures.append("production region attempt limit is outside its hard bound")
     if not (1 <= PRODUCTION_COMPILE_REPAIR_LIMIT <= MAX_COMPILE_REPAIR_LIMIT):
@@ -634,8 +679,10 @@ __all__ = [
     "AtomicSchemaLimits",
     "DEFAULT_ATOMIC_SCHEMA_LIMITS",
     "DEFAULT_COMPILE_REPAIR_LIMIT",
+    "DIAGNOSTIC_REPAIR_INLINE_SOURCE_MAX_BYTES",
     "DEFAULT_REGION_ATTEMPT_LIMIT",
     "DEFAULT_SCHEMA_PROFILE",
+    "JAVA_ATOMIC_ASSEMBLY_SYSTEM_PROMPT",
     "JAVA_COMPILER_FIRST_RULES",
     "JAVA_CONCERN_MEMBER_NODE_TYPES",
     "JAVA_DECLARATION_ONLY_CONCERNS",
@@ -683,6 +730,7 @@ __all__ = [
     "atomic_error_terminal_after_normalization",
     "atomic_schema_limits",
     "authorized_concern_nested_type_symbols",
+    "java_atomic_assembly_system_prompt",
     "java_generation_recipe_contract",
     "java_generation_shared_recipe_policy",
     "java_imported_jdk_use_can_be_qualified",
