@@ -287,7 +287,6 @@ def _chunk_messages(
     chunk_count: int,
     concerns: tuple[str, ...],
     include_evidence: bool = False,
-    record_counts: Mapping[str, int] | None = None,
     repair_error: str = "",
 ) -> list[dict[str, str]]:
     statement = _text(requirement.get("statement"))
@@ -327,7 +326,7 @@ def _chunk_messages(
                 f"{_evidence_context(evidence)}\n\n"
                 "Direct prerequisite worksheet sections:\n"
                 f"{prerequisite_context}\n\n"
-                f"{worksheet_chunk_prompt(section, chunk_index, chunk_count, concerns, include_evidence=include_evidence, record_counts=record_counts)}"
+                f"{worksheet_chunk_prompt(section, chunk_index, chunk_count, concerns, include_evidence=include_evidence )}"
             ),
         },
     ]
@@ -399,7 +398,6 @@ def _compile_worksheet_section(
     chunks_def = pack_section_concerns(section)
     chunk_count = len(chunks_def)
     chunk_results: list[dict[str, Any]] = []
-    record_counts: dict[str, int] = {}
 
     try:
         with planner_operation(operation):
@@ -409,7 +407,6 @@ def _compile_worksheet_section(
                     section,
                     concerns,
                     include_evidence=is_first,
-                    record_counts=record_counts,
                 )
                 messages = _chunk_messages(
                     requirement,
@@ -421,7 +418,6 @@ def _compile_worksheet_section(
                     chunk_count=chunk_count,
                     concerns=concerns,
                     include_evidence=is_first,
-                    record_counts=record_counts,
                 )
                 try:
                     decoded = _generate_chunk(
@@ -443,7 +439,6 @@ def _compile_worksheet_section(
                         chunk_count=chunk_count,
                         concerns=concerns,
                         include_evidence=is_first,
-                        record_counts=record_counts,
                         repair_error=str(parse_err),
                     )
                     decoded = _generate_chunk(
@@ -455,17 +450,6 @@ def _compile_worksheet_section(
                         chunk_schema=chunk_schema,
                     )
 
-                inapplicable = {
-                    str(item.get("concern") or "")
-                    for item in decoded.get("inapplicable_concerns", [])
-                    if isinstance(item, Mapping)
-                }
-                for concern in concerns:
-                    value = decoded.get(concern)
-                    if isinstance(value, list):
-                        record_counts.setdefault(concern, len(value))
-                    elif concern in inapplicable:
-                        record_counts.setdefault(concern, 0)
                 chunk_results.append(decoded)
 
             return merge_worksheet_section_chunks(section, chunk_results, allowed)
