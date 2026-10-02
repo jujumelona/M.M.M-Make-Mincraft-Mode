@@ -42,7 +42,7 @@ def test_model_facing_chunk_schema_allows_partial_bounded_records() -> None:
     assert schema["properties"]["inputs"]["items"]["required"] == []
     name_schema = schema["properties"]["actors"]["items"]["properties"]["name"]
     assert name_schema["minLength"] == 1
-    assert name_schema["maxLength"] == 256
+    assert "maxLength" not in name_schema
 
 
 def test_merge_salvages_partial_chunk_and_host_fills_omissions() -> None:
