@@ -1766,7 +1766,7 @@ def test_nested_type_visibility_is_host_owned() -> None:
 def test_parameter_schema_tolerates_small_model_metadata_noise() -> None:
     from jsonschema import Draft202012Validator
 
-    from minecraft_mod_ai.custom_module_generator import _ATOMIC_MEMBERS_PARAMETERS
+    from minecraft_mod_ai.execution_contract_policy import JAVA_ATOMIC_MEMBERS_PARAMETERS
 
     decision = {
         "classes": [
@@ -1788,11 +1788,11 @@ def test_parameter_schema_tolerates_small_model_metadata_noise() -> None:
         ]
     }
 
-    Draft202012Validator(_ATOMIC_MEMBERS_PARAMETERS).validate(decision)
+    Draft202012Validator(JAVA_ATOMIC_MEMBERS_PARAMETERS).validate(decision)
 
 
 def test_member_tool_schema_has_no_arbitrary_cardinality_or_length_caps() -> None:
-    from minecraft_mod_ai.custom_module_generator import _ATOMIC_MEMBERS_PARAMETERS
+    from minecraft_mod_ai.execution_contract_policy import JAVA_ATOMIC_MEMBERS_PARAMETERS
 
     def walk(value):
         if isinstance(value, dict):
@@ -1804,22 +1804,23 @@ def test_member_tool_schema_has_no_arbitrary_cardinality_or_length_caps() -> Non
             for child in value:
                 walk(child)
 
-    walk(_ATOMIC_MEMBERS_PARAMETERS)
+    walk(JAVA_ATOMIC_MEMBERS_PARAMETERS)
 
 
 def test_preferred_shape_is_guidance_not_schema_restriction() -> None:
-    from minecraft_mod_ai.custom_module_generator import (
-        _ATOMIC_MEMBERS_PARAMETERS,
-        _atomic_parameters_for_request,
+    from minecraft_mod_ai.execution_contract_policy import (
+        JAVA_ATOMIC_MEMBERS_PARAMETERS,
+        java_atomic_parameters_for_request,
     )
 
     for preferred in ("fields_and_local_types", "methods_and_constants"):
-        parameters, shape = _atomic_parameters_for_request(
+        parameters, shape = java_atomic_parameters_for_request(
             {"generation_recipe": {"preferred_shape": preferred}},
             response_region="members",
         )
         assert shape == preferred
-        assert parameters is _ATOMIC_MEMBERS_PARAMETERS
+        assert parameters == JAVA_ATOMIC_MEMBERS_PARAMETERS
+        assert parameters is not JAVA_ATOMIC_MEMBERS_PARAMETERS
         assert set(parameters["properties"]) == {
             "records",
             "enums",
@@ -1958,7 +1959,7 @@ def test_atomic_native_tool_call_does_not_force_legacy_2048_ceiling() -> None:
 def test_record_methods_are_not_arbitrarily_capped_by_tool_schema() -> None:
     from jsonschema import Draft202012Validator
 
-    from minecraft_mod_ai.custom_module_generator import _ATOMIC_MEMBERS_PARAMETERS
+    from minecraft_mod_ai.execution_contract_policy import JAVA_ATOMIC_MEMBERS_PARAMETERS
 
     decision = {
         "records": [
@@ -1984,15 +1985,15 @@ def test_record_methods_are_not_arbitrarily_capped_by_tool_schema() -> None:
         ]
     }
 
-    Draft202012Validator(_ATOMIC_MEMBERS_PARAMETERS).validate(decision)
+    Draft202012Validator(JAVA_ATOMIC_MEMBERS_PARAMETERS).validate(decision)
 
 
 def test_atomic_member_schema_accepts_model_modifier_noise_for_host_filtering() -> None:
     from jsonschema import Draft202012Validator
 
-    from minecraft_mod_ai.custom_module_generator import _ATOMIC_MEMBERS_PARAMETERS
+    from minecraft_mod_ai.execution_contract_policy import JAVA_ATOMIC_MEMBERS_PARAMETERS
 
-    Draft202012Validator(_ATOMIC_MEMBERS_PARAMETERS).validate(
+    Draft202012Validator(JAVA_ATOMIC_MEMBERS_PARAMETERS).validate(
         {
             "fields": [
                 {
@@ -2100,10 +2101,8 @@ def test_sibling_api_exposes_exact_type_and_mutability() -> None:
 def test_nested_init_method_is_normalized_to_record_constructor() -> None:
     from jsonschema import Draft202012Validator
 
-    from minecraft_mod_ai.custom_module_generator import (
-        _ATOMIC_MEMBERS_PARAMETERS,
-        _render_atomic_java_structure,
-    )
+    from minecraft_mod_ai.execution_contract_policy import JAVA_ATOMIC_MEMBERS_PARAMETERS
+    from minecraft_mod_ai.custom_module_generator import _render_atomic_java_structure
 
     decision = {
         "records": [
@@ -2122,7 +2121,7 @@ def test_nested_init_method_is_normalized_to_record_constructor() -> None:
         ]
     }
 
-    Draft202012Validator(_ATOMIC_MEMBERS_PARAMETERS).validate(decision)
+    Draft202012Validator(JAVA_ATOMIC_MEMBERS_PARAMETERS).validate(decision)
     rendered = _render_atomic_java_structure(
         decision,
         response_region="members",
@@ -2136,10 +2135,8 @@ def test_nested_init_method_is_normalized_to_record_constructor() -> None:
 def test_record_explicit_constructor_slot_is_supported() -> None:
     from jsonschema import Draft202012Validator
 
-    from minecraft_mod_ai.custom_module_generator import (
-        _ATOMIC_MEMBERS_PARAMETERS,
-        _render_atomic_java_structure,
-    )
+    from minecraft_mod_ai.execution_contract_policy import JAVA_ATOMIC_MEMBERS_PARAMETERS
+    from minecraft_mod_ai.custom_module_generator import _render_atomic_java_structure
 
     decision = {
         "records": [
@@ -2156,7 +2153,7 @@ def test_record_explicit_constructor_slot_is_supported() -> None:
         ]
     }
 
-    Draft202012Validator(_ATOMIC_MEMBERS_PARAMETERS).validate(decision)
+    Draft202012Validator(JAVA_ATOMIC_MEMBERS_PARAMETERS).validate(decision)
     rendered = _render_atomic_java_structure(
         decision,
         response_region="members",
@@ -2352,12 +2349,12 @@ def test_atomic_prompt_hides_planning_record_schema_from_coder() -> None:
 def test_logic_concerns_cannot_emit_nested_types() -> None:
     from jsonschema import Draft202012Validator, ValidationError
 
-    from minecraft_mod_ai.custom_module_generator import (
-        _ATOMIC_LOGIC_MEMBERS_PARAMETERS,
-        _atomic_parameters_for_request,
+    from minecraft_mod_ai.execution_contract_policy import (
+        JAVA_ATOMIC_LOGIC_MEMBERS_PARAMETERS,
+        java_atomic_parameters_for_request,
     )
 
-    parameters, _shape = _atomic_parameters_for_request(
+    parameters, _shape = java_atomic_parameters_for_request(
         {
             "concern": {"name": "initialization"},
             "generation_recipe": {"preferred_shape": "methods_and_constants"},
@@ -2365,7 +2362,8 @@ def test_logic_concerns_cannot_emit_nested_types() -> None:
         response_region="members",
     )
 
-    assert parameters is _ATOMIC_LOGIC_MEMBERS_PARAMETERS
+    assert parameters == JAVA_ATOMIC_LOGIC_MEMBERS_PARAMETERS
+    assert parameters is not JAVA_ATOMIC_LOGIC_MEMBERS_PARAMETERS
     assert set(parameters["properties"]) == {
         "fields",
         "methods",
@@ -2377,17 +2375,18 @@ def test_logic_concerns_cannot_emit_nested_types() -> None:
 
 
 def test_type_owning_concern_keeps_nested_type_schema() -> None:
-    from minecraft_mod_ai.custom_module_generator import (
-        _ATOMIC_MEMBERS_PARAMETERS,
-        _atomic_parameters_for_request,
+    from minecraft_mod_ai.execution_contract_policy import (
+        JAVA_ATOMIC_MEMBERS_PARAMETERS,
+        java_atomic_parameters_for_request,
     )
 
-    parameters, _shape = _atomic_parameters_for_request(
+    parameters, _shape = java_atomic_parameters_for_request(
         {"concern": {"name": "variables"}},
         response_region="members",
     )
 
-    assert parameters is _ATOMIC_MEMBERS_PARAMETERS
+    assert parameters == JAVA_ATOMIC_MEMBERS_PARAMETERS
+    assert parameters is not JAVA_ATOMIC_MEMBERS_PARAMETERS
     assert {"records", "enums", "classes"} <= set(parameters["properties"])
 
 
