@@ -258,9 +258,61 @@ def _generate_authored_chunk(
 
     try:
         return generate(concerns, evidence=include_evidence)
-    except (ValueError, RuntimeError, TypeError):
-        if len(concerns) <= 1:
-            raise
+    except (ValueError, RuntimeError, TypeError) as initial_error:
+        if len(concerns) == 1:
+            concern = str(concerns[0])
+            explicit_projection = getattr(concerns, "field_projection", {})
+            projected_fields = (
+                tuple(explicit_projection.get(concern, ()))
+                if isinstance(explicit_projection, Mapping)
+                else ()
+            )
+            fields = projected_fields or tuple(DETAIL_RECORDS[section][concern].split())
+            if len(fields) <= 1:
+                raise
+
+            # Last-resort small-model recovery: one field per model call.  Each page
+            # carries only one bounded string/array field, so a pathological model
+            # cannot consume the full concern budget by repeating sibling records.
+            record: dict[str, Any] = {}
+            merged_inapplicable: list[dict[str, Any]] = []
+            merged_refs: list[str] = []
+            for position, field in enumerate(fields):
+                isolated = WorksheetConcernChunk(
+                    (concern,),
+                    {concern: (field,)},
+                )
+                value = generate(
+                    isolated,
+                    evidence=bool(include_evidence and position == 0),
+                )
+                rows = value.get(concern)
+                if isinstance(rows, list):
+                    first = next(
+                        (
+                            item
+                            for item in rows
+                            if isinstance(item, Mapping) and field in item
+                        ),
+                        None,
+                    )
+                    if first is not None:
+                        record[field] = deepcopy(first[field])
+                for item in value.get("inapplicable_concerns", []):
+                    if isinstance(item, Mapping) and item not in merged_inapplicable:
+                        merged_inapplicable.append(deepcopy(dict(item)))
+                for ref in value.get("constraint_evidence_refs", []):
+                    if isinstance(ref, str) and ref not in merged_refs:
+                        merged_refs.append(ref)
+
+            if not record:
+                raise initial_error
+            merged: dict[str, Any] = {concern: [record]}
+            if merged_inapplicable:
+                merged["inapplicable_concerns"] = merged_inapplicable
+            if include_evidence:
+                merged["constraint_evidence_refs"] = merged_refs
+            return merged
 
     explicit_projection = getattr(concerns, "field_projection", {})
     merged: dict[str, Any] = {}
