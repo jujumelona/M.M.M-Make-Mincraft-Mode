@@ -116,9 +116,9 @@ def test_production_repair_paths_are_enabled_and_read_the_central_policy() -> No
     assert _HARD_REPAIR_ATTEMPTS == SOURCE_REPAIR_HARD_ATTEMPTS
 
 
-def test_verifier_repair_window_reads_central_string_limits() -> None:
+def test_verifier_repair_window_uses_only_host_repair_span_budget() -> None:
     assert MAX_REPAIR_WINDOW_CHARS == SOURCE_REPAIR_MAX_SPAN_CHARS
-    assert MIN_REPAIR_REPLACEMENT_CHARS == DEFAULT_ATOMIC_SCHEMA_LIMITS.max_string_chars
+    assert MIN_REPAIR_REPLACEMENT_CHARS == SOURCE_REPAIR_MAX_SPAN_CHARS
 
 
 def test_host_contract_annotations_do_not_leak_to_model_tool_schema() -> None:
