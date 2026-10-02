@@ -685,11 +685,27 @@ def _java_identifier_renames(decision: Mapping[str, Any]) -> dict[str, str]:
             add(field.get("name"))
     visit_methods(decision.get("methods") or [])
 
+    # Preserve already-valid names first, then canonicalize malformed semantic
+    # spellings without colliding with them. Distinct raw names that collapse to the
+    # same Java spelling receive a stable numeric suffix.
+    reserved = {
+        raw
+        for raw in names
+        if _canonical_java_identifier(raw) == raw
+    }
+    used = set(reserved)
     renames: dict[str, str] = {}
     for raw in sorted(names):
         canonical = _canonical_java_identifier(raw)
-        if canonical != raw:
-            renames[raw] = canonical
+        if canonical == raw:
+            continue
+        base = canonical
+        suffix = 2
+        while canonical in used:
+            canonical = f"{base}_{suffix}"
+            suffix += 1
+        renames[raw] = canonical
+        used.add(canonical)
     return renames
 
 
@@ -1787,6 +1803,55 @@ def _call_coder(
             raise
         return _plain_coder_output(text)
 
+
+def _production_atomic_coder(
+    router: Any,
+    messages: Sequence[Mapping[str, str]],
+    *,
+    output_token_ceiling: int | None,
+) -> str:
+    """Prefer host-rendered structured Java, then fall back to direct source.
+
+    Small coders are substantially more reliable when they choose semantic Java
+    components and the host owns syntax/identifier rendering. Complex regions can still
+    use direct Java when the structured assembler cannot represent the intent.
+    """
+    payload = _atomic_request_payload(messages)
+    response_region = str(payload.get("response_region") or "members").strip()
+    if response_region == "members":
+        try:
+            return _call_coder(
+                router,
+                messages,
+                output_token_ceiling=output_token_ceiling,
+                structured_java_region=True,
+                tool_stage="atomic_java_structured",
+            )
+        except AtomicJavaDecisionError as exc:
+            print(
+                "custom generation: structured Java materialization fell back to direct source "
+                f"({str(exc).splitlines()[0]})",
+                flush=True,
+            )
+        except CustomModuleGenerationError as exc:
+            # Structure/schema failures are local materialization failures, not semantic
+            # proof that direct source cannot implement the concern.
+            print(
+                "custom generation: structured Java contract fell back to direct source "
+                f"({str(exc).splitlines()[0]})",
+                flush=True,
+            )
+
+    return _call_coder(
+        router,
+        messages,
+        output_token_ceiling=output_token_ceiling,
+        force_non_thinking=True,
+        structured_java_region=False,
+        tool_stage="atomic_java",
+    )
+
+
 def _compile_log(report: Any) -> str:
     """Extract compiler diagnostics by structure instead of truncating raw logs."""
     fallback = str(getattr(report, "error", "") or "")
@@ -1992,23 +2057,13 @@ def _run_atomic_ir_generation(
         grounding=context.host_grounding,
         dependency_source=context.dependency_context,
         require_initialize=context.require_initialize,
-        # AtomicConcernExecutor already owns the concern boundary, sibling
-        # declaration inventory, scope validation, and compile admission. Production
-        # uses bounded diagnostic correction; do not put a syntax-level JavaStructureAssembly between
-        # that host contract and the coder: scalar slots such as type/modifier/body
-        # are exactly what caused valid Java intent to be misrouted across schema
-        # fields (for example type="final"). The coder emits one complete,
-        # concern-local Java region and the host parses/adjudicates its declarations.
-        call_coder=lambda messages: _call_coder(
+        # Prefer semantic structured decisions so the host owns Java syntax,
+        # modifiers and identifier spelling. Complex regions retain a direct-source
+        # fallback, but free-form Java is no longer the first production path.
+        call_coder=lambda messages: _production_atomic_coder(
             generator.router,
             messages,
             output_token_ceiling=_ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING,
-            # Atomic production is a source-materialization turn, not a reasoning
-            # turn. Qwen thinking can otherwise consume the entire 4096-token page
-            # while drafting/reconsidering multiple implementations before Java.
-            force_non_thinking=True,
-            structured_java_region=False,
-            tool_stage="atomic_java",
         ),
         compile_java=compile_java,
         compile_log=_compile_log,
