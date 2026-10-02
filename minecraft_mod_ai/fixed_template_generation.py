@@ -230,7 +230,11 @@ def _object_field_schemas(
         field_schema: dict[str, Any] = {
             "type": "object",
             "properties": {raw_name: deepcopy(dict(raw_schema))},
-            "required": [raw_name] if raw_name in required_fields else [],
+            # Once the host isolates a field for recovery, that field becomes the
+            # complete obligation for this call even when the parent schema expressed
+            # alternatives through anyOf. This prevents an empty {} repair from
+            # passing locally and failing again only after merge.
+            "required": [raw_name],
             "additionalProperties": False,
         }
         profile = parameters.get(SCHEMA_CONTRACT_PROFILE_KEY)
