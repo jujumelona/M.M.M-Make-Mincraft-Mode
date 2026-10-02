@@ -249,6 +249,40 @@ def _schema_errors(
     )
 
 
+def _extract_schema_valid_embedded_value(
+    output: str,
+    response_schema: Mapping[str, Any],
+) -> Any | None:
+    """Recover one embedded JSON value only when the host schema proves it valid."""
+    root_type = response_schema.get("type")
+    starts: tuple[str, ...]
+    if root_type == "array":
+        starts = ("[",)
+    elif root_type == "object" or "properties" in response_schema:
+        starts = ("{",)
+    else:
+        return None
+
+    decoder = json.JSONDecoder()
+    valid: list[Any] = []
+    seen: set[str] = set()
+    for index, character in enumerate(output):
+        if character not in starts:
+            continue
+        try:
+            value, _end = decoder.raw_decode(output[index:])
+        except json.JSONDecodeError:
+            continue
+        if _schema_errors(value, response_schema):
+            continue
+        key = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+        if key in seen:
+            continue
+        seen.add(key)
+        valid.append(value)
+    return valid[0] if len(valid) == 1 else None
+
+
 def validate_structured_output(
     output: str,
     *,
@@ -290,6 +324,15 @@ def validate_structured_output(
                     authority = "game_design_section_owner"
                 _emit_parser_owned_recovery(output, canonical, authority=authority)
                 return json.dumps(canonical, ensure_ascii=False, separators=(",", ":"))
+        if response_schema is not None:
+            recovered = _extract_schema_valid_embedded_value(output, response_schema)
+            if recovered is not None:
+                _emit_parser_owned_recovery(
+                    output,
+                    recovered if isinstance(recovered, Mapping) else {"value": recovered},
+                    authority="host_schema_transport_recovery",
+                )
+                return json.dumps(recovered, ensure_ascii=False, separators=(",", ":"))
         errors = (
             f"$: invalid JSON at line {exc.lineno}, column {exc.colno}: {exc.msg}",
         )
