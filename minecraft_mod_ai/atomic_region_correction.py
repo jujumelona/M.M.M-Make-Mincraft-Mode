@@ -35,14 +35,6 @@ def _private_implementation(source: str) -> bool:
     )
 
 
-def _private_nested_type(source: str) -> bool:
-    rows = class_body_member_contracts(source)
-    return bool(rows) and all(
-        row.get("visibility") == "private" and row.get("kind") == "type"
-        for row in rows
-    )
-
-
 @dataclass(frozen=True)
 class RegionCorrection:
     """Protect accepted declarations without freezing a rejected private design."""
@@ -50,16 +42,10 @@ class RegionCorrection:
     chunks: tuple[str, ...]
     selected: frozenset[int]
     allow_private_restructure: bool = False
-    allow_private_type_additions: bool = False
 
     @classmethod
     def for_diagnostic(
-        cls,
-        source: str,
-        diagnostic: str,
-        *,
-        allow_private_restructure: bool = False,
-        allow_private_type_additions: bool = False,
+        cls, source: str, diagnostic: str, *, allow_private_restructure: bool = False,
     ) -> RegionCorrection | None:
         from .atomic_concern_source import _structure_scan
 
@@ -83,23 +69,13 @@ class RegionCorrection:
             # An unlocalized semantic diagnostic stays inside this one concern.
             # Never infer sibling ownership from a substring of an error message.
             selected = frozenset(range(len(chunks)))
-        return (
-            cls(
-                chunks,
-                selected,
-                allow_private_restructure,
-                allow_private_type_additions,
-            )
-            if selected
-            else None
-        )
+        return cls(chunks, selected, allow_private_restructure) if selected else None
 
     def payload(self) -> dict:
         return {
             "selected_declarations": [self.chunks[i] for i in sorted(self.selected)],
             "immutable_declarations": [chunk for i, chunk in enumerate(self.chunks) if i not in self.selected],
             "allow_private_restructure": self.allow_private_restructure,
-            "allow_private_type_additions": self.allow_private_type_additions,
             "rules": (
                 "Return corrected selected_declarations only, as complete Java class-body members. "
                 "Do not return immutable_declarations. "
@@ -109,16 +85,8 @@ class RegionCorrection:
                     "members from task_authority when necessary; update all local callers together. "
                     "You may remove invented, unused helpers unrelated to the selected requirements "
                     "and add private helpers needed to implement those requirements. Preserve all "
-                    "non-private contracts and existing nested types. "
-                    + (
-                        "For this explicit type-authority correction only, you may add a private "
-                        "nested class/record whose exact name appears in the host diagnostic when "
-                        "that authored concern owns the runtime domain object. "
-                        if self.allow_private_type_additions else
-                        "Do not add nested types. "
-                    )
-                    + "Do not implement a sibling concern just to retain an invented helper. "
-                    "Never fabricate a dependency API. "
+                    "non-private contracts and nested types. Do not implement a sibling concern "
+                    "just to retain an invented helper. Never fabricate a dependency API. "
                     if self.allow_private_restructure else
                     "The host merges members into their original slots. Keep every declaration "
                     "identity and public/protected API. "
@@ -151,18 +119,10 @@ class RegionCorrection:
             seen_symbols.update(identity)
             index = original.get(identity)
             if index is None:
-                allowed_private_addition = (
-                    self.allow_private_restructure
-                    and (
-                        _private_implementation(chunk)
-                        or (
-                            self.allow_private_type_additions
-                            and _private_nested_type(chunk)
-                        )
-                    )
+                if (
+                    self.allow_private_restructure and _private_implementation(chunk)
                     and not frozen_symbols.intersection(identity)
-                )
-                if allowed_private_addition:
+                ):
                     additions.append(chunk)
                     continue
                 raise CustomModuleGenerationError("ATOMIC_CONCERN_REPAIR_STRUCTURE_ESCAPE: new declaration outside private implementation")

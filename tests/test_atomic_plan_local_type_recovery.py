@@ -3,11 +3,16 @@ from __future__ import annotations
 import pytest
 
 from minecraft_mod_ai.atomic_concern_source import (
-    _canonicalize_plan_local_zero_arg_domain_types,
-    _type_authority_repair_contract,
+    _structure_scan,
+    _type_leaf_names,
+    _validate_declared_type_authority,
     _validate_first_pass_java_semantics,
 )
-from minecraft_mod_ai.atomic_region_correction import RegionCorrection
+from minecraft_mod_ai.production_local_type_recovery import (
+    canonicalize_plan_local_zero_arg_domain_types,
+    region_correction_for_rejection,
+    type_authority_repair_contract,
+)
 from minecraft_mod_ai.custom_module_errors import CustomModuleGenerationError
 from minecraft_mod_ai.execution_contract_policy import (
     java_generation_recipe_contract,
@@ -33,11 +38,14 @@ def test_production_materializes_requirement_owned_zero_arg_domain_type() -> Non
         "}"
     )
 
-    repaired, changes = _canonicalize_plan_local_zero_arg_domain_types(
+    repaired, changes = canonicalize_plan_local_zero_arg_domain_types(
         source,
         concern_authority=_authority(),
         dependency_source="",
         sibling_api=(),
+        validate_declared_type_authority=_validate_declared_type_authority,
+        type_leaf_names=_type_leaf_names,
+        structure_scan=_structure_scan,
     )
 
     assert "private static final class ShipObject {}" in repaired
@@ -46,6 +54,9 @@ def test_production_materializes_requirement_owned_zero_arg_domain_type() -> Non
         repaired,
         dependency_source="",
         sibling_api=(),
+        validate_declared_type_authority=_validate_declared_type_authority,
+        type_leaf_names=_type_leaf_names,
+        structure_scan=_structure_scan,
     )
 
 
@@ -56,11 +67,14 @@ def test_production_does_not_hide_unowned_type_typo() -> None:
         "}"
     )
 
-    repaired, changes = _canonicalize_plan_local_zero_arg_domain_types(
+    repaired, changes = canonicalize_plan_local_zero_arg_domain_types(
         source,
         concern_authority=_authority(),
         dependency_source="",
         sibling_api=(),
+        validate_declared_type_authority=_validate_declared_type_authority,
+        type_leaf_names=_type_leaf_names,
+        structure_scan=_structure_scan,
     )
 
     assert repaired == source
@@ -76,53 +90,33 @@ def test_production_does_not_hide_unowned_type_typo() -> None:
         )
 
 
-def test_type_authority_repair_can_add_exact_private_nested_type() -> None:
-    rejected = "private static ShipObject buildShip() { return null; }"
+def test_type_authority_failure_uses_full_concern_regeneration() -> None:
     diagnostic = (
         "ATOMIC_CONCERN_RESPONSE_INVALID: ungrounded simple Java type name(s): "
         "ShipObject. Use an authoritative sibling/dependency type, a known JDK type, "
         "or the exact fully-qualified external type."
     )
-    correction = RegionCorrection.for_diagnostic(
-        rejected,
+    repair = type_authority_repair_contract(diagnostic)
+    correction = region_correction_for_rejection(
+        "private static ShipObject buildShip() { return null; }",
         diagnostic,
         allow_private_restructure=True,
-        allow_private_type_additions=True,
-    )
-    assert correction is not None
-
-    merged = correction.merge(
-        "private static final class ShipObject {}\n"
-        "private static ShipObject buildShip() { return new ShipObject(); }"
+        type_authority_repair=repair,
     )
 
-    assert "class ShipObject" in merged
-    assert "buildShip()" in merged
-    _validate_first_pass_java_semantics(
-        merged,
-        dependency_source="",
-        sibling_api=(),
-    )
+    assert repair is not None
+    assert correction is None
 
 
-def test_private_nested_type_addition_stays_forbidden_without_type_repair_authority() -> None:
-    rejected = "private static ShipObject buildShip() { return null; }"
-    correction = RegionCorrection.for_diagnostic(
-        rejected,
+def test_non_type_failure_keeps_region_correction_shape_guard() -> None:
+    correction = region_correction_for_rejection(
+        "private static int value() { return 1; }",
         "ATOMIC_CONCERN_RESPONSE_INVALID: some other semantic problem",
         allow_private_restructure=True,
-        allow_private_type_additions=False,
+        type_authority_repair=None,
     )
-    assert correction is not None
 
-    with pytest.raises(
-        CustomModuleGenerationError,
-        match="new declaration outside private implementation",
-    ):
-        correction.merge(
-            "private static final class ShipObject {}\n"
-            "private static ShipObject buildShip() { return new ShipObject(); }"
-        )
+    assert correction is not None
 
 
 def test_small_model_prompt_explicitly_forbids_undeclared_simple_domain_types() -> None:
@@ -143,7 +137,7 @@ def test_small_model_prompt_explicitly_forbids_undeclared_simple_domain_types() 
 
 
 def test_type_authority_repair_contract_names_exact_unknown_type() -> None:
-    contract = _type_authority_repair_contract(
+    contract = type_authority_repair_contract(
         "ATOMIC_CONCERN_RESPONSE_INVALID: ungrounded simple Java type name(s): "
         "ShipObject. Use an authoritative sibling/dependency type, a known JDK type, "
         "or the exact fully-qualified external type."
