@@ -315,12 +315,11 @@ def test_authorized_nested_runtime_type_reaches_structured_schema() -> None:
         response_region="members",
     )
 
-    assert "classes" in parameters["properties"]
-    class_name = parameters["properties"]["classes"]["items"]["properties"]["name"]
-    assert class_name["enum"] == ["ShipFuelCalculationException"]
-    assert class_name["not"] == {"enum": ["AuthoredFailureLimits"]}
-    assert "records" not in parameters["properties"]
-    assert "enums" not in parameters["properties"]
+    for category in ("classes", "records", "enums"):
+        assert category in parameters["properties"]
+        name_schema = parameters["properties"][category]["items"]["properties"]["name"]
+        assert name_schema["enum"] == ["ShipFuelCalculationException"]
+        assert name_schema["not"] == {"enum": ["AuthoredFailureLimits"]}
 
 
 def test_atomic_java_assembly_reads_model_field_bound_directly_from_canonical_policy() -> None:
