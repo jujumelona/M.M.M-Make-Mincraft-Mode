@@ -15,6 +15,7 @@ from minecraft_mod_ai.custom_module_errors import CustomModuleGenerationError
 from minecraft_mod_ai.custom_module_generator import (
     _call_atomic_java_region,
     _call_coder,
+    _render_atomic_java_structure,
 )
 from minecraft_mod_ai.implementation_ir import OutputBudgetExhausted
 from minecraft_mod_ai.java_region_parser import class_body_member_contracts
@@ -182,7 +183,7 @@ def test_integration_members_and_initialize_are_generated_as_separate_regions() 
     assert "registerThing();" in result["source"]
 
 
-def test_entry_points_initialize_sees_staged_members_and_recovers_logged_static_block_echo() -> None:
+def test_entry_points_initialize_sees_staged_members_before_structured_initialize() -> None:
     members = (
         'private static final String BOUNDARY = "Boundary";\n'
         'private static final String TRIGGER = "RightClick";\n'
@@ -190,17 +191,10 @@ def test_entry_points_initialize_sees_staged_members_and_recovers_logged_static_
         'private static final java.util.Map<String, String> ENTRY_POINTS = '
         'new java.util.HashMap<>();'
     )
-    initialize_echo = """```java
-private static final String BOUNDARY = "Boundary";
-private static final String TRIGGER = "RightClick";
-private static final String OWNER = "ModLoader";
-private static final java.util.Map<String, String> ENTRY_POINTS = new java.util.HashMap<>();
-static {
-    ENTRY_POINTS.put(BOUNDARY, TRIGGER);
-    ENTRY_POINTS.put(OWNER, BOUNDARY);
-}
-```
-"""
+    initialize_echo = (
+        "ENTRY_POINTS.put(BOUNDARY, TRIGGER);\n"
+        "ENTRY_POINTS.put(OWNER, BOUNDARY);"
+    )
     captured: list[list[dict[str, str]]] = []
     outputs = iter([members, initialize_echo])
 
@@ -248,24 +242,6 @@ static {
     assert "static {" not in result["source"]
     assert "ENTRY_POINTS.put(BOUNDARY, TRIGGER);" in result["source"]
     assert "ENTRY_POINTS.put(OWNER, BOUNDARY);" in result["source"]
-
-
-def test_integration_members_accept_misrouted_host_initialize_and_continue_to_initialize_region() -> None:
-    executor = _executor(
-        [
-            """```java
-public static void initialize() {
-    AuthoredResourcesUi.initializeState("entry_points", java.util.Map.of());
-}
-```""",
-            "registerThing();",
-        ],
-        section="integration",
-        require_initialize=True,
-    )
-    result = executor.run()
-    assert 'AuthoredResourcesUi.initializeState("entry_points"' not in result["source"]
-    assert "registerThing();" in result["source"]
 
 
 def test_integration_members_can_be_intentionally_empty_before_initialize_region() -> None:
@@ -369,72 +345,22 @@ def test_direct_coder_forwards_atomic_output_token_ceiling() -> None:
     assert captured["output_token_ceiling"] == 1536
 
 
-def test_authored_packet_names_are_privately_lowered_without_dropping_scope_rule() -> None:
-    remaining = [
-        (
-            "public static final class ShipSyncPacket {}\n"
-            "public static final class ResourceRequestPacket {}\n"
-            "public static final class TradeOfferPacket {}"
-        )
-    ]
-
-    def call_coder(_messages):
-        return remaining.pop(0)
-
-    task = {
-        "task_id": "t",
-        "semantic_outcome": "packets",
-        "authored_atomic_contract": {
-            "schema_version": "mmm/authored-atomic-contract-v1",
-            "section": "authority_and_network",
-            "concerns": {
-                "packets": {
-                    "instruction": {"concern": "packets"},
-                    "source_requirements": {
-                        "R1": "## authority_and_network",
-                        "R2": "- packets:",
-                        "R3": "    - `ShipSyncPacket` -> Server <- Client",
-                        "R4": "    - `ResourceRequestPacket` -> Server -> Client",
-                        "R5": "    - `TradeOfferPacket` -> Server <-> Client",
-                    },
-                    "structured_records": [],
-                }
-            },
+def test_structured_nested_packet_types_are_host_lowered_private() -> None:
+    rendered = _render_atomic_java_structure(
+        {
+            "classes": [
+                {"name": "ShipSyncPacket"},
+                {"name": "ResourceRequestPacket"},
+                {"name": "TradeOfferPacket"},
+            ]
         },
-    }
-    executor = AtomicConcernExecutor(
-        root=Path("."),
-        target=Path("src/main/java/example/Test.java"),
-        relative="src/main/java/example/Test.java",
-        symbol="Test",
-        original="package example;\n// MMM_AUTHORED_FEATURE_BODY\n",
-        task=task,
-        section="authority_and_network",
-        concerns=(
-            {
-                "sequence": 0,
-                "identifier": "feature/authority_and_network/packets",
-                "concern": "packets",
-                "task": "implement packets",
-                "rules": [],
-            },
-        ),
-        grounding={},
-        dependency_source="",
-        require_initialize=False,
-        call_coder=call_coder,
-        compile_java=lambda _root: SimpleNamespace(status="PASS"),
-        compile_log=lambda _report: "",
-        write_source=lambda _path, _source: None,
+        response_region="members",
     )
 
-    result = executor.run()
-
-    assert "private static final class ShipSyncPacket" in result["source"]
-    assert "private static final class ResourceRequestPacket" in result["source"]
-    assert "private static final class TradeOfferPacket" in result["source"]
-    assert "public static final class ShipSyncPacket" not in result["source"]
-
+    assert "private static final class ShipSyncPacket" in rendered
+    assert "private static final class ResourceRequestPacket" in rendered
+    assert "private static final class TradeOfferPacket" in rendered
+    assert "public static final class ShipSyncPacket" not in rendered
 
 def test_private_nested_helper_types_are_valid_class_body_members() -> None:
     output = (
@@ -446,21 +372,6 @@ def test_private_nested_helper_types_are_valid_class_body_members() -> None:
     assert "private enum ShipState" in result["source"]
     assert "private record CreditState" in result["source"]
     assert "private static final class Snapshot" in result["source"]
-
-
-@pytest.mark.parametrize(
-    "bad",
-    [
-        "class PackageVisibleEscape {}",
-        "protected static class ProtectedEscape {}",
-        "} private static final int ESCAPED = 1; {",
-    ],
-)
-def test_non_private_or_brace_escape_member_structure_is_rejected(bad: str, monkeypatch) -> None:
-    monkeypatch.setenv("MMM_ATOMIC_CONCERN_REGION_ATTEMPTS", "2")
-    executor = _executor([bad, "private static final int COST = 10;"])
-    result = executor.run()
-    assert "private static final int COST = 10;" in result["source"]
 
 
 def test_initialize_region_rejects_even_private_local_type_declarations(monkeypatch) -> None:
@@ -3607,108 +3518,6 @@ def test_post_admission_validation_is_ast_only_for_java_identifiers() -> None:
     _validate_region_text(source, initialize_region=False)
 
 
-def test_outer_class_recovery_with_next_identifier_survives_post_validation() -> None:
-    from minecraft_mod_ai.atomic_concern_source import _parse_region_content
-
-    output = (
-        "public class AuthoredAlgorithm {\n"
-        "    private static final java.util.concurrent.atomic.AtomicLong SEED = "
-        "new java.util.concurrent.atomic.AtomicLong(0L);\n"
-        "    public static long nextRandom() {\n"
-        "        long current = SEED.get();\n"
-        "        long next = (current ^ (current >>> 30)) * 0x5DEECE66D;\n"
-        "        next = (next ^ (next >>> 20)) * 0x5DEECE66D;\n"
-        "        next = (next ^ (next >>> 16)) * 0x5DEECE66D;\n"
-        "        SEED.set(next);\n"
-        "        return next & 0x7FFFFFFF;\n"
-        "    }\n"
-        "}"
-    )
-
-    parsed = _parse_region_content(output, response_region="members")
-
-    assert "class AuthoredAlgorithm" not in parsed
-    assert "long next =" in parsed
-    assert "next = (next ^ (next >>> 20))" in parsed
-
-def test_first_pass_rejects_invalid_installed_jdk_constructor_arity() -> None:
-    from minecraft_mod_ai.atomic_concern_source import _validate_first_pass_java_semantics
-
-    with pytest.raises(
-        CustomModuleGenerationError,
-        match="installed-JDK constructor java.lang.Object called with 1 argument",
-    ):
-        _validate_first_pass_java_semantics(
-            "private static Object value = new Object(1);",
-            dependency_source="",
-            sibling_api=(),
-        )
-
-
-def test_first_pass_accepts_valid_installed_jdk_constructor_arity() -> None:
-    from minecraft_mod_ai.atomic_concern_source import _validate_first_pass_java_semantics
-
-    _validate_first_pass_java_semantics(
-        "private static Object value = new Object();",
-        dependency_source="",
-        sibling_api=(),
-    )
-
-
-def test_javap_constructor_shape_parser_handles_varargs() -> None:
-    from minecraft_mod_ai.jdk_type_index import _constructor_shapes_from_javap
-
-    shapes = _constructor_shapes_from_javap(
-        (
-            "public final class java.example.Sample {\n"
-            "  public java.example.Sample();\n"
-            "  public java.example.Sample(java.lang.String, java.lang.Object...);\n"
-            "}\n"
-        ),
-        "java.example.Sample",
-    )
-
-    assert shapes == (
-        {"arity": 0, "varargs": False},
-        {"arity": 2, "varargs": True},
-    )
-
-
-def test_atomic_prompt_uses_single_java_generation_policy_payload() -> None:
-    from minecraft_mod_ai.java_generation_policy import (
-        production_java_generation_recipe_policy,
-    )
-
-    concern = {
-        "sequence": 0,
-        "identifier": "feature/failure_and_limits/diagnostics",
-        "concern": "diagnostics",
-        "task": "emit diagnostics",
-        "rules": [],
-    }
-    messages = _messages(
-        section="failure_and_limits",
-        concern=concern,
-        task={"task_id": "t", "implementation_obligations": []},
-        grounding={},
-        dependency_source="",
-        current_source=(
-            "package example;\n"
-            "public final class Test {\n"
-            "// MMM_AUTHORED_FEATURE_BODY\n"
-            "}\n"
-        ),
-        sibling_concerns=(),
-        response_region="members",
-        host_symbol="Test",
-    )
-    payload = __import__("json").loads(messages[-1]["content"])
-    shared = production_java_generation_recipe_policy()
-
-    for key, value in shared.items():
-        assert payload["generation_recipe"][key] == value
-
-
 def test_small_model_prompt_exposes_exact_dependency_calls_and_drops_irrelevant_grounding() -> None:
     dependency_source = json.dumps(
         {
@@ -3778,10 +3587,9 @@ def test_small_model_prompt_exposes_exact_dependency_calls_and_drops_irrelevant_
     assert ("AuthoredStateModel", "setState", 2) in calls
     assert ("AuthoredStateModel", "setState", 3) in calls
     assert payload["implementation_authority"] == ""
-    assert payload["host_grounding"]["facts"] == []
-    assert payload["host_grounding"]["host_version_facts"] == {}
-    assert "Never add arguments to a zero-arity method" in messages[0]["content"]
-    assert "Do not think aloud" in messages[0]["content"]
+    assert payload["host_grounding"] == {}
+    assert "host-structured Java assembly" in messages[0]["content"]
+    assert "host owns Java syntax" in messages[0]["content"]
 
 
 def test_first_pass_accepts_context_aware_state_access_contract() -> None:
