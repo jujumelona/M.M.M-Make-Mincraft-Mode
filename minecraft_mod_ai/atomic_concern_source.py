@@ -38,8 +38,6 @@ from .execution_contract_policy import (
 )
 from .java_region_parser import (
     JavaRegionParseError,
-    admit_initialize_region,
-    admit_member_region,
     class_body_chunks,
     class_body_assignment_targets,
     class_body_direct_return_calls,
@@ -1376,58 +1374,19 @@ def _parse_region_content(
     *,
     response_region: str,
     allow_inert_empty: bool = False,
-    allow_host_initialize_only_empty: bool = False,
-    canonical_private_nested_symbols: tuple[str, ...] = (),
-    known_member_source: str = "",
 ) -> str:
-    """Admit one host-selected region through Markdown and Java parsers in order."""
-    raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
-    exact_markers = {
-        MEMBERS_MARKER,
-        INITIALIZE_MARKER,
-        END_MARKER,
-    }
-    raw_value = "\n".join(
-        line for line in raw.splitlines() if line.strip() not in exact_markers
-    ).strip()
-    initialize_region = response_region == "initialize"
+    """Validate host-rendered structured Java without model-envelope recovery."""
     if response_region not in {"members", "initialize"}:
         raise CustomModuleGenerationError(
             f"ATOMIC_CONCERN_RESPONSE_REGION_INVALID: {response_region!r}"
         )
-
-    # Java envelope handling is centralized in java_region_parser for both
-    # member and initialize regions. Integration members may be intentionally
-    # empty because their executable lifecycle work is generated separately.
-    if (initialize_region or allow_inert_empty) and _is_inert_empty_region(
-        _normalize_region_text(raw_value)
-    ):
+    value = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    initialize_region = response_region == "initialize"
+    if (initialize_region or allow_inert_empty) and _is_inert_empty_region(value):
         return ""
-    try:
-        value = (
-            admit_initialize_region(
-                raw_value,
-                known_member_source=known_member_source,
-            )
-            if initialize_region
-            else admit_member_region(
-                raw_value,
-                allow_host_initialize_only_empty=allow_host_initialize_only_empty,
-                canonical_private_nested_symbols=canonical_private_nested_symbols,
-            )
-        )
-    except JavaRegionParseError as exc:
-        region = "initialize body" if initialize_region else "concern members"
-        prefix = (
-            "ATOMIC_CONCERN_SCOPE_ESCAPE"
-            if getattr(exc, "category", "syntax") == "scope"
-            else "ATOMIC_CONCERN_RESPONSE_INVALID"
-        )
-        raise CustomModuleGenerationError(
-            f"{prefix}: {region} could not be admitted by the Java parser: {exc}"
-        ) from exc
     _validate_region_text(value, initialize_region=initialize_region)
     return value
+
 
 def _validate_concerns(concerns: Sequence[Mapping[str, Any]]) -> tuple[dict[str, Any], ...]:
     result: list[dict[str, Any]] = []
@@ -4459,17 +4418,6 @@ class AtomicConcernExecutor:
                     output,
                     response_region=response_region,
                     allow_inert_empty=allow_integration_empty_members,
-                    allow_host_initialize_only_empty=allow_integration_empty_members,
-                    canonical_private_nested_symbols=canonical_private_nested_symbols,
-                    known_member_source=(
-                        _region_content(
-                            prompt_source,
-                            concern=name,
-                            region="MEMBERS",
-                        )
-                        if response_region == "initialize"
-                        else ""
-                    ),
                 )
                 if correction is not None:
                     parsed = correction.merge(parsed)
