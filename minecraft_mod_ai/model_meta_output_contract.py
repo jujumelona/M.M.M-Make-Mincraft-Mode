@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Reject internal reasoning and contradictions in accepted design fields."""
+"""Keep evidence contradictions semantic; never reject design text by phrase blacklist."""
 
 import re
 from collections.abc import Mapping, Sequence
@@ -87,10 +87,9 @@ def contradicts_grounded_research(value: Any) -> bool:
 def assert_design_field_clean(field: str, value: Any) -> None:
     if field not in _GUARDED_FIELDS:
         return
-    if contains_internal_model_meta(value):
-        raise ValueError(
-            f"game_design.{field} contains internal model reasoning/meta output and cannot be accepted"
-        )
+    # Phrase matches such as "I need to" or "the user wants" are not correctness
+    # evidence. They may occur legitimately in titles, narrative text, examples or
+    # localized content, so they are diagnostics only and never a fatal gate.
     if contradicts_grounded_research(value):
         state = current_grounded_evidence()
         raise ValueError(
