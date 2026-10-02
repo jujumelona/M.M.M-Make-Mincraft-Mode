@@ -15,6 +15,7 @@ from .base import (
     quantization_config,
     require_package,
     torch_dtype,
+    request_output_token_limit,
 )
 
 
@@ -93,10 +94,11 @@ class TransformersTextAdapter(ModelAdapter):
             truncation=False,
         )
         input_tokens = int(inputs["input_ids"].shape[-1])
-        if cfg.max_context > 0 and input_tokens + cfg.max_new_tokens > cfg.max_context:
+        output_tokens = request_output_token_limit(cfg, request)
+        if cfg.max_context > 0 and input_tokens + output_tokens > cfg.max_context:
             raise ModelConfigurationError(
                 "Rendered text request exceeds the model context: "
-                f"{input_tokens} input + {cfg.max_new_tokens} reserved output "
+                f"{input_tokens} input + {output_tokens} reserved output "
                 f"> max_context={cfg.max_context}. "
                 "Split the request into bounded, verifiable pages instead of "
                 "discarding prompt tokens."
@@ -127,7 +129,7 @@ class TransformersTextAdapter(ModelAdapter):
                         try:
                             output = model.generate(
                                 **generation_inputs,
-                                max_new_tokens=cfg.max_new_tokens,
+                                max_new_tokens=request_output_token_limit(cfg, request),
                                 do_sample=False,
                                 pad_token_id=tokenizer.eos_token_id,
                             )
