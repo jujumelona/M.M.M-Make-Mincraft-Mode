@@ -25,15 +25,11 @@ class RelationRouter:
         target_id = context["target_id"]
         pair_edges = self.edges if (source_id, target_id) == ("source", "target") else []
 
-        assert tool_name == "submit_next_design_content_relation"
-        accepted = context.get("accepted_records", [])
-        index = len(accepted)
-        if index >= len(pair_edges):
-            return {"record": None}
-        return {"record": {"relation_type": pair_edges[index]}}
+        assert tool_name == "submit_records_design_content_relation"
+        return {"records": [{"relation_type": edge} for edge in pair_edges]}
 
 
-def test_relation_cardinality_is_derived_from_accepted_records_without_count_prepass():
+def test_relation_cardinality_is_derived_from_semantic_record_set_without_count_prepass():
     router = RelationRouter()
     result = run_record_template(
         router,
@@ -50,6 +46,4 @@ def test_relation_cardinality_is_derived_from_accepted_records_without_count_pre
         for relation_type in router.edges
     ]
     assert all("count" not in call for call in router.calls)
-    # Five accepted relations + one null convergence call for source->target,
-    # and one null convergence call for target->source.
-    assert router.calls.count("submit_next_design_content_relation") == 7
+    assert router.calls.count("submit_records_design_content_relation") == 2
