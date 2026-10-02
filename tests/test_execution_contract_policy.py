@@ -293,10 +293,11 @@ def test_core_execution_contract_consumers_import_the_authority_directly() -> No
 def test_schema_selector_and_prompt_share_type_owning_concerns() -> None:
     import minecraft_mod_ai.custom_module_generator as generator
 
-    source = inspect.getsource(generator)
-    assert "_ATOMIC_TYPE_OWNING_CONCERNS" not in source
-    assert "JAVA_TYPE_OWNING_CONCERNS" in source
-    assert "JAVA_DECLARATION_ONLY_CONCERNS" in source
+    generator_source = inspect.getsource(generator)
+    selector_source = inspect.getsource(java_atomic_parameters_for_request)
+    assert "_ATOMIC_TYPE_OWNING_CONCERNS" not in generator_source
+    assert "JAVA_TYPE_OWNING_CONCERNS" in selector_source
+    assert "JAVA_DECLARATION_ONLY_CONCERNS" in selector_source
     assert {"variables", "inputs", "outputs", "stored_state", "payloads"} == set(
         JAVA_TYPE_OWNING_CONCERNS
     )
