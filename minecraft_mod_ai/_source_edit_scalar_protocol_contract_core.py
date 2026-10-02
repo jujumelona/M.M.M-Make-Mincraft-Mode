@@ -15,6 +15,11 @@ from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .execution_contract_policy import (
+    SOURCE_REPAIR_MAX_SOURCE_CHARS,
+    SOURCE_REPAIR_MAX_SPAN_CHARS,
+)
+
 _CANONICAL_OPERATIONS = (
     "replace_exact",
     "insert_before",
@@ -184,6 +189,40 @@ SOURCE_EDIT_SCHEMA: dict[str, Any] = {
         },
     },
 }
+_SOURCE_EDIT_GENERIC_MAX_CHARS = 512
+_SOURCE_EDIT_SPAN_FIELDS = frozenset({"old", "anchor", "old_text"})
+_SOURCE_EDIT_SOURCE_FIELDS = frozenset({
+    "new",
+    "content",
+    "text",
+    "member",
+    "new_text",
+    "new_content",
+    "replacement",
+    "code",
+    "body",
+})
+
+
+def _apply_source_edit_transport_bounds() -> None:
+    """Make every model-authored source-edit string finite without starving source text."""
+
+    properties = SOURCE_EDIT_SCHEMA["properties"]
+    for name, schema in properties.items():
+        if not isinstance(schema, dict) or schema.get("type") != "string":
+            continue
+        if "enum" in schema or "maxLength" in schema:
+            continue
+        if name in _SOURCE_EDIT_SPAN_FIELDS:
+            schema["maxLength"] = SOURCE_REPAIR_MAX_SPAN_CHARS
+        elif name in _SOURCE_EDIT_SOURCE_FIELDS:
+            schema["maxLength"] = SOURCE_REPAIR_MAX_SOURCE_CHARS
+        else:
+            schema["maxLength"] = _SOURCE_EDIT_GENERIC_MAX_CHARS
+
+
+_apply_source_edit_transport_bounds()
+
 _ALLOWED_FIELDS = frozenset(SOURCE_EDIT_SCHEMA["properties"].keys())
 
 
