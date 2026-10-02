@@ -376,10 +376,11 @@ def _base_args(binary: str, model_path: str, config: Any, port: int) -> list[str
         # This belongs to the server launch contract itself because autotune,
         # planner/coder priming and adapters can all be the first launch owner.
         "--jinja",
-        # Keep Jinja prompt rendering (including the current tool schemas) but return
-        # reasoning/tool markup in message.content. MMM validates and parses that raw
-        # model protocol on the host instead of accepting llama.cpp-parsed tool calls.
-        "--skip-chat-parsing",
+        # Do not force --skip-chat-parsing here. Current llama.cpp recognizes the
+        # Qwen3-Coder XML template used by Qwen3.5 and converts model XML into native
+        # OpenAI message.tool_calls. The adapter remains the host validation boundary
+        # and still recovers raw Qwen markup when an older/external server leaves it
+        # in message.content.
         # Output-exhausted non-thinking actions are resumed by appending the exact
         # partial assistant turn. Pin the server capability explicitly rather than
         # depending on a build default that could change across Colab upgrades.
