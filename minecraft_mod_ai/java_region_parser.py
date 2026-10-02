@@ -1369,7 +1369,101 @@ def _recover_initialize_from_class_body(candidate: str) -> str:
     return recovered
 
 
-def _recover_initialize_from_outer_class(candidate: str) -> str:
+def _static_initializer_statements(node: Any, source: bytes) -> tuple[str, ...]:
+    block = node.child_by_field_name("body")
+    if block is None:
+        block = next(
+            (child for child in node.named_children if child.type == "block"),
+            None,
+        )
+    if block is None:
+        raise JavaRegionParseError("static initializer envelope has no block body")
+    statements: list[str] = []
+    for child in block.named_children:
+        if child.type in _COMMENT_TYPES:
+            continue
+        if child.type in _NESTED_TYPES:
+            raise _scope_error(
+                f"initialize body cannot declare local type {_name(child, source)!r}"
+            )
+        rendered = _text(source, child).strip()
+        if rendered:
+            statements.append(rendered)
+    return tuple(statements)
+
+
+def _recover_initialize_from_static_initializer(
+    candidate: str,
+    *,
+    known_member_source: str = "",
+) -> str:
+    """Lower accidental class-body static initialization without inventing state.
+
+    Field declarations are discarded only when an identical declaration already exists
+    in the accepted same-concern members region. This prevents the host from turning a
+    model-invented static field into a dead local variable just to satisfy parser shape.
+    """
+    prefix = "final class __MMMRegionHost {\n"
+    source, root = _parse(prefix + str(candidate or "").strip() + "\n}\n")
+    body = _class_body(root)
+    nodes = tuple(
+        node for node in body.named_children if node.type not in _COMMENT_TYPES
+    )
+    if not nodes:
+        raise JavaRegionParseError("static initializer recovery received no class-body nodes")
+
+    known_fields: dict[str, dict[str, Any]] = {
+        str(row.get("symbol") or ""): dict(row)
+        for row in class_body_member_contracts(known_member_source)
+        if row.get("kind") == "field" and str(row.get("symbol") or "")
+    }
+
+    recovered: list[str] = []
+    saw_initializer = False
+    for node in nodes:
+        if node.type == "field_declaration":
+            contracts = _node_contracts(node, source)
+            if not contracts:
+                raise JavaRegionParseError(
+                    "static initializer recovery could not identify field declaration"
+                )
+            for contract in contracts:
+                symbol = str(contract.get("symbol") or "")
+                known = known_fields.get(symbol)
+                if known is None:
+                    raise JavaRegionParseError(
+                        f"initialize field {symbol!r} is not owned by current_concern_member_api"
+                    )
+                candidate_declaration = str(contract.get("declaration") or "")
+                known_declaration = str(known.get("declaration") or "")
+                if (
+                    class_body_token_identity(candidate_declaration)
+                    != class_body_token_identity(known_declaration)
+                ):
+                    raise JavaRegionParseError(
+                        f"initialize field {symbol!r} does not exactly match the accepted member declaration"
+                    )
+            continue
+        if node.type == "static_initializer":
+            saw_initializer = True
+            recovered.extend(_static_initializer_statements(node, source))
+            continue
+        raise JavaRegionParseError(
+            f"static initializer envelope contains unsupported class-body node {node.type!r}"
+        )
+
+    if not saw_initializer:
+        raise JavaRegionParseError("initialize candidate has no static initializer envelope")
+    value = "\n".join(recovered).strip()
+    strict_initialize_statements(value)
+    return value
+
+
+def _recover_initialize_from_outer_class(
+    candidate: str,
+    *,
+    known_member_source: str = "",
+) -> str:
     raw = str(candidate or "").strip()
     source = raw.encode("utf-8")
     tree = _parser().parse(source)
@@ -1413,10 +1507,24 @@ def _recover_initialize_from_outer_class(candidate: str) -> str:
     )
     if imports:
         class_body = _qualify_imported_jdk_names(class_body, imports)
-    return _recover_initialize_from_class_body(class_body)
+    try:
+        return _recover_initialize_from_class_body(class_body)
+    except JavaRegionParseError as wrapper_error:
+        try:
+            return _recover_initialize_from_static_initializer(
+                class_body,
+                known_member_source=known_member_source,
+            )
+        except JavaRegionParseError:
+            raise wrapper_error
 
 
-def _recover_initialize_shape(candidate: str, shape: str) -> str:
+def _recover_initialize_shape(
+    candidate: str,
+    shape: str,
+    *,
+    known_member_source: str = "",
+) -> str:
     if shape == "direct_statements":
         return "\n".join(strict_initialize_statements(candidate)).strip()
     if shape == "jdk_imported_statements":
@@ -1424,6 +1532,21 @@ def _recover_initialize_shape(candidate: str, shape: str) -> str:
         if canonical is None:
             raise JavaRegionParseError("initialize candidate has no leading JDK imports")
         return "\n".join(strict_initialize_statements(canonical)).strip()
+    if shape == "static_initializer_envelope":
+        return _recover_initialize_from_static_initializer(
+            candidate,
+            known_member_source=known_member_source,
+        )
+    if shape == "jdk_imported_static_initializer_envelope":
+        canonical = _canonicalize_member_jdk_imports(candidate)
+        if canonical is None:
+            raise JavaRegionParseError(
+                "static initializer candidate has no leading JDK imports"
+            )
+        return _recover_initialize_from_static_initializer(
+            canonical,
+            known_member_source=known_member_source,
+        )
     if shape == "initialize_wrapper":
         return _recover_initialize_from_class_body(candidate)
     if shape == "jdk_imported_initialize_wrapper":
@@ -1434,11 +1557,18 @@ def _recover_initialize_shape(candidate: str, shape: str) -> str:
             )
         return _recover_initialize_from_class_body(canonical)
     if shape == "outer_class_initialize":
-        return _recover_initialize_from_outer_class(candidate)
+        return _recover_initialize_from_outer_class(
+            candidate,
+            known_member_source=known_member_source,
+        )
     raise JavaRegionParseError(f"unsupported initialize recovery shape {shape!r}")
 
 
-def admit_initialize_region(value: str) -> str:
+def admit_initialize_region(
+    value: str,
+    *,
+    known_member_source: str = "",
+) -> str:
     """Recover arbitrary model output into host-owned initialize statements.
 
     Recovery is policy-driven and shape-based: direct statement lists, explicit
@@ -1454,7 +1584,11 @@ def admit_initialize_region(value: str) -> str:
     for candidate in candidates:
         for shape in shapes:
             try:
-                recovered = _recover_initialize_shape(candidate, shape)
+                recovered = _recover_initialize_shape(
+                    candidate,
+                    shape,
+                    known_member_source=known_member_source,
+                )
                 # A successfully parsed initialize region may intentionally lower
                 # to no statements (for example, an initialize() wrapper whose
                 # body contains comments only). Empty is therefore a valid no-op,
