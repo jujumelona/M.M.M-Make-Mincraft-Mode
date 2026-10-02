@@ -13,7 +13,7 @@ from minecraft_mod_ai.model_output_atomicity_contract import (
 )
 
 
-def test_large_closed_model_schema_is_rejected() -> None:
+def test_large_closed_model_schema_is_allowed() -> None:
     schema = {
         "type": "object",
         "properties": {
@@ -30,9 +30,8 @@ def test_large_closed_model_schema_is_rejected() -> None:
         "additionalProperties": False,
     }
 
-    with pytest.raises(ModelConfigurationError):
-        assert_atomic_model_schema(schema, surface="regression")
-    assert not is_atomic_model_schema(schema)
+    assert_atomic_model_schema(schema, surface="regression")
+    assert is_atomic_model_schema(schema)
 
 
 def test_small_atomic_schema_remains_allowed() -> None:
@@ -86,14 +85,14 @@ def test_native_tool_decision_uses_the_same_atomicity_boundary() -> None:
         "additionalProperties": False,
     }
 
-    with pytest.raises(ModelConfigurationError):
-        DummyRouter().generate_tool_decision(
-            "planner",
-            ({"role": "user", "content": "fill it"},),
-            tool_name="oversized_planner_contract",
-            parameters=oversized,
-        )
-    assert calls == []
+    result = DummyRouter().generate_tool_decision(
+        "planner",
+        ({"role": "user", "content": "fill it"},),
+        tool_name="wide_planner_contract",
+        parameters=oversized,
+    )
+    assert result == {"ok": True}
+    assert calls == ["tool"]
 
 
 def test_native_tool_decision_allows_bounded_closed_schema() -> None:
@@ -137,7 +136,7 @@ def test_native_tool_decision_allows_bounded_closed_schema() -> None:
     "kind",
     ["depth", "properties", "unbounded_string", "unbounded_array"],
 )
-def test_schema_violating_bounds_is_rejected(kind: str) -> None:
+def test_schema_shape_is_not_rejected_by_arbitrary_size_bounds(kind: str) -> None:
     if kind == "depth":
         schema = {
             "type": "object",
@@ -191,12 +190,11 @@ def test_schema_violating_bounds_is_rejected(kind: str) -> None:
             "additionalProperties": False,
         }
 
-    with pytest.raises(ModelConfigurationError):
-        assert_atomic_model_schema(schema, surface=f"bound-violation-{kind}")
-    assert not is_atomic_model_schema(schema)
+    assert_atomic_model_schema(schema, surface=f"size-regression-{kind}")
+    assert is_atomic_model_schema(schema)
 
 
-def test_union_string_scalar_keeps_string_bound_enforcement() -> None:
+def test_union_string_scalar_does_not_require_global_string_bound() -> None:
     bounded = {
         "type": "object",
         "properties": {
@@ -221,8 +219,8 @@ def test_union_string_scalar_keeps_string_bound_enforcement() -> None:
         "required": ["initializer"],
         "additionalProperties": False,
     }
-    with pytest.raises(ModelConfigurationError, match="MODEL_ATOMICITY_STRING_UNBOUNDED"):
-        assert_atomic_model_schema(unbounded, surface="union scalar")
+    assert_atomic_model_schema(unbounded, surface="union scalar")
+    assert is_atomic_model_schema(unbounded)
 
 
 def test_open_object_template_still_rejected() -> None:
