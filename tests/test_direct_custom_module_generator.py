@@ -168,24 +168,18 @@ def test_compiler_failure_is_sent_back_once_then_no_progress_stops(
     assert "not a patch" in calls[1][-1]["content"]
     assert (root / path).read_bytes() == original
 
-def test_package_import_has_one_live_runtime_bootstrap_owner() -> None:
+def test_package_import_has_no_runtime_rebinding_bootstrap() -> None:
     package = Path(__file__).resolve().parents[1] / "minecraft_mod_ai"
     init_text = (package / "__init__.py").read_text(encoding="utf-8")
-    bootstrap = (package / "runtime_bootstrap.py").read_text(encoding="utf-8")
 
-    assert init_text.count(
-        "from .runtime_bootstrap import initialize_runtime as _initialize_runtime"
-    ) == 1
-    assert init_text.count("_initialize_runtime()") == 1
-    assert "def initialize_runtime() -> None:" in bootstrap
-    assert "_INITIALIZED = False" in bootstrap
-    assert "with _LOCK:" in bootstrap
+    assert "runtime_bootstrap" not in init_text
+    assert "initialize_runtime" not in init_text
 
 
 def test_retired_runtime_composition_files_stay_absent() -> None:
     package = Path(__file__).resolve().parents[1] / "minecraft_mod_ai"
-    assert (package / "runtime_bootstrap.py").is_file()
     for name in (
+        "runtime_bootstrap.py",
         "runtime_contract_composer.py",
         "runtime_contract_wrappers.py",
         "runtime_finalization.py",
