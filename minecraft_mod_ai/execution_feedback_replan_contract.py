@@ -27,6 +27,8 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
+_MAX_LEDGER_TASK_PAGES = 10_000
+
 from .compiler_diagnostics import (
     compiler_log_diagnostics as _compiler_log_diagnostics,
 )
@@ -529,21 +531,45 @@ def _latest_failed_feedback(ledger: Any) -> dict[str, Any] | None:
     }
 
 
-def _generation_rows(ledger: Any) -> list[dict[str, Any]]:
+def _ledger_task_rows(ledger: Any) -> list[dict[str, Any]]:
+    """Read the finite ledger task stream and fail closed on cursor cycles."""
+
     rows: list[dict[str, Any]] = []
     cursor = ""
+    seen_cursors: set[str] = set()
+    page_count = 0
     while True:
+        if page_count >= _MAX_LEDGER_TASK_PAGES:
+            raise RuntimeError(
+                "EXECUTION_FEEDBACK_PAGINATION_LIMIT: ledger task pagination exceeded "
+                f"{_MAX_LEDGER_TASK_PAGES} pages"
+            )
         page = ledger.tasks(cursor=cursor, limit=1000)
-        for task in page.get("tasks", ()):  # pragma: no branch - host-controlled page
-            if not isinstance(task, Mapping):
-                continue
-            if not str(task.get("stage", "")).startswith("generate:"):
-                continue
-            rows.append(dict(task))
-        cursor = str(page.get("next_cursor") or "")
-        if not cursor:
-            break
-    return rows
+        page_count += 1
+        rows.extend(
+            dict(task)
+            for task in page.get("tasks", ())
+            if isinstance(task, Mapping)
+        )
+        next_cursor = str(page.get("next_cursor") or "")
+        if not next_cursor:
+            return rows
+        if next_cursor == cursor or next_cursor in seen_cursors:
+            raise RuntimeError(
+                "EXECUTION_FEEDBACK_PAGINATION_CYCLE: ledger returned a repeated "
+                f"cursor {next_cursor!r}"
+            )
+        if cursor:
+            seen_cursors.add(cursor)
+        cursor = next_cursor
+
+
+def _generation_rows(ledger: Any) -> list[dict[str, Any]]:
+    return [
+        task
+        for task in _ledger_task_rows(ledger)
+        if str(task.get("stage", "")).startswith("generate:")
+    ]
 
 
 def _observations(task: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -766,16 +792,7 @@ def invalidate_execution_feedback(
         impacted = ledger._invalidate_many(connection, sorted(seed_nodes))
         connection.commit()
     impacted_set = set(impacted)
-    all_rows: list[dict[str, Any]] = []
-    cursor = ""
-    while True:
-        page = ledger.tasks(cursor=cursor, limit=1000)
-        all_rows.extend(
-            dict(item) for item in page.get("tasks", ()) if isinstance(item, Mapping)
-        )
-        cursor = str(page.get("next_cursor") or "")
-        if not cursor:
-            break
+    all_rows = _ledger_task_rows(ledger)
     preserved = sorted(
         str(item.get("node_id"))
         for item in all_rows
