@@ -641,6 +641,7 @@ def _java_identifier_renames(
     decision: Mapping[str, Any],
     *,
     reserved_identifiers: Sequence[str] = (),
+    preferred_identifiers: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """Build host-owned, collision-free Java spellings for semantic labels."""
 
@@ -703,16 +704,31 @@ def _java_identifier_renames(
         if _canonical_java_identifier(raw) == raw and raw not in externally_reserved
     }
     used = set(externally_reserved) | set(already_valid)
+    preferred = {
+        str(raw): _canonical_java_identifier(final)
+        for raw, final in (preferred_identifiers or {}).items()
+        if str(raw or "").strip() and str(final or "").strip()
+    }
     renames: dict[str, str] = {}
     for raw in sorted(names):
-        canonical = _canonical_java_identifier(raw)
-        if canonical == raw and canonical not in externally_reserved:
+        canonical = preferred.get(raw, _canonical_java_identifier(raw))
+        if (
+            canonical == raw
+            and canonical not in externally_reserved
+            and raw not in preferred
+        ):
             continue
         base = canonical
         suffix = 2
-        while canonical in used:
+        while canonical in used and canonical != preferred.get(raw):
             canonical = f"{base}_{suffix}"
             suffix += 1
+        if canonical in used and canonical == preferred.get(raw):
+            base = canonical
+            suffix = 2
+            while canonical in used:
+                canonical = f"{base}_{suffix}"
+                suffix += 1
         renames[raw] = canonical
         used.add(canonical)
     return renames
@@ -1657,11 +1673,87 @@ def _validate_atomic_java_decision(
                 )
 
 
+def _semantic_identifier_key(value: Any) -> str:
+    return re.sub(r"[^A-Za-z0-9]+", "", str(value or "")).casefold()
+
+
+def _host_identifier_overrides(
+    decision: Mapping[str, Any],
+    payload: Mapping[str, Any],
+) -> dict[str, str]:
+    """Resolve identifiers already known by host authority before Java rendering."""
+
+    overrides: dict[str, str] = {}
+
+    concern = payload.get("concern")
+    plan = concern.get("java_symbol_plan") if isinstance(concern, Mapping) else None
+    authored = (
+        plan.get("authored_field_symbols")
+        if isinstance(plan, Mapping)
+        else None
+    )
+    authored_pairs = [
+        (str(key), str(value))
+        for key, value in (authored or {}).items()
+        if str(key or "").strip() and str(value or "").strip()
+    ]
+    for field in decision.get("fields") or ():
+        if not isinstance(field, Mapping):
+            continue
+        raw = str(field.get("name") or "").strip()
+        key = _semantic_identifier_key(raw)
+        for semantic, final in authored_pairs:
+            if key in {
+                _semantic_identifier_key(semantic),
+                _semantic_identifier_key(final),
+            }:
+                overrides[raw] = final
+                break
+
+    authorized = [
+        str(value).strip()
+        for value in payload.get("authorized_nested_runtime_types") or ()
+        if str(value).strip()
+    ]
+    unmatched_authorized = list(authorized)
+    unmatched_raw: list[str] = []
+    for category in ("records", "enums", "classes"):
+        for item in decision.get(category) or ():
+            if not isinstance(item, Mapping):
+                continue
+            raw = str(item.get("name") or "").strip()
+            if not raw:
+                continue
+            raw_key = _semantic_identifier_key(raw)
+            match = next(
+                (
+                    candidate
+                    for candidate in unmatched_authorized
+                    if _semantic_identifier_key(candidate) == raw_key
+                ),
+                None,
+            )
+            if match is not None:
+                overrides[raw] = match
+                unmatched_authorized.remove(match)
+            else:
+                unmatched_raw.append(raw)
+
+    # If authority identifies one exact required nested type and the model supplied
+    # one semantic nested-type placeholder, there is no naming decision left for
+    # the model to make.
+    if len(unmatched_raw) == 1 and len(unmatched_authorized) == 1:
+        overrides[unmatched_raw[0]] = unmatched_authorized[0]
+
+    return overrides
+
+
 def _render_atomic_java_structure(
     decision: Mapping[str, Any],
     *,
     response_region: str,
     host_symbol: str = "",
+    identifier_overrides: Mapping[str, str] | None = None,
 ) -> str:
     if response_region == "initialize":
         return "\n".join(
@@ -1672,6 +1764,7 @@ def _render_atomic_java_structure(
     renames = _java_identifier_renames(
         decision,
         reserved_identifiers=reserved_type_names,
+        preferred_identifiers=identifier_overrides,
     )
     _validate_atomic_type_namespace(
         decision,
@@ -1771,8 +1864,10 @@ def _call_atomic_java_region(
             response_region=response_region,
         )
         source = _render_atomic_java_structure(
-            decision, response_region=response_region,
+            decision,
+            response_region=response_region,
             host_symbol=str(payload.get("host_selected_class") or "").strip(),
+            identifier_overrides=_host_identifier_overrides(decision, payload),
         )
         _validate_region_text(source, initialize_region=response_region == "initialize")
     except CustomModuleGenerationError as exc:
