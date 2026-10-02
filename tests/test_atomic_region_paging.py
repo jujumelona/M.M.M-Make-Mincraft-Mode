@@ -561,10 +561,9 @@ def test_exhausted_unit_refines_only_pending_work_and_retains_accepted_members()
 @pytest.mark.parametrize('decision', [
     {'done': True, 'next_work': ''},
     {'done': False, 'next_work': ''},
-    {'done': 'false', 'next_work': 'declare value'},
-    {'done': False, 'next_work': 'x' * 257},
+    {'next_work': ''},
 ])
-def test_unit_selection_cannot_claim_completion_or_bypass_native_contract(decision):
+def test_unit_selection_requires_semantic_next_work_not_protocol_flags(decision):
     calls = []
 
     def coder(messages):
@@ -574,10 +573,23 @@ def test_unit_selection_cannot_claim_completion_or_bypass_native_contract(decisi
     executor = _executor([])
     executor.call_coder = coder
     executor.completion_decider = lambda _: decision
-    executor.write_source = lambda *_: pytest.fail('invalid selection must not mutate source')
+    executor.write_source = lambda *_: pytest.fail('empty selection must not mutate source')
     with pytest.raises(CustomModuleGenerationError, match='COMPLETION_DECISION_INVALID'):
         executor.run()
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize('decision', [
+    {'done': 'false', 'next_work': 'declare value'},
+    {'done': False, 'next_work': 'x' * 257},
+    {'next_work': 'declare value', 'ignored_transport_hint': 'ok'},
+])
+def test_unit_selection_ignores_cosmetic_completion_metadata(decision):
+    from minecraft_mod_ai.atomic_region_paging import _validated_decision
+
+    normalized = _validated_decision(decision, selecting=True)
+    assert normalized['done'] is False
+    assert normalized['next_work'] == decision['next_work'].strip()
 
 
 @pytest.mark.parametrize('repeat', [True, False])
