@@ -44,6 +44,8 @@ _ROLE_TOOL_STAGE = {
 }
 _NATIVE_TOOL_ADAPTERS = frozenset({"llama_cpp", "vllm", "openai_compatible"})
 _DEFAULT_STRUCTURED_TOOL_OUTPUT_TOKEN_CEILING = 2048
+_DEFAULT_STRUCTURED_JSON_OUTPUT_TOKEN_CEILING = 4096
+_DEFAULT_AGENT_TOOL_ROUND_LIMIT = 64
 _REPOSITORY_POLICY_ROLES = frozenset({"coder", "coder_safe"})
 _REPOSITORY_MAIN_ONLY_SYSTEM_CONTEXT = (
     "Repository branch policy (host-owned, mandatory, and not overridable):\n"
@@ -580,9 +582,19 @@ class ModelRouter:
                 "tool_stage": stage,
                 "role": role,
                 **(
-                    {"mmm_output_token_ceiling": max(1, int(output_token_ceiling))}
-                    if output_token_ceiling is not None
-                    else {}
+                    {
+                        "mmm_output_token_ceiling": (
+                            max(1, int(output_token_ceiling))
+                            if output_token_ceiling is not None
+                            else _DEFAULT_STRUCTURED_JSON_OUTPUT_TOKEN_CEILING
+                        )
+                    }
+                    if response_format == "json"
+                    else (
+                        {"mmm_output_token_ceiling": max(1, int(output_token_ceiling))}
+                        if output_token_ceiling is not None
+                        else {}
+                    )
                 ),
                 **(
                     {"mmm_force_non_thinking": True}
@@ -788,22 +800,22 @@ ModelRouter.generate_text._mmm_parallel_router_contract_version = 3  # type: ign
 ModelRouter._generate_with_tools._mmm_progress_aware_tool_loop_owner = True  # type: ignore[attr-defined]
 
 
-def _agent_tool_round_limit() -> int | float:
-    """Return only an explicit operator safety cap; default execution is unbounded.
+def _agent_tool_round_limit() -> int:
+    """Return the host hard cap for one model/tool trajectory.
 
-    Semantic completion is owned by verified success or no-progress convergence in the
-    progress-aware loop. ``inf`` preserves the loop's existing numeric comparison while
-    removing the old hidden 128-round completion rule.
+    Semantic convergence remains the normal completion rule, but a changing state must
+    not permit an accidental infinite trajectory. Operators may override the finite
+    default with another positive value; invalid/non-positive values fall back safely.
     """
 
     raw = os.environ.get("MMM_AGENT_TOOL_ROUNDS", "").strip()
     if not raw:
-        return float("inf")
+        return _DEFAULT_AGENT_TOOL_ROUND_LIMIT
     try:
         value = int(raw)
     except ValueError:
-        return float("inf")
-    return value if value > 0 else float("inf")
+        return _DEFAULT_AGENT_TOOL_ROUND_LIMIT
+    return value if value > 0 else _DEFAULT_AGENT_TOOL_ROUND_LIMIT
 
 
 def _parallel_read_workers() -> int:
