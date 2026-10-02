@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-"""Dedicated atomic worksheet chunker and host deterministic merger.
+"""Worksheet concern chunking with host-owned semantic merge.
 
-The host owns both concern paging and oversized record-field paging. Model-facing
-schemas always satisfy the global atomicity contract; the host deterministically
-reassembles field fragments and validates the canonical worksheet section afterward.
+A concern is never split into independent field pages, so record index/count/order is
+not used as cross-call identity. The host merges complete concern records and validates
+the canonical worksheet section afterward.
 """
 
 from collections.abc import Mapping, Sequence
@@ -12,11 +12,7 @@ from copy import deepcopy
 import json
 from typing import Any
 
-from .model_output_atomicity_contract import (
-    MAX_MODEL_FIELDS,
-    _assert_closed_object_schemas,
-    is_atomic_model_schema,
-)
+from .model_output_atomicity_contract import _assert_closed_object_schemas
 from .planning_detail_slots import DETAIL_RECORDS, record_field_schema
 from .planning_detail_template import (
     _PLACEHOLDERS,
@@ -93,14 +89,6 @@ def _chunk_projection(
     return projection
 
 
-def _field_pages(fields: Sequence[str]) -> tuple[tuple[str, ...], ...]:
-    width = max(1, int(MAX_MODEL_FIELDS))
-    return tuple(
-        tuple(fields[index : index + width])
-        for index in range(0, len(fields), width)
-    )
-
-
 def pack_section_concerns(
     section: str,
     *,
@@ -108,64 +96,39 @@ def pack_section_concerns(
 ) -> list[tuple[str, ...]]:
     """Pack concerns and oversized record fields into atomic model-facing chunks.
 
-    Returned objects remain tuple-compatible for existing callers while carrying the
-    exact host-selected record fields for each concern page.
-    """
+    Returned objects remain tupledef pack_section_concerns(
+    section: str,
+    *,
+    max_chunk_size: int | None = None,
+) -> list[tuple[str, ...]]:
+    """Pack complete concerns without splitting one record across model calls."""
     key = _normalize_section_name(section)
     records = DETAIL_RECORDS[key]
     if max_chunk_size is not None and max_chunk_size < 1:
         raise ValueError("max_chunk_size must be positive when supplied")
 
-    pages: list[tuple[str, tuple[str, ...]]] = []
-    for concern, columns in records.items():
-        for fields in _field_pages(tuple(columns.split())):
-            pages.append((concern, fields))
-
+    chunk_size = max_chunk_size or 1
+    items = list(records.items())
     chunks: list[tuple[str, ...]] = []
-    position = 0
-    while position < len(pages):
-        outer_capacity = max(1, MAX_MODEL_FIELDS - (2 if not chunks else 1))
-        if max_chunk_size is not None:
-            outer_capacity = min(outer_capacity, max_chunk_size)
-
-        selected: list[tuple[str, tuple[str, ...]]] = []
-        used_concerns: set[str] = set()
-        scan = position
-        while scan < len(pages) and len(selected) < outer_capacity:
-            concern, fields = pages[scan]
-            if concern in used_concerns:
-                break
-            selected.append((concern, fields))
-            used_concerns.add(concern)
-            scan += 1
-
-        if not selected:
-            selected = [pages[position]]
-            scan = position + 1
-
+    for start in range(0, len(items), chunk_size):
+        selected = items[start : start + chunk_size]
         chunk = WorksheetConcernChunk(
             [concern for concern, _ in selected],
-            {concern: fields for concern, fields in selected},
+            {
+                concern: tuple(columns.split())
+                for concern, columns in selected
+            },
         )
-        schema = worksheet_chunk_schema(key, chunk, include_evidence=not chunks)
-        if not is_atomic_model_schema(schema):
-            if len(selected) != 1:
-                concern, fields = selected[0]
-                chunk = WorksheetConcernChunk((concern,), {concern: fields})
-                schema = worksheet_chunk_schema(key, chunk, include_evidence=not chunks)
-                scan = position + 1
-            if not is_atomic_model_schema(schema):
-                _assert_closed_object_schemas(
-                    schema,
-                    path=f"worksheet chunk {key}.{chunk[0]}",
-                )
-                raise ValueError(
-                    f"DETAILED_PLAN_WORKSHEET_ATOMICITY: unable to atomize {key}.{chunk[0]}"
-                )
-
+        schema = worksheet_chunk_schema(
+            key,
+            chunk,
+            include_evidence=not chunks,
+        )
+        _assert_closed_object_schemas(
+            schema,
+            path=f"worksheet chunk {key}.{start // chunk_size + 1}",
+        )
         chunks.append(chunk)
-        position = scan
-
     return chunks
 
 
@@ -176,7 +139,12 @@ def worksheet_chunk_schema(
     include_evidence: bool = False,
     record_counts: Mapping[str, int] | None = None,
 ) -> dict[str, Any]:
-    """Return one bounded partial-record schema for a host-selected field page."""
+    """Return one complete-concern schema.
+
+    record_counts is accepted only for call-site compatibility and is intentionally
+    ignored: a previous model response never becomes a cardinality contract.
+    """
+    del record_counts
     key = _normalize_section_name(section)
     active = tuple(concerns)
     if not active:
@@ -187,23 +155,10 @@ def worksheet_chunk_schema(
     authored_signal: list[dict[str, Any]] = []
     for concern in active:
         fields = projection[concern]
-        field_schemas: dict[str, Any] = {}
-        for field in fields:
-            field_schema = dict(record_field_schema(key, concern, field))
-            raw_type = field_schema.get("type")
-            string_capable = raw_type == "string" or (
-                isinstance(raw_type, list) and "string" in raw_type
-            )
-            if string_capable:
-                field_schema.setdefault("maxLength", 256)
-            if raw_type == "array" or (
-                isinstance(raw_type, list) and "array" in raw_type
-            ):
-                field_schema.setdefault("maxItems", 4)
-                items = field_schema.get("items")
-                if isinstance(items, dict) and items.get("type") == "string":
-                    items.setdefault("maxLength", 256)
-            field_schemas[field] = field_schema
+        field_schemas = {
+            field: deepcopy(record_field_schema(key, concern, field))
+            for field in fields
+        }
         item_schema: dict[str, Any] = {
             "type": "object",
             "properties": field_schemas,
@@ -211,35 +166,21 @@ def worksheet_chunk_schema(
             "minProperties": 1,
             "additionalProperties": False,
         }
-        count = (
-            int(record_counts[concern])
-            if isinstance(record_counts, Mapping) and concern in record_counts
-            else None
-        )
-        array_schema: dict[str, Any] = {
+        properties[concern] = {
             "type": "array",
-            "maxItems": 4 if count is None else count,
             "items": item_schema,
         }
-        if count is not None:
-            if count < 0 or count > 4:
-                raise ValueError(
-                    f"Invalid host-fixed record count for {key}.{concern}: {count}"
-                )
-            array_schema["minItems"] = count
-        properties[concern] = array_schema
         authored_signal.append(
             {"required": [concern], "properties": {concern: {"minItems": 1}}}
         )
 
     properties["inapplicable_concerns"] = {
         "type": "array",
-        "maxItems": 4,
         "items": {
             "type": "object",
             "properties": {
                 "concern": {"type": "string", "enum": list(active)},
-                "reason": {"type": "string", "minLength": 1, "maxLength": 256},
+                "reason": {"type": "string", "minLength": 1},
             },
             "required": ["concern", "reason"],
             "additionalProperties": False,
@@ -255,18 +196,17 @@ def worksheet_chunk_schema(
     if include_evidence:
         properties["constraint_evidence_refs"] = {
             "type": "array",
-            "maxItems": 4,
             "uniqueItems": True,
             "description": (
                 "Evidence references supplied by the host that constrain this authored design section. "
                 "Use an empty array when the section is a design decision rather than an external fact."
             ),
-            "items": {"type": "string", "minLength": 1, "maxLength": 256},
+            "items": {"type": "string", "minLength": 1},
         }
 
     return {
         "type": "object",
-        "description": f"Atomic concern chunk for {key}: {', '.join(active)}",
+        "description": f"Complete concern chunk for {key}: {', '.join(active)}",
         "properties": properties,
         "required": [],
         "anyOf": authored_signal,
@@ -336,12 +276,12 @@ def worksheet_chunk_prompt(
 ) -> str:
     from .planning_contract_ssot import schema_skeleton_template
 
+    del record_counts
     key = _normalize_section_name(section)
     schema = worksheet_chunk_schema(
         key,
         concerns,
         include_evidence=include_evidence,
-        record_counts=record_counts,
     )
     skeleton = schema_skeleton_template(schema)
     projection = _chunk_projection(key, concerns)
@@ -353,32 +293,19 @@ def worksheet_chunk_prompt(
         if include_evidence
         else ""
     )
-    fixed_counts = {
-        concern: int(record_counts[concern])
-        for concern in concerns
-        if isinstance(record_counts, Mapping) and concern in record_counts
-    }
-    fixed_count_text = (
-        "Host-fixed Record Counts: "
-        + ", ".join(f"{concern}={count}" for concern, count in fixed_counts.items())
-        + ". For repeated field pages, emit exactly that many records in the same order."
-        if fixed_counts
-        else ""
-    )
     return "\n".join(
         (
-            f"ENGINEERING WORKSHEET — atomic concern chunk {chunk_index}/{chunk_count}:",
+            f"ENGINEERING WORKSHEET — concern chunk {chunk_index}/{chunk_count}:",
             f"Section: {key}",
             f"Active Concerns: {', '.join(concerns)}",
             f"Active Record Fields: {field_text}",
             f"Purpose: {_section_description(key)}",
-            f"Fill only the shown fields for these concern arrays.{evidence_instruction}",
-            "If a concern appears in another chunk, preserve record count and record order so the host can merge field pages deterministically.",
+            f"Fill the complete shown fields for these concern arrays.{evidence_instruction}",
+            "Each concern is generated as one semantic unit; do not depend on record indices from another call.",
             "Prefer complete values for the shown fields, but do not invent external facts; the host normalizes harmless omissions.",
             "The chunk must contain at least one concrete concern record or one concrete inapplicable reason; evidence refs alone are not an answer.",
             "Never use N/A, none, TODO, TBD, unknown, same-as-above, or another placeholder as the authored content.",
             "DO NOT output JSON Schema keywords (never output 'type', 'properties', 'required', or 'additionalProperties').",
-            fixed_count_text,
             "Return only a JSON object following this data template skeleton:",
             json.dumps(skeleton, ensure_ascii=False, indent=2),
         )
@@ -403,7 +330,6 @@ def merge_worksheet_section_chunks(
     merged_specification: dict[str, list[dict[str, Any]]] = {
         concern: [] for concern in records
     }
-    expected_record_counts: dict[str, int] = {}
     combined_inapplicable: list[dict[str, Any]] = []
     evidence_refs: list[str] = []
 
@@ -459,15 +385,6 @@ def merge_worksheet_section_chunks(
                 candidate_items = []
 
             count = len(candidate_items)
-            prior_count = expected_record_counts.get(field)
-            if prior_count is None:
-                expected_record_counts[field] = count
-            elif prior_count != count:
-                raise ValueError(
-                    "DETAILED_PLAN_WORKSHEET_FIELD_PAGE_COUNT: "
-                    f"{key}.{field} changed record count from {prior_count} to {count}"
-                )
-
             merged_rows = merged_specification[field]
             while len(merged_rows) < count:
                 merged_rows.append({})
