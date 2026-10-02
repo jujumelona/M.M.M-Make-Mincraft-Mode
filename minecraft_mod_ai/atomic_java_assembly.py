@@ -293,24 +293,6 @@ class JavaStructureAssembly:
         properties = schema["properties"]
         scalars = {key: _scalar_schema(value, key) for key, value in properties.items()
                    if value.get("type") not in {"array", "object"}}
-        if len(path) == 2 and "name" in scalars:
-            category = path[0]
-            kinds = {"fields": "field", "classes": "type", "records": "type", "enums": "type"}
-            reserved = {
-                row["symbol"] for row in self.payload.get("available_sibling_api", ())
-                if isinstance(row, Mapping) and row.get("kind") == kinds.get(category)
-                and row.get("symbol")
-            }
-            reserved.update(item["name"] for item in self.root.get(category, ())
-                            if item is not target and isinstance(item, Mapping) and item.get("name")
-                            and category != "methods")
-            if category in {"classes", "records", "enums"}:
-                reserved.add(self.payload.get("host_selected_class", ""))
-                for other in {"classes", "records", "enums"} - {category}:
-                    reserved.update(item["name"] for item in self.root.get(other, ()) if item.get("name"))
-            reserved.discard("")
-            if reserved:
-                scalars["name"]["not"] = {"enum": sorted(reserved)}
         required = set(schema.get("required", ()))
         names = list(scalars)
         if not scalars_seeded and scalars:
@@ -366,39 +348,6 @@ class JavaStructureAssembly:
                     self.multi_callback is not None
                     and item_scalars
                 ):
-                    reserved: set[str] = set()
-                    if len(item_path) == 2 and "name" in item_scalars:
-                        category = item_path[0]
-                        kinds = {
-                            "fields": "field",
-                            "classes": "type",
-                            "records": "type",
-                            "enums": "type",
-                        }
-                        reserved.update(
-                            row["symbol"]
-                            for row in self.payload.get("available_sibling_api", ())
-                            if isinstance(row, Mapping)
-                            and row.get("kind") == kinds.get(category)
-                            and row.get("symbol")
-                        )
-                        reserved.update(
-                            item["name"]
-                            for item in self.root.get(category, ())
-                            if isinstance(item, Mapping) and item.get("name")
-                            and category != "methods"
-                        )
-                        if category in {"classes", "records", "enums"}:
-                            reserved.add(self.payload.get("host_selected_class", ""))
-                            for other in {"classes", "records", "enums"} - {category}:
-                                reserved.update(
-                                    item["name"]
-                                    for item in self.root.get(other, ())
-                                    if isinstance(item, Mapping) and item.get("name")
-                                )
-                        reserved.discard("")
-                        if reserved:
-                            item_scalars["name"]["not"] = {"enum": sorted(reserved)}
                     seed_schema = _closed(
                         item_scalars,
                         [key for key in scalar_names if key in item_required],
@@ -409,17 +358,7 @@ class JavaStructureAssembly:
                         "Declare one or more sibling components; one native call per sibling.",
                         limit=remaining,
                     )
-                    batch_names: set[str] = set()
                     for seed in seeds:
-                        seed_name = str(seed.get("name") or "").strip()
-                        if seed_name and (seed_name in reserved or seed_name in batch_names):
-                            raise AtomicJavaDecisionError(
-                                f"ATOMIC_JAVA_ASSEMBLY_INVALID: duplicate or reserved "
-                                f"{selected} name {seed_name!r}.",
-                                response=seed,
-                            )
-                        if seed_name:
-                            batch_names.add(seed_name)
                         index = len(values)
                         item = dict(seed)
                         values.append(item)
