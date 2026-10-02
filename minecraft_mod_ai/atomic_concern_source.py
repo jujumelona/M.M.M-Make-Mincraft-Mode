@@ -4251,11 +4251,6 @@ class AtomicConcernExecutor:
             else max(1, int(self.region_attempt_limit))
         )
         concern_authority = _concern_authority(self.task, concern)
-        canonical_private_nested_symbols = (
-            authorized_concern_nested_type_symbols(concern_authority)
-            if response_region == "members"
-            else ()
-        )
 
         if (
             not failure
