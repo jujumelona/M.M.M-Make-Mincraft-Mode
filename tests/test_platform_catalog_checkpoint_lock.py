@@ -4,7 +4,7 @@ import json
 import pytest
 
 import minecraft_mod_ai.platform_catalog as catalog
-from minecraft_mod_ai.spec import PlatformLock
+from minecraft_mod_ai.platform_resolver import lock_from_adapter
 
 
 def _adapter():
@@ -13,9 +13,10 @@ def _adapter():
 
 def _write_lock(path, adapter) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    lock = lock_from_adapter(adapter)
     payload = {
-        name: getattr(adapter, name)
-        for name in PlatformLock.__dataclass_fields__
+        name: getattr(lock, name)
+        for name in lock.__dataclass_fields__
     }
     path.write_text(
         json.dumps(payload),
