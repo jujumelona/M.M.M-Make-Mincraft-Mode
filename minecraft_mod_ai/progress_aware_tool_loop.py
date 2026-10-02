@@ -265,7 +265,7 @@ def _constrain_existing_repair_schema(
     new_schema["type"] = "string"
     new_schema["maxLength"] = max_chars
     new_schema["description"] = (
-        "Replacement text for old only. "
+        "Replacement text for old only inside the host-selected bounded source window. "
         f"Emit at most {max_chars} characters and preserve unrelated source. "
         "Never emit the complete source file unless old itself is the complete source."
     )
@@ -1796,7 +1796,8 @@ class HostRunState:
             "The verifier failure is the active repair obligation. Do not restart generation, "
             "do not search unrelated ecosystem candidates, and never write a different path. "
             "The payload contains the exact diagnostic, exact old span and current source "
-            "context needed to repair the defect. Any earlier host_reserved/fresh metadata is "
+            "context needed to repair the defect. Treat repair_window as the bounded repair_window "
+            "and do not edit outside it. Any earlier host_reserved/fresh metadata is "
             "pre-materialization history only. Never regenerate the complete source file. "
             "Call apply_source_edit with old copied exactly from the repair request and new set "
             "to its replacement; host binds operation=replace_exact, path, count and transactional SHA. "
