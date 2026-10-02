@@ -551,6 +551,80 @@ def test_atomic_java_region_host_renders_malformed_semantic_member_names() -> No
     assert "STOP_PROPULSION_IMMEDIATELY_EMERGENCY_BRAKE_APPLIED" in result
 
 
+def test_stored_state_semantic_type_name_is_not_rejected_as_model_protocol() -> None:
+    responses = iter([
+        {"part": "classes"},
+        {"name": "stored_state"},
+        {"part": "done"},
+        {"part": "done"},
+    ])
+
+    class _Router:
+        def generate_tool_decision(self, role, messages, **kwargs):
+            return next(responses)
+
+    result = _call_atomic_java_region(
+        _Router(),
+        (
+            {"role": "system", "content": "structured only"},
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "response_region": "members",
+                        "host_selected_class": "AuthoredPersistence",
+                        "concern": {"name": "stored_state"},
+                        "available_sibling_api": [
+                            {
+                                "kind": "type",
+                                "symbol": "stored_state",
+                                "owner_concern": "prior_owner",
+                            }
+                        ],
+                    }
+                ),
+            },
+        ),
+        output_token_ceiling=1536,
+    )
+
+    assert "class stored_state" in result
+
+
+def test_host_selected_outer_name_is_renamed_by_host_not_rejected_by_model_schema() -> None:
+    responses = iter([
+        {"part": "classes"},
+        {"name": "AuthoredPersistence"},
+        {"part": "done"},
+        {"part": "done"},
+    ])
+
+    class _Router:
+        def generate_tool_decision(self, role, messages, **kwargs):
+            return next(responses)
+
+    result = _call_atomic_java_region(
+        _Router(),
+        (
+            {"role": "system", "content": "structured only"},
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "response_region": "members",
+                        "host_selected_class": "AuthoredPersistence",
+                        "concern": {"name": "stored_state"},
+                    }
+                ),
+            },
+        ),
+        output_token_ceiling=1536,
+    )
+
+    assert "class AuthoredPersistence_2" in result
+    assert "class AuthoredPersistence {" not in result
+
+
 def test_atomic_structured_tool_allows_intentional_empty_region() -> None:
     class _Router:
         def generate_tool_decision(self, role, messages, **kwargs):
