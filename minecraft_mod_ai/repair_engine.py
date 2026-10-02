@@ -633,15 +633,16 @@ class RepairEngine:
                         "role": "system",
                         "content": (
                             "You are a hash-guarded Minecraft source repair planner. "
-                            "Inspect evidence with read-only tools and return patch operations; "
-                            "the host transaction is the only writer."
+                            "Use only the host-supplied evidence and project context; retrieval "
+                            "and route selection are already host-owned. Return inert patch "
+                            "operations; the host transaction is the only writer."
                             " Return one JSON value conforming to the supplied repair tool schema."
                         ),
                     },
                     {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
                 ],
-                tool_stage="quality",
                 response_schema=repair_response_schema(self.policy.max_patch_bytes),
+                enable_tools=False,
             )
         except ModelConfigurationError as exc:
             raise RepairEngineError(
