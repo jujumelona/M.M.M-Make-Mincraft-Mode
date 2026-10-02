@@ -97,9 +97,8 @@ ATOMIC_REGION_COMPLETION_PARAMETERS = {
     "properties": {
         "done": {"type": "boolean"},
         "next_work": {"type": "string", "maxLength": 256},
-        "target": {"type": "string", "maxLength": 256},
     },
-    "required": ["done", "next_work", "target"],
+    "required": ["done", "next_work"],
     "additionalProperties": False,
 }
 JAVA_ATOMIC_ASSEMBLY_MAX_CALLS = 128

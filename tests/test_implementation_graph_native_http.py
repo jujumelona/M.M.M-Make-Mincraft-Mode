@@ -80,7 +80,7 @@ def test_host_graph_reaches_java_execution_without_planner_http(tmp_path, monkey
             if tools:
                 name = tools[0]["function"]["name"]
                 assert name == "report_java_region_completion"
-                arguments = json.dumps({"done": True, "next_work": "", "target": ""})
+                arguments = json.dumps({"done": True, "next_work": ""})
                 delta = {
                     "tool_calls": [
                         {
