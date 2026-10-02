@@ -340,7 +340,7 @@ def test_production_graph_output_pressure_preserves_siblings_and_rolls_back(tmp_
                         str(tmp_path / 'classes'), str(harness)], check=True, capture_output=True)
         subprocess.run([shutil.which('java'), '-cp', str(tmp_path / 'classes'), 'example.Probe'],
                        check=True, capture_output=True)
-    assert len(calls) == 4
+    assert len(calls) == (5 if reject_page else 4)
     assert all(p['host_selected_class'] == 'AuthoredFailureLimits' for p, _ in calls)
     assert request == original_request
     assert not list(main.parent.glob('*Part*.java'))
@@ -659,3 +659,124 @@ def test_initialize_batch_preserves_local_scope_order_and_repeated_side_effects(
     subprocess.run([javac, '-d', str(tmp_path), str(tmp_path / 'Test.java'),
                     str(tmp_path / 'Probe.java')], check=True, capture_output=True)
     subprocess.run([java, '-cp', str(tmp_path), 'example.Probe'], check=True, capture_output=True)
+
+
+def test_continuation_preserves_accepted_body_and_admits_only_new_declarations():
+    original = 'private static Object restoreShipComponents(java.util.Map<String, Object> nbtMap) { return nbtMap.get("ship_components"); }'
+    echo = '''// copied earlier helper
+        private static Object restoreShipComponents(java.util.Map<String, Object> nbtMap) {
+            /* layout is immaterial */ return nbtMap.get("ship_components");
+        }'''
+    new_member = 'public static Object restore(java.util.Map<String, Object> data) { return restoreShipComponents(data); }'
+    responses = iter([ir.OutputBudgetExhausted('OUTPUT_BUDGET_EXHAUSTED'), original, echo + new_member])
+    calls, decisions = [], []
+
+    def coder(messages):
+        calls.append(json.loads(messages[-1]['content']))
+        response = next(responses)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    def decide(payload):
+        decisions.append(deepcopy(payload))
+        if payload['completion_phase'] == 'select_next_unit':
+            return {'done': False, 'next_work': 'implement restoreShipComponents'}
+        if payload['page_index'] == 0:
+            return {'done': False, 'next_work': 'implement restore using restoreShipComponents'}
+        return {'done': True, 'next_work': ''}
+
+    executor = _executor([])
+    executor.call_coder, executor.completion_decider = coder, decide
+    source = executor.run()['source']
+    assert source.count(original) == 1
+    assert source.count('Object restoreShipComponents(') == 1
+    assert new_member in source
+    assert decisions[-1]['current_page_source'] == new_member
+    assert decisions[-1]['echoed_member_keys'] == ['method:restoreShipComponents(java.util.Map)']
+    page = calls[-1]
+    assert page['phase'] == 'append_atomic_concern_units'
+    assert page['scope']['generation_mode'] == 'append_only'
+    assert page['region_page']['accepted_member_keys'] == ['method:restoreShipComponents(java.util.Map)']
+    assert 'regenerate the whole' not in json.dumps(page['generation_recipe'])
+
+
+@pytest.mark.parametrize('omit_pending', [False, True])
+def test_changed_redeclaration_corrects_only_pending_page_without_replacing_accepted_source(omit_pending):
+    original = 'private static int stored() { return 7; }'
+    pending = 'public static int result() { return stored(); }'
+    corrected = 'public static int result() { return addOne(); }'
+    helper = 'private static int addOne() { return stored() + 1; }'
+    responses = iter([
+        ir.OutputBudgetExhausted('OUTPUT_BUDGET_EXHAUSTED'),
+        original,
+        'private static int stored() { return 99; }' + pending,
+        helper if omit_pending else corrected + helper,
+    ])
+    calls, decisions = [], []
+
+    def coder(messages):
+        calls.append(json.loads(messages[-1]['content']))
+        response = next(responses)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    def decide(payload):
+        decisions.append(deepcopy(payload))
+        if payload['completion_phase'] == 'select_next_unit':
+            return {'done': False, 'next_work': 'implement stored()'}
+        if payload['page_index'] == 0:
+            return {'done': False, 'next_work': 'implement result()'}
+        return {'done': True, 'next_work': ''}
+
+    executor = _executor([])
+    executor.call_coder, executor.completion_decider = coder, decide
+    if omit_pending:
+        executor.write_source = lambda *_: pytest.fail('omitted pending declaration must not commit')
+        with pytest.raises(CustomModuleGenerationError, match='selected declaration missing'):
+            executor.run()
+    else:
+        source = executor.run()['source']
+        assert source.count(original) == 1
+        assert 'return 99' not in source
+        assert corrected in source and helper in source
+    correction = calls[-1]['page_correction']
+    assert correction['immutable_conflicts'][0]['immutable_source'] == original
+    assert correction['pending_declarations'] == [pending]
+    assert calls[-1]['region_page']['accepted_sha256'] == calls[-2]['region_page']['accepted_sha256']
+    assert all(p['page_index'] != 1 for p in decisions if p['completion_phase'] == 'assess_completion')
+
+
+def test_identical_echo_cannot_claim_new_progress():
+    original = 'private static int stored() { return 7; }'
+    responses = iter([ir.OutputBudgetExhausted('OUTPUT_BUDGET_EXHAUSTED'), original, original])
+
+    def coder(_):
+        response = next(responses)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    executor = _executor([])
+    executor.call_coder = coder
+    executor.completion_decider = lambda _: {'done': False, 'next_work': 'implement missing result()'}
+    executor.write_source = lambda *_: pytest.fail('no-progress region must not commit')
+    with pytest.raises(CustomModuleGenerationError, match='NO_PROGRESS'):
+        executor.run()
+
+
+@pytest.mark.parametrize('changed', [
+    'private static String key() { return "a b"; }',
+    'private static String key() { return "a\\tb"; }',
+    'public static String key() { return "ab"; }',
+    'private static String key() { return "ab".trim(); }',
+])
+def test_echo_identity_preserves_literals_modifiers_and_executable_tokens(changed):
+    from minecraft_mod_ai.atomic_region_paging import _member_page_delta
+
+    original = 'private static String key() { return "ab"; }'
+    additions, echoed, conflicts = _member_page_delta([changed], [original])
+    assert not additions and not echoed
+    assert conflicts[0]['immutable_source'] == original
+    assert conflicts[0]['rejected_source'] == changed

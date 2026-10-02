@@ -19,6 +19,9 @@ from .execution_contract_policy import (
     ATOMIC_REGION_MAX_ACCEPTED_CONTEXT_CHARS as MAX_ACCEPTED_CONTEXT_CHARS,
 )
 from .execution_contract_policy import (
+    ATOMIC_REGION_MAX_OWNERSHIP_CORRECTIONS as MAX_OWNERSHIP_CORRECTIONS,
+)
+from .execution_contract_policy import (
     ATOMIC_REGION_MAX_PAGES as MAX_REGION_PAGES,
 )
 from .execution_contract_policy import (
@@ -31,6 +34,48 @@ from .implementation_ir import OutputBudgetExhausted
 
 MORE = "// MMM_REGION_MORE"
 DONE = "// MMM_REGION_DONE"
+
+
+def _member_page_delta(chunks, accepted_parts):
+    """Project only provably identical echoes out of an append-only page.
+
+    Symbol equality alone does not establish equality of implementations. Mixed
+    declarators and changed bodies stay conflicts, with their exact source, so
+    no accepted behavior can be replaced or silently discarded.
+    """
+    from .atomic_concern_source import _member_declaration_symbols
+    from .java_region_parser import class_body_token_identity
+
+    owners = {}
+    for chunk in accepted_parts:
+        for symbol in _member_declaration_symbols(chunk):
+            owners[symbol] = chunk
+    accepted_keys = set(owners)
+    additions, conflicts = [], []
+    echoed = set()
+    for chunk in chunks:
+        declared = set(_member_declaration_symbols(chunk))
+        collisions = declared.intersection(owners)
+        if collisions:
+            originals = tuple(dict.fromkeys(owners[key] for key in sorted(collisions)))
+            if (
+                len(originals) == 1
+                and declared == set(_member_declaration_symbols(originals[0]))
+                and class_body_token_identity(chunk) == class_body_token_identity(originals[0])
+            ):
+                echoed.update(collisions)
+                continue
+            conflicts.append({
+                "member_keys": sorted(collisions),
+                "previously_accepted": collisions.issubset(accepted_keys),
+                "immutable_source": "\n\n".join(originals),
+                "rejected_source": chunk,
+            })
+            continue
+        additions.append(chunk)
+        for symbol in declared:
+            owners[symbol] = chunk
+    return tuple(additions), tuple(sorted(echoed)), conflicts
 
 
 def _validated_decision(decision: Mapping, *, selecting: bool = False) -> dict:
@@ -92,6 +137,9 @@ def decide_region_completion(router, payload: Mapping) -> dict:
                         "next_work must name one concrete declaration/statement and its purpose, "
                         "using exact existing APIs. Source generation implements only that unit; "
                         "the host retains the complete task authority for later units."
+                        " accepted_member_keys are already implemented and immutable. Never "
+                        "select their implementation again. An echoed declaration adds no work; "
+                        "evaluate the actual accepted implementation, not the rejected proposal."
                     )},
                     {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
                 ],
@@ -160,6 +208,10 @@ def _generate_pages(call_coder, messages, *, completion_decider=None) -> str:
     parts: list[str] = []
     symbols: set[str] = set()
     next_work = ""
+    page_correction = None
+    pending_correction = None
+    ownership_corrections = 0
+    rejected_fingerprints: set[str] = set()
     for index in range(MAX_REGION_PAGES):
         accepted_source = "\n\n".join(parts)
         accepted = {
@@ -172,6 +224,7 @@ def _generate_pages(call_coder, messages, *, completion_decider=None) -> str:
                 _compact_prompt_member_contract(row)
                 for row in class_body_member_contracts(accepted_source)
             ]
+            accepted["accepted_member_keys"] = sorted(symbols)
             # A nested type name alone omits record components, constructors and
             # member APIs. Keep these complete, subject to the same context bound.
             accepted["accepted_nested_types"] = [
@@ -201,6 +254,22 @@ def _generate_pages(call_coder, messages, *, completion_decider=None) -> str:
             }), selecting=True)
             next_work = decision["next_work"]
         page_payload = deepcopy(payload)
+        # Whole-region recipes otherwise keep telling a small coder to reproduce
+        # the complete concern even after next_work selects an incremental unit.
+        page_payload["phase"] = "append_atomic_concern_units"
+        page_payload.setdefault("scope", {})["generation_mode"] = "append_only"
+        recipe = page_payload.setdefault("generation_recipe", {})
+        recipe["first_pass_goal"] = "Implement only region_page.next_work as new complete Java units."
+        recipe["declare_plan_local_domain_type_rule"] = (
+            "Reuse accepted, sibling and dependency types. Add an authorized local type "
+            "only if absent from those inventories; never regenerate accepted members."
+        )
+        recipe["mechanical_type_authority_repair_rule"] = (
+            "Apply supplied mechanical edits only to new units in this page. "
+            "Accepted member declarations and bodies are immutable."
+        )
+        if page_correction is not None:
+            page_payload["page_correction"] = page_correction
         page_payload["region_page"] = {
             "index": index,
             "remaining_pages": MAX_REGION_PAGES - index,
@@ -233,7 +302,11 @@ def _generate_pages(call_coder, messages, *, completion_decider=None) -> str:
         page_messages = [dict(item) for item in messages]
         page_messages[0]["content"] += (
             "\nOUTPUT SUBDIVISION: region_page narrows this turn to ONE complete semantic "
-            "unit. Keep complete declarations and the existing host owner."
+            "unit. Keep complete declarations and the existing host owner. This is APPEND ONLY: "
+            "the response region consists only of new declarations, never the whole concern. "
+            "Call existing accepted methods; do not emit their definitions. If page_correction "
+            "is present, return its pending_declarations corrected to use immutable_source, "
+            "plus only the new units needed for next_work. Never return conflicting definitions."
         )
         page_messages[-1]["content"] = json.dumps(page_payload, ensure_ascii=False)
         output = ""
@@ -304,6 +377,67 @@ def _generate_pages(call_coder, messages, *, completion_decider=None) -> str:
                       else strict_initialize_statements(parsed))
             if not chunks:
                 raise CustomModuleGenerationError("ATOMIC_REGION_NO_PROGRESS: page contains no executable unit")
+            echoed = ()
+            if region == "members":
+                additions, echoed, conflicts = _member_page_delta(chunks, parts)
+                if conflicts:
+                    reason = "ATOMIC_REGION_OWNERSHIP_VIOLATION: accepted member redeclared: " + ", ".join(
+                        sorted({key for conflict in conflicts for key in conflict["member_keys"]})
+                    )
+                    fingerprint = hashlib.sha256(parsed.encode("utf-8")).hexdigest()
+                    if (
+                        completion_decider is None
+                        or any(not conflict["previously_accepted"] for conflict in conflicts)
+                        or ownership_corrections >= MAX_OWNERSHIP_CORRECTIONS
+                        or fingerprint in rejected_fingerprints
+                    ):
+                        raise CustomModuleGenerationError(reason)
+                    from .atomic_region_correction import RegionCorrection
+
+                    # Keep the nonconflicting candidate declarations provisional.
+                    # A later correction cannot quietly omit their identities/APIs.
+                    if pending_correction is None and additions:
+                        pending_correction = RegionCorrection(
+                            additions, frozenset(range(len(additions))),
+                        )
+                    page_correction = {
+                        "immutable_conflicts": conflicts,
+                        "pending_declarations": list(pending_correction.chunks) if pending_correction else [],
+                        "rules": (
+                            "The previous page was rejected; none of it was committed. "
+                            "Keep every pending declaration identity and public API. "
+                            "Implement pending behavior against immutable_source; never replace "
+                            "or repeat a conflicting definition. This corrects only the new page."
+                        ),
+                    }
+                    if len(json.dumps(page_correction, ensure_ascii=False)) > MAX_ACCEPTED_CONTEXT_CHARS:
+                        raise CustomModuleGenerationError(
+                            reason + "; exact conflict context exceeds the bounded page context"
+                        )
+                    ownership_corrections += 1
+                    rejected_fingerprints.add(fingerprint)
+                    emit_root_cause(
+                        "atomic_concern_page_conflict_localized", stage="production", result="RETRY",
+                        reason=reason,
+                        details={"owner": payload["host_selected_class"], "region": region,
+                                 "concern": payload["concern"]["name"], "page": index,
+                                 "accepted_units": len(parts), "next_work": next_work,
+                                 "correction": page_correction},
+                    )
+                    continue
+                chunks = additions
+                if pending_correction is not None:
+                    pending_keys = {
+                        key for chunk in pending_correction.chunks
+                        for key in _member_declaration_symbols(chunk)
+                    }
+                    # Validate that pending identities/APIs survived, while
+                    # allowing genuinely new helper declarations in source order.
+                    pending_correction.merge("\n\n".join(
+                        chunk for chunk in chunks
+                        if pending_keys.intersection(_member_declaration_symbols(chunk))
+                    ))
+                parsed = "\n\n".join(chunks)
             if len(parts) + len(chunks) > MAX_REGION_UNITS:
                 raise CustomModuleGenerationError(
                     "ATOMIC_REGION_UNIT_LIMIT: page exceeds remaining semantic unit budget; "
@@ -325,18 +459,28 @@ def _generate_pages(call_coder, messages, *, completion_decider=None) -> str:
                     **accepted,
                     "completion_phase": "assess_completion",
                     "current_page_source": parsed,
+                    "echoed_member_keys": list(echoed),
                     "previous_next_work": next_work,
                     "page_index": index,
                 }))
                 done = decision["done"]
                 next_work = decision["next_work"]
+            if not chunks and not done:
+                raise CustomModuleGenerationError(
+                    "ATOMIC_REGION_NO_PROGRESS: page only repeated immutable declarations"
+                )
             parts.extend(chunks)
             symbols.update(page_symbols)
+            page_correction = None
+            pending_correction = None
+            ownership_corrections = 0
+            rejected_fingerprints.clear()
             emit_root_cause(
                 "atomic_concern_page_accepted", stage="production", result="PASS",
                 details={"owner": payload["host_selected_class"], "region": region,
                          "concern": payload["concern"]["name"], "page": index,
                          "unit_count": len(chunks), "done": done, "next_work": next_work,
+                         "echoed_member_keys": list(echoed),
                          "source_sha256": hashlib.sha256(parsed.encode("utf-8")).hexdigest()},
             )
             if done:

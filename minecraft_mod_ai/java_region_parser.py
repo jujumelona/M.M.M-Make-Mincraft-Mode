@@ -300,6 +300,27 @@ def strict_member_chunks(value: str) -> tuple[str, ...]:
     return _chunks_from_body(body, source, drop_host_lifecycle=False)
 
 
+def class_body_token_identity(value: str) -> tuple[tuple[str, str], ...]:
+    """Compare Java tokens without treating layout/comments as source changes.
+
+    Literal nodes remain byte-exact, including text-block whitespace. This is
+    deliberately stricter than semantic equivalence: changed bodies, modifiers,
+    initializers, annotations and parameter names are never redundant echoes.
+    """
+    source, root = _parse("final class __MMMRegionHost {\n" + value + "\n}\n")
+    pending = list(reversed(_class_body(root).named_children))
+    tokens: list[tuple[str, str]] = []
+    while pending:
+        node = pending.pop()
+        if node.type in _COMMENT_TYPES:
+            continue
+        if not node.children or node.type in {"string_literal", "character_literal"}:
+            tokens.append((node.type, _text(source, node)))
+        else:
+            pending.extend(reversed(node.children))
+    return tuple(tokens)
+
+
 def _declaration_summary(node: Any, source: bytes) -> str:
     body = node.child_by_field_name("body")
     if body is None:
