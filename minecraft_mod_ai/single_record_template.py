@@ -1,4 +1,4 @@
-"""Host-owned execution for templates whose cardinality is already known."""
+"""Host-owned execution for one logical record without arbitrary field paging."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from jsonschema import Draft202012Validator
 
 from .design_generation_schema import context_bound_record_schema
 from .fixed_template_generation import generate_fixed_template_value
-from .model_output_atomicity_contract import MAX_MODEL_FIELDS, assert_atomic_model_schema
+from .model_output_atomicity_contract import assert_atomic_model_schema
 from .task_template_catalog import load_record_template
 from .task_template_input import task_binding, task_context
 
@@ -77,7 +77,7 @@ def _atomic_record_schema_slices(
     *,
     identifier: str,
 ) -> tuple[dict[str, Any], ...]:
-    """Project one logical record into deterministic small-model field slices."""
+    """Keep one logical record intact instead of paging its fields by an arbitrary width."""
     if schema.get("type") != "object":
         raise SingleRecordTemplateError(
             f"SINGLE_TEMPLATE_SCHEMA: {identifier} record_schema must be an object"
@@ -88,45 +88,19 @@ def _atomic_record_schema_slices(
         raise SingleRecordTemplateError(
             f"SINGLE_TEMPLATE_SCHEMA: {identifier} must declare properties and required fields"
         )
-
-    field_names = tuple(properties)
-    if not field_names:
-        raise SingleRecordTemplateError(
-            f"SINGLE_TEMPLATE_SCHEMA: {identifier} has no model-authored fields"
-        )
-
-    required_set = set(required)
-    undeclared_required = required_set.difference(field_names)
+    undeclared_required = set(required).difference(properties)
     if undeclared_required:
         raise SingleRecordTemplateError(
             f"SINGLE_TEMPLATE_SCHEMA: {identifier} has undeclared required fields "
             f"{sorted(undeclared_required)!r}"
         )
-
-    slices: list[dict[str, Any]] = []
-    for start in range(0, len(field_names), MAX_MODEL_FIELDS):
-        names = field_names[start : start + MAX_MODEL_FIELDS]
-        projected = {
-            "type": "object",
-            "properties": {name: deepcopy(properties[name]) for name in names},
-            "required": [name for name in names if name in required_set],
-            "additionalProperties": False,
-        }
-        for metadata_key in ("title", "description"):
-            if metadata_key in schema:
-                projected[metadata_key] = deepcopy(schema[metadata_key])
-        try:
-            assert_atomic_model_schema(
-                projected,
-                surface=f"record slice for {identifier!r}",
-            )
-        except Exception as exc:
-            raise SingleRecordTemplateError(
-                f"SINGLE_TEMPLATE_ATOMIC_PROJECTION: cannot project {identifier} fields "
-                f"{list(names)!r} into one atomic model call: {exc}"
-            ) from exc
-        slices.append(projected)
-    return tuple(slices)
+    try:
+        assert_atomic_model_schema(schema, surface=f"logical record for {identifier!r}")
+    except Exception as exc:
+        raise SingleRecordTemplateError(
+            f"SINGLE_TEMPLATE_SCHEMA: invalid model-facing schema for {identifier}: {exc}"
+        ) from exc
+    return (deepcopy(schema),)
 
 
 def _merge_record_slice(
