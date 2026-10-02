@@ -31,10 +31,7 @@ from .llama_finish_reason_contract import (
     completion_boundary_error,
 )
 from .model_adapters.base import NativeToolDecisionRejected
-from .model_output_atomicity_contract import (
-    MAX_MODEL_FIELDS,
-    assert_atomic_model_schema,
-)
+from .model_output_atomicity_contract import assert_atomic_model_schema
 
 _TYPE_PATTERN = (
     r"^(?!.*\b(?:public|protected|private|static|final|volatile|transient|"
@@ -322,8 +319,8 @@ class JavaStructureAssembly:
         required = set(schema.get("required", ()))
         names = list(scalars)
         if not scalars_seeded:
-            for start in range(0, len(names), MAX_MODEL_FIELDS):
-                keys = names[start:start + MAX_MODEL_FIELDS]
+            for start in range(0, len(names), DEFAULT_ATOMIC_SCHEMA_LIMITS.max_fields):
+                keys = names[start:start + DEFAULT_ATOMIC_SCHEMA_LIMITS.max_fields]
                 target.update(self._ask(
                     _closed({key: scalars[key] for key in keys}, [key for key in keys if key in required]),
                     path, "Declare this component's identity, type and initial value.",
@@ -375,7 +372,7 @@ class JavaStructureAssembly:
                 if (
                     self.multi_callback is not None
                     and item_scalars
-                    and len(scalar_names) <= MAX_MODEL_FIELDS
+                    and len(scalar_names) <= DEFAULT_ATOMIC_SCHEMA_LIMITS.max_fields
                 ):
                     reserved: set[str] = set()
                     if len(item_path) == 2 and "name" in item_scalars:

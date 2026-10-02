@@ -686,10 +686,19 @@ def _atomic_parameters_for_request(
         if isinstance(concern, Mapping)
         else ""
     )
+    authorized_nested = tuple(
+        str(item).strip()
+        for item in payload.get("authorized_nested_runtime_types") or ()
+        if str(item).strip()
+    )
     if concern_name in JAVA_DECLARATION_ONLY_CONCERNS:
         parameters = _ATOMIC_DECLARATION_MEMBERS_PARAMETERS
         shape = preferred or "declarations_only_fields_or_private_nested_types"
-    elif concern_name and concern_name not in JAVA_TYPE_OWNING_CONCERNS:
+    elif (
+        concern_name
+        and concern_name not in JAVA_TYPE_OWNING_CONCERNS
+        and not authorized_nested
+    ):
         return (
             _ATOMIC_LOGIC_MEMBERS_PARAMETERS,
             preferred or "logic_fields_methods_only",
@@ -699,17 +708,32 @@ def _atomic_parameters_for_request(
         shape = preferred or "smallest_components"
 
     host_symbol = str(payload.get("host_selected_class") or "").strip()
-    if host_symbol:
+    if host_symbol or authorized_nested:
         parameters = deepcopy(parameters)
         for category in ("records", "enums", "classes"):
             category_schema = parameters["properties"].get(category)
             if not isinstance(category_schema, Mapping):
                 continue
             name_schema = category_schema["items"]["properties"]["name"]
-            name_schema["not"] = {"enum": [host_symbol]}
+            forbidden = [host_symbol] if host_symbol else []
+            if authorized_nested:
+                if category == "classes":
+                    name_schema["enum"] = list(authorized_nested)
+                else:
+                    # Explicit requirement-owned runtime helpers currently lower as
+                    # nested classes. Do not let another nested-type kind silently
+                    # satisfy the same symbol authority.
+                    category_schema["maxItems"] = 0
+            if forbidden:
+                name_schema["not"] = {"enum": forbidden}
             name_schema["description"] = (
-                f"Name of a nested runtime helper. {host_symbol} is the existing outer class "
-                "and must not be declared again. Place outer fields in fields, not in a class wrapper."
+                "Name of a requirement-owned nested runtime helper. "
+                + (
+                    f"{host_symbol} is the existing outer class and must not be declared again. "
+                    if host_symbol
+                    else ""
+                )
+                + "Place outer fields in fields, not in a class wrapper."
             )
     return parameters, shape
 

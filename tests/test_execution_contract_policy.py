@@ -299,3 +299,33 @@ def test_schema_selector_and_prompt_share_type_owning_concerns() -> None:
     assert {"variables", "inputs", "outputs", "stored_state", "payloads"} == set(
         JAVA_TYPE_OWNING_CONCERNS
     )
+
+
+
+def test_authorized_nested_runtime_type_reaches_structured_schema() -> None:
+    from minecraft_mod_ai.custom_module_generator import _atomic_parameters_for_request
+
+    parameters, _shape = _atomic_parameters_for_request(
+        {
+            "response_region": "members",
+            "host_selected_class": "AuthoredFailureLimits",
+            "concern": {"name": "diagnostics"},
+            "authorized_nested_runtime_types": ["ShipFuelCalculationException"],
+        },
+        response_region="members",
+    )
+
+    assert "classes" in parameters["properties"]
+    class_name = parameters["properties"]["classes"]["items"]["properties"]["name"]
+    assert class_name["enum"] == ["ShipFuelCalculationException"]
+    assert class_name["not"] == {"enum": ["AuthoredFailureLimits"]}
+    assert parameters["properties"]["records"]["maxItems"] == 0
+    assert parameters["properties"]["enums"]["maxItems"] == 0
+
+
+def test_atomic_java_assembly_reads_model_field_bound_directly_from_canonical_policy() -> None:
+    import minecraft_mod_ai.atomic_java_assembly as assembly
+
+    source = inspect.getsource(assembly)
+    assert "MAX_MODEL_FIELDS" not in source
+    assert "DEFAULT_ATOMIC_SCHEMA_LIMITS.max_fields" in source
