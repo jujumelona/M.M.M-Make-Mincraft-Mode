@@ -6,6 +6,7 @@ from minecraft_mod_ai import agent_capability_context as capability_context
 from minecraft_mod_ai.agent_capability_context import (
     build_agent_capability_context,
     filter_tool_schemas_for_role,
+    prepare_agent_tool_surface,
     skills_for_tool,
     target_neutral_research_scope,
 )
@@ -355,3 +356,57 @@ def test_tool_receipt_is_role_scoped() -> None:
         "external_mcp_call",
         model_role="researcher",
     ) == ()
+
+
+
+def test_prepare_agent_tool_surface_bounds_unbounded_tool_arguments_without_mutating_owner() -> None:
+    schema = {
+        "type": "function",
+        "function": {
+            "name": "search_code_rag",
+            "description": "search",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+    projected, _ = prepare_agent_tool_surface(
+        "generation",
+        "coder",
+        (schema,),
+    )
+
+    assert len(projected) == 1
+    parameters = projected[0]["function"]["parameters"]
+    assert parameters["properties"]["query"]["maxLength"] == 1024
+    assert parameters["properties"]["paths"]["maxItems"] == 16
+    assert parameters["properties"]["paths"]["items"]["maxLength"] == 1024
+    assert "maxLength" not in schema["function"]["parameters"]["properties"]["query"]
+
+
+def test_expansive_model_tool_gets_finite_large_argument_page() -> None:
+    schema = {
+        "type": "function",
+        "function": {
+            "name": "apply_source_edit",
+            "parameters": {
+                "type": "object",
+                "properties": {"content": {"type": "string"}},
+                "additionalProperties": False,
+            },
+        },
+    }
+
+    projected = capability_context._bound_model_tool_schema(schema)
+
+    assert projected["function"]["parameters"]["properties"]["content"]["maxLength"] == 16384
