@@ -16,6 +16,7 @@ from .base import (
     quantization_config,
     require_package,
     torch_dtype,
+    request_output_token_limit,
 )
 
 
@@ -176,11 +177,12 @@ class TransformersMultimodalAdapter(ModelAdapter):
                 )
                 inputs = tokenizer_or_proc(rendered, return_tensors="pt")
             input_tokens = int(inputs["input_ids"].shape[-1])
-            requested_tokens = input_tokens + cfg.max_new_tokens
+            output_tokens = request_output_token_limit(cfg, request)
+            requested_tokens = input_tokens + output_tokens
             if requested_tokens > cfg.max_context:
                 raise ModelConfigurationError(
                     "Rendered multimodal request exceeds the model context: "
-                    f"{input_tokens} input + {cfg.max_new_tokens} reserved output "
+                    f"{input_tokens} input + {output_tokens} reserved output "
                     f"> max_context={cfg.max_context}."
                 )
             if (
@@ -252,7 +254,7 @@ class TransformersMultimodalAdapter(ModelAdapter):
                     try:
                         output = model.generate(
                             **gen_inputs,
-                            max_new_tokens=cfg.max_new_tokens,
+                            max_new_tokens=output_tokens,
                             do_sample=False,
                         )
                         break
@@ -286,7 +288,7 @@ class TransformersMultimodalAdapter(ModelAdapter):
                     "CUDA out of memory during multimodal "
                     f"phase={phase} "
                     f"(input_tokens={input_tokens}, "
-                    f"max_new_tokens={cfg.max_new_tokens}, "
+                    f"max_new_tokens={output_tokens if output_tokens is not None else cfg.max_new_tokens}, "
                     f"max_input_tokens={cfg.max_input_tokens}, "
                     "attention_backend=sdpa). "
                     f"Backend detail: {exc}"
