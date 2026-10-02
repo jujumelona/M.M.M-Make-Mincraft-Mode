@@ -32,7 +32,14 @@ def test_complete_planner_finishes_healthy_8192_budget_stream_after_300_seconds(
     real_monotonic = time.monotonic
     monkeypatch.setattr(liveness, "time", SimpleNamespace(monotonic=lambda: real_monotonic() * 100))
     requests = []
-    chunks = ["# behavior_contract\n"] + [f"Requirement {i}.\n" for i in range(28)]
+    # This test exercises transport liveness, not plan-format repair. Replay
+    # canonical authored headings so the host does not have to invent or rewrite
+    # missing design sections after a successful long stream.
+    chunks = [
+        "## behavior_contract\n",
+        "## authority_and_network\n",
+        "## persistence\n",
+    ] + [f"Requirement {i}.\n" for i in range(28)]
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
