@@ -2543,18 +2543,17 @@ def test_duplicate_constructor_shapes_are_deduplicated_by_host() -> None:
     assert rendered.count("PlayerData() {") == 1
 
 
-def test_nested_type_cannot_shadow_host_selected_outer_class() -> None:
+def test_nested_type_shadowing_host_outer_class_is_host_renamed() -> None:
     from minecraft_mod_ai.custom_module_generator import _render_atomic_java_structure
 
-    with pytest.raises(
-        CustomModuleGenerationError,
-        match="collides with the host-selected outer class",
-    ):
-        _render_atomic_java_structure(
-            {"classes": [{"name": "AuthoredStateModel"}]},
-            response_region="members",
-            host_symbol="AuthoredStateModel",
-        )
+    rendered = _render_atomic_java_structure(
+        {"classes": [{"name": "AuthoredStateModel"}]},
+        response_region="members",
+        host_symbol="AuthoredStateModel",
+    )
+
+    assert "class AuthoredStateModel_2" in rendered
+    assert "class AuthoredStateModel {" not in rendered
 
 
 def test_outer_atomic_fields_and_methods_are_forced_static() -> None:
