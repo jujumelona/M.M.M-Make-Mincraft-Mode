@@ -397,12 +397,12 @@ def test_repo_has_no_legacy_java_model_schema_authority() -> None:
     package_root = Path(__file__).resolve().parents[1] / "minecraft_mod_ai"
     authority = package_root / "execution_contract_policy.py"
     forbidden_definition = re.compile(
-        r"^\\s*(?:"
+        r"^\s*(?:"
         r"_ATOMIC_(?:PARAMETER|FIELD|METHOD|OUTER_METHOD|CONSTRUCTOR|RECORD|ENUM|CLASS)_SCHEMA"
         r"|_ATOMIC_(?:MEMBERS|LOGIC_MEMBERS|DECLARATION_MEMBERS|INITIALIZE)_PARAMETERS"
         r"|JAVA_ATOMIC_(?:PARAMETER|FIELD|METHOD|OUTER_METHOD|CONSTRUCTOR|RECORD|ENUM|CLASS)_SCHEMA"
         r"|JAVA_ATOMIC_(?:MEMBERS|LOGIC_MEMBERS|DECLARATION_MEMBERS|INITIALIZE)_PARAMETERS"
-        r")\\s*=",
+        r")\s*=",
         re.MULTILINE,
     )
     violations = []
