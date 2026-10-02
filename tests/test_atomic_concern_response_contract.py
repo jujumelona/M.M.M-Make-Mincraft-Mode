@@ -177,6 +177,74 @@ def test_integration_members_and_initialize_are_generated_as_separate_regions() 
     assert "registerThing();" in result["source"]
 
 
+def test_entry_points_initialize_sees_staged_members_and_recovers_logged_static_block_echo() -> None:
+    members = (
+        'private static final String BOUNDARY = "Boundary";\n'
+        'private static final String TRIGGER = "RightClick";\n'
+        'private static final String OWNER = "ModLoader";\n'
+        'private static final java.util.Map<String, String> ENTRY_POINTS = '
+        'new java.util.HashMap<>();'
+    )
+    initialize_echo = """```java
+private static final String BOUNDARY = "Boundary";
+private static final String TRIGGER = "RightClick";
+private static final String OWNER = "ModLoader";
+private static final java.util.Map<String, String> ENTRY_POINTS = new java.util.HashMap<>();
+static {
+    ENTRY_POINTS.put(BOUNDARY, TRIGGER);
+    ENTRY_POINTS.put(OWNER, BOUNDARY);
+}
+```
+"""
+    captured: list[list[dict[str, str]]] = []
+    outputs = iter([members, initialize_echo])
+
+    def call_coder(messages):
+        captured.append(list(messages))
+        return next(outputs)
+
+    executor = AtomicConcernExecutor(
+        root=Path("."),
+        target=Path("src/main/java/example/Test.java"),
+        relative="src/main/java/example/Test.java",
+        symbol="Test",
+        original="package example;\n// MMM_AUTHORED_FEATURE_BODY\n",
+        task={"task_id": "t", "semantic_outcome": "entry points"},
+        section="integration",
+        concerns=(
+            {
+                "sequence": 0,
+                "identifier": "feature/integration/entry_points",
+                "concern": "entry_points",
+                "task": "wire the entry points",
+                "rules": [],
+            },
+        ),
+        grounding={},
+        dependency_source="",
+        require_initialize=True,
+        call_coder=call_coder,
+        compile_java=lambda _root: SimpleNamespace(status="PASS"),
+        compile_log=lambda _report: "",
+        write_source=lambda _path, _source: None,
+    )
+
+    result = executor.run()
+
+    assert len(captured) == 2
+    initialize_payload = json.loads(captured[1][-1]["content"])
+    current_api = {
+        row["symbol"]: row
+        for row in initialize_payload["current_concern_member_api"]
+    }
+    assert {"BOUNDARY", "TRIGGER", "OWNER", "ENTRY_POINTS"} <= set(current_api)
+    assert result["source"].count('private static final String BOUNDARY = "Boundary";') == 1
+    assert result["source"].count("ENTRY_POINTS = new java.util.HashMap<>();") == 1
+    assert "static {" not in result["source"]
+    assert "ENTRY_POINTS.put(BOUNDARY, TRIGGER);" in result["source"]
+    assert "ENTRY_POINTS.put(OWNER, BOUNDARY);" in result["source"]
+
+
 def test_integration_members_accept_misrouted_host_initialize_and_continue_to_initialize_region() -> None:
     executor = _executor(
         [
