@@ -710,20 +710,20 @@ def _atomic_parameters_for_request(
     host_symbol = str(payload.get("host_selected_class") or "").strip()
     if host_symbol or authorized_nested:
         parameters = deepcopy(parameters)
+        if authorized_nested:
+            # Explicit authorized runtime helpers currently lower as nested classes.
+            # Unsupported nested kinds are removed from the selector rather than
+            # offered and rejected later.
+            parameters["properties"].pop("records", None)
+            parameters["properties"].pop("enums", None)
         for category in ("records", "enums", "classes"):
             category_schema = parameters["properties"].get(category)
             if not isinstance(category_schema, Mapping):
                 continue
             name_schema = category_schema["items"]["properties"]["name"]
             forbidden = [host_symbol] if host_symbol else []
-            if authorized_nested:
-                if category == "classes":
-                    name_schema["enum"] = list(authorized_nested)
-                else:
-                    # Explicit requirement-owned runtime helpers currently lower as
-                    # nested classes. Do not let another nested-type kind silently
-                    # satisfy the same symbol authority.
-                    category_schema["maxItems"] = 0
+            if authorized_nested and category == "classes":
+                name_schema["enum"] = list(authorized_nested)
             if forbidden:
                 name_schema["not"] = {"enum": forbidden}
             name_schema["description"] = (
