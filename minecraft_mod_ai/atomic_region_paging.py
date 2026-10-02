@@ -79,23 +79,25 @@ def _member_page_delta(chunks, accepted_parts):
 
 
 def _validated_decision(decision: Mapping, *, selecting: bool = False) -> dict:
-    if (
-        not isinstance(decision, Mapping)
-        or set(decision) != {"done", "next_work"}
-        or type(decision.get("done")) is not bool
-        or not isinstance(decision.get("next_work"), str)
-        or len(decision["next_work"]) > ATOMIC_REGION_COMPLETION_PARAMETERS[
-            "properties"
-        ]["next_work"]["maxLength"]
-        or bool(decision["next_work"].strip()) is decision["done"]
-        or (selecting and decision["done"])
-    ):
+    """Normalize the semantic next-work signal instead of validating protocol cosmetics."""
+    if not isinstance(decision, Mapping):
         raise CustomModuleGenerationError(
-            "ATOMIC_REGION_COMPLETION_DECISION_INVALID: done must be a boolean; "
-            "done=true requires empty next_work, done=false requires concrete next_work. "
-            "Selection/refinement requires done=false; unfinished Java is not accepted work."
+            "ATOMIC_REGION_COMPLETION_DECISION_INVALID: completion decision must be an object"
         )
-    return {"done": decision["done"], "next_work": decision["next_work"].strip()}
+    raw_next = decision.get("next_work", "")
+    if not isinstance(raw_next, str):
+        raise CustomModuleGenerationError(
+            "ATOMIC_REGION_COMPLETION_DECISION_INVALID: next_work must be text"
+        )
+    next_work = raw_next.strip()
+    if selecting and not next_work:
+        raise CustomModuleGenerationError(
+            "ATOMIC_REGION_COMPLETION_DECISION_INVALID: unfinished selection needs semantic next_work"
+        )
+    # Production uses next_work as the single signal. Legacy callbacks may still
+    # include done; contradictory booleans are ignored rather than promoted to a
+    # fatal formatting gate.
+    return {"done": not bool(next_work), "next_work": next_work}
 
 
 def decide_region_completion(router, payload: Mapping) -> dict:
@@ -120,7 +122,9 @@ def decide_region_completion(router, payload: Mapping) -> dict:
                 [
                     {"role": "system", "content": (
                         "Assess completion of the selected production Java concern only. "
-                        "Do not generate Java, change the design or inspect sibling requirements. "
+                        "Return only next_work: a concrete next semantic unit, or an empty string "
+                        "when the selected concern is complete. Do not generate Java, change the design "
+                        "or inspect sibling requirements. "
                         "task_authority and region_correction (when present) define the work. "
                         "accepted_api/accepted_nested_types describe earlier completed pages; "
                         "current_page_source is the newly accepted page, and previous_next_work "
@@ -128,7 +132,7 @@ def decide_region_completion(router, payload: Mapping) -> dict:
                         "requirements are implemented, with next_work empty. Otherwise done=false "
                         "and next_work describes the next small complete declaration or statement "
                         "needed in this same class. Do not declare completion merely because a "
-                        "page parses or the model response ended."
+                        "page parses or the model response ended. next_work is the only completion signal."
                         " In select_next_unit phase no source has been accepted: choose the "
                         "first small declaration/statement, with done=false. In refine_next_unit "
                         "phase the selected work exhausted its output budget: choose a strictly "
