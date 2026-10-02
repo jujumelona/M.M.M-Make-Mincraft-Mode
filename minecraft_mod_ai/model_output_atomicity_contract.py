@@ -243,6 +243,12 @@ def _model_transport_schema(
             )
         if _schema_has_type(value, "array") and "maxItems" not in result:
             result["maxItems"] = limits.max_array_items
+        if (
+            (_schema_has_type(value, "object") or "properties" in value)
+            and value.get("additionalProperties") is not False
+            and "maxProperties" not in result
+        ):
+            result["maxProperties"] = limits.max_fields
         return result
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return [
