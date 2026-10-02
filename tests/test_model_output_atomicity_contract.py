@@ -10,6 +10,7 @@ from minecraft_mod_ai.model_output_atomicity_contract import (
     assert_installed,
     install,
     is_atomic_model_schema,
+    _model_transport_schema,
 )
 
 
@@ -229,3 +230,47 @@ def test_open_object_template_still_rejected() -> None:
     with pytest.raises(ModelConfigurationError, match="MODEL_JSON_TEMPLATE_REQUIRED"):
         assert_atomic_model_schema(schema, surface="open template")
     assert not is_atomic_model_schema(schema)
+
+
+
+def test_model_transport_synthesizes_missing_resource_bounds() -> None:
+    logical = {
+        "type": "object",
+        "properties": {
+            "value": {"type": "string"},
+            "items": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+        },
+        "additionalProperties": False,
+    }
+
+    projected = _model_transport_schema(logical)
+
+    assert projected["properties"]["value"]["maxLength"] == 256
+    assert projected["properties"]["items"]["maxItems"] == 4
+    assert projected["properties"]["items"]["items"]["maxLength"] == 256
+    assert "maxLength" not in logical["properties"]["value"]
+    assert "maxItems" not in logical["properties"]["items"]
+
+
+def test_model_transport_preserves_explicit_domain_bounds() -> None:
+    logical = {
+        "type": "object",
+        "properties": {
+            "value": {"type": "string", "maxLength": 4096},
+            "items": {
+                "type": "array",
+                "maxItems": 12,
+                "items": {"type": "string", "maxLength": 1024},
+            },
+        },
+        "additionalProperties": False,
+    }
+
+    projected = _model_transport_schema(logical)
+
+    assert projected["properties"]["value"]["maxLength"] == 4096
+    assert projected["properties"]["items"]["maxItems"] == 12
+    assert projected["properties"]["items"]["items"]["maxLength"] == 1024
