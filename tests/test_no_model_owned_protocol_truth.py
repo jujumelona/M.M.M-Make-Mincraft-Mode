@@ -115,3 +115,36 @@ def test_no_production_module_consumes_legacy_model_size_aliases() -> None:
             if token in source:
                 offenders.append(f"{candidate.relative_to(PACKAGE)}: {token}")
     assert not offenders, "legacy model-size correctness coupling remains:\n" + "\n".join(offenders)
+
+
+def test_atomic_java_production_has_one_structured_materialization_path() -> None:
+    generator = _source("custom_module_generator.py")
+    concern = _source("atomic_concern_source.py")
+
+    atomic_start = generator.index("def _run_atomic_ir_generation(")
+    atomic_end = generator.index("\nclass CustomModuleGenerator", atomic_start)
+    atomic_path = generator[atomic_start:atomic_end]
+
+    assert "_call_atomic_java_region(" in atomic_path
+    assert "_call_coder(" not in atomic_path
+    assert "_production_atomic_coder" not in generator
+    assert "structured_java_region" not in generator
+    assert "using direct source" not in generator
+
+    assert "admit_member_region" not in concern
+    assert "admit_initialize_region" not in concern
+    assert "parse_concern_content" not in concern
+    assert "<<<MMM_CONCERN_MEMBERS>>>" not in concern
+    assert "<<<MMM_CONCERN_INITIALIZE>>>" not in concern
+
+
+def test_atomic_structured_router_owns_java_syntax_and_identifier_rendering() -> None:
+    generator = _source("custom_module_generator.py")
+    policy = _source("execution_contract_policy.py")
+
+    assert "def _call_atomic_java_region(" in generator
+    assert "JavaStructureAssembly(" in generator
+    assert "_render_atomic_java_structure(" in generator
+    assert "_java_identifier_renames(" in generator
+    assert "Semantic field name" in policy
+    assert "host owns Java identifier spelling" in policy
