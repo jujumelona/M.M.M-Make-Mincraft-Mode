@@ -30,8 +30,7 @@ from .generation_implementation_grounding import (
 )
 from .execution_contract_policy import (
     ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING as _ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING,
-    JAVA_DECLARATION_ONLY_CONCERNS,
-    JAVA_TYPE_OWNING_CONCERNS,
+    java_atomic_parameters_for_request,
     PRODUCTION_CANONICALIZE_LOCAL_FINAL_REBINDINGS,
     PRODUCTION_COMPILE_REPAIR_LIMIT,
     PRODUCTION_REGION_ATTEMPT_LIMIT,
@@ -493,178 +492,6 @@ def _direct_host_grounding(
     }
 
 _ATOMIC_JAVA_REGION_TOOL = "emit_java_structure"
-_JAVA_IDENTIFIER_PATTERN = r"^[A-Za-z_$][A-Za-z0-9_$]*$"
-_ATOMIC_METHOD_NAME_PATTERN = r"^(?:<init>|[A-Za-z_$][A-Za-z0-9_$]*)$"
-_ATOMIC_PARAMETER_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "type": {
-            "type": "string",
-            "minLength": 1,
-            "description": (
-                "Java type. Use a primitive/java.lang type, a type declared in this same "
-                "structured call, a supplied sibling/dependency type, or a fully-qualified "
-                "external type. Common JDK collection names may be simple names because the "
-                "host qualifies them."
-            ),
-        },
-        "name": {
-            "type": "string",
-            "pattern": _JAVA_IDENTIFIER_PATTERN,
-            "description": (
-                "Semantic identifier. Java reserved words are accepted here because the host "
-                "canonicalizes them consistently before rendering."
-            ),
-        },
-    },
-    "required": ["type", "name"],
-    "additionalProperties": True,
-}
-_ATOMIC_FIELD_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "type": {
-            "type": "string",
-            "minLength": 1,
-            "description": (
-                "Java field type only. Concern-owned domain types may be declared in the same "
-                "records/enums/classes payload. Declaration modifiers are host-owned."
-            ),
-        },
-        "name": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
-        "initializer": {
-            "type": "string",
-            "description": (
-                "Initializer expression only, without a trailing semicolon. "
-                "Never instantiate an interface or abstract JDK collection directly; "
-                "use a concrete implementation or a valid factory."
-            ),
-        },
-    },
-    "required": ["type", "name"],
-    "additionalProperties": True,
-}
-_ATOMIC_METHOD_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "return_type": {
-            "type": "string",
-            "minLength": 1,
-            "description": (
-                "Java return type only. Declaration modifiers are host-owned."
-            ),
-        },
-        "name": {"type": "string", "pattern": _ATOMIC_METHOD_NAME_PATTERN},
-        "parameters": {"type": "array", "items": _ATOMIC_PARAMETER_SCHEMA},
-        "throws": {"type": "array", "items": {"type": "string", "minLength": 1}},
-        "body": {
-            "type": "array",
-            "items": {
-                "type": "string",
-                "description": (
-                    "One Java statement or one complete control-flow block inside this method."
-                ),
-            },
-        },
-    },
-    "required": ["return_type", "name"],
-    "additionalProperties": True,
-}
-_ATOMIC_OUTER_METHOD_SCHEMA: dict[str, Any] = deepcopy(_ATOMIC_METHOD_SCHEMA)
-_ATOMIC_OUTER_METHOD_SCHEMA["properties"]["name"] = {
-    "type": "string",
-    "pattern": _JAVA_IDENTIFIER_PATTERN,
-    "description": (
-        "Ordinary method name in the existing host-selected outer class. "
-        "<init> is forbidden here because outer-class construction is host-owned."
-    ),
-}
-
-_ATOMIC_CONSTRUCTOR_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "parameters": {"type": "array", "items": _ATOMIC_PARAMETER_SCHEMA},
-        "throws": {"type": "array", "items": {"type": "string", "minLength": 1}},
-        "body": {"type": "array", "items": {"type": "string"}},
-    },
-    "required": [],
-    "additionalProperties": True,
-}
-_ATOMIC_RECORD_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "name": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
-        "components": {"type": "array", "items": _ATOMIC_PARAMETER_SCHEMA},
-        "constructors": {"type": "array", "items": _ATOMIC_CONSTRUCTOR_SCHEMA},
-        "methods": {"type": "array", "items": _ATOMIC_METHOD_SCHEMA},
-    },
-    "required": ["name"],
-    "additionalProperties": True,
-}
-_ATOMIC_ENUM_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "name": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
-        "constants": {
-            "type": "array",
-            "items": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
-            "uniqueItems": True,
-        },
-    },
-    "required": ["name", "constants"],
-    "additionalProperties": True,
-}
-_ATOMIC_CLASS_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "name": {"type": "string", "pattern": _JAVA_IDENTIFIER_PATTERN},
-        "fields": {"type": "array", "items": _ATOMIC_FIELD_SCHEMA},
-        "constructors": {"type": "array", "items": _ATOMIC_CONSTRUCTOR_SCHEMA},
-        "methods": {"type": "array", "items": _ATOMIC_METHOD_SCHEMA},
-    },
-    "required": ["name"],
-    "additionalProperties": True,
-}
-_ATOMIC_MEMBERS_PARAMETERS: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "records": {"type": "array", "items": _ATOMIC_RECORD_SCHEMA},
-        "enums": {"type": "array", "items": _ATOMIC_ENUM_SCHEMA},
-        "classes": {"type": "array", "items": _ATOMIC_CLASS_SCHEMA},
-        "fields": {"type": "array", "items": _ATOMIC_FIELD_SCHEMA},
-        "methods": {"type": "array", "items": _ATOMIC_OUTER_METHOD_SCHEMA},
-    },
-    "required": [],
-    "additionalProperties": True,
-}
-_ATOMIC_LOGIC_MEMBERS_PARAMETERS: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "fields": {"type": "array", "items": _ATOMIC_FIELD_SCHEMA},
-        "methods": {"type": "array", "items": _ATOMIC_OUTER_METHOD_SCHEMA},
-    },
-    "required": [],
-    "additionalProperties": False,
-}
-_ATOMIC_DECLARATION_MEMBERS_PARAMETERS: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "records": {"type": "array", "items": _ATOMIC_RECORD_SCHEMA},
-        "enums": {"type": "array", "items": _ATOMIC_ENUM_SCHEMA},
-        "classes": {"type": "array", "items": _ATOMIC_CLASS_SCHEMA},
-        "fields": {"type": "array", "items": _ATOMIC_FIELD_SCHEMA},
-    },
-    "required": [],
-    "additionalProperties": False,
-}
-# Static initializer blocks are host-owned lifecycle structure. Concern models
-# may emit fields/methods/local helper types, but never class initialization blocks.
-_ATOMIC_INITIALIZE_PARAMETERS: dict[str, Any] = {
-    "type": "object",
-    "properties": {"statements": {"type": "array", "items": {"type": "string"}}},
-    "required": [],
-    "additionalProperties": True,
-}
 
 
 def _atomic_parameters_for_request(
@@ -672,64 +499,11 @@ def _atomic_parameters_for_request(
     *,
     response_region: str,
 ) -> tuple[dict[str, Any], str]:
-    if response_region == "initialize":
-        return _ATOMIC_INITIALIZE_PARAMETERS, "initialize_statements"
-    recipe = payload.get("generation_recipe")
-    preferred = (
-        str(recipe.get("preferred_shape") or "").strip()
-        if isinstance(recipe, Mapping)
-        else ""
+    """Compatibility wrapper over the canonical model-facing Java schema."""
+    return java_atomic_parameters_for_request(
+        payload,
+        response_region=response_region,
     )
-    concern = payload.get("concern")
-    concern_name = (
-        str(concern.get("name") or "").strip()
-        if isinstance(concern, Mapping)
-        else ""
-    )
-    authorized_nested = tuple(
-        str(item).strip()
-        for item in payload.get("authorized_nested_runtime_types") or ()
-        if str(item).strip()
-    )
-    if concern_name in JAVA_DECLARATION_ONLY_CONCERNS:
-        parameters = _ATOMIC_DECLARATION_MEMBERS_PARAMETERS
-        shape = preferred or "declarations_only_fields_or_private_nested_types"
-    elif (
-        concern_name
-        and concern_name not in JAVA_TYPE_OWNING_CONCERNS
-        and not authorized_nested
-    ):
-        return (
-            _ATOMIC_LOGIC_MEMBERS_PARAMETERS,
-            preferred or "logic_fields_methods_only",
-        )
-    else:
-        parameters = _ATOMIC_MEMBERS_PARAMETERS
-        shape = preferred or "smallest_components"
-
-    host_symbol = str(payload.get("host_selected_class") or "").strip()
-    if host_symbol or authorized_nested:
-        parameters = deepcopy(parameters)
-        for category in ("records", "enums", "classes"):
-            category_schema = parameters["properties"].get(category)
-            if not isinstance(category_schema, Mapping):
-                continue
-            name_schema = category_schema["items"]["properties"]["name"]
-            forbidden = [host_symbol] if host_symbol else []
-            if authorized_nested:
-                name_schema["enum"] = list(authorized_nested)
-            if forbidden:
-                name_schema["not"] = {"enum": forbidden}
-            name_schema["description"] = (
-                "Name of a requirement-owned nested runtime helper. "
-                + (
-                    f"{host_symbol} is the existing outer class and must not be declared again. "
-                    if host_symbol
-                    else ""
-                )
-                + "Place outer fields in fields, not in a class wrapper."
-            )
-    return parameters, shape
 
 
 _COMMON_JAVA_NAMES = {

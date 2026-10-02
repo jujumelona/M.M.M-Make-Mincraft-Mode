@@ -21,6 +21,7 @@ from minecraft_mod_ai.execution_contract_policy import (
     atomic_error_terminal_after_normalization,
     authorized_concern_nested_type_symbols,
     java_atomic_assembly_system_prompt,
+    java_atomic_parameters_for_request,
     java_generation_recipe_contract,
     java_region_system_prompt_contract,
     PRODUCTION_COMPILE_REPAIR_LIMIT,
@@ -303,9 +304,7 @@ def test_schema_selector_and_prompt_share_type_owning_concerns() -> None:
 
 
 def test_authorized_nested_runtime_type_reaches_structured_schema() -> None:
-    from minecraft_mod_ai.custom_module_generator import _atomic_parameters_for_request
-
-    parameters, _shape = _atomic_parameters_for_request(
+    parameters, _shape = java_atomic_parameters_for_request(
         {
             "response_region": "members",
             "host_selected_class": "AuthoredFailureLimits",
@@ -328,3 +327,24 @@ def test_atomic_java_assembly_reads_model_field_bound_directly_from_canonical_po
     source = inspect.getsource(assembly)
     assert "MAX_MODEL_FIELDS" not in source
     assert "DEFAULT_ATOMIC_SCHEMA_LIMITS.max_fields" in source
+
+
+
+def test_model_facing_java_schema_is_owned_by_canonical_contract() -> None:
+    import minecraft_mod_ai.custom_module_generator as generator
+
+    source = inspect.getsource(generator)
+    for legacy in (
+        "_ATOMIC_PARAMETER_SCHEMA",
+        "_ATOMIC_FIELD_SCHEMA",
+        "_ATOMIC_METHOD_SCHEMA",
+        "_ATOMIC_RECORD_SCHEMA",
+        "_ATOMIC_ENUM_SCHEMA",
+        "_ATOMIC_CLASS_SCHEMA",
+        "_ATOMIC_MEMBERS_PARAMETERS",
+        "_ATOMIC_LOGIC_MEMBERS_PARAMETERS",
+        "_ATOMIC_DECLARATION_MEMBERS_PARAMETERS",
+        "_ATOMIC_INITIALIZE_PARAMETERS",
+    ):
+        assert legacy not in source
+    assert "java_atomic_parameters_for_request(" in source

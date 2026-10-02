@@ -8,6 +8,8 @@ facades, but they must not independently redefine these rules.
 """
 
 import re
+from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
@@ -275,6 +277,175 @@ JAVA_INITIALIZE_RESPONSE_CONTRACT = (
 )
 
 
+
+JAVA_ATOMIC_IDENTIFIER_PATTERN = r"^[A-Za-z_$][A-Za-z0-9_$]*$"
+JAVA_ATOMIC_METHOD_NAME_PATTERN = r"^(?:<init>|[A-Za-z_$][A-Za-z0-9_$]*)$"
+JAVA_ATOMIC_PARAMETER_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "type": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "Java type. Use a primitive/java.lang type, a type declared in this same "
+                "structured call, a supplied sibling/dependency type, or a fully-qualified "
+                "external type. Common JDK collection names may be simple names because the "
+                "host qualifies them."
+            ),
+        },
+        "name": {
+            "type": "string",
+            "pattern": JAVA_ATOMIC_IDENTIFIER_PATTERN,
+            "description": (
+                "Semantic identifier. Java reserved words are accepted here because the host "
+                "canonicalizes them consistently before rendering."
+            ),
+        },
+    },
+    "required": ["type", "name"],
+    "additionalProperties": True,
+}
+JAVA_ATOMIC_FIELD_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "type": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "Java field type only. Concern-owned domain types may be declared in the same "
+                "records/enums/classes payload. Declaration modifiers are host-owned."
+            ),
+        },
+        "name": {"type": "string", "pattern": JAVA_ATOMIC_IDENTIFIER_PATTERN},
+        "initializer": {
+            "type": "string",
+            "description": (
+                "Initializer expression only, without a trailing semicolon. "
+                "Never instantiate an interface or abstract JDK collection directly; "
+                "use a concrete implementation or a valid factory."
+            ),
+        },
+    },
+    "required": ["type", "name"],
+    "additionalProperties": True,
+}
+JAVA_ATOMIC_METHOD_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "return_type": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Java return type only. Declaration modifiers are host-owned.",
+        },
+        "name": {"type": "string", "pattern": JAVA_ATOMIC_METHOD_NAME_PATTERN},
+        "parameters": {"type": "array", "items": JAVA_ATOMIC_PARAMETER_SCHEMA},
+        "throws": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "body": {
+            "type": "array",
+            "items": {
+                "type": "string",
+                "description": (
+                    "One Java statement or one complete control-flow block inside this method."
+                ),
+            },
+        },
+    },
+    "required": ["return_type", "name"],
+    "additionalProperties": True,
+}
+JAVA_ATOMIC_OUTER_METHOD_SCHEMA: dict[str, Any] = deepcopy(JAVA_ATOMIC_METHOD_SCHEMA)
+JAVA_ATOMIC_OUTER_METHOD_SCHEMA["properties"]["name"] = {
+    "type": "string",
+    "pattern": JAVA_ATOMIC_IDENTIFIER_PATTERN,
+    "description": (
+        "Ordinary method name in the existing host-selected outer class. "
+        "<init> is forbidden here because outer-class construction is host-owned."
+    ),
+}
+JAVA_ATOMIC_CONSTRUCTOR_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "parameters": {"type": "array", "items": JAVA_ATOMIC_PARAMETER_SCHEMA},
+        "throws": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "body": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": [],
+    "additionalProperties": True,
+}
+JAVA_ATOMIC_RECORD_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string", "pattern": JAVA_ATOMIC_IDENTIFIER_PATTERN},
+        "components": {"type": "array", "items": JAVA_ATOMIC_PARAMETER_SCHEMA},
+        "constructors": {"type": "array", "items": JAVA_ATOMIC_CONSTRUCTOR_SCHEMA},
+        "methods": {"type": "array", "items": JAVA_ATOMIC_METHOD_SCHEMA},
+    },
+    "required": ["name"],
+    "additionalProperties": True,
+}
+JAVA_ATOMIC_ENUM_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string", "pattern": JAVA_ATOMIC_IDENTIFIER_PATTERN},
+        "constants": {
+            "type": "array",
+            "items": {"type": "string", "pattern": JAVA_ATOMIC_IDENTIFIER_PATTERN},
+            "uniqueItems": True,
+        },
+    },
+    "required": ["name", "constants"],
+    "additionalProperties": True,
+}
+JAVA_ATOMIC_CLASS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string", "pattern": JAVA_ATOMIC_IDENTIFIER_PATTERN},
+        "fields": {"type": "array", "items": JAVA_ATOMIC_FIELD_SCHEMA},
+        "constructors": {"type": "array", "items": JAVA_ATOMIC_CONSTRUCTOR_SCHEMA},
+        "methods": {"type": "array", "items": JAVA_ATOMIC_METHOD_SCHEMA},
+    },
+    "required": ["name"],
+    "additionalProperties": True,
+}
+JAVA_ATOMIC_MEMBERS_PARAMETERS: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "records": {"type": "array", "items": JAVA_ATOMIC_RECORD_SCHEMA},
+        "enums": {"type": "array", "items": JAVA_ATOMIC_ENUM_SCHEMA},
+        "classes": {"type": "array", "items": JAVA_ATOMIC_CLASS_SCHEMA},
+        "fields": {"type": "array", "items": JAVA_ATOMIC_FIELD_SCHEMA},
+        "methods": {"type": "array", "items": JAVA_ATOMIC_OUTER_METHOD_SCHEMA},
+    },
+    "required": [],
+    "additionalProperties": True,
+}
+JAVA_ATOMIC_LOGIC_MEMBERS_PARAMETERS: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "fields": {"type": "array", "items": JAVA_ATOMIC_FIELD_SCHEMA},
+        "methods": {"type": "array", "items": JAVA_ATOMIC_OUTER_METHOD_SCHEMA},
+    },
+    "required": [],
+    "additionalProperties": False,
+}
+JAVA_ATOMIC_DECLARATION_MEMBERS_PARAMETERS: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "records": {"type": "array", "items": JAVA_ATOMIC_RECORD_SCHEMA},
+        "enums": {"type": "array", "items": JAVA_ATOMIC_ENUM_SCHEMA},
+        "classes": {"type": "array", "items": JAVA_ATOMIC_CLASS_SCHEMA},
+        "fields": {"type": "array", "items": JAVA_ATOMIC_FIELD_SCHEMA},
+    },
+    "required": [],
+    "additionalProperties": False,
+}
+JAVA_ATOMIC_INITIALIZE_PARAMETERS: dict[str, Any] = {
+    "type": "object",
+    "properties": {"statements": {"type": "array", "items": {"type": "string"}}},
+    "required": [],
+    "additionalProperties": True,
+}
+
 JAVA_ATOMIC_ASSEMBLY_SYSTEM_PROMPT = (
     "Implement the host-selected concern through native emit_java_part calls. "
     "Fill only the current assembly.path using the supplied scalar schema. "
@@ -339,6 +510,73 @@ def atomic_error_recoverable(reason: str) -> bool:
 
 def atomic_error_terminal_after_normalization(reason: str) -> bool:
     return str(reason or "").startswith(TERMINAL_AFTER_NORMALIZATION_PREFIXES)
+
+
+
+def java_atomic_parameters_for_request(
+    payload: Mapping[str, Any],
+    *,
+    response_region: str,
+) -> tuple[dict[str, Any], str]:
+    if response_region == "initialize":
+        return JAVA_ATOMIC_INITIALIZE_PARAMETERS, "initialize_statements"
+
+    recipe = payload.get("generation_recipe")
+    preferred = (
+        str(recipe.get("preferred_shape") or "").strip()
+        if isinstance(recipe, Mapping)
+        else ""
+    )
+    concern = payload.get("concern")
+    concern_name = (
+        str(concern.get("name") or "").strip()
+        if isinstance(concern, Mapping)
+        else ""
+    )
+    authorized_nested = tuple(
+        str(item).strip()
+        for item in payload.get("authorized_nested_runtime_types") or ()
+        if str(item).strip()
+    )
+
+    if concern_name in JAVA_DECLARATION_ONLY_CONCERNS:
+        parameters = JAVA_ATOMIC_DECLARATION_MEMBERS_PARAMETERS
+        shape = preferred or "declarations_only_fields_or_private_nested_types"
+    elif (
+        concern_name
+        and concern_name not in JAVA_TYPE_OWNING_CONCERNS
+        and not authorized_nested
+    ):
+        return (
+            JAVA_ATOMIC_LOGIC_MEMBERS_PARAMETERS,
+            preferred or "logic_fields_methods_only",
+        )
+    else:
+        parameters = JAVA_ATOMIC_MEMBERS_PARAMETERS
+        shape = preferred or "smallest_components"
+
+    host_symbol = str(payload.get("host_selected_class") or "").strip()
+    if host_symbol or authorized_nested:
+        parameters = deepcopy(parameters)
+        for category in ("records", "enums", "classes"):
+            category_schema = parameters["properties"].get(category)
+            if not isinstance(category_schema, Mapping):
+                continue
+            name_schema = category_schema["items"]["properties"]["name"]
+            if authorized_nested:
+                name_schema["enum"] = list(authorized_nested)
+            if host_symbol:
+                name_schema["not"] = {"enum": [host_symbol]}
+            name_schema["description"] = (
+                "Name of a requirement-owned nested runtime helper. "
+                + (
+                    f"{host_symbol} is the existing outer class and must not be declared again. "
+                    if host_symbol
+                    else ""
+                )
+                + "Place outer fields in fields, not in a class wrapper."
+            )
+    return parameters, shape
 
 
 def java_atomic_assembly_system_prompt() -> str:
@@ -693,6 +931,20 @@ __all__ = [
     "DEFAULT_REGION_ATTEMPT_LIMIT",
     "DEFAULT_SCHEMA_PROFILE",
     "JAVA_ATOMIC_ASSEMBLY_CONTEXT_MARGIN_BYTES",
+    "JAVA_ATOMIC_CLASS_SCHEMA",
+    "JAVA_ATOMIC_CONSTRUCTOR_SCHEMA",
+    "JAVA_ATOMIC_DECLARATION_MEMBERS_PARAMETERS",
+    "JAVA_ATOMIC_ENUM_SCHEMA",
+    "JAVA_ATOMIC_FIELD_SCHEMA",
+    "JAVA_ATOMIC_IDENTIFIER_PATTERN",
+    "JAVA_ATOMIC_INITIALIZE_PARAMETERS",
+    "JAVA_ATOMIC_LOGIC_MEMBERS_PARAMETERS",
+    "JAVA_ATOMIC_MEMBERS_PARAMETERS",
+    "JAVA_ATOMIC_METHOD_NAME_PATTERN",
+    "JAVA_ATOMIC_METHOD_SCHEMA",
+    "JAVA_ATOMIC_OUTER_METHOD_SCHEMA",
+    "JAVA_ATOMIC_PARAMETER_SCHEMA",
+    "JAVA_ATOMIC_RECORD_SCHEMA",
     "JAVA_ATOMIC_ASSEMBLY_MAX_CALLS",
     "JAVA_ATOMIC_ASSEMBLY_MAX_PART_ITEMS",
     "JAVA_ATOMIC_ASSEMBLY_SYSTEM_PROMPT",
@@ -745,6 +997,7 @@ __all__ = [
     "atomic_schema_limits",
     "authorized_concern_nested_type_symbols",
     "java_atomic_assembly_system_prompt",
+    "java_atomic_parameters_for_request",
     "java_generation_recipe_contract",
     "java_generation_shared_recipe_policy",
     "java_imported_jdk_use_can_be_qualified",
