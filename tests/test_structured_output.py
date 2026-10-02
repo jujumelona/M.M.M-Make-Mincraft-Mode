@@ -203,8 +203,14 @@ def test_parser_owned_research_allows_explicit_insufficient_gap_receipt() -> Non
     assert recovered["research_note"]["gaps"] == ["missing evidence"]
 
 
-def test_strict_schema_still_rejects_prose_wrapped_json() -> None:
+def test_strict_schema_recovers_one_schema_valid_embedded_object() -> None:
     output = 'prefix {"name":"ok","count":1} suffix'
+
+    assert json.loads(_validate(output)) == {"name": "ok", "count": 1}
+
+
+def test_strict_schema_rejects_ambiguous_multiple_valid_embedded_objects() -> None:
+    output = '{"name":"first","count":1} and {"name":"second","count":2}'
 
     with pytest.raises(StructuredOutputValidationError):
         _validate(output)
