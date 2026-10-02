@@ -45,6 +45,8 @@ def _task() -> dict[str, object]:
 def _executor(
     outputs: list[str],
     captured: list[list[dict[str, str]]],
+    *,
+    attempt_limit: int = 2,
 ) -> AtomicConcernExecutor:
     remaining = list(outputs)
 
@@ -78,7 +80,7 @@ def _executor(
         compile_java=lambda _root: SimpleNamespace(status="PASS"),
         compile_log=lambda _report: "",
         write_source=lambda _path, _source: None,
-        region_attempt_limit=2,
+        region_attempt_limit=attempt_limit,
         retry_structural_rejections=True,
     )
 
@@ -128,8 +130,8 @@ def test_bad_type_is_not_silently_materialized_by_host() -> None:
             )
         ],
         captured,
+        attempt_limit=1,
     )
-    executor.region_attempt_limit = 1
 
     with pytest.raises(
         CustomModuleGenerationError,
