@@ -484,6 +484,17 @@ def test_compact_coder_contract_drops_planner_provenance_blob() -> None:
     assert compact_bytes < original_bytes // 8
 
 
+def test_source_owned_task_local_contract_preserves_evidence_task_shape() -> None:
+    from minecraft_mod_ai import custom_module_generator as direct
+
+    task = direct._task_local_module_contract(_module())
+
+    assert "owned_anchors" in task
+    assert "production_bindings" in task
+    assert "coder_execution_contract" in task
+    assert "evidence_task" not in task
+
+
 def test_active_capsule_exposes_reuse_action_as_semantic_mode() -> None:
     import minecraft_mod_ai.small_model_task_capsule_contract as contract
 

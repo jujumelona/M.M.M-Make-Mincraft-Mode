@@ -11,15 +11,22 @@ from minecraft_mod_ai.complete_spec import ProductionModule
 
 
 def _module(path: str, symbol: str) -> ProductionModule:
+    anchor = {
+        "kind": "symbol",
+        "locator": f"{path}#{symbol}",
+        "status": "existing",
+        "ownership": "exclusive",
+    }
     task = {
         "task_id": "authored_feature_001",
         "semantic_outcome": "implement the approved feature",
         "implementation_obligations": ["implement the approved feature"],
-        "owned_anchors": [
+        "owned_anchors": [anchor],
+        "production_bindings": [
             {
-                "kind": "symbol",
-                "locator": f"{path}#{symbol}",
-                "status": "existing",
+                "task_ref": "authored_feature_001",
+                "reuse_action": "adapt",
+                "owned_anchors": [anchor],
             }
         ],
         "required_gates": ["target_compile"],
@@ -245,6 +252,20 @@ def test_host_reserved_missing_target_is_materialized_and_does_not_require_initi
                 "locator": f"{path}#{symbol}",
                 "status": "host_reserved",
                 "ownership": "exclusive",
+            }
+        ],
+        "production_bindings": [
+            {
+                "task_ref": "fresh_feature",
+                "reuse_action": "fresh",
+                "owned_anchors": [
+                    {
+                        "kind": "symbol",
+                        "locator": f"{path}#{symbol}",
+                        "status": "host_reserved",
+                        "ownership": "exclusive",
+                    }
+                ],
             }
         ],
         "required_gates": ["target_compile"],
@@ -1328,7 +1349,7 @@ def test_graph_owned_atomic_leaf_defers_gradle_until_graph_boundary(
     config = dict(base.config)
     config["implementation_graph_deferred_compile"] = True
     module = ProductionModule(
-        module_id="ir_authored_algorithm",
+        module_id=base.module_id,
         kind=base.kind,
         config=config,
         required_gates=base.required_gates,
