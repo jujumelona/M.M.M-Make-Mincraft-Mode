@@ -52,4 +52,4 @@ def test_runtime_record_templates_keep_host_control_out_of_model_rules():
         rules = "\n".join(str(rule).lower() for rule in template.get("rules", ()))
         for phrase in forbidden:
             assert phrase not in rules, f"{identifier}: {phrase}"
-        assert "host owns cardinality and iteration" in rules, identifier
+        assert "accepted-record state and iteration" in rules, identifier
