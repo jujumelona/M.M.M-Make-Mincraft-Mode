@@ -4065,11 +4065,12 @@ def _messages(
             f"ATOMIC_CONCERN_RESPONSE_REGION_INVALID: {response_region!r}"
         )
 
+    platform_api_policy = _section_platform_api_policy(section)
     system = java_region_system_prompt_contract(
         section=section,
         concern_name=name,
         response_region=response_region,
-        platform_api_policy=_section_platform_api_policy(section),
+        platform_api_policy=platform_api_policy,
     )
     scope = java_region_scope_policy(
         failure=bool(failure),
@@ -4119,10 +4120,14 @@ def _messages(
             if section == "state_model" and name == "variables"
             else []
         ),
-        "host_grounding": _bounded_grounding(grounding, section=section),
+        "host_grounding": (
+            _bounded_grounding(grounding, section=section)
+            if platform_api_policy != "forbidden"
+            else {}
+        ),
         "implementation_authority": (
             render_generation_implementation_authority_prompt(grounding)
-            if _section_platform_api_policy(section) != "forbidden"
+            if platform_api_policy != "forbidden"
             else ""
         ),
         "dependency_api": _dependency_api_context(dependency_source),
