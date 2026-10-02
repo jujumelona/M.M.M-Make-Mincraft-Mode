@@ -215,6 +215,7 @@ TERMINAL_AFTER_NORMALIZATION_PREFIXES = tuple(
 
 JAVA_COMPILER_FIRST_RULES = (
     "The first answer must compile as Java for the selected host JDK; do not rely on a later repair pass.",
+    "Every Java identifier you emit must be one lexical identifier with no spaces or punctuation. Authored values are data, never member names. When concern.java_symbol_plan supplies an authored_field_symbols mapping, use those names exactly.",
     "Never guess a package or fully-qualified class name. Use only a JDK/external type whose canonical package and API are known from the supplied authority.",
     "For non-java.lang JDK types, prefer canonical fully-qualified names. If an explicit java.* import is emitted, the host will remove it and qualify both type uses and static class receivers before validation.",
     "A field declaration type must be assignment-compatible with its initializer, and every receiver method call must exist on that declared type. Never use Map/List/Object as a lock holder merely because the field also guards cached state.",
@@ -240,6 +241,7 @@ JAVA_JDK_PACKAGE_ANCHORS = (
 )
 
 JAVA_PRE_EMIT_COMPILE_CHECKLIST = (
+    "Before emitting Java, verify every declared identifier is one Java identifier matching [A-Za-z_$][A-Za-z0-9_$]*; never splice natural-language values into a name.",
     "Before emitting Java, internally type-check every assignment: declared_type <- expression_type.",
     "For every field or local receiver.method(...), verify the method exists on the receiver's declared type.",
     "For every generic projection, preserve exact invariant type arguments from available_sibling_api.",
@@ -320,10 +322,10 @@ JAVA_ATOMIC_PARAMETER_SCHEMA: dict[str, Any] = {
         },
         "name": {
             "type": "string",
-            "pattern": JAVA_ATOMIC_IDENTIFIER_PATTERN,
+            "minLength": 1,
             "description": (
-                "Semantic identifier. Java reserved words are accepted here because the host "
-                "canonicalizes them consistently before rendering."
+                "Semantic parameter name. The host canonicalizes it into one legal Java identifier "
+                "and rewrites references consistently. Prefer concern.java_symbol_plan names when supplied."
             ),
         },
     },
@@ -341,7 +343,14 @@ JAVA_ATOMIC_FIELD_SCHEMA: dict[str, Any] = {
                 "records/enums/classes payload. Declaration modifiers are host-owned."
             ),
         },
-        "name": {"type": "string", "pattern": JAVA_ATOMIC_IDENTIFIER_PATTERN},
+        "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": (
+                "Semantic field name. The host owns Java identifier spelling and canonicalizes this "
+                "before rendering. Never derive the name from an authored value."
+            ),
+        },
         "initializer": {
             "type": "string",
             "description": (
@@ -362,7 +371,11 @@ JAVA_ATOMIC_METHOD_SCHEMA: dict[str, Any] = {
             "minLength": 1,
             "description": "Java return type only. Declaration modifiers are host-owned.",
         },
-        "name": {"type": "string", "pattern": JAVA_ATOMIC_METHOD_NAME_PATTERN},
+        "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Semantic method name; host canonicalizes Java spelling. Use <init> only for nested constructors.",
+        },
         "parameters": {"type": "array", "items": JAVA_ATOMIC_PARAMETER_SCHEMA},
         "throws": {"type": "array", "items": {"type": "string", "minLength": 1}},
         "body": {
@@ -381,10 +394,11 @@ JAVA_ATOMIC_METHOD_SCHEMA: dict[str, Any] = {
 JAVA_ATOMIC_OUTER_METHOD_SCHEMA: dict[str, Any] = deepcopy(JAVA_ATOMIC_METHOD_SCHEMA)
 JAVA_ATOMIC_OUTER_METHOD_SCHEMA["properties"]["name"] = {
     "type": "string",
-    "pattern": JAVA_ATOMIC_IDENTIFIER_PATTERN,
+    "minLength": 1,
+    "not": {"const": "<init>"},
     "description": (
-        "Ordinary method name in the existing host-selected outer class. "
-        "<init> is forbidden here because outer-class construction is host-owned."
+        "Ordinary semantic method name in the existing host-selected outer class. "
+        "The host canonicalizes Java spelling; <init> is forbidden because outer-class construction is host-owned."
     ),
 }
 JAVA_ATOMIC_CONSTRUCTOR_SCHEMA: dict[str, Any] = {
@@ -400,7 +414,7 @@ JAVA_ATOMIC_CONSTRUCTOR_SCHEMA: dict[str, Any] = {
 JAVA_ATOMIC_RECORD_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "name": {"type": "string", "pattern": JAVA_ATOMIC_IDENTIFIER_PATTERN},
+        "name": {"type": "string", "minLength": 1},
         "components": {"type": "array", "items": JAVA_ATOMIC_PARAMETER_SCHEMA},
         "constructors": {"type": "array", "items": JAVA_ATOMIC_CONSTRUCTOR_SCHEMA},
         "methods": {"type": "array", "items": JAVA_ATOMIC_METHOD_SCHEMA},
@@ -411,10 +425,10 @@ JAVA_ATOMIC_RECORD_SCHEMA: dict[str, Any] = {
 JAVA_ATOMIC_ENUM_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "name": {"type": "string", "pattern": JAVA_ATOMIC_IDENTIFIER_PATTERN},
+        "name": {"type": "string", "minLength": 1},
         "constants": {
             "type": "array",
-            "items": {"type": "string", "pattern": JAVA_ATOMIC_IDENTIFIER_PATTERN},
+            "items": {"type": "string", "minLength": 1},
             "uniqueItems": True,
         },
     },
@@ -424,7 +438,7 @@ JAVA_ATOMIC_ENUM_SCHEMA: dict[str, Any] = {
 JAVA_ATOMIC_CLASS_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "name": {"type": "string", "pattern": JAVA_ATOMIC_IDENTIFIER_PATTERN},
+        "name": {"type": "string", "minLength": 1},
         "fields": {"type": "array", "items": JAVA_ATOMIC_FIELD_SCHEMA},
         "constructors": {"type": "array", "items": JAVA_ATOMIC_CONSTRUCTOR_SCHEMA},
         "methods": {"type": "array", "items": JAVA_ATOMIC_METHOD_SCHEMA},
@@ -479,6 +493,9 @@ JAVA_ATOMIC_ASSEMBLY_SYSTEM_PROMPT = (
     "A batch part is single-use: when a part is selected, emit every needed sibling item "
     "for that part in the same native turn because the host closes that part immediately. "
     "Keep the authored requirements, dependency_api, available_sibling_api, and "
+    "concern.java_symbol_plan authoritative. Authored values are literals/data, not identifier source text. "
+    "If a semantic name contains spaces/punctuation, do not fight the transport; the host canonicalizes it "
+    "to a legal Java identifier and rewrites references consistently. "
     "compiler_contract authoritative. The target is first-pass compilable Java, not code that "
     "expects a compiler-repair round. Reuse exact sibling declarations; do not redeclare them "
     "or change their types/defaults. Never reassign a final sibling or concern-local final field. "
@@ -861,6 +878,9 @@ def java_region_system_prompt_contract(
         "such as owner/type/unit/default/domain/from_state/trigger/guard describe semantics; they "
         "are not a request to create a Java metadata record with those labels as components. "
         "Create a record/class only when the runtime gameplay implementation itself needs that data object. "
+        "Every free-form Java identifier must match [A-Za-z_$][A-Za-z0-9_$]*. "
+        "Never uppercase/concatenate authored prose or values into a Java name. "
+        "When concern.java_symbol_plan.authored_field_symbols is present, use those exact member names. "
         "Never emit an undeclared simple Java type. If you choose to represent an authored "
         "concern-local runtime concept as a simple Java type and no available sibling/dependency/"
         "JDK/platform authority owns it, declare the smallest private static nested class/record "
