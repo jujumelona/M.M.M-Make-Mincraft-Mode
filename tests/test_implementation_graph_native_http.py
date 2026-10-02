@@ -6,6 +6,7 @@ perform zero model requests.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import threading
@@ -70,17 +71,52 @@ def test_host_graph_reaches_java_execution_without_planner_http(tmp_path, monkey
         def do_POST(self):
             payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             requests.append(payload)
-            name = payload["tools"][0]["function"]["name"]
-            delta = {"tool_calls": [{"index": 0, "id": f"call_{len(requests)}", "type": "function",
-                                     "function": {"name": name, "arguments": '{"part":"done"}'}}]}
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Connection", "close")
             self.end_headers()
-            for event in (
-                {"choices": [{"delta": delta}]},
-                {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
-            ):
+
+            tools = payload.get("tools") or []
+            if tools:
+                name = tools[0]["function"]["name"]
+                assert name == "report_java_region_completion"
+                arguments = json.dumps({"done": True, "next_work": ""})
+                delta = {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": f"call_{len(requests)}",
+                            "type": "function",
+                            "function": {"name": name, "arguments": arguments},
+                        }
+                    ]
+                }
+                events = (
+                    {"choices": [{"delta": delta}]},
+                    {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+                )
+            else:
+                # Production atomic generation emits one complete concern-local
+                # Java region as text. Completion is decided in a separate native
+                # tool turn above; implementation planning itself performs no HTTP.
+                user_message = next(
+                    message["content"]
+                    for message in reversed(payload["messages"])
+                    if message.get("role") == "user"
+                )
+                region_request = json.loads(user_message)
+                concern = str(region_request["concern"]["name"])
+                identifier = re.sub(r"[^A-Za-z0-9_$]", "_", concern)
+                if region_request["response_region"] == "initialize":
+                    source = f"{identifier}Impl();"
+                else:
+                    source = f"private static void {identifier}Impl() {{}}"
+                events = (
+                    {"choices": [{"delta": {"role": "assistant", "content": source}}]},
+                    {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+                )
+
+            for event in events:
                 self.wfile.write(("data: " + json.dumps(event) + "\n\n").encode())
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
@@ -157,11 +193,20 @@ def test_host_graph_reaches_java_execution_without_planner_http(tmp_path, monkey
     try:
         generator = direct.CustomModuleGenerator(Router())
         result = generator.generate(tmp_path, module=module)
-        expected_requests = sum(
-            len(concern_contracts(section)) for section in EXECUTION_SECTION_ORDER if section != "state_model"
+        expected_region_requests = sum(
+            len(concern_contracts(section))
+            for section in EXECUTION_SECTION_ORDER
+            if section not in {"state_model", "behavior_contract"}
         ) + len(concern_contracts("integration"))
-        assert len(requests) == expected_requests
-        assert all(request["tools"][0]["function"]["name"] == "emit_java_part" for request in requests)
+        region_requests = [request for request in requests if not request.get("tools")]
+        completion_requests = [request for request in requests if request.get("tools")]
+        assert len(region_requests) == expected_region_requests
+        assert len(completion_requests) == expected_region_requests
+        assert all(
+            request["tools"][0]["function"]["name"] == "report_java_region_completion"
+            for request in completion_requests
+        )
+        assert all("response_format" not in request for request in requests)
         graph = result["implementation_ir"]
         symbols = {node["symbol"] for node in graph["nodes"]}
         assert symbols == {
