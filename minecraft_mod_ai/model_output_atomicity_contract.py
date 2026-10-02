@@ -204,17 +204,55 @@ def is_atomic_model_schema(schema: Mapping[str, Any]) -> bool:
     return True
 
 
-def _model_transport_schema(value: Any) -> Any:
-    """Remove host-only contract annotations before sending schema to a model adapter."""
+def _model_transport_schema(
+    value: Any,
+    *,
+    profile: str = DEFAULT_SCHEMA_PROFILE,
+    string_class: str = STRING_CLASS_GENERIC,
+) -> Any:
+    """Project a logical schema into a finite model-visible transport contract.
+
+    Logical/storage schemas may intentionally omit generic resource bounds. A model
+    decode may not: every model-visible string/array receives a finite transport bound
+    unless the logical schema already declares one. Explicit domain bounds are preserved.
+    Host-only profile annotations select the appropriate bound but are never sent over
+    the wire.
+    """
 
     if isinstance(value, Mapping):
-        return {
-            key: _model_transport_schema(child)
+        local_profile = str(
+            value.get(SCHEMA_CONTRACT_PROFILE_KEY, profile) or profile
+        ).strip()
+        limits = atomic_schema_limits(local_profile)
+        local_string_class = str(
+            value.get(SCHEMA_STRING_CLASS_KEY, string_class) or string_class
+        ).strip()
+        result = {
+            key: _model_transport_schema(
+                child,
+                profile=local_profile,
+                string_class=local_string_class,
+            )
             for key, child in value.items()
             if key not in {SCHEMA_CONTRACT_PROFILE_KEY, SCHEMA_STRING_CLASS_KEY}
         }
+        if _schema_has_type(value, "string") and "maxLength" not in result:
+            result["maxLength"] = string_limit_for_schema_class(
+                local_profile,
+                local_string_class,
+            )
+        if _schema_has_type(value, "array") and "maxItems" not in result:
+            result["maxItems"] = limits.max_array_items
+        return result
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return [_model_transport_schema(child) for child in value]
+        return [
+            _model_transport_schema(
+                child,
+                profile=profile,
+                string_class=string_class,
+            )
+            for child in value
+        ]
     return value
 
 
