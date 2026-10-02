@@ -4212,6 +4212,7 @@ class AtomicConcernExecutor:
         correction = None
         dependency_repair = None
         type_authority_repair = None
+        type_authority_retry_level = 1
         rejected_region = ""
         attempt_limit = (
             _region_attempt_limit()
@@ -4604,7 +4605,16 @@ class AtomicConcernExecutor:
                     ) from exc
 
                 violation = (reason, output_sha)
-                if output_sha and violation in seen_violations:
+                repeated_violation = bool(
+                    output_sha and violation in seen_violations
+                )
+                mechanical_escalation = bool(
+                    repeated_violation
+                    and attempt < attempt_limit
+                    and isinstance(type_authority_repair, Mapping)
+                    and type_authority_repair.get("mode") == "mechanical_copy_edit"
+                )
+                if repeated_violation and not mechanical_escalation:
                     _trace_region_generation(
                         "atomic_concern_region_no_progress",
                         result="FAIL",
@@ -4621,6 +4631,20 @@ class AtomicConcernExecutor:
                         f"ATOMIC_CONCERN_RESPONSE_NO_PROGRESS: {name}:{response_region} "
                         f"repeated identical invalid output: {reason}"
                     ) from exc
+                if mechanical_escalation:
+                    type_authority_retry_level += 1
+                    _trace_region_generation(
+                        "atomic_concern_region_mechanical_repair_escalated",
+                        result="RETRY",
+                        concern=name,
+                        region=response_region,
+                        attempt=attempt,
+                        attempt_limit=attempt_limit,
+                        reason=reason,
+                        output_sha256=output_sha,
+                        output_chars=len(output_text),
+                        rejected_response=rejected_response,
+                    )
 
                 if output_sha:
                     seen_violations.add(violation)
@@ -4656,7 +4680,12 @@ class AtomicConcernExecutor:
                     self.dependency_source,
                     reason,
                 )
-                type_authority_repair = _type_authority_repair_contract(reason)
+                type_authority_repair = _type_authority_repair_contract(
+                    reason,
+                    rejected_source=(parsed if candidate_merged else output_text),
+                    concern_authority=concern_authority,
+                    retry_level=type_authority_retry_level,
+                )
                 if candidate_merged:
                     # A repair candidate that violates the frozen type structure is
                     # not allowed to become the next correction authority. Keep the

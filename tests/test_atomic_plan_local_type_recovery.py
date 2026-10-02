@@ -110,6 +110,18 @@ def test_ungrounded_plan_local_type_forces_model_concern_regeneration() -> None:
     retry_payload = json.loads(captured[1][-1]["content"])
     repair = retry_payload["type_authority_repair_contract"]
     assert repair["unknown_simple_types"] == ["ShipObject"]
+    assert repair["mode"] == "mechanical_copy_edit"
+    assert repair["mechanical_edits"] == [
+        {
+            "operation": "insert_exact_sibling_declaration",
+            "type_name": "ShipObject",
+            "exact_declaration": "private static final class ShipObject {}",
+            "preserve_existing_declarations": [
+                "private static ShipObject buildShip() { ... }"
+            ],
+            "edit_budget": "one exact sibling declaration insertion; no semantic rewrites",
+        }
+    ]
     assert "current_selected_region_source" in retry_payload
     assert "private static ShipObject buildShip()" in retry_payload[
         "current_selected_region_source"
@@ -117,6 +129,47 @@ def test_ungrounded_plan_local_type_forces_model_concern_regeneration() -> None:
     assert "region_correction" not in retry_payload
     assert "private static final class ShipObject {}" in result["source"]
     assert "private static ShipObject buildShip()" in result["source"]
+
+
+def test_original_log_identical_retry_gets_one_more_mechanical_copy_edit_turn() -> None:
+    captured: list[list[dict[str, str]]] = []
+    bad = (
+        "private static ShipObject buildShip() {\n"
+        "    return new ShipObject();\n"
+        "}"
+    )
+    executor = _executor(
+        [
+            bad,
+            bad,
+            (
+                "private static final class ShipObject {}\n\n"
+                "private static ShipObject buildShip() {\n"
+                "    return new ShipObject();\n"
+                "}"
+            ),
+        ],
+        captured,
+        attempt_limit=3,
+    )
+
+    result = executor.run()
+
+    assert len(captured) == 3
+    second = json.loads(captured[1][-1]["content"])[
+        "type_authority_repair_contract"
+    ]
+    third = json.loads(captured[2][-1]["content"])[
+        "type_authority_repair_contract"
+    ]
+    assert second["mode"] == "mechanical_copy_edit"
+    assert second["retry_level"] == 1
+    assert third["mode"] == "mechanical_copy_edit"
+    assert third["retry_level"] == 2
+    assert third["mechanical_edits"][0]["exact_declaration"] == (
+        "private static final class ShipObject {}"
+    )
+    assert "private static final class ShipObject {}" in result["source"]
 
 
 def test_bad_type_is_not_silently_materialized_by_host() -> None:
@@ -205,9 +258,19 @@ def test_type_authority_repair_contract_names_exact_unknown_type() -> None:
     contract = type_authority_repair_contract(
         "ATOMIC_CONCERN_RESPONSE_INVALID: ungrounded simple Java type name(s): "
         "ShipObject. Use an authoritative sibling/dependency type, a known JDK type, "
-        "or the exact fully-qualified external type."
+        "or the exact fully-qualified external type.",
+        rejected_source=(
+            "private static ShipObject buildShip() { return new ShipObject(); }"
+        ),
+        concern_authority=_task()["authored_atomic_contract"]["concerns"][
+            "responsibilities"
+        ],
     )
 
     assert contract is not None
     assert contract["unknown_simple_types"] == ["ShipObject"]
-    assert "declare the smallest private static nested class/record" in contract["rules"]
+    assert contract["mode"] == "mechanical_copy_edit"
+    assert contract["mechanical_edits"][0]["exact_declaration"] == (
+        "private static final class ShipObject {}"
+    )
+    assert "copy-edit task" in contract["rules"]
