@@ -54,9 +54,6 @@ def test_production_materializes_requirement_owned_zero_arg_domain_type() -> Non
         repaired,
         dependency_source="",
         sibling_api=(),
-        validate_declared_type_authority=_validate_declared_type_authority,
-        type_leaf_names=_type_leaf_names,
-        structure_scan=_structure_scan,
     )
 
 
