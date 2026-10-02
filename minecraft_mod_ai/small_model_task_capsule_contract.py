@@ -1062,7 +1062,14 @@ def task_local_module_contract_owner(func: Any) -> Any:
             return func(module)
         if _evidence_task(module) is None:
             return func(module)
-        return compact_task_local_module_contract(module)
+        compact = compact_task_local_module_contract(module)
+        task = compact.get("evidence_task")
+        if not isinstance(task, Mapping):
+            raise TaskCapsuleContractError(
+                "TASK_CAPSULE_COMPACT_SHAPE_INVALID: compact task-local contract "
+                "must preserve the evidence-task return shape."
+            )
+        return dict(task)
 
     task_local_module_contract._mmm_small_model_task_capsule = True  # type: ignore[attr-defined]
     return task_local_module_contract
