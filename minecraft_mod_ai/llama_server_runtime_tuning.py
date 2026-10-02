@@ -296,10 +296,19 @@ def _config_extra(config: Any) -> dict[str, Any]:
 
 def _is_qwen35_mtp_config(config: Any) -> bool:
     extra = _config_extra(config)
-    return (
+    explicit = (
         str(extra.get("runtime_contract", "")).strip().casefold() == "qwen"
         and str(extra.get("decode_hotpath", "")).strip().casefold() == "t4_mtp"
     )
+    identity = " ".join(
+        (
+            str(getattr(config, "model_id", "") or ""),
+            str(extra.get("gguf_filename", "") or ""),
+        )
+    ).casefold()
+    inferred = "qwen3.5" in identity
+    enabled = os.environ.get("MMM_QWEN35_MTP_HOTPATH", "1").strip().casefold()
+    return bool((explicit or inferred) and enabled not in {"0", "false", "no", "off"})
 
 
 def _per_request_context(config: Any) -> int:
