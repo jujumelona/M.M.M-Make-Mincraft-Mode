@@ -110,7 +110,7 @@ def test_host_graph_reaches_java_execution_without_planner_http(tmp_path, monkey
                 else:
                     arguments_obj = {"part": "done"}
             elif "statement" in properties:
-                arguments_obj = {"statement": f"{identifier}State += 0;"}
+                arguments_obj = {"statement": "java.lang.System.nanoTime();"}
             elif "type" in properties and "name" in properties:
                 arguments_obj = {
                     "type": "int",
