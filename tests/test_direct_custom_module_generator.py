@@ -61,7 +61,7 @@ def _adapter() -> SimpleNamespace:
 
 
 
-def test_invariant_failure_is_not_retried(
+def test_invariant_failure_gets_one_bounded_correction_then_stops(
     tmp_path: Path, monkeypatch
 ) -> None:
     root, path, symbol = _project(tmp_path)
@@ -91,7 +91,7 @@ def test_invariant_failure_is_not_retried(
 
     with pytest.raises(
         direct.CustomModuleGenerationError,
-        match="DIRECT_CODER_FIRST_PASS_CONTRACT_FAILED",
+        match="DIRECT_CODER_CONTRACT_REPAIR_NO_PROGRESS",
     ):
         direct.CustomModuleGenerator(Router()).generate(
             root,
@@ -100,13 +100,15 @@ def test_invariant_failure_is_not_retried(
             loader="fabric",
         )
 
-    assert len(calls) == 1
+    assert len(calls) == 2
+    assert "HOST SOURCE CONTRACT FAILURE" in calls[1][0][-1]["content"]
+    assert "not a patch" in calls[1][0][-1]["content"]
     assert calls[0][1]["enable_tools"] is False
     assert calls[0][1]["response_format"] == "text"
     assert (root / path).read_bytes() == original
 
 
-def test_compiler_failure_is_not_sent_back_to_model(
+def test_compiler_failure_is_sent_back_once_then_no_progress_stops(
     tmp_path: Path, monkeypatch
 ) -> None:
     root, path, symbol = _project(tmp_path)
@@ -151,7 +153,7 @@ def test_compiler_failure_is_not_sent_back_to_model(
 
     with pytest.raises(
         direct.CustomModuleGenerationError,
-        match="DIRECT_CODER_FIRST_PASS_COMPILE_FAILED",
+        match="DIRECT_CODER_COMPILE_REPAIR_NO_PROGRESS",
     ):
         direct.CustomModuleGenerator(Router()).generate(
             root,
@@ -160,8 +162,10 @@ def test_compiler_failure_is_not_sent_back_to_model(
             loader="fabric",
         )
 
-    assert len(calls) == 1
-    assert Runner.attempts == 1
+    assert len(calls) == 2
+    assert Runner.attempts == 2
+    assert "cannot find symbol MissingType" in calls[1][-1]["content"]
+    assert "not a patch" in calls[1][-1]["content"]
     assert (root / path).read_bytes() == original
 
 def test_package_import_has_one_live_runtime_bootstrap_owner() -> None:
@@ -192,7 +196,7 @@ def test_retired_runtime_composition_files_stay_absent() -> None:
 
 
 
-def test_invalid_or_truncated_model_output_is_not_retried(
+def test_invalid_or_truncated_model_output_gets_one_bounded_contract_correction(
     tmp_path: Path, monkeypatch
 ) -> None:
     root, path, symbol = _project(tmp_path)
@@ -217,7 +221,7 @@ def test_invalid_or_truncated_model_output_is_not_retried(
 
     with pytest.raises(
         direct.CustomModuleGenerationError,
-        match="DIRECT_CODER_FIRST_PASS_CONTRACT_FAILED",
+        match="DIRECT_CODER_CONTRACT_REPAIR_NO_PROGRESS",
     ):
         direct.CustomModuleGenerator(Router()).generate(
             root,
@@ -226,7 +230,8 @@ def test_invalid_or_truncated_model_output_is_not_retried(
             loader="fabric",
         )
 
-    assert len(calls) == 1
+    assert len(calls) == 2
+    assert "HOST SOURCE CONTRACT FAILURE" in calls[1][-1]["content"]
     assert (root / path).read_bytes() == original
 
 def test_host_reserved_missing_target_is_materialized_and_does_not_require_initialize(
