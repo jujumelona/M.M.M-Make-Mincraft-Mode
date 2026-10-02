@@ -53,19 +53,20 @@ def test_authored_omissions_do_not_need_a_justification_to_pass():
     assert validate_worksheet_section(payload, set(), "persistence") == payload
 
 
-def test_behavior_contract_oversized_records_are_field_paged_atomically():
+def test_behavior_contract_records_are_not_split_into_field_identity_pages():
     chunks = pack_section_concerns("behavior_contract")
     input_pages = [chunk for chunk in chunks if "inputs" in chunk]
-    assert len(input_pages) >= 2
-    projected_fields = []
-    for index, chunk in enumerate(chunks):
-        schema = worksheet_chunk_schema(
-            "behavior_contract", chunk, include_evidence=index == 0
-        )
-        assert is_atomic_model_schema(schema)
-        if "inputs" in chunk:
-            projected_fields.extend(chunk.field_projection["inputs"])
-    assert projected_fields == ["name", "type", "unit", "range", "default", "source"]
+    assert len(input_pages) == 1
+    chunk = input_pages[0]
+    schema = worksheet_chunk_schema(
+        "behavior_contract",
+        chunk,
+        include_evidence=chunks.index(chunk) == 0,
+    )
+    assert is_atomic_model_schema(schema)
+    assert list(chunk.field_projection["inputs"]) == [
+        "name", "type", "unit", "range", "default", "source"
+    ]
 
 
 def test_ten_section_dag_preserves_objects_through_handoff():
