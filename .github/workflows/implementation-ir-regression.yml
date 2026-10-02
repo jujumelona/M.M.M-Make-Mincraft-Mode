@@ -102,10 +102,11 @@ jobs:
               tests/test_implementation_ir.py
               tests/test_implementation_contract_ownership.py
           - name: authored-production
-            tests: >-
-              tests/test_authored_production.py
-              tests/test_small_model_implementation_decisions.py
-              tests/test_implementation_graph_native_http.py
+            tests: tests/test_authored_production.py
+          - name: implementation-decisions
+            tests: tests/test_small_model_implementation_decisions.py
+          - name: graph-native-http
+            tests: tests/test_implementation_graph_native_http.py
           - name: atomic-generation
             tests: >-
               tests/test_atomic_concern_response_contract.py
