@@ -95,10 +95,12 @@ ATOMIC_REGION_MAX_OWNERSHIP_CORRECTIONS = 2
 ATOMIC_REGION_COMPLETION_PARAMETERS = {
     "type": "object",
     "properties": {
-        "done": {"type": "boolean"},
-        "next_work": {"type": "string", "maxLength": 256},
+        "next_work": {
+            "type": "string",
+            "description": "Next semantic unit; empty means the selected concern is complete.",
+        },
     },
-    "required": ["done", "next_work"],
+    "required": ["next_work"],
     "additionalProperties": False,
 }
 JAVA_ATOMIC_ASSEMBLY_MAX_CALLS = 128
