@@ -690,47 +690,48 @@ def _java_identifier_renames(
             add(field.get("name"))
     visit_methods(decision.get("methods") or [])
 
-    # Preserve already-valid names first, then canonicalize malformed semantic
-    # spellings without colliding with them. Distinct raw names that collapse to the
-    # same Java spelling receive a stable numeric suffix.
-    externally_reserved = {
-        _canonical_java_identifier(value)
-        for value in reserved_identifiers
-        if str(value or "").strip()
-    }
-    already_valid = {
-        raw
-        for raw in names
-        if _canonical_java_identifier(raw) == raw and raw not in externally_reserved
-    }
-    used = set(externally_reserved) | set(already_valid)
     preferred = {
         str(raw): _canonical_java_identifier(final)
         for raw, final in (preferred_identifiers or {}).items()
         if str(raw or "").strip() and str(final or "").strip()
     }
+    externally_reserved = {
+        _canonical_java_identifier(value)
+        for value in reserved_identifiers
+        if str(value or "").strip()
+    }
+    used = set(externally_reserved)
     renames: dict[str, str] = {}
-    for raw in sorted(names):
-        canonical = preferred.get(raw, _canonical_java_identifier(raw))
-        if (
-            canonical == raw
-            and canonical not in externally_reserved
-            and raw not in preferred
-        ):
-            continue
-        base = canonical
+
+    def claim(raw: str, desired: str) -> None:
+        candidate = desired
         suffix = 2
-        while canonical in used and canonical != preferred.get(raw):
-            canonical = f"{base}_{suffix}"
+        while candidate in used:
+            candidate = f"{desired}_{suffix}"
             suffix += 1
-        if canonical in used and canonical == preferred.get(raw):
-            base = canonical
-            suffix = 2
-            while canonical in used:
-                canonical = f"{base}_{suffix}"
-                suffix += 1
-        renames[raw] = canonical
-        used.add(canonical)
+        if candidate != raw:
+            renames[raw] = candidate
+        used.add(candidate)
+
+    # Host authority wins exact-name allocation.
+    for raw in sorted(name for name in names if name in preferred):
+        claim(raw, preferred[raw])
+
+    # Preserve already-valid semantic names when they do not collide with host authority.
+    for raw in sorted(
+        name
+        for name in names
+        if name not in preferred and _canonical_java_identifier(name) == name
+    ):
+        claim(raw, raw)
+
+    # Finally canonicalize malformed semantic labels.
+    for raw in sorted(
+        name
+        for name in names
+        if name not in preferred and _canonical_java_identifier(name) != name
+    ):
+        claim(raw, _canonical_java_identifier(raw))
     return renames
 
 
