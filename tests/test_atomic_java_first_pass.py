@@ -490,12 +490,12 @@ def test_compact_state_design_does_not_fall_back_to_free_form_atomic_coder(tmp_p
 
 
 def test_stored_state_schema_forbids_outer_methods_before_model_decode() -> None:
-    from minecraft_mod_ai.custom_module_generator import (
-        _ATOMIC_DECLARATION_MEMBERS_PARAMETERS,
-        _atomic_parameters_for_request,
+    from minecraft_mod_ai.execution_contract_policy import (
+        JAVA_ATOMIC_DECLARATION_MEMBERS_PARAMETERS,
+        java_atomic_parameters_for_request,
     )
 
-    parameters, shape = _atomic_parameters_for_request(
+    parameters, shape = java_atomic_parameters_for_request(
         {
             "response_region": "members",
             "host_selected_class": "Probe",
@@ -509,7 +509,7 @@ def test_stored_state_schema_forbids_outer_methods_before_model_decode() -> None
     assert set(parameters["properties"]) == {"records", "enums", "classes", "fields"}
     assert "methods" not in parameters["properties"]
     assert parameters["additionalProperties"] is False
-    assert parameters is not _ATOMIC_DECLARATION_MEMBERS_PARAMETERS
+    assert parameters is not JAVA_ATOMIC_DECLARATION_MEMBERS_PARAMETERS
     for category in ("records", "enums", "classes"):
         name_schema = parameters["properties"][category]["items"]["properties"]["name"]
         assert name_schema["not"] == {"enum": ["Probe"]}
