@@ -323,15 +323,16 @@ def test_production_graph_output_pressure_preserves_siblings_and_rolls_back(
                     return {'statement': 'return count >= 0;'}
                 return {'statement': 'return valid(count) && count <= LIMIT;'}
 
+            if 'return_type' in properties and 'name' in properties:
+                return {
+                    'return_type': 'boolean',
+                    'name': 'valid' if concern == 'invalid_inputs' else 'allowed',
+                }
+
             if 'type' in properties and 'name' in properties:
                 tail = path[-1] if path else ''
-                if tail == 'fields':
+                if tail == 'fields' or 'initializer' in properties:
                     return {'type': 'int', 'name': 'LIMIT', 'initializer': '100'}
-                if tail == 'methods':
-                    return {
-                        'return_type': 'boolean',
-                        'name': 'valid' if concern == 'invalid_inputs' else 'allowed',
-                    }
                 if tail == 'parameters':
                     return {'type': 'int', 'name': 'count'}
 
