@@ -59,6 +59,20 @@ class AdapterConfig:
     extra: Mapping[str, Any] = field(default_factory=dict)
 
 
+def request_output_token_limit(config: Any, request: Any) -> int:
+    """Return the finite per-request decode cap shared by non-llama adapters."""
+
+    configured = max(1, int(getattr(config, "max_new_tokens", 0) or 1))
+    metadata = getattr(request, "metadata", {})
+    if not isinstance(metadata, Mapping):
+        return configured
+    try:
+        ceiling = int(metadata.get("mmm_output_token_ceiling") or 0)
+    except (TypeError, ValueError):
+        ceiling = 0
+    return min(configured, ceiling) if ceiling > 0 else configured
+
+
 @dataclass(frozen=True)
 class ToolDefinition:
     """Transport-neutral function-tool definition kept for adapter compatibility."""
