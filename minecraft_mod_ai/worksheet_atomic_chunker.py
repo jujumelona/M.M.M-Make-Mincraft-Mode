@@ -213,7 +213,6 @@ def validate_worksheet_chunk_signal(
     key = _normalize_section_name(section)
     records = DETAIL_RECORDS[key]
     active = tuple(concerns)
-    projection = _chunk_projection(key, concerns)
     data = dict(chunk)
     nested = data.get("specification")
     if isinstance(nested, Mapping):
