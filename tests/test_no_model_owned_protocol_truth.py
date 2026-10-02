@@ -148,3 +148,17 @@ def test_atomic_structured_router_owns_java_syntax_and_identifier_rendering() ->
     assert "_java_identifier_renames(" in generator
     assert "Semantic field name" in policy
     assert "host owns Java identifier spelling" in policy
+
+
+def test_atomic_java_names_are_host_materialized_not_model_rejected() -> None:
+    assembly = _source("atomic_java_assembly.py")
+    policy = _source("execution_contract_policy.py")
+    generator = _source("custom_module_generator.py")
+
+    assert 'scalars["name"]["not"]' not in assembly
+    assert 'item_scalars["name"]["not"]' not in assembly
+    assert "duplicate or reserved" not in assembly
+    assert 'name_schema["not"]' not in policy
+    assert "def _host_identifier_overrides(" in generator
+    assert "reserved_identifiers=reserved_type_names" in generator
+    assert "preferred_identifiers=identifier_overrides" in generator
