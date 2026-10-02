@@ -357,10 +357,10 @@ def test_structured_nested_packet_types_are_host_lowered_private() -> None:
         response_region="members",
     )
 
-    assert "private static final class ShipSyncPacket" in rendered
-    assert "private static final class ResourceRequestPacket" in rendered
-    assert "private static final class TradeOfferPacket" in rendered
-    assert "public static final class ShipSyncPacket" not in rendered
+    assert "private static class ShipSyncPacket" in rendered
+    assert "private static class ResourceRequestPacket" in rendered
+    assert "private static class TradeOfferPacket" in rendered
+    assert "public static class ShipSyncPacket" not in rendered
 
 def test_private_nested_helper_types_are_valid_class_body_members() -> None:
     output = (
