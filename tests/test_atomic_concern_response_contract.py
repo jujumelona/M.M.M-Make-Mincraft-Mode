@@ -17,15 +17,11 @@ from minecraft_mod_ai.atomic_concern_source import (
 )
 from minecraft_mod_ai.custom_module_errors import CustomModuleGenerationError
 from minecraft_mod_ai.custom_module_generator import (
+    _call_atomic_java_region,
     _call_coder,
-    _production_atomic_coder,
 )
 from minecraft_mod_ai.implementation_ir import OutputBudgetExhausted
-from minecraft_mod_ai.java_region_parser import (
-    JavaRegionParseError,
-    admit_member_region,
-    class_body_member_contracts,
-)
+from minecraft_mod_ai.java_region_parser import class_body_member_contracts
 
 
 def _response(members: str = "", initialize: str = "") -> str:
@@ -591,14 +587,13 @@ def test_atomic_region_uses_required_structured_tool_not_free_text() -> None:
         {"part": "done"},
     ])
 
-    result = _call_coder(
+    result = _call_atomic_java_region(
         _Router(),
         (
             {"role": "system", "content": "structured only"},
             {"role": "user", "content": '{"response_region":"members"}'},
         ),
         output_token_ceiling=1536,
-        structured_java_region=True,
     )
 
     assert result == "private static int COST = 10;"
@@ -638,7 +633,7 @@ def test_structured_renderer_canonicalizes_natural_language_member_names() -> No
     assert "EMERGENCY BRAKE" not in rendered
 
 
-def test_production_atomic_coder_prefers_host_rendered_structured_members() -> None:
+def test_atomic_java_region_host_renders_malformed_semantic_member_names() -> None:
     responses = iter([
         {"part": "fields"},
         {
@@ -657,7 +652,7 @@ def test_production_atomic_coder_prefers_host_rendered_structured_members() -> N
         def generate_text(self, *args, **kwargs):
             raise AssertionError("valid structured members must not fall back to free text")
 
-    result = _production_atomic_coder(
+    result = _call_atomic_java_region(
         _Router(),
         (
             {"role": "system", "content": "atomic"},
@@ -677,58 +672,18 @@ def test_production_atomic_coder_prefers_host_rendered_structured_members() -> N
     assert "STOP_PROPULSION_IMMEDIATELY_EMERGENCY_BRAKE_APPLIED" in result
 
 
-def test_production_atomic_coder_falls_back_when_structured_transport_cannot_materialize() -> None:
-    class _Router:
-        def generate_tool_decision(self, role, messages, **kwargs):
-            return {"part": "done", "reasoning": "invalid extra transport field"}
-
-        def generate_text(self, role, messages, **kwargs):
-            return 'private static final String STOP_REASON = "engine_overheated";'
-
-    result = _production_atomic_coder(
-        _Router(),
-        (
-            {"role": "system", "content": "atomic"},
-            {
-                "role": "user",
-                "content": json.dumps(
-                    {
-                        "response_region": "members",
-                        "concern": {"name": "fail_closed"},
-                    }
-                ),
-            },
-        ),
-        output_token_ceiling=1536,
-    )
-
-    assert result == 'private static final String STOP_REASON = "engine_overheated";\n'
-
-
-def test_member_parser_reports_primary_fenced_java_error_not_only_markdown_fallback() -> None:
-    bad = """```java
-private static final String STOP_PROPULSION EMERGENCY_BRAKE = "stop";
-```"""
-    with pytest.raises(JavaRegionParseError) as captured:
-        admit_member_region(bad)
-
-    message = str(captured.value)
-    assert "primary Java candidate error:" in message
-    assert "raw-envelope fallback error:" in message
-
-
 def test_atomic_structured_tool_allows_intentional_empty_region() -> None:
     class _Router:
         def generate_tool_decision(self, role, messages, **kwargs):
             return {"part": "done"}
 
-    assert _call_coder(
+    assert _call_atomic_java_region(
         _Router(),
         (
             {"role": "system", "content": "structured only"},
             {"role": "user", "content": '{"response_region":"members"}'},
         ),
-        structured_java_region=True,
+        output_token_ceiling=None,
     ) == ""
 
 
@@ -741,13 +696,13 @@ def test_atomic_structured_tool_rejects_extra_fields() -> None:
         CustomModuleGenerationError,
         match="ATOMIC_JAVA_ASSEMBLY_INVALID",
     ):
-        _call_coder(
+        _call_atomic_java_region(
             _Router(),
             (
                 {"role": "system", "content": "structured only"},
                 {"role": "user", "content": '{"response_region":"members"}'},
             ),
-            structured_java_region=True,
+            output_token_ceiling=None,
         )
 
 def _multi_executor(
