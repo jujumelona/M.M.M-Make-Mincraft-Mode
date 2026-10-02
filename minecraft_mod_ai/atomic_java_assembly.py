@@ -18,7 +18,6 @@ from jsonschema import Draft202012Validator, ValidationError
 
 from .custom_module_errors import AtomicJavaDecisionError
 from .execution_contract_policy import (
-    DEFAULT_ATOMIC_SCHEMA_LIMITS,
     JAVA_ATOMIC_ASSEMBLY_CONTEXT_MARGIN_BYTES,
     JAVA_ATOMIC_ASSEMBLY_MAX_CALLS as MAX_ASSEMBLY_CALLS,
     JAVA_ATOMIC_ASSEMBLY_MAX_PART_ITEMS as MAX_PART_ITEMS,
@@ -55,10 +54,6 @@ def _closed(properties: Mapping[str, Any], required=()) -> dict[str, Any]:
 def _scalar_schema(schema: Mapping[str, Any], key: str) -> dict[str, Any]:
     result = deepcopy(dict(schema))
     if result.get("type") == "string":
-        result["maxLength"] = min(
-            result.get("maxLength", DEFAULT_ATOMIC_SCHEMA_LIMITS.max_string_chars),
-            DEFAULT_ATOMIC_SCHEMA_LIMITS.max_string_chars,
-        )
         if key in {"type", "return_type"}:
             result["pattern"] = _TYPE_PATTERN
             result["description"] = (
@@ -318,13 +313,11 @@ class JavaStructureAssembly:
                 scalars["name"]["not"] = {"enum": sorted(reserved)}
         required = set(schema.get("required", ()))
         names = list(scalars)
-        if not scalars_seeded:
-            for start in range(0, len(names), DEFAULT_ATOMIC_SCHEMA_LIMITS.max_fields):
-                keys = names[start:start + DEFAULT_ATOMIC_SCHEMA_LIMITS.max_fields]
-                target.update(self._ask(
-                    _closed({key: scalars[key] for key in keys}, [key for key in keys if key in required]),
-                    path, "Declare this component's identity, type and initial value.",
-                ))
+        if not scalars_seeded and scalars:
+            target.update(self._ask(
+                _closed(scalars, [key for key in names if key in required]),
+                path, "Declare this component's identity, type and initial value.",
+            ))
         # Schema metadata and cursor state must never share the same mutable
         # container. array_specs is immutable for the lifetime of this object
         # assembly; remaining_parts alone tracks which native multi-call batches
@@ -372,7 +365,6 @@ class JavaStructureAssembly:
                 if (
                     self.multi_callback is not None
                     and item_scalars
-                    and len(scalar_names) <= DEFAULT_ATOMIC_SCHEMA_LIMITS.max_fields
                 ):
                     reserved: set[str] = set()
                     if len(item_path) == 2 and "name" in item_scalars:
