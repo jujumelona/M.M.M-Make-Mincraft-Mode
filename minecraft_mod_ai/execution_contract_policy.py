@@ -99,6 +99,10 @@ ATOMIC_REGION_COMPLETION_PARAMETERS = {
             "type": "string",
             "description": "Next semantic unit; empty means the selected concern is complete.",
         },
+        "done": {
+            "type": "boolean",
+            "description": "Compatibility hint only; host derives completion from next_work.",
+        },
     },
     "required": ["next_work"],
     "additionalProperties": False,
