@@ -3509,7 +3509,10 @@ def _generate_with_tools_impl(
         semantic_fresh_java_target=fresh_java_target,
         host_authored_scaffold=host_authored_scaffold,
     )
-    required_evidence_choice = bool(require_rag)
+    # Evidence is an obligation, not a semantic route choice. Give the model one
+    # normal reviewed-tool turn first; only escalate tool_choice to required after
+    # it attempts to finalize without satisfying that obligation.
+    required_evidence_choice = False
     state.require_evidence = bool(require_rag)
     state.host_grounded = bool(host_grounded)
     state.compile_backed_java = bool(compile_backed_java)
