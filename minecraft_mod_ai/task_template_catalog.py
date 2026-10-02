@@ -7,11 +7,7 @@ import yaml
 from jsonschema import Draft202012Validator
 
 from .authored_section_ids import AUTHORING_SECTION_ORDER
-from .model_output_atomicity_contract import (
-    MAX_MODEL_ARRAY_ITEMS,
-    MAX_MODEL_STRING_CHARS,
-    _assert_closed_object_schemas,
-)
+from .model_output_atomicity_contract import _assert_closed_object_schemas
 
 RUNTIME_TEMPLATE_ROOT = Path(__file__).with_name("templates").resolve()
 ROOT = RUNTIME_TEMPLATE_ROOT
@@ -20,8 +16,8 @@ CRITERION_SECTIONS = AUTHORING_SECTION_ORDER
 _CRITERION_ALIASES = {f"feature/{section}": f"criterion/{section}" for section in CRITERION_SECTIONS}
 _PROMPT_POLICY = "prompt/policy"
 
-# Cardinality ownership is a host concern. The taxonomy is intentionally centralized
-# instead of duplicating the same policy flag across every record-template YAML.
+# Applicability/evidence policy remains host-owned. Record cardinality itself is
+# derived from accepted semantic records, never from a separate model count.
 # Reuse assessment is evidence-defined by construction; integration target bindings
 # are evidence-defined because they require verified symbols. All other criterion
 # sections author semantic records from the bounded requirement/criterion context.
@@ -38,8 +34,8 @@ _POSITIVE_HOST_CONTROL_PREFIXES = (
     "return blocked",
 )
 _HOST_CONTROL_RULE = (
-    "Do not emit continuation, completion, applicability, retry, or loop-control "
-    "decisions; the host owns cardinality and iteration."
+    "Do not emit continuation, retry, or loop-control protocol. The host owns "
+    "accepted-record state and iteration; cardinality is derived from accepted records."
 )
 
 
@@ -121,32 +117,13 @@ def _apply_record_host_policy(identifier: str, value: dict):
 
 
 def _materialize_atomic_record_schema(schema: dict) -> dict:
-    """Compile logical record shorthand before host-owned atomic projection.
+    """Return the logical schema without inventing global size constraints.
 
-    Record templates describe the canonical logical record and may contain more fields
-    than one small-model call can safely author. The worksheet atomic chunker owns field
-    paging and emits the actual model-facing schemas. Here we only materialize the
-    global primitive bounds so every later projection inherits bounded values.
-    Explicit bounds are never reduced.
+    Explicit domain bounds in the template are preserved. Generic string length,
+    array cardinality and object width are not correctness contracts and are not
+    synthesized by the host.
     """
-    value = deepcopy(schema)
-
-    def visit(node):
-        if isinstance(node, dict):
-            if node.get("type") == "string" and "enum" not in node:
-                node.setdefault("maxLength", MAX_MODEL_STRING_CHARS)
-            if node.get("type") == "array":
-                node.setdefault("maxItems", MAX_MODEL_ARRAY_ITEMS)
-            for child in node.values():
-                if isinstance(child, (dict, list)):
-                    visit(child)
-        elif isinstance(node, list):
-            for child in node:
-                if isinstance(child, (dict, list)):
-                    visit(child)
-
-    visit(value)
-    return value
+    return deepcopy(schema)
 
 
 def _compile_record_schema(identifier: str, schema: dict) -> dict:
@@ -256,7 +233,7 @@ def _architecture_impl__apply_record_host_policy(_ctx):
         if lowered.startswith("return only the next record"):
             text = text.replace("the next record", "the host-requested ordinal record", 1)
         rules.append(text)
-    if not any("host owns cardinality and iteration" in rule.lower() for rule in rules):
+    if not any("accepted-record state and iteration" in rule.lower() for rule in rules):
         rules.append(_HOST_CONTROL_RULE)
     if not expected_blocking:
         rules.append(
