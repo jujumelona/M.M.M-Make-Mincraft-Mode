@@ -21,6 +21,12 @@ def _module(path: str, symbol: str) -> ProductionModule:
         "task_id": "authored_feature_001",
         "semantic_outcome": "implement the approved feature",
         "implementation_obligations": ["implement the approved feature"],
+        "target_cell": {
+            "minecraft_version": "1.21.1",
+            "loader": "fabric",
+            "mappings": "1.21.1+build.3",
+            "java_version": 21,
+        },
         "owned_anchors": [anchor],
         "production_bindings": [
             {
@@ -246,6 +252,12 @@ def test_host_reserved_missing_target_is_materialized_and_does_not_require_initi
         "task_id": "fresh_feature",
         "semantic_outcome": "create one fresh exact source",
         "implementation_obligations": ["create the exact source"],
+        "target_cell": {
+            "minecraft_version": "1.21.1",
+            "loader": "fabric",
+            "mappings": "1.21.1+build.3",
+            "java_version": 21,
+        },
         "owned_anchors": [
             {
                 "kind": "symbol",
