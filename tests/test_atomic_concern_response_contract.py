@@ -7,13 +7,9 @@ from types import SimpleNamespace
 import pytest
 
 from minecraft_mod_ai.atomic_concern_source import (
-    END_MARKER,
-    INITIALIZE_MARKER,
-    MEMBERS_MARKER,
     AtomicConcernExecutor,
     _messages,
     _strip_host_orchestrated_dependency_lifecycle_calls,
-    parse_concern_content,
 )
 from minecraft_mod_ai.custom_module_errors import CustomModuleGenerationError
 from minecraft_mod_ai.custom_module_generator import (
@@ -22,23 +18,6 @@ from minecraft_mod_ai.custom_module_generator import (
 )
 from minecraft_mod_ai.implementation_ir import OutputBudgetExhausted
 from minecraft_mod_ai.java_region_parser import class_body_member_contracts
-
-
-def _response(members: str = "", initialize: str = "") -> str:
-    return (
-        f"{MEMBERS_MARKER}\n{members}\n"
-        f"{INITIALIZE_MARKER}\n{initialize}\n"
-        f"{END_MARKER}"
-    )
-
-
-def test_legacy_marker_parser_still_accepts_well_formed_response() -> None:
-    members, initialize = parse_concern_content(
-        _response("private static final int COST = 10;", ""),
-        section="behavior_contract",
-    )
-    assert members == "private static final int COST = 10;"
-    assert initialize == ""
 
 
 def _executor(
@@ -82,19 +61,8 @@ def _executor(
     )
 
 
-@pytest.mark.parametrize(
-    "output",
-    [
-        "private static final int COST = 10;",
-        "```java\nprivate static final int COST = 10;\n```",
-        f"{MEMBERS_MARKER}\nprivate static final int COST = 10;\n{END_MARKER}",
-        ("// MMM_ATOMIC_CONCERN_TRANSITIONS_MEMBERS_START\n"
-         "private static final int COST = 10;\n"
-         "// MMM_ATOMIC_CONCERN_TRANSITIONS_MEMBERS_END"),
-    ],
-)
-def test_executor_members_region_does_not_require_response_markers(output: str) -> None:
-    result = _executor([output]).run()
+def test_executor_accepts_host_rendered_member_source() -> None:
+    result = _executor(["private static final int COST = 10;"]).run()
     assert "private static final int COST = 10;" in result["source"]
 
 
