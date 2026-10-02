@@ -22,10 +22,7 @@ from worksheet_fixtures import row
 from minecraft_mod_ai import custom_module_generator as direct
 from minecraft_mod_ai import llama_exact_context, llama_lora_runtime
 from minecraft_mod_ai import llama_stream_efficiency_contract as streaming
-from minecraft_mod_ai.authored_execution_schema import (
-    EXECUTION_SECTION_ORDER,
-    concern_contracts,
-)
+from minecraft_mod_ai.authored_execution_schema import EXECUTION_SECTION_ORDER
 from minecraft_mod_ai.authored_structured_design import (
     normalize_structured_sections,
     render_structured_sections,
