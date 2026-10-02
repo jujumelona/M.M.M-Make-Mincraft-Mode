@@ -283,8 +283,7 @@ def test_production_graph_output_pressure_preserves_siblings_and_rolls_back(
                 return {'next_work': ''}
 
             assert tool_name in {'emit_java_part', 'emit_java_statement'}
-            request_payload = payload.get('request') or {}
-            concern = str((request_payload.get('concern') or {}).get('name') or '')
+            concern = str((payload.get('concern') or {}).get('name') or '')
             path = list((payload.get('assembly') or {}).get('path') or [])
             calls.append((concern, tuple(path), tool_name))
 
@@ -342,8 +341,7 @@ def test_production_graph_output_pressure_preserves_siblings_and_rolls_back(
         def generate_tool_decisions(self, role, messages, **kwargs):
             value = self._decision(role, messages, kwargs)
             payload = json.loads(messages[-1]['content'])
-            request_payload = payload.get('request') or {}
-            concern = str((request_payload.get('concern') or {}).get('name') or '')
+            concern = str((payload.get('concern') or {}).get('name') or '')
             path = list((payload.get('assembly') or {}).get('path') or [])
             if reject_page and concern == 'missing_dependencies' and path == ['fields']:
                 return [value, dict(value)]
