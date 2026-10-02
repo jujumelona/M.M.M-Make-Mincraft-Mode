@@ -174,11 +174,8 @@ def test_trusted_developer_fresh_target_still_obeys_explicit_evidence_policy(mon
     assert len(adapter.requests) == 1
     first = adapter.requests[0]
     assert [tool["function"]["name"] for tool in first.tools] == ["search_code_rag"]
-    assert first.tool_choice == {
-        "type": "function",
-        "function": {"name": "search_code_rag"},
-    }
-    assert first.parallel_tool_calls is False
+    assert first.tool_choice == "auto"
+    assert first.parallel_tool_calls is True
 
 
 def test_untrusted_user_owned_anchor_cannot_bypass_generic_rag(monkeypatch) -> None:
@@ -254,6 +251,10 @@ def test_materialized_fresh_authored_slot_uses_compile_probe_after_evidence_exha
               "status": "existing", "ownership": "host_exact_authored_lowering"}
     module = SimpleNamespace(module_id="authored_feature_001", kind="custom_java", config={
         "evidence_task": {"task_id": "authored_feature_001",
+                          "semantic_outcome": "register the launch pad using the selected target API",
+                          "implementation_obligations": [
+                              "Use the selected target API to implement the launch pad registration in the owned Java source."
+                          ],
                           "target_cell": {
                               "minecraft_version": "1.21.1",
                               "loader": "fabric",
