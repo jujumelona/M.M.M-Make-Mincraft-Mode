@@ -157,7 +157,6 @@ def _authored_chunk_messages(
     concerns: Sequence[str],
     completed: Mapping[str, Mapping[str, Any]],
     include_evidence: bool,
-    record_counts: Mapping[str, int],
 ) -> tuple[dict[str, str], ...]:
     from .planning_state_implementation import SECTION_DEPENDENCIES
     from .worksheet_atomic_chunker import worksheet_chunk_prompt
@@ -204,7 +203,6 @@ def _authored_chunk_messages(
                     chunk_count,
                     concerns,
                     include_evidence=include_evidence,
-                    record_counts=record_counts,
                 )
             ),
         },
@@ -221,7 +219,6 @@ def _generate_authored_chunk(
     concerns: Sequence[str],
     completed: Mapping[str, Mapping[str, Any]],
     include_evidence: bool,
-    record_counts: Mapping[str, int],
     media_paths: Sequence[str | Path],
 ) -> dict[str, Any]:
     """Generate one canonical chunk; schema failure becomes narrower work, not prose recovery."""
@@ -234,7 +231,6 @@ def _generate_authored_chunk(
             section,
             selected,
             include_evidence=evidence,
-            record_counts=record_counts,
         )
         value = generate_fixed_template_value(
             router,
@@ -247,7 +243,6 @@ def _generate_authored_chunk(
                 concerns=selected,
                 completed=completed,
                 include_evidence=evidence,
-                record_counts=record_counts,
             ),
             response_schema=schema,
             media_paths=media_paths,
@@ -326,7 +321,6 @@ def author_structured_sections(
     for section in WORKSHEET_SECTIONS:
         chunks = pack_section_concerns(section)
         chunk_results: list[dict[str, Any]] = []
-        record_counts: dict[str, int] = {}
         for index, concerns in enumerate(chunks, start=1):
             value = _generate_authored_chunk(
                 router,
@@ -337,20 +331,8 @@ def author_structured_sections(
                 concerns=concerns,
                 completed=completed,
                 include_evidence=index == 1,
-                record_counts=record_counts,
                 media_paths=media_paths,
             )
-            inapplicable = {
-                str(item.get("concern") or "")
-                for item in value.get("inapplicable_concerns", [])
-                if isinstance(item, Mapping)
-            }
-            for concern in concerns:
-                rows = value.get(concern)
-                if isinstance(rows, list):
-                    record_counts.setdefault(concern, len(rows))
-                elif concern in inapplicable:
-                    record_counts.setdefault(concern, 0)
             chunk_results.append(value)
 
         completed[section] = merge_worksheet_section_chunks(

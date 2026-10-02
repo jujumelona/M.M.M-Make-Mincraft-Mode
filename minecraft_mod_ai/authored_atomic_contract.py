@@ -162,115 +162,45 @@ def build_authored_atomic_contract(
     requirements: Mapping[str, str],
     raw_obligations: Sequence[str],
     structured_sections: Mapping[str, Any] | None = None,
+    canonical_concern_authority: Any = None,
     production_state_section: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the one canonical contract consumed by atomic production."""
 
     from .authored_execution_schema import section_spec
-    from .authored_structured_design import active_concern_records
+    from .canonical_concern_authority import CanonicalConcernAuthority
 
-    expected = {str(item["concern"]): dict(item) for item in concerns}
-    existing: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
-    extras: list[str] = []
-    for raw in raw_obligations:
-        decoded = decode_atomic_obligation(raw)
-        if decoded is None:
-            extras.append(str(raw))
-            continue
-        payload, instruction = decoded
-        name = str(instruction.get("concern") or "").strip()
-        if (
-            str(instruction.get("section") or "").strip() == section
-            and name in expected
-        ):
-            existing.setdefault(name, (payload, instruction))
-            continue
-        extras.append(str(raw))
-
-    structured_records = active_concern_records(structured_sections, section)
-    section_is_structured = bool(
-        isinstance(structured_sections, Mapping)
-        and section in structured_sections
-    )
-    if section == "state_model" and isinstance(production_state_section, Mapping):
-        raw_specification = production_state_section.get("specification")
-        if isinstance(raw_specification, Mapping):
-            structured_records = {
-                str(name): [
-                    deepcopy(dict(row))
-                    for row in rows
-                    if isinstance(row, Mapping)
-                ]
-                for name, rows in raw_specification.items()
-                if isinstance(rows, list) and rows
-            }
-            structured_records.pop("inapplicable_concerns", None)
-            section_is_structured = True
-
-    exact_sources: dict[str, dict[str, str]] = {}
-    for concern in concerns:
-        name = str(concern["concern"])
-        if section_is_structured:
-            if name not in structured_records:
-                continue
-            exact_sources[name] = {}
-            continue
-        source = concern_source_requirements(requirements, concern=name)
-        if source:
-            exact_sources[name] = source
-
-    if not exact_sources and existing:
-        first_name = next(
-            (
-                str(item["concern"])
-                for item in concerns
-                if str(item["concern"]) in existing
-            ),
-            "",
-        )
-        if first_name:
-            payload, _instruction = existing[first_name]
-            raw_sources = payload.get("source_requirements")
-            if isinstance(raw_sources, Mapping):
-                exact_sources[first_name] = {
-                    str(key): str(value)
-                    for key, value in raw_sources.items()
-                    if str(key) in requirements
-                }
+    if isinstance(canonical_concern_authority, CanonicalConcernAuthority):
+        authority = canonical_concern_authority
+    elif isinstance(canonical_concern_authority, Mapping):
+        authority = CanonicalConcernAuthority.from_dict(canonical_concern_authority)
+    else:
+        authority = CanonicalConcernAuthority.from_structured_sections(structured_sections)
 
     spec = section_spec(section) or {}
-    drifted: list[str] = []
     active: list[dict[str, Any]] = []
     concern_payloads: dict[str, dict[str, Any]] = {}
     obligations: list[str] = []
 
     for concern in concerns:
         name = str(concern["concern"])
-        if name not in exact_sources:
+        if not authority.has_concern(section, name):
             continue
-        host_sources = exact_sources[name]
+        records = list(authority.get_concern_records(section, name))
         active.append({**dict(concern), "sequence": len(active)})
 
-        if name in existing:
-            prior_payload, prior_instruction = deepcopy(existing[name])
-            if prior_payload.get("source_requirements") != host_sources:
-                drifted.append(name)
-            instruction = prior_instruction
-        else:
-            instruction = {}
-
-        instruction.update({
+        instruction = {
             "concern": name,
             "concern_template": str(concern["identifier"]),
             "rules": list(concern.get("rules") or []),
             "section": section,
             "section_instruction": str(spec.get("instruction") or ""),
             "task": str(concern["task"]),
-        })
+        }
         record = {
             "instruction": deepcopy(instruction),
-            "source_requirements": deepcopy(host_sources),
-            "structured_records": deepcopy(structured_records.get(name, [])),
+            "source_requirements": {},
+            "structured_records": deepcopy(records),
         }
         concern_payloads[name] = record
 
@@ -280,10 +210,9 @@ def build_authored_atomic_contract(
                 ensure_ascii=False,
                 sort_keys=True,
             ),
-            "source_requirements": deepcopy(host_sources),
+            "source_requirements": {},
+            "structured_records": deepcopy(records),
         }
-        if name in structured_records:
-            serialized["structured_records"] = deepcopy(structured_records[name])
         obligations.append(
             json.dumps(serialized, ensure_ascii=False, sort_keys=True)
         )
@@ -293,8 +222,8 @@ def build_authored_atomic_contract(
         "section": section,
         "concerns": concern_payloads,
         "active_concerns": active,
-        "implementation_obligations": obligations + extras,
-        "drifted_concerns": drifted,
+        "implementation_obligations": obligations,
+        "drifted_concerns": [],
     }
 
 
@@ -305,6 +234,7 @@ def bind_task_authored_atomic_contract(
     requirements: Mapping[str, str],
     raw_obligations: Sequence[str],
     structured_sections: Mapping[str, Any] | None = None,
+    canonical_concern_authority: Any = None,
     production_state_section: Mapping[str, Any] | None = None,
 ) -> tuple[str, list[dict[str, Any]], list[str]]:
     section, concerns = required_atomic_leaf_contract(symbol)
@@ -314,6 +244,7 @@ def bind_task_authored_atomic_contract(
         requirements=requirements,
         raw_obligations=raw_obligations,
         structured_sections=structured_sections,
+        canonical_concern_authority=canonical_concern_authority,
         production_state_section=production_state_section,
     )
     task["authored_atomic_contract"] = deepcopy(contract)

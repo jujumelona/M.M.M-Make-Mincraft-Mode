@@ -66,6 +66,7 @@ def _canonical_atomic_obligations(
     requirements: Mapping[str, str],
     raw_obligations: list[str],
     structured_sections: Mapping[str, Any] | None = None,
+    canonical_concern_authority: Any = None,
     production_state_section: Mapping[str, Any] | None = None,
 ) -> tuple[list[str], list[str], list[dict[str, Any]]]:
     from .authored_atomic_contract import build_authored_atomic_contract
@@ -76,6 +77,7 @@ def _canonical_atomic_obligations(
         requirements=requirements,
         raw_obligations=raw_obligations,
         structured_sections=structured_sections,
+        canonical_concern_authority=canonical_concern_authority,
         production_state_section=production_state_section,
     )
     return (
@@ -90,6 +92,7 @@ def _bind_atomic_leaf_contract(
     node: Mapping[str, Any],
     requirements: Mapping[str, str],
     structured_sections: Mapping[str, Any] | None = None,
+    canonical_concern_authority: Any = None,
     production_state_section: Mapping[str, Any] | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
     from .authored_atomic_contract import bind_task_authored_atomic_contract
@@ -102,6 +105,7 @@ def _bind_atomic_leaf_contract(
             requirements=requirements,
             raw_obligations=list(node["obligations"]),
             structured_sections=structured_sections,
+            canonical_concern_authority=canonical_concern_authority,
             production_state_section=production_state_section,
         )
     except ValueError as exc:
@@ -164,6 +168,7 @@ def _leaf_module(
         node,
         requirements,
         structured_sections=request.get("structured_sections"),
+        canonical_concern_authority=request.get("canonical_concern_authority"),
         production_state_section=request.get("production_state_section"),
     )
     parent = parent_config if isinstance(parent_config, Mapping) else {}
@@ -188,6 +193,7 @@ def _leaf_module(
                 "implementation_graph_deferred_compile": True,
                 "implementation_structured_sections": deepcopy(request["structured_sections"]),
                 "implementation_structured_sections_sha256": request["structured_sections_sha256"],
+                "canonical_concern_authority": deepcopy(request.get("canonical_concern_authority")),
                 **grounding_identity,
                 **request["target"]}, required_gates=("target_compile",),
     )
@@ -213,6 +219,7 @@ def _normalize_implementation_graph_request(raw_request: Mapping[str, Any]) -> d
         normalize_structured_sections,
         structured_sections_sha256,
     )
+    from .canonical_concern_authority import CanonicalConcernAuthority
 
     request = dict(raw_request)
     structured = normalize_structured_sections(
@@ -220,34 +227,26 @@ def _normalize_implementation_graph_request(raw_request: Mapping[str, Any]) -> d
         if isinstance(request.get("structured_sections"), Mapping)
         else None
     )
+    if not structured:
+        raise ImplementationGraphError(
+            "IMPLEMENTATION_IR_STRUCTURED_AUTHORITY_REQUIRED: structured_sections must be provided"
+        )
+
     supplied_sha = str(request.get("structured_sections_sha256") or "").strip()
     actual_sha = structured_sections_sha256(structured)
-    if structured:
-        if supplied_sha != actual_sha:
-            raise ImplementationGraphError(
-                "IMPLEMENTATION_IR_STRUCTURED_AUTHORITY_HASH_MISMATCH"
-            )
-    elif supplied_sha and supplied_sha != actual_sha:
+    if supplied_sha and supplied_sha != actual_sha:
         raise ImplementationGraphError(
             "IMPLEMENTATION_IR_STRUCTURED_AUTHORITY_HASH_MISMATCH"
         )
     request["structured_sections"] = structured
     request["structured_sections_sha256"] = actual_sha
-    if not structured:
-        emit_root_cause(
-            "implementation_graph_prose_authority_selected",
-            stage="production",
-            operation="execute_implementation_graph",
-            gate="authored_authority_selection",
-            result="PASS",
-            details={
-                "authority": "canonical_markdown_concern_anchors",
-                "structured_section_count": 0,
-                "state_sidecar_present": isinstance(
-                    request.get("production_state_section"), Mapping
-                ),
-            },
-        )
+
+    raw_authority = request.get("canonical_concern_authority")
+    if isinstance(raw_authority, Mapping):
+        authority = CanonicalConcernAuthority.from_dict(raw_authority)
+    else:
+        authority = CanonicalConcernAuthority.from_structured_sections(structured)
+    request["canonical_concern_authority"] = authority.to_dict()
 
     from .production_state_compiler import normalize_structured_state_section
 

@@ -617,21 +617,21 @@ def _compile_new_authored_modules(
     main_symbol = _main_class_name(mod_id)
     main_path = f"src/main/java/{package_name.replace('.', '/')}/{main_symbol}.java"
     task_id = "authored_implementation_graph"
+    from .canonical_concern_authority import CanonicalConcernAuthority
+
     structured_sections = deepcopy(plan.structured_sections)
+    authority = CanonicalConcernAuthority.from_structured_sections(structured_sections)
     request = {
-        "text": plan.text, "package": package_name, "mod_id": mod_id,
-        "target": dict(target), "entrypoint_path": main_path,
+        "text": plan.text,
+        "package": package_name,
+        "mod_id": mod_id,
+        "target": dict(target),
+        "entrypoint_path": main_path,
         "entrypoint_symbol": main_symbol,
         "structured_sections": structured_sections,
         "structured_sections_sha256": structured_sections_sha256(structured_sections),
+        "canonical_concern_authority": authority.to_dict(),
     }
-    if production_state_section is not None:
-        # Compatibility sidecar for legacy prose-only plans. Structured plans omit
-        # this key so implementation_graph_execution consumes state_model directly
-        # from structured_sections, preserving a single semantic authority.
-        request["production_state_section"] = deepcopy(
-            dict(production_state_section)
-        )
     task = _exact_authored_task(
         task_id=task_id, path=main_path, symbol=main_symbol, target=target,
         obligation="Compile the complete saved design into a responsibility/dependency IR, then execute admitted source units.",
@@ -1037,38 +1037,41 @@ def _execution_plan_projection(
     }
 
 
-def _legacy_production_state_sidecar(
-    router: Any,
-    plan: AuthoredPlan,
-    *,
-    existing: bool,
-) -> dict[str, Any] | None:
-    """Compile state from prose only for legacy plans that have no structured SSOT."""
-
-    if (
-        existing
-        or plan.structured_sections
-        or not callable(getattr(router, "generate_text", None))
-    ):
-        return None
-
-    from .production_state_compiler import compile_production_state_section
-
-    return compile_production_state_section(router, plan)
-
-
 def compile_authored_design(
     router: Any, plan: AuthoredPlan, *, existing_input_sha256: str = ""
 ) -> CompleteProposal:
+    from .authored_structured_design import (
+        author_structured_sections,
+        normalize_structured_sections,
+    )
+
     implementation_plan, source_projection = _implementation_authored_plan(plan)
     effective_existing = str(
         existing_input_sha256 or implementation_plan.existing_input_sha256 or ""
     ).strip()
-    production_state_section = _legacy_production_state_sidecar(
-        router,
-        implementation_plan,
-        existing=bool(effective_existing),
-    )
+
+    structured = normalize_structured_sections(implementation_plan.structured_sections)
+    if (
+        not effective_existing
+        and not structured
+        and callable(getattr(router, "generate_text", None))
+    ):
+        structured = author_structured_sections(
+            router,
+            implementation_plan.requested_prompt or implementation_plan.text,
+            media_paths=implementation_plan.media_paths,
+        )
+
+    if structured != implementation_plan.structured_sections:
+        implementation_plan = AuthoredPlan(
+            requested_prompt=implementation_plan.requested_prompt,
+            text=implementation_plan.text,
+            existing_input_sha256=implementation_plan.existing_input_sha256,
+            media_paths=implementation_plan.media_paths,
+            schema_version=implementation_plan.schema_version,
+            structured_sections=structured,
+        )
+
     execution_plan, execution_projection = _execution_plan_projection(implementation_plan)
     # These are host project coordinates, not inferred gameplay or placeholder content.
     mod_id = "authored_" + execution_plan.calculate_hash()[:12]
@@ -1116,7 +1119,6 @@ def compile_authored_design(
             mod_id=base.spec.mod_id,
             package_name=base.spec.package_name,
             target=target,
-            production_state_section=production_state_section,
         )
         design = {**design, "_authored_execution_manifest": manifest}
     else:

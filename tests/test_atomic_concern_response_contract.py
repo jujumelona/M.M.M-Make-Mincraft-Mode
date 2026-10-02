@@ -2707,7 +2707,7 @@ def test_stored_state_invalid_shape_fails_first_pass_without_regeneration() -> N
     assert calls["count"] == 1
 
 
-def test_multiline_behavior_actor_source_is_host_lowered_without_structured_plan() -> None:
+def test_behavior_actor_records_consumes_canonical_structured_records() -> None:
     import json
 
     from minecraft_mod_ai.atomic_concern_source import _behavior_actor_records
@@ -2716,29 +2716,59 @@ def test_multiline_behavior_actor_source_is_host_lowered_without_structured_plan
         _canonical_atomic_obligations,
     )
 
-    requirements = {
-        "R2": "## behavior_contract",
-        "R3": "- actors:",
-        "R4": "    - player: 자원 채굴, 제작, 거래를 실행하는 주체",
-        "R5": "    - dockyard_ai: 건설 요청을 검증하고 배치하는 자동화 로직",
-        "R6": "    - trade_npc: 자원 및 통화를 교환하는 상점 NPC",
-        "R7": "- entry_conditions:",
-        "R8": "    - trigger_owner: player",
+    structured = {
+        "behavior_contract": {
+            "specification": {
+                "actors": [
+                    {
+                        "name": "player",
+                        "role": "자원 채굴, 제작, 거래를 실행하는 주체",
+                        "authority": "Client",
+                    },
+                    {
+                        "name": "dockyard_ai",
+                        "role": "건설 요청을 검증하고 배치하는 자동화 로직",
+                        "authority": "Server",
+                    },
+                    {
+                        "name": "trade_npc",
+                        "role": "자원 및 통화를 교환하는 상점 NPC",
+                        "authority": "Server",
+                    },
+                ],
+                "entry_conditions": [],
+                "preconditions": [],
+                "inputs": [],
+                "outputs": [],
+                "success_postconditions": [],
+                "rejection_postconditions": [],
+                "ordering_and_timing": [],
+                "boundaries": [],
+                "inapplicable_concerns": [
+                    {"concern": "entry_conditions", "reason": "fixture"},
+                    {"concern": "preconditions", "reason": "fixture"},
+                    {"concern": "inputs", "reason": "fixture"},
+                    {"concern": "outputs", "reason": "fixture"},
+                    {"concern": "success_postconditions", "reason": "fixture"},
+                    {"concern": "rejection_postconditions", "reason": "fixture"},
+                    {"concern": "ordering_and_timing", "reason": "fixture"},
+                    {"concern": "boundaries", "reason": "fixture"},
+                ],
+            },
+            "constraint_evidence_refs": [],
+        }
     }
     concerns = list(concern_contracts("behavior_contract"))
     obligations, drifted, active = _canonical_atomic_obligations(
         section="behavior_contract",
         concerns=concerns,
-        requirements=requirements,
+        requirements={},
         raw_obligations=[],
-        structured_sections={},
+        structured_sections=structured,
     )
 
     assert drifted == []
-    assert [item["concern"] for item in active][:2] == [
-        "actors",
-        "entry_conditions",
-    ]
+    assert [item["concern"] for item in active] == ["actors"]
 
     task = {"implementation_obligations": obligations}
     actors = next(item for item in active if item["concern"] == "actors")
@@ -2748,91 +2778,41 @@ def test_multiline_behavior_actor_source_is_host_lowered_without_structured_plan
         {
             "name": "player",
             "role": "자원 채굴, 제작, 거래를 실행하는 주체",
-            "authority": "",
+            "authority": "Client",
         },
         {
             "name": "dockyard_ai",
             "role": "건설 요청을 검증하고 배치하는 자동화 로직",
-            "authority": "",
+            "authority": "Server",
         },
         {
             "name": "trade_npc",
             "role": "자원 및 통화를 교환하는 상점 NPC",
-            "authority": "",
+            "authority": "Server",
         },
     )
 
-    actor_payload = next(
-        json.loads(raw)
-        for raw in obligations
-        if json.loads(json.loads(raw)["instruction"])["concern"] == "actors"
-    )
-    assert list(actor_payload["source_requirements"]) == ["R2", "R3", "R4", "R5", "R6"]
 
-
-def test_bold_inline_behavior_actor_source_is_host_lowered_without_structured_plan() -> None:
-    import json
-
+def test_behavior_actor_records_does_not_reparse_markdown_when_structured_records_missing() -> None:
     from minecraft_mod_ai.atomic_concern_source import _behavior_actor_records
-    from minecraft_mod_ai.authored_execution_schema import concern_contracts
-    from minecraft_mod_ai.implementation_graph_execution import (
-        _canonical_atomic_obligations,
-    )
 
-    requirements = {
-        "R2": "## behavior_contract",
-        "R3": (
-            "- **actors**: 플레이어 (User), "
-            "우주선 컨트롤러 (ShipController, 서버 권위), "
-            "행성 관리자 (PlanetManager, 서버 권위), "
-            "시장 중재자 (MarketArbitrator, 클라이언트 예측 + 서버 검증)."
-        ),
-        "R4": "- **entry_conditions**: 플레이어가 우주 도크에 접근한 경우.",
+    # Even if markdown requirements exist, no markdown reparsing should occur
+    task = {
+        "authored_atomic_contract": {
+            "schema_version": "mmm/authored-atomic-contract-v1",
+            "concerns": {
+                "actors": {
+                    "structured_records": [],
+                    "source_requirements": {
+                        "R1": "- **actors**: Player (Client), Server (Server)",
+                    },
+                }
+            },
+        }
     }
-    concerns = list(concern_contracts("behavior_contract"))
-    obligations, drifted, active = _canonical_atomic_obligations(
-        section="behavior_contract",
-        concerns=concerns,
-        requirements=requirements,
-        raw_obligations=[],
-        structured_sections={},
-    )
-
-    assert drifted == []
-    assert [item["concern"] for item in active][:2] == [
-        "actors",
-        "entry_conditions",
-    ]
-
-    task = {"implementation_obligations": obligations}
-    actors = next(item for item in active if item["concern"] == "actors")
+    actors = {"concern": "actors"}
     rows = _behavior_actor_records(task, actors)
-
-    assert rows == (
-        {"name": "플레이어", "role": "플레이어", "authority": "User"},
-        {
-            "name": "우주선 컨트롤러",
-            "role": "우주선 컨트롤러",
-            "authority": "ShipController, 서버 권위",
-        },
-        {
-            "name": "행성 관리자",
-            "role": "행성 관리자",
-            "authority": "PlanetManager, 서버 권위",
-        },
-        {
-            "name": "시장 중재자",
-            "role": "시장 중재자",
-            "authority": "MarketArbitrator, 클라이언트 예측 + 서버 검증",
-        },
-    )
-
-    actor_payload = next(
-        json.loads(raw)
-        for raw in obligations
-        if json.loads(json.loads(raw)["instruction"])["concern"] == "actors"
-    )
-    assert list(actor_payload["source_requirements"]) == ["R2", "R3"]
+    assert rows == ()
 
 
 def test_sibling_inventory_exposes_exact_generic_field_type() -> None:

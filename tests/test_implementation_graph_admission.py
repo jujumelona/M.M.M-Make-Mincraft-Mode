@@ -786,13 +786,45 @@ def test_atomic_contract_producer_and_consumer_share_one_first_class_contract():
         "task_id": "ir_authoredbehaviorcontract",
         "implementation_obligations": ["legacy free-form obligation"],
     }
+    structured = {
+        "behavior_contract": {
+            "specification": {
+                "actors": [
+                    {
+                        "name": "Player",
+                        "role": "controls the ship",
+                        "authority": "Client",
+                    }
+                ],
+                "entry_conditions": [],
+                "preconditions": [],
+                "inputs": [],
+                "outputs": [],
+                "success_postconditions": [],
+                "rejection_postconditions": [],
+                "ordering_and_timing": [],
+                "boundaries": [],
+                "inapplicable_concerns": [
+                    {"concern": "entry_conditions", "reason": "fixture"},
+                    {"concern": "preconditions", "reason": "fixture"},
+                    {"concern": "inputs", "reason": "fixture"},
+                    {"concern": "outputs", "reason": "fixture"},
+                    {"concern": "success_postconditions", "reason": "fixture"},
+                    {"concern": "rejection_postconditions", "reason": "fixture"},
+                    {"concern": "ordering_and_timing", "reason": "fixture"},
+                    {"concern": "boundaries", "reason": "fixture"},
+                ],
+            },
+            "constraint_evidence_refs": [],
+        }
+    }
 
     section, active, _drifted = bind_task_authored_atomic_contract(
         task,
         symbol="AuthoredBehaviorContract",
         requirements=requirements,
         raw_obligations=task["implementation_obligations"],
-        structured_sections={},
+        structured_sections=structured,
     )
 
     authority = task_concern_authority(task, "actors")
@@ -802,30 +834,31 @@ def test_atomic_contract_producer_and_consumer_share_one_first_class_contract():
     assert task["authored_atomic_contract"]["schema_version"] == (
         "mmm/authored-atomic-contract-v1"
     )
-    assert authority["source_requirements"] == {
-        "R1": "## behavior_contract",
-        "R2": "### actors",
-        "R3": "- **Player:** controls the ship.",
-    }
+    assert authority["structured_records"] == [
+        {
+            "name": "Player",
+            "role": "controls the ship",
+            "authority": "Client",
+        }
+    ]
     assert any(
-        "source_requirements" in item
+        "structured_records" in item
         for item in task["implementation_obligations"]
     )
 
 
-def test_implementation_graph_accepts_markdown_authority_when_structured_sections_are_empty():
+def test_implementation_graph_rejects_empty_structured_sections():
     request = {
         "text": DESIGN,
         "structured_sections": {},
         "structured_sections_sha256": "",
     }
 
-    normalized = graph_execution._normalize_implementation_graph_request(request)
-
-    expected_sha = "sha256:" + hashlib.sha256(b"{}").hexdigest()
-    assert normalized["structured_sections"] == {}
-    assert normalized["structured_sections_sha256"] == expected_sha
-    assert normalized["production_state_section"] == {}
+    with pytest.raises(
+        graph_execution.ImplementationGraphError,
+        match="IMPLEMENTATION_IR_STRUCTURED_AUTHORITY_REQUIRED",
+    ):
+        graph_execution._normalize_implementation_graph_request(request)
 
 
 def test_implementation_graph_rejects_structured_authority_hash_drift():
@@ -1045,6 +1078,29 @@ def test_resource_leaf_materializes_direct_json_end_to_end(tmp_path, monkeypatch
         "target": dict(TARGET),
         "entrypoint_path": entry_rel,
         "entrypoint_symbol": "TestMod",
+        "structured_sections": {
+            "state_model": {
+                "specification": {
+                    "variables": [],
+                    "transitions": [],
+                    "invariants": [],
+                    "initialization": [],
+                    "updates": [],
+                    "cleanup": [],
+                    "concurrency": [],
+                    "inapplicable_concerns": [
+                        {"concern": "variables", "reason": "resource test"},
+                        {"concern": "transitions", "reason": "resource test"},
+                        {"concern": "invariants", "reason": "resource test"},
+                        {"concern": "initialization", "reason": "resource test"},
+                        {"concern": "updates", "reason": "resource test"},
+                        {"concern": "cleanup", "reason": "resource test"},
+                        {"concern": "concurrency", "reason": "resource test"},
+                    ],
+                },
+                "constraint_evidence_refs": [],
+            }
+        },
     }
     module = ProductionModule(
         module_id="authored_implementation_graph",

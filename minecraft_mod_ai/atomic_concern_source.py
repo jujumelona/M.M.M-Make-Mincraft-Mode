@@ -1775,125 +1775,7 @@ def _behavior_actor_records(
                 )
     if rows:
         return tuple(rows)
-
-    # Older/legacy saved designs can arrive with structured_sections={} even
-    # though the exact authored source requirement is preserved. Recover only
-    # this canonical concern from that exact requirement; never ask the model
-    # to infer a missing local Actor type.
-    sources = authority.get("source_requirements")
-    if not isinstance(sources, Mapping):
-        return ()
-
-    def source_key(item: tuple[Any, Any]) -> tuple[int, int | str]:
-        match = re.fullmatch(r"R(\d+)", str(item[0] or ""))
-        if match:
-            return (0, int(match.group(1)))
-        return (1, str(item[0] or ""))
-
-    lines: list[str] = []
-    for _key, source in sorted(sources.items(), key=source_key):
-        lines.extend(
-            str(source or "")
-            .replace("\r\n", "\n")
-            .replace("\r", "\n")
-            .splitlines()
-        )
-
-    def strip_markdown_wrapper(value: str) -> str:
-        text = str(value or "").strip()
-        wrappers = ("**", "__", "`", "*", "_")
-        changed = True
-        while changed and text:
-            changed = False
-            for wrapper in wrappers:
-                if (
-                    len(text) > len(wrapper) * 2
-                    and text.startswith(wrapper)
-                    and text.endswith(wrapper)
-                ):
-                    text = text[len(wrapper):-len(wrapper)].strip()
-                    changed = True
-                    break
-        return text
-
-    def add_row(name: str, role: str = "", actor_authority: str = "") -> None:
-        actor_name = strip_markdown_wrapper(name)
-        if not actor_name:
-            return
-        clean_role = strip_markdown_wrapper(role)
-        clean_authority = str(actor_authority or "").strip()
-        if any(row["name"] == actor_name for row in rows):
-            return
-        rows.append(
-            {
-                "name": actor_name,
-                "role": clean_role or actor_name,
-                "authority": clean_authority,
-            }
-        )
-
-    def add_inline(raw: str) -> None:
-        for item in _split_balanced_commas(raw):
-            value = item.strip().rstrip(".;")
-            if not value:
-                continue
-            wrapped = re.fullmatch(
-                r"(?P<name>.+?)\s*\((?P<authority>.*)\)",
-                value,
-            )
-            if wrapped is not None:
-                add_row(
-                    wrapped.group("name"),
-                    wrapped.group("name"),
-                    wrapped.group("authority"),
-                )
-                continue
-            if ":" in value:
-                name, role = value.split(":", 1)
-                add_row(name, role)
-                continue
-            add_row(value, value)
-
-    actor_indent: int | None = None
-    for line in lines:
-        anchor = re.match(
-            r"^(?P<indent>\s*)[-*+]\s*(?P<label>[^:]+?)\s*:\s*(?P<tail>.*?)\s*$",
-            line,
-        )
-        if (
-            anchor is not None
-            and section_slug(anchor.group("label")) == "actors"
-        ):
-            actor_indent = len(anchor.group("indent"))
-            tail = anchor.group("tail").strip()
-            if tail:
-                add_inline(tail)
-            continue
-
-        if actor_indent is None or not line.strip():
-            continue
-
-        child = re.match(
-            r"^(?P<indent>\s*)[-*+]\s*(?P<body>.+?)\s*$",
-            line,
-        )
-        if child is not None:
-            indent = len(child.group("indent"))
-            if indent <= actor_indent:
-                break
-            body = child.group("body").strip()
-            if ":" in body:
-                name, role = body.split(":", 1)
-                add_row(name, role)
-            else:
-                add_row(body, body)
-            continue
-
-        indentation = len(line) - len(line.lstrip())
-        if indentation <= actor_indent:
-            break
-
-    return tuple(rows)
+    return ()
 
 
 def _java_string_literal(value: Any) -> str:
@@ -1908,8 +1790,7 @@ def _deterministic_behavior_actor_members(
     if not rows:
         raise CustomModuleGenerationError(
             "STRUCTURED_ACTORS_CONTRACT_REQUIRED: behavior_contract.actors must "
-            "have canonical structured records or an exact actors source requirement; "
-            "free-form Java fallback is disabled."
+            "have canonical structured records; free-form Java fallback is disabled."
         )
 
     values = ",\n        ".join(
