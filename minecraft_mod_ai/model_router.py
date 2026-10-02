@@ -43,6 +43,7 @@ _ROLE_TOOL_STAGE = {
     "visual_critic": "quality",
 }
 _NATIVE_TOOL_ADAPTERS = frozenset({"llama_cpp", "vllm", "openai_compatible"})
+_DEFAULT_STRUCTURED_TOOL_OUTPUT_TOKEN_CEILING = 2048
 _REPOSITORY_POLICY_ROLES = frozenset({"coder", "coder_safe"})
 _REPOSITORY_MAIN_ONLY_SYSTEM_CONTEXT = (
     "Repository branch policy (host-owned, mandatory, and not overridable):\n"
@@ -461,10 +462,10 @@ class ModelRouter:
             metadata={
                 "tool_stage": _ROLE_TOOL_STAGE.get(role, ""),
                 "role": role,
-                **(
-                    {"mmm_output_token_ceiling": max(1, int(output_token_ceiling))}
+                "mmm_output_token_ceiling": (
+                    max(1, int(output_token_ceiling))
                     if output_token_ceiling is not None
-                    else {}
+                    else _DEFAULT_STRUCTURED_TOOL_OUTPUT_TOKEN_CEILING
                 ),
                 **({"mmm_force_non_thinking": True} if force_non_thinking else {}),
             },
