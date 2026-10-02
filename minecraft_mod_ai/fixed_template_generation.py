@@ -2,8 +2,9 @@ from __future__ import annotations
 
 """Host-owned fixed-template generation for every structured model response.
 
-Planning writes structured design content directly. Action-producing roles fill forced
-function arguments. The deterministic ``mock`` profile keeps its fixture transport.
+Structured model responses use host-owned native function arguments whenever the
+router supports them. The deterministic ``mock`` profile and text-only fixtures keep
+their fixture transport.
 """
 
 import json
@@ -448,9 +449,9 @@ __all__ = ["generate_fixed_template_text", "generate_fixed_template_value"]
 
 def _architecture_impl__structured_text_transport_required(_ctx):
     (router, role) = _ctx
+    del role
     return (
-        (role == "planner" and callable(getattr(router, "generate_text", None)))
-        or _adapter_name(router, role) == "mock"
+        _adapter_name(router, "planner") == "mock"
         or not callable(getattr(router, "generate_tool_decision", None))
     )
 
