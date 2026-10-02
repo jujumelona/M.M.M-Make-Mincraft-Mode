@@ -105,10 +105,19 @@ def test_host_graph_reaches_java_execution_without_planner_http(tmp_path, monkey
                     if message.get("role") == "user"
                 )
                 region_request = json.loads(user_message)
-                concern = str(region_request["concern"]["name"])
+                concern_row = region_request["concern"]
+                concern = str(concern_row["name"])
                 identifier = re.sub(r"[^A-Za-z0-9_$]", "_", concern)
+                recipe = region_request.get("generation_recipe") or {}
+                java_shape = str(concern_row.get("java_shape") or "")
+                preferred_shape = str(recipe.get("preferred_shape") or "")
                 if region_request["response_region"] == "initialize":
                     source = f"{identifier}Impl();"
+                elif (
+                    java_shape == "declarations_only_fields_or_private_nested_types"
+                    or preferred_shape == "fields_and_local_types"
+                ):
+                    source = f"private static int {identifier}State = 0;"
                 else:
                     source = f"private static void {identifier}Impl() {{}}"
                 events = (
