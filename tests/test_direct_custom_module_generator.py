@@ -1030,15 +1030,9 @@ def test_graph_owned_atomic_leaf_defers_gradle_until_graph_boundary(
     tmp_path: Path, monkeypatch
 ) -> None:
     root, path, symbol = _project(tmp_path)
-    calls = 0
-
-    class Router:
-        def generate_text(self, role, messages, **kwargs):
-            nonlocal calls
-            calls += 1
-            assert role == "coder"
-            assert kwargs.get("force_non_thinking") is True
-            return "private static int balance = 0;"
+    router = _StructuredDecisionRouter(
+        _native_field_parts("int", "balance", "0")
+    )
 
     class Runner:
         def __init__(self, _cache):
@@ -1095,14 +1089,14 @@ def test_graph_owned_atomic_leaf_defers_gradle_until_graph_boundary(
         lambda _root, paths: RecordingPathLock(paths),
     )
 
-    result = direct.CustomModuleGenerator(Router()).generate(
+    result = direct.CustomModuleGenerator(router).generate(
         root,
         module=module,
         minecraft_version="1.21.1",
         loader="fabric",
     )
 
-    assert calls == 1
+    assert router.calls
     assert path_locks == [(path,)]
     assert "private static int balance = 0;" in (
         root / path
@@ -1114,6 +1108,7 @@ def test_graph_owned_atomic_leaf_defers_gradle_until_graph_boundary(
         verification["mode"]
         == "host_semantic_validation_deferred_to_implementation_graph"
     )
+
 
 @pytest.mark.parametrize("newline", ["\n", "\r\n"])
 def test_pipeline_deferred_whole_file_generation_skips_gradle_but_commits_source(
