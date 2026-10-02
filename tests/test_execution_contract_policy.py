@@ -323,7 +323,9 @@ def test_authorized_nested_runtime_type_reaches_structured_schema() -> None:
     for category in ("classes", "records", "enums"):
         assert category in parameters["properties"]
         name_schema = parameters["properties"][category]["items"]["properties"]["name"]
-        assert name_schema["enum"] == ["ShipFuelCalculationException"]
+        assert "enum" not in name_schema
+        assert "not" not in name_schema
+        assert "host maps" in name_schema["description"].lower()
         assert name_schema["not"] == {"enum": ["AuthoredFailureLimits"]}
 
 
