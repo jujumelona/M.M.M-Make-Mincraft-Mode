@@ -89,3 +89,29 @@ def test_design_text_is_not_rejected_by_phrase_blacklist() -> None:
     guarded = meta.split("def assert_design_field_clean", 1)[1]
     assert "contains_internal_model_meta(value)" not in guarded
     assert "contradicts_grounded_research(value)" in guarded
+
+
+def test_no_production_module_consumes_legacy_model_size_aliases() -> None:
+    forbidden = (
+        "MAX_MODEL_FIELDS",
+        "MAX_MODEL_STRING_CHARS",
+        "MAX_MODEL_ARRAY_ITEMS",
+        "MAX_SCHEMA_DEPTH",
+        "DEFAULT_ATOMIC_SCHEMA_LIMITS.max_fields",
+        "DEFAULT_ATOMIC_SCHEMA_LIMITS.max_string_chars",
+        "DEFAULT_ATOMIC_SCHEMA_LIMITS.max_array_items",
+        "DEFAULT_ATOMIC_SCHEMA_LIMITS.max_schema_depth",
+    )
+    definition_owners = {
+        "execution_contract_policy.py",
+        "model_output_atomicity_contract.py",
+    }
+    offenders: list[str] = []
+    for candidate in sorted(PACKAGE.rglob("*.py")):
+        if candidate.name in definition_owners:
+            continue
+        source = candidate.read_text(encoding="utf-8")
+        for token in forbidden:
+            if token in source:
+                offenders.append(f"{candidate.relative_to(PACKAGE)}: {token}")
+    assert not offenders, "legacy model-size correctness coupling remains:\n" + "\n".join(offenders)
