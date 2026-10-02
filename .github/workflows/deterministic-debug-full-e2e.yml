@@ -5,6 +5,14 @@ on:
   pull_request:
     paths:
       - 'minecraft_mod_ai/custom_module_generator.py'
+      - 'minecraft_mod_ai/execution_contract_policy.py'
+      - 'minecraft_mod_ai/atomic_java_assembly.py'
+      - 'minecraft_mod_ai/central_atomic_generation_contract.py'
+      - 'minecraft_mod_ai/java_generation_policy.py'
+      - 'minecraft_mod_ai/repair_response_contract.py'
+      - 'minecraft_mod_ai/verifier_repair_window.py'
+      - 'minecraft_mod_ai/generation_diagnostic_repair.py'
+      - 'tests/test_execution_contract_policy.py'
       - 'minecraft_mod_ai/custom_generation_research.py'
       - 'minecraft_mod_ai/generation_implementation_grounding.py'
       - 'minecraft_mod_ai/colab_run_modes.py'
@@ -38,6 +46,14 @@ on:
     branches: [main]
     paths:
       - 'minecraft_mod_ai/custom_module_generator.py'
+      - 'minecraft_mod_ai/execution_contract_policy.py'
+      - 'minecraft_mod_ai/atomic_java_assembly.py'
+      - 'minecraft_mod_ai/central_atomic_generation_contract.py'
+      - 'minecraft_mod_ai/java_generation_policy.py'
+      - 'minecraft_mod_ai/repair_response_contract.py'
+      - 'minecraft_mod_ai/verifier_repair_window.py'
+      - 'minecraft_mod_ai/generation_diagnostic_repair.py'
+      - 'tests/test_execution_contract_policy.py'
       - 'minecraft_mod_ai/custom_generation_research.py'
       - 'minecraft_mod_ai/generation_implementation_grounding.py'
       - 'minecraft_mod_ai/colab_run_modes.py'
