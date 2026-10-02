@@ -1378,6 +1378,7 @@ def _parse_region_content(
     allow_inert_empty: bool = False,
     allow_host_initialize_only_empty: bool = False,
     canonical_private_nested_symbols: tuple[str, ...] = (),
+    known_member_source: str = "",
 ) -> str:
     """Admit one host-selected region through Markdown and Java parsers in order."""
     raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
@@ -1404,7 +1405,10 @@ def _parse_region_content(
         return ""
     try:
         value = (
-            admit_initialize_region(raw_value)
+            admit_initialize_region(
+                raw_value,
+                known_member_source=known_member_source,
+            )
             if initialize_region
             else admit_member_region(
                 raw_value,
@@ -4080,6 +4084,14 @@ def _messages(
             current_source,
             sibling_concerns=sibling_concerns,
         ),
+        "current_concern_member_api": (
+            _prompt_sibling_api(
+                current_source,
+                sibling_concerns=(name,),
+            )
+            if response_region == "initialize"
+            else []
+        ),
         "repair_failure": failure or None,
         "generation_recipe": java_generation_recipe_contract(name),
         "scope": scope,
@@ -4207,8 +4219,10 @@ class AtomicConcernExecutor:
         *,
         response_region: str,
         failure: str = "",
+        source_override: str | None = None,
     ) -> str:
         name = _slug(concern["concern"])
+        prompt_source = self.source if source_override is None else source_override
         seen_violations: set[tuple[str, str]] = set()
         repair_failure = failure
         correction = None
@@ -4339,7 +4353,7 @@ class AtomicConcernExecutor:
                     task=self.task,
                     grounding=self.grounding,
                     dependency_source=self.dependency_source,
-                    current_source=self.source,
+                    current_source=prompt_source,
                     response_region=response_region,
                     failure=repair_failure,
                     sibling_concerns=tuple(
@@ -4390,6 +4404,15 @@ class AtomicConcernExecutor:
                     allow_inert_empty=allow_integration_empty_members,
                     allow_host_initialize_only_empty=allow_integration_empty_members,
                     canonical_private_nested_symbols=canonical_private_nested_symbols,
+                    known_member_source=(
+                        _region_content(
+                            prompt_source,
+                            concern=name,
+                            region="MEMBERS",
+                        )
+                        if response_region == "initialize"
+                        else ""
+                    ),
                 )
                 if correction is not None:
                     parsed = correction.merge(parsed)
@@ -4747,17 +4770,10 @@ class AtomicConcernExecutor:
             response_region="members",
             failure=failure,
         )
-        initialize = ""
-        if self.require_initialize and str(self.section or "").strip() == "integration":
-            initialize = self._generate_region(
-                concern,
-                response_region="initialize",
-                failure=failure,
-            )
-        if failure and self.state.get(name) == (members, initialize):
-            raise CustomModuleGenerationError(
-                f"ATOMIC_CONCERN_REPAIR_NO_PROGRESS: {name} repeated the same bounded source."
-            )
+
+        # Resolve ownership before initialize generation. The initialize prompt must see
+        # exactly the declarations that would be committed, never a temporary duplicate
+        # that the host plans to discard afterward.
         owners = self._sibling_symbol_owners(exclude=name)
         members, dropped_redeclarations = _drop_authoritative_sibling_redeclarations(
             members,
@@ -4782,13 +4798,40 @@ class AtomicConcernExecutor:
                 },
             )
         self._assert_symbol_ownership(concern=name, members=members)
-        self.source = _replace_region(
-            self.source, concern=name, region="MEMBERS", content=members
+
+        # Stage members transactionally for initialize generation. This does not mutate
+        # self.source until both regions succeed, but it gives the initialize coder exact
+        # same-concern field/method authority and lets the parser verify redundant echoes.
+        staged_source = _replace_region(
+            self.source,
+            concern=name,
+            region="MEMBERS",
+            content=members,
         )
-        if self.require_initialize:
-            self.source = _replace_region(
-                self.source, concern=name, region="INIT", content=initialize
+
+        initialize = ""
+        if self.require_initialize and str(self.section or "").strip() == "integration":
+            initialize = self._generate_region(
+                concern,
+                response_region="initialize",
+                failure=failure,
+                source_override=staged_source,
             )
+
+        if failure and self.state.get(name) == (members, initialize):
+            raise CustomModuleGenerationError(
+                f"ATOMIC_CONCERN_REPAIR_NO_PROGRESS: {name} repeated the same bounded source."
+            )
+
+        next_source = staged_source
+        if self.require_initialize:
+            next_source = _replace_region(
+                next_source,
+                concern=name,
+                region="INIT",
+                content=initialize,
+            )
+        self.source = next_source
         self.state[name] = (members, initialize)
         label = f"{name} repair" if failure else name
         self.summaries.append(label)
