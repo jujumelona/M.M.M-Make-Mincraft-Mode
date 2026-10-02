@@ -223,7 +223,7 @@ def test_execution_contract_has_one_definition_authority_repo_wide() -> None:
         "JAVA_NESTED_TYPE_REQUIRED_VISIBILITY",
     )
     definition_re = re.compile(
-        r"^\\s*(?:" + "|".join(map(re.escape, definition_names)) + r")\\s*=",
+        r"^\s*(?:" + "|".join(map(re.escape, definition_names)) + r")\s*=",
         re.MULTILINE,
     )
     canonical_phrases = (
