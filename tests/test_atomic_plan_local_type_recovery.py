@@ -132,47 +132,6 @@ def test_ungrounded_plan_local_type_forces_model_concern_regeneration() -> None:
     assert "private static ShipObject buildShip()" in result["source"]
 
 
-def test_original_log_identical_retry_gets_one_more_mechanical_copy_edit_turn() -> None:
-    captured: list[list[dict[str, str]]] = []
-    bad = (
-        "private static ShipObject buildShip() {\n"
-        "    return new ShipObject();\n"
-        "}"
-    )
-    executor = _executor(
-        [
-            bad,
-            bad,
-            (
-                "private static final class ShipObject {}\n\n"
-                "private static ShipObject buildShip() {\n"
-                "    return new ShipObject();\n"
-                "}"
-            ),
-        ],
-        captured,
-        attempt_limit=3,
-    )
-
-    result = executor.run()
-
-    assert len(captured) == 3
-    second = json.loads(captured[1][-1]["content"])[
-        "type_authority_repair_contract"
-    ]
-    third = json.loads(captured[2][-1]["content"])[
-        "type_authority_repair_contract"
-    ]
-    assert second["mode"] == "mechanical_copy_edit"
-    assert second["retry_level"] == 1
-    assert third["mode"] == "mechanical_copy_edit"
-    assert third["retry_level"] == 2
-    assert third["mechanical_edits"][0]["exact_declaration"] == (
-        "private static final class ShipObject {}"
-    )
-    assert "private static final class ShipObject {}" in result["source"]
-
-
 def test_bad_type_is_not_silently_materialized_by_host() -> None:
     captured: list[list[dict[str, str]]] = []
     executor = _executor(

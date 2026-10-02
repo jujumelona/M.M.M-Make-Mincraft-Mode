@@ -2015,9 +2015,8 @@ def _run_atomic_ir_generation(
         write_source=write_atomic_source,
         # Production gets a bounded semantic correction budget. Deterministic
         # host canonicalizers run before this correction path, so mechanically provable
-        # Java mistakes are fixed without another decode. Identical rejected output
-        # normally terminates early; a mechanically proven type-authority copy-edit
-        # receives one bounded escalation before no-progress becomes terminal.
+        # Java mistakes are fixed without another decode. Identical rejected output is
+        # detected and terminated early by AtomicConcernExecutor.
         region_attempt_limit=PRODUCTION_REGION_ATTEMPT_LIMIT,
         retry_structural_rejections=PRODUCTION_RETRY_STRUCTURAL_REJECTIONS,
         canonicalize_local_final_rebindings=(
