@@ -276,11 +276,12 @@ def test_production_graph_output_pressure_preserves_siblings_and_rolls_back(tmp_
             assert kwargs['tool_name'] == 'report_java_region_completion'
             payload = json.loads(messages[-1]['content'])
             if payload.get('completion_phase') == 'select_next_unit':
-                return {'done': False, 'next_work': 'declare LIMIT = 100'}
+                return {'done': False, 'next_work': 'declare LIMIT = 100', 'target': 'private static final int LIMIT'}
             page = payload['current_page_source']
             if 'LIMIT = 100' in page:
-                return {'done': False, 'next_work': 'implement allowed(int count)'}
-            return {'done': True, 'next_work': ''}
+                return {'done': False, 'next_work': 'implement allowed(int count)',
+                        'target': 'public static boolean allowed(int count)'}
+            return {'done': True, 'next_work': '', 'target': ''}
 
         def generate_text(self, role, messages, **kwargs):
             payload = json.loads(messages[-1]['content'])
@@ -371,11 +372,12 @@ def test_real_adapter_sse_output_limit_enters_same_owner_java_paging(monkeypatch
     if native_completion:
         responses = [
             ('private static int unfinished(', 'length'),
-            ({'done': False, 'next_work': 'declare limit constants'}, 'tool_calls'),
+            ({'done': False, 'next_work': 'declare limit constants', 'target': 'private static final int LIMIT'}, 'tool_calls'),
             ('private static final int LIMIT = 100; private static final int FLOOR = 0;', 'stop'),
-            ({'done': False, 'next_work': 'implement allowed(int count)'}, 'tool_calls'),
+            ({'done': False, 'next_work': 'implement allowed(int count)',
+              'target': 'public static boolean allowed(int count)'}, 'tool_calls'),
             ('public static boolean allowed(int count) { return count >= FLOOR && count <= LIMIT; }', 'stop'),
-            ({'done': True, 'next_work': ''}, 'tool_calls'),
+            ({'done': True, 'next_work': '', 'target': ''}, 'tool_calls'),
         ]
 
     class Handler(BaseHTTPRequestHandler):

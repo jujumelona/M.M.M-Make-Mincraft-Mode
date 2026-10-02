@@ -23,6 +23,7 @@ on:
       - "minecraft_mod_ai/custom_module_generator.py"
       - "minecraft_mod_ai/execution_contract_policy.py"
       - "minecraft_mod_ai/atomic_region_paging.py"
+      - "minecraft_mod_ai/atomic_region_work.py"
       - "minecraft_mod_ai/atomic_java_assembly.py"
       - "minecraft_mod_ai/central_atomic_generation_contract.py"
       - "minecraft_mod_ai/java_generation_policy.py"
@@ -31,6 +32,7 @@ on:
       - "minecraft_mod_ai/generation_diagnostic_repair.py"
       - "tests/test_execution_contract_policy.py"
       - "tests/test_atomic_region_paging.py"
+      - "tests/test_atomic_region_work.py"
       - "minecraft_mod_ai/custom_module_errors.py"
       - "minecraft_mod_ai/structured_state_runtime.py"
       - "minecraft_mod_ai/production_state_compiler.py"
@@ -123,6 +125,7 @@ jobs:
               tests/test_direct_custom_module_generator.py
               tests/test_execution_contract_policy.py
               tests/test_atomic_region_paging.py
+              tests/test_atomic_region_work.py
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6

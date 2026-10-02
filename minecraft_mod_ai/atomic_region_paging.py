@@ -11,6 +11,13 @@ import json
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 
+from .atomic_region_work import (
+    conflicts_with_target,
+    defer_work,
+    implements_target,
+    validate_schedule,
+    work_receipt,
+)
 from .custom_module_errors import CustomModuleGenerationError
 from .execution_contract_policy import (
     ATOMIC_REGION_COMPLETION_PARAMETERS,
@@ -78,10 +85,15 @@ def _member_page_delta(chunks, accepted_parts):
     return tuple(additions), tuple(sorted(echoed)), conflicts
 
 
-def _validated_decision(decision: Mapping, *, selecting: bool = False) -> dict:
+def _validated_decision(decision: Mapping, *, selecting: bool = False, require_target: bool = False) -> dict:
     if (
         not isinstance(decision, Mapping)
-        or set(decision) != {"done", "next_work"}
+        or set(decision) not in ({"done", "next_work"}, {"done", "next_work", "target"})
+        or (require_target and "target" not in decision)
+        or ("target" in decision and (
+            not isinstance(decision["target"], str)
+            or len(decision["target"]) > ATOMIC_REGION_COMPLETION_PARAMETERS["properties"]["target"]["maxLength"]
+        ))
         or type(decision.get("done")) is not bool
         or not isinstance(decision.get("next_work"), str)
         or len(decision["next_work"]) > ATOMIC_REGION_COMPLETION_PARAMETERS[
@@ -93,9 +105,13 @@ def _validated_decision(decision: Mapping, *, selecting: bool = False) -> dict:
         raise CustomModuleGenerationError(
             "ATOMIC_REGION_COMPLETION_DECISION_INVALID: done must be a boolean; "
             "done=true requires empty next_work, done=false requires concrete next_work. "
-            "Selection/refinement requires done=false; unfinished Java is not accepted work."
+            "Selection/refinement requires done=false; unfinished Java is not accepted work. "
+            "Native decisions also require a target string of at most 256 characters."
         )
-    return {"done": decision["done"], "next_work": decision["next_work"].strip()}
+    result = {"done": decision["done"], "next_work": decision["next_work"].strip()}
+    if "target" in decision:
+        result["target"] = decision["target"].strip()
+    return result
 
 
 def decide_region_completion(router, payload: Mapping) -> dict:
@@ -140,6 +156,13 @@ def decide_region_completion(router, payload: Mapping) -> dict:
                         " accepted_member_keys are already implemented and immutable. Never "
                         "select their implementation again. An echoed declaration adds no work; "
                         "evaluate the actual accepted implementation, not the rejected proposal."
+                        " completed_work records which purposes were implemented, and accepted_fields "
+                        "contains exact field values. For members, target MUST be one Java declaration "
+                        "header without body, initializer or semicolon: e.g. private static final int LIMIT "
+                        "or public static boolean allowed(int count). This header binds the next source "
+                        "turn. Choose an unimplemented target; do not reword an existing declaration. "
+                        "For initialize statements target is empty. When done=true target is empty. "
+                        "Deferred parent work remains required after generating a smaller prerequisite."
                     )},
                     {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
                 ],
@@ -158,10 +181,12 @@ def decide_region_completion(router, payload: Mapping) -> dict:
             feedback = str(exc)
             continue
         try:
-            return _validated_decision(
+            validated = _validated_decision(
                 decision,
                 selecting=context.get("completion_phase") in {"select_next_unit", "refine_next_unit"},
+                require_target=True,
             )
+            return validate_schedule(validated, context)
         except CustomModuleGenerationError as exc:
             feedback = str(exc)
     raise CustomModuleGenerationError("ATOMIC_REGION_COMPLETION_DECISION_INVALID: " + feedback)
@@ -208,6 +233,10 @@ def _generate_pages(call_coder, messages, *, completion_decider=None) -> str:
     parts: list[str] = []
     symbols: set[str] = set()
     next_work = ""
+    selected_work: dict = {}
+    completed_work: list[dict] = []
+    deferred_work: list[dict] = []
+    target_refinements: dict[str, int] = {}
     page_correction = None
     pending_correction = None
     ownership_corrections = 0
@@ -216,6 +245,8 @@ def _generate_pages(call_coder, messages, *, completion_decider=None) -> str:
         accepted_source = "\n\n".join(parts)
         accepted = {
             "accepted_sha256": hashlib.sha256(accepted_source.encode("utf-8")).hexdigest(),
+            "completed_work": deepcopy(completed_work),
+            "deferred_work": deepcopy(deferred_work),
         }
         if region == "members":
             # Completed bodies stay host-side. The coder needs exact callable/type
@@ -225,6 +256,10 @@ def _generate_pages(call_coder, messages, *, completion_decider=None) -> str:
                 for row in class_body_member_contracts(accepted_source)
             ]
             accepted["accepted_member_keys"] = sorted(symbols)
+            accepted["accepted_fields"] = [
+                part for part in parts
+                if any(row.get("kind") == "field" for row in class_body_member_contracts(part))
+            ]
             # A nested type name alone omits record components, constructors and
             # member APIs. Keep these complete, subject to the same context bound.
             accepted["accepted_nested_types"] = [
@@ -245,13 +280,17 @@ def _generate_pages(call_coder, messages, *, completion_decider=None) -> str:
                 "ATOMIC_REGION_UNIT_LIMIT: bounded generation ended without explicit completion"
             )
         if completion_decider is not None and not next_work:
-            decision = _validated_decision(completion_decider({
+            context = {
                 **payload, **accepted,
                 "completion_phase": "select_next_unit",
                 "current_page_source": "",
                 "previous_next_work": "",
                 "page_index": index,
-            }), selecting=True)
+            }
+            decision = validate_schedule(
+                _validated_decision(completion_decider(context), selecting=True), context,
+            )
+            selected_work = decision
             next_work = decision["next_work"]
         page_payload = deepcopy(payload)
         # Whole-region recipes otherwise keep telling a small coder to reproduce
@@ -275,6 +314,7 @@ def _generate_pages(call_coder, messages, *, completion_decider=None) -> str:
             "remaining_pages": MAX_REGION_PAGES - index,
             "remaining_units": MAX_REGION_UNITS - len(parts),
             "next_work": next_work,
+            "target": selected_work.get("target", ""),
             **accepted,
             "unit": "one complete member" if region == "members" else "one complete statement or block",
             "rules": (
@@ -288,7 +328,9 @@ def _generate_pages(call_coder, messages, *, completion_decider=None) -> str:
                 "factor complex logic into private methods within this same class. "
                 "No new class owner, facade, run() wrapper, unrelated requirements, or tool protocol. "
                 "Return the next complete Java declaration (members) or statement/block (initialize). "
-                "Follow next_work when supplied. Never return partial syntax. "
+                "Implement target exactly when supplied, using next_work for its behavior. "
+                "completed_work and accepted_fields describe completed purposes and exact values. "
+                "Never substitute a different declaration for target. Never return partial syntax. "
                 "The host parses complete declarations/statements in source order; if a small "
                 "cohesive response contains several, all count toward remaining_units. "
                 + (
@@ -317,27 +359,40 @@ def _generate_pages(call_coder, messages, *, completion_decider=None) -> str:
                     output = str(call_coder(page_messages) or "").strip()
                     break
                 except OutputBudgetExhausted as exc:
-                    if completion_decider is None or refinement >= MAX_UNIT_REFINEMENTS:
+                    target = selected_work.get("target", "")
+                    target_refinements[target] = target_refinements.get(target, 0) + 1
+                    if (
+                        completion_decider is None or refinement >= MAX_UNIT_REFINEMENTS
+                        or (target and target_refinements[target] > MAX_UNIT_REFINEMENTS)
+                    ):
                         raise CustomModuleGenerationError(
                             f"ATOMIC_REGION_UNIT_TOO_LARGE: {payload['host_selected_class']} "
                             f"{payload['concern']['name']}:{region} page {index}; "
                             "bounded same-owner unit refinement exhausted"
                         ) from exc
                     exhausted_work.add(next_work)
-                    decision = _validated_decision(completion_decider({
+                    defer_work(deferred_work, selected_work)
+                    context = {
                         **payload, **accepted,
+                        "deferred_work": deepcopy(deferred_work),
                         "completion_phase": "refine_next_unit",
                         "current_page_source": "",
                         "previous_next_work": next_work,
                         "exhausted_work": sorted(exhausted_work),
                         "page_index": index,
-                    }), selecting=True)
+                    }
+                    decision = validate_schedule(
+                        _validated_decision(completion_decider(context), selecting=True), context,
+                    )
                     if decision["next_work"] in exhausted_work:
                         raise CustomModuleGenerationError(
                             "ATOMIC_REGION_NO_PROGRESS: refinement repeated exhausted work"
                         ) from exc
                     next_work = decision["next_work"]
+                    selected_work = decision
                     page_payload["region_page"]["next_work"] = next_work
+                    page_payload["region_page"]["target"] = selected_work.get("target", "")
+                    page_payload["region_page"]["deferred_work"] = deepcopy(deferred_work)
                     page_payload["region_page"]["exhausted_work"] = sorted(exhausted_work)
                     page_messages[-1]["content"] = json.dumps(page_payload, ensure_ascii=False)
                     emit_root_cause(
@@ -454,17 +509,75 @@ def _generate_pages(call_coder, messages, *, completion_decider=None) -> str:
                         )
                     page_symbols.update(declared)
             if completion_decider is not None:
-                decision = _validated_decision(completion_decider({
+                target = selected_work.get("target", "")
+                conflicting_parents = [
+                    work["target"] for work in deferred_work
+                    if conflicts_with_target(work["target"], parsed)
+                ]
+                if region == "members" and target and (
+                    not implements_target(target, parsed) or conflicting_parents
+                ):
+                    reason = "ATOMIC_REGION_TARGET_MISSING: page did not preserve selected/deferred headers: " + target
+                    fingerprint = hashlib.sha256(output.encode("utf-8")).hexdigest()
+                    if ownership_corrections >= MAX_OWNERSHIP_CORRECTIONS or fingerprint in rejected_fingerprints:
+                        raise CustomModuleGenerationError(reason)
+                    page_correction = {
+                        "expected_target": target,
+                        "conflicting_parent_targets": conflicting_parents,
+                        "actual_member_keys": sorted(page_symbols),
+                        "echoed_member_keys": list(echoed),
+                        "pending_declarations": list(pending_correction.chunks) if pending_correction else [],
+                        "rules": (
+                            "No source from the previous response was accepted. Implement expected_target "
+                            "with the selected next_work behavior. Reuse completed declarations and their "
+                            "exact values; do not emit them. Keep any pending_declarations. "
+                            "Do not implement a deferred parent using a different header."
+                        ),
+                    }
+                    if len(json.dumps(page_correction, ensure_ascii=False)) > MAX_ACCEPTED_CONTEXT_CHARS:
+                        raise CustomModuleGenerationError(reason + "; correction context exceeds bounded context")
+                    ownership_corrections += 1
+                    rejected_fingerprints.add(fingerprint)
+                    emit_root_cause(
+                        "atomic_concern_page_target_missed", stage="production", result="RETRY",
+                        reason=reason,
+                        details={"owner": payload["host_selected_class"], "region": region,
+                                 "concern": payload["concern"]["name"], "page": index,
+                                 "selected_work": selected_work, "accepted_units": len(parts),
+                                 "correction": page_correction},
+                    )
+                    continue
+                page_receipts = [work_receipt(selected_work, parsed, page_symbols)] if chunks else []
+                page_receipts.extend(
+                    work_receipt(work, parsed, page_symbols) for work in deferred_work
+                    if implements_target(work["target"], parsed)
+                )
+                # Refinement must not erase the caller that needed the helper.
+                # Resume the most recent parent directly from host-owned work.
+                remaining_work = [
+                    work for work in deferred_work
+                    if not implements_target(work["target"], accepted_source + "\n" + parsed)
+                ]
+                context = {
                     **payload,
                     **accepted,
+                    "completed_work": deepcopy(completed_work + page_receipts),
+                    "deferred_work": deepcopy(remaining_work),
                     "completion_phase": "assess_completion",
                     "current_page_source": parsed,
                     "echoed_member_keys": list(echoed),
                     "previous_next_work": next_work,
+                    "previous_target": target,
                     "page_index": index,
-                }))
+                }
+                decision = (remaining_work.pop() if remaining_work else validate_schedule(
+                    _validated_decision(completion_decider(context)), context,
+                ))
                 done = decision["done"]
                 next_work = decision["next_work"]
+                selected_work = decision
+                deferred_work = remaining_work
+                completed_work.extend(page_receipts)
             if not chunks and not done:
                 raise CustomModuleGenerationError(
                     "ATOMIC_REGION_NO_PROGRESS: page only repeated immutable declarations"
@@ -492,6 +605,8 @@ def _generate_pages(call_coder, messages, *, completion_decider=None) -> str:
                 details={"owner": payload["host_selected_class"], "region": region,
                          "concern": payload["concern"]["name"], "page": index,
                          "accepted_units": len(parts), "rejected_response": output,
+                         "selected_work": selected_work, "completed_work": completed_work,
+                         "deferred_work": deferred_work,
                          "output_sha256": hashlib.sha256(output.encode("utf-8")).hexdigest()},
             )
             raise
