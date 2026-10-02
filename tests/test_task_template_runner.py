@@ -1,14 +1,8 @@
 from copy import deepcopy
 
-import pytest
-
 from minecraft_mod_ai import bounded_record_template as bounded
 from minecraft_mod_ai import task_template_runner as runner
-from minecraft_mod_ai.task_template_catalog import ROOT, load_record_template, load_template
-
-
-def count_reply(count=0):
-    return {"count": count}
+from minecraft_mod_ai.task_template_catalog import ROOT, load_template
 
 
 def drive(monkeypatch, replies):
@@ -22,9 +16,9 @@ def drive(monkeypatch, replies):
     return calls
 
 
-def test_record_roundtrip_uses_cardinality_then_exact_record(monkeypatch):
+def test_record_roundtrip_uses_one_semantic_record_set(monkeypatch):
     record = {"trigger": "right click", "owner": "server player"}
-    calls = drive(monkeypatch, iter([count_reply(1), record]))
+    calls = drive(monkeypatch, iter([{"records": [record]}]))
     result = runner.run_record_template(
         None,
         "feature/behavior_contract/entry_conditions",
@@ -32,20 +26,15 @@ def test_record_roundtrip_uses_cardinality_then_exact_record(monkeypatch):
         allowed_refs=set(),
     )
     assert result["records"] == [record]
-    assert len(calls) == 2
-    count_schema = calls[0]["response_schema"]
-    assert count_schema["properties"]["count"] == {"type": "integer", "minimum": 0}
-    assert "maximum" not in count_schema["properties"]["count"]
-    assert set(count_schema["properties"]) == {"count"}
-    # The model-facing schema is the compiled record schema, which materializes global
-    # atomicity bounds (for example maxLength) before a record call is issued.
-    assert calls[1]["response_schema"] == load_record_template(
-        "feature/behavior_contract/entry_conditions"
-    )["record_schema"]
+    assert len(calls) == 1
+    schema = calls[0]["response_schema"]
+    assert schema["required"] == ["records"]
+    assert set(schema["properties"]) == {"records"}
+    assert "maxItems" not in schema["properties"]["records"]
 
 
-def test_empty_result_is_host_owned_completion(monkeypatch):
-    calls = drive(monkeypatch, iter([count_reply(0)]))
+def test_empty_result_is_host_owned_data_not_completion_protocol(monkeypatch):
+    calls = drive(monkeypatch, iter([{"records": []}]))
     result = runner.run_record_template(
         None,
         "feature/behavior_contract/entry_conditions",
@@ -57,20 +46,20 @@ def test_empty_result_is_host_owned_completion(monkeypatch):
     assert len(calls) == 1
 
 
-def test_repeated_record_fails_closed_without_model_continuation(monkeypatch):
+def test_repeated_records_are_deduplicated_without_fatal_loop_gate(monkeypatch):
     record = {"trigger": "right click", "owner": "server player"}
-    drive(monkeypatch, iter([count_reply(2), record, record]))
-    with pytest.raises(runner.TemplateBlocked, match="NO_PROGRESS"):
-        runner.run_record_template(
-            None,
-            "feature/behavior_contract/entry_conditions",
-            context={},
-            allowed_refs=set(),
-        )
+    drive(monkeypatch, iter([{"records": [record, record]}]))
+    result = runner.run_record_template(
+        None,
+        "feature/behavior_contract/entry_conditions",
+        context={},
+        allowed_refs=set(),
+    )
+    assert result["records"] == [record]
 
 
-def test_nonblocking_cardinality_never_delegates_missing_fact_policy(monkeypatch):
-    calls = drive(monkeypatch, iter([count_reply(0)]))
+def test_record_set_schema_has_no_model_loop_control(monkeypatch):
+    calls = drive(monkeypatch, iter([{"records": []}]))
     result = runner.run_record_template(
         None,
         "feature/behavior_contract/entry_conditions",
@@ -79,8 +68,10 @@ def test_nonblocking_cardinality_never_delegates_missing_fact_policy(monkeypatch
     )
     assert result["records"] == []
     schema = calls[0]["response_schema"]
-    assert set(schema["properties"]) == {"count"}
-    assert schema["required"] == ["count"]
+    assert set(schema["properties"]) == {"records"}
+    assert schema["required"] == ["records"]
+    for forbidden in ("count", "done", "next_work", "blocked_reason", "continuation"):
+        assert forbidden not in schema["properties"]
 
 
 def test_catalog_manifests_resolve_every_declared_task():
@@ -92,7 +83,7 @@ def test_catalog_manifests_resolve_every_declared_task():
 
 def test_allowed_evidence_is_not_automatically_attached(monkeypatch):
     record = {"trigger": "click", "owner": "server"}
-    drive(monkeypatch, iter([count_reply(1), record]))
+    drive(monkeypatch, iter([{"records": [record]}]))
     result = runner.run_record_template(
         None,
         "feature/behavior_contract/entry_conditions",
@@ -104,7 +95,7 @@ def test_allowed_evidence_is_not_automatically_attached(monkeypatch):
 
 def test_host_context_can_admit_known_evidence(monkeypatch):
     record = {"trigger": "click", "owner": "server"}
-    drive(monkeypatch, iter([count_reply(1), record]))
+    drive(monkeypatch, iter([{"records": [record]}]))
     result = runner.run_record_template(
         None,
         "feature/behavior_contract/entry_conditions",
@@ -114,10 +105,11 @@ def test_host_context_can_admit_known_evidence(monkeypatch):
     assert result["evidence_refs"] == ["e1"]
 
 
-def test_entry_condition_cardinality_contract_is_host_owned():
+def test_entry_condition_record_contract_is_data_only():
     schema = runner.record_response_schema(
         load_template("feature/behavior_contract/entry_conditions")
     )
-    assert "status" not in schema["properties"]
-    assert "records" not in schema["properties"]
-    assert set(schema["properties"]) == {"count"}
+    assert schema["required"] == ["records"]
+    assert set(schema["properties"]) == {"records"}
+    item = schema["properties"]["records"]["items"]
+    assert item == load_template("feature/behavior_contract/entry_conditions")["record_schema"]
