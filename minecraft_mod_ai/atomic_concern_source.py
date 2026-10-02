@@ -53,9 +53,6 @@ from .java_region_parser import (
     strict_member_chunks,
 )
 
-MEMBERS_MARKER = "<<<MMM_CONCERN_MEMBERS>>>"
-INITIALIZE_MARKER = "<<<MMM_CONCERN_INITIALIZE>>>"
-END_MARKER = "<<<MMM_CONCERN_END>>>"
 _DECLARATION_ONLY_CONCERNS = JAVA_DECLARATION_ONLY_CONCERNS
 _DECLARATION_ONLY_MEMBER_KINDS = JAVA_DECLARATION_ONLY_MEMBER_KINDS
 
@@ -132,68 +129,6 @@ def _slug(value: Any) -> str:
 
 def _marker(concern: str, region: str, edge: str) -> str:
     return f"// {_HOST_PREFIX}_{_slug(concern).upper()}_{region}_{edge}"
-
-
-_FENCE_LINE = re.compile(r"^\s*```(?:[A-Za-z0-9_+.\-]+)?\s*$", re.IGNORECASE)
-_HOST_MARKER_LINE = re.compile(
-    r"^\s*//\s*MMM_ATOMIC_CONCERN_[A-Z0-9_]+_(?:MEMBERS|INIT)_(?:START|END)\s*$",
-    re.IGNORECASE,
-)
-_REGION_LABEL_LINE = re.compile(
-    r"^\s*(?:members?|member code|initialize(?: body)?|initialization|java)\s*:?\s*$",
-    re.IGNORECASE,
-)
-
-_VISIBILITY_STATIC_INITIALIZER = re.compile(
-    r"(?m)^(?P<indent>[ \t]*)(?:public|protected|private)\s+static\s*\{"
-)
-_INVALID_VISIBILITY_INITIALIZER = re.compile(
-    r"(?m)^\s*(?:public|protected|private)\s*\{"
-)
-
-
-def _split_response_regions(text: str) -> tuple[str, str]:
-    raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
-    lines = raw.split("\n")
-    marker_positions: dict[str, list[int]] = {
-        marker: [index for index, line in enumerate(lines) if line.strip() == marker]
-        for marker in (MEMBERS_MARKER, INITIALIZE_MARKER, END_MARKER)
-    }
-    if any(len(marker_positions[marker]) != 1 for marker in marker_positions):
-        raise CustomModuleGenerationError(
-            "ATOMIC_CONCERN_RESPONSE_INVALID: each host response marker must occur exactly once as a marker line."
-        )
-    members_at = marker_positions[MEMBERS_MARKER][0]
-    init_at = marker_positions[INITIALIZE_MARKER][0]
-    end_at = marker_positions[END_MARKER][0]
-    if not members_at < init_at < end_at:
-        raise CustomModuleGenerationError(
-            "ATOMIC_CONCERN_RESPONSE_INVALID: host response markers are out of order."
-        )
-    return (
-        "\n".join(lines[members_at + 1:init_at]).strip(),
-        "\n".join(lines[init_at + 1:end_at]).strip(),
-    )
-
-
-def _normalize_region_text(value: str) -> str:
-    rows: list[str] = []
-    for line in str(value or "").splitlines():
-        if _FENCE_LINE.fullmatch(line):
-            continue
-        if _HOST_MARKER_LINE.fullmatch(line):
-            continue
-        if _REGION_LABEL_LINE.fullmatch(line):
-            continue
-        rows.append(line)
-    normalized = "\n".join(rows).strip()
-    # Java class initializers cannot carry visibility. Small coders sometimes emit
-    # "private static { ... }" when they mean a static initializer. Removing only
-    # the impossible visibility modifier preserves the executable semantics.
-    return _VISIBILITY_STATIC_INITIALIZER.sub(
-        lambda match: f"{match.group('indent')}static {{",
-        normalized,
-    )
 
 
 def _structure_scan(value: str) -> str:
@@ -1310,13 +1245,7 @@ def _symbol_owner_payload(owners: Mapping[str, str]) -> list[dict[str, str]]:
 
 
 def _validate_region_text(value: str, *, initialize_region: bool) -> None:
-    """Validate an already-admitted region using Java AST structure only.
-
-    Model-envelope recovery belongs to java_region_parser. Once that parser has
-    admitted a region, lexical words and identifier spellings are never treated
-    as protocol/prose signals. This prevents valid Java identifiers such as
-    next from being rejected by English-language heuristics.
-    """
+    """Validate host-rendered structured Java with the Java AST only."""
 
     region = "initialize body" if initialize_region else "concern members"
     try:
@@ -1328,22 +1257,6 @@ def _validate_region_text(value: str, *, initialize_region: bool) -> None:
         raise CustomModuleGenerationError(
             f"ATOMIC_CONCERN_SCOPE_ESCAPE: {region} is not admissible Java: {exc}"
         ) from exc
-
-
-def parse_concern_content(text: str, *, section: str) -> tuple[str, str]:
-    """Normalize inert model wrappers, then validate only executable concern content."""
-    members, initialize = _split_response_regions(text)
-    members = _normalize_region_text(members)
-    initialize = _normalize_region_text(initialize)
-    if str(section or "").strip() != "integration" and _is_inert_empty_region(initialize):
-        initialize = ""
-    _validate_region_text(members, initialize_region=False)
-    _validate_region_text(initialize, initialize_region=True)
-    if str(section or "").strip() != "integration" and initialize:
-        raise CustomModuleGenerationError(
-            "ATOMIC_CONCERN_SCOPE_ESCAPE: only integration concerns may add initialize() statements."
-        )
-    return members, initialize
 
 
 def _project_declaration_only_members(value: str) -> tuple[str, tuple[str, ...]]:
@@ -5028,10 +4941,6 @@ class AtomicConcernExecutor:
         }
 
 __all__ = [
-    "END_MARKER",
-    "INITIALIZE_MARKER",
-    "MEMBERS_MARKER",
     "AtomicConcernExecutor",
     "build_concern_scaffold",
-    "parse_concern_content",
 ]
