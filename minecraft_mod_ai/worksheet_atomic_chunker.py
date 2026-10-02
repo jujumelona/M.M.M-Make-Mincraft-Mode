@@ -161,17 +161,19 @@ def worksheet_chunk_schema(
         }
         properties[concern] = {
             "type": "array",
+            "maxItems": 4,
             "items": item_schema,
         }
         authored_signal.append({"required": [concern]})
 
     properties["inapplicable_concerns"] = {
         "type": "array",
+        "maxItems": max(1, len(active)),
         "items": {
             "type": "object",
             "properties": {
                 "concern": {"type": "string", "enum": list(active)},
-                "reason": {"type": "string", "minLength": 1},
+                "reason": {"type": "string", "minLength": 1, "maxLength": 512},
             },
             "required": ["concern", "reason"],
             "additionalProperties": False,
@@ -188,11 +190,12 @@ def worksheet_chunk_schema(
         properties["constraint_evidence_refs"] = {
             "type": "array",
             "uniqueItems": True,
+            "maxItems": 8,
             "description": (
                 "Evidence references supplied by the host that constrain this authored design section. "
                 "Use an empty array when the section is a design decision rather than an external fact."
             ),
-            "items": {"type": "string", "minLength": 1},
+            "items": {"type": "string", "minLength": 1, "maxLength": 128},
         }
 
     return {
