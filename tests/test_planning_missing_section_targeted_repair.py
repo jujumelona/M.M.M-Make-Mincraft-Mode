@@ -4,7 +4,6 @@ from typing import Any
 
 import minecraft_mod_ai.planning_state_adaptive_implementation as adaptive
 from minecraft_mod_ai.planning_detail_template import WORKSHEET_SECTIONS
-from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
 from worksheet_fixtures import _fixture_value, specification
 
 
