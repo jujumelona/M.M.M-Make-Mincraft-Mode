@@ -1,49 +1,46 @@
-"""Host-owned cardinality for record templates.
-
-The model never returns an arbitrarily capped record array and never controls
-continuation. It first determines the authored cardinality as one integer; the
-host then performs exactly that many single-record calls in stable ordinal order.
-Independent ordinals may occupy measured native llama slots concurrently.
-"""
+"""Generate record sets from accepted semantic records, never a model-owned count."""
 from __future__ import annotations
 
 import json
-from concurrent.futures import ThreadPoolExecutor
-from contextvars import copy_context
 from copy import deepcopy
-from threading import RLock
 from typing import Any
 
 from jsonschema import Draft202012Validator
 
+from .design_generation_schema import context_bound_record_schema
 from .fixed_template_generation import generate_fixed_template_value
-from .model_concurrency import router_native_model_parallelism
-from .single_record_template import run_single_record_template
 from .task_template_catalog import load_record_template
 from .task_template_input import task_binding, task_context
-from .template_errors import TemplateBlocked
 
 _EMPTY_REASON = "No applicable records in the supplied context."
+_MAX_RECORD_DISCOVERY_ROUNDS = 64
 
 
-def record_cardinality_response_schema(template: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Return the exact-cardinality contract.
+def record_cardinality_response_schema(
+    template: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compatibility surface for the active next-record contract.
 
-    Planning has no blocked/failure judgement here. The narrowed host context is
-    authoritative: zero applicable records is represented only by ``count == 0``.
+    Cardinality is no longer requested as a separate integer. The model contributes at
+    most one semantic record per call, or null when no additional record applies.
     """
-    del template
+    record_schema = deepcopy((template or {}).get("record_schema", {}))
     return {
         "type": "object",
         "properties": {
-            "count": {"type": "integer", "minimum": 0},
+            "record": {
+                "anyOf": [
+                    record_schema,
+                    {"type": "null"},
+                ],
+            },
         },
-        "required": ["count"],
+        "required": ["record"],
         "additionalProperties": False,
     }
 
 
-# Compatibility name for callers that inspect the active record-control schema.
+# Compatibility name retained for callers that inspect the active record-control schema.
 record_batch_response_schema = record_cardinality_response_schema
 
 
@@ -70,55 +67,29 @@ def _host_evidence_refs(context: dict[str, Any], allowed_refs: set[str]) -> list
     return refs
 
 
-def _load_cardinality(
-    router: Any,
+def _next_record_schema(
     identifier: str,
     template: dict[str, Any],
     context: dict[str, Any],
-    *,
-    allowed_refs: set[str],
-    progress: dict[str, Any] | None,
-    checkpoint: Any,
-) -> int:
-    schema = record_cardinality_response_schema(template)
-    binding = "record-cardinality-v1:" + task_binding(template, context, allowed_refs)
-    saved = (progress or {}).get(binding)
-
-    # Old checkpoints may contain the removed ``blocked_reason`` field. Reuse only
-    # their numeric count and discard all former judgement metadata.
-    if (
-        isinstance(saved, dict)
-        and isinstance(saved.get("count"), int)
-        and not isinstance(saved.get("count"), bool)
-        and int(saved["count"]) >= 0
-    ):
-        value = {"count": int(saved["count"])}
-    else:
-        rules = "\n".join(str(rule) for rule in template.get("rules", ()))
-        system_prompt = (
-            str(template.get("task") or "Produce the requested records.")
-            + ("\n" + rules if rules else "")
-            + "\nDetermine only the exact number of distinct authored/applicable records "
-            "supported by this narrowed context. The supplied context is authoritative. "
-            "Return count 0 when no records apply. Do not make a blocked, missing-fact, "
-            "failure, continuation, done, retry, or loop-control decision."
-        )
-        value = generate_fixed_template_value(
-            router,
-            "planner",
-            [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
-            ],
-            response_schema=schema,
-            enable_tools=False,
-            tool_name="submit_" + identifier.replace("/", "_") + "_count",
-        )
-        Draft202012Validator(schema).validate(value)
-        if checkpoint is not None:
-            checkpoint(binding, deepcopy(value))
-
-    return int(value["count"])
+) -> dict[str, Any]:
+    record_schema = context_bound_record_schema(
+        identifier,
+        template["record_schema"],
+        context,
+    )
+    return {
+        "type": "object",
+        "properties": {
+            "record": {
+                "anyOf": [
+                    record_schema,
+                    {"type": "null"},
+                ],
+            },
+        },
+        "required": ["record"],
+        "additionalProperties": False,
+    }
 
 
 def run_bounded_record_template(
@@ -130,69 +101,72 @@ def run_bounded_record_template(
     progress=None,
     checkpoint=None,
 ):
-    """Resolve one concern with host-owned exact cardinality and stable ordinals."""
+    """Accumulate distinct records until semantic convergence.
+
+    The host owns accepted-record state. There is no count pre-pass, ordinal contract,
+    or fatal duplicate-cardinality gate. A null next record or an exact duplicate means
+    the semantic frontier has converged. The finite round cap is only a runtime safety
+    budget against a non-converging model, not a claimed semantic cardinality.
+    """
     template = load_record_template(identifier)
     normalized_context = task_context(template, context)
     admitted_refs = {str(ref) for ref in allowed_refs}
-    checkpoint_lock = RLock()
+    records: list[dict[str, Any]] = []
+    seen: set[str] = set()
 
-    def serialized_checkpoint(*args, **kwargs):
-        if checkpoint is None:
-            return None
-        with checkpoint_lock:
-            return checkpoint(*args, **kwargs)
-
-    effective_checkpoint = serialized_checkpoint if checkpoint is not None else None
-    count = _load_cardinality(
-        router,
-        identifier,
-        template,
-        normalized_context,
-        allowed_refs=admitted_refs,
-        progress=progress,
-        checkpoint=effective_checkpoint,
+    rules = "\n".join(str(rule) for rule in template.get("rules", ()))
+    system_prompt = (
+        str(template.get("task") or "Produce the requested record.")
+        + ("\n" + rules if rules else "")
+        + "\nThe host supplies accepted_records as immutable semantic progress. "
+        "Return at most one additional distinct applicable record in the record field. "
+        "Return record=null only when no additional distinct record is supported by the "
+        "authoritative context. Do not estimate, declare, or preserve a total count or "
+        "ordinal. Do not repeat an accepted record."
     )
 
-    def generate_record(index: int) -> dict[str, Any]:
-        return run_single_record_template(
-            router,
-            identifier,
-            context={
-                **normalized_context,
-                "record_index": index,
-                "record_ordinal": index + 1,
-                "record_count": count,
-            },
-            progress=progress,
-            checkpoint=effective_checkpoint,
-            generator=generate_fixed_template_value,
+    for _round in range(_MAX_RECORD_DISCOVERY_ROUNDS):
+        iteration_context = {
+            **normalized_context,
+            "accepted_records": deepcopy(records),
+        }
+        schema = _next_record_schema(identifier, template, iteration_context)
+        validator = Draft202012Validator(schema)
+        binding = "record-next-v1:" + task_binding(
+            template,
+            iteration_context,
+            admitted_refs,
         )
+        saved = (progress or {}).get(binding)
 
-    workers = max(1, min(count, router_native_model_parallelism(router))) if count else 1
-    if count <= 1 or workers == 1:
-        records = [generate_record(index) for index in range(count)]
-    else:
-        contexts = [copy_context() for _ in range(count)]
-        with ThreadPoolExecutor(
-            max_workers=workers,
-            thread_name_prefix="planning-template-record-ordinal",
-        ) as pool:
-            futures = [
-                pool.submit(contexts[index].run, generate_record, index)
-                for index in range(count)
-            ]
-            try:
-                records = [future.result() for future in futures]
-            except BaseException:
-                for future in futures:
-                    future.cancel()
-                raise
+        if isinstance(saved, dict) and "record" in saved:
+            value = deepcopy(saved)
+        else:
+            value = generate_fixed_template_value(
+                router,
+                "planner",
+                [
+                    {"role": "system", "content": system_prompt},
+                    {
+                        "role": "user",
+                        "content": json.dumps(iteration_context, ensure_ascii=False),
+                    },
+                ],
+                response_schema=schema,
+                enable_tools=False,
+                tool_name="submit_next_" + identifier.replace("/", "_"),
+            )
+            validator.validate(value)
+            if checkpoint is not None:
+                checkpoint(binding, deepcopy(value))
 
-    # Cardinality is a host-owned semantic contract: each ordinal must contribute a
-    # distinct record. Repeating an already-produced record is a fixed point, not a
-    # smaller valid result, so fail closed instead of silently shrinking cardinality.
-    seen: set[str] = set()
-    for record in records:
+        validator.validate(value)
+        record = value.get("record")
+        if record is None:
+            break
+        if not isinstance(record, dict):
+            raise ValueError(f"TEMPLATE_RECORD_INVALID: {identifier} produced a non-object record")
+
         key = json.dumps(
             record,
             sort_keys=True,
@@ -200,8 +174,15 @@ def run_bounded_record_template(
             separators=(",", ":"),
         )
         if key in seen:
-            raise TemplateBlocked(f"TEMPLATE_NO_PROGRESS: repeated record in {identifier}")
+            # Repetition is convergence/no-progress, not a correctness failure.
+            break
         seen.add(key)
+        records.append(deepcopy(record))
+    else:
+        raise RuntimeError(
+            "TEMPLATE_RESOURCE_LIMIT: next-record generation did not converge within "
+            f"{_MAX_RECORD_DISCOVERY_ROUNDS} host iterations for {identifier}"
+        )
 
     return {
         "records": records,
