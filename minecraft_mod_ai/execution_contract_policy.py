@@ -519,7 +519,7 @@ def java_atomic_parameters_for_request(
     response_region: str,
 ) -> tuple[dict[str, Any], str]:
     if response_region == "initialize":
-        return JAVA_ATOMIC_INITIALIZE_PARAMETERS, "initialize_statements"
+        return deepcopy(JAVA_ATOMIC_INITIALIZE_PARAMETERS), "initialize_statements"
 
     recipe = payload.get("generation_recipe")
     preferred = (
@@ -540,7 +540,7 @@ def java_atomic_parameters_for_request(
     )
 
     if concern_name in JAVA_DECLARATION_ONLY_CONCERNS:
-        parameters = JAVA_ATOMIC_DECLARATION_MEMBERS_PARAMETERS
+        parameters = deepcopy(JAVA_ATOMIC_DECLARATION_MEMBERS_PARAMETERS)
         shape = preferred or "declarations_only_fields_or_private_nested_types"
     elif (
         concern_name
@@ -548,16 +548,15 @@ def java_atomic_parameters_for_request(
         and not authorized_nested
     ):
         return (
-            JAVA_ATOMIC_LOGIC_MEMBERS_PARAMETERS,
+            deepcopy(JAVA_ATOMIC_LOGIC_MEMBERS_PARAMETERS),
             preferred or "logic_fields_methods_only",
         )
     else:
-        parameters = JAVA_ATOMIC_MEMBERS_PARAMETERS
+        parameters = deepcopy(JAVA_ATOMIC_MEMBERS_PARAMETERS)
         shape = preferred or "smallest_components"
 
     host_symbol = str(payload.get("host_selected_class") or "").strip()
     if host_symbol or authorized_nested:
-        parameters = deepcopy(parameters)
         for category in ("records", "enums", "classes"):
             category_schema = parameters["properties"].get(category)
             if not isinstance(category_schema, Mapping):
