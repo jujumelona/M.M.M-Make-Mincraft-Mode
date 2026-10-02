@@ -107,6 +107,16 @@ def bind_structured_decode_policy(hardware_module: Any) -> None:
     @wraps(current)
     def payload(adapter: Any, request: Any) -> dict[str, Any]:
         result = dict(current(adapter, request))
+        metadata = getattr(request, "metadata", None)
+        force_non_thinking = bool(
+            isinstance(metadata, Mapping)
+            and metadata.get("mmm_force_non_thinking") is True
+        )
+        if force_non_thinking:
+            result["reasoning_effort"] = "none"
+            result["chat_template_kwargs"] = {"enable_thinking": False}
+            result.pop("thinking_budget_tokens", None)
+
         if result.get("tools"):
             return result
         if getattr(request, "response_format", None) != "json":
