@@ -512,7 +512,9 @@ def test_stored_state_schema_forbids_outer_methods_before_model_decode() -> None
     assert parameters is not JAVA_ATOMIC_DECLARATION_MEMBERS_PARAMETERS
     for category in ("records", "enums", "classes"):
         name_schema = parameters["properties"][category]["items"]["properties"]["name"]
-        assert name_schema["not"] == {"enum": ["Probe"]}
+        assert "not" not in name_schema
+        assert "enum" not in name_schema
+        assert "host" in name_schema["description"].lower()
 
 
 def test_stored_state_native_part_selector_never_offers_methods() -> None:
