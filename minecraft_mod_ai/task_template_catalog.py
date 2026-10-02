@@ -16,27 +16,22 @@ CRITERION_SECTIONS = AUTHORING_SECTION_ORDER
 _CRITERION_ALIASES = {f"feature/{section}": f"criterion/{section}" for section in CRITERION_SECTIONS}
 _PROMPT_POLICY = "prompt/policy"
 
-# Applicability/evidence policy remains host-owned. Record cardinality itself is
-# derived from accepted semantic records, never from a separate model count.
-# Reuse assessment is evidence-defined by construction; integration target bindings
-# are evidence-defined because they require verified symbols. All other criterion
-# sections author semantic records from the bounded requirement/criterion context.
-_EVIDENCE_BOUND_CARDINALITY_TASKS = frozenset({
+# Evidence authority is host-owned. Record-set cardinality/iteration is not a
+# separate model or host protocol at all: models author semantic records only.
+_EVIDENCE_BOUND_RECORD_TASKS = frozenset({
     "feature/integration/target_bindings",
 })
-_SEMANTIC_CARDINALITY_SECTIONS = frozenset(CRITERION_SECTIONS) - {
-    "integration",
-    "reuse_assessment",
-}
 _POSITIVE_HOST_CONTROL_PREFIXES = (
     "return done",
     "return not_applicable",
     "return blocked",
+    "return only the next record",
 )
 _HOST_CONTROL_RULE = (
-    "Do not emit continuation, retry, or loop-control protocol. The host owns "
-    "accepted-record state and iteration; cardinality is derived from accepted records."
+    "Return semantic record content only. Do not emit count, done, continuation, "
+    "retry, ordinal, blocked, applicability, or other loop-control protocol."
 )
+
 
 
 def _canonical_identifier(identifier: str) -> str:
@@ -99,17 +94,15 @@ def _runtime_concern_section(identifier: str):
     return None
 
 
-def _runtime_cardinality_blocking(identifier: str) -> bool:
+def _record_requires_external_evidence(identifier: str) -> bool:
     section = _runtime_concern_section(identifier)
     if section is None:
-        raise ValueError(f"TEMPLATE_CARDINALITY_POLICY: {identifier} is not a runtime criterion concern")
+        return False
     if section == "reuse_assessment":
         return True
     if section == "integration":
-        return identifier in _EVIDENCE_BOUND_CARDINALITY_TASKS
-    if section in _SEMANTIC_CARDINALITY_SECTIONS:
-        return False
-    raise ValueError(f"TEMPLATE_CARDINALITY_POLICY: unclassified runtime concern {identifier}")
+        return identifier in _EVIDENCE_BOUND_RECORD_TASKS
+    return False
 
 
 def _apply_record_host_policy(identifier: str, value: dict):
@@ -212,17 +205,9 @@ def _architecture_impl__apply_record_host_policy(_ctx):
     if _runtime_concern_section(identifier) is None:
         return value
 
-    expected_blocking = _runtime_cardinality_blocking(identifier)
-    declared_blocking = value.get("cardinality_blocking")
-    if declared_blocking is not None:
-        if not isinstance(declared_blocking, bool):
-            raise ValueError(f"TEMPLATE_CARDINALITY_POLICY: {identifier} must declare a boolean")
-        if declared_blocking is not expected_blocking:
-            raise ValueError(
-                f"TEMPLATE_CARDINALITY_POLICY: {identifier} declares "
-                f"{declared_blocking!r}, host taxonomy requires {expected_blocking!r}"
-            )
-    value["cardinality_blocking"] = expected_blocking
+    # Legacy catalog metadata is deliberately inert and removed before the model sees
+    # the template. Cardinality is represented by the records themselves, not a policy bit.
+    value.pop("cardinality_blocking", None)
 
     rules = []
     for rule in value.get("rules", ()):
@@ -230,12 +215,16 @@ def _architecture_impl__apply_record_host_policy(_ctx):
         lowered = text.strip().lower()
         if lowered.startswith(_POSITIVE_HOST_CONTROL_PREFIXES):
             continue
-        if lowered.startswith("return only the next record"):
-            text = text.replace("the next record", "the host-requested ordinal record", 1)
+        if (
+            "host owns cardinality" in lowered
+            or "host-requested ordinal" in lowered
+            or "determines cardinality only" in lowered
+        ):
+            continue
         rules.append(text)
-    if not any("accepted-record state and iteration" in rule.lower() for rule in rules):
+    if not any("loop-control protocol" in rule.lower() for rule in rules):
         rules.append(_HOST_CONTROL_RULE)
-    if not expected_blocking:
+    if not _record_requires_external_evidence(identifier):
         rules.append(
             "You are the designer of this gameplay record. Choose unspecified mechanics, "
             "actors, values and interactions coherently with the requirement. Authored "
