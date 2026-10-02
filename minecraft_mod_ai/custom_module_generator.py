@@ -1957,7 +1957,6 @@ def _run_atomic_ir_generation(
 
     graph_compile_deferred = (
         context.module.config.get("implementation_graph_deferred_compile") is True
-        and context.module.module_id.startswith("ir_")
         and isinstance(context.ir_contract, Mapping)
     )
     compile_deferred = (
