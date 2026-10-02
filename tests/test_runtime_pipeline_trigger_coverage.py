@@ -10,6 +10,22 @@ MODEL_RUNTIME_PATHS = (
     "minecraft_mod_ai/model_context_budget.py",
     "minecraft_mod_ai/model_output_atomicity_contract.py",
 )
+EXECUTION_CONTRACT_SOURCE_PATHS = (
+    "minecraft_mod_ai/execution_contract_policy.py",
+    "minecraft_mod_ai/atomic_java_assembly.py",
+    "minecraft_mod_ai/central_atomic_generation_contract.py",
+    "minecraft_mod_ai/java_generation_policy.py",
+    "minecraft_mod_ai/repair_response_contract.py",
+    "minecraft_mod_ai/verifier_repair_window.py",
+    "minecraft_mod_ai/generation_diagnostic_repair.py",
+)
+EXECUTION_CONTRACT_TARGETED_GATES = (
+    ".github/workflows/production-path-contract.yml",
+    ".github/workflows/runtime-generation-regression.yml",
+    ".github/workflows/candidate-verifier-targeted.yml",
+    ".github/workflows/implementation-ir-regression.yml",
+    ".github/workflows/deterministic-debug-full-e2e.yml",
+)
 SOURCE_OWNED_RUNTIME_PATHS = (
     "minecraft_mod_ai/acceptance_contracts.py",
     "minecraft_mod_ai/quality_evidence.py",
@@ -91,3 +107,29 @@ def test_failed_runtime_gates_feed_full_debug_owner() -> None:
         "Real Model Colab E2E",
     ):
         assert upstream in text, upstream
+
+
+
+def test_execution_contract_changes_reach_every_generation_gate() -> None:
+    workflows = (*SOFTWARE_GATES, *EXECUTION_CONTRACT_TARGETED_GATES)
+    for workflow in workflows:
+        text = _text(workflow)
+        for path in EXECUTION_CONTRACT_SOURCE_PATHS:
+            assert path in text, f"{workflow} missing canonical contract path {path}"
+
+
+def test_execution_contract_changes_reach_real_model_gate() -> None:
+    text = _text(".github/workflows/real-model-colab-e2e.yml")
+    for path in EXECUTION_CONTRACT_SOURCE_PATHS:
+        assert path in text, f"real-model gate missing canonical contract path {path}"
+
+
+def test_targeted_generation_gates_execute_ssot_regression() -> None:
+    for workflow in (
+        ".github/workflows/production-path-contract.yml",
+        ".github/workflows/runtime-generation-regression.yml",
+        ".github/workflows/candidate-verifier-targeted.yml",
+        ".github/workflows/implementation-ir-regression.yml",
+    ):
+        text = _text(workflow)
+        assert "tests/test_execution_contract_policy.py" in text, workflow
