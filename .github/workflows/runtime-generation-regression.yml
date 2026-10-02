@@ -5,6 +5,14 @@ on:
     branches: [main]
     paths:
       - "minecraft_mod_ai/custom_module_generator.py"
+      - "minecraft_mod_ai/execution_contract_policy.py"
+      - "minecraft_mod_ai/atomic_java_assembly.py"
+      - "minecraft_mod_ai/central_atomic_generation_contract.py"
+      - "minecraft_mod_ai/java_generation_policy.py"
+      - "minecraft_mod_ai/repair_response_contract.py"
+      - "minecraft_mod_ai/verifier_repair_window.py"
+      - "minecraft_mod_ai/generation_diagnostic_repair.py"
+      - "tests/test_execution_contract_policy.py"
       - "minecraft_mod_ai/atomic_concern_source.py"
       - "minecraft_mod_ai/java_region_parser.py"
       - "minecraft_mod_ai/authored_production.py"
@@ -24,6 +32,14 @@ on:
   pull_request:
     paths:
       - "minecraft_mod_ai/custom_module_generator.py"
+      - "minecraft_mod_ai/execution_contract_policy.py"
+      - "minecraft_mod_ai/atomic_java_assembly.py"
+      - "minecraft_mod_ai/central_atomic_generation_contract.py"
+      - "minecraft_mod_ai/java_generation_policy.py"
+      - "minecraft_mod_ai/repair_response_contract.py"
+      - "minecraft_mod_ai/verifier_repair_window.py"
+      - "minecraft_mod_ai/generation_diagnostic_repair.py"
+      - "tests/test_execution_contract_policy.py"
       - "minecraft_mod_ai/atomic_concern_source.py"
       - "minecraft_mod_ai/java_region_parser.py"
       - "minecraft_mod_ai/authored_production.py"
@@ -61,6 +77,7 @@ jobs:
           - tests/test_scheduler_claim_fencing_contract.py
           - tests/test_deterministic_debug_full_pipeline_e2e.py
           - tests/test_final_artifact_boundaries.py
+          - tests/test_execution_contract_policy.py
     steps:
       - name: Checkout
         uses: actions/checkout@v6
