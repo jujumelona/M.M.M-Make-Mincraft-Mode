@@ -45,6 +45,10 @@ from .platform_catalog import adapter_for_target, adapter_from_project
 from .project_write_lock import project_path_write_locks, project_write_lock
 from .runner import GradleRunner
 from .scale_policy import ScalePolicy
+from .small_model_task_capsule_contract import (
+    task_capsule_generation_scope,
+    task_local_module_contract_owner,
+)
 from .target_contract import TargetContractError, validate_target_coordinates
 
 _LOCATOR = re.compile(r"^(?P<path>[^#]+\.java)#(?P<symbol>[A-Za-z_$][A-Za-z0-9_$]*)$")
@@ -79,6 +83,7 @@ def _normalize_project_path(value: Any) -> str:
     return candidate.as_posix()
 
 
+@task_local_module_contract_owner
 def _task_local_module_contract(module: ProductionModule) -> dict[str, Any]:
     config = module.config if isinstance(module.config, dict) else {}
     task = config.get("evidence_task")
@@ -2088,6 +2093,7 @@ class CustomModuleGenerator:
                 return run_root / ".cache" / "gradle"
         return root / ".minecraft_ai" / "gradle-cache"
 
+    @task_capsule_generation_scope
     def generate(
         self,
         project_root: str | Path,
