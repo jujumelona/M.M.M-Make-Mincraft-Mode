@@ -23,7 +23,7 @@ def _behavior_contract_templates():
 def test_behavior_contract_generation_never_requires_a_model_owned_count():
     for path, template in _behavior_contract_templates():
         schema = record_cardinality_response_schema(template)
-        assert schema["required"] == ["record"], path.name
+        assert schema["required"] == ["records"], path.name
         assert "count" not in schema["properties"], path.name
         assert "blocked_reason" not in schema["properties"], path.name
 
@@ -36,8 +36,8 @@ def test_behavior_contract_records_do_not_delegate_loop_protocol_to_model():
             assert phrase not in rules, f"{path.name}: {phrase}"
 
 
-def test_next_record_contract_is_closed_without_cardinality_metadata():
+def test_record_set_contract_is_closed_without_cardinality_metadata():
     schema = record_cardinality_response_schema({})
-    assert schema["required"] == ["record"]
-    assert set(schema["properties"]) == {"record"}
+    assert schema["required"] == ["records"]
+    assert set(schema["properties"]) == {"records"}
     assert schema["additionalProperties"] is False
