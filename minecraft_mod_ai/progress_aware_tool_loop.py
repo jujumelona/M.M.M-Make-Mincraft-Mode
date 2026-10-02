@@ -3556,7 +3556,16 @@ def _generate_with_tools_impl(
         },
     )
 
+    from .model_router import _agent_tool_round_limit
+
+    hard_round_limit = _agent_tool_round_limit()
     while True:
+        if state.step_index >= hard_round_limit:
+            state.termination_reason = "AGENT_TOOL_ROUND_LIMIT"
+            raise ModelConfigurationError(
+                "AGENT_TOOL_ROUND_LIMIT: model/tool trajectory exceeded the host hard "
+                f"cap of {hard_round_limit} rounds without verified completion."
+            )
         if state.phase is LoopPhase.RECOVER and state.validation_status == "FAIL":
             snapshot = read_authorized_diagnostic_source(
                 state.latest_verifier_errors,
