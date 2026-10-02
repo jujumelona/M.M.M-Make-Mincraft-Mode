@@ -13,6 +13,7 @@ from .task_template_catalog import load_record_template
 from .task_template_input import task_binding, task_context
 
 _EMPTY_REASON = "No applicable records in the supplied context."
+_MAX_RECORD_SET_ITEMS = 16
 
 
 def record_cardinality_response_schema(
@@ -29,6 +30,7 @@ def record_cardinality_response_schema(
         "properties": {
             "records": {
                 "type": "array",
+                "maxItems": _MAX_RECORD_SET_ITEMS,
                 "items": record_schema,
             },
         },
@@ -78,6 +80,7 @@ def _record_set_schema(
         "properties": {
             "records": {
                 "type": "array",
+                "maxItems": _MAX_RECORD_SET_ITEMS,
                 "items": record_schema,
             },
         },
