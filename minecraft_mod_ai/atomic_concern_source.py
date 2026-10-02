@@ -34,7 +34,6 @@ from .execution_contract_policy import (
     authorized_concern_nested_type_symbols,
     java_generation_recipe_contract,
     java_region_scope_policy,
-    java_region_system_prompt_contract,
 )
 from .java_region_parser import (
     JavaRegionParseError,
@@ -3938,11 +3937,10 @@ def _messages(
         )
 
     platform_api_policy = _section_platform_api_policy(section)
-    system = java_region_system_prompt_contract(
-        section=section,
-        concern_name=name,
-        response_region=response_region,
-        platform_api_policy=platform_api_policy,
+    system = (
+        "Implement only the selected concern through host-structured Java assembly. "
+        "Emit semantic native tool decisions only; the host owns Java syntax, modifiers, "
+        "identifier spelling, outer-class structure, and lifecycle wrappers."
     )
     scope = java_region_scope_policy(
         failure=bool(failure),
