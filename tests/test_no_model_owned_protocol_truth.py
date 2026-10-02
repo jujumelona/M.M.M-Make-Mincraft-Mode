@@ -17,9 +17,12 @@ def test_record_generation_has_no_model_owned_cardinality_prepass() -> None:
     design = _source("design_record_runtime.py")
 
     assert "_load_cardinality" not in bounded
-    assert "submit_" + identifier.replace("/", "_") + "_count" not in bounded
+    assert "_count" not in bounded
     assert '"record_count": count' not in bounded
     assert "TEMPLATE_NO_PROGRESS: repeated record" not in bounded
+    assert "submit_next_" not in bounded
+    assert '"record": None' not in bounded
+    assert '"done"' not in bounded
     assert "design/content_entity_count" not in design
     assert "design/content_relation_count" not in design
 
