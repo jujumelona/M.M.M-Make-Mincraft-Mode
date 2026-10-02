@@ -163,9 +163,7 @@ def worksheet_chunk_schema(
             "type": "array",
             "items": item_schema,
         }
-        authored_signal.append(
-            {"required": [concern], "properties": {concern: {"minItems": 1}}}
-        )
+        authored_signal.append({"required": [concern]})
 
     properties["inapplicable_concerns"] = {
         "type": "array",
@@ -224,18 +222,17 @@ def validate_worksheet_chunk_signal(
     for concern in active:
         if concern not in records:
             raise ValueError(f"Unknown concern {concern!r} for section {key!r}")
+        if concern not in data:
+            continue
         value = data.get(concern)
-        if isinstance(value, Mapping):
-            candidates = [value]
-        elif isinstance(value, list):
-            candidates = value
-        else:
-            candidates = []
-        for item in candidates:
-            if isinstance(item, Mapping) and any(
-                _meaningful_text(item.get(field)) for field in projection[concern]
-            ):
-                return dict(chunk)
+        if isinstance(value, (Mapping, list)):
+            # Empty and placeholder records are intentionally admitted here. The
+            # deterministic merge below owns semantic cleanup and applicability.
+            return dict(chunk)
+        raise ValueError(
+            "DETAILED_PLAN_WORKSHEET_CHUNK: "
+            f"{key}.{concern} must be an object or array for host reconciliation"
+        )
 
     raw_inapplicable = data.get("inapplicable_concerns")
     candidates = (
@@ -296,7 +293,7 @@ def worksheet_chunk_prompt(
             f"Fill the complete shown fields for these concern arrays.{evidence_instruction}",
             "Each concern is generated as one semantic unit; do not depend on record indices from another call.",
             "Prefer complete values for the shown fields, but do not invent external facts; the host normalizes harmless omissions.",
-            "The chunk must contain at least one concrete concern record or one concrete inapplicable reason; evidence refs alone are not an answer.",
+            "Return each active concern key. Use an empty array when no record applies; the host owns applicability reconciliation and does not require a model-authored reason.",
             "Never use N/A, none, TODO, TBD, unknown, same-as-above, or another placeholder as the authored content.",
             "DO NOT output JSON Schema keywords (never output 'type', 'properties', 'required', or 'additionalProperties').",
             "Return only a JSON object following this data template skeleton:",
