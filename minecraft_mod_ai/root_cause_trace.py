@@ -562,6 +562,10 @@ def emit_root_cause(
             sync=failure_sync,
         )
         console_events = {
+            "mcp_transport_session_start",
+            "mcp_transport_process_ready",
+            "mcp_transport_initialized",
+            "mcp_transport_session_closed",
             "mcp_verifier_transport_retry",
             "mcp_verifier_transport_recovered",
             "jdt_stderr",
