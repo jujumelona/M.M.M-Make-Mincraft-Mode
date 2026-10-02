@@ -48,7 +48,9 @@ def _executor(outputs: list[str], captured: list[list[dict[str, str]]]) -> Atomi
         symbol="Test",
         original="package example;\n// MMM_AUTHORED_FEATURE_BODY\n",
         task={"task_id": "repair", "semantic_outcome": "compile"},
-        section="behavior_contract",
+        # behavior_contract is host-lowered in production. Use a coder-owned
+        # section here so this fixture exercises compiler-feedback repair itself.
+        section="failure_and_limits",
         concerns=(
             {
                 "sequence": 0,

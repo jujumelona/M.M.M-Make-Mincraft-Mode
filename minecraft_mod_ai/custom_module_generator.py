@@ -4,9 +4,10 @@ from __future__ import annotations
 
 Authored designs first compile to a responsibility/dependency implementation graph.
 Each admitted source unit owns an exact host-selected file. The coder returns one complete
-first-pass source candidate and Gradle is a pass/fail verification gate, never a model-repair
-loop. Output exhaustion returns to graph decomposition and cannot retry the exhausted task.
-No patch transport is involved.
+source candidate and Gradle verifies it. A failed source-contract or compiler check may open
+only the centrally bounded whole-file correction budget; every correction returns a complete
+source again, never a patch/diff. Output exhaustion returns to graph decomposition and cannot
+retry the exhausted task.
 """
 
 import hashlib
@@ -2223,9 +2224,11 @@ class CustomModuleGenerator:
             "another mod entrypoint. The host already resolved project/platform evidence; "
             "do not search for tools or invent unlisted Minecraft/Fabric APIs. "
             "Only the integration section may perform lifecycle/registration wiring; other "
-            "authored sections implement bounded domain logic. This is the only production "
-            "decode. The host compiles it as a pass/fail gate and never sends compiler errors "
-            "back to the model for repair."
+            "authored sections implement bounded domain logic. The first decode must be "
+            "compile-ready. If the host source contract or compiler rejects it, the host may "
+            "open only the centrally bounded correction budget and provide the exact rejection. "
+            "Every correction must return the complete corrected Java file; it is not a patch "
+            "or diff, and unrelated valid behavior must be preserved."
             + ("\n\n" + authority_prompt if authority_prompt else "")
         )
         initial_user = (
@@ -2266,6 +2269,9 @@ class CustomModuleGenerator:
             )
             return _run_atomic_ir_generation(self, context_state)
         attempt = 0
+        max_attempts = 1 + max(0, int(PRODUCTION_COMPILE_REPAIR_LIMIT))
+        repair_feedback = ""
+        previous_rejection_signature = ""
 
         generation_lock = (
             nullcontext()
@@ -2273,17 +2279,19 @@ class CustomModuleGenerator:
             else project_write_lock(root)
         )
         with generation_lock:
-            while True:
+            while attempt < max_attempts:
                 attempt += 1
-                if attempt != 1:
-                    raise CustomModuleGenerationError(
-                        "DIRECT_CODER_INTERNAL_RETRY_FORBIDDEN: production source generation "
-                        "must use exactly one model decode."
-                    )
                 messages: list[dict[str, str]] = [
                     {"role": "system", "content": system},
                     {"role": "user", "content": initial_user},
                 ]
+                if repair_feedback:
+                    messages.append(
+                        {
+                            "role": "system",
+                            "content": repair_feedback,
+                        }
+                    )
 
                 try:
                     payload = _call_coder(self.router, messages)
@@ -2318,16 +2326,35 @@ class CustomModuleGenerator:
                     from .implementation_graph_execution import public_api_errors
                     invariant_errors += public_api_errors(candidate, ir_contract)
                 if invariant_errors:
-                    if target_existed:
-                        _atomic_write(target, original_bytes)
-                    else:
-                        target.unlink(missing_ok=True)
-                    raise CustomModuleGenerationError(
-                        "DIRECT_CODER_FIRST_PASS_CONTRACT_FAILED: "
-                        f"{relative}#{symbol} violated the host source contract on its only "
-                        "production decode:\n"
+                    rejection = (
+                        "HOST SOURCE CONTRACT FAILURE for the just-generated complete file:\n"
                         + "\n".join(f"- {error}" for error in invariant_errors)
                     )
+                    signature = hashlib.sha256(rejection.encode("utf-8")).hexdigest()
+                    if (
+                        attempt >= max_attempts
+                        or (
+                            previous_rejection_signature
+                            and signature == previous_rejection_signature
+                        )
+                    ):
+                        if target_existed:
+                            _atomic_write(target, original_bytes)
+                        else:
+                            target.unlink(missing_ok=True)
+                        raise CustomModuleGenerationError(
+                            "DIRECT_CODER_CONTRACT_REPAIR_NO_PROGRESS: bounded whole-file "
+                            "correction ceased to improve the host source contract for "
+                            f"{relative}.\n" + rejection
+                        )
+                    previous_rejection_signature = signature
+                    repair_feedback = (
+                        rejection
+                        + "\n\nReturn the complete corrected Java source file. This is not a patch "
+                        "or diff. Preserve the exact package, public final top-level class, approved "
+                        "public API, and all unrelated valid behavior."
+                    )
+                    continue
 
                 if self.defer_compile_to_pipeline:
                     with project_path_write_locks(root, (relative,)):
@@ -2442,23 +2469,42 @@ class CustomModuleGenerator:
                     getattr(report, "error", "")
                     or "Gradle compileJava failed."
                 )
-                if target_existed:
-                    _atomic_write(target, original_bytes)
-                else:
-                    target.unlink(missing_ok=True)
-                raise CustomModuleGenerationError(
-                    "DIRECT_CODER_FIRST_PASS_COMPILE_FAILED: exact whole-file generation "
-                    f"did not compile on its only production decode for {relative}. "
-                    "Production does not invoke model repair.\n"
+                rejection = (
+                    "ACTUAL COMPILER FAILURE FROM THE JUST-COMPILED CANDIDATE:\n"
                     + last_failure
                 )
+                signature = hashlib.sha256(rejection.encode("utf-8")).hexdigest()
+                if (
+                    attempt >= max_attempts
+                    or (
+                        previous_rejection_signature
+                        and signature == previous_rejection_signature
+                    )
+                ):
+                    if target_existed:
+                        _atomic_write(target, original_bytes)
+                    else:
+                        target.unlink(missing_ok=True)
+                    raise CustomModuleGenerationError(
+                        "DIRECT_CODER_COMPILE_REPAIR_NO_PROGRESS: bounded whole-file correction "
+                        f"ceased to improve compiler diagnostics for {relative}.\n"
+                        + rejection
+                    )
+                previous_rejection_signature = signature
+                repair_feedback = (
+                    rejection
+                    + "\n\nReturn the complete corrected Java source file. This is not a patch "
+                    "or diff. Correct the concrete compiler failure while preserving the exact "
+                    "host-owned source identity and unrelated valid behavior."
+                )
+                continue
 
             if target_existed:
                 _atomic_write(target, original_bytes)
             else:
                 target.unlink(missing_ok=True)
             raise CustomModuleGenerationError(
-                "DIRECT_CODER_FIRST_PASS_FAILED: exact whole-file generation failed "
+                "DIRECT_CODER_BOUNDED_GENERATION_FAILED: whole-file generation failed "
                 f"before compile for {relative}.\n"
                 + last_failure
             )
