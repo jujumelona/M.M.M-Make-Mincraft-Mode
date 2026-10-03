@@ -991,12 +991,10 @@ def render_state_model_concern(
     parts: list[str] = [_COMMON] if include_runtime else []
 
     def executable(index: int, record: Mapping[str, str], field: str) -> str:
-        try:
-            if field in {"guard", "condition"}:
-                return _compile_condition(record.get(field, ""))
-            return _compile_mutation(record.get(field, ""), declared=declared)
-        except ValueError:
-            raise
+        del index
+        if field in {"guard", "condition"}:
+            return _compile_condition(record.get(field, ""))
+        return _compile_mutation(record.get(field, ""), declared=declared)
 
     if concern == "variables":
         lines = ["static {"]
