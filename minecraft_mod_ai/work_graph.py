@@ -894,22 +894,6 @@ def _content_node_is_cpu_safe(payload: dict[str, Any]) -> bool:
     return True
 
 
-def _custom_node_is_cpu_safe(payload: dict[str, Any]) -> bool:
-    """Typed PlanIR custom modules are deterministic host work, not LLM work."""
-
-    members = payload.get('members')
-    if not isinstance(members, list) or not members:
-        return False
-    for member in members:
-        if not isinstance(member, dict):
-            return False
-        config = member.get('config')
-        if not isinstance(config, dict):
-            return False
-        if not isinstance(config.get('typed_plan_ir'), dict):
-            return False
-    return True
-
 
 def _node(node_id: str, stage: str, dependencies: Iterable[str], payload: dict[str, Any]) -> WorkNode:
     kind = str(payload.get('kind', ''))
@@ -922,8 +906,6 @@ def _node(node_id: str, stage: str, dependencies: Iterable[str], payload: dict[s
         res_class = 'llm' if gen_stage == 'content' and not _content_node_is_cpu_safe(payload) else 'cpu_io'
     elif kind == 'module-shard' and gen_stage == 'host':
         res_class = 'cpu_io'
-    elif kind == 'module-shard' and gen_stage == 'custom':
-        res_class = 'llm'
     elif stage.startswith('validate:'):
         res_class = 'commit'
     else:
@@ -1032,13 +1014,6 @@ def _is_typed_host_module(module: ProductionModule) -> bool:
         and isinstance(config.get("typed_plan_ir"), dict)
     )
 
-
-def _active_llm_slots() -> int:
-    raw = os.environ.get('MMM_LLAMA_ACTIVE_PARALLEL', '1').strip()
-    try:
-        return max(1, min(8, int(raw)))
-    except ValueError:
-        return 1
 
 def _pipeline_shard_size(name: str, default: int, upper: int) -> int:
     raw = os.environ.get(name, '').strip()
