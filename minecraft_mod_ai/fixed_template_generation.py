@@ -492,6 +492,16 @@ def _architecture_impl__generate_native_template_arguments(_ctx):
             raise ValueError("fixed-template function call did not return an argument mapping")
         return _validate_native_arguments(arguments, host_parameters)
     except Exception as initial_error:
+        # Planner recovery is owned by the semantic work scheduler.  Re-projecting
+        # one failed concern/chunk into one model call per JSON field multiplies
+        # latency and can recreate the same invalid-attractor loop.  Fail this
+        # transport call immediately; the caller may narrow only at a complete
+        # concern boundary.
+        if role == "planner":
+            raise RuntimeError(
+                "FIXED_TEMPLATE_PLANNER_SEMANTIC_UNIT_REJECTED"
+            ) from initial_error
+
         current: BaseException | None = initial_error
         while current is not None:
             if "Failed to initialize samplers: failed to parse grammar" in str(current):
