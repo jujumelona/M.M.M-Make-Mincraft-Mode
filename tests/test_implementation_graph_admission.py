@@ -901,7 +901,7 @@ def test_implementation_graph_rejects_structured_authority_hash_drift():
         graph_execution._normalize_implementation_graph_request(request)
 
 
-def test_implementation_graph_boundary_canonicalizes_structured_state_authority():
+def test_implementation_graph_boundary_preserves_state_until_executable_lowering():
     from minecraft_mod_ai.authored_structured_design import render_structured_sections
 
     structured = {
@@ -948,7 +948,9 @@ def test_implementation_graph_boundary_canonicalizes_structured_state_authority(
     normalized = graph_execution._normalize_implementation_graph_request(request)
     state = normalized["production_state_section"]["specification"]
 
-    assert state["invariants"][0]["condition"] == "credits >= 0 && ready == true"
+    # Word operators are already supported by the executable DSL compiler.
+    # The graph boundary must preserve authored fields, not rewrite/drop them.
+    assert state["invariants"][0]["condition"] == "credits >= 0 AND ready = true"
     assert normalized["structured_sections"] == structured
 
 def test_resource_leaf_materializes_direct_json_end_to_end(tmp_path, monkeypatch):
@@ -1136,4 +1138,3 @@ def test_resource_leaf_materializes_direct_json_end_to_end(tmp_path, monkeypatch
     assert kwargs["output_token_ceiling"] == 4096
     assert kwargs["tool_stage"] == "resource_json"
     assert "wrapper object" in model_calls[0][1][0]["content"]
-

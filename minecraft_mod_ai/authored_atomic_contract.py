@@ -177,6 +177,13 @@ def build_authored_atomic_contract(
     else:
         authority = CanonicalConcernAuthority.from_structured_sections(structured_sections)
 
+    if section == "state_model" and production_state_section:
+        # Bind the actual production input instead of silently reverting to the
+        # planner's copy. The saved design and its canonical authority stay intact.
+        authority = CanonicalConcernAuthority.from_structured_sections(
+            {"state_model": production_state_section}
+        )
+
     spec = section_spec(section) or {}
     active: list[dict[str, Any]] = []
     concern_payloads: dict[str, dict[str, Any]] = {}

@@ -248,16 +248,15 @@ def _normalize_implementation_graph_request(raw_request: Mapping[str, Any]) -> d
         authority = CanonicalConcernAuthority.from_structured_sections(structured)
     request["canonical_concern_authority"] = authority.to_dict()
 
-    from .production_state_compiler import normalize_structured_state_section
-
     raw_state = request.get("production_state_section")
     if not isinstance(raw_state, Mapping):
         candidate = structured.get("state_model")
         raw_state = candidate if isinstance(candidate, Mapping) else None
     if isinstance(raw_state, Mapping):
-        request["production_state_section"] = normalize_structured_state_section(
-            raw_state
-        )
+        # Structured design fields may contain authored prose or domain calls.
+        # Preserve them until the executable-field compiler selects host DSL or
+        # bounded Java lowering. Legacy normalization drops actions/forces false.
+        request["production_state_section"] = deepcopy(dict(raw_state))
     else:
         request["production_state_section"] = {}
 

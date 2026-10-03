@@ -632,6 +632,8 @@ def _compile_new_authored_modules(
         "structured_sections_sha256": structured_sections_sha256(structured_sections),
         "canonical_concern_authority": authority.to_dict(),
     }
+    if production_state_section is not None:
+        request["production_state_section"] = deepcopy(dict(production_state_section))
     task = _exact_authored_task(
         task_id=task_id, path=main_path, symbol=main_symbol, target=target,
         obligation="Compile the complete saved design into a responsibility/dependency IR, then execute admitted source units.",

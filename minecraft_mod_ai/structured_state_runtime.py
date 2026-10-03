@@ -2,11 +2,12 @@ from __future__ import annotations
 
 """Host compiler for structured state-model records.
 
-Structured state records are compiled directly to Java. No text-model Java generation
-or compiler-repair loop is used on this path.
+Supported state expressions compile directly to Java. Production may supply a
+field-lowering callback for authored semantics outside that DSL; the host still
+owns the runtime and registrations, and strict direct callers keep failing closed.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 import ast
 import json
@@ -976,6 +977,7 @@ def render_state_model_concern(
     concern: str,
     *,
     include_runtime: bool,
+    lower_authored_field: Callable[[int, Mapping[str, str], str, ValueError], str] | None = None,
 ) -> str | None:
     records_by_concern = _obligations(task)
     if concern not in records_by_concern:
@@ -988,6 +990,19 @@ def render_state_model_concern(
         if str(record.get("name") or "").strip()
     }
     parts: list[str] = [_COMMON] if include_runtime else []
+
+    def executable(index: int, record: Mapping[str, str], field: str) -> str:
+        try:
+            if field in {"guard", "condition"}:
+                return _compile_condition(record.get(field, ""))
+            return _compile_mutation(record.get(field, ""), declared=declared)
+        except ValueError as exc:
+            # A structured design record is not necessarily a host DSL program.
+            # Keep strict callers strict; production may implement the exact field
+            # through its bounded Java path, retaining the host runtime/registration.
+            if lower_authored_field is None:
+                raise
+            return lower_authored_field(index, record, field, exc)
 
     if concern == "variables":
         lines = ["static {"]
@@ -1006,12 +1021,9 @@ def render_state_model_concern(
         parts.append("\n".join(lines))
     elif concern == "transitions":
         lines = ["static {"]
-        for record in records:
-            guard = _compile_condition(record.get("guard", ""))
-            mutation = _compile_mutation(
-                record.get("mutation", ""),
-                declared=declared,
-            )
+        for index, record in enumerate(records):
+            guard = executable(index, record, "guard")
+            mutation = executable(index, record, "mutation")
             lines.append(
                 "    $mmmTransitions.add(new $mmmTransition("
                 + ", ".join((
@@ -1027,8 +1039,8 @@ def render_state_model_concern(
         parts.append("\n".join(lines))
     elif concern == "invariants":
         lines = ["static {"]
-        for record in records:
-            condition = _compile_condition(record.get("condition", ""))
+        for index, record in enumerate(records):
+            condition = executable(index, record, "condition")
             lines.append(
                 "    $mmmInvariants.add(new $mmmInvariant("
                 f"context -> ({condition}), "
@@ -1038,11 +1050,8 @@ def render_state_model_concern(
         parts.append("\n".join(lines))
     elif concern == "initialization":
         lines = ["static {"]
-        for record in records:
-            action = _compile_mutation(
-                record.get("initial_state", ""),
-                declared=declared,
-            )
+        for index, record in enumerate(records):
+            action = executable(index, record, "initial_state")
             lines.append(
                 "    $mmmInitializers.add(new $mmmTriggeredAction("
                 f"{_java_string(record.get('trigger', ''))}, "
@@ -1053,11 +1062,8 @@ def render_state_model_concern(
         parts.append("\n".join(lines))
     elif concern == "updates":
         lines = ["static {"]
-        for record in records:
-            action = _compile_mutation(
-                record.get("mutation", ""),
-                declared=declared,
-            )
+        for index, record in enumerate(records):
+            action = executable(index, record, "mutation")
             lines.append(
                 "    $mmmUpdates.add(new $mmmTriggeredAction("
                 f"{_java_string(record.get('trigger', ''))}, "
@@ -1068,11 +1074,8 @@ def render_state_model_concern(
         parts.append("\n".join(lines))
     elif concern == "cleanup":
         lines = ["static {"]
-        for record in records:
-            action = _compile_mutation(
-                record.get("action", ""),
-                declared=declared,
-            )
+        for index, record in enumerate(records):
+            action = executable(index, record, "action")
             lines.append(
                 "    $mmmCleanup.add(new $mmmCleanupAction("
                 f"{_java_string(record.get('event', ''))}, "

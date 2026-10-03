@@ -4044,6 +4044,8 @@ class AtomicConcernExecutor:
             else max(1, int(self.region_attempt_limit))
         )
         concern_authority = _concern_authority(self.task, concern)
+        state_members = ""
+        state_lowering = None
 
         if (
             not failure
@@ -4073,15 +4075,15 @@ class AtomicConcernExecutor:
             and response_region == "members"
             and str(self.section or "").strip() == "state_model"
         ):
-            from .structured_state_runtime import render_state_model_concern
+            from .authored_state_lowering import prepare_state_concern
 
             first = _slug(self.ordered[0]["concern"]) if self.ordered else name
-            host_members = render_state_model_concern(
+            host_members, state_lowering = prepare_state_concern(
                 self.task,
                 name,
                 include_runtime=name == first,
             )
-            if host_members is not None:
+            if host_members is not None and not state_lowering["work"]:
                 output_sha = hashlib.sha256(
                     host_members.encode("utf-8")
                 ).hexdigest()
@@ -4097,6 +4099,7 @@ class AtomicConcernExecutor:
                 )
                 self.host_owned_concerns.add(name)
                 return host_members
+            state_members = host_members or ""
 
         if (
             not failure
@@ -4167,6 +4170,17 @@ class AtomicConcernExecutor:
                     ),
                     host_symbol=self.symbol,
                 )
+                if state_lowering and state_lowering["work"]:
+                    payload = json.loads(messages[-1]["content"])
+                    payload["state_lowering"] = state_lowering
+                    payload["state_lowering"]["variables"] = _concern_authority(
+                        self.task, {"concern": "variables"}
+                    )["structured_records"]
+                    payload["concern"]["implementation_goal"] = (
+                        "Implement the exact state_lowering.work helper declarations from "
+                        "their authored record fields. Host runtime registration calls these helpers."
+                    )
+                    messages[-1]["content"] = json.dumps(payload, ensure_ascii=False)
                 if rejected_region:
                     payload = json.loads(messages[-1]["content"])
                     payload["current_selected_region_source"] = rejected_region
@@ -4210,6 +4224,18 @@ class AtomicConcernExecutor:
                 if correction is not None:
                     parsed = correction.merge(parsed)
                 candidate_merged = True
+                if state_lowering and state_lowering["work"]:
+                    from .authored_state_lowering import validate_state_helpers
+
+                    validate_state_helpers(parsed, state_lowering)
+                    collisions = set(_member_declaration_symbols(parsed)) & set(
+                        _member_declaration_symbols(state_members)
+                    )
+                    if collisions:
+                        raise CustomModuleGenerationError(
+                            "ATOMIC_CONCERN_OWNERSHIP_VIOLATION: state runtime is host-owned: "
+                            + ", ".join(sorted(collisions))
+                        )
                 parsed, lifecycle_changes = (
                     _strip_host_orchestrated_dependency_lifecycle_calls(
                         parsed,
@@ -4552,7 +4578,7 @@ class AtomicConcernExecutor:
                 output_sha256=output_sha,
                 output_chars=len(output_text),
             )
-            return parsed
+            return "\n\n".join(part for part in (state_members, parsed) if part)
 
         raise AssertionError("atomic concern region attempt loop terminated unexpectedly")
 
@@ -4706,9 +4732,8 @@ class AtomicConcernExecutor:
         )
         if state_model and not (structured_state or variable_only_host_lowering):
             raise CustomModuleGenerationError(
-                "STRUCTURED_STATE_CONTRACT_REQUIRED: state_model execution is "
-                "host-compiled only. Canonical structured state records must be "
-                "present before production; free-form coder Java fallback is disabled."
+                "STRUCTURED_STATE_CONTRACT_REQUIRED: canonical structured state "
+                "records must be present before executable-field lowering."
             )
 
         if state_model:
@@ -4723,7 +4748,11 @@ class AtomicConcernExecutor:
                     or "Host-compiled structured state model did not compile."
                 )
                 raise CustomModuleGenerationError(
-                    "STRUCTURED_STATE_HOST_COMPILER_INVALID:\n"
+                    (
+                        "STRUCTURED_STATE_HOST_COMPILER_INVALID:\n"
+                        if len(self.host_owned_concerns) == len(self.ordered)
+                        else "ATOMIC_CONCERN_FIRST_PASS_COMPILE_FAILED: authored state helpers\n"
+                    )
                     + _compact_compiler_failure(
                         failure,
                         source=self.source,
