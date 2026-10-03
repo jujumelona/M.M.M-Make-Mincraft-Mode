@@ -12,7 +12,9 @@ from minecraft_mod_ai.authored_production import _compile_new_authored_modules
 from minecraft_mod_ai.complete_spec import ProductionModule
 from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
 from minecraft_mod_ai.generator import FabricProjectGenerator
+from minecraft_mod_ai.scale_policy import ScalePolicy
 from minecraft_mod_ai.spec import ContentKind, ContentSpec, ModSpec
+from minecraft_mod_ai.work_graph import _is_host_exact_authored_module, _module_shards
 
 
 
@@ -156,3 +158,62 @@ def test_typed_state_operations_fail_closed_without_canonical_state_authority() 
             target={},
             production_state_section={},
         )
+
+def test_typed_plan_backend_refuses_unowned_existing_source(tmp_path: Path) -> None:
+    root = _project(tmp_path)
+    source_path = (
+        root / "src/main/java/ai/minecraft/typedtest/AuthoredProgram.java"
+    )
+    source_path.write_text(
+        "package ai.minecraft.typedtest; public final class AuthoredProgram {}\n",
+        encoding="utf-8",
+    )
+    module = ProductionModule(
+        module_id="authored_typed_plan",
+        kind="custom_java",
+        config={
+            "implementation": "custom",
+            "typed_plan_ir": _plan(),
+            "typed_plan_package": "ai.minecraft.typedtest",
+            "typed_plan_path": (
+                "src/main/java/ai/minecraft/typedtest/AuthoredProgram.java"
+            ),
+            "typed_plan_capabilities": {},
+        },
+        required_gates=("target_compile",),
+    )
+
+    with pytest.raises(ValueError, match="TYPED_PLAN_OWNERSHIP_CONFLICT"):
+        CustomModuleGenerator(ForbiddenRouter()).generate(
+            root,
+            module=module,
+        )
+
+
+def test_typed_plan_custom_work_is_isolated_from_llm_shards() -> None:
+    typed = ProductionModule(
+        module_id="typed",
+        kind="custom_java",
+        config={
+            "implementation": "custom",
+            "typed_plan_ir": _plan(),
+        },
+    )
+    legacy = ProductionModule(
+        module_id="legacy",
+        kind="custom_java",
+        config={"implementation": "custom"},
+    )
+
+    assert _is_host_exact_authored_module(typed) is True
+    shards = list(
+        _module_shards(
+            (typed, legacy),
+            policy=ScalePolicy.from_environment(),
+        )
+    )
+    assert len(shards) == 2
+    typed_stage, typed_members = shards[0]
+    assert typed_stage == "custom"
+    assert [member.module_id for member in typed_members] == ["typed"]
+
