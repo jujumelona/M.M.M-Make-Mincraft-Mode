@@ -262,9 +262,14 @@ def generate_typed_plan_module(
             marker="// MMM:TYPED_STATE_PERSISTENCE_OWNER",
         )
 
-    if typed_plan_uses_state(raw_plan) or raw_state_store is not None:
-        raw_state = config.get("typed_plan_state_section")
-        if not isinstance(raw_state, Mapping) or not raw_state:
+    raw_state = config.get("typed_plan_state_section")
+    state_authority_present = isinstance(raw_state, Mapping) and bool(raw_state)
+    if (
+        typed_plan_uses_state(raw_plan)
+        or raw_state_store is not None
+        or state_authority_present
+    ):
+        if not state_authority_present:
             raise ValueError("TYPED_PLAN_STATE_AUTHORITY_REQUIRED")
         state_path = (
             "src/main/java/"
