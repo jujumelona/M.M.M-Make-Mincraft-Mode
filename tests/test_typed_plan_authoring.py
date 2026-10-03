@@ -27,10 +27,15 @@ def test_native_recursive_operation_builder_preserves_nested_arithmetic():
     from minecraft_mod_ai.typed_plan_authoring import TypedOperationAuthor
 
     router = NativePlanner([
-        "let", "credits", "int", "binary", "+",
-        "literal", "int", 7, "literal", "int", 3,
-        "assert", "binary", "==", "ref", "credits",
-        "literal", "int", 10, "credits must total ten", "done",
+        {"op": "let", "name": "credits", "type": "int"},
+        {"op": "binary", "operator": "+"},
+        {"op": "literal", "type": "int", "value": 7},
+        {"op": "literal", "type": "int", "value": 3},
+        {"op": "assert", "message": "credits must total ten"},
+        {"op": "binary", "operator": "=="},
+        {"op": "ref", "name": "credits"},
+        {"op": "literal", "type": "int", "value": 10},
+        {"op": "done"},
     ])
     author = TypedOperationAuthor(router, "Credit test", {}, {}, max_calls=40)
     body = author.body("requirement_0001")
@@ -41,14 +46,23 @@ def test_native_recursive_operation_builder_preserves_nested_arithmetic():
                   "right": {"op": "literal", "type": "int", "value": 3}},
     }
     assert body[1]["condition"]["left"] == {"op": "ref", "name": "credits"}
-    assert len(router.calls) == 21
+    assert len(router.calls) == 9
 
 
 def test_native_recursive_authoring_stops_at_hard_call_bound():
     from minecraft_mod_ai.typed_plan_authoring import TypedOperationAuthor
 
-    author = TypedOperationAuthor(NativePlanner(["unary", "!", "unary", "!"]),
-                                  "test", {}, {}, max_calls=3)
+    author = TypedOperationAuthor(
+        NativePlanner([
+            {"op": "unary", "operator": "!"},
+            {"op": "unary", "operator": "!"},
+            {"op": "unary", "operator": "!"},
+        ]),
+        "test",
+        {},
+        {},
+        max_calls=3,
+    )
     with pytest.raises(ValueError, match="TYPED_PLAN_AUTHORING_LIMIT"):
         author.expression("condition")
 
@@ -80,12 +94,7 @@ def test_event_handler_signature_is_host_owned_during_authoring():
             "constraint_evidence_refs": [],
         }
     }
-    router = NativePlanner([
-        "server_started",
-        "return",
-        "done",
-        "done",
-    ])
+    router = NativePlanner([])
 
     plan = author_typed_plan_ir(
         router,
@@ -109,6 +118,8 @@ def test_event_handler_signature_is_host_owned_during_authoring():
         {"name": "server", "type": "object"}
     ]
     assert handler["return_type"] == "void"
+    assert handler["body"] == []
+    assert router.calls == []
     requested_fields = [
         call[1][1]["content"]
         for call in router.calls
