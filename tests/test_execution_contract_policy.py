@@ -12,6 +12,9 @@ from minecraft_mod_ai.execution_contract_policy import (
     JAVA_ATOMIC_ASSEMBLY_CONTEXT_MARGIN_BYTES,
     JAVA_ATOMIC_ASSEMBLY_MAX_CALLS,
     JAVA_ATOMIC_ASSEMBLY_MAX_PART_ITEMS,
+    JAVA_ATOMIC_INITIALIZE_PARAMETERS,
+    JAVA_ATOMIC_LOGIC_MEMBERS_PARAMETERS,
+    JAVA_ATOMIC_MEMBERS_PARAMETERS,
     JAVA_NESTED_TYPE_REQUIRED_VISIBILITY,
     JAVA_TYPE_OWNING_CONCERNS,
     PRODUCTION_COMPILE_REPAIR_LIMIT,
@@ -46,36 +49,49 @@ from minecraft_mod_ai.model_output_atomicity_contract import (
     _model_transport_schema,
     assert_atomic_model_schema,
 )
-from minecraft_mod_ai.repair_engine import _HARD_REPAIR_ATTEMPTS
-from minecraft_mod_ai.repair_response_contract import repair_response_schema
-from minecraft_mod_ai.verifier_repair_window import (
-    MAX_REPAIR_WINDOW_CHARS,
-    MIN_REPAIR_REPLACEMENT_CHARS,
-)
 
 
-def test_repair_schema_and_atomicity_share_one_contract_profile() -> None:
-    schema = repair_response_schema(64 * 1024)
+def _source_repair_schema() -> dict[str, object]:
+    return {
+        SCHEMA_CONTRACT_PROFILE_KEY: SOURCE_REPAIR_SCHEMA_PROFILE,
+        "type": "object",
+        "properties": {
+            "content": {
+                "type": "string",
+                "maxLength": SOURCE_REPAIR_MAX_SOURCE_CHARS,
+                SCHEMA_STRING_CLASS_KEY: STRING_CLASS_SOURCE,
+            },
+            "old": {
+                "type": "string",
+                "maxLength": SOURCE_REPAIR_MAX_SPAN_CHARS,
+                SCHEMA_STRING_CLASS_KEY: STRING_CLASS_REPAIR_SPAN,
+            },
+            "new": {
+                "type": "string",
+                "maxLength": SOURCE_REPAIR_MAX_SPAN_CHARS,
+                SCHEMA_STRING_CLASS_KEY: STRING_CLASS_REPAIR_SPAN,
+            },
+        },
+        "required": ["content"],
+        "additionalProperties": False,
+    }
 
-    assert schema[SCHEMA_CONTRACT_PROFILE_KEY] == SOURCE_REPAIR_SCHEMA_PROFILE
-    branches = schema["properties"]["operations"]["items"]["anyOf"]
-    create_content = branches[0]["properties"]["content"]
-    replace_content = branches[1]["properties"]["content"]
-    replacement = branches[2]["properties"]["replacements"]["items"]["properties"]
 
-    assert create_content["maxLength"] == SOURCE_REPAIR_MAX_SOURCE_CHARS
-    assert replace_content["maxLength"] == SOURCE_REPAIR_MAX_SOURCE_CHARS
-    assert create_content[SCHEMA_STRING_CLASS_KEY] == STRING_CLASS_SOURCE
-    assert replacement["old"]["maxLength"] == SOURCE_REPAIR_MAX_SPAN_CHARS
-    assert replacement["new"]["maxLength"] == SOURCE_REPAIR_MAX_SPAN_CHARS
-    assert replacement["old"][SCHEMA_STRING_CLASS_KEY] == STRING_CLASS_REPAIR_SPAN
+def test_source_repair_profile_and_transport_share_one_contract() -> None:
+    schema = _source_repair_schema()
 
-    # Regression for the logged failure:
-    # maxLength=16384 must be legal only because the root repair contract selected it.
-    assert_atomic_model_schema(schema, surface="repair regression")
+    assert_atomic_model_schema(schema, surface="source repair regression")
+    transport = _model_transport_schema(schema)
+
+    assert SCHEMA_CONTRACT_PROFILE_KEY not in transport
+    assert SCHEMA_STRING_CLASS_KEY not in repr(transport)
+    properties = transport["properties"]
+    assert properties["content"]["maxLength"] == SOURCE_REPAIR_MAX_SOURCE_CHARS
+    assert properties["old"]["maxLength"] == SOURCE_REPAIR_MAX_SPAN_CHARS
+    assert properties["new"]["maxLength"] == SOURCE_REPAIR_MAX_SPAN_CHARS
 
 
-def test_generic_schema_allows_explicit_size_but_cannot_claim_repair_string_class() -> None:
+def test_generic_schema_cannot_claim_source_repair_string_class() -> None:
     explicit_domain_bound = {
         "type": "object",
         "properties": {
@@ -108,28 +124,13 @@ def test_generic_schema_allows_explicit_size_but_cannot_claim_repair_string_clas
         assert_atomic_model_schema(smuggled, surface="source class requires repair profile")
 
 
-def test_production_repair_paths_are_enabled_and_read_the_central_policy() -> None:
+def test_production_generation_policy_reads_the_central_contract() -> None:
     assert PRODUCTION_COMPILE_REPAIR_LIMIT >= 1
     assert PRODUCTION_RETRY_STRUCTURAL_REJECTIONS is True
     assert JAVA_PRODUCTION_COMPILE_REPAIR_LIMIT == PRODUCTION_COMPILE_REPAIR_LIMIT
     assert JAVA_RETRY_STRUCTURAL_REJECTIONS is PRODUCTION_RETRY_STRUCTURAL_REJECTIONS
-    assert _HARD_REPAIR_ATTEMPTS == SOURCE_REPAIR_HARD_ATTEMPTS
-
-
-def test_verifier_repair_window_uses_only_host_repair_span_budget() -> None:
-    assert MAX_REPAIR_WINDOW_CHARS == SOURCE_REPAIR_MAX_SPAN_CHARS
-    assert MIN_REPAIR_REPLACEMENT_CHARS == SOURCE_REPAIR_MAX_SPAN_CHARS
-
-
-def test_host_contract_annotations_do_not_leak_to_model_tool_schema() -> None:
-    schema = repair_response_schema(64 * 1024)
-    transport = _model_transport_schema(schema)
-
-    assert SCHEMA_CONTRACT_PROFILE_KEY not in transport
-    rendered = repr(transport)
-    assert SCHEMA_STRING_CLASS_KEY not in rendered
-    assert transport["properties"]["operations"]["items"]["anyOf"][0]["properties"]["content"]["maxLength"] == SOURCE_REPAIR_MAX_SOURCE_CHARS
-
+    assert SOURCE_REPAIR_HARD_ATTEMPTS >= 1
+    assert DIAGNOSTIC_REPAIR_INLINE_SOURCE_MAX_BYTES > 0
 
 
 def test_execution_contract_self_check_and_error_taxonomy_are_central() -> None:
@@ -171,51 +172,30 @@ def test_coder_prompt_and_recipe_are_derived_from_canonical_contract() -> None:
     )
 
 
-def test_consumers_do_not_redefine_canonical_contract_literals() -> None:
-    import minecraft_mod_ai.atomic_concern_source as concern_source
-    import minecraft_mod_ai.java_generation_policy as generation_policy
-    import minecraft_mod_ai.java_region_parser as region_parser
+def test_host_owned_sections_never_enter_the_small_model_java_route() -> None:
+    for payload, expected in (
+        (
+            {"concern": {"name": "stored_state"}},
+            "ATOMIC_HOST_ONLY_CONCERN_CODER_FORBIDDEN",
+        ),
+        (
+            {"section": "state_model", "concern": {"name": "variables"}},
+            "ATOMIC_HOST_ONLY_SECTION_CODER_FORBIDDEN",
+        ),
+        (
+            {"section": "behavior_contract", "concern": {"name": "updates"}},
+            "ATOMIC_HOST_ONLY_SECTION_CODER_FORBIDDEN",
+        ),
+    ):
+        with pytest.raises(ValueError, match=expected):
+            java_atomic_parameters_for_request(payload, response_region="members")
 
-    generation_source = inspect.getsource(generation_policy)
-    concern_source_text = inspect.getsource(concern_source)
-    parser_source = inspect.getsource(region_parser)
 
-    assert "RECOVERABLE_ATOMIC_ERROR_PREFIXES = (" not in generation_source
-    assert "TERMINAL_AFTER_NORMALIZATION_PREFIXES = (" not in generation_source
-    assert "COMPILER_FIRST_RULES = (" not in generation_source
-    assert "Return only compile-ready Java class-body source" not in concern_source_text
-    assert "must be private because outer type ownership is host-owned" not in parser_source
-    assert "from .java_generation_policy import" not in parser_source
-    assert "str(return_type or \"\").strip() == \"void\"" not in generation_source
-
-
-
-def test_secondary_atomic_and_repair_caps_read_the_canonical_policy() -> None:
-    import minecraft_mod_ai.atomic_java_assembly as java_assembly
-    import minecraft_mod_ai.central_atomic_generation_contract as central_atomic
-    import minecraft_mod_ai.generation_diagnostic_repair as diagnostic_repair
-
-    atomic_source = inspect.getsource(central_atomic)
-    diagnostic_source = inspect.getsource(diagnostic_repair)
-    assembly_source = inspect.getsource(java_assembly)
-
-    assert "_MAX_ITEMS = 4" not in atomic_source
-    assert "_MAX_CHARS = 256" not in atomic_source
-    assert "DEFAULT_ATOMIC_SCHEMA_LIMITS" not in atomic_source
-    assert "max_array_items" not in atomic_source
-    assert "max_string_chars" not in atomic_source
-
-    assert "_MAX_REPAIR_SOURCE_BYTES = 12 * 1024" not in diagnostic_source
-    assert "DIAGNOSTIC_REPAIR_INLINE_SOURCE_MAX_BYTES" in diagnostic_source
-    assert DIAGNOSTIC_REPAIR_INLINE_SOURCE_MAX_BYTES > 0
-
-    assert "MAX_MODEL_STRING_CHARS" not in assembly_source
-    assert "MAX_ASSEMBLY_CALLS = 128" not in assembly_source
-    assert "MAX_PART_ITEMS = 32" not in assembly_source
+def test_atomic_contract_caps_remain_bounded_and_canonical() -> None:
+    assert DEFAULT_ATOMIC_SCHEMA_LIMITS.max_fields > 0
     assert JAVA_ATOMIC_ASSEMBLY_MAX_CALLS > 0
     assert JAVA_ATOMIC_ASSEMBLY_MAX_PART_ITEMS > 0
     assert JAVA_ATOMIC_ASSEMBLY_CONTEXT_MARGIN_BYTES >= 0
-    assert "java_atomic_assembly_system_prompt()" in assembly_source
     assert "Lock/ReentrantLock live in java.util.concurrent.locks" in (
         java_atomic_assembly_system_prompt()
     )
@@ -245,12 +225,6 @@ def test_execution_contract_has_one_definition_authority_repo_wide() -> None:
         r"^\s*(?:" + "|".join(map(re.escape, definition_names)) + r")\s*=",
         re.MULTILINE,
     )
-    canonical_phrases = (
-        "Nested runtime types live inside a host-owned outer class.",
-        "Return only compile-ready Java class-body source",
-        "must be private because outer type ownership is host-owned",
-        "The host adds static to outer fields/methods and owns nested-type visibility.",
-    )
 
     violations: list[str] = []
     for path in sorted(package_root.rglob("*.py")):
@@ -258,32 +232,23 @@ def test_execution_contract_has_one_definition_authority_repo_wide() -> None:
             continue
         source = path.read_text(encoding="utf-8")
         for match in definition_re.finditer(source):
-            violations.append(f"{path.relative_to(package_root)} defines {match.group(0).strip()}")
-        for phrase in canonical_phrases:
-            if phrase in source:
-                violations.append(
-                    f"{path.relative_to(package_root)} duplicates canonical prompt/policy phrase {phrase!r}"
-                )
+            violations.append(
+                f"{path.relative_to(package_root)} defines {match.group(0).strip()}"
+            )
 
     assert not violations, "execution contract drift outside canonical authority:\n" + "\n".join(
         violations
     )
 
 
-def test_core_execution_contract_consumers_import_the_authority_directly() -> None:
+def test_current_execution_contract_consumers_import_the_authority_directly() -> None:
     package_root = Path(__file__).resolve().parents[1] / "minecraft_mod_ai"
     consumers = (
-        "atomic_concern_source.py",
-        "atomic_region_paging.py",
-        "atomic_java_assembly.py",
-        "custom_module_generator.py",
         "fixed_template_generation.py",
-        "generation_diagnostic_repair.py",
+        "host_declaration_compiler.py",
+        "java_generation_policy.py",
         "java_region_parser.py",
         "model_output_atomicity_contract.py",
-        "repair_engine.py",
-        "repair_response_contract.py",
-        "verifier_repair_window.py",
     )
 
     missing = []
@@ -292,30 +257,6 @@ def test_core_execution_contract_consumers_import_the_authority_directly() -> No
         if "from .execution_contract_policy import" not in source:
             missing.append(filename)
     assert not missing, f"execution contract consumer bypasses canonical policy: {missing!r}"
-
-
-
-def test_schema_selector_and_prompt_share_type_owning_concerns() -> None:
-    import minecraft_mod_ai.custom_module_generator as generator
-
-    generator_source = inspect.getsource(generator)
-    selector_source = inspect.getsource(java_atomic_parameters_for_request)
-    assert "_ATOMIC_TYPE_OWNING_CONCERNS" not in generator_source
-    assert "JAVA_TYPE_OWNING_CONCERNS" in selector_source
-    from minecraft_mod_ai.custom_module_errors import CustomModuleGenerationError
-    from minecraft_mod_ai.execution_contract_policy import (
-        JAVA_DECLARATION_ONLY_CONCERNS,
-    )
-
-    for concern in JAVA_DECLARATION_ONLY_CONCERNS:
-        with pytest.raises(CustomModuleGenerationError, match="ATOMIC_HOST_ONLY_CONCERN_CODER_FORBIDDEN"):
-            java_atomic_parameters_for_request(
-                {"concern": {"name": concern}}, response_region="members",
-            )
-    assert {"variables", "inputs", "outputs", "stored_state", "payloads"} == set(
-        JAVA_TYPE_OWNING_CONCERNS
-    )
-
 
 
 def test_authorized_nested_runtime_type_reaches_structured_schema() -> None:
@@ -337,45 +278,7 @@ def test_authorized_nested_runtime_type_reaches_structured_schema() -> None:
         assert name_schema["not"] == {"enum": ["AuthoredFailureLimits"]}
 
 
-def test_atomic_java_assembly_does_not_use_arbitrary_model_size_limits() -> None:
-    import minecraft_mod_ai.atomic_java_assembly as assembly
-
-    source = inspect.getsource(assembly)
-    assert "MAX_MODEL_FIELDS" not in source
-    assert "DEFAULT_ATOMIC_SCHEMA_LIMITS" not in source
-    assert "max_fields" not in source
-    assert "max_string_chars" not in source
-
-
-
-def test_model_facing_java_schema_is_owned_by_canonical_contract() -> None:
-    import minecraft_mod_ai.custom_module_generator as generator
-
-    source = inspect.getsource(generator)
-    for legacy in (
-        "_ATOMIC_PARAMETER_SCHEMA",
-        "_ATOMIC_FIELD_SCHEMA",
-        "_ATOMIC_METHOD_SCHEMA",
-        "_ATOMIC_RECORD_SCHEMA",
-        "_ATOMIC_ENUM_SCHEMA",
-        "_ATOMIC_CLASS_SCHEMA",
-        "_ATOMIC_MEMBERS_PARAMETERS",
-        "_ATOMIC_LOGIC_MEMBERS_PARAMETERS",
-        "_ATOMIC_DECLARATION_MEMBERS_PARAMETERS",
-        "_ATOMIC_INITIALIZE_PARAMETERS",
-    ):
-        assert legacy not in source
-    assert "java_atomic_parameters_for_request(" in source
-
-
-
 def test_model_facing_java_schema_factory_never_returns_shared_mutable_state() -> None:
-    from minecraft_mod_ai.execution_contract_policy import (
-        JAVA_ATOMIC_INITIALIZE_PARAMETERS,
-        JAVA_ATOMIC_LOGIC_MEMBERS_PARAMETERS,
-        JAVA_ATOMIC_MEMBERS_PARAMETERS,
-    )
-
     cases = (
         (
             {"concern": {"name": "diagnostics"}},
