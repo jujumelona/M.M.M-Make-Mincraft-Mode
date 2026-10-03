@@ -986,8 +986,16 @@ def _module_stage(
     *,
     deterministic_module_kinds: frozenset[str] | None = None,
 ) -> str:
-    if isinstance(module.config.get("typed_plan_ir"), dict):
+    if module.kind == "typed_host":
+        if not isinstance(module.config.get("typed_plan_ir"), dict):
+            raise WorkGraphError(
+                f"TYPED_HOST_PLAN_REQUIRED: {module.module_id}"
+            )
         return "host"
+    if isinstance(module.config.get("typed_plan_ir"), dict):
+        raise WorkGraphError(
+            f"TYPED_HOST_KIND_REQUIRED: {module.module_id}"
+        )
     if is_research_shard(module) or module.kind == 'research_shard':
         return 'content'
     if module.kind == 'integration':
@@ -1019,7 +1027,10 @@ def _is_typed_host_module(module: ProductionModule) -> bool:
     """Return whether the module is deterministic Typed PlanIR host work."""
 
     config = module.config if isinstance(module.config, dict) else {}
-    return isinstance(config.get("typed_plan_ir"), dict)
+    return (
+        module.kind == "typed_host"
+        and isinstance(config.get("typed_plan_ir"), dict)
+    )
 
 
 def _active_llm_slots() -> int:
