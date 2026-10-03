@@ -49,6 +49,40 @@ def test_native_recursive_operation_builder_preserves_nested_arithmetic():
     assert len(router.calls) == 9
 
 
+def test_host_resolves_fully_determined_schema_without_model_call():
+    from minecraft_mod_ai.typed_plan_authoring import TypedOperationAuthor
+
+    router = NativePlanner([])
+    author = TypedOperationAuthor(router, "fixed schema", {}, {}, max_calls=1)
+    value = author._ask(
+        "deterministic_fixture",
+        {
+            "type": "object",
+            "properties": {
+                "mode": {"type": "string", "enum": ["host"]},
+                "count": {"type": "integer", "const": 2},
+                "tags": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "items": {"type": "string", "const": "fixed"},
+                },
+            },
+            "required": ["mode", "count", "tags"],
+            "additionalProperties": False,
+        },
+        scope="fixture",
+    )
+
+    assert value == {
+        "mode": "host",
+        "count": 2,
+        "tags": ["fixed", "fixed"],
+    }
+    assert author.call_count == 0
+    assert router.calls == []
+
+
 def test_native_recursive_authoring_stops_at_hard_call_bound():
     from minecraft_mod_ai.typed_plan_authoring import TypedOperationAuthor
 

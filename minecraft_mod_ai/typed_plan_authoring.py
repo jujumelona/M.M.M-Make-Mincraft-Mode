@@ -9,11 +9,72 @@ graph, semantic coverage, AST depth, fan-out and termination measure.
 
 import hashlib
 import json
+from copy import deepcopy
 from collections.abc import Mapping, Sequence
 from typing import Any
 
 
 _TYPES = ["boolean", "int", "long", "double", "string", "object"]
+
+_HOST_UNRESOLVED = object()
+
+
+def _host_resolved_schema_value(schema: Mapping[str, Any]) -> Any:
+    """Return a schema-forced value without spending a model decision."""
+
+    if "const" in schema:
+        return deepcopy(schema["const"])
+
+    enum = schema.get("enum")
+    if (
+        isinstance(enum, Sequence)
+        and not isinstance(enum, (str, bytes, bytearray))
+        and len(enum) == 1
+    ):
+        return deepcopy(enum[0])
+
+    if schema.get("type") == "object":
+        properties = schema.get("properties")
+        required = schema.get("required")
+        if (
+            not isinstance(properties, Mapping)
+            or not isinstance(required, Sequence)
+            or isinstance(required, (str, bytes, bytearray))
+            or schema.get("additionalProperties", True) is not False
+        ):
+            return _HOST_UNRESOLVED
+
+        required_names = [str(name) for name in required]
+        if len(required_names) != len(properties) or set(required_names) != set(properties):
+            return _HOST_UNRESOLVED
+
+        resolved: dict[str, Any] = {}
+        for name in required_names:
+            child = properties.get(name)
+            if not isinstance(child, Mapping):
+                return _HOST_UNRESOLVED
+            value = _host_resolved_schema_value(child)
+            if value is _HOST_UNRESOLVED:
+                return _HOST_UNRESOLVED
+            resolved[name] = value
+        return resolved
+
+    if schema.get("type") == "array":
+        minimum = schema.get("minItems")
+        maximum = schema.get("maxItems")
+        if type(minimum) is not int or minimum < 0 or maximum != minimum:
+            return _HOST_UNRESOLVED
+        item_schema = schema.get("items")
+        if minimum == 0:
+            return []
+        if not isinstance(item_schema, Mapping):
+            return _HOST_UNRESOLVED
+        item = _host_resolved_schema_value(item_schema)
+        if item is _HOST_UNRESOLVED:
+            return _HOST_UNRESOLVED
+        return [deepcopy(item) for _ in range(minimum)]
+
+    return _HOST_UNRESOLVED
 
 
 def _active_concern_refs(
@@ -280,6 +341,10 @@ class TypedOperationAuthor:
         return False
 
     def _ask(self, field: str, schema: Mapping[str, Any], *, scope: str) -> Any:
+        host_value = _host_resolved_schema_value(schema)
+        if host_value is not _HOST_UNRESOLVED:
+            return host_value
+
         if self.call_count >= self.max_calls:
             raise ValueError(
                 f"TYPED_PLAN_AUTHORING_LIMIT: exceeded {self.max_calls} native decisions"
