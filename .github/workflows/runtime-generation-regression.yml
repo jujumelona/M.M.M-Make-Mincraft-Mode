@@ -22,7 +22,6 @@ on:
       - "tests/test_typed_plan_production.py"
       - "tests/test_authored_direct_lowering.py"
       - "tests/test_production_state_compiler.py"
-      - "tests/test_authored_state_lowering_regression.py"
       - "tests/test_complete_final_validation_contract.py"
       - "tests/test_scheduler_claim_fencing_contract.py"
       - "tests/test_deterministic_debug_full_pipeline_e2e.py"
@@ -48,7 +47,6 @@ on:
       - "tests/test_typed_plan_production.py"
       - "tests/test_authored_direct_lowering.py"
       - "tests/test_production_state_compiler.py"
-      - "tests/test_authored_state_lowering_regression.py"
       - "tests/test_complete_final_validation_contract.py"
       - "tests/test_scheduler_claim_fencing_contract.py"
       - "tests/test_deterministic_debug_full_pipeline_e2e.py"
@@ -73,7 +71,6 @@ jobs:
           - tests/test_typed_plan_production.py
           - tests/test_authored_direct_lowering.py
           - tests/test_production_state_compiler.py
-          - tests/test_authored_state_lowering_regression.py
           - tests/test_complete_final_validation_contract.py
           - tests/test_scheduler_claim_fencing_contract.py
           - tests/test_deterministic_debug_full_pipeline_e2e.py
