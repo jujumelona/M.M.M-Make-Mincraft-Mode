@@ -83,6 +83,33 @@ def test_host_resolves_fully_determined_schema_without_model_call():
     assert router.calls == []
 
 
+@pytest.mark.parametrize("combinator", ["oneOf", "anyOf", "allOf"])
+def test_host_resolves_single_schema_branch_without_model_call(combinator):
+    from minecraft_mod_ai.typed_plan_authoring import TypedOperationAuthor
+
+    router = NativePlanner([])
+    author = TypedOperationAuthor(router, "single branch", {}, {}, max_calls=1)
+    value = author._ask(
+        "single_branch_fixture",
+        {
+            combinator: [
+                {
+                    "type": "object",
+                    "properties": {"mode": {"const": "host"}},
+                    "required": ["mode"],
+                    "additionalProperties": False,
+                }
+            ],
+            "description": "There is no semantic choice for the model to make.",
+        },
+        scope="fixture",
+    )
+
+    assert value == {"mode": "host"}
+    assert author.call_count == 0
+    assert router.calls == []
+
+
 def test_native_recursive_authoring_stops_at_hard_call_bound():
     from minecraft_mod_ai.typed_plan_authoring import TypedOperationAuthor
 

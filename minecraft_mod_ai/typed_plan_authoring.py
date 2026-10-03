@@ -33,6 +33,18 @@ def _host_resolved_schema_value(schema: Mapping[str, Any]) -> Any:
     ):
         return deepcopy(enum[0])
 
+    annotation_keys = {"title", "description", "$comment", "default", "examples"}
+    for combinator in ("oneOf", "anyOf", "allOf"):
+        branches = schema.get(combinator)
+        if (
+            isinstance(branches, Sequence)
+            and not isinstance(branches, (str, bytes, bytearray))
+            and len(branches) == 1
+            and set(schema) <= {combinator, *annotation_keys}
+            and isinstance(branches[0], Mapping)
+        ):
+            return _host_resolved_schema_value(branches[0])
+
     if schema.get("type") == "object":
         properties = schema.get("properties")
         required = schema.get("required")
