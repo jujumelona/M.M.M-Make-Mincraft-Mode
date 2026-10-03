@@ -7,14 +7,25 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
 
+EVENT_PARAMETERS: dict[str, tuple[tuple[str, str], ...]] = {
+    "server_started": (("server", "object"),),
+    "server_stopping": (("server", "object"),),
+    "server_tick": (("server", "object"),),
+    "player_join": (("player", "object"),),
+    "player_disconnect": (("player", "object"),),
+    "player_respawn": (
+        ("oldPlayer", "object"),
+        ("newPlayer", "object"),
+        ("alive", "boolean"),
+    ),
+    "command": (("source", "object"),),
+}
 EVENT_SIGNATURES: dict[str, tuple[tuple[str, ...], str]] = {
-    "server_started": (("object",), "void"),
-    "server_stopping": (("object",), "void"),
-    "server_tick": (("object",), "void"),
-    "player_join": (("object",), "void"),
-    "player_disconnect": (("object",), "void"),
-    "player_respawn": (("object", "object", "boolean"), "void"),
-    "command": (("object",), "int"),
+    event: (
+        tuple(type_name for _name, type_name in parameters),
+        "int" if event == "command" else "void",
+    )
+    for event, parameters in EVENT_PARAMETERS.items()
 }
 
 _MOD_INITIALIZE_TRIGGER = re.compile(
@@ -147,6 +158,7 @@ def validate_event_bindings(
 
 
 __all__ = [
+    "EVENT_PARAMETERS",
     "EVENT_SIGNATURES",
     "event_config_schema",
     "is_mod_initialize_trigger",
