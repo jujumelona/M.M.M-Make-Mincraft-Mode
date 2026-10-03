@@ -448,9 +448,23 @@ def author_typed_plan_ir(
     *,
     max_calls: int = 2048,
 ) -> dict[str, Any]:
-    """Author a complete typed PlanIR using only bounded scalar native decisions."""
+    """Author a complete typed PlanIR using bounded native decisions only."""
 
     import hashlib
+
+    from .typed_event_ir import (
+        EVENT_PARAMETERS,
+        EVENT_SIGNATURES,
+        event_config_schema,
+        is_mod_initialize_trigger,
+        validate_event_bindings,
+    )
+    from .typed_platform_ir import (
+        PLATFORM_KINDS,
+        platform_config_schema,
+        platform_coverable_refs,
+        validate_platform_modules,
+    )
 
     author = TypedOperationAuthor(
         router,
@@ -459,15 +473,76 @@ def author_typed_plan_ir(
         capabilities,
         max_calls=max_calls,
     )
-    function_count = int(author._ask(
-        "function_count",
-        {"type": "integer", "minimum": 1, "maximum": 64},
-        scope="program",
-    ))
+    coverage_refs = _active_concern_refs(structured_sections)
 
     specs: list[dict[str, Any]] = []
     known_ids: set[str] = set()
-    for index in range(function_count):
+    event_bindings: list[dict[str, Any]] = []
+
+    # Event handler structure is host-owned. The planner only chooses the typed
+    # event enum and, for command events, the bounded command configuration.
+    for entry_point_index, row in enumerate(
+        _integration_entry_points(structured_sections)
+    ):
+        if is_mod_initialize_trigger(row.get("trigger")):
+            continue
+
+        event_scope = f"integration.entry_points[{entry_point_index}]"
+        event = author._enum(
+            "event_type",
+            sorted(EVENT_SIGNATURES),
+            scope=event_scope,
+        )
+        function_id = f"entryPoint{entry_point_index + 1}_{event}"
+        if function_id in known_ids:
+            raise ValueError(
+                f"TYPED_PLAN_AUTHORING_DUPLICATE_FUNCTION: {function_id}"
+            )
+        known_ids.add(function_id)
+
+        parameters = [
+            {"name": name, "type": type_name}
+            for name, type_name in EVENT_PARAMETERS[event]
+        ]
+        return_type = EVENT_SIGNATURES[event][1]
+        config: dict[str, Any] = {}
+        if event == "command":
+            raw_config = author._ask(
+                "event_config",
+                event_config_schema(event),
+                scope=event_scope,
+            )
+            if not isinstance(raw_config, Mapping):
+                raise ValueError(
+                    "TYPED_PLAN_AUTHORING_RESPONSE_INVALID: event_config"
+                )
+            config = dict(raw_config)
+
+        specs.append({
+            "id": function_id,
+            "parameters": parameters,
+            "return_type": return_type,
+            "covers": ["integration.entry_points"],
+        })
+        event_bindings.append({
+            "event": event,
+            "function": function_id,
+            "entry_point_index": entry_point_index,
+            "config": config,
+        })
+
+    max_additional = max(0, 64 - len(specs))
+    additional_count = int(author._ask(
+        "additional_function_count",
+        {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": max_additional,
+        },
+        scope="program",
+    ))
+
+    for index in range(additional_count):
         scope = f"function[{index}]"
         function_id = author._identifier("function_id", scope=scope)
         if function_id in known_ids:
@@ -508,19 +583,26 @@ def author_typed_plan_ir(
             scope=scope,
             allow_void=True,
         )
-        coverage_count = int(author._ask(
-            "coverage_count",
-            {"type": "integer", "minimum": 1, "maximum": 128},
-            scope=scope,
-        ))
-        covers = [
-            str(author._ask(
-                "coverage_ref",
-                {"type": "string", "minLength": 1},
-                scope=f"{scope}.coverage[{coverage_index}]",
+        covers: list[str] = []
+        if coverage_refs:
+            coverage_count = int(author._ask(
+                "coverage_count",
+                {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": min(128, len(coverage_refs)),
+                },
+                scope=scope,
             ))
-            for coverage_index in range(coverage_count)
-        ]
+            for coverage_index in range(coverage_count):
+                cover = author._enum(
+                    "coverage_ref",
+                    list(coverage_refs),
+                    scope=f"{scope}.coverage[{coverage_index}]",
+                )
+                if cover not in covers:
+                    covers.append(cover)
+
         specs.append({
             "id": function_id,
             "parameters": parameters,
@@ -551,13 +633,6 @@ def author_typed_plan_ir(
             ),
         })
 
-    from .typed_event_ir import (
-        EVENT_SIGNATURES,
-        event_config_schema,
-        is_mod_initialize_trigger,
-        validate_event_bindings,
-    )
-
     signature_map = {
         str(spec["id"]): (
             tuple(
@@ -568,62 +643,9 @@ def author_typed_plan_ir(
         )
         for spec in specs
     }
-    event_bindings: list[dict[str, Any]] = []
-    for entry_point_index, row in enumerate(
-        _integration_entry_points(structured_sections)
-    ):
-        if is_mod_initialize_trigger(row.get("trigger")):
-            continue
-
-        event_scope = f"integration.entry_points[{entry_point_index}]"
-        event = author._enum(
-            "event_type",
-            sorted(EVENT_SIGNATURES),
-            scope=event_scope,
-        )
-        expected_signature = EVENT_SIGNATURES[event]
-        compatible_functions = sorted(
-            function_id
-            for function_id, signature in signature_map.items()
-            if signature == expected_signature
-        )
-        if not compatible_functions:
-            raise ValueError(
-                "TYPED_PLAN_EVENT_FUNCTION_REQUIRED: "
-                f"{event!r} requires signature {expected_signature!r}"
-            )
-        function_id = author._enum(
-            "event_function",
-            compatible_functions,
-            scope=event_scope,
-        )
-        config = author._ask(
-            "event_config",
-            event_config_schema(event),
-            scope=event_scope,
-        )
-        if not isinstance(config, Mapping):
-            raise ValueError(
-                "TYPED_PLAN_AUTHORING_RESPONSE_INVALID: event_config"
-            )
-        event_bindings.append({
-            "event": event,
-            "function": function_id,
-            "entry_point_index": entry_point_index,
-            "config": dict(config),
-        })
-
     event_bindings = validate_event_bindings(
         event_bindings,
         signatures=signature_map,
-    )
-
-    coverage_refs = _active_concern_refs(structured_sections)
-    from .typed_platform_ir import (
-        PLATFORM_KINDS,
-        platform_config_schema,
-        platform_coverable_refs,
-        validate_platform_modules,
     )
 
     platform_modules: list[dict[str, Any]] = []
@@ -741,6 +763,5 @@ def author_typed_plan_ir(
     from .typed_plan_ir import validate_typed_plan_ir
 
     return validate_typed_plan_ir(plan, capabilities=capabilities)
-
 
 __all__ = ["TypedOperationAuthor", "author_typed_plan_ir"]
