@@ -128,6 +128,52 @@ def _obligation_payload(task: dict, concern: str) -> dict:
     raise AssertionError(concern)
 
 
+def _structured_state_authority() -> dict:
+    specification = {
+        **{name: [] for name in DETAIL_RECORDS["state_model"]},
+        "variables": [
+            {
+                "name": "PlayerBalance",
+                "owner": "Player",
+                "type": "double",
+                "unit": "Credits",
+                "default": "0.0",
+                "domain": "EconomySystem",
+            },
+            {
+                "name": "ShipComponents",
+                "owner": "Entity",
+                "type": "List",
+                "unit": "Blueprints",
+                "default": "[]",
+                "domain": "CraftingTable",
+            },
+            {
+                "name": "PlanetControl",
+                "owner": "WorldManager",
+                "type": "EnumSet",
+                "unit": "Colonies",
+                "default": "empty_set",
+                "domain": "SpaceMap",
+            },
+        ],
+        "transitions": [{
+            "from_state": "Idle",
+            "trigger": "Purchase",
+            "guard": "PlayerBalance >= cost",
+            "mutation": "PlayerBalance -= cost",
+            "to_state": "TradingComplete",
+        }],
+        "inapplicable_concerns": [],
+    }
+    return {
+        "state_model": {
+            "specification": specification,
+            "constraint_evidence_refs": [],
+        }
+    }
+
+
 def _bound_task() -> tuple[dict, list[dict]]:
     task = {"task_id": "state-regression"}
     node = {
@@ -137,7 +183,14 @@ def _bound_task() -> tuple[dict, list[dict]]:
             _model_obligation("transitions"),
         ],
     }
-    section, concerns = _bind_atomic_leaf_contract(task, node, STATE_REQUIREMENTS)
+    structured = _structured_state_authority()
+    section, concerns = _bind_atomic_leaf_contract(
+        task,
+        node,
+        STATE_REQUIREMENTS,
+        structured_sections=structured,
+        production_state_section=structured["state_model"],
+    )
     assert section == "state_model"
     return task, concerns
 
@@ -153,10 +206,13 @@ def test_concern_provenance_is_host_sliced_before_source_generation() -> None:
     ) == {}
 
     task, _concerns = _bound_task()
-    variables = _obligation_payload(task, "variables")["source_requirements"]
-    transitions = _obligation_payload(task, "transitions")["source_requirements"]
-    assert list(variables) == ["R29", "R30", "R31", "R32", "R33"]
-    assert list(transitions) == ["R29", "R34", "R35", "R36"]
+    variables = _obligation_payload(task, "variables")
+    transitions = _obligation_payload(task, "transitions")
+    assert variables["source_requirements"] == {}
+    assert transitions["source_requirements"] == {}
+    state = _structured_state_authority()["state_model"]["specification"]
+    assert variables["structured_records"] == state["variables"]
+    assert transitions["structured_records"] == state["transitions"]
 
 
 def test_structured_records_are_semantic_authority_over_markdown() -> None:
@@ -314,7 +370,7 @@ def test_full_state_unit_context_does_not_duplicate_sibling_concerns_per_page() 
     assert list(payload["source_requirements"]) == ["R12", "R14"]
 
 
-def test_leaf_contract_materializes_only_concerns_present_in_authored_source() -> None:
+def test_leaf_contract_materializes_only_structured_state_concerns() -> None:
     requirements = {
         "R12": "## state_model",
         "R13": "- variables: credits (Int, owner=Player)",
@@ -333,7 +389,14 @@ def test_leaf_contract_materializes_only_concerns_present_in_authored_source() -
             _model_obligation("concurrency"),
         ],
     }
-    section, active = _bind_atomic_leaf_contract(task, node, requirements)
+    structured = _structured_state_authority()
+    section, active = _bind_atomic_leaf_contract(
+        task,
+        node,
+        requirements,
+        structured_sections=structured,
+        production_state_section=structured["state_model"],
+    )
     assert section == "state_model"
     assert [item["concern"] for item in active] == ["variables", "transitions"]
     assert len(task["implementation_obligations"]) == 2
@@ -342,11 +405,13 @@ def test_leaf_contract_materializes_only_concerns_present_in_authored_source() -
         "variables",
         "transitions",
     ]
-    assert list(payloads[0]["source_requirements"]) == ["R12", "R13"]
-    assert list(payloads[1]["source_requirements"]) == ["R12", "R14"]
+    assert payloads[0]["source_requirements"] == {}
+    assert payloads[1]["source_requirements"] == {}
 
 
-def test_state_model_without_structured_records_never_falls_back_to_coder(tmp_path) -> None:
+def test_state_model_without_structured_records_is_rejected_at_ir_binding() -> None:
+    from minecraft_mod_ai.implementation_graph_execution import ImplementationGraphError
+
     requirements = {
         "R12": "## state_model",
         "R13": "- variables: credits (Int, owner=Player)",
@@ -360,45 +425,14 @@ def test_state_model_without_structured_records_never_falls_back_to_coder(tmp_pa
             _model_obligation("transitions"),
         ],
     }
-    section, active = _bind_atomic_leaf_contract(task, node, requirements)
-    called = False
-
-    def forbidden_model_call(_messages):
-        nonlocal called
-        called = True
-        raise AssertionError("state_model must not enter free-form coder fallback")
-
-    executor = AtomicConcernExecutor(
-        root=tmp_path,
-        target=tmp_path / "AuthoredStateModel.java",
-        relative="AuthoredStateModel.java",
-        symbol="AuthoredStateModel",
-        original=(
-            "public final class AuthoredStateModel {\n"
-            "    // MMM_AUTHORED_FEATURE_BODY\n"
-            "}\n"
-        ),
-        task=task,
-        section=section,
-        concerns=tuple(active),
-        grounding={},
-        dependency_source="",
-        require_initialize=False,
-        call_coder=forbidden_model_call,
-        compile_java=lambda _root: SimpleNamespace(status="PASS"),
-        compile_log=lambda _report: "",
-        write_source=lambda _path, _source: None,
-    )
-
     with pytest.raises(
-        CustomModuleGenerationError,
-        match="STRUCTURED_STATE_CONTRACT_REQUIRED",
+        ImplementationGraphError,
+        match="IMPLEMENTATION_IR_STRUCTURED_STATE_REQUIRED",
     ):
-        executor.run()
-    assert called is False
+        _bind_atomic_leaf_contract(task, node, requirements)
 
 
-def test_markdown_variables_lower_without_model_and_never_construct_bare_enumset() -> None:
+def test_structured_variables_lower_without_model_and_never_construct_bare_enumset() -> None:
     task, concerns = _bound_task()
     variables = concerns[0]
     contracts = _state_variable_contract(task, variables)
@@ -447,23 +481,36 @@ def test_markdown_variables_lower_without_model_and_never_construct_bare_enumset
     assert "java.util.HashSet" in result["source"]
 
 
-def test_inline_compact_state_variables_are_host_lowered_without_coder(tmp_path) -> None:
-    requirements = {
-        "R12": "## state_model",
-        "R13": (
-            "- variables: 현재 돈 (Int, owner=Player), "
-            "보유 재료 (Map<String, Int>, owner=Inventory), "
-            "우주선 구성 (List<ShipPartConfig>, owner=WorldData), "
-            "위치 좌표 (Vec3Double, owner=Server)"
-        ),
-        "R14": (
-            "- transitions: from_state(준비됨) -> trigger(재료 구매/제작) "
-            "-> to_state(조립중)"
-        ),
+def test_structured_custom_state_types_are_host_lowered_without_coder(tmp_path) -> None:
+    specification = {
+        **{name: [] for name in DETAIL_RECORDS["state_model"]},
+        "variables": [
+            {"name": "CurrentMoney", "owner": "Player", "type": "Int",
+             "unit": "credits", "default": "0", "domain": "non-negative"},
+            {"name": "Materials", "owner": "Inventory", "type": "Map<String, Int>",
+             "unit": "items", "default": "{}", "domain": "inventory"},
+            {"name": "ShipConfig", "owner": "WorldData", "type": "List<ShipPartConfig>",
+             "unit": "parts", "default": "[]", "domain": "ship"},
+            {"name": "Position", "owner": "Server", "type": "Vec3Double",
+             "unit": "blocks", "default": "null", "domain": "world"},
+        ],
+        "inapplicable_concerns": [],
     }
-    task = {"task_id": "inline-state-regression"}
+    structured = {
+        "state_model": {
+            "specification": specification,
+            "constraint_evidence_refs": [],
+        }
+    }
+    task = {"task_id": "structured-custom-state-types"}
     node = {"symbol": "AuthoredStateModel", "obligations": [_model_obligation("variables")]}
-    _section, concerns = _bind_atomic_leaf_contract(task, node, requirements)
+    _section, concerns = _bind_atomic_leaf_contract(
+        task,
+        node,
+        {},
+        structured_sections=structured,
+        production_state_section=structured["state_model"],
+    )
     variables = concerns[0]
     contracts = _state_variable_contract(task, variables)
     assert [item["java_type"] for item in contracts] == [
@@ -480,7 +527,7 @@ def test_inline_compact_state_variables_are_host_lowered_without_coder(tmp_path)
     assert "new java.util.ArrayList<>()" in members
 
     def forbidden_model_call(_messages):
-        raise AssertionError("inline variables must be host-lowered before coder decode")
+        raise AssertionError("structured variables must be host-lowered before coder decode")
 
     executor = AtomicConcernExecutor(
         root=tmp_path,
@@ -504,14 +551,20 @@ def test_inline_compact_state_variables_are_host_lowered_without_coder(tmp_path)
         write_source=lambda _path, _source: None,
     )
     source = executor.run()["source"]
-    assert "uD604uC7AC_uB3C8" in source
+    assert "ShipPartConfig" in source
+    assert "Vec3Double" in source
     assert "<init>" not in source
 
     javac = shutil.which("javac")
     if javac:
         target = tmp_path / "AuthoredStateModel.java"
         target.write_text(source, encoding="utf-8")
-        compiled = subprocess.run([javac, str(target)], capture_output=True, text=True, check=False)
+        compiled = subprocess.run(
+            [javac, str(target)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
         assert compiled.returncode == 0, compiled.stderr
 
 
