@@ -44,22 +44,38 @@ def _lifecycle_trigger(value: Any) -> bool:
 
 def typed_plan_support_issues(
     structured_sections: Mapping[str, Any] | None,
+    typed_plan_ir: Mapping[str, Any] | None = None,
 ) -> tuple[str, ...]:
     """Return deterministic unsupported-operation diagnostics."""
 
     normalized = normalize_structured_sections(structured_sections)
     issues: list[str] = []
+    covered = {
+        str(cover)
+        for module in (
+            typed_plan_ir.get("platform_modules", ())
+            if isinstance(typed_plan_ir, Mapping)
+            else ()
+        )
+        if isinstance(module, Mapping)
+        for cover in module.get("covers", ())
+        if isinstance(cover, str)
+    }
 
     for section in _UNSUPPORTED_PLATFORM_SECTIONS:
         active = active_concern_records(normalized, section)
         for concern, rows in active.items():
-            if rows:
-                issues.append(f"{section}.{concern}")
+            ref = f"{section}.{concern}"
+            if rows and ref not in covered:
+                issues.append(ref)
 
     integration = active_concern_records(normalized, "integration")
     for index, row in enumerate(integration.get("entry_points", ())):
         trigger = row.get("trigger")
-        if not _lifecycle_trigger(trigger):
+        if (
+            not _lifecycle_trigger(trigger)
+            and "integration.entry_points" not in covered
+        ):
             issues.append(
                 "integration.entry_points"
                 f"[{index}].trigger={_compact(trigger)!r}"
@@ -70,8 +86,12 @@ def typed_plan_support_issues(
 
 def assert_typed_plan_host_support(
     structured_sections: Mapping[str, Any] | None,
+    typed_plan_ir: Mapping[str, Any] | None = None,
 ) -> None:
-    issues = typed_plan_support_issues(structured_sections)
+    issues = typed_plan_support_issues(
+        structured_sections,
+        typed_plan_ir,
+    )
     if issues:
         raise ValueError(
             "TYPED_PLAN_UNSUPPORTED_HOST_OPERATION: deterministic production "
