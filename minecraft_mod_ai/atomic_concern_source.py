@@ -2299,60 +2299,33 @@ def _state_variable_contract(
     task: Mapping[str, Any],
     concern: Mapping[str, Any],
 ) -> tuple[dict[str, str], ...]:
+    """Return Java contracts only from canonical structured state records."""
+
     authority = _concern_authority(task, concern)
-    source_requirements = authority.get("source_requirements")
-    if not isinstance(source_requirements, Mapping):
+    structured = authority.get("structured_records")
+    if not isinstance(structured, Sequence) or isinstance(
+        structured, (str, bytes, bytearray)
+    ):
         return ()
 
-    structured = authority.get("structured_records")
-    records = (
-        tuple(dict(item) for item in structured if isinstance(item, Mapping))
-        if isinstance(structured, list) and structured
-        else ()
+    records = tuple(
+        dict(item)
+        for item in structured
+        if isinstance(item, Mapping)
     )
-    if records:
-        contracts: list[dict[str, str]] = []
-        seen_names: set[str] = set()
-        for attributes in records:
-            name = _host_java_identifier(attributes.get("name"))
-            java_type, default_literal = _state_java_contract(
-                attributes.get("type", ""),
-                attributes.get("default", ""),
-            )
-            # Never partially lower a variables record set. Unknown types fall
-            # back to the structured coder rather than silently dropping state.
-            if not name or not java_type or name in seen_names:
-                return ()
-            seen_names.add(name)
-            contracts.append({
-                "name": name,
-                "java_type": java_type,
-                "default_literal": default_literal,
-                "owner": attributes.get("owner", ""),
-                "unit": attributes.get("unit", ""),
-                "domain": attributes.get("domain", ""),
-                "source_type": attributes.get("type", ""),
-            })
-        return tuple(contracts)
+    if not records:
+        return ()
 
-    # Backward-compatible support for the older name(...)/type(...) form.
     contracts: list[dict[str, str]] = []
     seen_names: set[str] = set()
-    for value in source_requirements.values():
-        text = str(value or "")
-        attributes = {
-            match.group("key").casefold(): match.group("value").strip()
-            for match in _STATE_VARIABLE_ATTRIBUTE.finditer(text)
-        }
-        if "name" not in attributes or "type" not in attributes:
-            continue
-        name = _host_java_identifier(attributes["name"])
+    for attributes in records:
+        name = _host_java_identifier(attributes.get("name"))
         java_type, default_literal = _state_java_contract(
-            attributes["type"],
+            attributes.get("type", ""),
             attributes.get("default", ""),
         )
-        if not java_type or not name or name in seen_names:
-            continue
+        if not name or not java_type or name in seen_names:
+            return ()
         seen_names.add(name)
         contracts.append({
             "name": name,
