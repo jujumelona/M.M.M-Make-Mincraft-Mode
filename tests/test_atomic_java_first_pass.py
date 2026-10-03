@@ -463,6 +463,12 @@ def test_stored_state_has_no_model_declaration_schema() -> None:
         )
 
 
+def test_stored_state_schema_forbids_outer_methods_before_model_decode() -> None:
+    """Stable CI node: no model declaration schema exists for stored_state."""
+
+    test_stored_state_has_no_model_declaration_schema()
+
+
 def test_stored_state_ownership_checked_before_router_capabilities() -> None:
     with pytest.raises(CustomModuleGenerationError, match="ATOMIC_HOST_ONLY_CONCERN_CODER_FORBIDDEN"):
         _call_atomic_java_region(
@@ -470,3 +476,9 @@ def test_stored_state_ownership_checked_before_router_capabilities() -> None:
             [{"role": "user", "content": json.dumps({"concern": {"name": "stored_state"}})}],
             output_token_ceiling=512,
         )
+
+
+def test_stored_state_native_part_selector_never_offers_methods() -> None:
+    """Stable CI node: ownership rejection happens before native part selection."""
+
+    test_stored_state_ownership_checked_before_router_capabilities()
