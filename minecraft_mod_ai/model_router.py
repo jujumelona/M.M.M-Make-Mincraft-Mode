@@ -799,7 +799,7 @@ ModelRouter.generate_text._mmm_preserves_agent_tools = True  # type: ignore[attr
 ModelRouter.generate_text._mmm_preserves_response_schema = True  # type: ignore[attr-defined]
 ModelRouter.generate_text._mmm_uses_canonical_request_preparation = True  # type: ignore[attr-defined]
 ModelRouter.generate_text._mmm_parallel_router_contract_version = 3  # type: ignore[attr-defined]
-ModelRouter._generate_with_tools._mmm_progress_aware_tool_loop_owner = True  # type: ignore[attr-defined]
+ModelRouter._generate_with_tools._mmm_reviewed_tool_loop_owner = True  # type: ignore[attr-defined]
 
 
 def _agent_tool_round_limit() -> int:
