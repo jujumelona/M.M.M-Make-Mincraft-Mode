@@ -43,8 +43,14 @@ public final class MmmPersistentStore {{
         try (Reader reader = Files.newBufferedReader(file)) {{
             Map<String, Map<String, Object>> loaded = GSON.fromJson(reader, TYPE);
             if (loaded != null) DATA.putAll(loaded);
-        }} catch (IOException exception) {{
-            throw new IllegalStateException("Could not load M.M.M persistent state", exception);
+        }} catch (IOException | RuntimeException exception) {{
+            DATA.clear();
+            Path backup = file.resolveSibling(file.getFileName() + ".corrupt");
+            try {{
+                Files.move(file, backup, StandardCopyOption.REPLACE_EXISTING);
+            }} catch (IOException backupFailure) {{
+                exception.addSuppressed(backupFailure);
+            }}
         }}
     }}
 
