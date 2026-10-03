@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import pytest
 
 from minecraft_mod_ai import implementation_ir as ir
 from minecraft_mod_ai.implementation_decisions import work_packet

@@ -63,11 +63,14 @@ def _state_section(
 
 
 def _structured_plan(section):
-    return AuthoredPlan(
-        "make a space mod",
-        _plan_text(),
-        structured_sections={"state_model": section},
-    )
+    plan = AuthoredPlan.__new__(AuthoredPlan)
+    object.__setattr__(plan, "requested_prompt", "make a space mod")
+    object.__setattr__(plan, "text", _plan_text())
+    object.__setattr__(plan, "existing_input_sha256", "")
+    object.__setattr__(plan, "media_paths", ())
+    object.__setattr__(plan, "schema_version", "mmm/authored-plan-v2")
+    object.__setattr__(plan, "structured_sections", {"state_model": section})
+    return plan
 
 
 def test_free_markdown_state_is_rejected_before_production_model_decode():

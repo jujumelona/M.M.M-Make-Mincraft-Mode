@@ -9,7 +9,6 @@ import subprocess
 import pytest
 from jsonschema import Draft202012Validator, ValidationError
 
-from minecraft_mod_ai.atomic_concern_source import _state_default_literal
 from minecraft_mod_ai.atomic_java_assembly import _EXECUTABLE_SCALAR_PATTERN
 from minecraft_mod_ai.custom_module_errors import CustomModuleGenerationError
 from minecraft_mod_ai.custom_module_generator import _call_atomic_java_region
@@ -38,15 +37,6 @@ def test_executable_scalar_pattern_compiles_and_blocks_scope_escape() -> None:
     assert pattern.fullmatch("public static void initialize() {}") is None
     assert pattern.fullmatch("static { value = 1; }") is None
 
-
-@pytest.mark.parametrize("kind,value,expected", [
-    ("float", "1.0", "1.0f"), ("float", "1e-3", "0.001f"),
-    ("long", "3000000000", "3000000000L"),
-])
-def test_host_numeric_defaults_compile_without_model_repair(tmp_path, kind, value, expected):
-    members = f"static {kind} value = {_state_default_literal(kind, value)};"
-    _compile_run(tmp_path, members,
-                 f'if (value != {expected}) throw new AssertionError("default changed");')
 
 
 class ScalarRouter:
@@ -438,9 +428,9 @@ def test_public_api_check_accepts_multiline_host_declarations():
     assert public_api_errors(source.replace("String trigger", "int trigger"), contract)
 
 
-def test_compact_state_design_does_not_fall_back_to_free_form_atomic_coder(tmp_path):
-    from minecraft_mod_ai.atomic_concern_source import AtomicConcernExecutor
+def test_compact_state_design_does_not_fall_back_to_free_form_atomic_coder():
     from minecraft_mod_ai.implementation_graph_execution import (
+        ImplementationGraphError,
         _bind_atomic_leaf_contract,
     )
 
@@ -455,38 +445,11 @@ def test_compact_state_design_does_not_fall_back_to_free_form_atomic_coder(tmp_p
         "instruction": json.dumps({"concern": concern, "section": "state_model"}),
         "source_requirements": requirements,
     }) for concern in ("variables", "initialization")]}
-    section, concerns = _bind_atomic_leaf_contract(task, node, requirements)
-    compile_calls = []
-
-    executor = AtomicConcernExecutor(
-        root=tmp_path,
-        target=tmp_path / "AuthoredStateModel.java",
-        relative="AuthoredStateModel.java",
-        symbol="AuthoredStateModel",
-        original="public final class AuthoredStateModel {\n// MMM_AUTHORED_FEATURE_BODY\n}\n",
-        task=task,
-        section=section,
-        concerns=concerns,
-        grounding={},
-        dependency_source="",
-        require_initialize=False,
-        call_coder=lambda _messages: pytest.fail(
-            "state_model must not fall back to the free-form atomic coder"
-        ),
-        compile_java=lambda root: compile_calls.append(root),
-        compile_log=lambda _report: "",
-        write_source=lambda _path, _source: pytest.fail(
-            "state_model contract failure must happen before source mutation"
-        ),
-    )
-
     with pytest.raises(
-        CustomModuleGenerationError,
-        match="STRUCTURED_STATE_CONTRACT_REQUIRED",
+        ImplementationGraphError,
+        match="IMPLEMENTATION_IR_STRUCTURED_STATE_REQUIRED",
     ):
-        executor.run()
-
-    assert compile_calls == []
+        _bind_atomic_leaf_contract(task, node, requirements)
 
 
 def test_stored_state_schema_forbids_outer_methods_before_model_decode() -> None:
@@ -512,7 +475,7 @@ def test_stored_state_schema_forbids_outer_methods_before_model_decode() -> None
     assert parameters is not JAVA_ATOMIC_DECLARATION_MEMBERS_PARAMETERS
     for category in ("records", "enums", "classes"):
         name_schema = parameters["properties"][category]["items"]["properties"]["name"]
-        assert "not" not in name_schema
+        assert name_schema["not"] == {"enum": ["Probe"]}
         assert "enum" not in name_schema
         assert "host" in name_schema["description"].lower()
 

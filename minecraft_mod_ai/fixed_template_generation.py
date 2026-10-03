@@ -257,6 +257,18 @@ def _safe_tool_component(value: str) -> str:
     return safe.strip("_") or "field"
 
 
+def _model_transport_schema(schema: Any, *, is_properties_map: bool = False) -> Any:
+    if isinstance(schema, dict):
+        return {
+            key: _model_transport_schema(value, is_properties_map=(key == "properties"))
+            for key, value in schema.items()
+            if not (key == "pattern" and not is_properties_map)
+        }
+    if isinstance(schema, list):
+        return [_model_transport_schema(value) for value in schema]
+    return schema
+
+
 def _generate_native_arguments_by_field(
     router: Any,
     role: str,
@@ -285,11 +297,13 @@ def _generate_native_arguments_by_field(
         field_tool_name = (
             f"{tool_name}_field_{field_index}_{_safe_tool_component(field_name)}"
         )
+        host_field_schema = field_schema
+        transport_field_schema = _model_transport_schema(host_field_schema)
         arguments = router.generate_tool_decision(
             role,
             field_messages,
             tool_name=field_tool_name,
-            parameters=field_schema,
+            parameters=transport_field_schema,
             description=(
                 description
                 + f" Isolated fixed-template recovery for field {field_name!r}. "
@@ -300,7 +314,7 @@ def _generate_native_arguments_by_field(
             raise ValueError(
                 f"fixed-template isolated field {field_name!r} did not return an argument mapping"
             )
-        validated = _validate_native_arguments(arguments, field_schema)
+        validated = _validate_native_arguments(arguments, host_field_schema)
         merged.update(validated)
 
     return _validate_native_arguments(merged, parameters)
@@ -464,30 +478,41 @@ def _architecture_impl__generate_native_template_arguments(_ctx):
     """Generate host-valid tool arguments using bounded, schema-derived recovery."""
 
     initial_messages = tuple(dict(message) for message in messages)
+    host_parameters = parameters
+    transport_parameters = _model_transport_schema(host_parameters)
     try:
         arguments = router.generate_tool_decision(
             role,
             initial_messages,
             tool_name=tool_name,
-            parameters=parameters,
+            parameters=transport_parameters,
             description=description,
         )
         if not isinstance(arguments, Mapping):
             raise ValueError("fixed-template function call did not return an argument mapping")
-        return _validate_native_arguments(arguments, parameters)
+        return _validate_native_arguments(arguments, host_parameters)
     except Exception as initial_error:
+        current: BaseException | None = initial_error
+        while current is not None:
+            if "Failed to initialize samplers: failed to parse grammar" in str(current):
+                raise RuntimeError(
+                    "FIXED_TEMPLATE_NATIVE_GRAMMAR_INVALID: "
+                    "model-visible tool schema is not accepted by llama.cpp"
+                ) from initial_error
+            current = getattr(current, "cause", None) or current.__cause__ or current.__context__
+
         # A multi-field schema can enter a deterministic invalid attractor when one field is
         # repeatedly malformed. Do not regenerate the same object again. Project the failed
         # object into one-field forced calls, merge the host-validated fields, then validate
         # the complete object exactly once.
-        if _object_field_schemas(parameters):
+        if _object_field_schemas(host_parameters):
             try:
                 return _generate_native_arguments_by_field(
                     router,
                     role,
                     initial_messages,
                     tool_name=tool_name,
-                    parameters=parameters,
+                    parameters=host_parameters,
                     description=description,
                     failure=initial_error,
                 )
@@ -499,7 +524,7 @@ def _architecture_impl__generate_native_template_arguments(_ctx):
 
         last_error: BaseException = initial_error
         current_messages = initial_messages
-        directives = _schema_repair_directives(parameters)
+        directives = _schema_repair_directives(host_parameters)
         for repair_index, directive in enumerate(directives, start=1):
             current_messages = _schema_repair_messages(
                 messages,
@@ -511,7 +536,7 @@ def _architecture_impl__generate_native_template_arguments(_ctx):
                     role,
                     current_messages,
                     tool_name=f"{tool_name}_repair_{repair_index}",
-                    parameters=parameters,
+                    parameters=transport_parameters,
                     description=(
                         description
                         + " The prior function arguments failed host schema validation. "
@@ -523,7 +548,7 @@ def _architecture_impl__generate_native_template_arguments(_ctx):
                     raise ValueError(
                         "fixed-template function call did not return an argument mapping"
                     )
-                return _validate_native_arguments(arguments, parameters)
+                return _validate_native_arguments(arguments, host_parameters)
             except Exception as exc:
                 last_error = exc
 

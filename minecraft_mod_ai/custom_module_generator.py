@@ -1025,6 +1025,24 @@ def _render_method(
     return "\n".join([header + " {", *body, indent + "}"])
 
 
+def _java_numeric_literal(java_type: str, raw: str) -> str:
+    value = str(raw or "").strip()
+    if not value:
+        return ""
+    if java_type in {"byte", "short", "int", "long"}:
+        if re.fullmatch(r"[-+]?\d+[lL]?", value):
+            return value.rstrip("lL") + ("L" if java_type == "long" else "")
+        return ""
+    if java_type in {"float", "double"}:
+        if re.fullmatch(
+            r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?[fFdD]?",
+            value,
+        ):
+            return value.rstrip("fFdD") + "f" if java_type == "float" else value
+        return ""
+    return ""
+
+
 def _render_field(
     item: Mapping[str, Any],
     *,
@@ -1043,9 +1061,7 @@ def _render_field(
         _rewrite_java_identifiers(str(item.get("initializer") or "").strip(), active)
     )
     if java_type in {"float", "long"} and initializer:
-        from .atomic_concern_source import _state_default_literal
-
-        initializer = _state_default_literal(java_type, initializer) or initializer
+        initializer = _java_numeric_literal(java_type, initializer) or initializer
     suffix = f" = {initializer}" if initializer else ""
     return f"{indent}{prefix}{java_type} {name}{suffix};"
 

@@ -43,7 +43,19 @@ def record_field_schema(section: str, concern: str, field: str) -> dict:
     return {"type": "string", "minLength": 1, "maxLength": 512}
 
 
-def specification_schema(section):
+def _model_transport_schema(schema, *, is_properties_map: bool = False):
+    if isinstance(schema, dict):
+        return {
+            key: _model_transport_schema(value, is_properties_map=(key == "properties"))
+            for key, value in schema.items()
+            if not (key == "pattern" and not is_properties_map)
+        }
+    if isinstance(schema, list):
+        return [_model_transport_schema(value) for value in schema]
+    return schema
+
+
+def specification_schema(section, *, model_transport: bool = False):
     records = DETAIL_RECORDS[section]
     properties = {}
     for concern, columns in records.items():
@@ -77,12 +89,24 @@ def specification_schema(section):
             "additionalProperties": False,
         },
     }
-    return {
+    schema = {
         "type": "object",
         "properties": properties,
         "required": list(properties),
         "additionalProperties": False,
     }
+    if model_transport:
+        return _model_transport_schema(schema)
+    return schema
 
 
-__all__ = ["DETAIL_RECORDS", "record_field_schema", "specification_schema"]
+def model_specification_schema(section):
+    return specification_schema(section, model_transport=True)
+
+
+__all__ = [
+    "DETAIL_RECORDS",
+    "model_specification_schema",
+    "record_field_schema",
+    "specification_schema",
+]

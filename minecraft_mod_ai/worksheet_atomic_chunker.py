@@ -126,12 +126,25 @@ def pack_section_concerns(
     return chunks
 
 
+def _model_transport_schema(schema: Any, *, is_properties_map: bool = False) -> Any:
+    if isinstance(schema, dict):
+        return {
+            key: _model_transport_schema(value, is_properties_map=(key == "properties"))
+            for key, value in schema.items()
+            if not (key == "pattern" and not is_properties_map)
+        }
+    if isinstance(schema, list):
+        return [_model_transport_schema(value) for value in schema]
+    return schema
+
+
 def worksheet_chunk_schema(
     section: str,
     concerns: Sequence[str],
     *,
     include_evidence: bool = False,
     record_counts: Mapping[str, int] | None = None,
+    model_transport: bool = False,
 ) -> dict[str, Any]:
     """Return one complete-concern schema.
 
@@ -201,7 +214,7 @@ def worksheet_chunk_schema(
             "items": {"type": "string", "minLength": 1, "maxLength": 128},
         }
 
-    return {
+    schema = {
         "type": "object",
         "description": f"Complete concern chunk for {key}: {', '.join(active)}",
         "properties": properties,
@@ -209,6 +222,25 @@ def worksheet_chunk_schema(
         "anyOf": authored_signal,
         "additionalProperties": False,
     }
+    if model_transport:
+        return _model_transport_schema(schema)
+    return schema
+
+
+def worksheet_chunk_model_schema(
+    section: str,
+    concerns: Sequence[str],
+    *,
+    include_evidence: bool = False,
+    record_counts: Mapping[str, int] | None = None,
+) -> dict[str, Any]:
+    return worksheet_chunk_schema(
+        section,
+        concerns,
+        include_evidence=include_evidence,
+        record_counts=record_counts,
+        model_transport=True,
+    )
 
 
 def validate_worksheet_chunk_signal(
@@ -490,6 +522,7 @@ __all__ = [
     "merge_worksheet_section_chunks",
     "pack_section_concerns",
     "validate_worksheet_chunk_signal",
+    "worksheet_chunk_model_schema",
     "worksheet_chunk_prompt",
     "worksheet_chunk_schema",
 ]

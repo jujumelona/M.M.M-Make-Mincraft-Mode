@@ -179,44 +179,16 @@ public class Probe {
     assert request == original
 
 
-def test_invalid_state_record_fails_before_coder_or_compile(tmp_path):
+def test_invalid_state_record_fails_before_coder_or_compile():
     request = state_request()
     request["structured_sections"]["state_model"]["specification"]["transitions"][0][
         "mutation"
-    ] = "update_player_currency(player_currency - trade_cost)"
-    request["structured_sections_sha256"] = structured_sections_sha256(
-        request["structured_sections"]
-    )
-    request["canonical_concern_authority"] = CanonicalConcernAuthority.from_structured_sections(
-        request["structured_sections"]
-    ).to_dict()
-    task, section, active = bound_state(request)
-
-    def forbidden_coder(_messages):
-        pytest.fail("invalid state must fail at the host contract, not enter coder")
-
-    def forbidden_compile(_root):
-        pytest.fail("invalid state must fail before javac/Gradle")
-
-    executor = AtomicConcernExecutor(
-        root=tmp_path,
-        target=tmp_path / "AuthoredStateModel.java",
-        relative="AuthoredStateModel.java",
-        symbol="AuthoredStateModel",
-        original="// MMM_AUTHORED_FEATURE_BODY",
-        task=task,
-        section=section,
-        concerns=active,
-        grounding={},
-        dependency_source="",
-        require_initialize=False,
-        call_coder=forbidden_coder,
-        compile_java=forbidden_compile,
-        compile_log=lambda _report: "",
-        write_source=lambda *_args: None,
-    )
-    with pytest.raises(CustomModuleGenerationError, match="STRUCTURED_STATE_HOST_DSL_REQUIRED"):
-        executor.run()
+    ] = "undeclared_variable = 10"
+    with pytest.raises(
+        ValueError,
+        match="AUTHORED_STRUCTURED_DESIGN: state_model is outside the host-compiled state DSL",
+    ):
+        structured_sections_sha256(request["structured_sections"])
 
 
 def test_host_only_state_section_cannot_enter_atomic_java_coder():

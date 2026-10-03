@@ -346,11 +346,13 @@ def _generate_chunk(
 
     if hasattr(router, "generate_tool_decision"):
         try:
+            from .fixed_template_generation import _model_transport_schema
+
             raw_decision = router.generate_tool_decision(
                 "planner",
                 messages,
                 tool_name=tool_name,
-                parameters=chunk_schema,
+                parameters=_model_transport_schema(chunk_schema),
                 description=description,
             )
             if isinstance(raw_decision, Mapping):
@@ -362,10 +364,12 @@ def _generate_chunk(
                 raise
             # Fall back to text generation if native tool call fails or is not enabled for role
 
+    from .fixed_template_generation import _model_transport_schema
+
     raw = generate_fixed_template_text(router,
         "planner",
         messages,
-        response_schema=chunk_schema,
+        response_schema=_model_transport_schema(chunk_schema),
         enable_tools=False,
     )
     from .planning_contract_ssot import is_schema_definition_echo

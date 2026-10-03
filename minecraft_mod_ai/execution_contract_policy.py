@@ -589,10 +589,8 @@ def java_atomic_parameters_for_request(
         and concern_name not in JAVA_TYPE_OWNING_CONCERNS
         and not authorized_nested
     ):
-        return (
-            deepcopy(JAVA_ATOMIC_LOGIC_MEMBERS_PARAMETERS),
-            preferred or "logic_fields_methods_only",
-        )
+        parameters = deepcopy(JAVA_ATOMIC_LOGIC_MEMBERS_PARAMETERS)
+        shape = preferred or "logic_fields_methods_only"
     else:
         parameters = deepcopy(JAVA_ATOMIC_MEMBERS_PARAMETERS)
         shape = preferred or "smallest_components"
@@ -611,6 +609,19 @@ def java_atomic_parameters_for_request(
             )
             if host_symbol:
                 name_schema["not"] = {"enum": [host_symbol]}
+
+    sibling_fields = tuple(
+        str(row.get("symbol") or "").strip()
+        for row in payload.get("available_sibling_api") or ()
+        if isinstance(row, Mapping)
+        and row.get("kind") == "field"
+        and str(row.get("symbol") or "").strip()
+    )
+    if sibling_fields and "fields" in parameters.get("properties", {}):
+        fields_schema = parameters["properties"]["fields"]
+        if isinstance(fields_schema, Mapping) and "items" in fields_schema:
+            field_name_schema = fields_schema["items"]["properties"]["name"]
+            field_name_schema["not"] = {"enum": sorted(set(sibling_fields))}
     return parameters, shape
 
 

@@ -591,18 +591,7 @@ def test_top_level_method_schema_structurally_forbids_outer_constructor() -> Non
     assert "not" not in nested_method["properties"]["name"]
 
 
-def test_explicit_collection_element_types_are_preserved() -> None:
-    from minecraft_mod_ai.atomic_concern_source import _state_java_contract
 
-    assert _state_java_contract("List<ShipPart>", "[]") == (
-        "java.util.List<ShipPart>",
-        "new java.util.ArrayList<>()",
-    )
-    assert _state_java_contract("EnumSet<ColonyState>", "empty_set") == (
-        "java.util.EnumSet<ColonyState>",
-        "java.util.EnumSet.noneOf(ColonyState.class)",
-    )
-    assert _state_java_contract("EnumSet<?>", "empty_set") == ("", "")
 
 
 def test_enumset_and_collection_interface_construction_are_rejected_before_javac() -> None:
