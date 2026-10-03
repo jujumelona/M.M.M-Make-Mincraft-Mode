@@ -1571,7 +1571,6 @@ class CompleteProductionOrchestrator:
                         and module not in research_shards
                         and module not in artifact_handled_members
                     )
-                    or module.config.get("requires_custom_generation")
                 ]
                 if unsupported:
                     raise CompleteProductionError(
@@ -1627,10 +1626,6 @@ class CompleteProductionOrchestrator:
                             policy=self.policy,
                         )
                     )
-                    if config.get("requires_custom_generation"):
-                        raise CompleteProductionError(
-                            "CUSTOM_GENERATION_REMOVED: entity custom generation is forbidden"
-                        )
             elif stage == 'host':
                 from .typed_plan_production import generate_typed_plan_module
 
@@ -1640,10 +1635,6 @@ class CompleteProductionOrchestrator:
                         module=module,
                     )
                     for module in members
-                )
-            elif stage == 'custom':
-                raise CompleteProductionError(
-                    "CUSTOM_GENERATION_REMOVED: custom stage must not exist"
                 )
             else:
                 raise CompleteProductionError(f'Unsupported generation work stage: {stage}')
