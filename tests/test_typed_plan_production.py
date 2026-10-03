@@ -12,6 +12,7 @@ from minecraft_mod_ai.authored_production import _compile_new_authored_modules
 from minecraft_mod_ai.complete_spec import ProductionModule
 from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
 from minecraft_mod_ai.generator import FabricProjectGenerator
+from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
 from minecraft_mod_ai.scale_policy import ScalePolicy
 from minecraft_mod_ai.spec import ContentKind, ContentSpec, ModSpec
 from minecraft_mod_ai.work_graph import _is_host_exact_authored_module, _module_shards, _node
@@ -463,5 +464,154 @@ def test_typed_state_store_generates_state_owner_and_persistence_bridge(
         if "implements ModInitializer" in path.read_text(encoding="utf-8")
     )
     main_text = main_source.read_text(encoding="utf-8")
+    assert "AuthoredStatePersistence.register();" in main_text
+
+def _structured_section(section: str, concern: str, rows: list[dict]) -> dict:
+    specification = {
+        name: []
+        for name in DETAIL_RECORDS[section]
+    }
+    specification[concern] = rows
+    specification["inapplicable_concerns"] = []
+    return {
+        section: {
+            "specification": specification,
+            "constraint_evidence_refs": [],
+        }
+    }
+
+
+def test_typed_platform_content_lowers_to_deterministic_module() -> None:
+    text = "typed platform content"
+    typed = _plan(text)
+    typed["platform_modules"] = [
+        {
+            "module_id": "marker_item",
+            "kind": "item",
+            "config": {"display_name_en": "Marker"},
+            "covers": ["resources_and_ui.registries"],
+        }
+    ]
+    structured = _structured_section(
+        "resources_and_ui",
+        "registries",
+        [
+            {
+                "purpose": "item",
+                "identifier": "marker_item",
+                "binding_requirement": "register the marker item",
+            }
+        ],
+    )
+    plan = AuthoredPlan(
+        requested_prompt="marker item",
+        text=text,
+        structured_sections=structured,
+        typed_plan_ir=typed,
+    )
+
+    modules, manifest = _compile_new_authored_modules(
+        plan,
+        mod_id="typedtest",
+        package_name="ai.minecraft.typedtest",
+        target={},
+        production_state_section={},
+    )
+
+    assert [(module.module_id, module.kind) for module in modules] == [
+        ("authored_typed_plan", "custom_java"),
+        ("marker_item", "item"),
+    ]
+    assert modules[1].config == {"display_name_en": "Marker"}
+    assert manifest["policy"] == "host_typed_plan_ir"
+    assert manifest["platform_modules"] == [
+        {
+            "module_id": "marker_item",
+            "kind": "item",
+            "covers": ["resources_and_ui.registries"],
+        }
+    ]
+
+
+def test_typed_state_store_materializes_persistence_without_router(
+    tmp_path: Path,
+) -> None:
+    root = _project(tmp_path)
+    text = "persistent typed state"
+    typed = _plan(text)
+    typed["platform_modules"] = [
+        {
+            "module_id": "persistent_state",
+            "kind": "state_store",
+            "config": {"namespace": "player_state"},
+            "covers": ["persistence.stored_state"],
+        }
+    ]
+    state_section = _structured_section(
+        "state_model",
+        "variables",
+        [
+            {
+                "name": "coins",
+                "owner": "player",
+                "type": "integer",
+                "unit": "credits",
+                "default": "0",
+                "domain": "integer >= 0",
+            }
+        ],
+    )["state_model"]
+    persistence_section = _structured_section(
+        "persistence",
+        "stored_state",
+        [
+            {
+                "state": "coins",
+                "owner": "player",
+                "scope": "world",
+            }
+        ],
+    )["persistence"]
+    plan = AuthoredPlan(
+        requested_prompt="persistent state",
+        text=text,
+        structured_sections={
+            "state_model": state_section,
+            "persistence": persistence_section,
+        },
+        typed_plan_ir=typed,
+    )
+
+    modules, manifest = _compile_new_authored_modules(
+        plan,
+        mod_id="typedtest",
+        package_name="ai.minecraft.typedtest",
+        target={},
+        production_state_section=state_section,
+    )
+
+    assert len(modules) == 1
+    module = modules[0]
+    assert module.module_id == "authored_typed_plan"
+    assert module.config["typed_state_store"] == {"namespace": "player_state"}
+    assert manifest["typed_program"]["state_store"] is True
+
+    receipt = CustomModuleGenerator(ForbiddenRouter()).generate(
+        root,
+        module=module,
+    )
+
+    assert receipt["generation_verification"]["model_calls"] == 0
+    package_root = root / "src/main/java/ai/minecraft/typedtest"
+    assert (package_root / "AuthoredStateModel.java").is_file()
+    bridge = package_root / "AuthoredStatePersistence.java"
+    assert bridge.is_file()
+    assert "// MMM:TYPED_STATE_PERSISTENCE_OWNER" in bridge.read_text(
+        encoding="utf-8"
+    )
+    assert (package_root / "system/MmmPersistentStore.java").is_file()
+    main_text = (
+        package_root / "TypedtestMod.java"
+    ).read_text(encoding="utf-8")
     assert "AuthoredStatePersistence.register();" in main_text
 
