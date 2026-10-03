@@ -342,31 +342,33 @@ def _generate_chunk(
     chunk_schema: Mapping[str, Any],
 ) -> dict[str, Any]:
     tool_name = f"submit_{section}_{index}_chunk"
-    description = f"Submit worksheet specifications for {section}: {', '.join(concerns)}."
+    description = (
+        f"Submit worksheet specifications for {section}: "
+        + ", ".join(concerns)
+        + "."
+    )
 
-    if hasattr(router, "generate_tool_decision"):
-        try:
-            from .fixed_template_generation import _model_transport_schema
+    generate_decision = getattr(router, "generate_tool_decision", None)
+    if callable(generate_decision):
+        from .fixed_template_generation import _model_transport_schema
 
-            raw_decision = router.generate_tool_decision(
-                "planner",
-                messages,
-                tool_name=tool_name,
-                parameters=_model_transport_schema(chunk_schema),
-                description=description,
+        raw_decision = generate_decision(
+            "planner",
+            messages,
+            tool_name=tool_name,
+            parameters=_model_transport_schema(chunk_schema),
+            description=description,
+        )
+        if not isinstance(raw_decision, Mapping):
+            raise ValueError(
+                "DETAILED_PLAN_NATIVE_CHUNK_INVALID: expected argument mapping"
             )
-            if isinstance(raw_decision, Mapping):
-                return dict(raw_decision)
-        except Exception as exc:
-            from .model_adapters import ModelConfigurationError
-
-            if isinstance(exc, ModelConfigurationError):
-                raise
-            # Fall back to text generation if native tool call fails or is not enabled for role
+        return dict(raw_decision)
 
     from .fixed_template_generation import _model_transport_schema
 
-    raw = generate_fixed_template_text(router,
+    raw = generate_fixed_template_text(
+        router,
         "planner",
         messages,
         response_schema=_model_transport_schema(chunk_schema),
@@ -379,8 +381,7 @@ def _generate_chunk(
         raise ValueError("chunk output must be a JSON object")
     if is_schema_definition_echo(decoded):
         raise ValueError(
-            "Model returned JSON Schema definition instead of concrete data records. "
-            "Please output records matching the template skeleton."
+            "Model returned JSON Schema definition instead of concrete data records."
         )
     return dict(decoded)
 
@@ -423,36 +424,14 @@ def _compile_worksheet_section(
                     concerns=concerns,
                     include_evidence=is_first,
                 )
-                try:
-                    decoded = _generate_chunk(
-                        router,
-                        messages,
-                        section=section,
-                        index=index,
-                        concerns=concerns,
-                        chunk_schema=chunk_schema,
-                    )
-                except (json.JSONDecodeError, ValueError) as parse_err:
-                    repair_messages = _chunk_messages(
-                        requirement,
-                        selected_sections,
-                        section,
-                        evidence,
-                        completed,
-                        chunk_index=index,
-                        chunk_count=chunk_count,
-                        concerns=concerns,
-                        include_evidence=is_first,
-                        repair_error=str(parse_err),
-                    )
-                    decoded = _generate_chunk(
-                        router,
-                        repair_messages,
-                        section=section,
-                        index=index,
-                        concerns=concerns,
-                        chunk_schema=chunk_schema,
-                    )
+                decoded = _generate_chunk(
+                    router,
+                    messages,
+                    section=section,
+                    index=index,
+                    concerns=concerns,
+                    chunk_schema=chunk_schema,
+                )
 
                 chunk_results.append(decoded)
 
