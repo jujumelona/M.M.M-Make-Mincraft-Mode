@@ -1057,7 +1057,8 @@ def compile_authored_design(
 
     structured = normalize_structured_sections(implementation_plan.structured_sections)
     if (
-        not effective_existing
+        not implementation_plan.typed_plan_ir
+        and not effective_existing
         and not structured
         and callable(getattr(router, "generate_text", None))
     ):
