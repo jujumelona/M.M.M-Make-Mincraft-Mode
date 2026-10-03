@@ -40,6 +40,34 @@ def record_field_schema(section: str, concern: str, field: str) -> dict:
             "maxItems": 4,
             "items": {"type": "string", "maxLength": 256},
         }
+    if section == "persistence" and concern == "migration":
+        if field == "operation":
+            return {
+                "type": "string",
+                "enum": [
+                    "preserve",
+                    "rename_key",
+                    "delete_key",
+                    "set_default",
+                ],
+            }
+        if field in {"source_key", "destination_key"}:
+            return {
+                "type": ["string", "null"],
+                "minLength": 1,
+                "maxLength": 128,
+            }
+        if field == "value":
+            return {
+                "type": [
+                    "string",
+                    "number",
+                    "integer",
+                    "boolean",
+                    "null",
+                ],
+                "maxLength": 512,
+            }
     if (
         section == "state_model"
         and field in {"guard", "mutation", "condition", "initial_state", "action"}
