@@ -111,6 +111,11 @@ def _bind_atomic_leaf_contract(
     except ValueError as exc:
         raise ImplementationGraphError(str(exc)) from exc
     task["task_sha256"] = _task_sha(task)
+    if section == "state_model" and not active:
+        raise ImplementationGraphError(
+            "IMPLEMENTATION_IR_STRUCTURED_STATE_REQUIRED: "
+            "state_model has no canonical structured concern records"
+        )
     if drifted:
         emit_root_cause(
             "atomic_leaf_source_requirements_rebound",
@@ -253,9 +258,15 @@ def _normalize_implementation_graph_request(raw_request: Mapping[str, Any]) -> d
         candidate = structured.get("state_model")
         raw_state = candidate if isinstance(candidate, Mapping) else None
     if isinstance(raw_state, Mapping):
-        # Structured design fields may contain authored prose or domain calls.
-        # Preserve them until the executable-field compiler selects host DSL or
-        # bounded Java lowering. Legacy normalization drops actions/forces false.
+        from .structured_state_runtime import validate_structured_state_section
+
+        try:
+            validate_structured_state_section(raw_state)
+        except ValueError as exc:
+            raise ImplementationGraphError(
+                "IMPLEMENTATION_IR_STATE_HOST_DSL_REQUIRED: "
+                f"{exc}"
+            ) from exc
         request["production_state_section"] = deepcopy(dict(raw_state))
     else:
         request["production_state_section"] = {}
