@@ -167,6 +167,8 @@ def _authored_chunk_messages(
     concerns: Sequence[str],
     completed: Mapping[str, Mapping[str, Any]],
     include_evidence: bool,
+    state_symbols: Any = None,
+    section_context: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, str], ...]:
     from .planning_state_implementation import SECTION_DEPENDENCIES
     from .worksheet_atomic_chunker import worksheet_chunk_prompt
@@ -186,6 +188,37 @@ def _authored_chunk_messages(
         if dependencies
         else "{}"
     )
+
+    user_parts = [
+        "User request:\n" + prompt,
+        "Canonical prerequisite sections:\n" + prerequisite_text,
+    ]
+    if state_symbols:
+        symbols_text = (
+            state_symbols.prompt_text()
+            if hasattr(state_symbols, "prompt_text")
+            else str(state_symbols)
+        )
+        if symbols_text:
+            user_parts.append(symbols_text)
+    if section_context:
+        context_text = json.dumps(
+            section_context,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        user_parts.append(f"Canonical {section} records authored so far:\n{context_text}")
+    user_parts.append(
+        worksheet_chunk_prompt(
+            section,
+            chunk_index,
+            chunk_count,
+            concerns,
+            include_evidence=include_evidence,
+        )
+    )
+
     return (
         {
             "role": "system",
@@ -201,20 +234,7 @@ def _authored_chunk_messages(
         },
         {
             "role": "user",
-            "content": (
-                "User request:\n"
-                + prompt
-                + "\n\nCanonical prerequisite sections:\n"
-                + prerequisite_text
-                + "\n\n"
-                + worksheet_chunk_prompt(
-                    section,
-                    chunk_index,
-                    chunk_count,
-                    concerns,
-                    include_evidence=include_evidence,
-                )
-            ),
+            "content": "\n\n".join(user_parts),
         },
     )
 
@@ -230,6 +250,8 @@ def _generate_authored_chunk(
     completed: Mapping[str, Mapping[str, Any]],
     include_evidence: bool,
     media_paths: Sequence[str | Path],
+    state_symbols: Any = None,
+    section_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Generate one canonical chunk; schema failure becomes narrower work, not prose recovery."""
 
@@ -253,6 +275,8 @@ def _generate_authored_chunk(
                 concerns=selected,
                 completed=completed,
                 include_evidence=evidence,
+                state_symbols=state_symbols,
+                section_context=section_context,
             ),
             response_schema=schema,
             media_paths=media_paths,
@@ -264,11 +288,25 @@ def _generate_authored_chunk(
             raise ValueError(
                 f"AUTHORED_STRUCTURED_DESIGN: {section} chunk {chunk_index} must be an object"
             )
-        return dict(value)
+        result = dict(value)
+        if section == "state_model":
+            from .structured_state_runtime import validate_state_concern
+
+            for concern in selected:
+                rows = result.get(concern, [])
+                if rows:
+                    validate_state_concern(
+                        concern,
+                        rows,
+                        symbols=state_symbols,
+                    )
+        return result
 
     try:
         return generate(concerns, evidence=include_evidence)
     except (ValueError, RuntimeError, TypeError) as initial_error:
+        if "STRUCTURED_STATE_" in str(initial_error):
+            raise
         if len(concerns) == 1:
             concern = str(concerns[0])
             explicit_projection = getattr(concerns, "field_projection", {})
@@ -381,8 +419,58 @@ def author_structured_sections(
 
     completed: dict[str, Any] = {}
     for section in WORKSHEET_SECTIONS:
+        if section == "state_model":
+            from .structured_state_runtime import StateSymbolTable, validate_state_concern
+
+            chunks = pack_section_concerns("state_model")
+            var_idx = next(
+                (i for i, c in enumerate(chunks) if "variables" in c),
+                None,
+            )
+            if var_idx is not None:
+                ordered_chunks: list[Sequence[str]] = [chunks[var_idx]] + [
+                    c for i, c in enumerate(chunks) if i != var_idx
+                ]
+            else:
+                ordered_chunks = list(chunks)
+
+            chunk_results: list[dict[str, Any]] = []
+            state_symbols: StateSymbolTable | None = None
+            accumulated_state_records: dict[str, Any] = {}
+
+            for index, concerns in enumerate(ordered_chunks, start=1):
+                value = _generate_authored_chunk(
+                    router,
+                    prompt,
+                    section="state_model",
+                    chunk_index=index,
+                    chunk_count=len(ordered_chunks),
+                    concerns=concerns,
+                    completed=completed,
+                    include_evidence=index == 1,
+                    media_paths=media_paths,
+                    state_symbols=state_symbols,
+                    section_context=accumulated_state_records if accumulated_state_records else None,
+                )
+                for concern in concerns:
+                    rows = value.get(concern, [])
+                    validate_state_concern(concern, rows, symbols=state_symbols)
+                    if rows:
+                        accumulated_state_records[concern] = deepcopy(rows)
+                    if concern == "variables":
+                        state_symbols = StateSymbolTable(rows)
+
+                chunk_results.append(value)
+
+            completed["state_model"] = merge_worksheet_section_chunks(
+                "state_model",
+                chunk_results,
+                set(),
+            )
+            continue
+
         chunks = pack_section_concerns(section)
-        chunk_results: list[dict[str, Any]] = []
+        chunk_results = []
         for index, concerns in enumerate(chunks, start=1):
             value = _generate_authored_chunk(
                 router,

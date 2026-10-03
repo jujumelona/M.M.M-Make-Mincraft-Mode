@@ -491,6 +491,121 @@ def _compile_mutation(
     return " ".join(rows)
 
 
+class StateSymbolTable:
+    """Canonical symbol table for state variables declared in state_model."""
+
+    def __init__(
+        self,
+        variables: Sequence[Mapping[str, Any]] | Sequence[str] | set[str] | StateSymbolTable = (),
+    ) -> None:
+        if isinstance(variables, StateSymbolTable):
+            self.declared_names: set[str] = set(variables.declared_names)
+            self.variables: dict[str, Mapping[str, Any]] = dict(variables.variables)
+            return
+
+        self.declared_names = set()
+        self.variables = {}
+        for item in variables or ():
+            if isinstance(item, Mapping):
+                name = str(item.get("name") or "").strip()
+                if name:
+                    self.variables[name] = item
+                    self.declared_names.add(name)
+            elif isinstance(item, str):
+                name = item.strip()
+                if name:
+                    self.declared_names.add(name)
+
+    def contains(self, name: str) -> bool:
+        return name in self.declared_names
+
+    def __contains__(self, name: str) -> bool:
+        return name in self.declared_names
+
+    def __iter__(self):
+        return iter(sorted(self.declared_names))
+
+    def __len__(self) -> int:
+        return len(self.declared_names)
+
+    def prompt_text(self) -> str:
+        if not self.declared_names:
+            return ""
+        lines = ["Canonical state symbols:", "variables:"]
+        for name in sorted(self.declared_names):
+            lines.append(f"- {name}")
+        return "\n".join(lines)
+
+
+def validate_state_concern(
+    concern: str,
+    records: Sequence[Mapping[str, Any]],
+    *,
+    symbols: StateSymbolTable | set[str] | Sequence[str] | None = None,
+) -> None:
+    """Validate a single concern of state_model against the declared symbol table."""
+    if isinstance(symbols, StateSymbolTable):
+        declared = symbols.declared_names
+    elif isinstance(symbols, set):
+        declared = symbols
+    elif isinstance(symbols, Sequence) and not isinstance(symbols, (str, bytes, bytearray)):
+        declared = set(symbols)
+    else:
+        declared = set()
+
+    rows = records if isinstance(records, Sequence) and not isinstance(records, (str, bytes, bytearray)) else ()
+
+    if concern == "variables":
+        seen: set[str] = set()
+        for record in rows:
+            if not isinstance(record, Mapping):
+                continue
+            name = str(record.get("name") or "").strip()
+            if re.fullmatch(_STATE_IDENTIFIER_PATTERN, name) is None:
+                raise ValueError(
+                    f"STRUCTURED_STATE_VARIABLE_NAME: {name!r} is not a stable identifier"
+                )
+            if name in seen:
+                raise ValueError(
+                    f"STRUCTURED_STATE_VARIABLE_DUPLICATE: {name!r}"
+                )
+            seen.add(name)
+        return
+
+    if concern == "transitions":
+        for record in rows:
+            if not isinstance(record, Mapping):
+                continue
+            validate_state_expression(str(record.get("guard") or ""))
+            _compile_mutation(
+                str(record.get("mutation") or ""),
+                declared=declared,
+            )
+        return
+
+    if concern == "invariants":
+        for record in rows:
+            if not isinstance(record, Mapping):
+                continue
+            validate_state_expression(str(record.get("condition") or ""))
+        return
+
+    if concern in {"initialization", "updates", "cleanup"}:
+        field = {
+            "initialization": "initial_state",
+            "updates": "mutation",
+            "cleanup": "action",
+        }[concern]
+        for record in rows:
+            if not isinstance(record, Mapping):
+                continue
+            _compile_mutation(
+                str(record.get(field) or ""),
+                declared=declared,
+            )
+        return
+
+
 def validate_structured_state_section(section: Mapping[str, Any]) -> None:
     """Fail closed on canonical state semantics before any production code is generated."""
 
@@ -499,47 +614,13 @@ def validate_structured_state_section(section: Mapping[str, Any]) -> None:
         raw_specification if isinstance(raw_specification, Mapping) else section
     )
     variables = specification.get("variables", [])
-    declared: set[str] = set()
-    if isinstance(variables, Sequence) and not isinstance(
-        variables, (str, bytes, bytearray)
-    ):
-        for record in variables:
-            if not isinstance(record, Mapping):
-                continue
-            name = str(record.get("name") or "").strip()
-            if re.fullmatch(_STATE_IDENTIFIER_PATTERN, name) is None:
-                raise ValueError(
-                    f"STRUCTURED_STATE_VARIABLE_NAME: {name!r} is not a stable identifier"
-                )
-            if name in declared:
-                raise ValueError(
-                    f"STRUCTURED_STATE_VARIABLE_DUPLICATE: {name!r}"
-                )
-            declared.add(name)
+    validate_state_concern("variables", variables)
+    symbols = StateSymbolTable(variables)
 
-    for record in specification.get("transitions", []) or []:
-        if not isinstance(record, Mapping):
-            continue
-        validate_state_expression(str(record.get("guard") or ""))
-        _compile_mutation(
-            str(record.get("mutation") or ""),
-            declared=declared,
-        )
-    for record in specification.get("invariants", []) or []:
-        if isinstance(record, Mapping):
-            validate_state_expression(str(record.get("condition") or ""))
-    for concern, field in (
-        ("initialization", "initial_state"),
-        ("updates", "mutation"),
-        ("cleanup", "action"),
-    ):
-        for record in specification.get(concern, []) or []:
-            if not isinstance(record, Mapping):
-                continue
-            _compile_mutation(
-                str(record.get(field) or ""),
-                declared=declared,
-            )
+    for concern in ("transitions", "invariants", "initialization", "updates", "cleanup", "concurrency"):
+        records = specification.get(concern, [])
+        if records:
+            validate_state_concern(concern, records, symbols=symbols)
 
 
 def _obligations(task: Mapping[str, Any]) -> dict[str, list[dict[str, str]]]:
@@ -1063,9 +1144,12 @@ __all__ = [
     "PUBLIC_API",
     "STATE_EXPRESSION_PATTERN",
     "STATE_MUTATION_PATTERN",
+    "StateSymbolTable",
     "constrain_state_chunk_schema",
     "constrain_state_record_schema",
     "has_complete_structured_state",
     "render_state_model_concern",
+    "validate_state_concern",
     "validate_state_expression",
+    "validate_structured_state_section",
 ]
