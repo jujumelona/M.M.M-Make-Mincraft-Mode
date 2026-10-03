@@ -546,18 +546,17 @@ def atomic_error_terminal_after_normalization(reason: str) -> bool:
 
 def assert_java_coder_ownership(payload: Mapping[str, Any]) -> None:
     """Host-owned declarations cannot enter any model generation/repair route."""
-    from .custom_module_errors import CustomModuleGenerationError
 
     concern = payload.get("concern")
     name = str(concern.get("name") or "").strip() if isinstance(concern, Mapping) else ""
     if name in JAVA_DECLARATION_ONLY_CONCERNS:
-        raise CustomModuleGenerationError(
+        raise ValueError(
             "ATOMIC_HOST_ONLY_CONCERN_CODER_FORBIDDEN: "
             f"{name} must be compiled from canonical records by the host."
         )
     section = str(payload.get("section") or "").strip()
     if section in {"state_model", "behavior_contract"}:
-        raise CustomModuleGenerationError(
+        raise ValueError(
             "ATOMIC_HOST_ONLY_SECTION_CODER_FORBIDDEN: "
             f"{section} must be compiled by deterministic host lowering."
         )
