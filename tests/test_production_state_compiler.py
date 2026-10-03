@@ -84,7 +84,40 @@ def _plan_text() -> str:
     )
 
 
-def test_free_markdown_planner_defers_state_structuring_to_production():
+def _state_section(
+    *,
+    variables=None,
+    transitions=None,
+    invariants=None,
+    initialization=None,
+    updates=None,
+    cleanup=None,
+    concurrency=None,
+):
+    return {
+        "specification": {
+            "variables": list(variables or []),
+            "transitions": list(transitions or []),
+            "invariants": list(invariants or []),
+            "initialization": list(initialization or []),
+            "updates": list(updates or []),
+            "cleanup": list(cleanup or []),
+            "concurrency": list(concurrency or []),
+            "inapplicable_concerns": [],
+        },
+        "constraint_evidence_refs": [],
+    }
+
+
+def _structured_plan(section):
+    return AuthoredPlan(
+        "make a space mod",
+        _plan_text(),
+        structured_sections={"state_model": section},
+    )
+
+
+def test_free_markdown_state_is_rejected_before_production_model_decode():
     class PlannerRouter:
         def __init__(self):
             self.calls = []
@@ -95,32 +128,21 @@ def test_free_markdown_planner_defers_state_structuring_to_production():
 
     planner_router = PlannerRouter()
     planner = CompleteGameDesignPlanner(planner_router)
-
     plan = planner.plan("make a space mod")
 
     assert plan.structured_sections == {}
     assert plan.text == _plan_text()
     assert len(planner_router.calls) == 1
-    role, _messages, kwargs = planner_router.calls[0]
-    assert role == "planner"
-    assert kwargs["response_format"] == "text"
-    assert kwargs["response_schema"] is None
-    assert kwargs["enable_tools"] is False
 
-    class StateRouter:
-        def generate_text(self, role, messages, **kwargs):
-            payload = json.loads(messages[-1]["content"])
-            if payload["concern"] == "variables":
-                return (
-                    "STATUS=DONE\nRECORD\n"
-                    "name=credits\nowner=player\ntype=integer\nunit=credits\n"
-                    "default=0\ndomain=integer >= 0\nEND"
-                )
-            return "STATUS=EMPTY"
+    class ForbiddenStateRouter:
+        def generate_text(self, *_args, **_kwargs):
+            raise AssertionError("production state compilation must not call the model")
 
-    section = compile_production_state_section(StateRouter(), plan)
-
-    assert section["specification"]["variables"][0]["name"] == "credits"
+    with pytest.raises(
+        ValueError,
+        match="PRODUCTION_STATE_STRUCTURED_AUTHORITY_REQUIRED",
+    ):
+        compile_production_state_section(ForbiddenStateRouter(), plan)
 
 
 def test_malformed_json_like_state_output_is_parsed_without_json_validation():
@@ -159,41 +181,31 @@ def test_malformed_json_like_state_output_is_parsed_without_json_validation():
     ]
 
 
-def test_state_concern_extraction_never_paginates_on_missing_completion_signal():
-    class Router:
-        def __init__(self):
-            self.calls = []
+def test_production_state_compile_never_calls_router_when_structured_state_exists():
+    class ForbiddenRouter:
+        def generate_text(self, *_args, **_kwargs):
+            raise AssertionError("structured production state must be model-free")
 
-        def generate_text(self, role, messages, **kwargs):
-            payload = json.loads(messages[-1]["content"])
-            self.calls.append(payload)
-            concern = payload["concern"]
-            if concern == "variables":
-                return (
-                    "RECORD\n"
-                    "name=credits\nowner=player\ntype=integer\nunit=credits\n"
-                    "default=0\ndomain=integer >= 0\nEND"
-                )
-            if concern == "invariants":
-                # Deliberately omit STATUS/DONE. Older code kept asking for another page.
-                return (
-                    "RECORD\n"
-                    "condition=credits >= 0\n"
-                    "enforcement=reject negative balances\nEND"
-                )
-            return "STATUS=EMPTY"
-
-    router = Router()
-    section = compile_production_state_section(
-        router,
-        AuthoredPlan("make a space mod", _plan_text()),
+    section = _state_section(
+        variables=[{
+            "name": "credits",
+            "owner": "player",
+            "type": "integer",
+            "unit": "credits",
+            "default": "0",
+            "domain": "integer >= 0",
+        }],
+        invariants=[{
+            "condition": "credits >= 0",
+            "enforcement": "reject negative balances",
+        }],
+    )
+    compiled = compile_production_state_section(
+        ForbiddenRouter(),
+        _structured_plan(section),
     )
 
-    assert len(router.calls) == 7
-    assert [call["concern"] for call in router.calls].count("invariants") == 1
-    assert all("page" not in call for call in router.calls)
-    assert all("already_accepted_records" not in call for call in router.calls)
-    assert section["specification"]["invariants"] == [
+    assert compiled["specification"]["invariants"] == [
         {
             "condition": "credits >= 0",
             "enforcement": "reject negative balances",
@@ -201,30 +213,44 @@ def test_state_concern_extraction_never_paginates_on_missing_completion_signal()
     ]
 
 
-def test_production_state_lowering_normalizes_small_model_dsl_and_java_symbols():
-    router = ProductionStateRouter()
-    plan = AuthoredPlan("make a space mod", _plan_text())
+def test_production_state_normalizes_structured_dsl_without_model():
+    class ForbiddenRouter:
+        def generate_text(self, *_args, **_kwargs):
+            raise AssertionError("structured production state must be model-free")
 
-    section = compile_production_state_section(router, plan)
+    plan = _structured_plan(_state_section(
+        variables=[
+            {
+                "name": "credits",
+                "owner": "player",
+                "type": "integer",
+                "unit": "credits",
+                "default": "0",
+                "domain": "integer >= 0",
+            },
+            {
+                "name": "shipStatus",
+                "owner": "player",
+                "type": "string",
+                "unit": "status",
+                "default": "DOCKED",
+                "domain": "status",
+            },
+        ],
+        transitions=[{
+            "from_state": "dock",
+            "trigger": "launch",
+            "guard": "shipStatus == ShipStatus.COMPLETE AND credits >= cost",
+            "mutation": "credits -= cost",
+            "to_state": "space",
+        }],
+    ))
+
+    section = compile_production_state_section(ForbiddenRouter(), plan)
 
     transitions = section["specification"]["transitions"]
     assert transitions[0]["guard"] == 'shipStatus == "COMPLETE" && credits >= cost'
     assert transitions[0]["mutation"] == "credits -= cost"
-    assert all(
-        kwargs["response_format"] == "text"
-        and kwargs["response_schema"] is None
-        and kwargs["enable_tools"] is False
-        for _role, _concern, kwargs in router.calls
-    )
-    assert [concern for _role, concern, _kwargs in router.calls] == [
-        "variables",
-        "transitions",
-        "invariants",
-        "initialization",
-        "updates",
-        "cleanup",
-        "concurrency",
-    ]
 
     obligations = []
     for concern in ("variables", "transitions"):
@@ -551,29 +577,24 @@ def test_host_expression_parser_accepts_trailing_whitespace_only():
     validate_state_expression("credits >= 0   ")
 
 
-def test_cleanup_subsystem_action_does_not_crash_state_mutation_compiler():
-    class Router:
-        def generate_text(self, role, messages, **kwargs):
-            payload = json.loads(messages[-1]["content"])
-            concern = payload["concern"]
-            if concern == "variables":
-                return (
-                    "STATUS=DONE\nRECORD\n"
-                    "name=credits\nowner=player\ntype=integer\nunit=credits\n"
-                    "default=0\ndomain=integer >= 0\nEND"
-                )
-            if concern == "cleanup":
-                return (
-                    "STATUS=DONE\nRECORD\n"
-                    "event=shutdown\n"
-                    "action=SaveStateToFile\n"
-                    "retained_state=player progress\nEND"
-                )
-            return "STATUS=EMPTY"
-
+def test_cleanup_subsystem_action_is_dropped_by_host_normalizer_without_model():
     section = compile_production_state_section(
-        Router(),
-        AuthoredPlan("make a space mod", _plan_text()),
+        None,
+        _structured_plan(_state_section(
+            variables=[{
+                "name": "credits",
+                "owner": "player",
+                "type": "integer",
+                "unit": "credits",
+                "default": "0",
+                "domain": "integer >= 0",
+            }],
+            cleanup=[{
+                "event": "shutdown",
+                "action": "SaveStateToFile",
+                "retained_state": "player progress",
+            }],
+        )),
     )
 
     assert section["specification"]["cleanup"] == []
@@ -584,26 +605,23 @@ def test_cleanup_subsystem_action_does_not_crash_state_mutation_compiler():
 
 
 def test_undeclared_mutation_target_is_not_promoted_to_state_variable():
-    class Router:
-        def generate_text(self, role, messages, **kwargs):
-            payload = json.loads(messages[-1]["content"])
-            concern = payload["concern"]
-            if concern == "variables":
-                return (
-                    "STATUS=DONE\nRECORD\n"
-                    "name=credits\nowner=player\ntype=integer\nunit=credits\n"
-                    "default=0\ndomain=integer >= 0\nEND"
-                )
-            if concern == "updates":
-                return (
-                    "STATUS=DONE\nRECORD\n"
-                    "trigger=tick\nmutation=ghost_counter += 1\nowner=server\nEND"
-                )
-            return "STATUS=EMPTY"
-
     section = compile_production_state_section(
-        Router(),
-        AuthoredPlan("make a space mod", _plan_text()),
+        None,
+        _structured_plan(_state_section(
+            variables=[{
+                "name": "credits",
+                "owner": "player",
+                "type": "integer",
+                "unit": "credits",
+                "default": "0",
+                "domain": "integer >= 0",
+            }],
+            updates=[{
+                "trigger": "tick",
+                "mutation": "ghost_counter += 1",
+                "owner": "server",
+            }],
+        )),
     )
 
     assert [row["name"] for row in section["specification"]["variables"]] == ["credits"]
@@ -611,29 +629,25 @@ def test_undeclared_mutation_target_is_not_promoted_to_state_variable():
 
 
 def test_transition_without_state_assignment_uses_empty_program_not_magic_token():
-    class Router:
-        def generate_text(self, role, messages, **kwargs):
-            payload = json.loads(messages[-1]["content"])
-            concern = payload["concern"]
-            if concern == "variables":
-                return (
-                    "STATUS=DONE\nRECORD\n"
-                    "name=ship_state\nowner=player\ntype=string\nunit=status\n"
-                    "default=Docked\ndomain=status\nEND"
-                )
-            if concern == "transitions":
-                return (
-                    "STATUS=DONE\nRECORD\n"
-                    "from_state=dock\ntrigger=launch\n"
-                    "guard=ship_state == Ready\n"
-                    "mutation=SendPacket\n"
-                    "to_state=space\nEND"
-                )
-            return "STATUS=EMPTY"
-
     section = compile_production_state_section(
-        Router(),
-        AuthoredPlan("make a space mod", _plan_text()),
+        None,
+        _structured_plan(_state_section(
+            variables=[{
+                "name": "ship_state",
+                "owner": "player",
+                "type": "string",
+                "unit": "status",
+                "default": "Docked",
+                "domain": "status",
+            }],
+            transitions=[{
+                "from_state": "dock",
+                "trigger": "launch",
+                "guard": "ship_state == Ready",
+                "mutation": "SendPacket",
+                "to_state": "space",
+            }],
+        )),
     )
 
     transition = section["specification"]["transitions"][0]
@@ -682,9 +696,19 @@ def test_production_state_sidecar_activates_state_leaf_without_text_anchor():
 
 
 def test_production_state_is_sidecar_and_does_not_mutate_authored_plan():
-    router = ProductionStateRouter()
-    original = AuthoredPlan("make a space mod", _plan_text())
-    section = compile_production_state_section(router, original)
+    raw = _state_section(
+        variables=[{
+            "name": "credits",
+            "owner": "player",
+            "type": "integer",
+            "unit": "credits",
+            "default": "0",
+            "domain": "integer >= 0",
+        }]
+    )
+    original = _structured_plan(raw)
+    original_snapshot = original.to_dict()
+    section = compile_production_state_section(None, original)
 
     modules, _manifest = _compile_new_authored_modules(
         original,
@@ -696,10 +720,10 @@ def test_production_state_is_sidecar_and_does_not_mutate_authored_plan():
 
     request = modules[0].config["implementation_graph_request"]
     assert request["production_state_section"] == section
-    assert request["structured_sections"] == {}
+    assert request["structured_sections"] == original.structured_sections
     assert request["structured_sections_sha256"].startswith("sha256:")
-    assert original.text == _plan_text()
-    assert original.structured_sections == {}
+    assert original.to_dict() == original_snapshot
+
 
 def test_lark_state_expression_accepts_word_logic_aggregates_and_implication():
     for expression in (
@@ -929,101 +953,50 @@ def test_free_markdown_nested_state_bullets_are_explicit_payload():
     assert _concern_has_explicit_payload(source, "transitions") is True
 
 
-def test_free_markdown_nested_state_values_lower_at_production_boundary():
-    class Router:
+def test_free_markdown_nested_state_values_is_rejected_at_production_boundary():
+    class ForbiddenRouter:
         def __init__(self):
             self.calls = []
 
-        def generate_text(self, role, messages, **kwargs):
-            payload = json.loads(messages[-1]["content"])
-            self.calls.append(payload["concern"])
-            return "STATUS=EMPTY"
-
-    plan = AuthoredPlan(
-        "make a space mod",
-        (
-            "## state_model\n"
-            "- **variables**:\n"
-            "    - `star_balance`: `player` 소유, `long`, 기본값 `0L`, 범위 `0 ~ 2^63-1`\n"
-            "## algorithm\n"
-            "- steps: launch flow\n"
-        ),
-    )
-    router = Router()
-
-    section = compile_production_state_section(router, plan)
-
-    assert "variables" not in router.calls
-    assert section["specification"]["variables"][0]["name"] == "star_balance"
-    assert section["specification"]["variables"][0]["owner"] == "player"
-
-
-def test_logged_free_markdown_state_lowers_without_model_cooperation():
-    class EmptyRouter:
-        def __init__(self):
-            self.calls = []
-
-        def generate_text(self, role, messages, **kwargs):
-            payload = json.loads(messages[-1]["content"])
-            self.calls.append(payload["concern"])
-            return "STATUS=EMPTY"
+        def generate_text(self, *_args, **_kwargs):
+            self.calls.append(True)
+            raise AssertionError("production must not reinterpret free Markdown state")
 
     plan = AuthoredPlan(
         "space mod",
-        (
-            "## state_model\n\n"
-            "모드 내 상태 모델은 플레이어의 경제력, 우주선 구축 현황, 위치 정보를 저장하는 변수와 전이 규칙으로 구성됩니다.\n\n"
-            "- **variables**:\n"
-            "    - `star_balance`: `player` 소유, `long`, 기본값 `0L`, 범위 `0 ~ 2^63-1` (화석 크레딧)\n"
-            "    - `ship_blueprint`: `player` 또는 `world_chunk` 소유, `Map<SlotType, Item>`, 기본값 `{}`\n"
-            "    - `dimension_id`: `entity`, `int`, 기본값 `-1` (지상 모드), 우주 진입 시 `-9999` (StarForge 차원)\n"
-            "- **transitions**:\n"
-            "    - `from_state`: `ground_mode` -> `dock_building` (도크 사용 시), `flying_disabled` -> `flying_capable` (연료 충전 완료 시)\n"
-            "    - `trigger`: `player_interaction`, `fuel_consumption` (추진소 연료 소모)\n"
-            "    - `guard`: `credits >= cost` (구매 조건), `inventory_slots >= count` (공간 조건)\n"
-            "    - `mutation`: `ship_blueprint.put(slot, item)`, `star_balance -= cost`\n"
-            "    - `to_state`: `building_complete`, `in_space_active`\n"
-            "- **invariants**:\n"
-            "    - `condition_enforcement`: 항상 `ship_strength <= 100%` (최대 성능 제한), `credits >= 0`\n"
-            "- **initialization**:\n"
-            "    - `owner`: `world_gen`\n"
-            "    - `trigger`: `server_load` 및 `player_first_login`\n"
-            "    - `initial_state`: 플레이어는 `ground_mode`, 크레딧은 0, 우주선 없음 상태 유지\n"
-            "- **updates**:\n"
-            "    - `trigger`: `tick_event` (우주선 연료 감수), `trade_complete` (매각 완료 시)\n"
-            "    - `owner`: `state_manager`\n"
-            "- **cleanup**:\n"
-            "    - `event`: `player_logout` 또는 `server_shutdown`\n"
-            "    - `action`: 모든 불완전한 `ship_blueprint` 제거 및 보상 처리\n"
-            "    - `retained_state`: `star_balance`는 반드시 저장됨\n"
-            "- **concurrency**:\n"
-            "    - `entry_path`: 각 `PlayerEntity` 는 독립적인 상태 관리 경로 사용\n"
-            "    - `ownership`: `server_authoritative`, 클라이언트는 읽기 전용 미리보기 권한만 가짐\n"
-            "    - `reentrancy_rule`: 동시 호출은 1 개만 허용, 나머지는 큐에 대기\n"
-            "## algorithm\n"
-            "- steps: launch flow\n"
-        ),
+        "## state_model\n- variables: free-form authored state\n",
     )
-    router = EmptyRouter()
+    router = ForbiddenRouter()
 
-    section = compile_production_state_section(router, plan)
-    spec = section["specification"]
+    with pytest.raises(
+        ValueError,
+        match="PRODUCTION_STATE_STRUCTURED_AUTHORITY_REQUIRED",
+    ):
+        compile_production_state_section(router, plan)
+    assert router.calls == []
 
-    assert [row["name"] for row in spec["variables"]] == [
-        "star_balance",
-        "ship_blueprint",
-        "dimension_id",
-    ]
-    assert spec["variables"][0]["default"] == "0"
-    assert spec["transitions"][0]["mutation"] == "star_balance -= cost"
-    assert "credits >= cost" in spec["transitions"][0]["guard"]
-    assert "inventory_slots >= count" in spec["transitions"][0]["guard"]
-    assert "100%" not in spec["invariants"][0]["condition"]
-    assert spec["concurrency"]
-    assert "variables" not in router.calls
-    assert "transitions" not in router.calls
-    assert "invariants" not in router.calls
-    assert "concurrency" not in router.calls
+
+def test_logged_free_markdown_state_is_rejected_without_model_decode():
+    class ForbiddenRouter:
+        def __init__(self):
+            self.calls = []
+
+        def generate_text(self, *_args, **_kwargs):
+            self.calls.append(True)
+            raise AssertionError("production must not reinterpret free Markdown state")
+
+    plan = AuthoredPlan(
+        "space mod",
+        "## state_model\n- variables: free-form authored state\n",
+    )
+    router = ForbiddenRouter()
+
+    with pytest.raises(
+        ValueError,
+        match="PRODUCTION_STATE_STRUCTURED_AUTHORITY_REQUIRED",
+    ):
+        compile_production_state_section(router, plan)
+    assert router.calls == []
 
 
 def test_production_state_extractor_rejects_false_empty_for_explicit_authored_values():
