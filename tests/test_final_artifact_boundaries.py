@@ -21,7 +21,7 @@ from minecraft_mod_ai.final_artifact import (
     verify_debug_fixture_source,
     write_downloadable_bundle,
 )
-from minecraft_mod_ai.pipeline import MinecraftModPipeline
+from minecraft_mod_ai.spec import ModSpec
 from minecraft_mod_ai.validator import validate_jar
 
 
@@ -641,7 +641,14 @@ def test_final_jar_metadata_rejects_windows_drive_entry(tmp_path: Path) -> None:
 
 
 def test_validate_jar_rejects_direct_symlink_before_archive_parsing(tmp_path: Path) -> None:
-    spec = MinecraftModPipeline().plan("Create a frost item").spec
+    spec = ModSpec(
+        mod_id="frost_test",
+        mod_name="Frost Test",
+        package_name="ai.minecraft.frosttest",
+        version="1.0.0",
+        summary="validator boundary test",
+        contents=(),
+    )
     target = tmp_path / "target.jar"
     target.write_bytes(b"not-even-a-zip")
     link = tmp_path / "linked.jar"
