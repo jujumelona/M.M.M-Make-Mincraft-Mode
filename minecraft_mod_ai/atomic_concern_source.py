@@ -1748,11 +1748,83 @@ def _concern_authority(
 
 
 
+def _split_legacy_actor_entries(value: str) -> tuple[str, ...]:
+    """Split an exact legacy actors list without interpreting free-form prose."""
+
+    rows: list[str] = []
+    buffer: list[str] = []
+    depth = 0
+    for char in str(value or ""):
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth < 0:
+                return ()
+        if char == "," and depth == 0:
+            row = "".join(buffer).strip()
+            if row:
+                rows.append(row)
+            buffer.clear()
+            continue
+        buffer.append(char)
+    if depth != 0:
+        return ()
+    tail = "".join(buffer).strip()
+    if tail:
+        rows.append(tail)
+    return tuple(rows)
+
+
+def _legacy_behavior_actor_records(
+    source_requirements: Mapping[str, Any],
+) -> tuple[dict[str, str], ...]:
+    """Decode only the historical actors requirement contract."""
+
+    lines = _concern_source_requirements(
+        source_requirements,
+        concern="actors",
+    )
+    rows: list[dict[str, str]] = []
+    pattern = re.compile(r"^\s*-\s*actors\s*:\s*(.+?)\s*$", re.IGNORECASE)
+    entry_pattern = re.compile(
+        r"^\s*(?P<name>[^(),]+?)\s*"
+        r"\(\s*(?P<role>[^(),]+?)\s*,\s*(?P<authority>[^(),]+?)\s*\)\s*$"
+    )
+    for raw_line in lines.values():
+        match = pattern.fullmatch(str(raw_line or ""))
+        if match is None:
+            continue
+        entries = _split_legacy_actor_entries(match.group(1))
+        if not entries:
+            return ()
+        parsed: list[dict[str, str]] = []
+        for entry in entries:
+            actor = entry_pattern.fullmatch(entry)
+            if actor is None:
+                return ()
+            name = actor.group("name").strip()
+            role = actor.group("role").strip()
+            actor_authority = actor.group("authority").strip()
+            if not name or not role or not actor_authority:
+                return ()
+            parsed.append(
+                {
+                    "name": name,
+                    "role": name,
+                    "authority": actor_authority,
+                }
+            )
+        rows.extend(parsed)
+    return tuple(rows)
+
+
 def _behavior_actor_records(
     task: Mapping[str, Any],
     concern: Mapping[str, Any],
 ) -> tuple[dict[str, str], ...]:
-    """Recover the canonical actor records without asking the coder to invent Java types."""
+    """Recover actor records without giving Java design authority to the coder."""
+
     authority = _concern_authority(task, concern)
     rows: list[dict[str, str]] = []
     structured = authority.get("structured_records")
@@ -1775,6 +1847,10 @@ def _behavior_actor_records(
                 )
     if rows:
         return tuple(rows)
+
+    source_requirements = authority.get("source_requirements")
+    if isinstance(source_requirements, Mapping):
+        return _legacy_behavior_actor_records(source_requirements)
     return ()
 
 
