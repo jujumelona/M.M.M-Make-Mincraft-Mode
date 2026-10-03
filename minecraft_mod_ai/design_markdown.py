@@ -291,30 +291,6 @@ def _module_rows(body: str) -> list[dict[str, Any]]:
         if value.casefold() in _NONE_VALUES and current is None:
             continue
 
-        parts = _pipe_parts(value)
-        if "|" in value:
-            normalized_header = [_normalize_heading(part) for part in parts]
-            if normalized_header[:2] == [
-                "plugin_id",
-                "status",
-            ] or _is_markdown_table_separator(parts):
-                continue
-            if len(parts) >= 5 and all(parts[:2]) and parts[-2] and parts[-1]:
-                flush()
-                rows.append(
-                    _finalize_module_record(
-                        {
-                            "plugin_id": parts[0],
-                            "status": parts[1],
-                            "reason": " | ".join(parts[2:-2]).strip(),
-                            "requirement_refs": _split_csv(parts[-2]),
-                            "implementation_obligations": _split_obligations(parts[-1]),
-                        },
-                        source=value,
-                    )
-                )
-                continue
-
         key_value = _record_key_value(value)
         if key_value is not None:
             key, item_value = key_value
@@ -350,7 +326,7 @@ def _module_rows(body: str) -> list[dict[str, Any]]:
             current["reason"] = f"{current['reason']} {value}".strip()
             continue
         raise SpecValidationError(
-            "Could not parse a ## modules record. Use labeled Markdown records or the supported legacy pipe record."
+            "Could not parse a ## modules record. Use labeled Markdown records."
         )
 
     flush()
