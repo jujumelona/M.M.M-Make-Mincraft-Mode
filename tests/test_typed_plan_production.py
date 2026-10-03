@@ -14,7 +14,7 @@ from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
 from minecraft_mod_ai.generator import FabricProjectGenerator
 from minecraft_mod_ai.scale_policy import ScalePolicy
 from minecraft_mod_ai.spec import ContentKind, ContentSpec, ModSpec
-from minecraft_mod_ai.work_graph import _is_host_exact_authored_module, _module_shards
+from minecraft_mod_ai.work_graph import _is_host_exact_authored_module, _module_shards, _node
 
 
 
@@ -190,7 +190,7 @@ def test_typed_plan_backend_refuses_unowned_existing_source(tmp_path: Path) -> N
         )
 
 
-def test_typed_plan_custom_work_is_isolated_from_llm_shards() -> None:
+def test_typed_plan_host_work_is_isolated_from_llm_shards() -> None:
     typed = ProductionModule(
         module_id="typed",
         kind="custom_java",
@@ -214,6 +214,24 @@ def test_typed_plan_custom_work_is_isolated_from_llm_shards() -> None:
     )
     assert len(shards) == 2
     typed_stage, typed_members = shards[0]
-    assert typed_stage == "custom"
+    assert typed_stage == "host"
     assert [member.module_id for member in typed_members] == ["typed"]
+
+    node = _node(
+        "typed-host",
+        "generate:host",
+        (),
+        {
+            "kind": "module-shard",
+            "generation_stage": "host",
+            "members": [
+                {
+                    "module_id": "typed",
+                    "kind": "custom_java",
+                    "config": {"typed_plan_ir": _plan()},
+                }
+            ],
+        },
+    )
+    assert node.resource_class == "cpu_io"
 
