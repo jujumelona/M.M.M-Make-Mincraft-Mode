@@ -12,8 +12,8 @@ def _fixture_value(schema: dict[str, Any], text: str) -> Any:
     pattern = str(schema.get("pattern") or "")
     if "Stable ASCII internal state identifier" in description:
         return "stateValue"
-    if "Host state-compiler DSL" in description:
-        if "\\+=" in pattern or "\\-=" in pattern or "\\*=" in pattern or "/=" in pattern:
+    if "Host state-" in description and "DSL" in description:
+        if "mutation" in description.casefold():
             return "stateValue = 1"
         return "true"
 
