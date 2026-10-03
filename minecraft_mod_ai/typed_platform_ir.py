@@ -12,7 +12,7 @@ from .system_pack_validation import validate_system_modules
 
 PLATFORM_CONTENT_KINDS = frozenset({
     "item", "block", "tool", "weapon", "armor", "food", "crop", "machine",
-    "effect", "enchantment", "command", "recipe", "advancement", "loot",
+    "effect", "enchantment", "command", "recipe", "advancement", "loot", "tag",
 })
 PLATFORM_SYSTEM_KIND_TO_PACK = {
     "quest": "quest-system",
@@ -135,6 +135,20 @@ def platform_config_schema(kind: str) -> dict[str, Any]:
                 "maxProperties": 128,
             },
         }, required=("json",))
+    if kind == "tag":
+        return _schema({
+            "registry": {
+                "type": "string",
+                "enum": ["items", "blocks", "entity_types", "fluids", "functions"],
+            },
+            "values": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 256,
+                "items": _RESOURCE_ID,
+            },
+            "replace": {"type": "boolean"},
+        }, required=("registry", "values"))
     if kind in PLATFORM_ENTITY_KINDS:
         return _schema({
             "max_health": {"type": "number", "exclusiveMinimum": 0},
@@ -330,7 +344,29 @@ _PERSISTENT_SYSTEM_KINDS = frozenset({
 def _coverage_allowed(kind: str, cover: str) -> bool:
     if cover.startswith("resources_and_ui."):
         concern = cover.split(".", 1)[1]
-        if concern in {"registries", "data_resources", "assets", "paths"}:
+        registry_kinds = {
+            "item", "block", "tool", "weapon", "armor", "food", "crop",
+            "machine", "effect", "enchantment",
+        }
+        asset_kinds = {
+            "item", "block", "tool", "weapon", "armor", "food", "crop",
+            "machine",
+        }
+        if concern == "registries":
+            return (
+                kind in registry_kinds
+                or kind in PLATFORM_SYSTEM_KIND_TO_PACK
+                or kind in PLATFORM_ENTITY_KINDS
+            )
+        if concern == "data_resources":
+            return (
+                kind in PLATFORM_CONTENT_KINDS
+                or kind in PLATFORM_SYSTEM_KIND_TO_PACK
+                or kind in PLATFORM_ENTITY_KINDS
+            )
+        if concern == "assets":
+            return kind in asset_kinds or kind in PLATFORM_ENTITY_KINDS
+        if concern == "paths":
             return (
                 kind in PLATFORM_CONTENT_KINDS
                 or kind in PLATFORM_SYSTEM_KIND_TO_PACK
@@ -406,6 +442,7 @@ def _validate_content_config(kind: str, config: Mapping[str, Any], module_id: st
         "recipe": {"json"},
         "advancement": {"json"},
         "loot": {"json"},
+        "tag": {"registry", "values", "replace"},
     }
     unknown = set(config) - allowed_by_kind[kind]
     if unknown:
@@ -451,6 +488,29 @@ def _validate_content_config(kind: str, config: Mapping[str, Any], module_id: st
         if not isinstance(payload, Mapping):
             raise ValueError(f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.json")
         _json_scalar_tree(payload, f"{module_id}.json")
+    if kind == "tag":
+        registry = config.get("registry")
+        if registry not in {"items", "blocks", "entity_types", "fluids", "functions"}:
+            raise ValueError(
+                f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.registry"
+            )
+        values = config.get("values")
+        if (
+            not isinstance(values, list)
+            or not values
+            or len(values) > 256
+            or any(
+                not isinstance(value, str) or not _RESOURCE.fullmatch(value)
+                for value in values
+            )
+        ):
+            raise ValueError(
+                f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.values"
+            )
+        if "replace" in config and type(config["replace"]) is not bool:
+            raise ValueError(
+                f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.replace"
+            )
 
 
 def validate_platform_modules(raw_modules: Any) -> list[dict[str, Any]]:
