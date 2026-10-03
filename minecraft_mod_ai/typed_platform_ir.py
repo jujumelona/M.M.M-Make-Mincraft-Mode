@@ -25,7 +25,11 @@ PLATFORM_SYSTEM_KIND_TO_PACK = {
     "party": "party-guild",
     "guild": "party-guild",
 }
-PLATFORM_HOST_KINDS = frozenset({"state_store"})
+PLATFORM_HOST_KINDS = frozenset({
+    "state_store",
+    "network_sync",
+    "resource_policy",
+})
 PLATFORM_ENTITY_KINDS = frozenset({"entity", "boss", "npc"})
 PLATFORM_KINDS = frozenset(
     set(PLATFORM_CONTENT_KINDS)
@@ -213,12 +217,64 @@ def platform_config_schema(kind: str) -> dict[str, Any]:
             "main_color",
         ))
     if kind == "state_store":
+        migration = _schema({
+            "from_version": _STRING,
+            "to_version": _STRING,
+            "operation": {
+                "type": "string",
+                "enum": [
+                    "preserve",
+                    "rename_key",
+                    "delete_key",
+                    "set_default",
+                ],
+            },
+            "source_key": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+            },
+            "destination_key": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+            },
+            "value": {
+                "type": ["string", "number", "integer", "boolean", "null"],
+            },
+        }, required=("from_version", "to_version", "operation"))
         return _schema({
             "namespace": {
                 "type": "string",
                 "pattern": r"^[a-z][a-z0-9_.-]{1,63}$",
             },
+            "schema_version": _STRING,
+            "migrations": {
+                "type": "array",
+                "maxItems": 64,
+                "items": migration,
+            },
+            "malformed_policy": {
+                "type": "string",
+                "enum": ["backup_and_reset"],
+            },
+            "transfer_on_respawn": {"type": "boolean"},
         })
+    if kind == "network_sync":
+        return _schema({
+            "sync_interval_ticks": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1200,
+            },
+            "max_payload_bytes": {
+                "type": "integer",
+                "minimum": 256,
+                "maximum": 32767,
+            },
+        })
+    if kind == "resource_policy":
+        return _schema({})
     if kind == "quest":
         return _schema({
             "objective": {"type": "string", "enum": ["kill", "break", "manual"]},
@@ -376,10 +432,19 @@ def _coverage_allowed(kind: str, cover: str) -> bool:
             return kind in {"command", "machine", "gui", "networking"}
         if concern == "displayed_state":
             return kind == "gui"
+        if concern in {"missing_resources", "accessibility"}:
+            return kind == "resource_policy"
         return False
 
     if cover.startswith("authority_and_network."):
         concern = cover.split(".", 1)[1]
+        if concern in {
+            "client_boundaries",
+            "payloads",
+            "synchronization",
+            "reconnection",
+        }:
+            return kind == "network_sync"
         return kind == "networking" and concern in {
             "decisions",
             "packets",
@@ -398,6 +463,9 @@ def _coverage_allowed(kind: str, cover: str) -> bool:
             "missing_defaults",
             "save_triggers",
             "load_behavior",
+            "migration",
+            "malformed_data",
+            "transfers",
         }
 
     if cover.startswith("integration."):
@@ -657,17 +725,121 @@ def validate_platform_modules(raw_modules: Any) -> list[dict[str, Any]]:
                         f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.{field}"
                     )
         elif kind in PLATFORM_HOST_KINDS:
-            unknown = set(config) - {"namespace"}
-            if unknown:
-                raise ValueError(
-                    f"TYPED_PLATFORM_CONFIG_INVALID: {module_id} has "
-                    f"unsupported fields {sorted(unknown)}"
-                )
-            namespace = str(config.get("namespace", "authored_state"))
-            if not re.fullmatch(r"[a-z][a-z0-9_.-]{1,63}", namespace):
-                raise ValueError(
-                    f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.namespace"
-                )
+            if kind == "state_store":
+                allowed = {
+                    "namespace",
+                    "schema_version",
+                    "migrations",
+                    "malformed_policy",
+                    "transfer_on_respawn",
+                }
+                unknown = set(config) - allowed
+                if unknown:
+                    raise ValueError(
+                        f"TYPED_PLATFORM_CONFIG_INVALID: {module_id} has "
+                        f"unsupported fields {sorted(unknown)}"
+                    )
+                namespace = str(config.get("namespace", "authored_state"))
+                if not re.fullmatch(r"[a-z][a-z0-9_.-]{1,63}", namespace):
+                    raise ValueError(
+                        f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.namespace"
+                    )
+                schema_version = str(config.get("schema_version", "1")).strip()
+                if not schema_version or len(schema_version) > 256:
+                    raise ValueError(
+                        f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.schema_version"
+                    )
+                migrations = config.get("migrations", [])
+                if not isinstance(migrations, list) or len(migrations) > 64:
+                    raise ValueError(
+                        f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.migrations"
+                    )
+                for migration in migrations:
+                    if not isinstance(migration, Mapping):
+                        raise ValueError(
+                            f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.migrations"
+                        )
+                    required = {"from_version", "to_version", "operation"}
+                    optional = {"source_key", "destination_key", "value"}
+                    if not required <= set(migration) or set(migration) - required - optional:
+                        raise ValueError(
+                            f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.migration"
+                        )
+                    operation = str(migration["operation"])
+                    if operation not in {
+                        "preserve",
+                        "rename_key",
+                        "delete_key",
+                        "set_default",
+                    }:
+                        raise ValueError(
+                            f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.migration.operation"
+                        )
+                    if operation in {"rename_key", "delete_key"} and not str(
+                        migration.get("source_key") or ""
+                    ).strip():
+                        raise ValueError(
+                            f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.migration.source_key"
+                        )
+                    if operation == "rename_key" and not str(
+                        migration.get("destination_key") or ""
+                    ).strip():
+                        raise ValueError(
+                            f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.migration.destination_key"
+                        )
+                    if operation == "set_default" and not str(
+                        migration.get("destination_key") or ""
+                    ).strip():
+                        raise ValueError(
+                            f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.migration.destination_key"
+                        )
+                if config.get("malformed_policy", "backup_and_reset") != "backup_and_reset":
+                    raise ValueError(
+                        f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.malformed_policy"
+                    )
+                if "transfer_on_respawn" in config and type(
+                    config["transfer_on_respawn"]
+                ) is not bool:
+                    raise ValueError(
+                        f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.transfer_on_respawn"
+                    )
+                cover_set = set(normalized_covers)
+                if "persistence.migration" in cover_set and not migrations:
+                    raise ValueError(
+                        f"TYPED_PLATFORM_CONFIG_INVALID: {module_id} migration "
+                        "coverage requires typed migrations"
+                    )
+                if (
+                    "persistence.transfers" in cover_set
+                    and config.get("transfer_on_respawn") is not True
+                ):
+                    raise ValueError(
+                        f"TYPED_PLATFORM_CONFIG_INVALID: {module_id} transfers "
+                        "coverage requires transfer_on_respawn=true"
+                    )
+            elif kind == "network_sync":
+                allowed = {"sync_interval_ticks", "max_payload_bytes"}
+                unknown = set(config) - allowed
+                if unknown:
+                    raise ValueError(
+                        f"TYPED_PLATFORM_CONFIG_INVALID: {module_id} has "
+                        f"unsupported fields {sorted(unknown)}"
+                    )
+                for field, lower, upper, default in (
+                    ("sync_interval_ticks", 1, 1200, 20),
+                    ("max_payload_bytes", 256, 32767, 32767),
+                ):
+                    value = config.get(field, default)
+                    if type(value) is not int or not lower <= value <= upper:
+                        raise ValueError(
+                            f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.{field}"
+                        )
+            elif kind == "resource_policy":
+                if config:
+                    raise ValueError(
+                        f"TYPED_PLATFORM_CONFIG_INVALID: {module_id} resource_policy "
+                        "takes no model-authored configuration"
+                    )
         else:
             pack = PLATFORM_SYSTEM_KIND_TO_PACK[kind]
             system_groups.setdefault(pack, []).append({
