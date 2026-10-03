@@ -1,38 +1,39 @@
-name: Planner Liveness Regression
+name: Planner Liveness
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'minecraft_mod_ai/complete_planner.py'
+      - 'minecraft_mod_ai/deadline_executor.py'
+      - 'minecraft_mod_ai/model_concurrency.py'
+      - 'minecraft_mod_ai/model_router.py'
+      - 'minecraft_mod_ai/planner_structured_router.py'
+      - 'minecraft_mod_ai/llama_completion_liveness_contract.py'
+      - 'minecraft_mod_ai/llama_stream_efficiency_contract.py'
+      - 'minecraft_mod_ai/llama_structured_decode_policy.py'
+      - 'tests/test_planner_stream_liveness.py'
+      - 'tests/test_agentic_planner_runtime_hardening.py'
+      - 'tests/test_pipeline_liveness_regressions.py'
+      - 'tests/test_planner_structured_router.py'
+      - 'tests/test_required_tool_decode_liveness.py'
+      - '.github/workflows/planner-liveness.yml'
   pull_request:
     paths:
-      - 'minecraft_mod_ai/planning_state_adaptive_implementation.py'
-      - 'minecraft_mod_ai/planning_criterion_fragments.py'
-      - 'minecraft_mod_ai/planning_state_research.py'
+      - 'minecraft_mod_ai/complete_planner.py'
       - 'minecraft_mod_ai/deadline_executor.py'
       - 'minecraft_mod_ai/model_concurrency.py'
-      - 'minecraft_mod_ai/planning_state_pipeline.py'
-      - 'minecraft_mod_ai/planning_convergence_contract.py'
-      - 'minecraft_mod_ai/planning_detail_template.py'
-      - 'minecraft_mod_ai/planning_state_implementation.py'
-      - 'tests/test_planning_progress_monotone.py'
-      - 'tests/test_planning_deadline_hardening.py'
-      - 'tests/test_planning_convergence_contract.py'
-      - '.github/workflows/planner-liveness.yml'
-  push:
-    branches:
-      - main
-    paths:
-      - 'minecraft_mod_ai/planning_state_adaptive_implementation.py'
-      - 'minecraft_mod_ai/planning_criterion_fragments.py'
-      - 'minecraft_mod_ai/planning_state_research.py'
-      - 'minecraft_mod_ai/deadline_executor.py'
-      - 'minecraft_mod_ai/model_concurrency.py'
-      - 'minecraft_mod_ai/planning_state_pipeline.py'
-      - 'minecraft_mod_ai/planning_convergence_contract.py'
-      - 'minecraft_mod_ai/planning_detail_template.py'
-      - 'minecraft_mod_ai/planning_state_implementation.py'
-      - 'tests/test_planning_progress_monotone.py'
-      - 'tests/test_planning_deadline_hardening.py'
-      - 'tests/test_planning_convergence_contract.py'
+      - 'minecraft_mod_ai/model_router.py'
+      - 'minecraft_mod_ai/planner_structured_router.py'
+      - 'minecraft_mod_ai/llama_completion_liveness_contract.py'
+      - 'minecraft_mod_ai/llama_stream_efficiency_contract.py'
+      - 'minecraft_mod_ai/llama_structured_decode_policy.py'
+      - 'tests/test_planner_stream_liveness.py'
+      - 'tests/test_agentic_planner_runtime_hardening.py'
+      - 'tests/test_pipeline_liveness_regressions.py'
+      - 'tests/test_planner_structured_router.py'
+      - 'tests/test_required_tool_decode_liveness.py'
       - '.github/workflows/planner-liveness.yml'
 
 permissions:
@@ -43,10 +44,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  liveness:
+  planner-liveness:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    name: Monotone planning and terminal resume
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -55,19 +55,17 @@ jobs:
           cache: pip
       - name: Install test dependencies
         run: python -m pip install --prefer-binary -e '.[dev]'
-      - name: Compile planner-owned sources
+      - name: Compile current planner runtime
         run: >-
           python -m py_compile
-          minecraft_mod_ai/planning_state_adaptive_implementation.py
-          minecraft_mod_ai/planning_criterion_fragments.py
-          minecraft_mod_ai/planning_state_research.py
+          minecraft_mod_ai/complete_planner.py
           minecraft_mod_ai/deadline_executor.py
           minecraft_mod_ai/model_concurrency.py
-          minecraft_mod_ai/planning_state_pipeline.py
-          minecraft_mod_ai/planning_convergence_contract.py
-          tests/test_planning_progress_monotone.py
-          tests/test_planning_deadline_hardening.py
-          tests/test_planning_convergence_contract.py
+          minecraft_mod_ai/model_router.py
+          minecraft_mod_ai/planner_structured_router.py
+          minecraft_mod_ai/llama_completion_liveness_contract.py
+          minecraft_mod_ai/llama_stream_efficiency_contract.py
+          minecraft_mod_ai/llama_structured_decode_policy.py
       - name: Run planner liveness regressions
         run: >-
           python tools/pytest_diagnostics.py
@@ -75,9 +73,11 @@ jobs:
           --junit audit/planner-liveness.xml
           --durations 20
           --maxfail 20
-          tests/test_planning_progress_monotone.py
-          tests/test_planning_deadline_hardening.py
-          tests/test_planning_convergence_contract.py
+          tests/test_planner_stream_liveness.py
+          tests/test_agentic_planner_runtime_hardening.py
+          tests/test_pipeline_liveness_regressions.py
+          tests/test_planner_structured_router.py
+          tests/test_required_tool_decode_liveness.py
       - name: Upload planner liveness diagnostics
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
