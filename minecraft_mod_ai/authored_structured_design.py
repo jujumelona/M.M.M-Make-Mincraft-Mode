@@ -313,10 +313,11 @@ def _generate_authored_chunk(
             raise
 
     explicit_projection = getattr(concerns, "field_projection", {})
-    merged: dict[str, Any] = {}
-    merged_inapplicable: list[dict[str, Any]] = []
-    merged_refs: list[str] = []
-    for position, concern in enumerate(concerns):
+
+    def generate_isolated(
+        item: tuple[int, str],
+    ) -> tuple[int, str, dict[str, Any]]:
+        position, concern = item
         fields = (
             explicit_projection.get(concern)
             if isinstance(explicit_projection, Mapping)
@@ -330,10 +331,46 @@ def _generate_authored_chunk(
                 else tuple(DETAIL_RECORDS[section][concern].split())
             },
         )
-        value = generate(
-            isolated,
-            evidence=bool(include_evidence and position == 0),
+        return (
+            position,
+            concern,
+            generate(
+                isolated,
+                evidence=bool(include_evidence and position == 0),
+            ),
         )
+
+    indexed_concerns = [
+        (position, str(concern))
+        for position, concern in enumerate(concerns)
+    ]
+    from .model_concurrency import router_native_model_parallelism
+
+    fallback_workers = min(
+        len(indexed_concerns),
+        max(1, router_native_model_parallelism(router, role="planner")),
+    )
+    if fallback_workers > 1:
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(
+            max_workers=fallback_workers,
+            thread_name_prefix=f"mmm-plan-recover-{section}",
+        ) as executor:
+            isolated_results = list(
+                executor.map(generate_isolated, indexed_concerns)
+            )
+    else:
+        isolated_results = [
+            generate_isolated(item)
+            for item in indexed_concerns
+        ]
+
+    isolated_results.sort(key=lambda item: item[0])
+    merged: dict[str, Any] = {}
+    merged_inapplicable: list[dict[str, Any]] = []
+    merged_refs: list[str] = []
+    for _position, concern, value in isolated_results:
         if concern in value:
             merged[concern] = deepcopy(value[concern])
         for item in value.get("inapplicable_concerns", []):
