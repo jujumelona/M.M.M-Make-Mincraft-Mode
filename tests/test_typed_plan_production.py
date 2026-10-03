@@ -16,7 +16,7 @@ from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
 from minecraft_mod_ai.scale_policy import ScalePolicy
 from minecraft_mod_ai.typed_host_capabilities import typed_host_capability_contracts
 from minecraft_mod_ai.spec import ContentKind, ContentSpec, ModSpec
-from minecraft_mod_ai.work_graph import _is_host_exact_authored_module, _module_shards, _node
+from minecraft_mod_ai.work_graph import _is_typed_host_module, _module_shards, _node
 
 
 
@@ -298,7 +298,7 @@ def test_typed_plan_backend_refuses_unowned_existing_source(tmp_path: Path) -> N
 def test_typed_plan_host_work_is_isolated_from_llm_shards() -> None:
     typed = ProductionModule(
         module_id="typed",
-        kind="custom_java",
+        kind="typed_host",
         config={
             "implementation": "custom",
             "typed_plan_ir": _plan(),
@@ -310,7 +310,7 @@ def test_typed_plan_host_work_is_isolated_from_llm_shards() -> None:
         config={"implementation": "custom"},
     )
 
-    assert _is_host_exact_authored_module(typed) is True
+    assert _is_typed_host_module(typed) is True
     shards = list(
         _module_shards(
             (typed, legacy),
@@ -332,7 +332,7 @@ def test_typed_plan_host_work_is_isolated_from_llm_shards() -> None:
             "members": [
                 {
                     "module_id": "typed",
-                    "kind": "custom_java",
+                    "kind": "typed_host",
                     "config": {"typed_plan_ir": _plan()},
                 }
             ],
