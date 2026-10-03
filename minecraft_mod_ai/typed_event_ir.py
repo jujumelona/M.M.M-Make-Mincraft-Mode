@@ -48,6 +48,59 @@ def is_mod_initialize_trigger(value: Any) -> bool:
     return bool(_MOD_INITIALIZE_TRIGGER.fullmatch(normalized))
 
 
+_EVENT_HINTS: dict[str, tuple[re.Pattern[str], ...]] = {
+    "server_started": (
+        re.compile(r"\bserver\s*(?:start|started|startup)\b", re.IGNORECASE),
+        re.compile(r"\bstartup\b", re.IGNORECASE),
+        re.compile(r"서버\s*시작"),
+    ),
+    "server_stopping": (
+        re.compile(r"\bserver\s*(?:stop|stopping|shutdown)\b", re.IGNORECASE),
+        re.compile(r"\bshutdown\b", re.IGNORECASE),
+        re.compile(r"서버\s*(?:종료|중지)"),
+    ),
+    "server_tick": (
+        re.compile(r"\bserver\s*tick\b", re.IGNORECASE),
+        re.compile(r"\btick\b", re.IGNORECASE),
+        re.compile(r"(?:서버\s*)?틱"),
+    ),
+    "player_join": (
+        re.compile(r"\bplayer\s*(?:join|login|connect|reconnect)\b", re.IGNORECASE),
+        re.compile(r"\b(?:join|login|reconnect)\b", re.IGNORECASE),
+        re.compile(r"플레이어\s*(?:접속|입장|재접속)"),
+    ),
+    "player_disconnect": (
+        re.compile(r"\bplayer\s*(?:disconnect|leave|logout)\b", re.IGNORECASE),
+        re.compile(r"\b(?:disconnect|logout)\b", re.IGNORECASE),
+        re.compile(r"플레이어\s*(?:퇴장|접속\s*종료|로그아웃)"),
+    ),
+    "player_respawn": (
+        re.compile(r"\bplayer\s*respawn\b", re.IGNORECASE),
+        re.compile(r"\brespawn\b", re.IGNORECASE),
+        re.compile(r"플레이어\s*리스폰|부활"),
+    ),
+    "command": (
+        re.compile(r"\bcommand\b", re.IGNORECASE),
+        re.compile(r"명령어|커맨드"),
+        re.compile(r"^/"),
+    ),
+}
+
+
+def infer_event_type(value: Any) -> str | None:
+    """Return a host-owned event only when the trigger text is unambiguous."""
+
+    text = _compact(value)
+    if not text or is_mod_initialize_trigger(text):
+        return None
+    matches = [
+        event
+        for event, patterns in _EVENT_HINTS.items()
+        if any(pattern.search(text) for pattern in patterns)
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
 def event_config_schema(event: str) -> dict[str, Any]:
     if event == "command":
         return {
@@ -161,6 +214,7 @@ __all__ = [
     "EVENT_PARAMETERS",
     "EVENT_SIGNATURES",
     "event_config_schema",
+    "infer_event_type",
     "is_mod_initialize_trigger",
     "validate_event_bindings",
 ]
