@@ -1903,9 +1903,6 @@ def _deterministic_behavior_contract_members(
     )
 
 
-_STATE_VARIABLE_ATTRIBUTE = re.compile(
-    r"\b(?P<key>[A-Za-z_][A-Za-z0-9_]*)\((?P<value>[^()]*)\)"
-)
 _STATE_JAVA_TYPES = {
     "bool": "boolean",
     "boolean": "boolean",
@@ -2175,124 +2172,6 @@ def _state_support_types(raw_type: str) -> tuple[tuple[str, str], ...]:
     if re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", source_type):
         return (("class", source_type),)
     return ()
-
-
-def _structured_requirement_records(
-    source_requirements: Mapping[str, Any],
-    concern: Mapping[str, Any],
-) -> tuple[dict[str, str], ...]:
-    """Parse Markdown records by the host-declared record_schema field order."""
-    ordered = [
-        (str(key), str(value))
-        for key, value in sorted(
-            dict(source_requirements or {}).items(), key=_requirement_sort_key
-        )
-    ]
-    target = _slug(concern.get("concern"))
-    anchor = next(
-        (
-            index
-            for index, (_key, value) in enumerate(ordered)
-            if _requirement_concern_label(value) == target
-        ),
-        -1,
-    )
-    if anchor < 0:
-        return ()
-
-    schema = concern.get("record_schema")
-    properties = (
-        list(schema.get("properties") or {})
-        if isinstance(schema, Mapping)
-        else []
-    )
-    required = (
-        list(schema.get("required") or [])
-        if isinstance(schema, Mapping)
-        else []
-    )
-    header_fields = re.findall(
-        r"[A-Za-z_][A-Za-z0-9_]*",
-        ordered[anchor][1].split(":", 1)[1] if ":" in ordered[anchor][1] else "",
-    )
-    fields = [field for field in header_fields if not properties or field in properties]
-    if not fields:
-        fields = properties
-    if not fields or fields[0] != "name":
-        return ()
-
-    records: list[dict[str, str]] = []
-    for _key, value in ordered[anchor + 1:]:
-        if value.startswith("## "):
-            break
-        sibling = _requirement_concern_label(value)
-        if sibling:
-            break
-        stripped = value.lstrip()
-        if not stripped.startswith("- "):
-            continue
-        head, separator, tail = stripped[2:].partition(":")
-        if not separator:
-            continue
-        name = head.strip().strip("*`_ ")
-        values = re.findall(r"`([^`]*)`", tail)
-        if not name or len(values) < len(fields) - 1:
-            continue
-        record = {"name": name}
-        record.update({
-            field: raw.strip()
-            for field, raw in zip(fields[1:], values)
-        })
-        if required and any(not str(record.get(field) or "").strip() for field in required):
-            continue
-        records.append(record)
-    return tuple(records)
-
-
-def _inline_state_variable_records(
-    source_requirements: Mapping[str, Any],
-    concern: Mapping[str, Any],
-) -> tuple[dict[str, str], ...]:
-    """Parse compact 'name (Type, key=value)' state declarations."""
-    target = _slug(concern.get("concern"))
-    ordered = [
-        (str(key), str(value))
-        for key, value in sorted(dict(source_requirements or {}).items(), key=_requirement_sort_key)
-    ]
-    anchor = next((value for _key, value in ordered if _requirement_concern_label(value) == target), "")
-    if not anchor or ":" not in anchor:
-        return ()
-    payload = anchor.split(":", 1)[1].strip()
-    if not payload:
-        return ()
-    if re.match(r"name\s*\(", payload, re.IGNORECASE):
-        # name(...), type(...), default(...) is the labeled record syntax,
-        # not a compact variable literally named 'name' with a custom type.
-        return ()
-
-    records: list[dict[str, str]] = []
-    for entry in _split_balanced_commas(payload):
-        match = re.fullmatch(r"\s*(?P<name>.+?)\s*\((?P<body>.*)\)\s*", entry)
-        if match is None:
-            return ()
-        parts = _split_balanced_commas(match.group("body"))
-        if not parts or "=" in parts[0]:
-            return ()
-        record = {
-            "name": match.group("name").strip().strip("*`_ "),
-            "type": parts[0].strip(),
-        }
-        for attribute in parts[1:]:
-            key, separator, value = attribute.partition("=")
-            if not separator:
-                continue
-            normalized_key = key.strip().casefold()
-            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", normalized_key):
-                record[normalized_key] = value.strip().strip("`")
-        if not record["name"] or not record["type"]:
-            return ()
-        records.append(record)
-    return tuple(records)
 
 
 def _state_variable_contract(
