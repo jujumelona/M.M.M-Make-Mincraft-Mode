@@ -665,7 +665,7 @@ def author_typed_plan_ir(
     structured_sections: Mapping[str, Any] | None = None,
     capabilities: Mapping[str, Any] | None = None,
     *,
-    max_calls: int = 2048,
+    max_calls: int | None = None,
 ) -> dict[str, Any]:
     """Author a complete typed PlanIR using bounded native decisions only."""
 
@@ -686,14 +686,21 @@ def author_typed_plan_ir(
         validate_platform_modules,
     )
 
+    coverage_refs = _active_concern_refs(structured_sections)
+    entry_points = _integration_entry_points(structured_sections)
+    semantic_units = len(coverage_refs) + len(entry_points)
+    effective_max_calls = (
+        max(1, int(max_calls))
+        if max_calls is not None
+        else max(24, min(256, 8 + semantic_units * 6))
+    )
     author = TypedOperationAuthor(
         router,
         source_text,
         structured_sections,
         capabilities,
-        max_calls=max_calls,
+        max_calls=effective_max_calls,
     )
-    coverage_refs = _active_concern_refs(structured_sections)
 
     specs: list[dict[str, Any]] = []
     known_ids: set[str] = set()
@@ -701,9 +708,7 @@ def author_typed_plan_ir(
 
     # Event handler structure is host-owned. The planner only chooses the typed
     # event enum and, for command events, the bounded command configuration.
-    for entry_point_index, row in enumerate(
-        _integration_entry_points(structured_sections)
-    ):
+    for entry_point_index, row in enumerate(entry_points):
         if is_mod_initialize_trigger(row.get("trigger")):
             continue
 
@@ -952,10 +957,7 @@ def author_typed_plan_ir(
     }
     platform_index = 0
     while uncovered:
-        if platform_index >= 64:
-            raise ValueError(
-                "TYPED_PLAN_PLATFORM_MODULE_LIMIT: host coverage did not converge."
-            )
+        previous_uncovered = len(uncovered)
         scope = f"platform[{platform_index}]"
         available_kinds = [
             kind
@@ -1032,6 +1034,10 @@ def author_typed_plan_ir(
             )
         covers = list(coverable_refs)
         uncovered.difference_update(covers)
+        if len(uncovered) >= previous_uncovered:
+            raise ValueError(
+                "TYPED_PLAN_PLATFORM_NO_PROGRESS: host coverage must strictly decrease"
+            )
         platform_modules.append({
             "module_id": module_id,
             "kind": kind,
@@ -1042,17 +1048,46 @@ def author_typed_plan_ir(
 
     platform_modules = validate_platform_modules(platform_modules)
 
+    has_mod_initialize = any(
+        is_mod_initialize_trigger(row.get("trigger"))
+        for row in entry_points
+    )
+    if has_mod_initialize:
+        initialize_author = TypedOperationAuthor(
+            router,
+            source_text,
+            structured_sections,
+            capabilities,
+            max_calls=max(24, min(128, 8 + semantic_units * 4)),
+        )
+        initialize_author.function_signatures = dict(author.function_signatures)
+        initialize_covers = [
+            "integration.entry_points",
+            *sorted(logic_refs),
+        ]
+        initialize_author.set_scope_covers(
+            "initialize",
+            initialize_covers,
+        )
+        initialize_limit = initialize_author._semantic_statement_budget(
+            "initialize"
+        )
+        initialize_body = initialize_author.body(
+            "initialize",
+            env={},
+            return_type="void",
+            max_statements=initialize_limit,
+        )
+    else:
+        initialize_body = []
+
     plan = {
         "schema_version": "mmm/typed-plan-ir-v1",
         "source_sha256": hashlib.sha256(
             source_text.encode("utf-8")
         ).hexdigest(),
         "functions": functions,
-        "initialize": author.body(
-            "initialize",
-            env={},
-            return_type="void",
-        ),
+        "initialize": initialize_body,
         "platform_modules": platform_modules,
         "event_bindings": event_bindings,
     }
