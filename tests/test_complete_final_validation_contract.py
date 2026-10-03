@@ -16,6 +16,7 @@ from minecraft_mod_ai.final_artifact import (
 from minecraft_mod_ai.mcp_tools import MMMToolService
 
 from minecraft_mod_ai.complete_orchestrator_support import file_sha256
+from minecraft_mod_ai.debug_fixture_host import debug_fixture_source_contract
 from minecraft_mod_ai.complete_orchestrator import (
     CompleteProductionOrchestrator,
     _attach_verified_release_artifact,
@@ -119,26 +120,26 @@ public final class MmmDebugFixtureModGameTests {
         encoding="utf-8",
     )
 
-    module = SimpleNamespace(
-        module_id="debug_token",
-        config={
-            "observable_source_contract": {
-                "schema_version": "mmm/debug-source-contract-v1",
-                "binding_field": "DEBUG_TOKEN",
-            }
-        },
+    source_contract = debug_fixture_source_contract(
+        package_name="dev.mmm.debugfixture",
+        minecraft_version="1.21.8",
     )
     proposal = SimpleNamespace(
         schema_version="mmm/complete-proposal-v1",
         game_design={
             "mode": "debug_fixture",
-            "fixture": {"module_id": "debug_token"},
+            "fixture": {
+                "artifact_id": "debug_token",
+                "deterministic": True,
+                "source_contract": source_contract,
+            },
         },
-        modules=(module,),
+        modules=(),
         base_proposal=SimpleNamespace(
             spec=SimpleNamespace(
                 package_name="dev.mmm.debugfixture",
                 mod_id="mmm_debug_fixture",
+                platform=SimpleNamespace(minecraft_version="1.21.8"),
             )
         ),
     )
@@ -208,26 +209,26 @@ def test_debug_fixture_prepare_uses_dedicated_gametest_fallback_without_receipt(
         encoding="utf-8",
     )
 
-    module = SimpleNamespace(
-        module_id="debug_token",
-        config={
-            "observable_source_contract": {
-                "schema_version": "mmm/debug-source-contract-v1",
-                "binding_field": "DEBUG_TOKEN",
-            }
-        },
+    source_contract = debug_fixture_source_contract(
+        package_name="dev.mmm.debugfixture",
+        minecraft_version="1.21.8",
     )
     proposal = SimpleNamespace(
         schema_version="mmm/complete-proposal-v1",
         game_design={
             "mode": "debug_fixture",
-            "fixture": {"module_id": "debug_token"},
+            "fixture": {
+                "artifact_id": "debug_token",
+                "deterministic": True,
+                "source_contract": source_contract,
+            },
         },
-        modules=(module,),
+        modules=(),
         base_proposal=SimpleNamespace(
             spec=SimpleNamespace(
                 package_name="dev.mmm.debugfixture",
                 mod_id="mmm_debug_fixture",
+                platform=SimpleNamespace(minecraft_version="1.21.8"),
             )
         ),
     )
