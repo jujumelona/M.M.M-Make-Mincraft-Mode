@@ -893,6 +893,24 @@ def _content_node_is_cpu_safe(payload: dict[str, Any]) -> bool:
             return False
     return True
 
+
+def _custom_node_is_cpu_safe(payload: dict[str, Any]) -> bool:
+    """Typed PlanIR custom modules are deterministic host work, not LLM work."""
+
+    members = payload.get('members')
+    if not isinstance(members, list) or not members:
+        return False
+    for member in members:
+        if not isinstance(member, dict):
+            return False
+        config = member.get('config')
+        if not isinstance(config, dict):
+            return False
+        if not isinstance(config.get('typed_plan_ir'), dict):
+            return False
+    return True
+
+
 def _node(node_id: str, stage: str, dependencies: Iterable[str], payload: dict[str, Any]) -> WorkNode:
     kind = str(payload.get('kind', ''))
     gen_stage = str(payload.get('generation_stage', ''))
@@ -903,7 +921,7 @@ def _node(node_id: str, stage: str, dependencies: Iterable[str], payload: dict[s
     elif kind == 'module-shard' and gen_stage in {'content', 'system', 'entity'}:
         res_class = 'llm' if gen_stage == 'content' and not _content_node_is_cpu_safe(payload) else 'cpu_io'
     elif kind == 'module-shard' and gen_stage == 'custom':
-        res_class = 'llm'
+        res_class = 'cpu_io' if _custom_node_is_cpu_safe(payload) else 'llm'
     elif stage.startswith('validate:'):
         res_class = 'commit'
     else:
