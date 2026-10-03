@@ -513,12 +513,14 @@ class TypedOperationAuthor:
         *,
         env: Mapping[str, str] | None = None,
         return_type: str | None = None,
+        _depth: int = 0,
     ) -> dict[str, Any] | None:
         bindings = dict(env or {})
         statement_ops = [
-            "let", "return", "assert", "if", "while", "foreach",
-            "state_set", "expr", "done",
+            "let", "return", "assert", "state_set", "expr", "done",
         ]
+        if _depth < 3:
+            statement_ops[3:3] = ["if", "while", "foreach"]
         if bindings:
             statement_ops.insert(1, "set")
         op = self._enum(
@@ -529,10 +531,33 @@ class TypedOperationAuthor:
         if op == "done":
             return None
         if op == "let":
+            binding = self._ask(
+                "local_binding",
+                {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "pattern": r"^[A-Za-z_$][A-Za-z0-9_$]*$",
+                        },
+                        "type": {
+                            "type": "string",
+                            "enum": list(_TYPES),
+                        },
+                    },
+                    "required": ["name", "type"],
+                    "additionalProperties": False,
+                },
+                scope=scope,
+            )
+            if not isinstance(binding, Mapping):
+                raise ValueError(
+                    f"TYPED_PLAN_AUTHORING_RESPONSE_INVALID: {scope}.local_binding"
+                )
             return {
                 "op": "let",
-                "name": self._identifier("local_name", scope=scope),
-                "type": self._type("local_type", scope=scope),
+                "name": str(binding["name"]),
+                "type": str(binding["type"]),
                 "value": self.expression(scope + ".value", bindings),
             }
         if op == "set":
@@ -587,11 +612,13 @@ class TypedOperationAuthor:
                     scope + ".then",
                     env=bindings,
                     return_type=return_type,
+                    _depth=_depth + 1,
                 ),
                 "else": self.body(
                     scope + ".else",
                     env=bindings,
                     return_type=return_type,
+                    _depth=_depth + 1,
                 ),
             }
         if op == "while":
@@ -610,11 +637,35 @@ class TypedOperationAuthor:
                     scope + ".body",
                     env=bindings,
                     return_type=return_type,
+                    _depth=_depth + 1,
                 ),
             }
         if op == "foreach":
-            name = self._identifier("item_name", scope=scope)
-            item_type = self._type("item_type", scope=scope)
+            item = self._ask(
+                "foreach_binding",
+                {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "pattern": r"^[A-Za-z_$][A-Za-z0-9_$]*$",
+                        },
+                        "type": {
+                            "type": "string",
+                            "enum": list(_TYPES),
+                        },
+                    },
+                    "required": ["name", "type"],
+                    "additionalProperties": False,
+                },
+                scope=scope,
+            )
+            if not isinstance(item, Mapping):
+                raise ValueError(
+                    f"TYPED_PLAN_AUTHORING_RESPONSE_INVALID: {scope}.foreach_binding"
+                )
+            name = str(item["name"])
+            item_type = str(item["type"])
             nested = dict(bindings)
             nested[name] = item_type
             return {
@@ -629,6 +680,7 @@ class TypedOperationAuthor:
                     scope + ".body",
                     env=nested,
                     return_type=return_type,
+                    _depth=_depth + 1,
                 ),
             }
         if op == "state_set":
@@ -662,19 +714,23 @@ class TypedOperationAuthor:
         env: Mapping[str, str] | None = None,
         return_type: str | None = None,
         max_statements: int | None = None,
+        _depth: int = 0,
     ) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         bindings = dict(env or {})
-        limit = (
+        requested_limit = (
             self._semantic_statement_budget(scope)
             if max_statements is None
             else max(1, int(max_statements))
         )
+        nesting_limit = 24 if _depth == 0 else max(2, 16 // (2 ** _depth))
+        limit = min(requested_limit, nesting_limit)
         for _ in range(limit):
             statement = self.statement(
                 f"{scope}.statement[{len(result)}]",
                 env=bindings,
                 return_type=return_type,
+                _depth=_depth,
             )
             if statement is None:
                 return result
