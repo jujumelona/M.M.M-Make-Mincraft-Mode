@@ -61,8 +61,6 @@ from .complete_orchestrator_support import (
     _system_groups,
 )
 from .complete_spec import AssetRequest, CompleteProposal, CompleteProposalStatus, ProductionModule
-from .custom_module_generator import CustomModuleGenerator
-from .generation_checkpoint import finalize_persisted_generation_checkpoint
 from .execution_feedback_replan_contract import (
     execution_feedback_scoped,
     feedback_run_context,
@@ -168,13 +166,6 @@ def _run_release_jdt_verification(
         run_once=run_jdt_diagnostics,
     )
 
-
-def _fork_custom_work_router(router: Any) -> Any:
-    """Fork request-local state while retaining one managed model server."""
-
-    from .custom_generation_research import _fork_router_for_candidate
-
-    return _fork_router_for_candidate(router)
 
 
 def _receipt_owned_module_ids(receipt: dict[str, Any]) -> tuple[str, ...]:
@@ -1490,147 +1481,12 @@ class CompleteProductionOrchestrator:
                         router = self.router_factory()
             return router
         shared_project_index = execution_project_index(ProjectIndex, project_root, policy=self.policy)
-        fallback_custom_generator: CustomModuleGenerator | None = None
-        generation_checkpoint_owners: dict[str, CustomModuleGenerator] = {}
-        generation_checkpoint_owners_lock = threading.RLock()
-
-        def _custom_generation_receipts(value: Any) -> tuple[dict[str, Any], ...]:
-            found: list[dict[str, Any]] = []
-
-            def visit(item: Any) -> None:
-                if isinstance(item, dict):
-                    if (
-                        item.get('schema_version') == 'mmm/custom-module-result-v3'
-                        and isinstance(item.get('generation_checkpoint'), dict)
-                    ):
-                        found.append(item)
-                    for nested in item.values():
-                        if nested is not item:
-                            visit(nested)
-                elif isinstance(item, (list, tuple)):
-                    for nested in item:
-                        visit(nested)
-
-            visit(value)
-            return tuple(found)
-
-        def _register_checkpoint_owner(
-            result: dict[str, Any],
-            generator: CustomModuleGenerator,
-        ) -> None:
-            checkpoint = result.get('generation_checkpoint')
-            token = checkpoint.get('cleanup_token') if isinstance(checkpoint, dict) else None
-            if isinstance(token, str) and token:
-                with generation_checkpoint_owners_lock:
-                    generation_checkpoint_owners[token] = generator
-
-        def _finalize_committed_generation_receipts(receipt: dict[str, Any]) -> None:
-            for result in _custom_generation_receipts(receipt):
-                checkpoint = result.get('generation_checkpoint')
-                token = checkpoint.get('cleanup_token') if isinstance(checkpoint, dict) else None
-                owner = None
-                if isinstance(token, str):
-                    with generation_checkpoint_owners_lock:
-                        owner = generation_checkpoint_owners.pop(token, None)
-                finalized = (
-                    owner.finalize_committed_generation_checkpoint(
-                        result,
-                        project_root=project_root,
-                    )
-                    if owner is not None
-                    else finalize_persisted_generation_checkpoint(
-                        result,
-                        project_root=project_root,
-                        checkpoint_root=run_root / '.minecraft_ai' / '.mmm-custom-checkpoints',
-                    )
-                )
-                if not finalized:
-                    raise CompleteProductionError(
-                        'Committed custom-generation checkpoint could not be finalized safely.'
-                    )
-
-        def _release_uncommitted_generation_receipts(receipt: dict[str, Any]) -> None:
-            for result in _custom_generation_receipts(receipt):
-                checkpoint = result.get('generation_checkpoint')
-                token = checkpoint.get('cleanup_token') if isinstance(checkpoint, dict) else None
-                owner = None
-                if isinstance(token, str):
-                    with generation_checkpoint_owners_lock:
-                        owner = generation_checkpoint_owners.pop(token, None)
-                if owner is not None:
-                    owner.release_generation_checkpoint(result)
-
-        def new_custom_generator() -> CustomModuleGenerator:
-            nonlocal fallback_custom_generator
-            base_router = get_router()
-            worker_router = _fork_custom_work_router(base_router)
-            if worker_router is base_router:
-                # Legacy routers and test doubles that cannot fork retain the
-                # instance-level safety lock. Real ModelRouter workers isolate only
-                # workspace/tool state and still share one llama-server/model copy.
-                with runtime_init_lock:
-                    if fallback_custom_generator is None:
-                        fallback_custom_generator = CustomModuleGenerator(base_router, policy=self.policy, fast_mode=getattr(self, '_fast_mode', False), project_index=shared_project_index, checkpoint_root=run_root / '.minecraft_ai' / '.mmm-custom-checkpoints', defer_compile_to_pipeline=True)
-                    return fallback_custom_generator
-            return CustomModuleGenerator(worker_router, policy=self.policy, fast_mode=getattr(self, '_fast_mode', False), project_index=shared_project_index, checkpoint_root=run_root / '.minecraft_ai' / '.mmm-custom-checkpoints', defer_compile_to_pipeline=True)
-
         def module_node_action(
             node: WorkNode,
             members: list[ProductionModule],
-            uncommitted_custom_results: list[dict[str, Any]],
         ) -> dict[str, Any]:
             stage = str(node.payload.get('generation_stage', ''))
             receipts: list[dict[str, Any]] = []
-            node_custom_generator: CustomModuleGenerator | None = None
-
-            def generate_custom(module: ProductionModule) -> dict[str, Any]:
-                nonlocal node_custom_generator
-                if node_custom_generator is None:
-                    node_custom_generator = new_custom_generator()
-
-                execution_feedback = None
-                feedback_context = getattr(
-                    self, "_mmm_execution_feedback_context", None
-                )
-                if isinstance(feedback_context, dict):
-                    invalidation = feedback_context.get("invalidation_receipt")
-                    owner_ids = (
-                        invalidation.get("owner_ids")
-                        if isinstance(invalidation, dict)
-                        else ()
-                    )
-                    if (
-                        isinstance(owner_ids, (list, tuple))
-                        and module.module_id in owner_ids
-                    ):
-                        raw_feedback = feedback_context.get("feedback")
-                        if isinstance(raw_feedback, dict):
-                            execution_feedback = raw_feedback
-
-                result = node_custom_generator.generate(
-                    project_root,
-                    module=module,
-                    research_modules=research_modules,
-                    minecraft_version=spec.platform.minecraft_version,
-                    loader=spec.platform.loader,
-                    mappings=spec.platform.yarn_mappings,
-                    execution_feedback=execution_feedback,
-                )
-                _register_checkpoint_owner(result, node_custom_generator)
-                uncommitted_custom_results.append(result)
-                ensure_live_commit = getattr(
-                    node_custom_generator, "ensure_generation_live_commit", None
-                )
-                if callable(ensure_live_commit) and not ensure_live_commit(
-                    result,
-                    project_root=project_root,
-                ):
-                    raise CompleteProductionError(
-                        "GENERATION_LIVE_COMMIT_MISSING: generated source was verified "
-                        "outside the canonical project but its exact patch could not be "
-                        f"materialized for {module.module_id}."
-                    )
-                return result
 
             if stage == 'content':
                 research_shards = [module for module in members if is_research_shard(module)]
@@ -1706,7 +1562,22 @@ class CompleteProductionOrchestrator:
                     receipts.append(generate_extended_content(project_root=project_root, mod_id=spec.mod_id, package_name=spec.package_name, modules=deterministic, policy=self.policy))
                 sidecars = [module for module in members if module.kind == 'integration' and module.config.get('integration_type') == LOCAL_AI_SIDECAR_INTEGRATION_TYPE]
                 receipts.extend(generate_local_ai_sidecar(project_root=project_root, mod_id=spec.mod_id, package_name=spec.package_name, module=module, policy=self.policy) for module in sidecars)
-                receipts.extend(generate_custom(module) for module in members if (module.kind not in extended_kinds or module.config.get("requires_custom_generation")) and module not in sidecars and (module not in research_shards) and (module not in artifact_handled_members))
+                unsupported = [
+                    module.module_id
+                    for module in members
+                    if (
+                        module.kind not in extended_kinds
+                        and module not in sidecars
+                        and module not in research_shards
+                        and module not in artifact_handled_members
+                    )
+                    or module.config.get("requires_custom_generation")
+                ]
+                if unsupported:
+                    raise CompleteProductionError(
+                        "CUSTOM_GENERATION_REMOVED: deterministic backend required for "
+                        + ", ".join(unsupported)
+                    )
             elif stage == 'system':
                 for pack_id, pack_modules in _system_groups(members).items():
                     receipts.append(generate_system_pack(project_root=project_root, pack_id=pack_id, mod_id=spec.mod_id, package_name=spec.package_name, config={'modules': [_module_dict(item) for item in pack_modules]}, policy=self.policy))
@@ -1757,7 +1628,9 @@ class CompleteProductionOrchestrator:
                         )
                     )
                     if config.get("requires_custom_generation"):
-                        receipts.append(generate_custom(module))
+                        raise CompleteProductionError(
+                            "CUSTOM_GENERATION_REMOVED: entity custom generation is forbidden"
+                        )
             elif stage == 'host':
                 from .typed_plan_production import generate_typed_plan_module
 
@@ -1769,7 +1642,9 @@ class CompleteProductionOrchestrator:
                     for module in members
                 )
             elif stage == 'custom':
-                receipts.extend(generate_custom(module) for module in members)
+                raise CompleteProductionError(
+                    "CUSTOM_GENERATION_REMOVED: custom stage must not exist"
+                )
             else:
                 raise CompleteProductionError(f'Unsupported generation work stage: {stage}')
             if spec.platform.host_facts_json:
