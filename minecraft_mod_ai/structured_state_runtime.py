@@ -2,12 +2,12 @@ from __future__ import annotations
 
 """Host compiler for structured state-model records.
 
-Supported state expressions compile directly to Java. Production may supply a
-field-lowering callback for authored semantics outside that DSL; the host still
-owns the runtime and registrations, and strict direct callers keep failing closed.
+Supported state expressions and mutations compile directly to Java. Anything
+outside the host DSL fails closed before source generation; there is no model or
+Java callback fallback on this path.
 """
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 import ast
 import json
@@ -977,7 +977,6 @@ def render_state_model_concern(
     concern: str,
     *,
     include_runtime: bool,
-    lower_authored_field: Callable[[int, Mapping[str, str], str, ValueError], str] | None = None,
 ) -> str | None:
     records_by_concern = _obligations(task)
     if concern not in records_by_concern:
@@ -996,13 +995,8 @@ def render_state_model_concern(
             if field in {"guard", "condition"}:
                 return _compile_condition(record.get(field, ""))
             return _compile_mutation(record.get(field, ""), declared=declared)
-        except ValueError as exc:
-            # A structured design record is not necessarily a host DSL program.
-            # Keep strict callers strict; production may implement the exact field
-            # through its bounded Java path, retaining the host runtime/registration.
-            if lower_authored_field is None:
-                raise
-            return lower_authored_field(index, record, field, exc)
+        except ValueError:
+            raise
 
     if concern == "variables":
         lines = ["static {"]
