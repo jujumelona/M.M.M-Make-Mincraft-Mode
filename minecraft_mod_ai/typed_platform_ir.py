@@ -265,17 +265,48 @@ _PERSISTENT_SYSTEM_KINDS = frozenset({
 def _coverage_allowed(kind: str, cover: str) -> bool:
     if cover.startswith("resources_and_ui."):
         concern = cover.split(".", 1)[1]
-        if concern in {"registries", "data_resources", "assets", "paths", "missing_resources"}:
-            return kind in PLATFORM_CONTENT_KINDS or kind == "gui"
-        if concern in {"interactions", "displayed_state", "accessibility"}:
+        if concern in {"registries", "data_resources", "assets", "paths"}:
+            return (
+                kind in PLATFORM_CONTENT_KINDS
+                or kind in PLATFORM_SYSTEM_KIND_TO_PACK
+            )
+        if concern == "interactions":
             return kind in {"command", "machine", "gui", "networking"}
+        if concern == "displayed_state":
+            return kind == "gui"
         return False
+
     if cover.startswith("authority_and_network."):
-        return kind in {"networking", "gui"}
+        concern = cover.split(".", 1)[1]
+        return kind == "networking" and concern in {
+            "decisions",
+            "packets",
+            "security_checks",
+            "invalid_packets",
+        }
+
     if cover.startswith("persistence."):
-        return kind == "state_store" or kind in _PERSISTENT_SYSTEM_KINDS
+        concern = cover.split(".", 1)[1]
+        return (
+            kind == "state_store"
+            or kind in _PERSISTENT_SYSTEM_KINDS
+        ) and concern in {
+            "stored_state",
+            "serialization",
+            "missing_defaults",
+            "save_triggers",
+            "load_behavior",
+        }
+
     if cover.startswith("integration."):
-        return True
+        return cover in {
+            "integration.responsibilities",
+            "integration.target_bindings",
+            "integration.initialization_order",
+            "integration.module_interfaces",
+            "integration.side_placement",
+            "integration.compatibility",
+        }
     return False
 
 
