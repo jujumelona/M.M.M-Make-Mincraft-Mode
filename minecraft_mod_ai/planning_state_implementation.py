@@ -787,11 +787,7 @@ def compile_detailed_implementation_plans(
 
 
 def compile_authored_worksheet(router: Any, prompt: str) -> dict[str, Any]:
-    """Compile one authored request into the canonical structured worksheet.
-
-    Fresh design authoring and legacy prose migration both converge here. Production
-    consumes these records; Markdown is only their human-readable projection.
-    """
+    """Compile one authored request through the same finite dependency DAG."""
 
     statement = _text(prompt)
     if not statement:
@@ -810,17 +806,42 @@ def compile_authored_worksheet(router: Any, prompt: str) -> dict[str, Any]:
     }
     completed: dict[str, dict[str, Any]] = {}
     pending = set(selected_sections)
+    workers = max(
+        1,
+        min(
+            len(selected_sections),
+            router_native_model_parallelism(router),
+        ),
+    )
 
     with planner_operation("compile_authored_worksheet"):
         while pending:
-            progressed = False
-            for section in selected_sections:
-                if section not in pending:
-                    continue
-                dependencies = _section_dependencies(section, selected_sections)
-                if any(dependency not in completed for dependency in dependencies):
-                    continue
-                compiled_section = _compile_worksheet_section(
+            ready = [
+                section
+                for section in selected_sections
+                if section in pending
+                and all(
+                    dependency in completed
+                    for dependency in _section_dependencies(
+                        section,
+                        selected_sections,
+                    )
+                )
+            ]
+            if not ready:
+                raise RuntimeError(
+                    "AUTHORED_WORKSHEET_DAG_DEADLOCK: "
+                    + ", ".join(sorted(pending))
+                )
+
+            snapshot = deepcopy(completed)
+
+            def compile_ready(section: str) -> tuple[str, dict[str, Any]]:
+                dependencies = _section_dependencies(
+                    section,
+                    selected_sections,
+                )
+                return section, _compile_worksheet_section(
                     router,
                     requirement=requirement,
                     selected_sections=selected_sections,
@@ -828,18 +849,25 @@ def compile_authored_worksheet(router: Any, prompt: str) -> dict[str, Any]:
                     evidence=[],
                     allowed=set(),
                     completed={
-                        dependency: deepcopy(completed[dependency])
+                        dependency: deepcopy(snapshot[dependency])
                         for dependency in dependencies
                     },
                 )
-                completed[section] = compiled_section
-                pending.remove(section)
-                progressed = True
-            if not progressed:
-                raise RuntimeError(
-                    "AUTHORED_WORKSHEET_DAG_DEADLOCK: "
-                    + ", ".join(sorted(pending))
-                )
+
+            if workers > 1 and len(ready) > 1:
+                with ThreadPoolExecutor(
+                    max_workers=min(workers, len(ready)),
+                    thread_name_prefix="authored-worksheet",
+                ) as pool:
+                    authored = list(pool.map(compile_ready, ready))
+            else:
+                authored = [compile_ready(section) for section in ready]
+
+            by_section = dict(authored)
+            for section in selected_sections:
+                if section in by_section:
+                    completed[section] = by_section[section]
+                    pending.remove(section)
 
     return validate_worksheet(
         completed,
