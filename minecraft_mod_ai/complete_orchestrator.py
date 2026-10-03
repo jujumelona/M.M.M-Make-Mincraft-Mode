@@ -19,7 +19,6 @@ from typing import Any
 from .artifact_graph_executor import execute_artifact_graph
 from .artifact_job import ArtifactJob
 from .artifact_materializer import ensure_artifact_scaffolding
-from .complete_build_repair import run_build_repair_checkpoint
 from .complete_preflight_contract import (
     REQUIRED_GATE_TO_EVIDENCE as _REQUIRED_GATE_TO_EVIDENCE,
     normalize_required_gate as _normalize_required_gate,
@@ -124,6 +123,7 @@ from .release_artifact_contract import (
     stable_payload_sha256 as _stable_payload_sha256,
 )
 from .root_cause_trace import emit_root_cause
+from .runner import GradleRunner
 from .runtime_manager import MinecraftRuntimeManager
 from .scalable_generator import ScalableFabricProjectGenerator as FabricProjectGenerator
 from .scalable_validator import ScalableProjectValidator
@@ -257,8 +257,6 @@ class CompleteExecutionOptions:
     source_only: bool = False
     run_jdt: bool = True
     run_gametest: bool = True
-    auto_repair: bool = True
-    max_repair_attempts: int | None = None
     run_blockbench: bool = True
     run_runtime: bool = True
     run_client: bool = True
@@ -278,8 +276,6 @@ class CompleteExecutionOptions:
 
     def validate(self, *, policy: ScalePolicy | None=None) -> None:
         policy = policy or ScalePolicy.from_environment()
-        if self.max_repair_attempts is not None and (type(self.max_repair_attempts) is not int or self.max_repair_attempts < 1):
-            raise CompleteProductionError('max_repair_attempts must be null or a positive integer.')
         if self.publish_provider not in {None, 'modrinth', 'curseforge'}:
             raise CompleteProductionError('publish_provider must be modrinth or curseforge.')
         if self.publish_provider and (not self.publish_project_id):
@@ -328,7 +324,7 @@ class CompletePipelineResult:
 
 
 class CompleteProductionOrchestrator:
-    """Approved request -> sharded source -> repair -> runtime -> release."""
+    """Approved request -> deterministic source -> build -> runtime -> release."""
 
     def __init__(self, *, workspace_root: str | Path='mmm-output', profile: str='t4_local', router_factory: Callable[[], ModelRouter] | None=None, policy: ScalePolicy | None=None) -> None:
         self.workspace_root = Path(workspace_root).expanduser().resolve()
@@ -504,7 +500,7 @@ class CompleteProductionOrchestrator:
             # Infrastructure-unavailable JDT remains auxiliary, but real source diagnostics
             # cannot be packaged in source-only mode and must be repaired before a full build exits.
             errors = _blocking_jdt_errors(jdt_receipt)
-            if errors and (options.source_only or not options.auto_repair):
+            if errors:
                 raise CompleteProductionError(
                     'JDT reported source errors that cannot be left unresolved.'
                 )
@@ -555,34 +551,46 @@ class CompleteProductionOrchestrator:
             )
             self._persist_work_evidence(project_root, ledger, work_plan)
             return CompletePipelineResult(schema_version='mmm/complete-pipeline-result-v3', status='SOURCE_READY', project_root=str(project_root), release_zip=release, jar_path=None, complete_proposal_hash=approved.calculate_hash(), source_validation=source_report, build_report=None, jar_validation=None, module_receipts=tuple(module_receipts), asset_receipt=asset_receipt, blockbench_receipts=tuple(blockbench_receipts), runtime_receipt=None, playtest_receipt=None, visual_receipt=None, distribution_receipt=None, unresolved_gates=tuple(sorted(set(unresolved))), release_ready=False, work_graph_hash=work_plan.graph_hash, work_ledger_path=str(ledger.path), run_resumed=run_resumed, quality_report=quality_report)
-        typed_plan_host_only = any(
-            isinstance(module.config.get("typed_plan_ir"), dict)
-            for module in approved.modules
-        )
-        build_options = (
-            replace(options, auto_repair=False)
-            if typed_plan_host_only
-            else options
-        )
-        build_bundle, router = run_build_repair_checkpoint(
-            ledger=ledger, graph_hash=work_plan.graph_hash,
-            validation_manifest=validation_manifest, project_root=project_root,
-            run_root=run_root, options=build_options, router=router,
-            router_factory=self.router_factory, policy=self.policy,
+        gradle_cache = run_root / ".cache/gradle"
+
+        def run_build() -> dict[str, Any]:
+            build = GradleRunner(gradle_cache).build(
+                project_root,
+                run_gametest=options.run_gametest,
+            ).to_dict()
+            from .compiler_diagnostics import compiler_log_diagnostics
+
+            diagnostics = compiler_log_diagnostics(
+                build,
+                project_root=project_root,
+            )
+            if diagnostics:
+                build = {**build, "diagnostics": diagnostics}
+            return build
+
+        build = run_named_checkpoint(
+            ledger,
+            "gradle-build",
+            stage="build",
+            input_value={
+                "graph_hash": work_plan.graph_hash,
+                "project_manifest": validation_manifest,
+                "run_gametest": options.run_gametest,
+            },
+            action=run_build,
+            encode=lambda value: value,
+            decode=lambda cached: cached,
             validate_cached=lambda cached: self._cached_build_exists(
                 cached,
                 require_gametest=options.run_gametest,
                 spec=spec,
             ),
         )
-        build = build_bundle['build']
-        repair = build_bundle.get('repair')
-        if isinstance(repair, dict):
-            module_receipts.append({'schema_version': 'mmm/repair-receipt-v2', **repair})
-            if repair.get('patch_receipts'):
-                update_execution_project_index_from_receipt(project_root, repair)
         if build.get('status') != 'PASS':
-            raise CompleteProductionError('Gradle/GameTest failed after the repair loop.')
+            raise CompleteProductionError(
+                'Gradle/GameTest failed; Typed host production does not mutate '
+                'source through an AI repair fallback.'
+            )
 
         final_manifest = str(
             execution_project_index(ProjectIndex, project_root, policy=self.policy)
