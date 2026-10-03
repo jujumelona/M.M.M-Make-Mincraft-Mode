@@ -156,7 +156,11 @@ def worksheet_chunk_schema(
     record_counts is accepted only for call-site compatibility and is intentionally
     ignored: a previous model response never becomes a cardinality contract.
     """
-    del record_counts
+    # Planning owns the canonical worksheet contract. Structured state IR is an
+    # authoring/production representation and must not leak back into planning,
+    # otherwise the chunk producer emits objects that the planning validator
+    # correctly rejects as non-string DSL fields.
+    del record_counts, state_symbols
     key = _normalize_section_name(section)
     active = tuple(concerns)
     if not active:
@@ -166,27 +170,20 @@ def worksheet_chunk_schema(
     properties: dict[str, Any] = {}
     authored_signal: list[dict[str, Any]] = []
     for concern in active:
-        if key == "state_model" and state_symbols is not None:
-            from .structured_state_runtime import state_concern_schema
-            item_schema = state_concern_schema(
-                concern,
-                allowed_state_symbols=state_symbols,
-            )
-        else:
-            fields = projection[concern]
-            field_schemas = {
-                field: deepcopy(record_field_schema(key, concern, field))
-                for field in fields
-            }
-            item_schema: dict[str, Any] = {
-                "type": "object",
-                "properties": field_schemas,
-                "required": list(fields) if key == "state_model" else [],
-                "minProperties": 1,
-                "additionalProperties": False,
-            }
-            if key == "state_model":
-                item_schema = constrain_state_record_schema(concern, item_schema)
+        fields = projection[concern]
+        field_schemas = {
+            field: deepcopy(record_field_schema(key, concern, field))
+            for field in fields
+        }
+        item_schema: dict[str, Any] = {
+            "type": "object",
+            "properties": field_schemas,
+            "required": list(fields) if key == "state_model" else [],
+            "minProperties": 1,
+            "additionalProperties": False,
+        }
+        if key == "state_model":
+            item_schema = constrain_state_record_schema(concern, item_schema)
         properties[concern] = {
             "type": "array",
             "maxItems": 4,
