@@ -66,6 +66,22 @@ def _default_check(kind: str, expression: str) -> str:
     return f"{expression} instanceof {_boxed_type(kind)}"
 
 
+def _state_read(kind: str, expression: str) -> str:
+    if kind == "boolean":
+        return f"((Boolean) {expression}).booleanValue()"
+    if kind == "int":
+        return f"((Number) {expression}).intValue()"
+    if kind == "long":
+        return f"((Number) {expression}).longValue()"
+    if kind == "double":
+        return f"((Number) {expression}).doubleValue()"
+    if kind == "string":
+        return f"((String) {expression})"
+    if kind == "object":
+        return expression
+    raise ValueError(f"cannot read state as {kind!r}")
+
+
 class _Renderer:
     def __init__(self, plan: Mapping[str, Any], capabilities: Mapping[str, Any] | None) -> None:
         self.plan = plan
@@ -130,7 +146,7 @@ class _Renderer:
             return f"{contract['owner']}.{contract['method']}(" + ", ".join(self.expr(arg) for arg in node["args"]) + ")"
         if op == "state_get":
             call = "AuthoredStateModel.getState(" + self.expr(node["key"]) + ", " + self.expr(node["context"]) + ")"
-            return _unbox(node["type"], call)
+            return _state_read(node["type"], call)
         raise ValueError(f"unsupported expression op {op!r}")
 
     def block(self, body: list[Mapping[str, Any]], indent: str = "        ") -> list[str]:
