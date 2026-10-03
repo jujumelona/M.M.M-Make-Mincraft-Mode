@@ -195,7 +195,7 @@ class ProductionModule(Mapping[str, Any]):
 
 @dataclass(frozen=True)
 class AssetRequest:
-    """Canonical semantic resource request. Legacy payloads are migrated at deserialization."""
+    """Canonical semantic resource request."""
 
     asset_id: str
     kind: str
@@ -588,8 +588,6 @@ def _asset_from_dict(value: Any) -> AssetRequest:
         value = {**value, "visual_description": visual.prompt_fragment()}
     semantic_required = {"asset_id", "kind", "visual_description"}
     semantic_optional = {"render_kind", "subject_id", "owner_module_id", "container", "requested_width", "requested_height", "variant_count", "visual_spec"}
-    legacy_required = {"asset_id", "kind", "prompt", "target_path"}
-    legacy_optional = {"width", "height"}
     keys = set(value)
     if semantic_required <= keys and not (keys - semantic_required - semantic_optional):
         asset_id = str(value["asset_id"])
@@ -612,24 +610,6 @@ def _asset_from_dict(value: Any) -> AssetRequest:
             requested_height=None if value.get("requested_height") is None else _strict_int(value["requested_height"], "asset.requested_height"),
             variant_count=_strict_int(value.get("variant_count", 1), "asset.variant_count"),
             visual_spec=value.get("visual_spec"),
-        )
-    if legacy_required <= keys and not (keys - legacy_required - legacy_optional):
-        from .resource_contracts import infer_render_kind
-
-        asset_id = str(value["asset_id"])
-        kind = str(value["kind"])
-        target_path = str(value["target_path"]).replace("\\", "/")
-        width = value.get("width")
-        height = value.get("height")
-        return AssetRequest(
-            asset_id=asset_id,
-            kind=kind,
-            visual_description=str(value["prompt"]).strip(),
-            render_kind=infer_render_kind(kind, target_path=target_path),
-            subject_id=PurePosixPath(target_path).stem or asset_id,
-            container="resource_pack" if target_path.startswith("assets/") else "mod",
-            requested_width=None if width is None else _strict_int(width, "asset.width"),
-            requested_height=None if height is None else _strict_int(height, "asset.height"),
         )
     raise SpecValidationError(f"Invalid asset fields: {sorted(keys)}")
 
