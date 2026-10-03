@@ -67,19 +67,15 @@ def test_state_planning_schema_is_host_compilable_before_generation() -> None:
     )
     item = schema["properties"]["transitions"]["items"]
     guard = item["properties"]["guard"]
-    mutation = item["properties"]["mutation"]
+    mutations = item["properties"]["mutations"]
 
     assert "pattern" not in guard
-    assert "pattern" not in mutation
+    assert "pattern" not in mutations
     assert set(item["required"]) == {
-        "from_state", "trigger", "guard", "mutation", "to_state"
+        "from_state", "trigger", "guard", "mutations", "to_state"
     }
-    assert guard["type"] == "string"
-    assert guard["maxLength"] == 512
-    assert mutation["type"] == "string"
-    assert mutation["maxLength"] == 512
-    assert "host" in guard["description"].casefold()
-    assert "host" in mutation["description"].casefold()
+    assert guard["type"] == "object"
+    assert mutations["type"] == "array"
 
 
 STATE_REQUIREMENTS = {

@@ -263,6 +263,7 @@ def _generate_authored_chunk(
             section,
             selected,
             include_evidence=evidence,
+            state_symbols=state_symbols,
         )
         value = generate_fixed_template_value(
             router,
@@ -305,8 +306,6 @@ def _generate_authored_chunk(
     try:
         return generate(concerns, evidence=include_evidence)
     except (ValueError, RuntimeError, TypeError) as initial_error:
-        if "STRUCTURED_STATE_" in str(initial_error):
-            raise
         if len(concerns) == 1:
             concern = str(concerns[0])
             explicit_projection = getattr(concerns, "field_projection", {})

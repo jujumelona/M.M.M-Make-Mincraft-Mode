@@ -24,11 +24,11 @@ STATE_EXPRESSION_PATTERN = r"^.*$"
 STATE_MUTATION_PATTERN = r"^.*$"
 
 _STATE_EXECUTABLE_FIELDS = {
-    "transitions": ("guard", "mutation"),
+    "transitions": ("guard", "mutation", "mutations"),
     "invariants": ("condition",),
-    "initialization": ("initial_state",),
-    "updates": ("mutation",),
-    "cleanup": ("action",),
+    "initialization": ("initial_state", "mutations"),
+    "updates": ("mutation", "mutations"),
+    "cleanup": ("action", "mutations"),
 }
 
 
@@ -49,7 +49,7 @@ def constrain_state_record_schema(
         target = properties.get(field)
         if not isinstance(target, dict):
             continue
-        if field in {"mutation", "initial_state", "action"}:
+        if field in {"mutation", "mutations", "initial_state", "action"}:
             target["description"] = (
                 "Host state-mutation DSL. Empty string means no state mutation. "
                 "Non-empty values must contain only assignments to declared state "
@@ -491,6 +491,607 @@ def _compile_mutation(
     return " ".join(rows)
 
 
+def validate_state_expr_ir(
+    expr: Any,
+    *,
+    symbols: StateSymbolTable | set[str] | Sequence[str] | None = None,
+) -> None:
+    """Validate expression IR or legacy expression against symbols."""
+    if expr is None or isinstance(expr, bool):
+        return
+    if isinstance(symbols, StateSymbolTable):
+        declared = symbols.declared_names
+    elif isinstance(symbols, set):
+        declared = symbols
+    elif isinstance(symbols, Sequence) and not isinstance(symbols, (str, bytes, bytearray)):
+        declared = set(symbols)
+    else:
+        declared = None
+
+    if isinstance(expr, str):
+        raw = expr.strip()
+        if not raw or raw.casefold() in {"true", "false", "null"}:
+            return
+        node = _Expression(raw).parse()
+        _validate_state_ast(node)
+        return
+
+    if isinstance(expr, (int, float)):
+        return
+
+    if not isinstance(expr, Mapping):
+        raise ValueError(f"STRUCTURED_STATE_EXPRESSION: expected object or string, got {type(expr).__name__}")
+
+    kind = expr.get("kind")
+    if not kind:
+        if "terms" in expr:
+            kind = "and"
+        elif "op" in expr and "left" in expr and "right" in expr:
+            kind = "compare" if expr["op"] in {"==", "!=", ">=", "<=", ">", "<", "="} else "arithmetic"
+        elif "name" in expr:
+            kind = "state_ref"
+        elif "value" in expr:
+            kind = "literal"
+        else:
+            raise ValueError(f"STRUCTURED_STATE_EXPRESSION: missing 'kind' in expression object {expr!r}")
+
+    if kind in {"and", "or"}:
+        terms = expr.get("terms")
+        if terms is None:
+            terms = ()
+        elif not isinstance(terms, Sequence) or isinstance(terms, (str, bytes, bytearray)):
+            raise ValueError(f"STRUCTURED_STATE_EXPRESSION: {kind} terms must be a list")
+        for term in terms:
+            validate_state_expr_ir(term, symbols=declared)
+        return
+
+    if kind == "compare":
+        op = expr.get("op", "==")
+        if op not in {"==", "!=", ">=", "<=", ">", "<", "="}:
+            raise ValueError(f"STRUCTURED_STATE_EXPRESSION: unsupported comparison op {op!r}")
+        left = expr.get("left")
+        right = expr.get("right")
+        if left is None or right is None:
+            raise ValueError("STRUCTURED_STATE_EXPRESSION: compare requires left and right operands")
+        validate_state_expr_ir(left, symbols=declared)
+        validate_state_expr_ir(right, symbols=declared)
+        return
+
+    if kind == "not":
+        term = expr.get("term") or expr.get("operand") or expr.get("left")
+        if term is None:
+            raise ValueError("STRUCTURED_STATE_EXPRESSION: not requires a term")
+        validate_state_expr_ir(term, symbols=declared)
+        return
+
+    if kind == "implies":
+        validate_state_expr_ir(expr.get("left"), symbols=declared)
+        validate_state_expr_ir(expr.get("right"), symbols=declared)
+        return
+
+    if kind == "state_ref":
+        name = expr.get("name")
+        if not name or not isinstance(name, str):
+            raise ValueError("STRUCTURED_STATE_EXPRESSION: state_ref requires string 'name'")
+        name = name.strip()
+        if declared is not None and len(declared) > 0 and name not in declared:
+            raise ValueError(f"STRUCTURED_STATE_EXPRESSION: undeclared state variable {name!r}")
+        return
+
+    if kind == "context_ref":
+        name = expr.get("name")
+        if not name or not isinstance(name, str):
+            raise ValueError("STRUCTURED_STATE_EXPRESSION: context_ref requires string 'name'")
+        return
+
+    if kind == "literal":
+        return
+
+    if kind == "arithmetic":
+        op = expr.get("op", "+")
+        if op not in {"+", "-", "*", "/", "%"}:
+            raise ValueError(f"STRUCTURED_STATE_EXPRESSION: unsupported arithmetic op {op!r}")
+        validate_state_expr_ir(expr.get("left"), symbols=declared)
+        validate_state_expr_ir(expr.get("right"), symbols=declared)
+        return
+
+    if kind == "call":
+        name = str(expr.get("name") or "").casefold()
+        if name not in _SUPPORTED_STATE_FUNCTIONS:
+            raise ValueError(f"STRUCTURED_STATE_EXPRESSION: unsupported function {name!r}")
+        args = expr.get("args") or ()
+        for arg in args:
+            validate_state_expr_ir(arg, symbols=declared)
+        return
+
+    raise ValueError(f"STRUCTURED_STATE_EXPRESSION: unknown expression kind {kind!r}")
+
+
+def compile_state_expr_ir(
+    expr: Any,
+    *,
+    declared: set[str] | None = None,
+    context: str = "context",
+) -> str:
+    """Compile expression IR or legacy string to Java."""
+    if expr is None:
+        return "true"
+    if isinstance(expr, bool):
+        return "true" if expr else "false"
+    if isinstance(expr, (int, float)):
+        return f"Double.valueOf({expr})"
+    if isinstance(expr, str):
+        raw = expr.strip()
+        if not raw or raw.casefold() == "true":
+            return "true"
+        return _compile_condition(raw, context=context)
+
+    if not isinstance(expr, Mapping):
+        return "true"
+
+    kind = expr.get("kind")
+    if not kind:
+        if "terms" in expr:
+            kind = "and"
+        elif "op" in expr and "left" in expr and "right" in expr:
+            kind = "compare" if expr["op"] in {"==", "!=", ">=", "<=", ">", "<", "="} else "arithmetic"
+        elif "name" in expr:
+            kind = "state_ref"
+        elif "value" in expr:
+            kind = "literal"
+        else:
+            kind = "literal"
+
+    if kind == "literal":
+        val = expr.get("value")
+        if val is None or val == "null":
+            return "null"
+        if isinstance(val, bool):
+            return "Boolean.TRUE" if val else "Boolean.FALSE"
+        if isinstance(val, (int, float)):
+            return f"Double.valueOf({val})"
+        return _java_string(str(val))
+
+    if kind == "state_ref":
+        name = str(expr.get("name") or "").strip()
+        if declared is not None and len(declared) > 0 and name not in declared:
+            raise ValueError(f"STRUCTURED_STATE_EXPRESSION: undeclared state variable {name!r}")
+        return f"$mmmRead({_java_string(name)}, {context})"
+
+    if kind == "context_ref":
+        name = str(expr.get("name") or "").strip()
+        return f"$mmmRead({_java_string(name)}, {context})"
+
+    if kind == "and":
+        terms = expr.get("terms") or []
+        if not terms:
+            return "true"
+        compiled_terms = [compile_state_expr_ir(t, declared=declared, context=context) for t in terms]
+        if len(compiled_terms) == 1:
+            return compiled_terms[0]
+        return "(" + " && ".join(f"({t})" for t in compiled_terms) + ")"
+
+    if kind == "or":
+        terms = expr.get("terms") or []
+        if not terms:
+            return "false"
+        compiled_terms = [compile_state_expr_ir(t, declared=declared, context=context) for t in terms]
+        if len(compiled_terms) == 1:
+            return compiled_terms[0]
+        return "(" + " || ".join(f"({t})" for t in compiled_terms) + ")"
+
+    if kind == "not":
+        term = expr.get("term") or expr.get("operand") or expr.get("left")
+        compiled = compile_state_expr_ir(term, declared=declared, context=context)
+        return f"(!$mmmTruthy({compiled}))"
+
+    if kind == "implies":
+        left = compile_state_expr_ir(expr.get("left"), declared=declared, context=context)
+        right = compile_state_expr_ir(expr.get("right"), declared=declared, context=context)
+        return f"((!({left})) || ({right}))"
+
+    if kind == "compare":
+        op = expr.get("op", "==")
+        op = "==" if op == "=" else op
+        left = compile_state_expr_ir(expr.get("left"), declared=declared, context=context)
+        right = compile_state_expr_ir(expr.get("right"), declared=declared, context=context)
+        if op == "==":
+            return f"$mmmEquals({left}, {right})"
+        if op == "!=":
+            return f"(!$mmmEquals({left}, {right}))"
+        if op in {">=", "<=", ">", "<"}:
+            return f"($mmmCompare({left}, {right}) {op} 0)"
+        return f"Boolean.valueOf({left} {op} {right})"
+
+    if kind == "arithmetic":
+        op = expr.get("op", "+")
+        left = compile_state_expr_ir(expr.get("left"), declared=declared, context=context)
+        right = compile_state_expr_ir(expr.get("right"), declared=declared, context=context)
+        return f"$mmmArithmetic({_java_string(op)}, {left}, {right})"
+
+    if kind == "call":
+        name = str(expr.get("name") or "").casefold()
+        args = expr.get("args") or ()
+        args_compiled = ", ".join(compile_state_expr_ir(a, declared=declared, context=context) for a in args)
+        return f"$mmmFunction({_java_string(name)}, java.util.Arrays.asList({args_compiled}), {context})"
+
+    return "true"
+
+
+def validate_mutation_ir(
+    mutation: Any,
+    *,
+    symbols: StateSymbolTable | set[str] | Sequence[str] | None = None,
+) -> None:
+    """Validate mutation IR or legacy mutation string against declared symbols."""
+    if mutation is None:
+        return
+    if isinstance(symbols, StateSymbolTable):
+        declared = symbols.declared_names
+    elif isinstance(symbols, set):
+        declared = symbols
+    elif isinstance(symbols, Sequence) and not isinstance(symbols, (str, bytes, bytearray)):
+        declared = set(symbols)
+    else:
+        declared = None
+
+    if isinstance(mutation, str):
+        text = mutation.strip()
+        if not text:
+            return
+        for raw in _split_mutation_statements(text):
+            stmt = raw.strip()
+            if not stmt:
+                continue
+            try:
+                name, op, expression = _parse_state_assignment(stmt)
+            except ValueError as exc:
+                raise ValueError(
+                    f"STRUCTURED_STATE_MUTATION: expected assignment, got {stmt!r}"
+                ) from exc
+            if declared is not None and len(declared) > 0 and name not in declared:
+                raise ValueError(
+                    f"STRUCTURED_STATE_MUTATION: undeclared state variable {name!r}"
+                )
+        return
+
+    if isinstance(mutation, Mapping):
+        mutations = [mutation]
+    elif isinstance(mutation, Sequence) and not isinstance(mutation, (str, bytes, bytearray)):
+        mutations = list(mutation)
+    else:
+        raise ValueError(
+            f"STRUCTURED_STATE_MUTATION: expected list or object, got {type(mutation).__name__}"
+        )
+
+    for item in mutations:
+        if not isinstance(item, Mapping):
+            raise ValueError(
+                f"STRUCTURED_STATE_MUTATION: mutation item must be an object, got {type(item).__name__}"
+            )
+        target = str(item.get("target") or "").strip()
+        if not target:
+            raise ValueError("STRUCTURED_STATE_MUTATION: mutation requires non-empty string 'target'")
+        if declared is not None and len(declared) > 0 and target not in declared:
+            raise ValueError(
+                f"STRUCTURED_STATE_MUTATION: undeclared state variable {target!r}"
+            )
+        op = item.get("operator", "=")
+        if op not in {"=", "+=", "-=", "*=", "/=", ":"}:
+            raise ValueError(f"STRUCTURED_STATE_MUTATION: invalid operator {op!r}")
+        val = item.get("value")
+        if val is not None:
+            validate_state_expr_ir(val, symbols=declared)
+
+
+def compile_mutation_ir(
+    mutation: Any,
+    *,
+    declared: set[str] | None = None,
+    context: str = "context",
+) -> str:
+    """Compile mutation IR or legacy string to Java."""
+    if mutation is None:
+        return ""
+    if isinstance(mutation, str):
+        return _compile_mutation(mutation, declared=declared or set(), context=context)
+
+    if isinstance(mutation, Mapping):
+        mutations = [mutation]
+    elif isinstance(mutation, Sequence) and not isinstance(mutation, (str, bytes, bytearray)):
+        mutations = list(mutation)
+    else:
+        return ""
+
+    rows: list[str] = []
+    for item in mutations:
+        if not isinstance(item, Mapping):
+            continue
+        target = str(item.get("target") or "").strip()
+        if not target:
+            continue
+        if declared is not None and len(declared) > 0 and target not in declared:
+            raise ValueError(
+                f"STRUCTURED_STATE_MUTATION: undeclared state variable {target!r}"
+            )
+        operator = item.get("operator", "=")
+        operator = "=" if operator == ":" else operator
+        val = item.get("value")
+        right = compile_state_expr_ir(val, declared=declared, context=context)
+        if operator == "=":
+            rows.append(f"setState({_java_string(target)}, {right});")
+        else:
+            arithmetic = operator[0]
+            rows.append(
+                f"setState({_java_string(target)}, "
+                f"$mmmArithmetic({_java_string(arithmetic)}, "
+                f"$mmmRead({_java_string(target)}, {context}), {right}));"
+            )
+    return " ".join(rows)
+
+
+def mutations_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
+    symbols = (
+        sorted(allowed_state_symbols.declared_names)
+        if isinstance(allowed_state_symbols, StateSymbolTable)
+        else sorted(set(allowed_state_symbols))
+        if isinstance(allowed_state_symbols, (set, list, tuple)) and allowed_state_symbols
+        else []
+    )
+    target_schema = (
+        {"type": "string", "enum": symbols}
+        if symbols
+        else {"type": "string", "minLength": 1, "maxLength": 128}
+    )
+    name_schema = (
+        {"type": "string", "enum": symbols}
+        if symbols
+        else {"type": "string", "minLength": 1, "maxLength": 128}
+    )
+    value_operand = {
+        "type": "object",
+        "properties": {
+            "kind": {
+                "type": "string",
+                "enum": ["literal", "state_ref", "context_ref"],
+            },
+            "value": {"type": ["string", "number", "boolean", "null"]},
+            "name": name_schema,
+        },
+        "required": ["kind"],
+        "additionalProperties": False,
+    }
+    value_schema = {
+        "type": "object",
+        "properties": {
+            "kind": {
+                "type": "string",
+                "enum": ["literal", "state_ref", "context_ref", "arithmetic", "call"],
+            },
+            "value": {"type": ["string", "number", "boolean", "null"]},
+            "name": name_schema,
+            "op": {"type": "string", "enum": ["+", "-", "*", "/", "%"]},
+            "left": value_operand,
+            "right": value_operand,
+            "args": {
+                "type": "array",
+                "maxItems": 4,
+                "items": value_operand,
+            },
+        },
+        "required": ["kind"],
+        "additionalProperties": False,
+    }
+    return {
+        "type": "array",
+        "maxItems": 8,
+        "items": {
+            "type": "object",
+            "properties": {
+                "target": target_schema,
+                "operator": {
+                    "type": "string",
+                    "enum": ["=", "+=", "-=", "*=", "/="],
+                },
+                "value": value_schema,
+            },
+            "required": ["target", "operator", "value"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def state_expr_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
+    symbols = (
+        sorted(allowed_state_symbols.declared_names)
+        if isinstance(allowed_state_symbols, StateSymbolTable)
+        else sorted(set(allowed_state_symbols))
+        if isinstance(allowed_state_symbols, (set, list, tuple)) and allowed_state_symbols
+        else []
+    )
+    name_schema = (
+        {"type": "string", "enum": symbols}
+        if symbols
+        else {"type": "string", "minLength": 1, "maxLength": 128}
+    )
+    operand_schema = {
+        "type": "object",
+        "properties": {
+            "kind": {
+                "type": "string",
+                "enum": ["state_ref", "context_ref", "literal", "arithmetic", "call"],
+            },
+            "name": name_schema,
+            "value": {"type": ["string", "number", "boolean", "null"]},
+            "op": {"type": "string", "enum": ["+", "-", "*", "/", "%"]},
+            "left": {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": ["state_ref", "context_ref", "literal"]},
+                    "name": name_schema,
+                    "value": {"type": ["string", "number", "boolean", "null"]},
+                },
+                "required": ["kind"],
+                "additionalProperties": False,
+            },
+            "right": {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": ["state_ref", "context_ref", "literal"]},
+                    "name": name_schema,
+                    "value": {"type": ["string", "number", "boolean", "null"]},
+                },
+                "required": ["kind"],
+                "additionalProperties": False,
+            },
+        },
+        "required": ["kind"],
+        "additionalProperties": False,
+    }
+    compare_term_schema = {
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string", "enum": ["compare", "state_ref", "literal"]},
+            "op": {"type": "string", "enum": ["==", "!=", ">=", "<=", ">", "<", "="]},
+            "left": operand_schema,
+            "right": operand_schema,
+            "name": name_schema,
+            "value": {"type": ["string", "number", "boolean", "null"]},
+        },
+        "required": ["kind"],
+        "additionalProperties": False,
+    }
+    return {
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string", "enum": ["and", "or", "compare", "not", "literal"]},
+            "terms": {
+                "type": "array",
+                "maxItems": 8,
+                "items": compare_term_schema,
+            },
+            "op": {"type": "string", "enum": ["==", "!=", ">=", "<=", ">", "<", "="]},
+            "left": operand_schema,
+            "right": operand_schema,
+            "value": {"type": ["string", "number", "boolean", "null"]},
+        },
+        "required": ["kind"],
+        "additionalProperties": False,
+    }
+
+
+def state_concern_schema(
+    concern: str,
+    *,
+    allowed_state_symbols: Any = None,
+) -> dict[str, Any]:
+    symbols = (
+        sorted(allowed_state_symbols.declared_names)
+        if isinstance(allowed_state_symbols, StateSymbolTable)
+        else sorted(set(allowed_state_symbols))
+        if isinstance(allowed_state_symbols, (set, list, tuple)) and allowed_state_symbols
+        else []
+    )
+    if concern == "variables":
+        schema = {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "description": "Stable ASCII internal state identifier consumed by the host state compiler.",
+                },
+                "owner": {"type": "string", "minLength": 1, "maxLength": 256},
+                "type": {"type": "string", "minLength": 1, "maxLength": 128},
+                "unit": {"type": "string", "minLength": 1, "maxLength": 128},
+                "default": {"type": "string", "minLength": 1, "maxLength": 128},
+                "domain": {"type": "string", "minLength": 1, "maxLength": 256},
+            },
+            "required": ["name", "owner", "type", "unit", "default", "domain"],
+            "additionalProperties": False,
+        }
+        return constrain_state_record_schema(concern, schema)
+    if concern == "transitions":
+        schema = {
+            "type": "object",
+            "properties": {
+                "from_state": {"type": "string", "minLength": 1, "maxLength": 128},
+                "trigger": {"type": "string", "minLength": 1, "maxLength": 128},
+                "guard": state_expr_schema(symbols),
+                "mutations": mutations_schema(symbols),
+                "mutation": mutations_schema(symbols),
+                "to_state": {"type": "string", "minLength": 1, "maxLength": 128},
+            },
+            "required": ["from_state", "trigger", "guard", "mutations", "to_state"],
+            "additionalProperties": False,
+        }
+        return constrain_state_record_schema(concern, schema)
+    if concern == "invariants":
+        schema = {
+            "type": "object",
+            "properties": {
+                "condition": state_expr_schema(symbols),
+                "enforcement": {"type": "string", "minLength": 1, "maxLength": 512},
+            },
+            "required": ["condition", "enforcement"],
+            "additionalProperties": False,
+        }
+        return constrain_state_record_schema(concern, schema)
+    if concern == "initialization":
+        schema = {
+            "type": "object",
+            "properties": {
+                "owner": {"type": "string", "minLength": 1, "maxLength": 256},
+                "trigger": {"type": "string", "minLength": 1, "maxLength": 128},
+                "initial_state": mutations_schema(symbols),
+                "mutations": mutations_schema(symbols),
+            },
+            "required": ["owner", "trigger", "initial_state"],
+            "additionalProperties": False,
+        }
+        return constrain_state_record_schema(concern, schema)
+    if concern == "updates":
+        schema = {
+            "type": "object",
+            "properties": {
+                "trigger": {"type": "string", "minLength": 1, "maxLength": 128},
+                "mutation": mutations_schema(symbols),
+                "mutations": mutations_schema(symbols),
+                "owner": {"type": "string", "minLength": 1, "maxLength": 256},
+            },
+            "required": ["trigger", "mutation", "owner"],
+            "additionalProperties": False,
+        }
+        return constrain_state_record_schema(concern, schema)
+    if concern == "cleanup":
+        schema = {
+            "type": "object",
+            "properties": {
+                "event": {"type": "string", "minLength": 1, "maxLength": 128},
+                "action": mutations_schema(symbols),
+                "mutations": mutations_schema(symbols),
+                "retained_state": {"type": "string", "minLength": 1, "maxLength": 256},
+            },
+            "required": ["event", "action", "retained_state"],
+            "additionalProperties": False,
+        }
+        return constrain_state_record_schema(concern, schema)
+    if concern == "concurrency":
+        schema = {
+            "type": "object",
+            "properties": {
+                "entry_path": {"type": "string", "minLength": 1, "maxLength": 256},
+                "ownership": {"type": "string", "minLength": 1, "maxLength": 256},
+                "reentrancy_rule": {"type": "string", "minLength": 1, "maxLength": 512},
+            },
+            "required": ["entry_path", "ownership", "reentrancy_rule"],
+            "additionalProperties": False,
+        }
+        return constrain_state_record_schema(concern, schema)
+    raise ValueError(f"Unknown state concern: {concern!r}")
+
+
 class StateSymbolTable:
     """Canonical symbol table for state variables declared in state_model."""
 
@@ -576,18 +1177,21 @@ def validate_state_concern(
         for record in rows:
             if not isinstance(record, Mapping):
                 continue
-            validate_state_expression(str(record.get("guard") or ""))
-            _compile_mutation(
-                str(record.get("mutation") or ""),
-                declared=declared,
-            )
+            guard_val = record.get("guard")
+            if guard_val is not None:
+                validate_state_expr_ir(guard_val, symbols=declared)
+            mut_val = record.get("mutations") if "mutations" in record else record.get("mutation")
+            if mut_val is not None:
+                validate_mutation_ir(mut_val, symbols=declared)
         return
 
     if concern == "invariants":
         for record in rows:
             if not isinstance(record, Mapping):
                 continue
-            validate_state_expression(str(record.get("condition") or ""))
+            cond_val = record.get("condition")
+            if cond_val is not None:
+                validate_state_expr_ir(cond_val, symbols=declared)
         return
 
     if concern in {"initialization", "updates", "cleanup"}:
@@ -599,10 +1203,9 @@ def validate_state_concern(
         for record in rows:
             if not isinstance(record, Mapping):
                 continue
-            _compile_mutation(
-                str(record.get(field) or ""),
-                declared=declared,
-            )
+            mut_val = record.get("mutations") if "mutations" in record else record.get(field)
+            if mut_val is not None:
+                validate_mutation_ir(mut_val, symbols=declared)
         return
 
 
@@ -1022,11 +1625,12 @@ def render_state_model_concern(
     }
     parts: list[str] = [_COMMON] if include_runtime else []
 
-    def executable(index: int, record: Mapping[str, str], field: str) -> str:
+    def executable(index: int, record: Mapping[str, Any], field: str) -> str:
         del index
         if field in {"guard", "condition"}:
-            return _compile_condition(record.get(field, ""))
-        return _compile_mutation(record.get(field, ""), declared=declared)
+            return compile_state_expr_ir(record.get(field), declared=declared)
+        mut_val = record.get("mutations") if "mutations" in record else record.get(field)
+        return compile_mutation_ir(mut_val, declared=declared)
 
     if concern == "variables":
         lines = ["static {"]
@@ -1047,7 +1651,7 @@ def render_state_model_concern(
         lines = ["static {"]
         for index, record in enumerate(records):
             guard = executable(index, record, "guard")
-            mutation = executable(index, record, "mutation")
+            mutation = executable(index, record, "mutations" if "mutations" in record else "mutation")
             lines.append(
                 "    $mmmTransitions.add(new $mmmTransition("
                 + ", ".join((
@@ -1145,11 +1749,18 @@ __all__ = [
     "STATE_EXPRESSION_PATTERN",
     "STATE_MUTATION_PATTERN",
     "StateSymbolTable",
+    "compile_mutation_ir",
+    "compile_state_expr_ir",
     "constrain_state_chunk_schema",
     "constrain_state_record_schema",
     "has_complete_structured_state",
+    "mutations_schema",
     "render_state_model_concern",
+    "state_concern_schema",
+    "state_expr_schema",
+    "validate_mutation_ir",
     "validate_state_concern",
+    "validate_state_expr_ir",
     "validate_state_expression",
     "validate_structured_state_section",
 ]

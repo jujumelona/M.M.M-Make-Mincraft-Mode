@@ -12,8 +12,19 @@ def _fixture_value(schema: dict[str, Any], text: str) -> Any:
     if "Stable ASCII internal state identifier" in description:
         return "stateValue"
     if "Host state-" in description and "DSL" in description:
+        any_of = schema.get("anyOf", [])
+        has_array = schema.get("type") == "array" or any(isinstance(s, dict) and s.get("type") == "array" for s in any_of)
+        has_object = schema.get("type") == "object" or any(isinstance(s, dict) and s.get("type") == "object" for s in any_of)
         if "mutation" in description.casefold():
+            if has_array or (not any_of and schema.get("type") != "string"):
+                return [{
+                    "target": "stateValue",
+                    "operator": "=",
+                    "value": {"kind": "literal", "value": 1},
+                }]
             return "stateValue = 1"
+        if has_object or (not any_of and schema.get("type") != "string"):
+            return {"kind": "literal", "value": True}
         return "true"
 
     schema_type = schema.get("type")
