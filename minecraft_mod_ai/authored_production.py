@@ -882,6 +882,7 @@ def materialize_authored_execution_scaffold(
         "host_exact_task_queue_no_coder_file_planning",
         "host_bounded_coherent_authored_design",
         "host_implementation_graph_before_source",
+        "host_typed_plan_ir",
     }:
         raise ValueError("AUTHORED_SCAFFOLD_POLICY_MISMATCH")
 
@@ -889,6 +890,89 @@ def materialize_authored_execution_scaffold(
     supplied_digest = str(expected_manifest.pop("manifest_sha256", "") or "")
     if supplied_digest != _sha256_json(expected_manifest):
         raise ValueError("AUTHORED_SCAFFOLD_MANIFEST_HASH_MISMATCH")
+
+    if policy == "host_typed_plan_ir":
+        from .production_state_compiler import render_production_state_java
+        from .project_edit import (
+            ensure_main_initializer_call,
+            inspect_fabric_project,
+            write_text_files,
+        )
+
+        info = inspect_fabric_project(root)
+        package_name = proposal.base_proposal.spec.package_name
+        if info.package_name != package_name:
+            raise ValueError(
+                "AUTHORED_TYPED_PACKAGE_MISMATCH: "
+                f"{info.package_name!r} != {package_name!r}"
+            )
+
+        typed_program = manifest.get("typed_program")
+        if not isinstance(typed_program, Mapping):
+            raise ValueError("AUTHORED_TYPED_PROGRAM_MANIFEST_MISSING")
+        program_path = str(typed_program.get("path") or "").replace("\\", "/").strip()
+        expected_program_path = (
+            f"src/main/java/{package_name.replace('.', '/')}/AuthoredProgram.java"
+        )
+        if program_path != expected_program_path:
+            raise ValueError("AUTHORED_TYPED_PROGRAM_PATH_DRIFT")
+
+        program_target = root / program_path
+        if program_target.exists():
+            if not program_target.is_file() or program_target.is_symlink():
+                raise ValueError("AUTHORED_TYPED_PROGRAM_TARGET_INVALID")
+            current_program = program_target.read_text(encoding="utf-8")
+            if "// MMM:TYPED_PLAN_OWNER" not in current_program:
+                raise ValueError("AUTHORED_TYPED_PROGRAM_OWNERSHIP_CONFLICT")
+        else:
+            placeholder = (
+                f"package {package_name};\n\n"
+                "// MMM:TYPED_PLAN_OWNER\n"
+                "public final class AuthoredProgram {\n"
+                "    private AuthoredProgram() {}\n"
+                "    public static void initialize() {}\n"
+                "}\n"
+            )
+            write_text_files(
+                info,
+                {program_path: placeholder},
+                replace_existing=False,
+            )
+
+        if bool(typed_program.get("state_required")):
+            raw_state = design.get("_production_state_section")
+            if not isinstance(raw_state, Mapping) or not raw_state:
+                raise ValueError("AUTHORED_TYPED_STATE_AUTHORITY_MISSING")
+            state_path = (
+                f"src/main/java/{package_name.replace('.', '/')}/"
+                "AuthoredStateModel.java"
+            )
+            state_target = root / state_path
+            replace_state = False
+            if state_target.exists():
+                if not state_target.is_file() or state_target.is_symlink():
+                    raise ValueError("AUTHORED_TYPED_STATE_TARGET_INVALID")
+                current_state = state_target.read_text(encoding="utf-8")
+                if "// MMM:TYPED_PLAN_STATE_OWNER" not in current_state:
+                    raise ValueError("AUTHORED_TYPED_STATE_OWNERSHIP_CONFLICT")
+                replace_state = True
+            state_source = render_production_state_java(
+                raw_state,
+                package_name=package_name,
+            )
+            write_text_files(
+                info,
+                {state_path: state_source},
+                replace_existing=replace_state,
+            )
+
+        ensure_main_initializer_call(
+            info,
+            import_line=f"import {package_name}.AuthoredProgram",
+            call_line="AuthoredProgram.initialize()",
+            marker="typed-plan",
+        )
+        return root
 
     if policy in {"host_bounded_coherent_authored_design", "host_implementation_graph_before_source"}:
         # The canonical Fabric template is already materialized by the host. Coherent
