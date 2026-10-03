@@ -106,13 +106,13 @@ def infer_event_config(event: str, trigger: Any) -> dict[str, Any] | None:
         return {}
     text = _compact(trigger)
     match = re.search(
-        r"(?:^|\\s)/(?:\\s*)?([a-z0-9_]{1,64})(?:\\b|$)",
+        r"(?:^|\s)/(?:\s*)?([a-z0-9_]{1,64})(?:\b|$)",
         text,
         re.IGNORECASE,
     )
     if match is None:
         match = re.search(
-            r"\\b(?:command|명령어|커맨드)\\s*[:=]?\\s*([a-z0-9_]{1,64})\\b",
+            r"\b(?:command|명령어|커맨드)\s*[:=]?\s*([a-z0-9_]{1,64})\b",
             text,
             re.IGNORECASE,
         )
