@@ -50,6 +50,14 @@ def typed_plan_support_issues(
 
     normalized = normalize_structured_sections(structured_sections)
     issues: list[str] = []
+    from .planning_detail_template import WORKSHEET_SECTIONS
+
+    active_refs = {
+        f"{section}.{concern}"
+        for section in WORKSHEET_SECTIONS
+        for concern, rows in active_concern_records(normalized, section).items()
+        if rows
+    }
     covered = {
         str(cover)
         for module in (
@@ -61,6 +69,12 @@ def typed_plan_support_issues(
         for cover in module.get("covers", ())
         if isinstance(cover, str)
     }
+
+    phantom = sorted(covered - active_refs)
+    issues.extend(
+        f"platform.coverage_without_active_concern:{ref}"
+        for ref in phantom
+    )
 
     for section in _UNSUPPORTED_PLATFORM_SECTIONS:
         active = active_concern_records(normalized, section)
