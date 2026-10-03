@@ -349,8 +349,12 @@ class _Validator:
 
     def run(self) -> dict[str, Any]:
         plan = _mapping(self.plan, "typed_plan_ir")
-        _keys(plan, {"schema_version", "source_sha256", "functions", "initialize"},
-              {"schema_version", "source_sha256", "functions", "initialize"}, "typed_plan_ir")
+        _keys(
+            plan,
+            {"schema_version", "source_sha256", "functions", "initialize", "platform_modules"},
+            {"schema_version", "source_sha256", "functions", "initialize"},
+            "typed_plan_ir",
+        )
         if plan["schema_version"] != TYPED_PLAN_IR_SCHEMA_VERSION:
             raise _error("typed_plan_ir: unsupported schema_version")
         source_sha = str(plan["source_sha256"] or "")
@@ -414,7 +418,15 @@ class _Validator:
 
         for function in self.signatures:
             visit(function)
-        return deepcopy(dict(plan))
+
+        normalized = deepcopy(dict(plan))
+        if "platform_modules" in plan:
+            from .typed_platform_ir import validate_platform_modules
+
+            normalized["platform_modules"] = validate_platform_modules(
+                plan.get("platform_modules")
+            )
+        return normalized
 
 
 def validate_typed_plan_ir(
@@ -435,17 +447,24 @@ def _walk_nodes(value: Any):
             yield from _walk_nodes(item)
 
 
+def _execution_ast(plan: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "functions": plan.get("functions", ()),
+        "initialize": plan.get("initialize", ()),
+    }
+
+
 def typed_plan_uses_state(plan: Mapping[str, Any]) -> bool:
     return any(
         node.get("op") in {"state_get", "state_set"}
-        for node in _walk_nodes(plan)
+        for node in _walk_nodes(_execution_ast(plan))
     )
 
 
 def typed_plan_capability_ids(plan: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(
         str(node.get("id") or "")
-        for node in _walk_nodes(plan)
+        for node in _walk_nodes(_execution_ast(plan))
         if node.get("op") == "capability" and str(node.get("id") or "")
     ))
 
