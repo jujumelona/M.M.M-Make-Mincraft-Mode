@@ -127,49 +127,22 @@ class CompleteGameDesignPlanner:
         from .planner_operation import planner_operation
         from .planning_detail_slots import DETAIL_RECORDS
 
-        template = _design_writing_template(DETAIL_RECORDS)
-
-        with planner_operation("author_game_plan"):
-            text = self.router.generate_text(
-                "planner",
-                (
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are the game designer. Write a complete, concrete Minecraft "
-                            "mod design in the user's language as readable prose and Markdown. "
-                            "Develop every requested feature into a coherent playable experience: "
-                            "the main gameplay loop, progression, interacting systems, resources "
-                            "and content, player actions, UI and multiplayer behavior. Choose "
-                            "missing mechanics, quantities, names and balance values yourself. "
-                            "Explain how the systems connect using concrete examples. "
-                            "Your choices are authored design and need no proof or approval. "
-                            "Describe desired platform behavior without claiming unresearched "
-                            "API symbols are verified. Fill this writing template in one response. "
-                            "Use every canonical template section heading exactly once and keep the "
-                            "sections in the shown order. Keep canonical section headings at Markdown "
-                            "level 2 (`##`); you may add one document title at level 1 (`#`) and use "
-                            "deeper headings only inside a canonical section. For an inapplicable "
-                            "section, say so concretely instead of removing the section:\n"
-                            + template
-                            + "\nThe concern fields inside each canonical section are writing guidance, "
-                            "not required output keys. Verification sections describe future tests "
-                            "of the implementation; they do not judge your plan. "
-                            "Finish the design in this response."
-                        ),
-                    },
-                    {"role": "user", "content": prompt},
-                ),
-                media_paths=media_paths,
-                response_format="text",
-                response_schema=None,
-                enable_tools=False,
-                force_non_thinking=True,
-            )
         structured_sections: dict[str, Any] = {}
         typed_plan_ir: dict[str, Any] = {}
+
+        # The canonical structured design is the semantic source of truth.  Do not
+        # spend one full-model pass writing prose and then ask the same small model
+        # to rediscover the semantics as structured records.  When native decisions
+        # are available, author the bounded records first and render the human-readable
+        # document deterministically from them.
         if callable(getattr(self.router, "generate_tool_decision", None)):
-            from .authored_structured_design import author_structured_sections
+            from .authored_structured_design import (
+                author_structured_sections,
+                render_structured_sections,
+            )
+            from .typed_host_capabilities import (
+                typed_host_capability_contracts,
+            )
             from .typed_plan_authoring import author_typed_plan_ir
 
             with planner_operation("author_structured_execution_contract"):
@@ -178,9 +151,8 @@ class CompleteGameDesignPlanner:
                     prompt,
                     media_paths=media_paths,
                 )
-            from .typed_host_capabilities import (
-                typed_host_capability_contracts,
-            )
+
+            text = render_structured_sections(structured_sections)
 
             with planner_operation("author_typed_plan_ir"):
                 typed_plan_ir = author_typed_plan_ir(
@@ -195,7 +167,30 @@ class CompleteGameDesignPlanner:
                 structured_sections,
                 typed_plan_ir,
             )
-
+        else:
+            template = _design_writing_template(DETAIL_RECORDS)
+            with planner_operation("author_game_plan"):
+                text = self.router.generate_text(
+                    "planner",
+                    (
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are the game designer. Write a complete, concrete Minecraft "
+                                "mod design in the user's language as readable prose and Markdown. "
+                                "Develop every requested feature into a coherent playable experience. "
+                                "Fill this writing template in one response and finish the design in "
+                                "this response:\n" + template
+                            ),
+                        },
+                        {"role": "user", "content": prompt},
+                    ),
+                    media_paths=media_paths,
+                    response_format="text",
+                    response_schema=None,
+                    enable_tools=False,
+                    force_non_thinking=True,
+                )
         return AuthoredPlan(
             requested_prompt=prompt,
             text=text,
