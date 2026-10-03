@@ -44,7 +44,7 @@ class AuthoredPlan:
             "existing_input_sha256": self.existing_input_sha256,
             "media_paths": list(self.media_paths),
             "structured_sections": deepcopy(self.structured_sections),
-            "typed_plan_ir": deepcopy(self.typed_plan_ir),
+            "typed_plan_ir": deepcopy(getattr(self, "typed_plan_ir", {})),
         }
 
     @classmethod
