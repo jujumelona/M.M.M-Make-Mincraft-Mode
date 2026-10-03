@@ -3,23 +3,12 @@
 # Each concern is a required array of records with exactly these string fields.
 # Empty arrays are allowed only with a concrete reason in inapplicable_concerns.
 from .task_template_catalog import detail_records
-from .structured_state_runtime import (
-    constrain_state_record_schema,
-    mutations_schema,
-    state_concern_schema,
-    state_expr_schema,
-)
+from .structured_state_runtime import constrain_state_record_schema
 
 DETAIL_RECORDS = detail_records()
 
 
-def record_field_schema(
-    section: str,
-    concern: str,
-    field: str,
-    *,
-    allowed_state_symbols: Any = None,
-) -> dict:
+def record_field_schema(section: str, concern: str, field: str) -> dict:
     """Canonical authored-field type contract shared by storage and model paging."""
 
     if (
@@ -51,11 +40,11 @@ def record_field_schema(
             "maxItems": 4,
             "items": {"type": "string", "maxLength": 256},
         }
-    if section == "state_model":
-        if field in {"guard", "condition"}:
-            return state_expr_schema(allowed_state_symbols)
-        if field in {"mutations", "mutation", "initial_state", "action"}:
-            return mutations_schema(allowed_state_symbols)
+    if (
+        section == "state_model"
+        and field in {"guard", "mutation", "condition", "initial_state", "action"}
+    ):
+        return {"type": "string", "maxLength": 512}
     return {"type": "string", "minLength": 1, "maxLength": 512}
 
 
@@ -71,52 +60,22 @@ def _model_transport_schema(schema, *, is_properties_map: bool = False):
     return schema
 
 
-def specification_schema(
-    section: str,
-    *,
-    model_transport: bool = False,
-    state_symbols: Any = None,
-) -> dict:
+def specification_schema(section, *, model_transport: bool = False):
     records = DETAIL_RECORDS[section]
     properties = {}
     for concern, columns in records.items():
+        fields = columns.split()
+        item_schema = {
+            "type": "object",
+            "properties": {
+                field: record_field_schema(section, concern, field)
+                for field in fields
+            },
+            "required": fields,
+            "additionalProperties": False,
+        }
         if section == "state_model":
-            item_schema = state_concern_schema(concern, allowed_state_symbols=state_symbols)
-            for field_name in ("guard", "condition"):
-                if field_name in item_schema["properties"]:
-                    desc = item_schema["properties"][field_name].get("description")
-                    item_schema["properties"][field_name] = {
-                        "anyOf": [
-                            state_expr_schema(state_symbols),
-                            {"type": "string", "maxLength": 512},
-                        ],
-                    }
-                    if desc:
-                        item_schema["properties"][field_name]["description"] = desc
-            for field_name in ("mutations", "mutation", "initial_state", "action"):
-                if field_name in item_schema["properties"]:
-                    desc = item_schema["properties"][field_name].get("description")
-                    item_schema["properties"][field_name] = {
-                        "anyOf": [
-                            mutations_schema(state_symbols),
-                            {"type": "string", "maxLength": 512},
-                        ],
-                    }
-                    if desc:
-                        item_schema["properties"][field_name]["description"] = desc
-            if concern == "transitions":
-                item_schema["required"] = ["from_state", "trigger", "guard", "to_state"]
-        else:
-            fields = columns.split()
-            item_schema = {
-                "type": "object",
-                "properties": {
-                    field: record_field_schema(section, concern, field)
-                    for field in fields
-                },
-                "required": fields,
-                "additionalProperties": False,
-            }
+            item_schema = constrain_state_record_schema(concern, item_schema)
         properties[concern] = {
             "type": "array",
             "maxItems": 4,

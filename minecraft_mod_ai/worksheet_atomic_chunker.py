@@ -166,7 +166,7 @@ def worksheet_chunk_schema(
     properties: dict[str, Any] = {}
     authored_signal: list[dict[str, Any]] = []
     for concern in active:
-        if key == "state_model":
+        if key == "state_model" and state_symbols is not None:
             from .structured_state_runtime import state_concern_schema
             item_schema = state_concern_schema(
                 concern,
@@ -181,10 +181,12 @@ def worksheet_chunk_schema(
             item_schema: dict[str, Any] = {
                 "type": "object",
                 "properties": field_schemas,
-                "required": [],
+                "required": list(fields) if key == "state_model" else [],
                 "minProperties": 1,
                 "additionalProperties": False,
             }
+            if key == "state_model":
+                item_schema = constrain_state_record_schema(concern, item_schema)
         properties[concern] = {
             "type": "array",
             "maxItems": 4,
