@@ -193,13 +193,8 @@ def _install_search_width(generation_search: Any, repair_search: Any) -> None:
 
 
 def _install_verifier_first_ranking(generation_search: Any, repair_search: Any) -> None:
-    """Keep legacy verifier-first scaling confined to repair search.
+    """Keep verifier-first ranking confined to repair search."""
 
-    Custom generation owns candidate admission and ordering in
-    generation_verification_contract. Wrapping generation_search._verify_candidate
-    here used an obsolete JDT-centric tier, overwrote exact generation receipts, and
-    made runtime behavior differ from the reviewed source implementation.
-    """
     del generation_search
 
     current_repair_verify = repair_search._verify_repair_candidate
@@ -227,12 +222,9 @@ def _install_source_free_repair_memory(repair_search: Any) -> None:
     if getattr(current_read, _MEMORY_MARKER, False):
         return
 
-    @wraps(current_read)
     def read_memory(root: Any, signature: str, *, limit: int = 4) -> list[dict[str, Any]]:
-        legacy = current_read(root, signature, limit=limit)
-        sanitized = [_sanitize_legacy_repair_memory(item) for item in legacy]
         if root is None:
-            return sanitized[:limit]
+            return []
         try:
             rows = relevant_trajectories(
                 root,
@@ -271,40 +263,16 @@ def _install_source_free_repair_memory(repair_search: Any) -> None:
                     "rule": "Source-free procedure memory only; current hashes, diagnostics and exact source remain authoritative.",
                 }
             )
-        combined = [*verified, *sanitized]
-        combined.sort(
+        verified.sort(
             key=lambda item: (
                 -float(item.get("similarity", 0.0) or 0.0),
                 str(item.get("trajectory_id") or item.get("signature_sha256") or ""),
             )
         )
-        return combined[:limit]
+        return verified[:limit]
 
     setattr(read_memory, _MEMORY_MARKER, True)
     repair_search._read_memory = read_memory
-
-
-def _sanitize_legacy_repair_memory(value: Mapping[str, Any]) -> dict[str, Any]:
-    pattern = value.get("repair_pattern")
-    safe_pattern: list[dict[str, Any]] = []
-    if isinstance(pattern, Sequence) and not isinstance(pattern, (str, bytes, bytearray)):
-        for item in pattern[:16]:
-            if not isinstance(item, Mapping):
-                continue
-            safe_pattern.append(
-                {
-                    "operation": str(item.get("operation", "")),
-                    "path": str(item.get("path", "")),
-                }
-            )
-    return {
-        "similarity": float(value.get("similarity", 0.0) or 0.0),
-        "memory_type": "legacy_verified_repair_structure",
-        "signature_sha256": str(value.get("signature_sha256", "")),
-        "evidence": value.get("evidence", {}),
-        "repair_pattern": safe_pattern,
-        "rule": "Legacy source excerpts were removed; use current exact source for patch content.",
-    }
 
 
 def _generation_query(messages: Sequence[Mapping[str, Any]], module: Any) -> str:
