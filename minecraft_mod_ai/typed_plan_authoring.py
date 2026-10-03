@@ -1044,7 +1044,7 @@ def author_typed_plan_ir(
             "config": config,
         })
 
-    logic_refs = {
+    logic_refs = sorted(
         ref
         for ref in coverage_refs
         if ref.startswith((
@@ -1052,117 +1052,33 @@ def author_typed_plan_ir(
             "algorithm.",
             "failure_and_limits.",
         ))
-    }
-    logic_groups: list[tuple[str, list[str]]] = []
-    for section in (
-        "behavior_contract",
-        "algorithm",
-        "failure_and_limits",
-    ):
-        covers = sorted(
-            ref for ref in logic_refs if ref.startswith(section + ".")
+    )
+    has_mod_initialize = any(
+        is_mod_initialize_trigger(row.get("trigger"))
+        for row in entry_points
+    )
+    if logic_refs and not event_bindings and not has_mod_initialize:
+        raise ValueError(
+            "TYPED_PLAN_LOGIC_ENTRY_POINT_REQUIRED: executable semantics "
+            "have no runtime entry point."
         )
-        if covers:
-            logic_groups.append((section, covers))
 
-    for logic_index, (section, covers) in enumerate(logic_groups):
-        scope = f"function[{logic_index}]"
-        function_id = f"logic_{section}"
-        if function_id in known_ids:
-            raise ValueError(
-                f"TYPED_PLAN_AUTHORING_DUPLICATE_FUNCTION: {function_id}"
-            )
-        known_ids.add(function_id)
-        author.set_scope_covers(scope, covers)
-
-        signature = author._ask(
-            "function_signature",
-            {
-                "type": "object",
-                "properties": {
-                    "parameters": {
-                        "type": "array",
-                        "maxItems": 8,
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "name": {
-                                    "type": "string",
-                                    "pattern": r"^[A-Za-z_$][A-Za-z0-9_$]*$",
-                                },
-                                "type": {
-                                    "type": "string",
-                                    "enum": list(_TYPES),
-                                },
-                            },
-                            "required": ["name", "type"],
-                            "additionalProperties": False,
-                        },
-                    },
-                    "return_type": {
-                        "type": "string",
-                        "enum": [*_TYPES, "void"],
-                    },
-                },
-                "required": ["parameters", "return_type"],
-                "additionalProperties": False,
-            },
-            scope=scope,
-        )
-        if not isinstance(signature, Mapping):
-            raise ValueError(
-                f"TYPED_PLAN_AUTHORING_RESPONSE_INVALID: {scope}.function_signature"
-            )
-        raw_parameters = signature.get("parameters")
-        if not isinstance(raw_parameters, list):
-            raise ValueError(
-                f"TYPED_PLAN_AUTHORING_RESPONSE_INVALID: {scope}.parameters"
-            )
-        parameters: list[dict[str, str]] = []
-        parameter_names: set[str] = set()
-        for raw_parameter in raw_parameters:
-            if not isinstance(raw_parameter, Mapping):
-                raise ValueError(
-                    f"TYPED_PLAN_AUTHORING_RESPONSE_INVALID: {scope}.parameter"
-                )
-            name = str(raw_parameter.get("name") or "")
-            type_name = str(raw_parameter.get("type") or "")
-            if name in parameter_names or type_name not in _TYPES:
-                raise ValueError(
-                    f"TYPED_PLAN_AUTHORING_RESPONSE_INVALID: {scope}.parameter"
-                )
-            parameter_names.add(name)
-            parameters.append({"name": name, "type": type_name})
-
-        return_type = str(signature.get("return_type") or "")
-        if return_type not in {*_TYPES, "void"}:
-            raise ValueError(
-                f"TYPED_PLAN_AUTHORING_RESPONSE_INVALID: {scope}.return_type"
-            )
-        specs.append({
-            "id": function_id,
-            "parameters": parameters,
-            "return_type": return_type,
-            "covers": covers,
-        })
-
-    author.function_signatures = {
-        str(spec["id"]): tuple(
-            str(parameter["type"])
-            for parameter in spec["parameters"]
-        )
-        for spec in specs
-    }
-    author.function_covers = {
-        str(spec["id"]): tuple(str(ref) for ref in spec["covers"])
-        for spec in specs
-    }
-
-    def author_function_body(
-        item: tuple[int, dict[str, Any]],
-    ) -> tuple[int, dict[str, Any]]:
-        index, spec = item
-        scope = f"function[{index}].body"
+    logic_dispatch_id = "logic_dispatch"
+    logic_dispatch_spec: dict[str, Any] | None = None
+    logic_dispatch_body: list[dict[str, Any]] = []
+    if logic_refs:
+        logic_dispatch_spec = {
+            "id": logic_dispatch_id,
+            "parameters": [
+                {"name": "event", "type": "string"},
+                {"name": "primary", "type": "object"},
+                {"name": "secondary", "type": "object"},
+                {"name": "flag", "type": "boolean"},
+            ],
+            "return_type": "int",
+            "covers": list(logic_refs),
+        }
+        dispatch_scope = "function[logic_dispatch].body"
         body_author = TypedOperationAuthor(
             router,
             source_text,
@@ -1170,57 +1086,116 @@ def author_typed_plan_ir(
             capabilities,
             max_calls=128,
         )
-        body_author.function_signatures = dict(author.function_signatures)
-        body_author.function_covers = dict(author.function_covers)
-        body_author.set_scope_covers(scope, spec["covers"])
-        statement_limit = body_author._semantic_statement_budget(scope)
-        # The model-call ceiling is derived from this function's actual semantic
-        # work.  It is only a runaway guard; normal completion happens at done or
-        # a terminal statement.
-        body_author.max_calls = max(16, min(128, statement_limit * 8))
-        env = {
-            str(parameter["name"]): str(parameter["type"])
-            for parameter in spec["parameters"]
-        }
-        return index, {
-            **spec,
-            "body": body_author.body(
-                scope,
-                env=env,
-                return_type=str(spec["return_type"]),
-                max_statements=statement_limit,
-            ),
-        }
-
-    indexed_specs = list(enumerate(specs))
-    if len(indexed_specs) <= 1:
-        authored_functions = [
-            author_function_body(item)
-            for item in indexed_specs
-        ]
-    else:
-        from concurrent.futures import ThreadPoolExecutor
-        from .model_concurrency import active_llama_parallelism
-
-        workers = min(
-            len(indexed_specs),
-            max(1, active_llama_parallelism()),
+        # Runtime wrappers are host-owned. The semantic dispatcher may use only
+        # typed operations, state and host capabilities; it cannot call wrappers
+        # or recursively build another function graph.
+        body_author.function_signatures = {}
+        body_author.function_covers = {}
+        body_author.set_scope_covers(dispatch_scope, logic_refs)
+        statement_limit = body_author._semantic_statement_budget(
+            dispatch_scope
         )
-        if workers == 1:
-            authored_functions = [
-                author_function_body(item)
-                for item in indexed_specs
-            ]
+        body_author.max_calls = max(
+            16,
+            min(128, statement_limit * 8),
+        )
+        logic_dispatch_body = body_author.body(
+            dispatch_scope,
+            env={
+                "event": "string",
+                "primary": "object",
+                "secondary": "object",
+                "flag": "boolean",
+            },
+            return_type="int",
+            max_statements=statement_limit,
+        )
+
+    def literal(kind: str, value: Any) -> dict[str, Any]:
+        return {"op": "literal", "type": kind, "value": value}
+
+    def ref(name: str) -> dict[str, Any]:
+        return {"op": "ref", "name": name}
+
+    def dispatch_call(
+        event: str,
+        *,
+        primary: dict[str, Any],
+        secondary: dict[str, Any] | None = None,
+        flag: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if logic_dispatch_spec is None:
+            raise ValueError(
+                "TYPED_PLAN_INTERNAL: logic dispatcher is unavailable"
+            )
+        return {
+            "op": "call",
+            "function": logic_dispatch_id,
+            "args": [
+                literal("string", event),
+                primary,
+                secondary or literal("object", None),
+                flag or literal("boolean", False),
+            ],
+        }
+
+    binding_by_function = {
+        str(binding["function"]): binding
+        for binding in event_bindings
+    }
+    functions: list[dict[str, Any]] = []
+    for spec in specs:
+        function_id = str(spec["id"])
+        binding = binding_by_function.get(function_id)
+        if binding is None:
+            raise ValueError(
+                f"TYPED_PLAN_INTERNAL: event wrapper {function_id!r} "
+                "has no host binding"
+            )
+        event = str(binding["event"])
+        if logic_dispatch_spec is None:
+            body = (
+                [{
+                    "op": "return",
+                    "value": literal("int", 1),
+                }]
+                if event == "command"
+                else []
+            )
         else:
-            with ThreadPoolExecutor(
-                max_workers=workers,
-                thread_name_prefix="mmm-typed-body",
-            ) as executor:
-                authored_functions = list(
-                    executor.map(author_function_body, indexed_specs)
+            if event in {
+                "server_started",
+                "server_stopping",
+                "server_tick",
+            }:
+                call = dispatch_call(event, primary=ref("server"))
+            elif event in {"player_join", "player_disconnect"}:
+                call = dispatch_call(event, primary=ref("player"))
+            elif event == "player_respawn":
+                call = dispatch_call(
+                    event,
+                    primary=ref("newPlayer"),
+                    secondary=ref("oldPlayer"),
+                    flag=ref("alive"),
                 )
-    authored_functions.sort(key=lambda item: item[0])
-    functions = [value for _, value in authored_functions]
+            elif event == "command":
+                call = dispatch_call(event, primary=ref("source"))
+            else:
+                raise ValueError(
+                    f"TYPED_PLAN_INTERNAL: unsupported event {event!r}"
+                )
+            body = (
+                [{"op": "return", "value": call}]
+                if event == "command"
+                else [{"op": "expr", "value": call}]
+            )
+        functions.append({**spec, "body": body})
+
+    if logic_dispatch_spec is not None:
+        functions.append({
+            **logic_dispatch_spec,
+            "body": logic_dispatch_body,
+        })
 
     signature_map = {
         str(spec["id"]): (
@@ -1230,7 +1205,7 @@ def author_typed_plan_ir(
             ),
             str(spec["return_type"]),
         )
-        for spec in specs
+        for spec in functions
     }
     event_bindings = validate_event_bindings(
         event_bindings,
@@ -1363,37 +1338,14 @@ def author_typed_plan_ir(
 
     platform_modules = validate_platform_modules(platform_modules)
 
-    has_mod_initialize = any(
-        is_mod_initialize_trigger(row.get("trigger"))
-        for row in entry_points
-    )
-    if has_mod_initialize:
-        initialize_author = TypedOperationAuthor(
-            router,
-            source_text,
-            structured_sections,
-            capabilities,
-            max_calls=max(16, min(96, 8 + semantic_units * 3)),
-        )
-        initialize_author.function_signatures = dict(author.function_signatures)
-        initialize_author.function_covers = dict(author.function_covers)
-        initialize_covers = [
-            "integration.entry_points",
-            *sorted(logic_refs),
-        ]
-        initialize_author.set_scope_covers(
-            "initialize",
-            initialize_covers,
-        )
-        initialize_limit = initialize_author._semantic_statement_budget(
-            "initialize"
-        )
-        initialize_body = initialize_author.body(
-            "initialize",
-            env={},
-            return_type="void",
-            max_statements=initialize_limit,
-        )
+    if has_mod_initialize and logic_dispatch_spec is not None:
+        initialize_body = [{
+            "op": "expr",
+            "value": dispatch_call(
+                "mod_initialize",
+                primary=literal("object", None),
+            ),
+        }]
     else:
         initialize_body = []
 
