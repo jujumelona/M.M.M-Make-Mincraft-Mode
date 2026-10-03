@@ -167,6 +167,38 @@ def _run_release_jdt_verification(
     )
 
 
+def _debug_fixture_source_contract(
+    approved: CompleteProposal,
+) -> dict[str, Any] | None:
+    """Return the host-owned Debug source contract, with old-plan compatibility."""
+
+    game_design = approved.game_design if isinstance(approved.game_design, dict) else {}
+    fixture = game_design.get("fixture")
+    if not isinstance(fixture, dict):
+        return None
+    direct = fixture.get("source_contract")
+    if isinstance(direct, dict):
+        return direct
+
+    # Immutable Debug plans produced before the host compiler stored the contract
+    # on the implementation module. Read it only for replay compatibility.
+    fixture_module_id = str(fixture.get("module_id") or "").strip()
+    if not fixture_module_id:
+        return None
+    fixture_module = next(
+        (
+            module
+            for module in approved.modules
+            if module.module_id == fixture_module_id
+        ),
+        None,
+    )
+    if fixture_module is None or not isinstance(fixture_module.config, dict):
+        return None
+    legacy = fixture_module.config.get("observable_source_contract")
+    return legacy if isinstance(legacy, dict) else None
+
+
 
 def _receipt_owned_module_ids(receipt: dict[str, Any]) -> tuple[str, ...]:
     """Return only module ownership explicitly declared by a generation receipt."""
@@ -402,25 +434,7 @@ class CompleteProductionOrchestrator:
             approved.schema_version == 'mmm/complete-proposal-v1'
             and approved.game_design.get('mode') == 'debug_fixture'
         ):
-            fixture = approved.game_design.get('fixture')
-            fixture_module_id = (
-                str(fixture.get('module_id') or '').strip()
-                if isinstance(fixture, dict)
-                else ''
-            )
-            fixture_module = next(
-                (
-                    module
-                    for module in approved.modules
-                    if module.module_id == fixture_module_id
-                ),
-                None,
-            )
-            source_contract = (
-                fixture_module.config.get('observable_source_contract')
-                if fixture_module is not None and isinstance(fixture_module.config, dict)
-                else None
-            )
+            source_contract = _debug_fixture_source_contract(approved)
             normalized_source_contract = (
                 source_contract if isinstance(source_contract, dict) else None
             )
@@ -2264,7 +2278,7 @@ class CompleteProductionOrchestrator:
         approved: CompleteProposal,
         project_root: Path,
     ) -> Path:
-        """Bind the model-owned DebugToken source to host-owned runtime execution."""
+        """Materialize and bind the host-owned DebugToken runtime fixture."""
 
         root = project_root.expanduser().resolve()
         schema_version = str(getattr(approved, 'schema_version', '') or '')
@@ -2277,25 +2291,7 @@ class CompleteProductionOrchestrator:
         ):
             return root
 
-        fixture = game_design.get('fixture')
-        fixture_module_id = (
-            str(fixture.get('module_id') or '').strip()
-            if isinstance(fixture, dict)
-            else ''
-        )
-        fixture_module = next(
-            (
-                module
-                for module in approved.modules
-                if module.module_id == fixture_module_id
-            ),
-            None,
-        )
-        source_contract = (
-            fixture_module.config.get('observable_source_contract')
-            if fixture_module is not None and isinstance(fixture_module.config, dict)
-            else None
-        )
+        source_contract = _debug_fixture_source_contract(approved)
         if not isinstance(source_contract, dict):
             raise CompleteProductionError(
                 'Debug fixture is missing its observable source contract.'
@@ -2307,6 +2303,22 @@ class CompleteProductionOrchestrator:
             )
 
         package_name = approved.base_proposal.spec.package_name
+        try:
+            from .debug_fixture_host import (
+                DebugFixtureHostError,
+                materialize_debug_fixture_source,
+            )
+
+            materialize_debug_fixture_source(
+                root,
+                package_name=package_name,
+                mod_id=approved.base_proposal.spec.mod_id,
+                minecraft_version=approved.base_proposal.spec.platform.minecraft_version,
+                source_contract=source_contract,
+            )
+        except DebugFixtureHostError as exc:
+            raise CompleteProductionError(str(exc)) from exc
+
         package_path = package_name.replace('.', '/')
         main_class = ''.join(
             part.capitalize()
