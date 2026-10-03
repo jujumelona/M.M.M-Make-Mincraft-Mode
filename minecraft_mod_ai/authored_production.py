@@ -653,16 +653,25 @@ def _compile_new_authored_modules(
 
         raw_platform_modules = validated_plan.get("platform_modules", [])
         platform_modules: list[ProductionModule] = []
+        state_store_config: dict[str, Any] | None = None
         for item in raw_platform_modules:
             module_id = str(item["module_id"])
+            kind = str(item["kind"])
             if module_id == "authored_typed_plan":
                 raise ValueError(
                     "TYPED_PLATFORM_MODULE_ID_CONFLICT: authored_typed_plan"
                 )
+            if kind == "state_store":
+                if state_store_config is not None:
+                    raise ValueError(
+                        "TYPED_PLATFORM_STATE_STORE_DUPLICATE"
+                    )
+                state_store_config = deepcopy(dict(item["config"]))
+                continue
             platform_modules.append(
                 ProductionModule(
                     module_id=module_id,
-                    kind=str(item["kind"]),
+                    kind=kind,
                     config=deepcopy(dict(item["config"])),
                     required_gates=("target_compile",),
                 )
@@ -673,10 +682,13 @@ def _compile_new_authored_modules(
             if isinstance(production_state_section, Mapping)
             else {}
         )
-        if typed_plan_uses_state(validated_plan) and not state_section:
+        if (
+            typed_plan_uses_state(validated_plan)
+            or state_store_config is not None
+        ) and not state_section:
             raise ValueError(
-                "TYPED_PLAN_STATE_AUTHORITY_REQUIRED: state operations require "
-                "canonical structured state_model authority."
+                "TYPED_PLAN_STATE_AUTHORITY_REQUIRED: state operations or "
+                "persistent state require canonical structured state_model authority."
             )
 
         program_symbol = "AuthoredProgram"
@@ -716,6 +728,7 @@ def _compile_new_authored_modules(
                 "typed_plan_path": program_path,
                 "typed_plan_capabilities": {},
                 "typed_plan_state_section": state_section,
+                "typed_state_store": state_store_config,
                 **dict(target),
             },
             required_gates=("target_compile",),
@@ -737,6 +750,7 @@ def _compile_new_authored_modules(
                 "path": program_path,
                 "symbol": program_symbol,
                 "state_required": typed_plan_uses_state(validated_plan),
+                "state_store": state_store_config is not None,
             },
             "platform_modules": [
                 {
