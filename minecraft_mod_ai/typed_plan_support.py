@@ -72,10 +72,7 @@ def typed_plan_support_issues(
     integration = active_concern_records(normalized, "integration")
     for index, row in enumerate(integration.get("entry_points", ())):
         trigger = row.get("trigger")
-        if (
-            not _lifecycle_trigger(trigger)
-            and "integration.entry_points" not in covered
-        ):
+        if not _lifecycle_trigger(trigger):
             issues.append(
                 "integration.entry_points"
                 f"[{index}].trigger={_compact(trigger)!r}"
