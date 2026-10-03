@@ -244,14 +244,6 @@ TEMPLATE_REQUIREMENTS = {
 }
 
 
-def _sha256_text(text: str) -> str:
-    """DEPRECATED: Use ImplementationRegistry instead.
-    
-    This function kept for backward compatibility during migration.
-    """
-    return "sha256:" + sha256(text.encode("utf-8")).hexdigest()
-
-
 def make_implementation(
     leaf: str,
     minecraft_version: str,
@@ -296,7 +288,12 @@ def template_hashes() -> dict[str, str]:
     authority.verify_live()
     for identifier in LEAF_TEMPLATES:
         authority.implementations.get_implementation(identifier)
-    return {identifier: _sha256_text(_encode(load_template(identifier))) for identifier in LEAF_TEMPLATES}
+    return {
+        identifier: "sha256:" + sha256(
+            _encode(load_template(identifier)).encode("utf-8")
+        ).hexdigest()
+        for identifier in LEAF_TEMPLATES
+    }
 
 
 from .structural_routing_contract import CANONICAL_ARTIFACT_KINDS
