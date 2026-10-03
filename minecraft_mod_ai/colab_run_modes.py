@@ -321,8 +321,8 @@ def write_debug_example_plan(
     from .complete_spec import (
         CompleteProposal,
         CompleteProposalStatus,
-        ProductionModule,
     )
+    from .debug_fixture_host import debug_fixture_source_contract
     from .knowledge import evidence_catalog_for_version, evidence_snapshot_hash
     from .platform_resolver import lock_from_adapter
     from .spec import ModSpec, Proposal, ProposalStatus
@@ -330,6 +330,10 @@ def write_debug_example_plan(
     adapter = _debug_target(minecraft_version=minecraft_version, loader=loader)
     platform = lock_from_adapter(adapter)
     evidence = evidence_catalog_for_version(platform.minecraft_version)
+    source_contract = debug_fixture_source_contract(
+        package_name="dev.mmm.debugfixture",
+        minecraft_version=platform.minecraft_version,
+    )
     prompt = (
         "M.M.M Debug Mode fixture: add one deterministic host-generated debug "
         "token item and run the normal implementation/verification pipeline."
@@ -377,23 +381,14 @@ def write_debug_example_plan(
                 "without planner or coder generation."
             ),
             "fixture": {
-                "module_id": "debug_token",
+                "artifact_id": "debug_token",
                 "kind": "item",
                 "semantic_kind": "item",
                 "deterministic": True,
+                "source_contract": source_contract,
             },
         },
-        modules=(
-            ProductionModule(
-                module_id="debug_token",
-                kind="item",
-                config={
-                    "name": "Debug Token",
-                    "display_name": "Debug Token",
-                },
-                required_gates=("target_compile",),
-            ),
-        ),
+        modules=(),
         assets=(),
         acceptance_tests=acceptance,
         external_runtime_required=False,
