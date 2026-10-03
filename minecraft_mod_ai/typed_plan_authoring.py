@@ -32,6 +32,20 @@ def _active_concern_refs(
     return tuple(dict.fromkeys(refs))
 
 
+def _integration_entry_points(
+    structured_sections: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], ...]:
+    from .authored_structured_design import active_concern_records
+
+    active = active_concern_records(structured_sections, "integration")
+    rows = active.get("entry_points", ())
+    return tuple(
+        dict(row)
+        for row in rows
+        if isinstance(row, Mapping)
+    )
+
+
 class TypedOperationAuthor:
     def __init__(
         self,
@@ -537,6 +551,73 @@ def author_typed_plan_ir(
             ),
         })
 
+    from .typed_event_ir import (
+        EVENT_SIGNATURES,
+        event_config_schema,
+        is_mod_initialize_trigger,
+        validate_event_bindings,
+    )
+
+    signature_map = {
+        str(spec["id"]): (
+            tuple(
+                str(parameter["type"])
+                for parameter in spec["parameters"]
+            ),
+            str(spec["return_type"]),
+        )
+        for spec in specs
+    }
+    event_bindings: list[dict[str, Any]] = []
+    for entry_point_index, row in enumerate(
+        _integration_entry_points(structured_sections)
+    ):
+        if is_mod_initialize_trigger(row.get("trigger")):
+            continue
+
+        event_scope = f"integration.entry_points[{entry_point_index}]"
+        event = author._enum(
+            "event_type",
+            sorted(EVENT_SIGNATURES),
+            scope=event_scope,
+        )
+        expected_signature = EVENT_SIGNATURES[event]
+        compatible_functions = sorted(
+            function_id
+            for function_id, signature in signature_map.items()
+            if signature == expected_signature
+        )
+        if not compatible_functions:
+            raise ValueError(
+                "TYPED_PLAN_EVENT_FUNCTION_REQUIRED: "
+                f"{event!r} requires signature {expected_signature!r}"
+            )
+        function_id = author._enum(
+            "event_function",
+            compatible_functions,
+            scope=event_scope,
+        )
+        config = author._ask(
+            "event_config",
+            event_config_schema(event),
+            scope=event_scope,
+        )
+        if not isinstance(config, Mapping):
+            raise ValueError(
+                "TYPED_PLAN_AUTHORING_RESPONSE_INVALID: event_config"
+            )
+        event_bindings.append({
+            "event": event,
+            "function": function_id,
+            "entry_point_index": entry_point_index,
+            "config": dict(config),
+        })
+
+    event_bindings = validate_event_bindings(
+        event_bindings,
+        signatures=signature_map,
+    )
+
     coverage_refs = _active_concern_refs(structured_sections)
     from .typed_platform_ir import (
         PLATFORM_KINDS,
@@ -652,6 +733,7 @@ def author_typed_plan_ir(
             return_type="void",
         ),
         "platform_modules": platform_modules,
+        "event_bindings": event_bindings,
     }
     from .typed_plan_ir import validate_typed_plan_ir
 
