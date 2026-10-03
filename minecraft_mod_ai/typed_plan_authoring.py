@@ -675,6 +675,7 @@ def author_typed_plan_ir(
         EVENT_PARAMETERS,
         EVENT_SIGNATURES,
         event_config_schema,
+        infer_event_type,
         is_mod_initialize_trigger,
         validate_event_bindings,
     )
@@ -713,7 +714,7 @@ def author_typed_plan_ir(
             continue
 
         event_scope = f"integration.entry_points[{entry_point_index}]"
-        event = author._enum(
+        event = infer_event_type(row.get("trigger")) or author._enum(
             "event_type",
             sorted(EVENT_SIGNATURES),
             scope=event_scope,
