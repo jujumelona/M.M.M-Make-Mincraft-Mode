@@ -314,6 +314,13 @@ class TypedOperationAuthor:
                 "the host owns iteration and completion."
             ),
         }
+        token_ceiling = {
+            "statement_node": 256,
+            "expression_node": 512,
+            "event_config": 192,
+            "function_signature": 768,
+            "platform_config": 1024,
+        }.get(field, 256)
         result = self.router.generate_tool_decision(
             "planner",
             (
@@ -329,6 +336,8 @@ class TypedOperationAuthor:
             tool_name="emit_typed_plan_value",
             parameters=parameters,
             description="Emit exactly one host-requested typed PlanIR value.",
+            output_token_ceiling=token_ceiling,
+            force_non_thinking=True,
         )
         if not isinstance(result, Mapping) or set(result) != {"value"}:
             raise ValueError("TYPED_PLAN_AUTHORING_RESPONSE_INVALID")
