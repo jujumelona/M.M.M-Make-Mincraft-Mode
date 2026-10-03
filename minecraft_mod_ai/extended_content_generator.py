@@ -38,6 +38,7 @@ _SUPPORTED = frozenset(
         "recipe",
         "advancement",
         "loot",
+        "tag",
     }
 )
 _JAVA_KINDS = _SUPPORTED - {"recipe", "advancement", "loot"}
@@ -151,7 +152,7 @@ def generate_extended_content(
             prefix = "effect" if kind == "effect" else "enchantment"
             lang_en[f"{prefix}.{mod_id}.{module_id}"] = display_en
             lang_ko[f"{prefix}.{mod_id}.{module_id}"] = display_ko
-        elif kind in {"recipe", "advancement", "loot"}:
+        elif kind in {"recipe", "advancement", "loot", "tag"}:
             files.update(_data_only_resource(mod_id, module_id, kind, config))
         elif kind == "command":
             pass
@@ -1038,11 +1039,39 @@ def _item_resources(mod_id: str, module_id: str, kind: str, config: dict[str, An
 def _data_only_resource(mod_id: str, module_id: str, kind: str, config: dict[str, Any]) -> dict[str, str]:
     if kind == "recipe":
         path = f"src/main/resources/data/{mod_id}/recipes/{module_id}.json"
+        payload = config.get("json", config)
     elif kind == "advancement":
         path = f"src/main/resources/data/{mod_id}/advancements/{module_id}.json"
-    else:
+        payload = config.get("json", config)
+    elif kind == "loot":
         path = f"src/main/resources/data/{mod_id}/loot_tables/{module_id}.json"
-    payload = config.get("json", config)
+        payload = config.get("json", config)
+    elif kind == "tag":
+        registry = str(config.get("registry") or "")
+        if registry not in {"items", "blocks", "entity_types", "fluids", "functions"}:
+            raise ExtendedContentError(
+                f"Unsupported tag registry for {module_id}: {registry!r}"
+            )
+        values = config.get("values")
+        if not isinstance(values, list) or not values:
+            raise ExtendedContentError(
+                f"Tag {module_id} requires non-empty values."
+            )
+        for value in values:
+            if not re.fullmatch(r"[a-z0-9_.-]+:[a-z0-9_./-]+", str(value)):
+                raise ExtendedContentError(
+                    f"Tag {module_id} contains invalid entry {value!r}."
+                )
+        path = (
+            f"src/main/resources/data/{mod_id}/tags/"
+            f"{registry}/{module_id}.json"
+        )
+        payload = {
+            "replace": bool(config.get("replace", False)),
+            "values": [str(value) for value in values],
+        }
+    else:
+        raise ExtendedContentError(f"Unsupported data resource kind: {kind}")
     return {path: json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"}
 
 
