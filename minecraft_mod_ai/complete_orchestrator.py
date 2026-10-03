@@ -170,33 +170,14 @@ def _run_release_jdt_verification(
 def _debug_fixture_source_contract(
     approved: CompleteProposal,
 ) -> dict[str, Any] | None:
-    """Return the host-owned Debug source contract, with old-plan compatibility."""
+    """Return only the current host-owned Debug source contract."""
 
     game_design = approved.game_design if isinstance(approved.game_design, dict) else {}
     fixture = game_design.get("fixture")
     if not isinstance(fixture, dict):
         return None
-    direct = fixture.get("source_contract")
-    if isinstance(direct, dict):
-        return direct
-
-    # Immutable Debug plans produced before the host compiler stored the contract
-    # on the implementation module. Read it only for replay compatibility.
-    fixture_module_id = str(fixture.get("module_id") or "").strip()
-    if not fixture_module_id:
-        return None
-    fixture_module = next(
-        (
-            module
-            for module in approved.modules
-            if module.module_id == fixture_module_id
-        ),
-        None,
-    )
-    if fixture_module is None or not isinstance(fixture_module.config, dict):
-        return None
-    legacy = fixture_module.config.get("observable_source_contract")
-    return legacy if isinstance(legacy, dict) else None
+    source_contract = fixture.get("source_contract")
+    return source_contract if isinstance(source_contract, dict) else None
 
 
 
