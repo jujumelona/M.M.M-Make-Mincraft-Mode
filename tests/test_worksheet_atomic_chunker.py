@@ -98,6 +98,22 @@ def test_each_concern_is_generated_once_without_cross_page_count_identity():
     assert "record indices from another call" in prompt
 
 
+def test_state_model_symbols_do_not_change_planning_chunk_field_types():
+    chunks = pack_section_concerns("state_model")
+    target = next(chunk for chunk in chunks if "transitions" in chunk)
+
+    baseline = worksheet_chunk_schema("state_model", target)
+    with_symbols = worksheet_chunk_schema(
+        "state_model",
+        target,
+        state_symbols={"ship_blueprint", "player_currency"},
+    )
+
+    assert with_symbols == baseline
+    guard = with_symbols["properties"]["transitions"]["items"]["properties"]["guard"]
+    assert guard["type"] == "string"
+
+
 def test_root_integration_prerequisite_accepts_null_and_canonicalizes():
     chunks = pack_section_concerns("integration")
     target = next(chunk for chunk in chunks if "initialization_order" in chunk)
