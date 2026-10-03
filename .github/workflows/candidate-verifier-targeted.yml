@@ -4,38 +4,36 @@ on:
   push:
     branches: [main]
     paths:
-      - "minecraft_mod_ai/custom_module_generator.py"
       - "minecraft_mod_ai/execution_contract_policy.py"
-      - "minecraft_mod_ai/atomic_region_paging.py"
-      - "minecraft_mod_ai/atomic_java_assembly.py"
-      - "minecraft_mod_ai/central_atomic_generation_contract.py"
       - "minecraft_mod_ai/java_generation_policy.py"
-      - "minecraft_mod_ai/repair_response_contract.py"
-      - "minecraft_mod_ai/verifier_repair_window.py"
-      - "minecraft_mod_ai/generation_diagnostic_repair.py"
-      - "tests/test_execution_contract_policy.py"
+      - "minecraft_mod_ai/java_region_parser.py"
+      - "minecraft_mod_ai/host_declaration_compiler.py"
       - "minecraft_mod_ai/authored_production.py"
+      - "minecraft_mod_ai/typed_plan_ir.py"
+      - "minecraft_mod_ai/typed_plan_production.py"
+      - "minecraft_mod_ai/typed_host_capabilities.py"
       - "minecraft_mod_ai/runner.py"
       - "minecraft_mod_ai/complete_orchestrator.py"
-      - "tests/test_direct_custom_module_generator.py"
+      - "tests/test_execution_contract_policy.py"
+      - "tests/test_typed_plan_authoring.py"
+      - "tests/test_typed_plan_production.py"
       - "tests/test_authored_direct_lowering.py"
       - ".github/workflows/candidate-verifier-targeted.yml"
   pull_request:
     paths:
-      - "minecraft_mod_ai/custom_module_generator.py"
       - "minecraft_mod_ai/execution_contract_policy.py"
-      - "minecraft_mod_ai/atomic_region_paging.py"
-      - "minecraft_mod_ai/atomic_java_assembly.py"
-      - "minecraft_mod_ai/central_atomic_generation_contract.py"
       - "minecraft_mod_ai/java_generation_policy.py"
-      - "minecraft_mod_ai/repair_response_contract.py"
-      - "minecraft_mod_ai/verifier_repair_window.py"
-      - "minecraft_mod_ai/generation_diagnostic_repair.py"
-      - "tests/test_execution_contract_policy.py"
+      - "minecraft_mod_ai/java_region_parser.py"
+      - "minecraft_mod_ai/host_declaration_compiler.py"
       - "minecraft_mod_ai/authored_production.py"
+      - "minecraft_mod_ai/typed_plan_ir.py"
+      - "minecraft_mod_ai/typed_plan_production.py"
+      - "minecraft_mod_ai/typed_host_capabilities.py"
       - "minecraft_mod_ai/runner.py"
       - "minecraft_mod_ai/complete_orchestrator.py"
-      - "tests/test_direct_custom_module_generator.py"
+      - "tests/test_execution_contract_policy.py"
+      - "tests/test_typed_plan_authoring.py"
+      - "tests/test_typed_plan_production.py"
       - "tests/test_authored_direct_lowering.py"
       - ".github/workflows/candidate-verifier-targeted.yml"
   workflow_dispatch:
@@ -57,17 +55,24 @@ jobs:
           cache: pip
       - name: Install targeted test dependencies
         run: python -m pip install --prefer-binary -e ".[dev]"
-      - name: Compile direct production path
+      - name: Compile current production path
         run: >-
           python -m py_compile
-          minecraft_mod_ai/custom_module_generator.py
+          minecraft_mod_ai/execution_contract_policy.py
+          minecraft_mod_ai/java_generation_policy.py
+          minecraft_mod_ai/java_region_parser.py
+          minecraft_mod_ai/host_declaration_compiler.py
           minecraft_mod_ai/authored_production.py
+          minecraft_mod_ai/typed_plan_ir.py
+          minecraft_mod_ai/typed_plan_production.py
+          minecraft_mod_ai/typed_host_capabilities.py
           minecraft_mod_ai/runner.py
           minecraft_mod_ai/complete_orchestrator.py
-      - name: Run direct generation regressions
+      - name: Run current production regressions
         run: >-
           python -m pytest
-          tests/test_direct_custom_module_generator.py
-          tests/test_authored_direct_lowering.py
           tests/test_execution_contract_policy.py
+          tests/test_typed_plan_authoring.py
+          tests/test_typed_plan_production.py
+          tests/test_authored_direct_lowering.py
           -q
