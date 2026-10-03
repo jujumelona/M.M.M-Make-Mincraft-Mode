@@ -49,6 +49,16 @@ def normalize_structured_sections(raw: Mapping[str, Any] | None) -> dict[str, An
             raise ValueError(
                 f"AUTHORED_STRUCTURED_DESIGN: {section}.{path}: {error.message}"
             )
+        if section == "state_model":
+            from .structured_state_runtime import validate_structured_state_section
+
+            try:
+                validate_structured_state_section(value)
+            except ValueError as exc:
+                raise ValueError(
+                    "AUTHORED_STRUCTURED_DESIGN: state_model is outside the "
+                    f"host-compiled state DSL: {exc}"
+                ) from exc
         normalized[section] = deepcopy(dict(value))
     return normalized
 
