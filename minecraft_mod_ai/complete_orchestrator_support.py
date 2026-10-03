@@ -71,12 +71,13 @@ def _is_custom(module: ProductionModule) -> bool:
     return module.kind == 'custom_java' or module.config.get('implementation') == 'custom'
 
 def _normalize_modules(modules: tuple[ProductionModule, ...], spec) -> tuple[list[ProductionModule], list[dict[str, Any]]]:
-    """Deduplicate bootstrap content and route custom semantics exactly once.
+    """Deduplicate bootstrap content while rejecting the retired custom-coder route.
 
-    An explicit ``implementation=custom`` module is converted to ``custom_java`` before
-    any content, system, entity or native-module generator sees it. The requested kind is kept
-    in config so the indexed coder receives the original semantic target. This prevents
-    built-in generation followed by a second custom patch for the same module.
+    Model-authored Java modules are no longer a production backend. Typed authored
+    behavior must arrive as ``typed_host``; deterministic native modules keep their
+    declared kind. Failing here prevents a stale ``implementation=custom`` plan from
+    being rewritten into the removed ``custom_java`` kind and failing later in the
+    work graph with a misleading backend error.
     """
     base = {content.content_id: content.kind.value for content in spec.contents}
     if spec.boss is not None:
@@ -87,13 +88,12 @@ def _normalize_modules(modules: tuple[ProductionModule, ...], spec) -> tuple[lis
     receipts: list[dict[str, Any]] = []
     for module in modules:
         if _is_custom(module):
-            requested_kind = str(module.config.get('requested_kind', module.kind)) if module.kind == 'custom_java' else module.kind
-            custom_config = dict(module.config)
-            custom_config.pop('implementation', None)
-            custom_config['requested_kind'] = requested_kind
-            staged.append(ProductionModule(module_id=module.module_id, kind='custom_java', config=custom_config, depends_on=module.depends_on, required_gates=module.required_gates))
-            receipts.append({'schema_version': 'mmm/custom-routing-v1', 'status': 'ROUTED_CUSTOM', 'module_id': module.module_id, 'requested_kind': requested_kind})
-            continue
+            raise CompleteProductionError(
+                "CUSTOM_JAVA_BACKEND_REMOVED: "
+                f"{module.module_id} must be expressed as typed_host or a supported "
+                "deterministic production module; model-backed custom Java generation "
+                "is not a production route."
+            )
         existing = base.get(module.module_id)
         if existing is None:
             staged.append(module)
