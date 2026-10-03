@@ -68,7 +68,6 @@ def test_typed_plan_backend_generates_compileable_java_without_router(tmp_path: 
         module_id="authored_typed_plan",
         kind="typed_host",
         config={
-            "implementation": "custom",
             "typed_plan_ir": _plan(),
             "typed_plan_package": "ai.minecraft.typedtest",
             "typed_plan_path": (
@@ -167,7 +166,6 @@ def test_typed_state_backend_generates_state_owner_without_router(
         module_id="authored_typed_state",
         kind="typed_host",
         config={
-            "implementation": "custom",
             "typed_plan_ir": typed,
             "typed_plan_package": "ai.minecraft.typedtest",
             "typed_plan_path": (
@@ -277,7 +275,6 @@ def test_typed_plan_backend_refuses_unowned_existing_source(tmp_path: Path) -> N
         module_id="authored_typed_plan",
         kind="typed_host",
         config={
-            "implementation": "custom",
             "typed_plan_ir": _plan(),
             "typed_plan_package": "ai.minecraft.typedtest",
             "typed_plan_path": (
@@ -300,7 +297,6 @@ def test_typed_plan_host_work_is_isolated_from_llm_shards() -> None:
         module_id="typed",
         kind="typed_host",
         config={
-            "implementation": "custom",
             "typed_plan_ir": _plan(),
         },
     )
@@ -412,7 +408,6 @@ def test_typed_state_store_generates_state_owner_and_persistence_bridge(
         module_id="authored_typed_plan",
         kind="typed_host",
         config={
-            "implementation": "custom",
             "typed_plan_ir": {
                 **_plan(),
                 "platform_modules": [
@@ -652,7 +647,6 @@ def test_typed_host_capability_generates_owned_java_without_router(
         module_id="authored_typed_plan",
         kind="typed_host",
         config={
-            "implementation": "custom",
             "typed_plan_ir": typed,
             "typed_plan_package": "ai.minecraft.typedtest",
             "typed_plan_path": (
