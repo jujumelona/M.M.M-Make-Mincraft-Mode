@@ -82,7 +82,6 @@ def test_event_handler_signature_is_host_owned_during_authoring():
     }
     router = NativePlanner([
         "server_started",
-        0,
         "return",
         "done",
         "done",
