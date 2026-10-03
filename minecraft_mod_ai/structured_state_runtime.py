@@ -1023,7 +1023,7 @@ def state_concern_schema(
                 "mutation": mutations_schema(symbols),
                 "to_state": {"type": "string", "minLength": 1, "maxLength": 128},
             },
-            "required": ["from_state", "trigger", "guard", "mutations", "to_state"],
+            "required": ["from_state", "trigger", "guard", "to_state"],
             "additionalProperties": False,
         }
         return constrain_state_record_schema(concern, schema)
