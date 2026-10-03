@@ -5,12 +5,10 @@ from __future__ import annotations
 import hashlib
 from copy import deepcopy
 import json
-import re
 from collections.abc import Mapping
 from typing import Any
 
 from .authored_plan import AuthoredPlan
-from .authored_structured_design import structured_sections_sha256
 from .complete_spec import (
     CompleteProposal,
     ProductionModule,
@@ -18,41 +16,10 @@ from .complete_spec import (
 )
 from .planning_pipeline import PlanningPipeline
 from .spec import ModSpec, Proposal, ProposalStatus
-from .target_contract import TargetContractError, target_coordinates_from_mapping
+from .target_contract import target_coordinates_from_mapping
 
 _TARGET_KEYS = ("minecraft_version", "loader", "mappings")
 _AUTHORED_EXECUTION_SCHEMA = "mmm/authored-execution-manifest-v2"
-_GENERIC_AUTHORED_CONTAINER_TITLES = frozenset({
-    "design",
-    "design document",
-    "game design",
-    "spec",
-    "specification",
-    "requirements",
-    "features",
-    "feature design",
-    "systems",
-    "gameplay systems",
-    "core systems",
-    "mechanics",
-    "gameplay mechanics",
-    "architecture",
-    "implementation",
-    "설계",
-    "설계 문서",
-    "게임 설계",
-    "요구사항",
-    "기능",
-    "기능 목록",
-    "시스템",
-    "게임플레이 시스템",
-    "핵심 시스템",
-    "메커니즘",
-    "게임플레이 메커니즘",
-    "아키텍처",
-    "구현",
-})
-
 
 def _sha256_json(value: Any) -> str:
     payload = json.dumps(
@@ -70,348 +37,6 @@ def _main_class_name(mod_id: str) -> str:
 
     return "".join(part.capitalize() for part in str(mod_id).split("_")) + "Mod"
 
-
-def _authored_heading_records(text: str) -> tuple[list[str], tuple[tuple[int, int, str], ...]]:
-    """Parse Markdown headings outside fences while preserving exact source lines."""
-
-    lines = text.splitlines(keepends=True)
-    heading = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.+?)\s*$")
-    records: list[tuple[int, int, str]] = []
-    fence = ""
-    for index, line in enumerate(lines):
-        marker = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
-        if fence:
-            if (
-                marker
-                and marker[1][0] == fence[0]
-                and len(marker[1]) >= len(fence)
-                and not line[marker.end():].strip()
-            ):
-                fence = ""
-            continue
-        if marker:
-            fence = marker[1]
-            continue
-        match = heading.match(line)
-        if match:
-            title = re.sub(r"[ \t]+#+[ \t]*$", "", match[2]).strip("*_` ")
-            records.append((index, len(match[1]), title))
-    return lines, tuple(records)
-
-
-def _generic_authored_container(title: str) -> bool:
-    normalized = re.sub(r"\s+", " ", str(title or "").strip()).casefold()
-    return normalized in _GENERIC_AUTHORED_CONTAINER_TITLES
-
-
-def _document_preamble_title(title: str) -> bool:
-    """Recognize document-level wrappers without hard-coding a project name."""
-
-    normalized = re.sub(r"\s+", " ", str(title or "").strip()).casefold()
-    return bool(
-        re.search(
-            r"(?:^|\s)(?:game\s+)?(?:mod\s+)?design\s+document$"
-            r"|(?:^|\s)design\s+spec(?:ification)?$"
-            r"|(?:^|\s)requirements(?:\s+document)?$"
-            r"|(?:^|\s)설계\s*문서$"
-            r"|(?:^|\s)기획서$",
-            normalized,
-        )
-    )
-
-
-def _document_context_title(title: str) -> bool:
-    normalized = re.sub(r"\s+", " ", str(title or "").strip()).casefold()
-    return normalized in {
-        "intro",
-        "introduction",
-        "overview",
-        "document overview",
-        "project overview",
-        "metadata",
-        "project metadata",
-        "summary",
-        "about",
-        "소개",
-        "개요",
-        "문서 개요",
-        "프로젝트 개요",
-        "메타데이터",
-        "요약",
-    }
-
-
-def _metadata_only_preamble(lines: list[str], start: int, end: int) -> bool:
-    """Return whether a leading section contains document metadata, not behavior."""
-
-    meaningful = []
-    for line in lines[start:end]:
-        value = line.strip()
-        if not value or re.fullmatch(r"[-*_]{3,}", value):
-            continue
-        if value.startswith("#"):
-            continue
-        meaningful.append(value)
-    if not meaningful:
-        return False
-    metadata = re.compile(
-        r"^(?:[-*+]\s+)?(?:\*\*)?[^:]{1,80}:(?:\*\*)?\s*\S.*$"
-    )
-    return all(metadata.match(value) for value in meaningful)
-
-
-def _heading_peer_is_context(
-    lines: list[str],
-    peers: list[tuple[int, int, str]],
-    position: int,
-) -> bool:
-    start_line, _level, title = peers[position]
-    end_line = peers[position + 1][0] if position + 1 < len(peers) else len(lines)
-    return bool(
-        _document_context_title(title)
-        or _metadata_only_preamble(lines, start_line + 1, end_line)
-    )
-
-
-def _document_wrapper_split_level(
-    lines: list[str],
-    records: tuple[tuple[int, int, str], ...],
-    shallowest: int,
-) -> int:
-    for depth in sorted({record[1] for record in records if record[1] > shallowest}):
-        peers = [record for record in records if record[1] == depth]
-        actionable = [
-            record
-            for position, record in enumerate(peers)
-            if not _heading_peer_is_context(lines, peers, position)
-        ]
-        if len(actionable) >= 2:
-            return depth
-        if len(actionable) == 1 and not _generic_authored_container(actionable[0][2]):
-            return depth
-    return shallowest
-
-
-def _trim_leading_authored_context(
-    lines: list[str],
-    split_records: list[tuple[int, int, str]],
-    *,
-    split_level: int,
-    shallowest: int,
-) -> list[int]:
-    starts = [record[0] for record in split_records]
-    if split_level > shallowest:
-        while len(starts) >= 2:
-            first_position = next(
-                (
-                    position
-                    for position, record in enumerate(split_records)
-                    if record[0] == starts[0]
-                ),
-                None,
-            )
-            if first_position is None or not _heading_peer_is_context(
-                lines, split_records, first_position
-            ):
-                break
-            starts = starts[1:]
-        return starts
-
-    if len(starts) < 2:
-        return starts
-    first_start, first_end = starts[:2]
-    first_title = split_records[0][2]
-    if (
-        _document_preamble_title(first_title)
-        or _metadata_only_preamble(lines, first_start + 1, first_end)
-    ):
-        return starts[1:]
-    return starts
-
-
-def _lossless_authored_partition(
-    lines: list[str],
-    records: tuple[tuple[int, int, str], ...],
-    starts: list[int],
-) -> tuple[str, ...]:
-    if not starts:
-        return ("".join(lines),)
-
-    heading_indexes = {index for index, _depth, _title in records}
-    blocks: list[str] = []
-    pending = ""
-    for position, start_line in enumerate(starts):
-        end_line = starts[position + 1] if position + 1 < len(starts) else len(lines)
-        segment_start = 0 if position == 0 else start_line
-        segment = "".join(lines[segment_start:end_line])
-        feature_has_body = any(
-            line.strip() and index not in heading_indexes
-            for index, line in enumerate(lines[start_line:end_line], start_line)
-        )
-        if feature_has_body:
-            blocks.append(pending + segment)
-            pending = ""
-        else:
-            pending += segment
-
-    if pending:
-        if blocks:
-            blocks[-1] += pending
-        else:
-            blocks.append(pending)
-    return tuple(blocks)
-
-
-def _semantic_authored_blocks(text: str) -> tuple[str, ...]:
-    """Split approved prose into semantic implementation units without losing bytes."""
-
-    if not text:
-        return ("",)
-    lines, records = _authored_heading_records(text)
-    if not records:
-        return (text,)
-
-    shallowest = min(depth for _index, depth, _title in records)
-    shallow = [record for record in records if record[1] == shallowest]
-    document_wrapper = bool(
-        len(shallow) == 1
-        and (
-            _generic_authored_container(shallow[0][2])
-            or _document_preamble_title(shallow[0][2])
-        )
-    )
-    split_level = (
-        _document_wrapper_split_level(lines, records, shallowest)
-        if document_wrapper
-        else shallowest
-    )
-    split_records = [record for record in records if record[1] == split_level]
-    starts = _trim_leading_authored_context(
-        lines,
-        split_records,
-        split_level=split_level,
-        shallowest=shallowest,
-    )
-    blocks = _lossless_authored_partition(lines, records, starts)
-    if "".join(blocks) != text:
-        raise ValueError("Authored semantic block parsing changed approved design text.")
-    return blocks
-
-
-def _first_authored_feature_title(
-    lines: list[str],
-    records: tuple[tuple[int, int, str], ...],
-    first_level: int,
-) -> str:
-    descendants = [record for record in records[1:] if record[1] > first_level]
-    for position, (child_index, _child_level, child_title) in enumerate(descendants):
-        next_index = (
-            descendants[position + 1][0]
-            if position + 1 < len(descendants)
-            else len(lines)
-        )
-        if (
-            _document_context_title(child_title)
-            or _generic_authored_container(child_title)
-            or _metadata_only_preamble(lines, child_index + 1, next_index)
-        ):
-            continue
-        return child_title
-    return descendants[-1][2] if descendants else ""
-
-
-def _authored_block_section(block: str) -> str:
-    lines, records = _authored_heading_records(block)
-    if not records:
-        return ""
-
-    first_index, first_level, first_title = records[0]
-    if _generic_authored_container(first_title) or _document_preamble_title(first_title):
-        descendant_title = _first_authored_feature_title(lines, records, first_level)
-        if descendant_title:
-            return descendant_title
-
-    if len(records) >= 2:
-        second_index, second_level, second_title = records[1]
-        if (
-            second_level == first_level
-            and (
-                _document_preamble_title(first_title)
-                or _metadata_only_preamble(lines, first_index + 1, second_index)
-            )
-        ):
-            return second_title
-    return first_title
-
-
-def _authored_block_implementation_text(block: str, section: str) -> str:
-    """Return only the executable feature slice while retaining block provenance elsewhere."""
-
-    wanted = str(section or "").strip()
-    if not block or not wanted:
-        return block
-    lines, records = _authored_heading_records(block)
-    for start_line, _level, title in records:
-        if title == wanted:
-            return "".join(lines[start_line:])
-    return block
-
-
-def _orphan_reasoning_close_projection_start(text: str) -> int:
-    """Recover a final authored suffix after a standalone leaked reasoning close tag.
-
-    Some model transports can drop the opening <think>/<analysis> token while preserving
-    the closing token and the final answer. Only treat that as an envelope when the close
-    tag is a standalone line outside Markdown fences and the suffix contains a substantial
-    canonical authored contract. This keeps quoted/inline tags in user-authored prose intact.
-    """
-
-    from .authored_ir_parser import authored_section_id
-
-    lines = str(text or "").splitlines(keepends=True)
-    fence = ""
-    offset = 0
-    candidates: list[int] = []
-    for line in lines:
-        marker = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
-        if fence:
-            if (
-                marker
-                and marker[1][0] == fence[0]
-                and len(marker[1]) >= len(fence)
-                and not line[marker.end():].strip()
-            ):
-                fence = ""
-            offset += len(line)
-            continue
-        if marker:
-            fence = marker[1]
-            offset += len(line)
-            continue
-        if re.fullmatch(r"\s*</(?:think|analysis)>\s*(?:\r?\n)?", line, re.IGNORECASE):
-            candidates.append(offset + len(line))
-        offset += len(line)
-
-    for raw_start in reversed(candidates):
-        start = raw_start
-        while start < len(text) and text[start] in " \t\r\n":
-            start += 1
-        suffix = text[start:]
-        if not suffix:
-            continue
-        sections = [
-            authored_section_id(title)
-            for _line, _depth, title in _authored_heading_records(suffix)[1]
-        ]
-        canonical = [section for section in sections if section]
-        distinct = tuple(dict.fromkeys(canonical))
-        if (
-            len(distinct) >= 4
-            and "behavior_contract" in distinct
-            and "state_model" in distinct
-        ):
-            return start
-    return 0
 
 def _compile_new_authored_modules(
     plan: AuthoredPlan,
@@ -641,7 +266,7 @@ def materialize_authored_execution_scaffold(
     design = game_design if isinstance(game_design, Mapping) else {}
     manifest = design.get("_authored_execution_manifest")
     if not isinstance(manifest, Mapping):
-        return root
+        raise ValueError("AUTHORED_TYPED_EXECUTION_MANIFEST_REQUIRED")
     if manifest.get("schema_version") != _AUTHORED_EXECUTION_SCHEMA:
         raise ValueError("AUTHORED_SCAFFOLD_SCHEMA_MISMATCH")
     policy = str(manifest.get("policy") or "")
@@ -739,74 +364,16 @@ def materialize_authored_execution_scaffold(
 
 
 def _bound_target(design: Mapping[str, Any]) -> dict[str, str]:
-    """Return the complete host-selected target, or no target when none exists.
-
-    The platform selector owns the target. Decode its receipt through the same
-    contract used by generation, including native names and mapping receipt objects.
-    Older saved designs without a selection may still carry standalone coordinates.
-    """
-    candidates: list[Mapping[str, Any]] = [design]
-    for key in ("platform", "target", "toolchain", "build", "existing_project"):
-        value = design.get(key)
-        if isinstance(value, Mapping):
-            candidates.append(value)
+    """Return the current host-selected platform target only."""
 
     selection = design.get("_platform_selection")
-    if isinstance(selection, Mapping) and "target" in selection:
-        target = selection["target"]
-        if not isinstance(target, Mapping):
-            raise ValueError("Saved authored platform selection target must be an object.")
-        # Never let stale design/existing-project fields override the selected target,
-        # including when the selected receipt is invalid.
-        coordinates = target_coordinates_from_mapping(target)
-        return {key: getattr(coordinates, key) for key in _TARGET_KEYS}
-    if isinstance(selection, Mapping):
-        candidates.append(selection)
-
-    first_error: TargetContractError | None = None
-    for candidate in candidates:
-        if not any(candidate.get(key) not in (None, "") for key in (
-            *_TARGET_KEYS, "mappings_version", "yarn_mappings",
-        )):
-            continue
-        try:
-            coordinates = target_coordinates_from_mapping(candidate)
-        except TargetContractError as exc:
-            if first_error is None:
-                first_error = exc
-            continue
-        return {key: getattr(coordinates, key) for key in _TARGET_KEYS}
-
-    if first_error is not None:
-        raise first_error
-    return {}
-
-
-def _normalized_contract_heading(title: str) -> str:
-    return re.sub(r"[\s-]+", "_", str(title or "").strip().casefold()).strip("_")
-
-
-def _contract_shaped_authored_design(text: str) -> bool:
-    """Recognize an engineering worksheet whose headings are facets, not features."""
-
-    from .planning_detail_template import WORKSHEET_SECTIONS
-
-    _lines, records = _authored_heading_records(text)
-    if not records:
-        return False
-    canonical = set(WORKSHEET_SECTIONS)
-    for depth in sorted({record[1] for record in records}):
-        names = tuple(
-            _normalized_contract_heading(title)
-            for _index, record_depth, title in records
-            if record_depth == depth and not _document_context_title(title)
-        )
-        contract_names = tuple(name for name in names if name in canonical)
-        # Supplementary prose/overview headings do not turn engineering facets
-        # into independent features. Repeated facets indicate multiple contracts.
-        if len(set(contract_names)) >= 3 and len(contract_names) == len(set(contract_names)):
-            return True
-    return False
+    if not isinstance(selection, Mapping):
+        raise ValueError("TYPED_PLATFORM_SELECTION_REQUIRED")
+    target = selection.get("target")
+    if not isinstance(target, Mapping):
+        raise ValueError("TYPED_PLATFORM_SELECTION_TARGET_REQUIRED")
+    coordinates = target_coordinates_from_mapping(target)
+    return {key: getattr(coordinates, key) for key in _TARGET_KEYS}
 
 
 def compile_authored_design(
