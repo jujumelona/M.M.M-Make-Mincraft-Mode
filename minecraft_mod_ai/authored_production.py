@@ -677,18 +677,27 @@ def _compile_new_authored_modules(
                 )
             )
 
+        from .authored_structured_design import active_concern_records
+
         state_section = (
             deepcopy(dict(production_state_section))
             if isinstance(production_state_section, Mapping)
             else {}
         )
-        if (
+        active_state = active_concern_records(
+            plan.structured_sections,
+            "state_model",
+        )
+        state_required = (
             typed_plan_uses_state(validated_plan)
             or state_store_config is not None
-        ) and not state_section:
+            or any(bool(rows) for rows in active_state.values())
+        )
+        if state_required and not state_section:
             raise ValueError(
-                "TYPED_PLAN_STATE_AUTHORITY_REQUIRED: state operations or "
-                "persistent state require canonical structured state_model authority."
+                "TYPED_PLAN_STATE_AUTHORITY_REQUIRED: active state semantics, "
+                "state operations, or persistent state require canonical "
+                "structured state_model authority."
             )
 
         program_symbol = "AuthoredProgram"
@@ -749,10 +758,7 @@ def _compile_new_authored_modules(
             "typed_program": {
                 "path": program_path,
                 "symbol": program_symbol,
-                "state_required": (
-                    typed_plan_uses_state(validated_plan)
-                    or state_store_config is not None
-                ),
+                "state_required": state_required,
                 "state_store": state_store_config is not None,
             },
             "platform_modules": [
