@@ -16,6 +16,7 @@ from .authored_ir_parser import authored_section_id, parse_markdown_heading
 from .authored_plan import AuthoredPlan
 from .planning_detail_slots import DETAIL_RECORDS
 from .structured_state_runtime import (
+    render_state_model_concern,
     validate_state_expression,
     validate_structured_state_section,
 )
@@ -659,6 +660,86 @@ def normalize_structured_state_section(
     return normalized_section
 
 
+def render_production_state_java(
+    section: Mapping[str, Any],
+    *,
+    package_name: str,
+    symbol: str = "AuthoredStateModel",
+) -> str:
+    """Render one complete state owner class from canonical structured authority."""
+
+    if not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", symbol):
+        raise ValueError(f"PRODUCTION_STATE_SYMBOL_INVALID: {symbol!r}")
+    package = str(package_name or "").strip()
+    if package and re.fullmatch(
+        r"[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*",
+        package,
+    ) is None:
+        raise ValueError(f"PRODUCTION_STATE_PACKAGE_INVALID: {package!r}")
+
+    normalized = normalize_structured_state_section(section)
+    specification = normalized["specification"]
+    obligations: list[str] = []
+    active: list[str] = []
+    for concern in _STATE_CONCERNS:
+        rows = specification.get(concern)
+        if not isinstance(rows, list) or not rows:
+            continue
+        active.append(concern)
+        obligations.append(
+            json.dumps(
+                {
+                    "instruction": json.dumps(
+                        {"concern": concern},
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                    "structured_records": rows,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+
+    if not active:
+        raise ValueError(
+            "PRODUCTION_STATE_STRUCTURED_AUTHORITY_REQUIRED: "
+            "state operations require at least one canonical state concern record"
+        )
+
+    task = {"implementation_obligations": obligations}
+    members: list[str] = []
+    include_runtime = True
+    for concern in active:
+        rendered = render_state_model_concern(
+            task,
+            concern,
+            include_runtime=include_runtime,
+        )
+        if not rendered:
+            continue
+        members.append(rendered)
+        include_runtime = False
+
+    if not members:
+        raise ValueError("PRODUCTION_STATE_HOST_COMPILER_EMPTY")
+
+    body = "\n\n".join(members)
+    indented = "\n".join(
+        ("    " + line if line else "")
+        for line in body.splitlines()
+    )
+    prefix = f"package {package};\n\n" if package else ""
+    return (
+        prefix
+        + f"public final class {symbol} {{\n"
+        + f"    private {symbol}() {{}}\n\n"
+        + indented
+        + "\n}\n"
+    )
+
+
+
 def compile_production_state_section(router: Any, plan: AuthoredPlan) -> dict[str, Any]:
     """Return canonical structured state without invoking a production model.
 
@@ -687,4 +768,5 @@ def compile_production_state_section(router: Any, plan: AuthoredPlan) -> dict[st
 __all__ = [
     "compile_production_state_section",
     "normalize_structured_state_section",
+    "render_production_state_java",
 ]
