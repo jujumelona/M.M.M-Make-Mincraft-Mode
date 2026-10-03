@@ -12,7 +12,6 @@ import json
 import re
 from typing import Any
 
-from .authored_ir_parser import authored_section_id, parse_markdown_heading
 from .authored_plan import AuthoredPlan
 from .planning_detail_slots import DETAIL_RECORDS
 from .structured_state_runtime import (
@@ -27,33 +26,6 @@ _ASSIGNMENT = re.compile(
     r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(\+=|-=|\*=|/=|=)\s*(.*?)\s*$"
 )
 
-
-def _section_text(text: str, section: str) -> str:
-    lines = str(text or "").splitlines()
-    start = -1
-    depth = 0
-    for index, line in enumerate(lines):
-        heading = parse_markdown_heading(line)
-        if heading is None:
-            continue
-        heading_depth, title = heading
-        if authored_section_id(title) == section:
-            start = index
-            depth = heading_depth
-            break
-    if start < 0:
-        return ""
-
-    end = len(lines)
-    for index in range(start + 1, len(lines)):
-        heading = parse_markdown_heading(lines[index])
-        if heading is None:
-            continue
-        heading_depth, title = heading
-        if heading_depth <= depth and authored_section_id(title):
-            end = index
-            break
-    return "\n".join(lines[start:end]).strip()
 
 
 def _stable_identifier(value: str, *, fallback: str) -> str:
@@ -299,31 +271,19 @@ def _canonicalize_expression_operands(
     return " ".join(part.strip() for part in segments if part.strip())
 
 
-def _validated_expression_or_fallback(
+def _validated_expression(
     text: str,
     *,
-    fallback: str,
     original: str,
 ) -> str:
     try:
         validate_state_expression(text)
-        return text
-    except ValueError:
-        from .root_cause_trace import emit_root_cause
-
-        emit_root_cause(
-            "production_state_expression_degraded",
-            stage="production",
-            operation="state_expression_canonicalization",
-            gate="host_expression_parser",
-            result="PASS",
-            details={
-                "original": str(original or "")[:512],
-                "canonical": str(text or "")[:512],
-                "fallback": fallback,
-            },
-        )
-        return fallback
+    except ValueError as exc:
+        raise ValueError(
+            "PRODUCTION_STATE_EXPRESSION_INVALID: canonical structured state "
+            f"cannot be compiled without changing semantics: {original!r}"
+        ) from exc
+    return text
 
 
 def _normalize_expression(
@@ -340,9 +300,8 @@ def _normalize_expression(
     lowered = text.casefold()
     if not text or lowered in {"none", "n/a", "na", "always", "no guard", "no condition"}:
         return fallback
-    return _validated_expression_or_fallback(
+    return _validated_expression(
         text,
-        fallback=fallback,
         original=original,
     )
 
@@ -741,29 +700,16 @@ def render_production_state_java(
 
 
 
-def compile_production_state_section(router: Any, plan: AuthoredPlan) -> dict[str, Any]:
-    """Return canonical structured state without invoking a production model.
+def compile_production_state_section(plan: AuthoredPlan) -> dict[str, Any]:
+    """Return canonical structured state for deterministic host compilation."""
 
-    The small model may translate authored intent into the bounded state worksheet
-    during planning. Production accepts only that canonical worksheet and performs
-    deterministic normalization/validation.
-    """
-
-    _ = router  # Compatibility only; production state compilation is model-free.
     structured = plan.structured_sections
     if not isinstance(structured, Mapping):
-        structured = {}
+        raise ValueError("PRODUCTION_STATE_STRUCTURED_AUTHORITY_REQUIRED")
     raw_state = structured.get("state_model")
-    if isinstance(raw_state, Mapping):
-        return normalize_structured_state_section(raw_state)
-
-    source = _section_text(plan.text, "state_model")
-    if source:
-        raise ValueError(
-            "PRODUCTION_STATE_STRUCTURED_AUTHORITY_REQUIRED: state_model exists in "
-            "the authored design but no canonical structured state worksheet was supplied"
-        )
-    return {}
+    if not isinstance(raw_state, Mapping):
+        return {}
+    return normalize_structured_state_section(raw_state)
 
 
 __all__ = [
