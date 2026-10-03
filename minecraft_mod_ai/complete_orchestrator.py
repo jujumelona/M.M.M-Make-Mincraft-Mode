@@ -2434,12 +2434,15 @@ class CompleteProductionOrchestrator:
 
     def _prepare_project(self, approved: CompleteProposal, *, run_root: Path, existing_input: str | Path | None) -> Path:
         def bind_host_runtime(project_root: Path) -> Path:
-            from .authored_production import materialize_authored_execution_scaffold
+            materialized = project_root
+            design = approved.game_design if isinstance(approved.game_design, dict) else {}
+            if isinstance(design.get("_authored_execution_manifest"), dict):
+                from .authored_production import materialize_authored_execution_scaffold
 
-            materialized = materialize_authored_execution_scaffold(
-                approved,
-                project_root,
-            )
+                materialized = materialize_authored_execution_scaffold(
+                    approved,
+                    project_root,
+                )
             return self._bind_debug_fixture_runtime(approved, materialized)
 
         if existing_input is not None:
