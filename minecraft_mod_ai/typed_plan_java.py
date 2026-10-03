@@ -203,6 +203,69 @@ class _Renderer:
                 raise ValueError(f"unsupported statement op {op!r}")
         return lines
 
+    def event_registration(
+        self,
+        binding: Mapping[str, Any],
+        *,
+        indent: str = "        ",
+    ) -> list[str]:
+        event = str(binding["event"])
+        function = str(binding["function"])
+        call = f"fn_{function}"
+        if event == "server_started":
+            return [
+                indent
+                + "net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents."
+                + f"SERVER_STARTED.register(server -> {call}(server));"
+            ]
+        if event == "server_stopping":
+            return [
+                indent
+                + "net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents."
+                + f"SERVER_STOPPING.register(server -> {call}(server));"
+            ]
+        if event == "server_tick":
+            return [
+                indent
+                + "net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents."
+                + f"END_SERVER_TICK.register(server -> {call}(server));"
+            ]
+        if event == "player_join":
+            return [
+                indent
+                + "net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents."
+                + f"JOIN.register((handler, sender, server) -> {call}(handler.player));"
+            ]
+        if event == "player_disconnect":
+            return [
+                indent
+                + "net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents."
+                + f"DISCONNECT.register((handler, server) -> {call}(handler.player));"
+            ]
+        if event == "player_respawn":
+            return [
+                indent
+                + "net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents."
+                + f"COPY_FROM.register((oldPlayer, newPlayer, alive) -> "
+                + f"{call}(oldPlayer, newPlayer, alive));"
+            ]
+        if event == "command":
+            config = binding["config"]
+            literal = _string_expr(str(config["literal"]))
+            permission = int(config.get("permission_level", 0))
+            return [
+                indent
+                + "net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback.EVENT."
+                + "register((dispatcher, registryAccess, environment) -> "
+                + "dispatcher.register("
+                + "net.minecraft.server.command.CommandManager.literal("
+                + literal
+                + ")"
+                + f".requires(source -> source.hasPermissionLevel({permission}))"
+                + f".executes(context -> {call}(context.getSource()))));"
+            ]
+        raise ValueError(f"unsupported event binding {event!r}")
+
     def dispatcher_case(self, fn: Mapping[str, Any]) -> list[str]:
         function_id = str(fn["id"])
         lines = [f"            case \"{function_id}\": {{"]
@@ -261,6 +324,8 @@ class _Renderer:
             "    public static void initialize() {",
         ])
         lines.extend(self.block(self.plan["initialize"], "        "))
+        for binding in self.plan.get("event_bindings", ()):
+            lines.extend(self.event_registration(binding))
         lines.extend(["    }", ""])
         for fn in self.plan["functions"]:
             params = ", ".join(
