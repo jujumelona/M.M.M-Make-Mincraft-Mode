@@ -32,6 +32,98 @@ def _active_concern_refs(
     return tuple(dict.fromkeys(refs))
 
 
+def _state_store_config_from_structured(
+    structured_sections: Mapping[str, Any] | None,
+    *,
+    transfer_required: bool,
+) -> dict[str, Any]:
+    from .authored_structured_design import active_concern_records
+
+    persistence = active_concern_records(
+        structured_sections,
+        "persistence",
+    )
+    rows = tuple(persistence.get("migration", ()))
+    migrations: list[dict[str, Any]] = []
+    edges: dict[str, str] = {}
+    destinations: set[str] = set()
+    sources: set[str] = set()
+
+    for index, row in enumerate(rows):
+        if not isinstance(row, Mapping):
+            raise ValueError(
+                f"TYPED_PLAN_MIGRATION_RECORD_INVALID: {index}"
+            )
+        source = str(row.get("source_version") or "").strip()
+        destination = str(row.get("destination_version") or "").strip()
+        operation = str(row.get("operation") or "").strip()
+        if not source or not destination:
+            raise ValueError(
+                f"TYPED_PLAN_MIGRATION_VERSION_REQUIRED: {index}"
+            )
+        if operation not in {
+            "preserve",
+            "rename_key",
+            "delete_key",
+            "set_default",
+        }:
+            raise ValueError(
+                f"TYPED_PLAN_MIGRATION_OPERATION_INVALID: {operation!r}"
+            )
+        previous = edges.get(source)
+        if previous is not None and previous != destination:
+            raise ValueError(
+                "TYPED_PLAN_MIGRATION_BRANCHING_FORBIDDEN: "
+                f"{source!r}"
+            )
+        edges[source] = destination
+        sources.add(source)
+        destinations.add(destination)
+
+        source_key = row.get("source_key")
+        destination_key = row.get("destination_key")
+        value = row.get("value")
+        if operation in {"rename_key", "delete_key"} and not str(
+            source_key or ""
+        ).strip():
+            raise ValueError(
+                f"TYPED_PLAN_MIGRATION_SOURCE_KEY_REQUIRED: {index}"
+            )
+        if operation in {"rename_key", "set_default"} and not str(
+            destination_key or ""
+        ).strip():
+            raise ValueError(
+                f"TYPED_PLAN_MIGRATION_DESTINATION_KEY_REQUIRED: {index}"
+            )
+        migrations.append({
+            "from_version": source,
+            "to_version": destination,
+            "operation": operation,
+            "source_key": source_key,
+            "destination_key": destination_key,
+            "value": value,
+        })
+
+    if rows:
+        sinks = sorted(destinations - sources)
+        if len(sinks) != 1:
+            raise ValueError(
+                "TYPED_PLAN_MIGRATION_TARGET_AMBIGUOUS: "
+                f"{sinks!r}"
+            )
+        schema_version = sinks[0]
+    else:
+        schema_version = "1"
+
+    return {
+        "namespace": "authored_state",
+        "schema_version": schema_version,
+        "migrations": migrations,
+        "malformed_policy": "backup_and_reset",
+        "transfer_on_respawn": bool(transfer_required),
+    }
+
+
 def _integration_entry_points(
     structured_sections: Mapping[str, Any] | None,
 ) -> tuple[dict[str, Any], ...]:
@@ -464,6 +556,7 @@ def author_typed_plan_ir(
         validate_event_bindings,
     )
     from .typed_platform_ir import (
+        PLATFORM_HOST_KINDS,
         PLATFORM_KINDS,
         platform_config_schema,
         platform_coverable_refs,
@@ -694,14 +787,21 @@ def author_typed_plan_ir(
             available_kinds,
             scope=scope,
         )
-        module_id = str(author._ask(
-            "platform_module_id",
-            {
-                "type": "string",
-                "pattern": r"^[a-z][a-z0-9_]{1,63}$",
-            },
-            scope=scope,
-        ))
+        if kind in PLATFORM_HOST_KINDS:
+            module_id = {
+                "state_store": "typed_state_store",
+                "network_sync": "typed_network_sync",
+                "resource_policy": "typed_resource_policy",
+            }[kind]
+        else:
+            module_id = str(author._ask(
+                "platform_module_id",
+                {
+                    "type": "string",
+                    "pattern": r"^[a-z][a-z0-9_]{1,63}$",
+                },
+                scope=scope,
+            ))
         if module_id in seen_platform_ids:
             raise ValueError(
                 f"TYPED_PLAN_AUTHORING_DUPLICATE_PLATFORM_MODULE: {module_id}"
@@ -713,15 +813,13 @@ def author_typed_plan_ir(
             config = {}
         elif kind == "resource_policy":
             config = {}
-        elif kind == "state_store" and "persistence.migration" not in uncovered:
-            config = {
-                "namespace": "authored_state",
-                "schema_version": "1",
-                "malformed_policy": "backup_and_reset",
-                "transfer_on_respawn": (
+        elif kind == "state_store":
+            config = _state_store_config_from_structured(
+                structured_sections,
+                transfer_required=(
                     "persistence.transfers" in uncovered
                 ),
-            }
+            )
         elif (
             config_schema.get("type") == "object"
             and config_schema.get("properties") == {}
