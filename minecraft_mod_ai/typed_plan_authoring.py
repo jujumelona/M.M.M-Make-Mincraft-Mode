@@ -1262,11 +1262,36 @@ def author_typed_plan_ir(
                 "TYPED_PLAN_PLATFORM_KIND_UNAVAILABLE: active concerns have "
                 "no deterministic platform backend."
             )
-        kind = author._enum(
-            "platform_kind",
-            available_kinds,
-            scope=scope,
+
+        # Dedicated host backends are correctness policy, not a design choice.
+        # Prefer them whenever one covers an active concern so the small model
+        # never spends a turn choosing between deterministic infrastructure paths.
+        dedicated_host_kind: str | None = None
+        host_priorities = (
+            "state_store",
+            "network_sync",
+            "resource_policy",
         )
+        for candidate in host_priorities:
+            if candidate not in available_kinds:
+                continue
+            if platform_coverable_refs(candidate, sorted(uncovered)):
+                dedicated_host_kind = candidate
+                break
+        kind = (
+            dedicated_host_kind
+            if dedicated_host_kind is not None
+            else author._enum(
+                "platform_kind",
+                available_kinds,
+                scope=scope,
+            )
+        )
+        candidate_covers = platform_coverable_refs(
+            kind,
+            sorted(uncovered),
+        )
+        author.set_scope_covers(scope, candidate_covers)
         if kind in PLATFORM_HOST_KINDS:
             module_id = {
                 "state_store": "typed_state_store",
@@ -1316,10 +1341,7 @@ def author_typed_plan_ir(
                 raise ValueError(
                     f"TYPED_PLAN_AUTHORING_RESPONSE_INVALID: {scope}.platform_config"
                 )
-        coverable_refs = platform_coverable_refs(
-            kind,
-            sorted(uncovered),
-        )
+        coverable_refs = candidate_covers
         if not coverable_refs:
             raise ValueError(
                 f"TYPED_PLAN_PLATFORM_COVERAGE_REQUIRED: {kind} has no "
