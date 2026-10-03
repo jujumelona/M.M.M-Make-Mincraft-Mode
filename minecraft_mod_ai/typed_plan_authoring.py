@@ -709,7 +709,20 @@ def author_typed_plan_ir(
         seen_platform_ids.add(module_id)
 
         config_schema = platform_config_schema(kind)
-        if (
+        if kind == "network_sync":
+            config = {}
+        elif kind == "resource_policy":
+            config = {}
+        elif kind == "state_store" and "persistence.migration" not in uncovered:
+            config = {
+                "namespace": "authored_state",
+                "schema_version": "1",
+                "malformed_policy": "backup_and_reset",
+                "transfer_on_respawn": (
+                    "persistence.transfers" in uncovered
+                ),
+            }
+        elif (
             config_schema.get("type") == "object"
             and config_schema.get("properties") == {}
             and config_schema.get("additionalProperties") is False
