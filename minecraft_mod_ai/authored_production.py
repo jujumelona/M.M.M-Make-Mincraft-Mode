@@ -749,7 +749,10 @@ def _compile_new_authored_modules(
             "typed_program": {
                 "path": program_path,
                 "symbol": program_symbol,
-                "state_required": typed_plan_uses_state(validated_plan),
+                "state_required": (
+                    typed_plan_uses_state(validated_plan)
+                    or state_store_config is not None
+                ),
                 "state_store": state_store_config is not None,
             },
             "platform_modules": [
