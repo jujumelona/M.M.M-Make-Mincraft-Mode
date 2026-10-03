@@ -1,5 +1,5 @@
 id: feature/persistence/migration
-task: Resolve exactly one migration record for the supplied feature and acceptance
+task: Resolve exactly one typed migration record for the supplied feature and acceptance
   criterion.
 input_fields:
 - requirement
@@ -15,18 +15,43 @@ record_schema:
     destination_version:
       type: string
       minLength: 1
-    transformation:
+    operation:
       type: string
+      enum:
+      - preserve
+      - rename_key
+      - delete_key
+      - set_default
+    source_key:
+      type:
+      - string
+      - "null"
       minLength: 1
+    destination_key:
+      type:
+      - string
+      - "null"
+      minLength: 1
+    value:
+      type:
+      - string
+      - number
+      - integer
+      - boolean
+      - "null"
   required:
   - source_version
   - destination_version
-  - transformation
+  - operation
+  - source_key
+  - destination_key
+  - value
   additionalProperties: false
 rules:
-- Return only the next record for this concern; do not plan neighboring concerns.
 - Preserve supplied evidence identifiers. Never invent external APIs, paths or facts.
-- Return done only after all records for this concern are supplied.
-- Return not_applicable with a concrete reason only when this concern does not apply.
-- Return blocked with the missing information when it cannot be resolved.
-- Do not turn missing information into an inapplicability claim.
+- Use only the typed migration operations in the schema; never encode executable behavior in prose.
+- rename_key requires source_key and destination_key.
+- delete_key requires source_key.
+- set_default requires destination_key and a typed value.
+- preserve requires no keys or value.
+- Return semantic record content only. Do not emit count, done, continuation, retry, ordinal, blocked, applicability, or other loop-control protocol.
