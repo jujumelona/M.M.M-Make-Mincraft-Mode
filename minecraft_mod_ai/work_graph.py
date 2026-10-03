@@ -1012,6 +1012,8 @@ def _is_host_exact_authored_module(module: ProductionModule) -> bool:
     """
 
     config = module.config if isinstance(module.config, dict) else {}
+    if isinstance(config.get("typed_plan_ir"), dict):
+        return True
     if config.get("authored_localization_required") is True:
         return True
     task = config.get("evidence_task")
@@ -1114,12 +1116,10 @@ def _module_shards(
         dependency_groups = {module_group[dependency] for dependency in module.depends_on}
 
         if stage == "custom" and _is_host_exact_authored_module(module):
-            # One semantic authored task owns one exact pre-materialized target and one
-            # independent target_compile gate. Give it a distinct durable node so:
-            #   * the model execution deadline applies to this task only,
-            #   * successful tasks commit before later tasks start,
-            #   * resume never replays earlier successful authored tasks,
-            #   * one slow task cannot roll back a whole authored shard.
+            # One authored task owns one exact host target and one independent
+            # target_compile gate. Keep deterministic Typed PlanIR work isolated from
+            # legacy LLM custom work so resource classification and retry semantics
+            # cannot pull a host compiler task back into the model lane.
             chosen = len(groups)
             groups.append(
                 {
