@@ -617,11 +617,11 @@ class ModelRouter:
         stage: str,
         role: str,
     ) -> str:
-        """Delegate to the single production retrieve/act/observe loop owner."""
+        """Delegate to the finite host-reviewed model tool loop."""
 
-        from .progress_aware_tool_loop import generate_with_tools
+        from .reviewed_tool_loop import generate_with_reviewed_tools
 
-        return generate_with_tools(
+        return generate_with_reviewed_tools(
             self,
             config=config,
             adapter=adapter,
@@ -631,7 +631,7 @@ class ModelRouter:
             role=role,
         )
 
-    _generate_with_tools._mmm_progress_aware_tool_loop_owner = True
+    _generate_with_tools._mmm_reviewed_tool_loop_owner = True
 
     def _tool_runtime(self) -> Any:
         runtime = self._agent_tool_runtime
