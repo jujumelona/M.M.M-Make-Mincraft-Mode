@@ -343,3 +343,125 @@ def test_typed_plan_host_work_is_isolated_from_llm_shards() -> None:
     )
     assert node.resource_class == "cpu_io"
 
+def test_typed_platform_modules_lower_to_deterministic_production_modules() -> None:
+    text = "item behavior"
+    typed = {
+        **_plan(text),
+        "platform_modules": [
+            {
+                "module_id": "marker_token",
+                "kind": "item",
+                "config": {"display_name_en": "Marker Token"},
+                "covers": ["resources_and_ui.registries"],
+            }
+        ],
+    }
+    plan = AuthoredPlan(
+        requested_prompt="add marker token",
+        text=text,
+        typed_plan_ir=typed,
+    )
+
+    modules, manifest = _compile_new_authored_modules(
+        plan,
+        mod_id="typedtest",
+        package_name="ai.minecraft.typedtest",
+        target={},
+        production_state_section={},
+    )
+
+    assert [module.module_id for module in modules] == [
+        "authored_typed_plan",
+        "marker_token",
+    ]
+    assert modules[1].kind == "item"
+    assert modules[1].config["display_name_en"] == "Marker Token"
+    assert manifest["platform_modules"] == [
+        {
+            "module_id": "marker_token",
+            "kind": "item",
+            "covers": ["resources_and_ui.registries"],
+        }
+    ]
+
+
+def test_typed_state_store_generates_state_owner_and_persistence_bridge(
+    tmp_path: Path,
+) -> None:
+    root = _project(tmp_path)
+    state = {
+        "specification": {
+            "variables": [
+                {
+                    "name": "coins",
+                    "owner": "player",
+                    "type": "integer",
+                    "unit": "credits",
+                    "default": "0",
+                    "domain": "integer >= 0",
+                }
+            ],
+            "transitions": [],
+            "invariants": [],
+            "initialization": [],
+            "updates": [],
+            "cleanup": [],
+            "concurrency": [],
+            "inapplicable_concerns": [],
+        },
+        "constraint_evidence_refs": [],
+    }
+    module = ProductionModule(
+        module_id="authored_typed_plan",
+        kind="custom_java",
+        config={
+            "implementation": "custom",
+            "typed_plan_ir": {
+                **_plan(),
+                "platform_modules": [
+                    {
+                        "module_id": "persistent_state",
+                        "kind": "state_store",
+                        "config": {"namespace": "player_state"},
+                        "covers": ["persistence.stored_state"],
+                    }
+                ],
+            },
+            "typed_plan_package": "ai.minecraft.typedtest",
+            "typed_plan_path": (
+                "src/main/java/ai/minecraft/typedtest/AuthoredProgram.java"
+            ),
+            "typed_plan_capabilities": {},
+            "typed_plan_state_section": state,
+            "typed_state_store": {"namespace": "player_state"},
+        },
+        required_gates=("target_compile",),
+    )
+
+    receipt = CustomModuleGenerator(ForbiddenRouter()).generate(
+        root,
+        module=module,
+    )
+
+    package_root = root / "src/main/java/ai/minecraft/typedtest"
+    state_owner = package_root / "AuthoredStateModel.java"
+    bridge = package_root / "AuthoredStatePersistence.java"
+    store = package_root / "system/MmmPersistentStore.java"
+    assert receipt["generation_verification"]["model_calls"] == 0
+    assert state_owner.is_file()
+    assert bridge.is_file()
+    assert store.is_file()
+    bridge_text = bridge.read_text(encoding="utf-8")
+    assert "// MMM:TYPED_STATE_PERSISTENCE_OWNER" in bridge_text
+    assert 'MmmPersistentStore.namespace("player_state")' in bridge_text
+    assert 'AuthoredStateModel.getState("coins")' in bridge_text
+    assert 'AuthoredStateModel.setState("coins", data.get("coins"))' in bridge_text
+
+    main_source = next(
+        path
+        for path in (root / "src/main/java/ai/minecraft/typedtest").glob("*.java")
+        if "implements ModInitializer" in path.read_text(encoding="utf-8")
+    )
+    main_text = main_source.read_text(encoding="utf-8")
+    assert "AuthoredStatePersistence.register();" in main_text
+
