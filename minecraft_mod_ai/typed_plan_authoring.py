@@ -541,21 +541,44 @@ def author_typed_plan_ir(
     from .typed_platform_ir import (
         PLATFORM_KINDS,
         platform_config_schema,
+        platform_coverable_refs,
         validate_platform_modules,
     )
 
+    requires_platform_module = any(
+        ref.startswith((
+            "authority_and_network.",
+            "persistence.",
+            "resources_and_ui.",
+        ))
+        for ref in coverage_refs
+    )
     platform_count = int(author._ask(
         "platform_module_count",
-        {"type": "integer", "minimum": 0, "maximum": 64},
+        {
+            "type": "integer",
+            "minimum": 1 if requires_platform_module else 0,
+            "maximum": 64,
+        },
         scope="platform",
     ))
     platform_modules: list[dict[str, Any]] = []
     seen_platform_ids: set[str] = set()
     for index in range(platform_count):
         scope = f"platform[{index}]"
+        available_kinds = [
+            kind
+            for kind in sorted(PLATFORM_KINDS)
+            if platform_coverable_refs(kind, coverage_refs)
+        ]
+        if not available_kinds:
+            raise ValueError(
+                "TYPED_PLAN_PLATFORM_KIND_UNAVAILABLE: active concerns have "
+                "no deterministic platform backend."
+            )
         kind = author._enum(
             "platform_kind",
-            sorted(PLATFORM_KINDS),
+            available_kinds,
             scope=scope,
         )
         module_id = str(author._ask(
@@ -581,17 +604,21 @@ def author_typed_plan_ir(
             raise ValueError(
                 f"TYPED_PLAN_AUTHORING_RESPONSE_INVALID: {scope}.platform_config"
             )
-        if not coverage_refs:
+        coverable_refs = platform_coverable_refs(
+            kind,
+            coverage_refs,
+        )
+        if not coverable_refs:
             raise ValueError(
-                "TYPED_PLAN_PLATFORM_COVERAGE_REQUIRED: platform modules require "
-                "at least one active canonical concern."
+                f"TYPED_PLAN_PLATFORM_COVERAGE_REQUIRED: {kind} has no "
+                "active canonical concern to implement."
             )
         coverage_count = int(author._ask(
             "platform_coverage_count",
             {
                 "type": "integer",
                 "minimum": 1,
-                "maximum": min(64, len(coverage_refs)),
+                "maximum": min(64, len(coverable_refs)),
             },
             scope=scope,
         ))
@@ -599,7 +626,7 @@ def author_typed_plan_ir(
         for coverage_index in range(coverage_count):
             cover = author._enum(
                 "platform_coverage_ref",
-                list(coverage_refs),
+                list(coverable_refs),
                 scope=f"{scope}.coverage[{coverage_index}]",
             )
             if cover not in covers:
