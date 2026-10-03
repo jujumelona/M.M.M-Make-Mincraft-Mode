@@ -101,6 +101,29 @@ def infer_event_type(value: Any) -> str | None:
     return matches[0] if len(matches) == 1 else None
 
 
+def infer_event_config(event: str, trigger: Any) -> dict[str, Any] | None:
+    if event != "command":
+        return {}
+    text = _compact(trigger)
+    match = re.search(
+        r"(?:^|\\s)/(?:\\s*)?([a-z0-9_]{1,64})(?:\\b|$)",
+        text,
+        re.IGNORECASE,
+    )
+    if match is None:
+        match = re.search(
+            r"\\b(?:command|명령어|커맨드)\\s*[:=]?\\s*([a-z0-9_]{1,64})\\b",
+            text,
+            re.IGNORECASE,
+        )
+    if match is None:
+        return None
+    return {
+        "literal": match.group(1).lower(),
+        "permission_level": 0,
+    }
+
+
 def event_config_schema(event: str) -> dict[str, Any]:
     if event == "command":
         return {
@@ -214,6 +237,7 @@ __all__ = [
     "EVENT_PARAMETERS",
     "EVENT_SIGNATURES",
     "event_config_schema",
+    "infer_event_config",
     "infer_event_type",
     "is_mod_initialize_trigger",
     "validate_event_bindings",
