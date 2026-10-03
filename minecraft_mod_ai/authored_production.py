@@ -680,7 +680,10 @@ def _compile_new_authored_modules(
             if kind == "network_sync":
                 if network_sync_config is not None:
                     raise ValueError("TYPED_PLATFORM_NETWORK_SYNC_DUPLICATE")
-                network_sync_config = deepcopy(dict(item["config"]))
+                network_sync_config = {
+                    **deepcopy(dict(item["config"])),
+                    "__covers": list(item["covers"]),
+                }
                 continue
             if kind == "resource_policy":
                 if resource_policy_config is not None:
@@ -707,10 +710,23 @@ def _compile_new_authored_modules(
             plan.structured_sections,
             "state_model",
         )
+        network_sync_covers = set(
+            network_sync_config.get("__covers", ())
+            if isinstance(network_sync_config, Mapping)
+            else ()
+        )
+        network_sync_needs_state = bool(
+            network_sync_covers
+            & {
+                "authority_and_network.payloads",
+                "authority_and_network.synchronization",
+                "authority_and_network.reconnection",
+            }
+        )
         state_required = (
             typed_plan_uses_state(validated_plan)
             or state_store_config is not None
-            or network_sync_config is not None
+            or network_sync_needs_state
             or any(bool(rows) for rows in active_state.values())
         )
         if state_required and not state_section:
