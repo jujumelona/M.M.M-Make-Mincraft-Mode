@@ -2308,8 +2308,7 @@ def _state_variable_contract(
     records = (
         tuple(dict(item) for item in structured if isinstance(item, Mapping))
         if isinstance(structured, list) and structured
-        else _structured_requirement_records(source_requirements, concern)
-        or _inline_state_variable_records(source_requirements, concern)
+        else ()
     )
     if records:
         contracts: list[dict[str, str]] = []
@@ -4678,19 +4677,10 @@ class AtomicConcernExecutor:
             state_model
             and has_complete_structured_state(self.task, self.ordered)
         )
-        variable_only_host_lowering = (
-            state_model
-            and bool(self.ordered)
-            and all(_slug(item["concern"]) == "variables" for item in self.ordered)
-            and all(
-                bool(_deterministic_state_variable_members(self.task, item))
-                for item in self.ordered
-            )
-        )
-        if state_model and not (structured_state or variable_only_host_lowering):
+        if state_model and not structured_state:
             raise CustomModuleGenerationError(
                 "STRUCTURED_STATE_CONTRACT_REQUIRED: canonical structured state "
-                "records must be present before executable-field lowering."
+                "records must be present before host compilation."
             )
 
         if state_model:
