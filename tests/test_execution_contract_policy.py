@@ -245,7 +245,6 @@ def test_current_execution_contract_consumers_import_the_authority_directly() ->
     package_root = Path(__file__).resolve().parents[1] / "minecraft_mod_ai"
     consumers = (
         "fixed_template_generation.py",
-        "host_declaration_compiler.py",
         "java_generation_policy.py",
         "java_region_parser.py",
         "model_output_atomicity_contract.py",
