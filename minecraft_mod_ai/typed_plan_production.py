@@ -2,13 +2,18 @@ from __future__ import annotations
 
 """Model-free production backend for authored Typed PlanIR modules."""
 
-from collections.abc import Mapping
+import json
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 from .complete_spec import ProductionModule
 from .production_state_compiler import render_production_state_java
-from .project_edit import inspect_fabric_project, write_text_files
+from .project_edit import (
+    ensure_main_initializer_call,
+    inspect_fabric_project,
+    write_text_files,
+)
 from .typed_plan_ir import typed_plan_uses_state
 from .typed_plan_java import render_typed_plan_java
 
@@ -35,6 +40,112 @@ def _assert_host_owned_or_absent(
     current = target.read_text(encoding="utf-8")
     if marker not in current:
         raise ValueError(f"TYPED_PLAN_OWNERSHIP_CONFLICT: {relative}")
+
+
+
+
+def _state_variable_names(section: Mapping[str, Any]) -> tuple[str, ...]:
+    raw_specification = section.get("specification")
+    specification = (
+        raw_specification
+        if isinstance(raw_specification, Mapping)
+        else section
+    )
+    rows = specification.get("variables")
+    if not isinstance(rows, Sequence) or isinstance(
+        rows, (str, bytes, bytearray)
+    ):
+        return ()
+    names: list[str] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        name = str(row.get("name") or "").strip()
+        if name and name not in names:
+            names.append(name)
+    return tuple(names)
+
+
+def _state_persistence_java(
+    package_name: str,
+    namespace: str,
+    state_names: tuple[str, ...],
+) -> str:
+    namespace_literal = json.dumps(namespace, ensure_ascii=True)
+    restore_lines: list[str] = []
+    persist_lines: list[str] = []
+    for name in state_names:
+        literal = json.dumps(name, ensure_ascii=True)
+        restore_lines.extend([
+            f"            if (data.containsKey({literal})) {{",
+            f"                AuthoredStateModel.setState({literal}, data.get({literal}));",
+            "            }",
+        ])
+        persist_lines.extend([
+            f"            value = AuthoredStateModel.getState({literal});",
+            f"            if (value != null) data.put({literal}, value);",
+        ])
+    restore = "\n".join(restore_lines)
+    persist = "\n".join(persist_lines)
+    return f"""package {package_name};
+
+import {package_name}.system.MmmPersistentStore;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+
+public final class AuthoredStatePersistence {{
+    private static boolean registered;
+
+    private AuthoredStatePersistence() {{}}
+
+    public static synchronized void register() {{
+        if (registered) return;
+        registered = true;
+        ServerLifecycleEvents.SERVER_STARTED.register(server -> {{
+            MmmPersistentStore.load(server);
+            java.util.Map<String, Object> data =
+                    MmmPersistentStore.namespace({namespace_literal});
+{restore}
+        }});
+        ServerLifecycleEvents.SERVER_STOPPING.register(server -> {{
+            java.util.Map<String, Object> data =
+                    MmmPersistentStore.namespace({namespace_literal});
+            data.clear();
+            Object value;
+{persist}
+            MmmPersistentStore.save(server);
+        }});
+    }}
+}}
+"""
+
+
+def _persistence_files(
+    *,
+    package_name: str,
+    mod_id: str,
+    section: Mapping[str, Any],
+    config: Mapping[str, Any],
+) -> dict[str, str]:
+    state_names = _state_variable_names(section)
+    if not state_names:
+        raise ValueError(
+            "TYPED_STATE_STORE_VARIABLES_REQUIRED: persistent state requires "
+            "canonical state_model.variables."
+        )
+    namespace = str(config.get("namespace") or "authored_state").strip()
+    package_path = package_name.replace(".", "/")
+    from .system_templates_common import _persistent_store_java
+
+    return {
+        f"src/main/java/{package_path}/system/MmmPersistentStore.java":
+            _persistent_store_java(package_name, mod_id),
+        f"src/main/java/{package_path}/AuthoredStatePersistence.java":
+            _state_persistence_java(
+                package_name,
+                namespace,
+                state_names,
+            ),
+    }
 
 
 def generate_typed_plan_module(
@@ -93,6 +204,23 @@ def generate_typed_plan_module(
         capabilities=capabilities,
     )
     files = {expected_path: source}
+
+    raw_state_store = config.get("typed_state_store")
+    if raw_state_store is not None:
+        if not isinstance(raw_state_store, Mapping):
+            raise ValueError("TYPED_STATE_STORE_CONFIG_INVALID")
+        raw_state = config.get("typed_plan_state_section")
+        if not isinstance(raw_state, Mapping) or not raw_state:
+            raise ValueError("TYPED_STATE_STORE_STATE_AUTHORITY_REQUIRED")
+        files.update(
+            _persistence_files(
+                package_name=package_name,
+                mod_id=info.mod_id,
+                section=raw_state,
+                config=raw_state_store,
+            )
+        )
+
     _assert_host_owned_or_absent(
         root,
         expected_path,
@@ -123,6 +251,13 @@ def generate_typed_plan_module(
         files,
         replace_existing=True,
     )
+    if raw_state_store is not None:
+        ensure_main_initializer_call(
+            info,
+            import_line=f"import {package_name}.AuthoredStatePersistence",
+            call_line="AuthoredStatePersistence.register()",
+            marker="typed-state-persistence",
+        )
     touched_paths = sorted(files)
     return {
         "schema_version": "mmm/custom-module-result-v3",
