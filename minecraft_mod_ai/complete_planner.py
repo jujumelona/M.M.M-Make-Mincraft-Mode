@@ -166,11 +166,33 @@ class CompleteGameDesignPlanner:
                 enable_tools=False,
                 force_non_thinking=True,
             )
+        structured_sections: dict[str, Any] = {}
+        typed_plan_ir: dict[str, Any] = {}
+        if callable(getattr(self.router, "generate_tool_decision", None)):
+            from .authored_structured_design import author_structured_sections
+            from .typed_plan_authoring import author_typed_plan_ir
+
+            with planner_operation("author_structured_execution_contract"):
+                structured_sections = author_structured_sections(
+                    self.router,
+                    prompt,
+                    media_paths=media_paths,
+                )
+            with planner_operation("author_typed_plan_ir"):
+                typed_plan_ir = author_typed_plan_ir(
+                    self.router,
+                    text,
+                    structured_sections,
+                    {},
+                )
+
         return AuthoredPlan(
             requested_prompt=prompt,
             text=text,
             existing_input_sha256=existing_input_sha256,
             media_paths=tuple(str(path) for path in media_paths),
+            structured_sections=structured_sections,
+            typed_plan_ir=typed_plan_ir,
         )
 
     def compile_for_production(
