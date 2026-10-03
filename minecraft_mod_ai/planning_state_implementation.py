@@ -349,9 +349,14 @@ def _generate_chunk(
     )
 
     generate_decision = getattr(router, "generate_tool_decision", None)
-    if callable(generate_decision):
-        from .fixed_template_generation import _model_transport_schema
-
+    from .fixed_template_generation import (
+        _model_transport_schema,
+        _structured_text_transport_required,
+    )
+    if (
+        callable(generate_decision)
+        and not _structured_text_transport_required(router, "planner")
+    ):
         raw_decision = generate_decision(
             "planner",
             messages,
@@ -364,8 +369,6 @@ def _generate_chunk(
                 "DETAILED_PLAN_NATIVE_CHUNK_INVALID: expected argument mapping"
             )
         return dict(raw_decision)
-
-    from .fixed_template_generation import _model_transport_schema
 
     raw = generate_fixed_template_text(
         router,
