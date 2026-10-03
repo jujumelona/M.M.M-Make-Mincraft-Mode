@@ -19,12 +19,10 @@ jobs:
         shell: bash
         run: |
           for spec in \
-            'minecraft_mod_ai/progress_aware_tool_loop.py:1560:1750' \
             'minecraft_mod_ai/pre_design_rag_corrective.py:60:110' \
             'minecraft_mod_ai/pre_design_rag_corrective.py:350:470' \
             'minecraft_mod_ai/resource_asset_production.py:600:640' \
             'minecraft_mod_ai/resource_asset_production.py:885:945' \
-            'minecraft_mod_ai/planning_state_implementation.py:600:705' \
             'minecraft_mod_ai/artifact_graph_executor.py:195:300' \
             'minecraft_mod_ai/source_transplant.py:720:855' \
             'minecraft_mod_ai/parallel_runtime_contract.py:1:125' \
