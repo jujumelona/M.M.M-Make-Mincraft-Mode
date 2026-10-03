@@ -6,14 +6,9 @@ import subprocess
 
 import pytest
 from copy import deepcopy
-from pathlib import Path
 from types import SimpleNamespace
 
-from minecraft_mod_ai.atomic_concern_source import (
-    AtomicConcernExecutor,
-    _deterministic_state_variable_members,
-    _state_variable_contract,
-)
+from minecraft_mod_ai.atomic_concern_source import AtomicConcernExecutor
 from minecraft_mod_ai.atomic_java_admission import _semantic_component_issue
 from minecraft_mod_ai.authored_ir_parser import slice_concern_requirements
 from minecraft_mod_ai.custom_module_errors import CustomModuleGenerationError
@@ -432,140 +427,24 @@ def test_state_model_without_structured_records_is_rejected_at_ir_binding() -> N
         _bind_atomic_leaf_contract(task, node, requirements)
 
 
-def test_structured_variables_lower_without_model_and_never_construct_bare_enumset() -> None:
+def test_structured_variables_use_single_generic_host_runtime() -> None:
+    from minecraft_mod_ai.structured_state_runtime import render_state_model_concern
+
     task, concerns = _bound_task()
-    variables = concerns[0]
-    contracts = _state_variable_contract(task, variables)
-    by_name = {item["name"]: item for item in contracts}
+    assert concerns[0]["concern"] == "variables"
 
-    assert by_name["PlayerBalance"]["java_type"] == "double"
-    assert by_name["PlayerBalance"]["default_literal"] == "0.0"
-    assert by_name["ShipComponents"]["java_type"] == "java.util.List<Object>"
-    assert by_name["ShipComponents"]["default_literal"] == "new java.util.ArrayList<>()"
-    assert by_name["PlanetControl"]["java_type"] == "java.util.Set<java.lang.Enum<?>>"
-    assert by_name["PlanetControl"]["default_literal"] == "new java.util.HashSet<>()"
-
-    members = _deterministic_state_variable_members(task, variables)
-    assert "new java.util.EnumSet" not in members
-    assert (
-        "private static java.util.Set<java.lang.Enum<?>> PlanetControl"
-        " = new java.util.HashSet<>();"
-    ) in members
-
-    def forbidden_model_call(_messages):
-        raise AssertionError("variables should be host-lowered before coder decode")
-
-    executor = AtomicConcernExecutor(
-        root=Path("."),
-        target=Path("AuthoredStateModel.java"),
-        relative="AuthoredStateModel.java",
-        symbol="AuthoredStateModel",
-        original=(
-            "public final class AuthoredStateModel {\n"
-            "    // MMM_AUTHORED_FEATURE_BODY\n"
-            "}\n"
-        ),
-        task=task,
-        section="state_model",
-        concerns=(variables,),
-        grounding={},
-        dependency_source="",
-        require_initialize=False,
-        call_coder=forbidden_model_call,
-        compile_java=lambda _root: SimpleNamespace(status="PASS"),
-        compile_log=lambda _report: "",
-        write_source=lambda _path, _source: None,
-    )
-    result = executor.run()
-    assert result["repair_count"] == 0
-    assert "java.util.HashSet" in result["source"]
-
-
-def test_structured_custom_state_types_are_host_lowered_without_coder(tmp_path) -> None:
-    specification = {
-        **{name: [] for name in DETAIL_RECORDS["state_model"]},
-        "variables": [
-            {"name": "CurrentMoney", "owner": "Player", "type": "Int",
-             "unit": "credits", "default": "0", "domain": "non-negative"},
-            {"name": "Materials", "owner": "Inventory", "type": "Map<String, Int>",
-             "unit": "items", "default": "{}", "domain": "inventory"},
-            {"name": "ShipConfig", "owner": "WorldData", "type": "List<ShipPartConfig>",
-             "unit": "parts", "default": "[]", "domain": "ship"},
-            {"name": "Position", "owner": "Server", "type": "Vec3Double",
-             "unit": "blocks", "default": "null", "domain": "world"},
-        ],
-        "inapplicable_concerns": [],
-    }
-    structured = {
-        "state_model": {
-            "specification": specification,
-            "constraint_evidence_refs": [],
-        }
-    }
-    task = {"task_id": "structured-custom-state-types"}
-    node = {"symbol": "AuthoredStateModel", "obligations": [_model_obligation("variables")]}
-    _section, concerns = _bind_atomic_leaf_contract(
+    source = render_state_model_concern(
         task,
-        node,
-        {},
-        structured_sections=structured,
-        production_state_section=structured["state_model"],
+        "variables",
+        include_runtime=True,
     )
-    variables = concerns[0]
-    contracts = _state_variable_contract(task, variables)
-    assert [item["java_type"] for item in contracts] == [
-        "int",
-        "java.util.Map<String, Integer>",
-        "java.util.List<ShipPartConfig>",
-        "Vec3Double",
-    ]
 
-    members = _deterministic_state_variable_members(task, variables)
-    assert "private static final class ShipPartConfig {}" in members
-    assert "private static final class Vec3Double {}" in members
-    assert "new java.util.HashMap<>()" in members
-    assert "new java.util.ArrayList<>()" in members
-
-    def forbidden_model_call(_messages):
-        raise AssertionError("structured variables must be host-lowered before coder decode")
-
-    executor = AtomicConcernExecutor(
-        root=tmp_path,
-        target=tmp_path / "AuthoredStateModel.java",
-        relative="AuthoredStateModel.java",
-        symbol="AuthoredStateModel",
-        original=(
-            "public final class AuthoredStateModel {\n"
-            "    // MMM_AUTHORED_FEATURE_BODY\n"
-            "}\n"
-        ),
-        task=task,
-        section="state_model",
-        concerns=(variables,),
-        grounding={},
-        dependency_source="",
-        require_initialize=False,
-        call_coder=forbidden_model_call,
-        compile_java=lambda _root: SimpleNamespace(status="PASS"),
-        compile_log=lambda _report: "",
-        write_source=lambda _path, _source: None,
-    )
-    source = executor.run()["source"]
-    assert "ShipPartConfig" in source
-    assert "Vec3Double" in source
-    assert "<init>" not in source
-
-    javac = shutil.which("javac")
-    if javac:
-        target = tmp_path / "AuthoredStateModel.java"
-        target.write_text(source, encoding="utf-8")
-        compiled = subprocess.run(
-            [javac, str(target)],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        assert compiled.returncode == 0, compiled.stderr
+    assert source is not None
+    assert '$mmmState.put("PlayerBalance", Double.valueOf("0.0"));' in source
+    assert '$mmmState.put("ShipComponents", new java.util.ArrayList<>());' in source
+    assert '$mmmState.put("PlanetControl", new java.util.LinkedHashSet<>());' in source
+    assert "private enum" not in source
+    assert "private static final class ShipPartConfig" not in source
 
 
 def test_structured_state_model_is_host_compiled_in_one_pass_without_coder(tmp_path) -> None:
