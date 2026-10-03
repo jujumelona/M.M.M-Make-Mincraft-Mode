@@ -3,6 +3,8 @@ from copy import deepcopy
 import pytest
 
 from minecraft_mod_ai.authored_plan import AuthoredPlan
+from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
+from minecraft_mod_ai.typed_plan_authoring import author_typed_plan_ir
 
 
 class NativePlanner:
@@ -58,3 +60,60 @@ def test_legacy_saved_plan_roundtrip_remains_readable():
     assert legacy.typed_plan_ir == {}
     restored = AuthoredPlan.from_dict(deepcopy(legacy.to_dict()))
     assert restored.calculate_hash() == legacy.calculate_hash()
+
+def test_event_handler_signature_is_host_owned_during_authoring():
+    specification = {
+        name: []
+        for name in DETAIL_RECORDS["integration"]
+    }
+    specification["entry_points"] = [
+        {
+            "boundary": "server",
+            "trigger": "server startup",
+            "owner": "server",
+        }
+    ]
+    specification["inapplicable_concerns"] = []
+    structured = {
+        "integration": {
+            "specification": specification,
+            "constraint_evidence_refs": [],
+        }
+    }
+    router = NativePlanner([
+        "server_started",
+        0,
+        "return",
+        "done",
+        "done",
+    ])
+
+    plan = author_typed_plan_ir(
+        router,
+        "server event design",
+        structured,
+        {},
+        max_calls=16,
+    )
+
+    assert plan["event_bindings"] == [
+        {
+            "event": "server_started",
+            "function": "entryPoint1_server_started",
+            "entry_point_index": 0,
+            "config": {},
+        }
+    ]
+    handler = plan["functions"][0]
+    assert handler["id"] == "entryPoint1_server_started"
+    assert handler["parameters"] == [
+        {"name": "server", "type": "object"}
+    ]
+    assert handler["return_type"] == "void"
+    requested_fields = [
+        call[1][1]["content"]
+        for call in router.calls
+    ]
+    assert all("parameter_name" not in payload for payload in requested_fields)
+    assert all("return_type" not in payload for payload in requested_fields)
+
