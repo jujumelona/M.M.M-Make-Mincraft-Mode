@@ -929,9 +929,6 @@ def _exclusive_anchor_keys(module: ProductionModule) -> tuple[str, ...]:
     config = module.config if isinstance(module.config, dict) else {}
     raw = config.get('owned_anchors')
     if not isinstance(raw, list):
-        evidence_task = config.get('evidence_task')
-        raw = evidence_task.get('owned_anchors') if isinstance(evidence_task, dict) else None
-    if not isinstance(raw, list):
         return ()
     keys: list[str] = []
     for anchor in raw:
