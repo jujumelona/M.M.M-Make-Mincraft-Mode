@@ -25,8 +25,11 @@ PLATFORM_SYSTEM_KIND_TO_PACK = {
     "party": "party-guild",
     "guild": "party-guild",
 }
+PLATFORM_HOST_KINDS = frozenset({"state_store"})
 PLATFORM_KINDS = frozenset(
-    set(PLATFORM_CONTENT_KINDS) | set(PLATFORM_SYSTEM_KIND_TO_PACK)
+    set(PLATFORM_CONTENT_KINDS)
+    | set(PLATFORM_SYSTEM_KIND_TO_PACK)
+    | set(PLATFORM_HOST_KINDS)
 )
 
 _ID = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
@@ -130,6 +133,13 @@ def platform_config_schema(kind: str) -> dict[str, Any]:
                 "maxProperties": 128,
             },
         }, required=("json",))
+    if kind == "state_store":
+        return _schema({
+            "namespace": {
+                "type": "string",
+                "pattern": r"^[a-z][a-z0-9_.-]{1,63}$",
+            },
+        })
     if kind == "quest":
         return _schema({
             "objective": {"type": "string", "enum": ["kill", "break", "manual"]},
@@ -263,7 +273,7 @@ def _coverage_allowed(kind: str, cover: str) -> bool:
     if cover.startswith("authority_and_network."):
         return kind in {"networking", "gui"}
     if cover.startswith("persistence."):
-        return kind in _PERSISTENT_SYSTEM_KINDS
+        return kind == "state_store" or kind in _PERSISTENT_SYSTEM_KINDS
     if cover.startswith("integration."):
         return True
     return False
@@ -385,6 +395,18 @@ def validate_platform_modules(raw_modules: Any) -> list[dict[str, Any]]:
         }
         if kind in PLATFORM_CONTENT_KINDS:
             _validate_content_config(kind, config, module_id)
+        elif kind in PLATFORM_HOST_KINDS:
+            unknown = set(config) - {"namespace"}
+            if unknown:
+                raise ValueError(
+                    f"TYPED_PLATFORM_CONFIG_INVALID: {module_id} has "
+                    f"unsupported fields {sorted(unknown)}"
+                )
+            namespace = str(config.get("namespace", "authored_state"))
+            if not re.fullmatch(r"[a-z][a-z0-9_.-]{1,63}", namespace):
+                raise ValueError(
+                    f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.namespace"
+                )
         else:
             pack = PLATFORM_SYSTEM_KIND_TO_PACK[kind]
             system_groups.setdefault(pack, []).append({
@@ -425,6 +447,7 @@ def platform_module_authoring_schema() -> dict[str, Any]:
 
 __all__ = [
     "PLATFORM_CONTENT_KINDS",
+    "PLATFORM_HOST_KINDS",
     "PLATFORM_KINDS",
     "PLATFORM_SYSTEM_KIND_TO_PACK",
     "platform_config_schema",
