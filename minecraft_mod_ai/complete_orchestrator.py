@@ -1761,17 +1761,26 @@ class CompleteProductionOrchestrator:
                         )
                         raise CompleteProductionError(f'Pipeline generation node failed: {node_id}: {type(exc).__name__}: {exc}') from exc
 
-                while True:
-                    claimed = ledger.claim_ready(worker_id='mmm-orchestrator', stages=generation_stages, lease_seconds=lease_seconds)
-                    if claimed is None:
-                        break
-                    node_id = str(claimed['node_id'])
-                    node = node_by_id.get(node_id)
-                    if node is None:
-                        raise CompleteProductionError(f'Ledger claimed an unknown generation node: {node_id}')
-                    if node_id in node_futures:
-                        raise CompleteProductionError(f'Generation node was claimed twice: {node_id}')
-                    node_futures[node_id] = dispatch_node(node)
+                if generation_stages:
+                    while True:
+                        claimed = ledger.claim_ready(
+                            worker_id='mmm-orchestrator',
+                            stages=generation_stages,
+                            lease_seconds=lease_seconds,
+                        )
+                        if claimed is None:
+                            break
+                        node_id = str(claimed['node_id'])
+                        node = node_by_id.get(node_id)
+                        if node is None:
+                            raise CompleteProductionError(
+                                f'Ledger claimed an unknown generation node: {node_id}'
+                            )
+                        if node_id in node_futures:
+                            raise CompleteProductionError(
+                                f'Generation node was claimed twice: {node_id}'
+                            )
+                        node_futures[node_id] = dispatch_node(node)
                 if node_futures:
                     wait(
                         tuple(node_futures.values()),
