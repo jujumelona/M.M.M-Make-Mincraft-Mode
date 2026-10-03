@@ -7,9 +7,10 @@ actually bind. Unsupported platform behavior fails before Java generation; there
 is no coder fallback.
 """
 
-import re
 from collections.abc import Mapping
 from typing import Any
+
+from .typed_event_ir import is_mod_initialize_trigger
 
 from .authored_structured_design import (
     active_concern_records,
@@ -23,23 +24,8 @@ _UNSUPPORTED_PLATFORM_SECTIONS = (
     "resources_and_ui",
 )
 
-_LIFECYCLE_TRIGGER = re.compile(
-    r"^(?:"
-    r"mod[ _-]?(?:init|initialize|initialization|startup)|"
-    r"oninitialize|initialize|initialization|startup|server[ _-]?startup|"
-    r"모드[ _-]?(?:초기화|시작)|초기화|시작"
-    r")$",
-    re.IGNORECASE,
-)
-
-
 def _compact(value: Any) -> str:
-    return re.sub(r"\s+", " ", str(value or "").strip())
-
-
-def _lifecycle_trigger(value: Any) -> bool:
-    normalized = re.sub(r"[\s:/\\]+", "_", _compact(value)).strip("_")
-    return bool(_LIFECYCLE_TRIGGER.fullmatch(normalized))
+    return " ".join(str(value or "").split())
 
 
 def typed_plan_support_issues(
@@ -84,13 +70,37 @@ def typed_plan_support_issues(
                 issues.append(ref)
 
     integration = active_concern_records(normalized, "integration")
-    for index, row in enumerate(integration.get("entry_points", ())):
+    entry_points = tuple(integration.get("entry_points", ()))
+    bound_entry_points = {
+        binding.get("entry_point_index")
+        for binding in (
+            typed_plan_ir.get("event_bindings", ())
+            if isinstance(typed_plan_ir, Mapping)
+            else ()
+        )
+        if isinstance(binding, Mapping)
+        and type(binding.get("entry_point_index")) is int
+    }
+
+    for index, row in enumerate(entry_points):
         trigger = row.get("trigger")
-        if not _lifecycle_trigger(trigger):
+        if is_mod_initialize_trigger(trigger):
+            if index in bound_entry_points:
+                issues.append(
+                    f"integration.entry_points[{index}].duplicate_mod_init_binding"
+                )
+            continue
+        if index not in bound_entry_points:
             issues.append(
                 "integration.entry_points"
                 f"[{index}].trigger={_compact(trigger)!r}"
             )
+
+    valid_entry_points = set(range(len(entry_points)))
+    for index in sorted(bound_entry_points - valid_entry_points):
+        issues.append(
+            f"event.binding_without_entry_point:{index}"
+        )
 
     return tuple(dict.fromkeys(issues))
 
