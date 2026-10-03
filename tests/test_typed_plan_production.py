@@ -111,6 +111,114 @@ def test_typed_plan_backend_generates_compileable_java_without_router(tmp_path: 
     assert compiled.returncode == 0, compiled.stderr
 
 
+def test_typed_state_backend_generates_state_owner_without_router(
+    tmp_path: Path,
+) -> None:
+    root = _project(tmp_path)
+    text = "stateful behavior"
+    typed = {
+        "schema_version": "mmm/typed-plan-ir-v1",
+        "source_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        "functions": [
+            {
+                "id": "readCoins",
+                "parameters": [],
+                "return_type": "int",
+                "body": [
+                    {
+                        "op": "return",
+                        "value": {
+                            "op": "state_get",
+                            "key": {
+                                "op": "literal",
+                                "type": "string",
+                                "value": "coins",
+                            },
+                            "type": "int",
+                            "context": {"op": "map", "entries": []},
+                        },
+                    }
+                ],
+                "covers": ["state:coins"],
+            }
+        ],
+        "initialize": [],
+    }
+    state = {
+        "specification": {
+            "variables": [
+                {
+                    "name": "coins",
+                    "owner": "player",
+                    "type": "integer",
+                    "unit": "credits",
+                    "default": "0",
+                    "domain": "integer >= 0",
+                }
+            ],
+            "transitions": [],
+            "invariants": [],
+            "initialization": [],
+            "updates": [],
+            "cleanup": [],
+            "concurrency": [],
+            "inapplicable_concerns": [],
+        },
+        "constraint_evidence_refs": [],
+    }
+    module = ProductionModule(
+        module_id="authored_typed_state",
+        kind="custom_java",
+        config={
+            "implementation": "custom",
+            "typed_plan_ir": typed,
+            "typed_plan_package": "ai.minecraft.typedtest",
+            "typed_plan_path": (
+                "src/main/java/ai/minecraft/typedtest/AuthoredProgram.java"
+            ),
+            "typed_plan_capabilities": {},
+            "typed_plan_state_section": state,
+        },
+        required_gates=("target_compile",),
+    )
+
+    receipt = CustomModuleGenerator(ForbiddenRouter()).generate(
+        root,
+        module=module,
+    )
+
+    assert receipt["generation_verification"]["model_calls"] == 0
+    package_root = root / "src/main/java/ai/minecraft/typedtest"
+    program = package_root / "AuthoredProgram.java"
+    state_owner = package_root / "AuthoredStateModel.java"
+    assert program.is_file()
+    assert state_owner.is_file()
+    assert "// MMM:TYPED_PLAN_STATE_OWNER" in state_owner.read_text(encoding="utf-8")
+
+    javac = shutil.which("javac")
+    if not javac:
+        pytest.skip("JDK required")
+    classes = root / ".typed-state-test-classes"
+    classes.mkdir()
+    compiled = subprocess.run(
+        [
+            javac,
+            "-encoding",
+            "UTF-8",
+            "-d",
+            str(classes),
+            str(state_owner),
+            str(program),
+        ],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert compiled.returncode == 0, compiled.stderr
+
+
 def test_typed_state_operations_fail_closed_without_canonical_state_authority() -> None:
     text = "stateful behavior"
     typed = {
