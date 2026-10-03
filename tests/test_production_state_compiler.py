@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from minecraft_mod_ai.authored_plan import AuthoredPlan
 from minecraft_mod_ai.authored_execution_schema import concern_contracts
 from minecraft_mod_ai.authored_production import _compile_new_authored_modules
 from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner
 from minecraft_mod_ai.implementation_graph_execution import _canonical_atomic_obligations
 from minecraft_mod_ai.production_state_compiler import (
-    _generate_concern_records,
     _normalize_expression,
-    _parse_semantic_page,
     compile_production_state_section,
     normalize_structured_state_section,
 )
@@ -18,53 +18,6 @@ from minecraft_mod_ai.structured_state_runtime import (
     render_state_model_concern,
     validate_state_expression,
 )
-
-
-class PlanRouter:
-    def __init__(self, response: str):
-        self.response = response
-        self.calls = []
-
-    def generate_text(self, role, messages, **kwargs):
-        self.calls.append((role, messages, kwargs))
-        return self.response
-
-
-class ProductionStateRouter:
-    def __init__(self):
-        self.calls = []
-
-    def generate_text(self, role, messages, **kwargs):
-        payload = json.loads(messages[-1]["content"])
-        concern = payload["concern"]
-        self.calls.append((role, concern, kwargs))
-        records = {
-            "variables": [
-                {
-                    "name": "credits",
-                    "owner": "player",
-                    "type": "integer",
-                    "unit": "credits",
-                    "default": "0",
-                    "domain": "integer >= 0",
-                }
-            ],
-            "transitions": [
-                {
-                    "from_state": "dock",
-                    "trigger": "launch",
-                    "guard": "shipStatus == ShipStatus.COMPLETE AND credits >= cost",
-                    "mutation": "credits -= cost",
-                    "to_state": "space",
-                }
-            ],
-            "invariants": [],
-            "initialization": [],
-            "updates": [],
-            "cleanup": [],
-            "concurrency": [],
-        }[concern]
-        return json.dumps({"records": records, "complete": True})
 
 
 def _plan_text() -> str:
@@ -143,42 +96,6 @@ def test_free_markdown_state_is_rejected_before_production_model_decode():
         match="PRODUCTION_STATE_STRUCTURED_AUTHORITY_REQUIRED",
     ):
         compile_production_state_section(ForbiddenStateRouter(), plan)
-
-
-def test_malformed_json_like_state_output_is_parsed_without_json_validation():
-    raw = (
-        '{"type": "object", "properties": {"records": ['
-        '{"name": "credits";"owner": "player";"type": "double";'
-        '"unit": "currency";"default": "0.0";"domain": "financial"}, '
-        '{"name": "ship_state";"owner": "player";"type": "string";'
-        '"unit": "status";"default": "\\\"Docked\\\"";"domain": "navigation"}'
-        '], "complete": true}'
-    )
-
-    records, complete = _parse_semantic_page(
-        raw,
-        fields=("name", "owner", "type", "unit", "default", "domain"),
-    )
-
-    assert complete is True
-    assert records == [
-        {
-            "name": "credits",
-            "owner": "player",
-            "type": "double",
-            "unit": "currency",
-            "default": "0.0",
-            "domain": "financial",
-        },
-        {
-            "name": "ship_state",
-            "owner": "player",
-            "type": "string",
-            "unit": "status",
-            "default": '"Docked"',
-            "domain": "navigation",
-        },
-    ]
 
 
 def test_production_state_compile_never_calls_router_when_structured_state_exists():
@@ -888,71 +805,6 @@ def test_lark_state_expression_compiles_latest_invariants_without_model():
 
 
 
-def test_production_state_extractor_receives_only_selected_concern_block():
-    class Router:
-        def __init__(self):
-            self.payload = None
-
-        def generate_text(self, role, messages, **kwargs):
-            self.payload = json.loads(messages[-1]["content"])
-            return (
-                "STATUS=DONE\nRECORD\n"
-                "name=player_currency\n"
-                "owner=Player\n"
-                "type=long\n"
-                "unit=crystals\n"
-                "default=0\n"
-                "domain=integer >= 0\nEND"
-            )
-
-    source = (
-        "## state_model\n"
-        "- variables: name owner type unit default domain: "
-        "`player_currency` Player long crystals 0 integer\n"
-        "- transitions: from_state trigger guard mutation to_state: "
-        "DRAFT build_part true player_currency -= 1 IN_PROGRESS\n"
-    )
-    router = Router()
-    rows = _generate_concern_records(
-        router,
-        source=source,
-        concern="variables",
-        declared_names=[],
-    )
-
-    assert rows[0]["name"] == "player_currency"
-    assert router.payload is not None
-    supplied = router.payload["approved_state_model"]
-    assert router.payload["contains_authored_values"] is True
-    assert "- variables:" in supplied
-    assert "- transitions:" not in supplied
-
-
-def test_free_markdown_nested_state_bullets_are_explicit_payload():
-    from minecraft_mod_ai.production_state_compiler import (
-        _concern_has_explicit_payload,
-        _concern_source,
-    )
-
-    source = (
-        "## state_model\n"
-        "- **variables**:\n"
-        "    - `star_balance`: `player` 소유, `long`, 기본값 `0L`, 범위 `0 ~ 2^63-1`\n"
-        "- **transitions**:\n"
-        "    - `from_state`: `ground_mode` -> `dock_building`\n"
-        "    - `trigger`: `player_interaction`\n"
-    )
-
-    variables = _concern_source(source, "variables")
-    transitions = _concern_source(source, "transitions")
-
-    assert "`star_balance`" in variables
-    assert "`from_state`" not in variables
-    assert "`from_state`" in transitions
-    assert _concern_has_explicit_payload(source, "variables") is True
-    assert _concern_has_explicit_payload(source, "transitions") is True
-
-
 def test_free_markdown_nested_state_values_is_rejected_at_production_boundary():
     class ForbiddenRouter:
         def __init__(self):
@@ -999,46 +851,3 @@ def test_logged_free_markdown_state_is_rejected_without_model_decode():
     assert router.calls == []
 
 
-def test_production_state_extractor_rejects_false_empty_for_explicit_authored_values():
-    class EmptyRouter:
-        def generate_text(self, role, messages, **kwargs):
-            return "STATUS=EMPTY"
-
-    source = (
-        "## state_model\n"
-        "- variables: name owner type unit default domain: "
-        "`player_ship` Player enum status DRAFT DRAFT|IN_PROGRESS|READY|DESTROYED\n"
-    )
-
-    try:
-        _generate_concern_records(
-            EmptyRouter(),
-            source=source,
-            concern="variables",
-            declared_names=[],
-        )
-    except ValueError as exc:
-        assert "PRODUCTION_STATE_LOWERING_FALSE_EMPTY" in str(exc)
-    else:
-        raise AssertionError("explicit authored state must never be accepted as EMPTY")
-
-
-def test_legacy_bold_state_concern_labels_are_detected_before_compat_lowering():
-    from minecraft_mod_ai.production_state_compiler import (
-        _concern_has_explicit_payload,
-        _concern_source,
-    )
-
-    source = (
-        "## state_model\n"
-        "- **variables**: name owner type unit default domain\n"
-        "  - record_1: name=credits; owner=player; type=integer; "
-        "unit=credits; default=0; domain=integer >= 0\n"
-        "- **transitions**: from_state trigger guard mutation to_state\n"
-    )
-
-    block = _concern_source(source, "variables")
-
-    assert block.startswith("- **variables**:")
-    assert "name=credits" in block
-    assert _concern_has_explicit_payload(source, "variables") is True
