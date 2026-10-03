@@ -10,7 +10,7 @@ import pytest
 from minecraft_mod_ai.authored_plan import AuthoredPlan
 from minecraft_mod_ai.authored_production import _compile_new_authored_modules
 from minecraft_mod_ai.complete_spec import ProductionModule
-from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
+from minecraft_mod_ai.typed_plan_production import generate_typed_plan_module
 from minecraft_mod_ai.generator import FabricProjectGenerator
 from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
 from minecraft_mod_ai.scale_policy import ScalePolicy
@@ -18,11 +18,6 @@ from minecraft_mod_ai.typed_host_capabilities import typed_host_capability_contr
 from minecraft_mod_ai.spec import ContentKind, ContentSpec, ModSpec
 from minecraft_mod_ai.work_graph import _is_host_exact_authored_module, _module_shards, _node
 
-
-
-class ForbiddenRouter:
-    def __getattr__(self, name):
-        raise AssertionError(f"Typed PlanIR production touched router attribute {name!r}")
 
 
 def _project(root: Path) -> Path:
@@ -84,7 +79,7 @@ def test_typed_plan_backend_generates_compileable_java_without_router(tmp_path: 
         required_gates=("target_compile",),
     )
 
-    receipt = CustomModuleGenerator(ForbiddenRouter()).generate(
+    receipt = generate_typed_plan_module(
         root,
         module=module,
     )
@@ -184,7 +179,7 @@ def test_typed_state_backend_generates_state_owner_without_router(
         required_gates=("target_compile",),
     )
 
-    receipt = CustomModuleGenerator(ForbiddenRouter()).generate(
+    receipt = generate_typed_plan_module(
         root,
         module=module,
     )
@@ -294,7 +289,7 @@ def test_typed_plan_backend_refuses_unowned_existing_source(tmp_path: Path) -> N
     )
 
     with pytest.raises(ValueError, match="TYPED_PLAN_OWNERSHIP_CONFLICT"):
-        CustomModuleGenerator(ForbiddenRouter()).generate(
+        generate_typed_plan_module(
             root,
             module=module,
         )
@@ -440,7 +435,7 @@ def test_typed_state_store_generates_state_owner_and_persistence_bridge(
         required_gates=("target_compile",),
     )
 
-    receipt = CustomModuleGenerator(ForbiddenRouter()).generate(
+    receipt = generate_typed_plan_module(
         root,
         module=module,
     )
@@ -597,7 +592,7 @@ def test_typed_state_store_materializes_persistence_without_router(
     assert module.config["typed_state_store"] == {"namespace": "player_state"}
     assert manifest["typed_program"]["state_store"] is True
 
-    receipt = CustomModuleGenerator(ForbiddenRouter()).generate(
+    receipt = generate_typed_plan_module(
         root,
         module=module,
     )
@@ -670,7 +665,7 @@ def test_typed_host_capability_generates_owned_java_without_router(
         required_gates=("target_compile",),
     )
 
-    receipt = CustomModuleGenerator(ForbiddenRouter()).generate(
+    receipt = generate_typed_plan_module(
         root,
         module=module,
     )
