@@ -54,7 +54,6 @@ MODULE_KINDS = frozenset(
         "advancement",
         "loot",
         "integration",
-        "custom_java",
         "typed_host",
     }
 )
@@ -114,7 +113,7 @@ class ProductionModule(Mapping[str, Any]):
                 return list(obligations)
             return [f"Implement {self.module_id}"]
         if key == "status":
-            return "host_ready" if self.kind == "typed_host" else "custom_required"
+            return "host_ready"
         if key == "capability":
             return self.kind
         if key == "reason":
