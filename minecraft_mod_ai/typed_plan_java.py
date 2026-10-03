@@ -227,6 +227,7 @@ class _Renderer:
         if package:
             lines.extend([f"package {package};", ""])
         lines.extend([
+            "// MMM:TYPED_PLAN_OWNER",
             "public final class AuthoredProgram {",
             "    private AuthoredProgram() {}",
             "",
