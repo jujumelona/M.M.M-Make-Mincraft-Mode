@@ -567,6 +567,7 @@ def _exact_authored_task(
     worksheet: Mapping[str, Any],
     required_gates: tuple[str, ...],
     target_status: str = "existing",
+    execution_role: str = "coder",
 ) -> dict[str, Any]:
     anchor = {
         "kind": "symbol",
@@ -581,7 +582,7 @@ def _exact_authored_task(
     task: dict[str, Any] = {
         "task_id": task_id,
         "task_sha256": "",
-        "execution_role": "coder",
+        "execution_role": execution_role,
         "semantic_outcome": semantic_outcome,
         "implementation_obligations": [obligation],
         "engineering_worksheet": dict(worksheet),
@@ -679,6 +680,7 @@ def _compile_new_authored_modules(
             },
             required_gates=("target_compile",),
             target_status="host_reserved",
+            execution_role="host_compiler",
         )
         module = ProductionModule(
             module_id=task_id,
