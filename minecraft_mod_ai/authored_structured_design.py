@@ -356,21 +356,28 @@ def author_structured_sections(
     *,
     media_paths: Sequence[str | Path] = (),
 ) -> dict[str, Any]:
-    """Author the canonical design directly, one small concern chunk at a time.
+    """Author the canonical design as a finite host-owned dependency DAG."""
 
-    The returned records are the semantic source of truth. Markdown is rendered from
-    these records afterward and is never required to be re-parsed to recover semantics.
-    """
-
+    from .model_concurrency import router_native_model_parallelism
+    from .planning_state_implementation import SECTION_DEPENDENCIES
     from .worksheet_atomic_chunker import (
         merge_worksheet_section_chunks,
         pack_section_concerns,
     )
 
-    completed: dict[str, Any] = {}
-    for section in WORKSHEET_SECTIONS:
+    slots = max(1, router_native_model_parallelism(router, role="planner"))
+
+    def author_section(
+        section: str,
+        completed_snapshot: Mapping[str, Mapping[str, Any]],
+        *,
+        allow_chunk_parallel: bool,
+    ) -> dict[str, Any]:
         if section == "state_model":
-            from .structured_state_runtime import StateSymbolTable, validate_state_concern
+            from .structured_state_runtime import (
+                StateSymbolTable,
+                validate_state_concern,
+            )
 
             chunks = pack_section_concerns("state_model")
             var_idx = next(
@@ -396,33 +403,40 @@ def author_structured_sections(
                     chunk_index=index,
                     chunk_count=len(ordered_chunks),
                     concerns=concerns,
-                    completed=completed,
+                    completed=completed_snapshot,
                     include_evidence=index == 1,
                     media_paths=media_paths,
                     state_symbols=state_symbols,
-                    section_context=accumulated_state_records if accumulated_state_records else None,
+                    section_context=(
+                        accumulated_state_records
+                        if accumulated_state_records
+                        else None
+                    ),
                 )
                 for concern in concerns:
                     rows = value.get(concern, [])
-                    validate_state_concern(concern, rows, symbols=state_symbols)
+                    validate_state_concern(
+                        concern,
+                        rows,
+                        symbols=state_symbols,
+                    )
                     if rows:
                         accumulated_state_records[concern] = deepcopy(rows)
                     if concern == "variables":
                         state_symbols = StateSymbolTable(rows)
-
                 chunk_results.append(value)
 
-            completed["state_model"] = merge_worksheet_section_chunks(
+            return merge_worksheet_section_chunks(
                 "state_model",
                 chunk_results,
                 set(),
             )
-            continue
 
         chunks = pack_section_concerns(section)
-        completed_snapshot = deepcopy(completed)
 
-        def generate_chunk(item: tuple[int, Sequence[str]]) -> tuple[int, dict[str, Any]]:
+        def generate_chunk(
+            item: tuple[int, Sequence[str]],
+        ) -> tuple[int, dict[str, Any]]:
             index, concerns = item
             return index, _generate_authored_chunk(
                 router,
@@ -436,37 +450,89 @@ def author_structured_sections(
                 media_paths=media_paths,
             )
 
-        if len(chunks) <= 1:
-            chunk_results = [
-                generate_chunk((1, chunks[0]))[1]
-            ] if chunks else []
-        else:
+        indexed = list(enumerate(chunks, start=1))
+        if not indexed:
+            chunk_results: list[dict[str, Any]] = []
+        elif allow_chunk_parallel and slots > 1 and len(indexed) > 1:
             from concurrent.futures import ThreadPoolExecutor
-            from .model_concurrency import active_llama_parallelism
 
-            workers = min(len(chunks), max(1, active_llama_parallelism()))
-            if workers == 1:
-                ordered = [
-                    generate_chunk((index, concerns))
-                    for index, concerns in enumerate(chunks, start=1)
-                ]
-            else:
-                with ThreadPoolExecutor(
-                    max_workers=workers,
-                    thread_name_prefix=f"mmm-plan-{section}",
-                ) as executor:
-                    ordered = list(executor.map(
-                        generate_chunk,
-                        enumerate(chunks, start=1),
-                    ))
+            with ThreadPoolExecutor(
+                max_workers=min(slots, len(indexed)),
+                thread_name_prefix=f"mmm-plan-{section}",
+            ) as executor:
+                ordered = list(executor.map(generate_chunk, indexed))
             ordered.sort(key=lambda item: item[0])
             chunk_results = [value for _, value in ordered]
+        else:
+            chunk_results = [
+                generate_chunk(item)[1]
+                for item in indexed
+            ]
 
-        completed[section] = merge_worksheet_section_chunks(
+        return merge_worksheet_section_chunks(
             section,
             chunk_results,
             set(),
         )
+
+    completed: dict[str, Any] = {}
+    pending = set(WORKSHEET_SECTIONS)
+    while pending:
+        ready = [
+            section
+            for section in WORKSHEET_SECTIONS
+            if section in pending
+            and set(SECTION_DEPENDENCIES.get(section, ())).issubset(completed)
+        ]
+        if not ready:
+            unresolved = {
+                section: tuple(
+                    dependency
+                    for dependency in SECTION_DEPENDENCIES.get(section, ())
+                    if dependency not in completed
+                )
+                for section in WORKSHEET_SECTIONS
+                if section in pending
+            }
+            raise ValueError(
+                "AUTHORED_STRUCTURED_DESIGN_DEPENDENCY_CYCLE: "
+                + repr(unresolved)
+            )
+
+        snapshot = deepcopy(completed)
+        if slots > 1 and len(ready) > 1:
+            from concurrent.futures import ThreadPoolExecutor
+
+            def run_section(section: str) -> tuple[str, dict[str, Any]]:
+                return section, author_section(
+                    section,
+                    snapshot,
+                    allow_chunk_parallel=False,
+                )
+
+            with ThreadPoolExecutor(
+                max_workers=min(slots, len(ready)),
+                thread_name_prefix="mmm-plan-wave",
+            ) as executor:
+                authored = list(executor.map(run_section, ready))
+        else:
+            authored = [
+                (
+                    section,
+                    author_section(
+                        section,
+                        snapshot,
+                        allow_chunk_parallel=True,
+                    ),
+                )
+                for section in ready
+            ]
+
+        authored_by_section = dict(authored)
+        for section in WORKSHEET_SECTIONS:
+            if section in authored_by_section:
+                completed[section] = authored_by_section[section]
+                pending.remove(section)
 
     return normalize_structured_sections(completed)
 
