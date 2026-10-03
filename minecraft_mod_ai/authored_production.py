@@ -572,8 +572,8 @@ def _exact_authored_task(
     anchor = {
         "kind": "symbol",
         "locator": f"{path}#{symbol}",
-        # Fresh authored projects materialize this exact skeleton before coder decode.
-        # The coder therefore modifies an existing host-owned file and never chooses a path.
+        # Fresh authored projects materialize this exact target before execution.
+        # The selected executor therefore never chooses a path or top-level symbol.
         "status": target_status,
         "ownership": "host_exact_authored_lowering",
         "module_id": task_id,
@@ -614,10 +614,11 @@ def _compile_new_authored_modules(
     target: Mapping[str, Any],
     production_state_section: Mapping[str, Any] | None = None,
 ) -> tuple[tuple[ProductionModule, ...], dict[str, Any]]:
-    """Reserve graph compilation, not Java files derived from Markdown sections.
+    """Lower fresh authored work through its persisted execution authority.
 
-    Semantic lowering runs with the production router and actual project context,
-    before the first source decode. The saved document remains exact and recoverable.
+    Typed PlanIR is compiled directly by the host. Legacy plans without Typed
+    PlanIR retain the implementation-graph compatibility route. The saved
+    document remains exact and recoverable in either case.
     """
     main_symbol = _main_class_name(mod_id)
     main_path = f"src/main/java/{package_name.replace('.', '/')}/{main_symbol}.java"
