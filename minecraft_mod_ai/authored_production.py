@@ -710,6 +710,7 @@ def _compile_new_authored_modules(
         state_required = (
             typed_plan_uses_state(validated_plan)
             or state_store_config is not None
+            or network_sync_config is not None
             or any(bool(rows) for rows in active_state.values())
         )
         if state_required and not state_section:
