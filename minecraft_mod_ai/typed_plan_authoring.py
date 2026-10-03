@@ -108,9 +108,14 @@ class TypedOperationAuthor:
         return self._ask("literal_value", schema, scope=scope)
 
     def expression(self, scope: str) -> dict[str, Any]:
+        expression_ops = [
+            "literal", "ref", "unary", "binary", "list", "map", "call", "state_get"
+        ]
+        if self.capabilities:
+            expression_ops.append("capability")
         op = self._enum(
             "expression_op",
-            ["literal", "ref", "unary", "binary", "list", "map", "call", "capability", "state_get"],
+            expression_ops,
             scope=scope,
         )
         if op == "literal":
@@ -275,4 +280,94 @@ class TypedOperationAuthor:
             result.append(statement)
 
 
-__all__ = ["TypedOperationAuthor"]
+def author_typed_plan_ir(
+    router: Any,
+    source_text: str,
+    structured_sections: Mapping[str, Any] | None = None,
+    capabilities: Mapping[str, Any] | None = None,
+    *,
+    max_calls: int = 2048,
+) -> dict[str, Any]:
+    """Author a complete typed PlanIR using only bounded scalar native decisions."""
+
+    import hashlib
+
+    author = TypedOperationAuthor(
+        router,
+        source_text,
+        structured_sections,
+        capabilities,
+        max_calls=max_calls,
+    )
+    function_count = int(author._ask(
+        "function_count",
+        {"type": "integer", "minimum": 1, "maximum": 64},
+        scope="program",
+    ))
+    functions: list[dict[str, Any]] = []
+    known_ids: set[str] = set()
+    for index in range(function_count):
+        scope = f"function[{index}]"
+        function_id = author._identifier("function_id", scope=scope)
+        if function_id in known_ids:
+            raise ValueError(
+                f"TYPED_PLAN_AUTHORING_DUPLICATE_FUNCTION: {function_id}"
+            )
+        known_ids.add(function_id)
+        parameter_count = int(author._ask(
+            "parameter_count",
+            {"type": "integer", "minimum": 0, "maximum": 32},
+            scope=scope,
+        ))
+        parameters = []
+        parameter_names: set[str] = set()
+        for parameter_index in range(parameter_count):
+            parameter_scope = f"{scope}.parameter[{parameter_index}]"
+            name = author._identifier("parameter_name", scope=parameter_scope)
+            if name in parameter_names:
+                raise ValueError(
+                    f"TYPED_PLAN_AUTHORING_DUPLICATE_PARAMETER: {function_id}.{name}"
+                )
+            parameter_names.add(name)
+            parameters.append({
+                "name": name,
+                "type": author._type("parameter_type", scope=parameter_scope),
+            })
+        return_type = author._type(
+            "return_type",
+            scope=scope,
+            allow_void=True,
+        )
+        coverage_count = int(author._ask(
+            "coverage_count",
+            {"type": "integer", "minimum": 1, "maximum": 128},
+            scope=scope,
+        ))
+        covers = [
+            str(author._ask(
+                "coverage_ref",
+                {"type": "string", "minLength": 1},
+                scope=f"{scope}.coverage[{coverage_index}]",
+            ))
+            for coverage_index in range(coverage_count)
+        ]
+        functions.append({
+            "id": function_id,
+            "parameters": parameters,
+            "return_type": return_type,
+            "body": author.body(scope + ".body"),
+            "covers": covers,
+        })
+
+    plan = {
+        "schema_version": "mmm/typed-plan-ir-v1",
+        "source_sha256": hashlib.sha256(source_text.encode("utf-8")).hexdigest(),
+        "functions": functions,
+        "initialize": author.body("initialize"),
+    }
+    from .typed_plan_ir import validate_typed_plan_ir
+
+    return validate_typed_plan_ir(plan, capabilities=capabilities)
+
+
+__all__ = ["TypedOperationAuthor", "author_typed_plan_ir"]
