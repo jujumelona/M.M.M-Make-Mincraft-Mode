@@ -1,4 +1,4 @@
-"""Pass a saved design to the implementation agent without planning it again."""
+"""Lower a saved Typed PlanIR design through deterministic host production."""
 
 from __future__ import annotations
 
@@ -171,32 +171,10 @@ def _compile_new_authored_modules(
         f"src/main/java/{package_name.replace('.', '/')}/{program_symbol}.java"
     )
     task_id = "authored_typed_plan"
-    task = _exact_authored_task(
-        task_id=task_id,
-        path=program_path,
-        symbol=program_symbol,
-        target=target,
-        obligation=(
-            "Compile the persisted Typed PlanIR exactly through the host Java backend. "
-            "Do not invoke a coder or reinterpret authored behavior."
-        ),
-        semantic_outcome="Materialize the approved Typed PlanIR deterministically.",
-        depends_on=(),
-        consumes=(),
-        provides=("authored_typed_program_ready",),
-        worksheet={
-            "typed_plan_ir": deepcopy(validated_plan),
-            "typed_plan_source_sha256": source_sha,
-        },
-        required_gates=("target_compile",),
-        target_status="host_reserved",
-        execution_role="host_compiler",
-    )
     module = ProductionModule(
         module_id=task_id,
         kind="typed_host",
         config={
-            "evidence_task": task,
             "typed_plan_ir": deepcopy(validated_plan),
             "typed_plan_package": package_name,
             "typed_plan_path": program_path,
