@@ -3,8 +3,8 @@ from __future__ import annotations
 """Host-owned bridge from grounded repository evidence to executable code reuse.
 
 The small coder never searches for or selects a donor. Only GitHub repositories that
-have host-materialized evidence in the planning-state RAG, legacy pre-design RAG, or
-were explicitly supplied by the host/user may enter this pipeline. A discovery receipt
+have host-materialized evidence in the planning-state RAG or were explicitly
+supplied by the host/user may enter this pipeline. A discovery receipt
 is reference-only: a candidate is pinned, license/closure checked, materialized, and
 compiled against the selected target before its source is attached to a generation task.
 """
@@ -162,40 +162,6 @@ def _grounded_repository_cards(design: Mapping[str, Any]) -> tuple[dict[str, Any
     for raw in planning_state_repository_cards(design):
         _merge_card(cards, by_repository, raw)
 
-    # Keep legacy pre-design evidence readable during migration, but do not make it an
-    # alternate authority path: these cards enter the same verifier/proof gates.
-    research = design.get("_pre_design_research")
-    notes = research.get("domain_notes") if isinstance(research, Mapping) else None
-    for note in notes if isinstance(notes, list) else ():
-        raw_cards = note.get("grounded_evidence_cards") if isinstance(note, Mapping) else None
-        for raw in raw_cards if isinstance(raw_cards, list) else ():
-            if not isinstance(raw, Mapping):
-                continue
-            repository = _github_repository(
-                str(raw.get("source_id") or ""),
-                str(raw.get("source_url") or ""),
-            )
-            if not repository:
-                continue
-            evidence_text = " ".join(
-                str(raw.get(key) or "")
-                for key in ("source_title", "exact_excerpt")
-            )
-            _merge_card(
-                cards,
-                by_repository,
-                {
-                    "repository": repository,
-                    "page_refs": [str(raw.get("page_ref") or "")],
-                    "source_ids": [str(raw.get("source_id") or "")],
-                    "source_urls": [str(raw.get("source_url") or "")],
-                    "evidence_text": evidence_text,
-                    "evidence_tokens": sorted(_tokens(evidence_text)),
-                    "explicit_reference": False,
-                    "reference_only": True,
-                    "source_reuse_authority": "verification_required",
-                },
-            )
 
     for host_card in _host_reference_cards():
         _merge_card(cards, by_repository, host_card)
@@ -360,7 +326,7 @@ def build_repository_reuse_plan(
                             "repository": repository,
                             "page_refs": list(card.get("page_refs", ())),
                             "explicit_reference": explicit_reference,
-                            "candidate_origin": str(card.get("candidate_origin") or "legacy_or_explicit"),
+                            "candidate_origin": str(card.get("candidate_origin") or "planning_state_or_explicit"),
                             "status": "inspection_error",
                             "error": f"{type(exc).__name__}: {exc}",
                         }
@@ -377,7 +343,7 @@ def build_repository_reuse_plan(
                         "repository": repository,
                         "page_refs": list(card.get("page_refs", ())),
                         "explicit_reference": explicit_reference,
-                        "candidate_origin": str(card.get("candidate_origin") or "legacy_or_explicit"),
+                        "candidate_origin": str(card.get("candidate_origin") or "planning_state_or_explicit"),
                         "status": "proof_pending" if admitted else "inspection_rejected",
                         "overlap": overlap,
                     }
