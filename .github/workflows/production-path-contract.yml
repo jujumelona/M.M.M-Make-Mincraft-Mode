@@ -152,8 +152,8 @@ jobs:
           python -m pytest -q \
             tests/test_direct_custom_module_generator.py \
             tests/test_atomic_concern_response_contract.py::test_stored_state_invalid_shape_fails_first_pass_without_regeneration \
-            tests/test_atomic_concern_response_contract.py::test_multiline_behavior_actor_source_is_host_lowered_without_structured_plan \
-            tests/test_atomic_concern_response_contract.py::test_bold_inline_behavior_actor_source_is_host_lowered_without_structured_plan \
+            tests/test_atomic_concern_response_contract.py::test_behavior_actor_records_consumes_canonical_structured_records \
+            tests/test_atomic_concern_response_contract.py::test_behavior_actor_records_does_not_reparse_markdown_when_structured_records_missing \
             tests/test_atomic_java_first_pass.py::test_stored_state_schema_forbids_outer_methods_before_model_decode \
             tests/test_atomic_java_first_pass.py::test_stored_state_native_part_selector_never_offers_methods \
             tests/test_authored_direct_lowering.py \
