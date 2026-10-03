@@ -393,8 +393,16 @@ class TypedOperationAuthor:
         env: Mapping[str, str] | None = None,
         *,
         _depth: int = 0,
+        _node_budget: list[int] | None = None,
     ) -> dict[str, Any]:
         bindings = dict(env or {})
+        if _node_budget is None:
+            _node_budget = [16]
+        if _node_budget[0] <= 0:
+            raise ValueError(
+                f"TYPED_PLAN_EXPRESSION_BUDGET_EXHAUSTED: {scope}"
+            )
+        _node_budget[0] -= 1
 
         def closed(
             properties: Mapping[str, Any],
@@ -454,7 +462,7 @@ class TypedOperationAuthor:
                 ("op", "name"),
             ))
 
-        if _depth < 4:
+        if _depth < 3:
             branches.extend([
                 closed(
                     {
@@ -486,7 +494,7 @@ class TypedOperationAuthor:
                         "count": {
                             "type": "integer",
                             "minimum": 0,
-                            "maximum": 8,
+                            "maximum": 4,
                         },
                     },
                     ("op", "count"),
@@ -497,7 +505,7 @@ class TypedOperationAuthor:
                         "count": {
                             "type": "integer",
                             "minimum": 0,
-                            "maximum": 8,
+                            "maximum": 4,
                         },
                     },
                     ("op", "count"),
@@ -563,6 +571,7 @@ class TypedOperationAuthor:
                     scope + ".unary",
                     bindings,
                     _depth=_depth + 1,
+                _node_budget=_node_budget,
                 ),
             }
         if op == "binary":
@@ -573,11 +582,13 @@ class TypedOperationAuthor:
                     scope + ".left",
                     bindings,
                     _depth=_depth + 1,
+                _node_budget=_node_budget,
                 ),
                 "right": self.expression(
                     scope + ".right",
                     bindings,
                     _depth=_depth + 1,
+                _node_budget=_node_budget,
                 ),
             }
         if op == "list":
@@ -589,6 +600,7 @@ class TypedOperationAuthor:
                         f"{scope}.item[{index}]",
                         bindings,
                         _depth=_depth + 1,
+                    _node_budget=_node_budget,
                     )
                     for index in range(count)
                 ],
@@ -603,11 +615,13 @@ class TypedOperationAuthor:
                             f"{scope}.entry[{index}].key",
                             bindings,
                             _depth=_depth + 1,
+                        _node_budget=_node_budget,
                         ),
                         "value": self.expression(
                             f"{scope}.entry[{index}].value",
                             bindings,
                             _depth=_depth + 1,
+                        _node_budget=_node_budget,
                         ),
                     }
                     for index in range(count)
@@ -624,6 +638,7 @@ class TypedOperationAuthor:
                         f"{scope}.arg[{index}]",
                         bindings,
                         _depth=_depth + 1,
+                    _node_budget=_node_budget,
                     )
                     for index in range(len(parameter_types))
                 ],
@@ -643,6 +658,7 @@ class TypedOperationAuthor:
                         f"{scope}.capability_arg[{index}]",
                         bindings,
                         _depth=_depth + 1,
+                    _node_budget=_node_budget,
                     )
                     for index in range(count)
                 ],
@@ -654,12 +670,14 @@ class TypedOperationAuthor:
                     scope + ".state_key",
                     bindings,
                     _depth=_depth + 1,
+                _node_budget=_node_budget,
                 ),
                 "type": str(head["type"]),
                 "context": self.expression(
                     scope + ".state_context",
                     bindings,
                     _depth=_depth + 1,
+                _node_budget=_node_budget,
                 ),
             }
         raise ValueError(
