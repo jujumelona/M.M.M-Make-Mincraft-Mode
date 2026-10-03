@@ -15,6 +15,23 @@ from typing import Any
 _TYPES = ["boolean", "int", "long", "double", "string", "object"]
 
 
+def _active_concern_refs(
+    structured_sections: Mapping[str, Any] | None,
+) -> tuple[str, ...]:
+    from .authored_structured_design import active_concern_records
+    from .planning_detail_template import WORKSHEET_SECTIONS
+
+    refs: list[str] = []
+    for section in WORKSHEET_SECTIONS:
+        for concern, rows in active_concern_records(
+            structured_sections,
+            section,
+        ).items():
+            if rows:
+                refs.append(f"{section}.{concern}")
+    return tuple(dict.fromkeys(refs))
+
+
 class TypedOperationAuthor:
     def __init__(
         self,
@@ -520,6 +537,82 @@ def author_typed_plan_ir(
             ),
         })
 
+    coverage_refs = _active_concern_refs(structured_sections)
+    from .typed_platform_ir import (
+        PLATFORM_KINDS,
+        platform_config_schema,
+        validate_platform_modules,
+    )
+
+    platform_count = int(author._ask(
+        "platform_module_count",
+        {"type": "integer", "minimum": 0, "maximum": 64},
+        scope="platform",
+    ))
+    platform_modules: list[dict[str, Any]] = []
+    seen_platform_ids: set[str] = set()
+    for index in range(platform_count):
+        scope = f"platform[{index}]"
+        kind = author._enum(
+            "platform_kind",
+            sorted(PLATFORM_KINDS),
+            scope=scope,
+        )
+        module_id = str(author._ask(
+            "platform_module_id",
+            {
+                "type": "string",
+                "pattern": r"^[a-z][a-z0-9_]{1,63}$",
+            },
+            scope=scope,
+        ))
+        if module_id in seen_platform_ids:
+            raise ValueError(
+                f"TYPED_PLAN_AUTHORING_DUPLICATE_PLATFORM_MODULE: {module_id}"
+            )
+        seen_platform_ids.add(module_id)
+
+        config = author._ask(
+            "platform_config",
+            platform_config_schema(kind),
+            scope=scope,
+        )
+        if not isinstance(config, Mapping):
+            raise ValueError(
+                f"TYPED_PLAN_AUTHORING_RESPONSE_INVALID: {scope}.platform_config"
+            )
+        if not coverage_refs:
+            raise ValueError(
+                "TYPED_PLAN_PLATFORM_COVERAGE_REQUIRED: platform modules require "
+                "at least one active canonical concern."
+            )
+        coverage_count = int(author._ask(
+            "platform_coverage_count",
+            {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": min(64, len(coverage_refs)),
+            },
+            scope=scope,
+        ))
+        covers: list[str] = []
+        for coverage_index in range(coverage_count):
+            cover = author._enum(
+                "platform_coverage_ref",
+                list(coverage_refs),
+                scope=f"{scope}.coverage[{coverage_index}]",
+            )
+            if cover not in covers:
+                covers.append(cover)
+        platform_modules.append({
+            "module_id": module_id,
+            "kind": kind,
+            "config": dict(config),
+            "covers": covers,
+        })
+
+    platform_modules = validate_platform_modules(platform_modules)
+
     plan = {
         "schema_version": "mmm/typed-plan-ir-v1",
         "source_sha256": hashlib.sha256(
@@ -531,6 +624,7 @@ def author_typed_plan_ir(
             env={},
             return_type="void",
         ),
+        "platform_modules": platform_modules,
     }
     from .typed_plan_ir import validate_typed_plan_ir
 
