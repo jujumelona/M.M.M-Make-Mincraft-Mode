@@ -40,6 +40,11 @@ def record_field_schema(section: str, concern: str, field: str) -> dict:
             "maxItems": 4,
             "items": {"type": "string", "maxLength": 256},
         }
+    if (
+        section == "state_model"
+        and field in {"guard", "mutation", "condition", "initial_state", "action"}
+    ):
+        return {"type": "string", "maxLength": 512}
     return {"type": "string", "minLength": 1, "maxLength": 512}
 
 

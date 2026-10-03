@@ -20,58 +20,15 @@ from lark.exceptions import VisitError
 
 
 _STATE_IDENTIFIER_PATTERN = r"^[A-Za-z_][A-Za-z0-9_]*$"
-_STATE_OPERAND_PATTERN = (
-    r'(?:[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?'
-    r'|"(?:\\.|[^"\\])*"|true|false|null|[A-Za-z_][A-Za-z0-9_]*)'
-)
-_STATE_ARITHMETIC_PATTERN = (
-    _STATE_OPERAND_PATTERN
-    + r"(?:[ \t]*[+\-*/%][ \t]*"
-    + _STATE_OPERAND_PATTERN
-    + r")*"
-)
-_STATE_COMPARISON_PATTERN = (
-    _STATE_ARITHMETIC_PATTERN
-    + r"(?:[ \t]*(?:==|!=|>=|<=|>|<)[ \t]*"
-    + _STATE_ARITHMETIC_PATTERN
-    + r")?"
-)
-_STATE_TERM_PATTERN = r"(?:![ \t]*)?" + _STATE_COMPARISON_PATTERN
-STATE_EXPRESSION_PATTERN = (
-    r"^"
-    + _STATE_TERM_PATTERN
-    + r"(?:[ \t]*(?:&&|\|\|)[ \t]*"
-    + _STATE_TERM_PATTERN
-    + r")*$"
-)
-
-
-def _state_mutation_pattern(target_pattern: str = r"[A-Za-z_][A-Za-z0-9_]*") -> str:
-    expression = (
-        _STATE_TERM_PATTERN
-        + r"(?:[ \t]*(?:&&|\|\|)[ \t]*"
-        + _STATE_TERM_PATTERN
-        + r")*"
-    )
-    assignment = (
-        target_pattern
-        + r"[ \t]*(?:\+=|-=|\*=|/=|=)[ \t]*"
-        + expression
-    )
-    return r"^(?:" + assignment + r"(?:[ \t]*;[ \t]*" + assignment + r")*)?$"
-
-
-STATE_MUTATION_PATTERN = _state_mutation_pattern()
+STATE_EXPRESSION_PATTERN = r"^.*$"
+STATE_MUTATION_PATTERN = r"^.*$"
 
 _STATE_EXECUTABLE_FIELDS = {
-    "transitions": {
-        "guard": STATE_EXPRESSION_PATTERN,
-        "mutation": STATE_MUTATION_PATTERN,
-    },
-    "invariants": {"condition": STATE_EXPRESSION_PATTERN},
-    "initialization": {"initial_state": STATE_MUTATION_PATTERN},
-    "updates": {"mutation": STATE_MUTATION_PATTERN},
-    "cleanup": {"action": STATE_MUTATION_PATTERN},
+    "transitions": ("guard", "mutation"),
+    "invariants": ("condition",),
+    "initialization": ("initial_state",),
+    "updates": ("mutation",),
+    "cleanup": ("action",),
 }
 
 
@@ -79,23 +36,20 @@ def constrain_state_record_schema(
     concern: str,
     schema: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Project the compiler grammar into the planner schema from one SSOT."""
+    """Decorate state-model record schemas with guidance descriptions."""
     result = deepcopy(dict(schema))
     properties = result.get("properties")
     if not isinstance(properties, dict):
         return result
     if concern == "variables" and isinstance(properties.get("name"), dict):
-        properties["name"]["pattern"] = _STATE_IDENTIFIER_PATTERN
         properties["name"]["description"] = (
             "Stable ASCII internal state identifier consumed by the host state compiler."
         )
-    for field, pattern in _STATE_EXECUTABLE_FIELDS.get(concern, {}).items():
+    for field in _STATE_EXECUTABLE_FIELDS.get(concern, ()):
         target = properties.get(field)
         if not isinstance(target, dict):
             continue
-        target["pattern"] = pattern
         if field in {"mutation", "initial_state", "action"}:
-            target["minLength"] = 0
             target["description"] = (
                 "Host state-mutation DSL. Empty string means no state mutation. "
                 "Non-empty values must contain only assignments to declared state "
@@ -141,8 +95,6 @@ def constrain_state_chunk_schema(
     properties = result.get("properties")
     if not isinstance(properties, dict):
         return result
-    target_pattern = "(?:" + "|".join(re.escape(name) for name in names) + ")"
-    mutation_pattern = _state_mutation_pattern(target_pattern)
     for concern in ("transitions", "initialization", "updates", "cleanup"):
         concern_schema = properties.get(concern)
         if not isinstance(concern_schema, dict):
@@ -159,7 +111,6 @@ def constrain_state_chunk_schema(
         }[concern]
         field_schema = item_properties.get(field)
         if isinstance(field_schema, dict):
-            field_schema["pattern"] = mutation_pattern
             field_schema["description"] = (
                 "Host mutation DSL. Assignment targets are restricted to already-authored "
                 "state variables: " + ", ".join(names) + "."
