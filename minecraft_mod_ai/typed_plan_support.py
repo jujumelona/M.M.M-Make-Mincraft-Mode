@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from .typed_event_ir import is_mod_initialize_trigger
+from .typed_plan_ir import typed_plan_reachable_function_ids
 
 from .authored_structured_design import (
     active_concern_records,
@@ -55,6 +56,11 @@ def typed_plan_support_issues(
         for cover in module.get("covers", ())
         if isinstance(cover, str)
     }
+    reachable_functions = set(
+        typed_plan_reachable_function_ids(typed_plan_ir)
+        if isinstance(typed_plan_ir, Mapping)
+        else ()
+    )
     function_covered = {
         str(cover)
         for function in (
@@ -63,9 +69,24 @@ def typed_plan_support_issues(
             else ()
         )
         if isinstance(function, Mapping)
+        and str(function.get("id") or "") in reachable_functions
         for cover in function.get("covers", ())
         if isinstance(cover, str)
     }
+    for function in (
+        typed_plan_ir.get("functions", ())
+        if isinstance(typed_plan_ir, Mapping)
+        else ()
+    ):
+        if (
+            isinstance(function, Mapping)
+            and function.get("covers")
+            and str(function.get("id") or "") not in reachable_functions
+        ):
+            issues.append(
+                "function.unreachable:"
+                + str(function.get("id") or "<missing>")
+            )
 
     phantom = sorted(covered - active_refs)
     issues.extend(
