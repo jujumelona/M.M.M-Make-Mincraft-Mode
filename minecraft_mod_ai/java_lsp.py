@@ -610,7 +610,6 @@ class JavaLanguageService:
             raise FileNotFoundError(root)
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive.")
-        deadline = time.monotonic() + float(timeout_seconds)
         try:
             assert_server_safe_source_sets(root)
         except (SourceSetBoundaryError, FileNotFoundError, OSError, UnicodeError) as exc:
@@ -635,17 +634,18 @@ class JavaLanguageService:
             )
 
         with self._session_lock:
-            _remaining_jdt_deadline(deadline, operation="diagnostics")
+            startup_deadline = time.monotonic() + float(timeout_seconds)
             rpc = self._ensure_rpc_locked(
                 root,
                 timeout_seconds=timeout_seconds,
-                deadline=deadline,
+                deadline=startup_deadline,
             )
+            diagnostic_deadline = time.monotonic() + float(timeout_seconds)
             diagnostics: dict[str, list[dict[str, Any]]] = {}
             page_receipts: list[dict[str, Any]] = []
             total_source_bytes = 0
             for page_index, page in enumerate(pages):
-                _remaining_jdt_deadline(deadline, operation="diagnostics")
+                _remaining_jdt_deadline(diagnostic_deadline, operation="diagnostics")
                 sources, source_bytes = _read_source_page(
                     page,
                     max_source_bytes=self.diagnostic_page_max_source_bytes,
@@ -663,10 +663,10 @@ class JavaLanguageService:
                         rpc,
                         expected_uris=expected_uris,
                         timeout_seconds=_remaining_jdt_deadline(
-                            deadline, operation="diagnostics"
+                            diagnostic_deadline, operation="diagnostics"
                         ),
                         quiet_seconds=self.diagnostic_quiet_seconds,
-                        deadline=deadline,
+                        deadline=diagnostic_deadline,
                     )
                     _raise_on_java_core_bootstrap_failure(page_diagnostics)
                 finally:
@@ -713,18 +713,20 @@ class JavaLanguageService:
             raise FileNotFoundError(root)
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive.")
-        deadline = time.monotonic() + float(timeout_seconds)
         with self._session_lock:
-            _remaining_jdt_deadline(deadline, operation="workspace symbols")
+            startup_deadline = time.monotonic() + float(timeout_seconds)
             rpc = self._ensure_rpc_locked(
                 root,
                 timeout_seconds=timeout_seconds,
-                deadline=deadline,
+                deadline=startup_deadline,
             )
+            operation_deadline = time.monotonic() + float(timeout_seconds)
             result = rpc.request(
                 "workspace/symbol",
                 {"query": query},
-                timeout=_remaining_jdt_deadline(deadline, operation="workspace symbols"),
+                timeout=_remaining_jdt_deadline(
+                    operation_deadline, operation="workspace symbols"
+                ),
             )
             return {
                 "schema_version": "mmm/java-symbols-v1",
@@ -869,14 +871,13 @@ def _await_java_core_ready(
     quiet_seconds: float,
     deadline: float | None = None,
 ) -> None:
-    """Wait for JDT LS explicit service-readiness notification.
+    """Wait only for JDT LS protocol-level ServiceReady.
 
-    Feature requests such as documentSymbol and publishDiagnostics are not lifecycle
-    acknowledgements. During Gradle import they may legitimately block or stay silent,
-    which made the previous readiness probes report a healthy workspace as unavailable.
-    JDT LS emits language/status with type=ServiceReady after workspace initialization.
-    Actual Java/classpath correctness remains fail-closed in the normal diagnostics
-    pass that follows this gate.
+    ServiceReady is a lifecycle/transport gate, not a diagnostics-ready signal.
+    JDT LS can still be finishing post-import build jobs, index checks, project-build
+    hooks, and initial workspace diagnostics after emitting it. Callers must therefore
+    start their own operation deadline only after this gate returns. Actual Java and
+    classpath correctness remains fail-closed in the diagnostics pass that follows.
     """
 
     del quiet_seconds
