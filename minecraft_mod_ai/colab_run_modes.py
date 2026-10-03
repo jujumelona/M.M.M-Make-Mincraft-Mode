@@ -21,20 +21,7 @@ RUN_MODES = (
     AUDIT_MODE,
 )
 
-# Backward compatibility for already-open Colab notebooks and saved notebook copies.
-LEGACY_RUN_MODE_ALIASES = {
-    "플랜모드": PLAN_MODE,
-    "풀모드": FULL_MODE,
-    "이미 만들어진 모드 수정보안모드": EXISTING_MOD_MODE,
-    "이미 있는 플랜을 만드는모드": EXISTING_PLAN_MODE,
-    # The old run-mode label "Debug" meant repository audit. It is now "Audit"
-    # because DEBUG_MODE in the Colab UI means planner-bypass implementation debug.
-    "Debug": AUDIT_MODE,
-}
-
 AUDIT_RELATIVE_PATH = "tools/full_project_audit.py"
-# Compatibility aliases for callers that imported the old audit name.
-DEBUG_AUDIT_RELATIVE_PATH = AUDIT_RELATIVE_PATH
 DEBUG_MODE = "Debug"
 
 
@@ -47,10 +34,9 @@ class PlanDialogResult:
 
 def validate_run_mode(run_mode: str) -> str:
     value = run_mode.strip()
-    canonical = LEGACY_RUN_MODE_ALIASES.get(value, value)
-    if canonical not in RUN_MODES:
+    if value not in RUN_MODES:
         raise ValueError(f"지원하지 않는 실행 모드: {value!r}")
-    return canonical
+    return value
 
 
 def needs_prompt(run_mode: str) -> bool:
@@ -468,12 +454,10 @@ def run_plan_dialog(
 __all__ = [
     "AUDIT_MODE",
     "AUDIT_RELATIVE_PATH",
-    "DEBUG_AUDIT_RELATIVE_PATH",
     "DEBUG_MODE",
     "EXISTING_MOD_MODE",
     "EXISTING_PLAN_MODE",
     "FULL_MODE",
-    "LEGACY_RUN_MODE_ALIASES",
     "PLAN_MODE",
     "RUN_MODES",
     "PlanDialogResult",
