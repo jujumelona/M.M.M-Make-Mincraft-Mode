@@ -961,6 +961,7 @@ def author_typed_plan_ir(
         EVENT_PARAMETERS,
         EVENT_SIGNATURES,
         event_config_schema,
+        infer_event_config,
         infer_event_type,
         is_mod_initialize_trigger,
         validate_event_bindings,
@@ -1019,16 +1020,23 @@ def author_typed_plan_ir(
         return_type = EVENT_SIGNATURES[event][1]
         config: dict[str, Any] = {}
         if event == "command":
-            raw_config = author._ask(
-                "event_config",
-                event_config_schema(event),
-                scope=event_scope,
+            inferred_config = infer_event_config(
+                event,
+                row.get("trigger"),
             )
-            if not isinstance(raw_config, Mapping):
-                raise ValueError(
-                    "TYPED_PLAN_AUTHORING_RESPONSE_INVALID: event_config"
+            if inferred_config is not None:
+                config = dict(inferred_config)
+            else:
+                raw_config = author._ask(
+                    "event_config",
+                    event_config_schema(event),
+                    scope=event_scope,
                 )
-            config = dict(raw_config)
+                if not isinstance(raw_config, Mapping):
+                    raise ValueError(
+                        "TYPED_PLAN_AUTHORING_RESPONSE_INVALID: event_config"
+                    )
+                config = dict(raw_config)
 
         specs.append({
             "id": function_id,
