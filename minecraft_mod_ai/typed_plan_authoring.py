@@ -156,6 +156,7 @@ class TypedOperationAuthor:
         self.max_calls = max(1, int(max_calls))
         self.call_count = 0
         self.function_signatures: dict[str, tuple[str, ...]] = {}
+        self.function_covers: dict[str, tuple[str, ...]] = {}
         self.scope_covers: dict[str, tuple[str, ...]] = {}
 
     def set_scope_covers(
@@ -299,6 +300,10 @@ class TypedOperationAuthor:
             "known_functions": {
                 name: list(parameters)
                 for name, parameters in self.function_signatures.items()
+            },
+            "known_function_covers": {
+                name: list(self.function_covers.get(name, ()))
+                for name in self.function_signatures
             },
             "scope": scope,
             "field": field,
@@ -738,6 +743,15 @@ class TypedOperationAuthor:
                 f"TYPED_PLAN_AUTHORING_RESPONSE_INVALID: {scope}.statement_node"
             )
         op = str(head.get("op") or "")
+        expression_budget = [16]
+
+        def expr(expr_scope: str, expr_env: Mapping[str, str]) -> dict[str, Any]:
+            return self.expression(
+                expr_scope,
+                expr_env,
+                _node_budget=expression_budget,
+            )
+
         if op == "done":
             return None
         if op == "let":
@@ -750,7 +764,7 @@ class TypedOperationAuthor:
                 "op": "let",
                 "name": name,
                 "type": str(head["type"]),
-                "value": self.expression(
+                "value": expr(
                     scope + ".value",
                     bindings,
                 ),
@@ -759,7 +773,7 @@ class TypedOperationAuthor:
             return {
                 "op": "set",
                 "name": str(head["name"]),
-                "value": self.expression(
+                "value": expr(
                     scope + ".value",
                     bindings,
                 ),
@@ -773,7 +787,7 @@ class TypedOperationAuthor:
             return (
                 {
                     "op": "return",
-                    "value": self.expression(
+                    "value": expr(
                         scope + ".value",
                         bindings,
                     ),
@@ -784,7 +798,7 @@ class TypedOperationAuthor:
         if op == "assert":
             return {
                 "op": "assert",
-                "condition": self.expression(
+                "condition": expr(
                     scope + ".condition",
                     bindings,
                 ),
@@ -793,7 +807,7 @@ class TypedOperationAuthor:
         if op == "if":
             return {
                 "op": "if",
-                "condition": self.expression(
+                "condition": expr(
                     scope + ".condition",
                     bindings,
                 ),
@@ -813,7 +827,7 @@ class TypedOperationAuthor:
         if op == "while":
             return {
                 "op": "while",
-                "condition": self.expression(
+                "condition": expr(
                     scope + ".condition",
                     bindings,
                 ),
@@ -838,7 +852,7 @@ class TypedOperationAuthor:
                 "op": "foreach",
                 "name": name,
                 "type": item_type,
-                "collection": self.expression(
+                "collection": expr(
                     scope + ".collection",
                     bindings,
                 ),
@@ -852,15 +866,15 @@ class TypedOperationAuthor:
         if op == "state_set":
             return {
                 "op": "state_set",
-                "key": self.expression(
+                "key": expr(
                     scope + ".state_key",
                     bindings,
                 ),
-                "value": self.expression(
+                "value": expr(
                     scope + ".state_value",
                     bindings,
                 ),
-                "context": self.expression(
+                "context": expr(
                     scope + ".state_context",
                     bindings,
                 ),
@@ -868,7 +882,7 @@ class TypedOperationAuthor:
         if op == "expr":
             return {
                 "op": "expr",
-                "value": self.expression(
+                "value": expr(
                     scope + ".value",
                     bindings,
                 ),
@@ -1130,6 +1144,10 @@ def author_typed_plan_ir(
         )
         for spec in specs
     }
+    author.function_covers = {
+        str(spec["id"]): tuple(str(ref) for ref in spec["covers"])
+        for spec in specs
+    }
 
     def author_function_body(
         item: tuple[int, dict[str, Any]],
@@ -1144,6 +1162,7 @@ def author_typed_plan_ir(
             max_calls=128,
         )
         body_author.function_signatures = dict(author.function_signatures)
+        body_author.function_covers = dict(author.function_covers)
         body_author.set_scope_covers(scope, spec["covers"])
         statement_limit = body_author._semantic_statement_budget(scope)
         # The model-call ceiling is derived from this function's actual semantic
@@ -1326,6 +1345,7 @@ def author_typed_plan_ir(
             max_calls=max(16, min(96, 8 + semantic_units * 3)),
         )
         initialize_author.function_signatures = dict(author.function_signatures)
+        initialize_author.function_covers = dict(author.function_covers)
         initialize_covers = [
             "integration.entry_points",
             *sorted(logic_refs),
