@@ -17,6 +17,7 @@ class AuthoredPlan:
     media_paths: tuple[str, ...] = ()
     schema_version: str = "mmm/authored-plan-v2"
     structured_sections: dict[str, Any] = field(default_factory=dict)
+    typed_plan_ir: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         from .authored_structured_design import normalize_structured_sections
@@ -26,6 +27,16 @@ class AuthoredPlan:
             "structured_sections",
             normalize_structured_sections(self.structured_sections),
         )
+        if self.typed_plan_ir:
+            from .typed_plan_ir import validate_typed_plan_ir
+
+            object.__setattr__(
+                self,
+                "typed_plan_ir",
+                validate_typed_plan_ir(self.typed_plan_ir),
+            )
+        else:
+            object.__setattr__(self, "typed_plan_ir", {})
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -35,6 +46,7 @@ class AuthoredPlan:
             "existing_input_sha256": self.existing_input_sha256,
             "media_paths": list(self.media_paths),
             "structured_sections": deepcopy(self.structured_sections),
+            "typed_plan_ir": deepcopy(self.typed_plan_ir),
         }
 
     @classmethod
@@ -45,6 +57,7 @@ class AuthoredPlan:
             existing_input_sha256=data.get("existing_input_sha256", ""),
             media_paths=tuple(data.get("media_paths", ())),
             structured_sections=deepcopy(data.get("structured_sections") or {}),
+            typed_plan_ir=deepcopy(data.get("typed_plan_ir") or {}),
             schema_version=str(data.get("schema_version") or "mmm/authored-plan-v1"),
         )
 
