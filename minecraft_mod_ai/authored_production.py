@@ -631,7 +631,6 @@ def _compile_new_authored_modules(
         )
         from .typed_plan_support import assert_typed_plan_host_support
 
-        assert_typed_plan_host_support(plan.structured_sections)
         source_sha = "sha256:" + hashlib.sha256(plan.text.encode("utf-8")).hexdigest()
         stored_sha = str(plan.typed_plan_ir.get("source_sha256") or "")
         normalized_stored_sha = (
@@ -647,6 +646,27 @@ def _compile_new_authored_modules(
                 + ", ".join(capabilities)
             )
         validated_plan = validate_typed_plan_ir(plan.typed_plan_ir)
+        assert_typed_plan_host_support(
+            plan.structured_sections,
+            validated_plan,
+        )
+
+        raw_platform_modules = validated_plan.get("platform_modules", [])
+        platform_modules: list[ProductionModule] = []
+        for item in raw_platform_modules:
+            module_id = str(item["module_id"])
+            if module_id == "authored_typed_plan":
+                raise ValueError(
+                    "TYPED_PLATFORM_MODULE_ID_CONFLICT: authored_typed_plan"
+                )
+            platform_modules.append(
+                ProductionModule(
+                    module_id=module_id,
+                    kind=str(item["kind"]),
+                    config=deepcopy(dict(item["config"])),
+                    required_gates=("target_compile",),
+                )
+            )
 
         state_section = (
             deepcopy(dict(production_state_section))
@@ -705,7 +725,7 @@ def _compile_new_authored_modules(
             "policy": "host_typed_plan_ir",
             "source_text_sha256": source_sha,
             "source_bytes": len(plan.text.encode("utf-8")),
-            "unit_count": 1,
+            "unit_count": 1 + len(platform_modules),
             "units": [{
                 "module_id": task_id,
                 "path": program_path,
@@ -718,6 +738,14 @@ def _compile_new_authored_modules(
                 "symbol": program_symbol,
                 "state_required": typed_plan_uses_state(validated_plan),
             },
+            "platform_modules": [
+                {
+                    "module_id": str(item["module_id"]),
+                    "kind": str(item["kind"]),
+                    "covers": list(item["covers"]),
+                }
+                for item in raw_platform_modules
+            ],
             "entrypoint": {
                 "owner": "host_scaffold",
                 "path": main_path,
@@ -726,7 +754,7 @@ def _compile_new_authored_modules(
             },
         }
         manifest["manifest_sha256"] = _sha256_json(manifest)
-        return (module,), manifest
+        return (module, *platform_modules), manifest
 
     task_id = "authored_implementation_graph"
     from .canonical_concern_authority import CanonicalConcernAuthority
