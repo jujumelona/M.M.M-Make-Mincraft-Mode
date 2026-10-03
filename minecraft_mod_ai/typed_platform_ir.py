@@ -26,10 +26,12 @@ PLATFORM_SYSTEM_KIND_TO_PACK = {
     "guild": "party-guild",
 }
 PLATFORM_HOST_KINDS = frozenset({"state_store"})
+PLATFORM_ENTITY_KINDS = frozenset({"entity", "boss", "npc"})
 PLATFORM_KINDS = frozenset(
     set(PLATFORM_CONTENT_KINDS)
     | set(PLATFORM_SYSTEM_KIND_TO_PACK)
     | set(PLATFORM_HOST_KINDS)
+    | set(PLATFORM_ENTITY_KINDS)
 )
 
 _ID = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
@@ -133,6 +135,69 @@ def platform_config_schema(kind: str) -> dict[str, Any]:
                 "maxProperties": 128,
             },
         }, required=("json",))
+    if kind in PLATFORM_ENTITY_KINDS:
+        return _schema({
+            "max_health": {"type": "number", "exclusiveMinimum": 0},
+            "attack_damage": {"type": "number", "minimum": 0},
+            "movement_speed": {"type": "number", "exclusiveMinimum": 0},
+            "follow_range": {"type": "number", "exclusiveMinimum": 0},
+            "archetype": {
+                "type": "string",
+                "enum": [
+                    "biped",
+                    "quadruped",
+                    "flying",
+                    "serpentine",
+                    "construct",
+                ],
+            },
+            "behavior": {
+                "type": "string",
+                "enum": [
+                    "hostile_melee",
+                    "neutral_melee",
+                    "passive",
+                    "npc",
+                ],
+            },
+            "entity_width": {"type": "number", "exclusiveMinimum": 0},
+            "entity_height": {"type": "number", "exclusiveMinimum": 0},
+            "spawn_group": {
+                "type": "string",
+                "enum": [
+                    "monster",
+                    "creature",
+                    "ambient",
+                    "water_creature",
+                    "misc",
+                ],
+            },
+            "main_color": {
+                "type": "string",
+                "pattern": r"^#[0-9A-Fa-f]{6}$",
+            },
+            "texture_width": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 4096,
+            },
+            "texture_height": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 4096,
+            },
+        }, required=(
+            "max_health",
+            "attack_damage",
+            "movement_speed",
+            "follow_range",
+            "archetype",
+            "behavior",
+            "entity_width",
+            "entity_height",
+            "spawn_group",
+            "main_color",
+        ))
     if kind == "state_store":
         return _schema({
             "namespace": {
@@ -269,6 +334,7 @@ def _coverage_allowed(kind: str, cover: str) -> bool:
             return (
                 kind in PLATFORM_CONTENT_KINDS
                 or kind in PLATFORM_SYSTEM_KIND_TO_PACK
+                or kind in PLATFORM_ENTITY_KINDS
             )
         if concern == "interactions":
             return kind in {"command", "machine", "gui", "networking"}
@@ -439,6 +505,97 @@ def validate_platform_modules(raw_modules: Any) -> list[dict[str, Any]]:
         }
         if kind in PLATFORM_CONTENT_KINDS:
             _validate_content_config(kind, config, module_id)
+        elif kind in PLATFORM_ENTITY_KINDS:
+            required = {
+                "max_health",
+                "attack_damage",
+                "movement_speed",
+                "follow_range",
+                "archetype",
+                "behavior",
+                "entity_width",
+                "entity_height",
+                "spawn_group",
+                "main_color",
+            }
+            optional = {"texture_width", "texture_height"}
+            if not required <= set(config) or set(config) - required - optional:
+                raise ValueError(
+                    f"TYPED_PLATFORM_CONFIG_INVALID: {module_id} entity fields"
+                )
+            for field in {
+                "max_health",
+                "attack_damage",
+                "movement_speed",
+                "follow_range",
+                "entity_width",
+                "entity_height",
+            }:
+                value = config[field]
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(float(value))
+                ):
+                    raise ValueError(
+                        f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.{field}"
+                    )
+            if float(config["max_health"]) <= 0:
+                raise ValueError(
+                    f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.max_health"
+                )
+            if float(config["movement_speed"]) <= 0:
+                raise ValueError(
+                    f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.movement_speed"
+                )
+            if float(config["follow_range"]) <= 0:
+                raise ValueError(
+                    f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.follow_range"
+                )
+            if float(config["entity_width"]) <= 0 or float(config["entity_height"]) <= 0:
+                raise ValueError(
+                    f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.entity_size"
+                )
+            if float(config["attack_damage"]) < 0:
+                raise ValueError(
+                    f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.attack_damage"
+                )
+            if config["behavior"] in {"hostile_melee", "neutral_melee"} and float(
+                config["attack_damage"]
+            ) <= 0:
+                raise ValueError(
+                    f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.attack_damage"
+                )
+            if config["archetype"] not in {
+                "biped", "quadruped", "flying", "serpentine", "construct"
+            }:
+                raise ValueError(
+                    f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.archetype"
+                )
+            if config["behavior"] not in {
+                "hostile_melee", "neutral_melee", "passive", "npc"
+            }:
+                raise ValueError(
+                    f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.behavior"
+                )
+            if config["spawn_group"] not in {
+                "monster", "creature", "ambient", "water_creature", "misc"
+            }:
+                raise ValueError(
+                    f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.spawn_group"
+                )
+            if not _HEX.fullmatch(str(config["main_color"])):
+                raise ValueError(
+                    f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.main_color"
+                )
+            for field in ("texture_width", "texture_height"):
+                if field in config and (
+                    type(config[field]) is not int
+                    or not 1 <= config[field] <= 4096
+                ):
+                    raise ValueError(
+                        f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.{field}"
+                    )
         elif kind in PLATFORM_HOST_KINDS:
             unknown = set(config) - {"namespace"}
             if unknown:
@@ -491,6 +648,7 @@ def platform_module_authoring_schema() -> dict[str, Any]:
 
 __all__ = [
     "PLATFORM_CONTENT_KINDS",
+    "PLATFORM_ENTITY_KINDS",
     "PLATFORM_HOST_KINDS",
     "PLATFORM_KINDS",
     "PLATFORM_SYSTEM_KIND_TO_PACK",
