@@ -1574,7 +1574,7 @@ class CompleteProductionOrchestrator:
                 ]
                 if unsupported:
                     raise CompleteProductionError(
-                        "CUSTOM_GENERATION_REMOVED: deterministic backend required for "
+                        "DETERMINISTIC_BACKEND_REQUIRED: no host backend for "
                         + ", ".join(unsupported)
                     )
             elif stage == 'system':
