@@ -993,9 +993,13 @@ def _module_stage(
     if module.kind == 'integration':
         if str(module.config.get('integration_type', '')) == 'mmm_local_ai_sidecar':
             return 'content'
-        return 'custom'
+        raise WorkGraphError(
+            f"CUSTOM_GENERATION_REMOVED: unsupported integration module {module.module_id}"
+        )
     if module.kind == 'custom_java' or module.config.get('implementation') == 'custom':
-        return 'custom'
+        raise WorkGraphError(
+            f"CUSTOM_GENERATION_REMOVED: module {module.module_id} is not Typed host work"
+        )
     if module.kind in {'entity', 'boss', 'npc'}:
         return 'entity'
     if module.kind in {'quest', 'class', 'skill', 'economy', 'shop', 'gui', 'networking', 'party', 'guild'}:
@@ -1004,8 +1008,12 @@ def _module_stage(
     if module.kind in extended_kinds:
         if deterministic_module_kinds is None or module.kind in deterministic_module_kinds:
             return 'content'
-        return 'custom'
-    return 'custom'
+        raise WorkGraphError(
+            f"CUSTOM_GENERATION_REMOVED: no deterministic backend for {module.kind}"
+        )
+    raise WorkGraphError(
+        f"CUSTOM_GENERATION_REMOVED: unsupported module kind {module.kind!r}"
+    )
 
 def _is_typed_host_module(module: ProductionModule) -> bool:
     """Return whether the module is deterministic Typed PlanIR host work."""
@@ -1075,11 +1083,6 @@ def _module_shards(
             )
         if stage == 'host':
             return 1
-        if stage == 'custom':
-            count = max(1, stage_counts.get(stage, 1))
-            slots = min(_active_llm_slots(), count)
-            per_slot = (count + slots - 1) // slots
-            return min(max(1, int(policy.java_shard_size)), max(1, per_slot))
         return max(1, int(policy.java_shard_size))
 
     for module, stage in staged:
