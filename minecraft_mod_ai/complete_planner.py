@@ -178,12 +178,16 @@ class CompleteGameDesignPlanner:
                     prompt,
                     media_paths=media_paths,
                 )
+            from .typed_minecraft_capabilities import (
+                typed_host_capability_contracts,
+            )
+
             with planner_operation("author_typed_plan_ir"):
                 typed_plan_ir = author_typed_plan_ir(
                     self.router,
                     text,
                     structured_sections,
-                    {},
+                    typed_host_capability_contracts(),
                 )
             from .typed_plan_support import assert_typed_plan_host_support
 
