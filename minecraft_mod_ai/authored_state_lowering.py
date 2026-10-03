@@ -16,9 +16,13 @@ def prepare_state_concern(task: Mapping[str, Any], concern: str, *, include_runt
         predicate = field in {"guard", "condition"}
         symbol = f"mmmState_{concern}_{field}_{index}"
         return_type = "boolean" if predicate else "void"
+        parameters = [
+            {"type": "java.util.Map<String, Object>", "name": "context"},
+        ]
         work.append({
             "symbol": symbol,
             "return_type": return_type,
+            "parameters": parameters,
             "declaration": f"private static {return_type} {symbol}(java.util.Map<String, Object> context)",
             "record_index": index,
             "record": dict(record),
@@ -50,10 +54,13 @@ def validate_state_helpers(source: str, contract: Mapping[str, Any]) -> None:
     for work in contract["work"]:
         matches = [row for row in methods if row.get("kind") == "method"
                    and row.get("symbol") == work["symbol"]]
+        expected_parameters = work.get("parameters") or [
+            {"type": "java.util.Map<String, Object>", "name": "context"},
+        ]
         if not any(
             row.get("visibility") == "private" and row.get("static")
             and row.get("return_type") == work["return_type"]
-            and row.get("parameters") == [{"type": "java.util.Map<String, Object>", "name": "context"}]
+            and row.get("parameters") == expected_parameters
             for row in matches
         ):
             raise CustomModuleGenerationError(

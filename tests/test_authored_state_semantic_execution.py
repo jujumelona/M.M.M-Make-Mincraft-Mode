@@ -91,15 +91,11 @@ def test_authored_state_transition_compiles_and_changes_balance(tmp_path, native
             assert_atomic_model_schema,
         )
 
-        decisions = [
-            {"part": "methods"},
-            {"name": work["symbol"], "return_type": work["return_type"]},
-            {"part": "parameters"},
-            {"name": "context", "type": "java.util.Map<String, Object>"},
-        ]
-        for statement in statements:
+        assert statements
+        decisions = [{"statement": statements[0]}]
+        for statement in statements[1:]:
             decisions.extend([{"part": "body"}, {"statement": statement}])
-        decisions.extend([{"part": "done"}, {"part": "done"}])
+        decisions.append({"part": "done"})
 
         class Router:
             def generate_tool_decision(self, role, request, **kwargs):
