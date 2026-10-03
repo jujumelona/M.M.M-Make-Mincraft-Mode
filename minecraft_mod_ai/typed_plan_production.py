@@ -788,12 +788,20 @@ def generate_typed_plan_module(
             package_name
         )
 
+    raw_structured = config.get("typed_plan_structured_sections")
+    structured = (
+        dict(raw_structured)
+        if isinstance(raw_structured, Mapping)
+        else {}
+    )
+    raw_state = config.get("typed_plan_state_section")
+    state_authority_present = isinstance(raw_state, Mapping) and bool(raw_state)
+
     raw_state_store = config.get("typed_state_store")
     if raw_state_store is not None:
         if not isinstance(raw_state_store, Mapping):
             raise ValueError("TYPED_STATE_STORE_CONFIG_INVALID")
-        raw_state = config.get("typed_plan_state_section")
-        if not isinstance(raw_state, Mapping) or not raw_state:
+        if not state_authority_present:
             raise ValueError("TYPED_STATE_STORE_STATE_AUTHORITY_REQUIRED")
         files.update(
             _persistence_files(
@@ -801,6 +809,35 @@ def generate_typed_plan_module(
                 mod_id=info.mod_id,
                 section=raw_state,
                 config=raw_state_store,
+            )
+        )
+
+    raw_network_sync = config.get("typed_network_sync")
+    if raw_network_sync is not None:
+        if not isinstance(raw_network_sync, Mapping):
+            raise ValueError("TYPED_NETWORK_SYNC_CONFIG_INVALID")
+        if not state_authority_present:
+            raise ValueError("TYPED_NETWORK_STATE_AUTHORITY_REQUIRED")
+        files.update(
+            _network_policy_files(
+                package_name=package_name,
+                mod_id=info.mod_id,
+                structured=structured,
+                state_section=raw_state,
+                config=raw_network_sync,
+            )
+        )
+
+    raw_resource_policy = config.get("typed_resource_policy")
+    if raw_resource_policy is not None:
+        if not isinstance(raw_resource_policy, Mapping):
+            raise ValueError("TYPED_RESOURCE_POLICY_CONFIG_INVALID")
+        files.update(
+            _resource_policy_files(
+                root=root,
+                package_name=package_name,
+                mod_id=info.mod_id,
+                structured=structured,
             )
         )
 
@@ -829,11 +866,35 @@ def generate_typed_plan_module(
             marker="// MMM:TYPED_STATE_PERSISTENCE_OWNER",
         )
 
-    raw_state = config.get("typed_plan_state_section")
-    state_authority_present = isinstance(raw_state, Mapping) and bool(raw_state)
+    if raw_network_sync is not None:
+        package_path = package_name.replace(".", "/")
+        _assert_host_owned_or_absent(
+            root,
+            f"src/main/java/{package_path}/AuthoredNetworkSync.java",
+            marker="// MMM:TYPED_NETWORK_SYNC_OWNER",
+        )
+        _assert_host_owned_or_absent(
+            root,
+            f"src/main/java/{package_path}/AuthoredNetworkClient.java",
+            marker="// MMM:TYPED_NETWORK_CLIENT_OWNER",
+        )
+
+    if raw_resource_policy is not None:
+        package_path = package_name.replace(".", "/")
+        accessibility_path = (
+            f"src/main/java/{package_path}/AuthoredAccessibility.java"
+        )
+        if accessibility_path in files:
+            _assert_host_owned_or_absent(
+                root,
+                accessibility_path,
+                marker="// MMM:TYPED_ACCESSIBILITY_OWNER",
+            )
+
     if (
         typed_plan_uses_state(raw_plan)
         or raw_state_store is not None
+        or raw_network_sync is not None
         or state_authority_present
     ):
         if not state_authority_present:
@@ -865,6 +926,29 @@ def generate_typed_plan_module(
             call_line="AuthoredStatePersistence.register()",
             marker="typed-state-persistence",
         )
+    if raw_network_sync is not None:
+        ensure_main_initializer_call(
+            info,
+            import_line=f"import {package_name}.AuthoredNetworkSync",
+            call_line="AuthoredNetworkSync.register()",
+            marker="typed-network-sync",
+        )
+        ensure_client_entrypoint(
+            info,
+            entrypoint=f"{package_name}.AuthoredNetworkClient",
+        )
+    if raw_resource_policy is not None:
+        package_path = package_name.replace(".", "/")
+        accessibility_path = (
+            f"src/main/java/{package_path}/AuthoredAccessibility.java"
+        )
+        if accessibility_path in files:
+            ensure_main_initializer_call(
+                info,
+                import_line=f"import {package_name}.AuthoredAccessibility",
+                call_line="AuthoredAccessibility.register()",
+                marker="typed-accessibility",
+            )
     touched_paths = sorted(files)
     return {
         "schema_version": "mmm/custom-module-result-v3",
