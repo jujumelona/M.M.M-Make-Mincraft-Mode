@@ -351,7 +351,14 @@ class _Validator:
         plan = _mapping(self.plan, "typed_plan_ir")
         _keys(
             plan,
-            {"schema_version", "source_sha256", "functions", "initialize", "platform_modules"},
+            {
+                "schema_version",
+                "source_sha256",
+                "functions",
+                "initialize",
+                "platform_modules",
+                "event_bindings",
+            },
             {"schema_version", "source_sha256", "functions", "initialize"},
             "typed_plan_ir",
         )
@@ -425,6 +432,13 @@ class _Validator:
 
             normalized["platform_modules"] = validate_platform_modules(
                 plan.get("platform_modules")
+            )
+        if "event_bindings" in plan:
+            from .typed_event_ir import validate_event_bindings
+
+            normalized["event_bindings"] = validate_event_bindings(
+                plan.get("event_bindings"),
+                signatures=self.signatures,
             )
         return normalized
 
