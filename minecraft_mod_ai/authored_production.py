@@ -14,7 +14,7 @@ from .complete_spec import (
     ProductionModule,
     complete_proposal_from_parts,
 )
-from .planning_pipeline import PlanningPipeline
+from .host_target_binding import bind_existing_project, bind_platform
 from .spec import ModSpec, Proposal, ProposalStatus
 from .target_contract import target_coordinates_from_mapping
 
@@ -406,9 +406,9 @@ def compile_authored_design(
     )
 
     design = {"authored_plan": plan.to_dict()}
-    binding = PlanningPipeline(router)
-    design = binding._bind_existing_project(design)
-    design, base, _, _ = binding._bind_platform(
+    design = bind_existing_project(router, design)
+    design, base = bind_platform(
+        router,
         plan.requested_prompt,
         design,
         base,
