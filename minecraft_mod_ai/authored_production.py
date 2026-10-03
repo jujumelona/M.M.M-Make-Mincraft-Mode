@@ -421,7 +421,7 @@ def _implementation_authored_plan(plan: AuthoredPlan) -> tuple[AuthoredPlan, dic
     is recoverable here. Mentions in prose, examples and ambiguous drafts stay intact.
     """
 
-    if plan.typed_plan_ir:
+    if getattr(plan, "typed_plan_ir", {}):
         return plan, None
 
     text = plan.text
@@ -482,7 +482,7 @@ def _implementation_authored_plan(plan: AuthoredPlan) -> tuple[AuthoredPlan, dic
         media_paths=plan.media_paths,
         schema_version=plan.schema_version,
         structured_sections=deepcopy(plan.structured_sections),
-        typed_plan_ir=deepcopy(plan.typed_plan_ir),
+        typed_plan_ir=deepcopy(getattr(plan, "typed_plan_ir", {})),
     )
     provenance = {
         "schema_version": "mmm/authored-source-projection-v1",
@@ -622,7 +622,7 @@ def _compile_new_authored_modules(
     main_symbol = _main_class_name(mod_id)
     main_path = f"src/main/java/{package_name.replace('.', '/')}/{main_symbol}.java"
 
-    if plan.typed_plan_ir:
+    if getattr(plan, "typed_plan_ir", {}):
         from .typed_plan_ir import (
             typed_plan_capability_ids,
             typed_plan_uses_state,
@@ -808,7 +808,7 @@ def _compile_existing_authored_modules(
             media_paths=plan.media_paths,
             schema_version=plan.schema_version,
             structured_sections=structured_sections,
-            typed_plan_ir=deepcopy(plan.typed_plan_ir),
+            typed_plan_ir=deepcopy(getattr(plan, "typed_plan_ir", {})),
         )
         modules.append(
             ProductionModule(
@@ -1216,7 +1216,7 @@ def _compile_coherent_authored_module(
 def _execution_plan_projection(
     plan: AuthoredPlan,
 ) -> tuple[AuthoredPlan, dict[str, Any]]:
-    if plan.typed_plan_ir:
+    if getattr(plan, "typed_plan_ir", {}):
         return plan, {}
 
     from .authored_document_contract import normalize_authored_document
@@ -1231,7 +1231,7 @@ def _execution_plan_projection(
         media_paths=plan.media_paths,
         schema_version=plan.schema_version,
         structured_sections=deepcopy(plan.structured_sections),
-        typed_plan_ir=deepcopy(plan.typed_plan_ir),
+        typed_plan_ir=deepcopy(getattr(plan, "typed_plan_ir", {})),
     )
     return execution_plan, {
         "_authored_document_normalization": normalization,
@@ -1273,7 +1273,7 @@ def compile_authored_design(
             media_paths=implementation_plan.media_paths,
             schema_version=implementation_plan.schema_version,
             structured_sections=structured,
-            typed_plan_ir=deepcopy(implementation_plan.typed_plan_ir),
+            typed_plan_ir=deepcopy(getattr(implementation_plan, "typed_plan_ir", {})),
         )
 
     execution_plan, execution_projection = _execution_plan_projection(implementation_plan)
@@ -1316,7 +1316,7 @@ def compile_authored_design(
     design = {**design, **target}
     effective_existing = existing_input_sha256 or plan.existing_input_sha256
     production_state_section: dict[str, Any] | None = None
-    if execution_plan.typed_plan_ir:
+    if getattr(execution_plan, "typed_plan_ir", {}):
         from .production_state_compiler import compile_production_state_section
 
         production_state_section = compile_production_state_section(
