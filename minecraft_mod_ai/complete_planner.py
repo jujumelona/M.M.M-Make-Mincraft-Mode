@@ -31,25 +31,6 @@ from .research_derived_requirements import (
 from .root_cause_trace import emit_root_cause, trace_scope
 
 
-def _design_writing_template(
-    detail_records: Mapping[str, Mapping[str, Sequence[str] | str]],
-) -> str:
-    """Render canonical concern descriptors for compatibility/documentation surfaces."""
-
-    def render_fields(fields: Sequence[str] | str) -> str:
-        if isinstance(fields, str):
-            return fields
-        return ", ".join(str(value) for value in fields)
-
-    sections: list[str] = []
-    for section, records in detail_records.items():
-        concerns = [
-            "- " + concern + ": " + render_fields(fields)
-            for concern, fields in records.items()
-        ]
-        sections.append("## " + section + "\n" + "\n".join(concerns))
-    return "\n".join(sections)
-
 
 @dataclass(frozen=True)
 class _ProductionBatch:
@@ -125,72 +106,43 @@ class CompleteGameDesignPlanner:
     ) -> AuthoredPlan:
         """Write the design itself; no schema, critic, evidence or production gate."""
         from .planner_operation import planner_operation
-        from .planning_detail_slots import DETAIL_RECORDS
 
-        structured_sections: dict[str, Any] = {}
-        typed_plan_ir: dict[str, Any] = {}
-
-        # The canonical structured design is the semantic source of truth.  Do not
-        # spend one full-model pass writing prose and then ask the same small model
-        # to rediscover the semantics as structured records.  When native decisions
-        # are available, author the bounded records first and render the human-readable
-        # document deterministically from them.
-        if callable(getattr(self.router, "generate_tool_decision", None)):
-            from .authored_structured_design import (
-                author_structured_sections,
-                render_structured_sections,
+        if not callable(getattr(self.router, "generate_tool_decision", None)):
+            raise PlanningStageError(
+                PlanningStage.DESIGN,
+                "Typed PlanIR planning requires native structured decisions; "
+                "the legacy prose planner path has been removed.",
             )
-            from .typed_host_capabilities import (
-                typed_host_capability_contracts,
+
+        from .authored_structured_design import (
+            author_structured_sections,
+            render_structured_sections,
+        )
+        from .typed_host_capabilities import typed_host_capability_contracts
+        from .typed_plan_authoring import author_typed_plan_ir
+
+        with planner_operation("author_structured_execution_contract"):
+            structured_sections = author_structured_sections(
+                self.router,
+                prompt,
+                media_paths=media_paths,
             )
-            from .typed_plan_authoring import author_typed_plan_ir
 
-            with planner_operation("author_structured_execution_contract"):
-                structured_sections = author_structured_sections(
-                    self.router,
-                    prompt,
-                    media_paths=media_paths,
-                )
+        text = render_structured_sections(structured_sections)
 
-            text = render_structured_sections(structured_sections)
-
-            with planner_operation("author_typed_plan_ir"):
-                typed_plan_ir = author_typed_plan_ir(
-                    self.router,
-                    text,
-                    structured_sections,
-                    typed_host_capability_contracts(),
-                )
-            from .typed_plan_support import assert_typed_plan_host_support
-
-            assert_typed_plan_host_support(
+        with planner_operation("author_typed_plan_ir"):
+            typed_plan_ir = author_typed_plan_ir(
+                self.router,
+                text,
                 structured_sections,
-                typed_plan_ir,
+                typed_host_capability_contracts(),
             )
-        else:
-            template = _design_writing_template(DETAIL_RECORDS)
-            with planner_operation("author_game_plan"):
-                text = self.router.generate_text(
-                    "planner",
-                    (
-                        {
-                            "role": "system",
-                            "content": (
-                                "You are the game designer. Write a complete, concrete Minecraft "
-                                "mod design in the user's language as readable prose and Markdown. "
-                                "Develop every requested feature into a coherent playable experience. "
-                                "Fill this writing template in one response and finish the design in "
-                                "this response:\n" + template
-                            ),
-                        },
-                        {"role": "user", "content": prompt},
-                    ),
-                    media_paths=media_paths,
-                    response_format="text",
-                    response_schema=None,
-                    enable_tools=False,
-                    force_non_thinking=True,
-                )
+        from .typed_plan_support import assert_typed_plan_host_support
+
+        assert_typed_plan_host_support(
+            structured_sections,
+            typed_plan_ir,
+        )
         return AuthoredPlan(
             requested_prompt=prompt,
             text=text,
@@ -209,10 +161,12 @@ class CompleteGameDesignPlanner:
     ) -> CompleteProposal:
         from .authored_production import compile_authored_design
 
-        plan = prompt if isinstance(prompt, AuthoredPlan) else AuthoredPlan(
-            requested_prompt=prompt, text=prompt,
-            media_paths=tuple(str(path) for path in media_paths),
-        )
+        if not isinstance(prompt, AuthoredPlan):
+            raise TypeError(
+                "compile_for_production requires an AuthoredPlan with Typed PlanIR; "
+                "the legacy raw-text production route has been removed."
+            )
+        plan = prompt
         with trace_scope("production_preparation", trace_id=uuid.uuid4().hex):
             emit_root_cause(
                 "production_preparation_start", stage="production", result="START",
