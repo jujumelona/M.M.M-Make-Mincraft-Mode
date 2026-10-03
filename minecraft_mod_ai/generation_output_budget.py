@@ -89,12 +89,6 @@ def _configured_output_ceiling(config: Any) -> int | None:
     if override is not None:
         return override
 
-    adapter = str(getattr(config, "adapter", "") or "").strip().casefold()
-    if adapter in {"llama_cpp", "vllm"}:
-        legacy = _positive_override("MMM_LLAMA_TEXT_MAX_TOKENS")
-        if legacy is not None:
-            return legacy
-
     if dynamic_output_budget_enabled(config):
         return None
     try:
