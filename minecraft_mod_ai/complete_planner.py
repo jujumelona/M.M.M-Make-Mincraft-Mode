@@ -178,9 +178,6 @@ class CompleteGameDesignPlanner:
                     prompt,
                     media_paths=media_paths,
                 )
-            from .typed_plan_support import assert_typed_plan_host_support
-
-            assert_typed_plan_host_support(structured_sections)
             with planner_operation("author_typed_plan_ir"):
                 typed_plan_ir = author_typed_plan_ir(
                     self.router,
@@ -188,6 +185,12 @@ class CompleteGameDesignPlanner:
                     structured_sections,
                     {},
                 )
+            from .typed_plan_support import assert_typed_plan_host_support
+
+            assert_typed_plan_host_support(
+                structured_sections,
+                typed_plan_ir,
+            )
 
         return AuthoredPlan(
             requested_prompt=prompt,
