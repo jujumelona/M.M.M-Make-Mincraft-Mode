@@ -194,7 +194,6 @@ def _semantic_execution_observations(
     receipts: Iterable[dict[str, Any]],
     *,
     downstream_ids: Callable[[str], Iterable[str]],
-    evidence_context: Any | None = None,
 ) -> list[dict[str, Any]]:
     """Attribute receipts by explicit ownership and fail closed on evidence gaps."""
     member_by_id = {module.module_id: module for module in members}
@@ -224,15 +223,6 @@ def _semantic_execution_observations(
                 receipt,
                 dependent_ids=downstream_ids(module_id),
             )
-            if observation is not None and evidence_context is not None:
-                from .evidence_first_pipeline_contract import (
-                    enrich_execution_observation,
-                )
-
-                observation = enrich_execution_observation(
-                    observation,
-                    evidence_context,
-                )
             if observation is not None:
                 observations.append(observation)
     return observations
@@ -1365,7 +1355,6 @@ class CompleteProductionOrchestrator:
         from concurrent.futures import FIRST_COMPLETED, Future, wait
 
         from . import scheduler_parallel_safety_contract as scheduler_safety
-        from .evidence_first_pipeline_contract import build_execution_context
         from .production_generation_preflight import (
             ProductionGenerationPreflightError,
             validate_production_generation_project,
@@ -1381,12 +1370,6 @@ class CompleteProductionOrchestrator:
             active_profile,
             active_registry,
         )
-        evidence_context = build_execution_context(
-            approved,
-            project_root,
-            policy=self.policy,
-        )
-
         if bool(getattr(options, "resume", False)):
             for node in work_plan.nodes:
                 node_id = str(node.node_id)
@@ -1642,7 +1625,6 @@ class CompleteProductionOrchestrator:
                 members,
                 receipts,
                 downstream_ids=downstream_ids,
-                evidence_context=evidence_context,
             )
             return {'schema_version': 'mmm/generation-work-node-v1', 'status': 'SUCCEEDED', 'node_id': node.node_id, 'stage': stage, 'module_ids': [module.module_id for module in members], 'receipts': receipts, 'semantic_observations': semantic_observations}
 
