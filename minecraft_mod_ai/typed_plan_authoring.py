@@ -626,31 +626,28 @@ def author_typed_plan_ir(
         validate_platform_modules,
     )
 
-    requires_platform_module = any(
-        ref.startswith((
+    platform_modules: list[dict[str, Any]] = []
+    seen_platform_ids: set[str] = set()
+    uncovered = {
+        ref
+        for ref in coverage_refs
+        if ref.startswith((
             "authority_and_network.",
             "persistence.",
             "resources_and_ui.",
         ))
-        for ref in coverage_refs
-    )
-    platform_count = int(author._ask(
-        "platform_module_count",
-        {
-            "type": "integer",
-            "minimum": 1 if requires_platform_module else 0,
-            "maximum": 64,
-        },
-        scope="platform",
-    ))
-    platform_modules: list[dict[str, Any]] = []
-    seen_platform_ids: set[str] = set()
-    for index in range(platform_count):
-        scope = f"platform[{index}]"
+    }
+    platform_index = 0
+    while uncovered:
+        if platform_index >= 64:
+            raise ValueError(
+                "TYPED_PLAN_PLATFORM_MODULE_LIMIT: host coverage did not converge."
+            )
+        scope = f"platform[{platform_index}]"
         available_kinds = [
             kind
             for kind in sorted(PLATFORM_KINDS)
-            if platform_coverable_refs(kind, coverage_refs)
+            if platform_coverable_refs(kind, sorted(uncovered))
         ]
         if not available_kinds:
             raise ValueError(
@@ -687,12 +684,12 @@ def author_typed_plan_ir(
             )
         coverable_refs = platform_coverable_refs(
             kind,
-            coverage_refs,
+            sorted(uncovered),
         )
         if not coverable_refs:
             raise ValueError(
                 f"TYPED_PLAN_PLATFORM_COVERAGE_REQUIRED: {kind} has no "
-                "active canonical concern to implement."
+                "uncovered canonical concern to implement."
             )
         coverage_count = int(author._ask(
             "platform_coverage_count",
@@ -712,12 +709,18 @@ def author_typed_plan_ir(
             )
             if cover not in covers:
                 covers.append(cover)
+        if not covers:
+            raise ValueError(
+                "TYPED_PLAN_PLATFORM_COVERAGE_REQUIRED: module made no progress."
+            )
+        uncovered.difference_update(covers)
         platform_modules.append({
             "module_id": module_id,
             "kind": kind,
             "config": dict(config),
             "covers": covers,
         })
+        platform_index += 1
 
     platform_modules = validate_platform_modules(platform_modules)
 
