@@ -232,20 +232,34 @@ class TypedOperationAuthor:
         return selected
 
     def _semantic_statement_budget(self, scope: str) -> int:
-        context = self._scope_semantic_context(scope)
+        from .authored_structured_design import active_concern_records
+
+        selected_covers: tuple[str, ...] = ()
+        for prefix in sorted(self.scope_covers, key=len, reverse=True):
+            if scope == prefix or scope.startswith(prefix + "."):
+                selected_covers = self.scope_covers[prefix]
+                break
+
         units = 0
-        for concerns in context.values():
-            if not isinstance(concerns, Mapping):
+        for ref in selected_covers:
+            section, dot, concern = ref.partition(".")
+            if not dot:
                 continue
-            for rows in concerns.values():
-                if isinstance(rows, Sequence) and not isinstance(
-                    rows, (str, bytes, bytearray)
-                ):
-                    units += max(1, len(rows))
-        # This is a fail-closed emergency ceiling derived from actual semantic
-        # records, not a normal completion target.  Normal bodies stop on done or
-        # an unconditional terminal statement well before it.
-        return min(24, max(2, 2 + units * 2))
+            rows = active_concern_records(
+                self.structured_sections,
+                section,
+            ).get(concern, ())
+            if isinstance(rows, Sequence) and not isinstance(
+                rows, (str, bytes, bytearray)
+            ):
+                units += max(1, len(rows))
+        if units == 0:
+            units = 1
+
+        # Normal completion is semantic: every covered concern has been compiled
+        # into this body and the model emits done/return.  This small derived bound
+        # exists only to reject runaway authoring before transport/token ceilings.
+        return min(12, max(2, 1 + units * 2))
 
     @staticmethod
     def _statement_terminates(statement: Mapping[str, Any]) -> bool:
@@ -965,7 +979,7 @@ def author_typed_plan_ir(
     effective_max_calls = (
         max(1, int(max_calls))
         if max_calls is not None
-        else max(24, min(256, 8 + semantic_units * 6))
+        else max(16, min(128, 8 + semantic_units * 4))
     )
     author = TypedOperationAuthor(
         router,
@@ -1149,7 +1163,7 @@ def author_typed_plan_ir(
             source_text,
             structured_sections,
             capabilities,
-            max_calls=256,
+            max_calls=128,
         )
         body_author.function_signatures = dict(author.function_signatures)
         body_author.set_scope_covers(scope, spec["covers"])
@@ -1157,7 +1171,7 @@ def author_typed_plan_ir(
         # The model-call ceiling is derived from this function's actual semantic
         # work.  It is only a runaway guard; normal completion happens at done or
         # a terminal statement.
-        body_author.max_calls = max(24, min(256, statement_limit * 10))
+        body_author.max_calls = max(16, min(128, statement_limit * 8))
         env = {
             str(parameter["name"]): str(parameter["type"])
             for parameter in spec["parameters"]
@@ -1331,7 +1345,7 @@ def author_typed_plan_ir(
             source_text,
             structured_sections,
             capabilities,
-            max_calls=max(24, min(128, 8 + semantic_units * 4)),
+            max_calls=max(16, min(96, 8 + semantic_units * 3)),
         )
         initialize_author.function_signatures = dict(author.function_signatures)
         initialize_covers = [
