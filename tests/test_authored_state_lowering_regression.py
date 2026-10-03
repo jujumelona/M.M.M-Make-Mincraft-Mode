@@ -253,9 +253,15 @@ def test_structured_records_are_semantic_authority_over_markdown() -> None:
     payload = json.loads(task["implementation_obligations"][0])
     assert payload["structured_records"] == state_spec["variables"]
 
-    contract = _state_variable_contract(task, concerns[0])
-    assert contract[0]["java_type"] == "int"
-    assert contract[0]["default_literal"] == "0"
+    from minecraft_mod_ai.structured_state_runtime import render_state_model_concern
+
+    source = render_state_model_concern(
+        task,
+        "variables",
+        include_runtime=True,
+    )
+    assert source is not None
+    assert '$mmmState.put("credits", Long.valueOf("0"));' in source
 
 
 def test_structured_renderer_projects_nested_records_to_leaf_fields() -> None:
