@@ -305,61 +305,12 @@ def _generate_authored_chunk(
 
     try:
         return generate(concerns, evidence=include_evidence)
-    except (ValueError, RuntimeError, TypeError) as initial_error:
+    except (ValueError, RuntimeError, TypeError):
         if len(concerns) == 1:
-            concern = str(concerns[0])
-            explicit_projection = getattr(concerns, "field_projection", {})
-            projected_fields = (
-                tuple(explicit_projection.get(concern, ()))
-                if isinstance(explicit_projection, Mapping)
-                else ()
-            )
-            fields = projected_fields or tuple(DETAIL_RECORDS[section][concern].split())
-            if len(fields) <= 1:
-                raise
-
-            # Last-resort small-model recovery: one field per model call.  Each page
-            # carries only one bounded string/array field, so a pathological model
-            # cannot consume the full concern budget by repeating sibling records.
-            record: dict[str, Any] = {}
-            merged_inapplicable: list[dict[str, Any]] = []
-            merged_refs: list[str] = []
-            for position, field in enumerate(fields):
-                isolated = WorksheetConcernChunk(
-                    (concern,),
-                    {concern: (field,)},
-                )
-                value = generate(
-                    isolated,
-                    evidence=bool(include_evidence and position == 0),
-                )
-                rows = value.get(concern)
-                if isinstance(rows, list):
-                    first = next(
-                        (
-                            item
-                            for item in rows
-                            if isinstance(item, Mapping) and field in item
-                        ),
-                        None,
-                    )
-                    if first is not None:
-                        record[field] = deepcopy(first[field])
-                for item in value.get("inapplicable_concerns", []):
-                    if isinstance(item, Mapping) and item not in merged_inapplicable:
-                        merged_inapplicable.append(deepcopy(dict(item)))
-                for ref in value.get("constraint_evidence_refs", []):
-                    if isinstance(ref, str) and ref not in merged_refs:
-                        merged_refs.append(ref)
-
-            if not record:
-                raise initial_error
-            merged: dict[str, Any] = {concern: [record]}
-            if merged_inapplicable:
-                merged["inapplicable_concerns"] = merged_inapplicable
-            if include_evidence:
-                merged["constraint_evidence_refs"] = merged_refs
-            return merged
+            # One complete concern is already the minimum semantic work unit.
+            # Do not explode it into one model call per field: that recreates the
+            # latency/runaway failure mode and lets partial fields drift apart.
+            raise
 
     explicit_projection = getattr(concerns, "field_projection", {})
     merged: dict[str, Any] = {}
@@ -469,20 +420,47 @@ def author_structured_sections(
             continue
 
         chunks = pack_section_concerns(section)
-        chunk_results = []
-        for index, concerns in enumerate(chunks, start=1):
-            value = _generate_authored_chunk(
+        completed_snapshot = deepcopy(completed)
+
+        def generate_chunk(item: tuple[int, Sequence[str]]) -> tuple[int, dict[str, Any]]:
+            index, concerns = item
+            return index, _generate_authored_chunk(
                 router,
                 prompt,
                 section=section,
                 chunk_index=index,
                 chunk_count=len(chunks),
                 concerns=concerns,
-                completed=completed,
+                completed=completed_snapshot,
                 include_evidence=index == 1,
                 media_paths=media_paths,
             )
-            chunk_results.append(value)
+
+        if len(chunks) <= 1:
+            chunk_results = [
+                generate_chunk((1, chunks[0]))[1]
+            ] if chunks else []
+        else:
+            from concurrent.futures import ThreadPoolExecutor
+            from .model_concurrency import active_llama_parallelism
+
+            workers = min(len(chunks), max(1, active_llama_parallelism()))
+            if workers == 1:
+                ordered = [
+                    generate_chunk((index, concerns))
+                    for index, concerns in enumerate(chunks, start=1)
+                ]
+            else:
+                with ThreadPoolExecutor(
+                    max_workers=workers,
+                    thread_name_prefix=f"mmm-plan-{section}",
+                ) as executor:
+                    ordered = list(executor.map(
+                        generate_chunk,
+                        enumerate(chunks, start=1),
+                    ))
+            ordered.sort(key=lambda item: item[0])
+            chunk_results = [value for _, value in ordered]
 
         completed[section] = merge_worksheet_section_chunks(
             section,
