@@ -1007,38 +1007,11 @@ def _module_stage(
         return 'custom'
     return 'custom'
 
-def _is_host_exact_authored_module(module: ProductionModule) -> bool:
-    """Return whether one authored unit requires an independent durable work node.
-
-    Fresh authored tasks already carry exact host targets. Existing-project authored units
-    acquire exact targets at generation entry, so they must also remain unbatched; otherwise
-    localization, checkpoint, commit, and retry boundaries collapse back into one large task.
-    """
+def _is_typed_host_module(module: ProductionModule) -> bool:
+    """Return whether the module is deterministic Typed PlanIR host work."""
 
     config = module.config if isinstance(module.config, dict) else {}
-    if isinstance(config.get("typed_plan_ir"), dict):
-        return True
-    if config.get("authored_localization_required") is True:
-        return True
-    task = config.get("evidence_task")
-    if not isinstance(task, dict):
-        return False
-    anchors = task.get("owned_anchors")
-    if not isinstance(anchors, list) or not anchors:
-        return False
-    writable = [
-        anchor
-        for anchor in anchors
-        if isinstance(anchor, dict)
-        and str(anchor.get("ownership") or "").strip()
-        == "host_exact_authored_lowering"
-    ]
-    if not writable:
-        return False
-    return all(
-        str(anchor.get("status") or "").strip().casefold() == "existing"
-        for anchor in writable
-    )
+    return isinstance(config.get("typed_plan_ir"), dict)
 
 
 def _active_llm_slots() -> int:
@@ -1121,11 +1094,9 @@ def _module_shards(
         batch_key = _module_batch_key(module, stage)
         dependency_groups = {module_group[dependency] for dependency in module.depends_on}
 
-        if stage in {"custom", "host"} and _is_host_exact_authored_module(module):
-            # One authored task owns one exact host target and one independent
-            # target_compile gate. Keep deterministic Typed PlanIR work isolated from
-            # legacy LLM custom work so resource classification and retry semantics
-            # cannot pull a host compiler task back into the model lane.
+        if stage == "host" and _is_typed_host_module(module):
+            # Typed PlanIR host work owns one deterministic target and must never
+            # be batched into or classified with model-backed custom generation.
             chosen = len(groups)
             groups.append(
                 {
