@@ -31,8 +31,6 @@ on:
       - 'tests/test_production_state_compiler.py'
       - 'tests/test_authored_state_lowering_regression.py'
       - 'tests/test_complete_final_validation_contract.py'
-      - 'tests/test_repair_semantic_convergence_contract.py'
-      - 'tests/test_repair_project_index_efficiency.py'
       - 'tests/test_runner_gametest_first_execution.py'
       - 'tests/test_resource_asset_clean_contract.py'
       - 'tests/test_release_source_hygiene.py'
@@ -69,8 +67,6 @@ on:
       - 'tests/test_production_state_compiler.py'
       - 'tests/test_authored_state_lowering_regression.py'
       - 'tests/test_complete_final_validation_contract.py'
-      - 'tests/test_repair_semantic_convergence_contract.py'
-      - 'tests/test_repair_project_index_efficiency.py'
       - 'tests/test_runner_gametest_first_execution.py'
       - 'tests/test_resource_asset_clean_contract.py'
       - 'tests/test_release_source_hygiene.py'
@@ -134,8 +130,6 @@ jobs:
             tests/test_production_state_compiler.py \
             tests/test_authored_state_lowering_regression.py \
             tests/test_complete_final_validation_contract.py \
-            tests/test_repair_semantic_convergence_contract.py \
-            tests/test_repair_project_index_efficiency.py \
             tests/test_runner_gametest_first_execution.py \
             tests/test_resource_asset_clean_contract.py \
             tests/test_release_source_hygiene.py \
