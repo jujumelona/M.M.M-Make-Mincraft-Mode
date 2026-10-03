@@ -1827,124 +1827,6 @@ def _render_atomic_java_structure(
         )
     return "\n\n".join(row for row in rows if row.strip()).strip()
 
-
-def _state_lowering_assembly_seed(
-    payload: Mapping[str, Any],
-    parameters: Mapping[str, Any],
-    *,
-    response_region: str,
-) -> tuple[dict[str, Any] | None, tuple[tuple[Any, ...], ...]]:
-    """Project host-owned authored-state helper signatures into Java assembly."""
-
-    if response_region != "members":
-        return None, ()
-    lowering = payload.get("state_lowering")
-    work_rows = lowering.get("work") if isinstance(lowering, Mapping) else None
-    if (
-        not isinstance(work_rows, Sequence)
-        or isinstance(work_rows, (str, bytes, bytearray))
-        or not work_rows
-    ):
-        return None, ()
-
-    properties = parameters.get("properties")
-    if not isinstance(properties, Mapping):
-        raise CustomModuleGenerationError(
-            "ATOMIC_STATE_LOWERING_CONTRACT_INVALID: Java member schema has no properties."
-        )
-    method_spec = properties.get("methods")
-    if not isinstance(method_spec, Mapping) or method_spec.get("type") != "array":
-        raise CustomModuleGenerationError(
-            "ATOMIC_STATE_LOWERING_CONTRACT_INVALID: authored-state lowering "
-            "requires a methods array."
-        )
-
-    initial: dict[str, Any] = {
-        str(name): []
-        for name, spec in properties.items()
-        if isinstance(spec, Mapping) and spec.get("type") == "array"
-    }
-    methods: list[dict[str, Any]] = []
-    required: list[tuple[Any, ...]] = []
-    default_parameters = (
-        {"type": "java.util.Map<String, Object>", "name": "context"},
-    )
-
-    for index, raw_work in enumerate(work_rows):
-        if not isinstance(raw_work, Mapping):
-            raise CustomModuleGenerationError(
-                "ATOMIC_STATE_LOWERING_CONTRACT_INVALID: work item must be an object."
-            )
-        symbol = str(raw_work.get("symbol") or "").strip()
-        return_type = str(raw_work.get("return_type") or "").strip()
-        raw_parameters = raw_work.get("parameters") or default_parameters
-        if (
-            not isinstance(raw_parameters, Sequence)
-            or isinstance(raw_parameters, (str, bytes, bytearray))
-        ):
-            raise CustomModuleGenerationError(
-                "ATOMIC_STATE_LOWERING_CONTRACT_INVALID: helper parameters must be a sequence."
-            )
-
-        method_parameters: list[dict[str, str]] = []
-        for raw_parameter in raw_parameters:
-            if not isinstance(raw_parameter, Mapping):
-                raise CustomModuleGenerationError(
-                    "ATOMIC_STATE_LOWERING_CONTRACT_INVALID: helper parameter must be an object."
-                )
-            java_type = str(raw_parameter.get("type") or "").strip()
-            name = str(raw_parameter.get("name") or "").strip()
-            if not java_type or not name:
-                raise CustomModuleGenerationError(
-                    "ATOMIC_STATE_LOWERING_CONTRACT_INVALID: helper parameter type/name missing."
-                )
-            method_parameters.append({"type": java_type, "name": name})
-
-        if not symbol or not return_type or not method_parameters:
-            raise CustomModuleGenerationError(
-                "ATOMIC_STATE_LOWERING_CONTRACT_INVALID: helper signature is incomplete."
-            )
-        methods.append({
-            "return_type": return_type,
-            "name": symbol,
-            "parameters": method_parameters,
-            "throws": [],
-        })
-        required.append(("methods", index, "body"))
-
-    initial["methods"] = methods
-    return initial, tuple(required)
-
-
-
-def _state_lowering_model_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Remove host-owned Java declarations from the state body-generation prompt."""
-
-    result = deepcopy(dict(payload))
-    lowering = result.get("state_lowering")
-    if not isinstance(lowering, Mapping):
-        return result
-    raw_work = lowering.get("work")
-    if (
-        not isinstance(raw_work, Sequence)
-        or isinstance(raw_work, (str, bytes, bytearray))
-    ):
-        return result
-
-    clean_lowering = dict(lowering)
-    clean_work: list[Any] = []
-    for raw_item in raw_work:
-        if not isinstance(raw_item, Mapping):
-            clean_work.append(raw_item)
-            continue
-        item = dict(raw_item)
-        item.pop("declaration", None)
-        clean_work.append(item)
-    clean_lowering["work"] = clean_work
-    result["state_lowering"] = clean_lowering
-    return result
-
-
 def _call_atomic_java_region(
     router: Any,
     messages: Sequence[Mapping[str, str]],
@@ -1962,28 +1844,22 @@ def _call_atomic_java_region(
     from .atomic_java_assembly import JavaStructureAssembly
 
     payload = _atomic_request_payload(messages)
+    section = str(payload.get("section") or "").strip()
+    if section in {"state_model", "behavior_contract"}:
+        raise CustomModuleGenerationError(
+            "ATOMIC_HOST_ONLY_SECTION_CODER_FORBIDDEN: "
+            f"{section} must be compiled by deterministic host lowering."
+        )
     response_region = str(payload.get("response_region") or "members").strip()
     parameters, _ = _atomic_parameters_for_request(payload, response_region=response_region)
     registry = getattr(router, "registry", None)
     config = registry.role(router.profile, "coder") if registry is not None else None
-    initial_structure, required_nonempty_arrays = _state_lowering_assembly_seed(
-        payload,
-        parameters,
-        response_region=response_region,
-    )
-    assembly_payload = (
-        _state_lowering_model_payload(payload)
-        if initial_structure is not None
-        else payload
-    )
     decision = JavaStructureAssembly(
         callback,
-        assembly_payload,
+        payload,
         output_token_ceiling=output_token_ceiling,
         config=config,
         multi_callback=multi_callback,
-        initial_structure=initial_structure,
-        required_nonempty_arrays=required_nonempty_arrays,
     ).run(parameters)
     decision = _materialize_atomic_java_modifiers(decision, payload=payload)
     from .atomic_concern_source import _validate_region_text
