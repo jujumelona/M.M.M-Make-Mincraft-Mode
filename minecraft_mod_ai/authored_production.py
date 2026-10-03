@@ -194,9 +194,8 @@ def _compile_new_authored_modules(
     )
     module = ProductionModule(
         module_id=task_id,
-        kind="custom_java",
+        kind="typed_host",
         config={
-            "implementation": "custom",
             "evidence_task": task,
             "typed_plan_ir": deepcopy(validated_plan),
             "typed_plan_package": package_name,
