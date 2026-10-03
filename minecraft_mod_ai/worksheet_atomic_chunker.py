@@ -105,11 +105,32 @@ def pack_section_concerns(
     if max_chunk_size is not None and max_chunk_size < 1:
         raise ValueError("max_chunk_size must be positive when supplied")
 
-    chunk_size = max_chunk_size or 1
+    # State records depend on the variable symbol table and stay serialized.
+    # Other sections are packed into bounded semantic work units so the small model
+    # does not pay one full inference round-trip per concern.  The field budget keeps
+    # each native structured response comfortably below the transport ceiling.
+    chunk_size = max_chunk_size or (1 if key == "state_model" else 4)
+    max_fields = 12
     items = list(records.items())
+    groups: list[list[tuple[str, str]]] = []
+    current: list[tuple[str, str]] = []
+    current_fields = 0
+    for concern, columns in items:
+        field_count = max(1, len(columns.split()))
+        if current and (
+            len(current) >= chunk_size
+            or current_fields + field_count > max_fields
+        ):
+            groups.append(current)
+            current = []
+            current_fields = 0
+        current.append((concern, columns))
+        current_fields += field_count
+    if current:
+        groups.append(current)
+
     chunks: list[tuple[str, ...]] = []
-    for start in range(0, len(items), chunk_size):
-        selected = items[start : start + chunk_size]
+    for index, selected in enumerate(groups, start=1):
         chunk = WorksheetConcernChunk(
             [concern for concern, _ in selected],
             {
@@ -124,7 +145,7 @@ def pack_section_concerns(
         )
         _assert_closed_object_schemas(
             schema,
-            path=f"worksheet chunk {key}.{start // chunk_size + 1}",
+            path=f"worksheet chunk {key}.{index}",
         )
         chunks.append(chunk)
     return chunks
