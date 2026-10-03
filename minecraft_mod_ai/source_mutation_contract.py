@@ -16,7 +16,6 @@ SOURCE_MUTATION_NAMES = frozenset(
         "apply_source_patch",
         "apply_source_edit",
         "apply_java_operations",
-        "repair_project",
     }
 )
 STRICT_RECEIPT_MUTATION_NAMES = frozenset(
