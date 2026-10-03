@@ -113,6 +113,10 @@ class TypedOperationAuthor:
         return result["value"]
 
     def _enum(self, field: str, values: list[str], *, scope: str) -> str:
+        if not values:
+            raise ValueError(f"TYPED_PLAN_AUTHORING_ENUM_EMPTY: {field}")
+        if len(values) == 1:
+            return str(values[0])
         value = self._ask(field, {"type": "string", "enum": values}, scope=scope)
         if value not in values:
             raise ValueError(f"TYPED_PLAN_AUTHORING_RESPONSE_INVALID: {field}")
@@ -704,15 +708,23 @@ def author_typed_plan_ir(
             )
         seen_platform_ids.add(module_id)
 
-        config = author._ask(
-            "platform_config",
-            platform_config_schema(kind),
-            scope=scope,
-        )
-        if not isinstance(config, Mapping):
-            raise ValueError(
-                f"TYPED_PLAN_AUTHORING_RESPONSE_INVALID: {scope}.platform_config"
+        config_schema = platform_config_schema(kind)
+        if (
+            config_schema.get("type") == "object"
+            and config_schema.get("properties") == {}
+            and config_schema.get("additionalProperties") is False
+        ):
+            config = {}
+        else:
+            config = author._ask(
+                "platform_config",
+                config_schema,
+                scope=scope,
             )
+            if not isinstance(config, Mapping):
+                raise ValueError(
+                    f"TYPED_PLAN_AUTHORING_RESPONSE_INVALID: {scope}.platform_config"
+                )
         coverable_refs = platform_coverable_refs(
             kind,
             sorted(uncovered),
