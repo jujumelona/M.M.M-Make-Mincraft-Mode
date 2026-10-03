@@ -14,7 +14,8 @@ from .project_edit import (
     inspect_fabric_project,
     write_text_files,
 )
-from .typed_plan_ir import typed_plan_uses_state
+from .typed_host_capabilities import render_typed_host_capabilities_java
+from .typed_plan_ir import typed_plan_capability_ids, typed_plan_uses_state
 from .typed_plan_java import render_typed_plan_java
 
 
@@ -220,6 +221,32 @@ def generate_typed_plan_module(
         capabilities=capabilities,
     )
     files = {expected_path: source}
+
+    capability_ids = typed_plan_capability_ids(raw_plan)
+    if capability_ids:
+        missing = [
+            capability_id
+            for capability_id in capability_ids
+            if capability_id not in capabilities
+        ]
+        if missing:
+            raise ValueError(
+                "TYPED_PLAN_CAPABILITY_BINDING_REQUIRED: "
+                + ", ".join(missing)
+            )
+        capability_path = (
+            "src/main/java/"
+            + package_name.replace(".", "/")
+            + "/AuthoredHostCapabilities.java"
+        )
+        _assert_host_owned_or_absent(
+            root,
+            capability_path,
+            marker="// MMM:TYPED_HOST_CAPABILITIES_OWNER",
+        )
+        files[capability_path] = render_typed_host_capabilities_java(
+            package_name
+        )
 
     raw_state_store = config.get("typed_state_store")
     if raw_state_store is not None:
