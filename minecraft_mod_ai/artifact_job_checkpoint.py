@@ -21,16 +21,6 @@ def digest(value):
     ).hexdigest()
 
 
-def _load(path):
-    """Load the legacy monolithic checkpoint for backward-compatible reuse only."""
-    if not path.exists():
-        return {"jobs": {}, "paths": {}}
-    envelope = json.loads(path.read_text(encoding="utf-8"))
-    state = envelope["state"]
-    if envelope.get("sha256") != digest(state):
-        raise ValueError("ARTIFACT_CHECKPOINT_CORRUPT")
-    return state
-
 
 def _record_path(root, namespace, key):
     filename = sha256(str(key).encode("utf-8")).hexdigest() + ".json"
@@ -65,22 +55,12 @@ def _write_record(root, namespace, key, value):
             temp.unlink()
 
 
-def _legacy_state(root):
-    return _load(root / ".mmm/artifact_jobs.json")
-
-
 def _read_job_record(root, job_id):
-    record = _read_record(root, "jobs", job_id)
-    if record is not None:
-        return record
-    return _legacy_state(root)["jobs"].get(job_id)
+    return _read_record(root, "jobs", job_id)
 
 
 def _read_path_hash(root, relative):
-    record = _read_record(root, "paths", relative)
-    if record is not None:
-        return record
-    return _legacy_state(root)["paths"].get(relative)
+    return _read_record(root, "paths", relative)
 
 
 def _locks_for(root, job_id, relative):
