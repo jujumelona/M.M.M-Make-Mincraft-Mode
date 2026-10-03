@@ -14,6 +14,7 @@ from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
 from minecraft_mod_ai.generator import FabricProjectGenerator
 from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
 from minecraft_mod_ai.scale_policy import ScalePolicy
+from minecraft_mod_ai.typed_host_capabilities import typed_host_capability_contracts
 from minecraft_mod_ai.spec import ContentKind, ContentSpec, ModSpec
 from minecraft_mod_ai.work_graph import _is_host_exact_authored_module, _module_shards, _node
 
@@ -614,4 +615,75 @@ def test_typed_state_store_materializes_persistence_without_router(
         package_root / "TypedtestMod.java"
     ).read_text(encoding="utf-8")
     assert "AuthoredStatePersistence.register();" in main_text
+
+def test_typed_host_capability_generates_owned_java_without_router(
+    tmp_path: Path,
+) -> None:
+    root = _project(tmp_path)
+    text = "notify player"
+    typed = {
+        "schema_version": "mmm/typed-plan-ir-v1",
+        "source_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        "functions": [
+            {
+                "id": "notify",
+                "parameters": [{"name": "player", "type": "object"}],
+                "return_type": "void",
+                "body": [
+                    {
+                        "op": "expr",
+                        "value": {
+                            "op": "capability",
+                            "id": "player.send_message",
+                            "args": [
+                                {"op": "ref", "name": "player"},
+                                {
+                                    "op": "literal",
+                                    "type": "string",
+                                    "value": "hello",
+                                },
+                            ],
+                        },
+                    },
+                    {"op": "return"},
+                ],
+                "covers": ["behavior_contract.outputs"],
+            }
+        ],
+        "initialize": [],
+    }
+    contracts = typed_host_capability_contracts()
+    module = ProductionModule(
+        module_id="authored_typed_plan",
+        kind="custom_java",
+        config={
+            "implementation": "custom",
+            "typed_plan_ir": typed,
+            "typed_plan_package": "ai.minecraft.typedtest",
+            "typed_plan_path": (
+                "src/main/java/ai/minecraft/typedtest/AuthoredProgram.java"
+            ),
+            "typed_plan_capabilities": {
+                "player.send_message": contracts["player.send_message"],
+            },
+        },
+        required_gates=("target_compile",),
+    )
+
+    receipt = CustomModuleGenerator(ForbiddenRouter()).generate(
+        root,
+        module=module,
+    )
+
+    assert receipt["generation_verification"]["model_calls"] == 0
+    package_root = root / "src/main/java/ai/minecraft/typedtest"
+    program = (package_root / "AuthoredProgram.java").read_text(
+        encoding="utf-8"
+    )
+    capability_source = (
+        package_root / "AuthoredHostCapabilities.java"
+    ).read_text(encoding="utf-8")
+    assert "AuthoredHostCapabilities.sendMessage" in program
+    assert "// MMM:TYPED_HOST_CAPABILITIES_OWNER" in capability_source
+    assert "public static void sendMessage" in capability_source
 
