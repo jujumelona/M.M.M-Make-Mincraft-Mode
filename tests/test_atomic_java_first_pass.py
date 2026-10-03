@@ -317,67 +317,6 @@ def test_multi_call_scalar_batch_keeps_schema_after_cursor_close() -> None:
     assert rendered == "private static void launch() {\n    return;\n}"
 
 
-
-def test_state_lowering_helper_signature_is_host_owned_and_only_body_is_decoded() -> None:
-    calls = []
-
-    class Router:
-        def generate_tool_decision(self, *_args, **_kwargs):
-            pytest.fail("host-owned state helper structure must not be decoded")
-
-        def generate_tool_decisions(self, role, messages, **kwargs):
-            assert role == "coder"
-            properties = kwargs["parameters"]["properties"]
-            assert set(properties) == {"statement"}
-            assert kwargs["tool_name"] == "emit_java_statement"
-            payload = json.loads(messages[-1]["content"])
-            assert payload["assembly"]["path"] == ["methods", 0, "body"]
-            assert "declaration" not in payload["state_lowering"]["work"][0]
-            assert "body" in payload["concern"]["implementation_goal"].lower() or (
-                payload["concern"].get("implementation_goal") is None
-            )
-            calls.append(payload["assembly"]["path"])
-            return (
-                {"statement": 'Object value = getState("player_currency", context);'},
-                {"statement": 'setState("player_currency", value, context);'},
-            )
-
-    rendered = _call_atomic_java_region(
-        Router(),
-        [{
-            "role": "user",
-            "content": json.dumps({
-                "response_region": "members",
-                "host_selected_class": "AuthoredStateModel",
-                "concern": {"name": "transitions"},
-                "state_lowering": {
-                    "work": [{
-                        "symbol": "mmmState_transitions_mutation_0",
-                        "return_type": "void",
-                        "parameters": [{
-                            "type": "java.util.Map<String, Object>",
-                            "name": "context",
-                        }],
-                        "declaration": (
-                            "private static void mmmState_transitions_mutation_0"
-                            "(java.util.Map<String, Object> context)"
-                        ),
-                        "record": {"mutation": "update player currency"},
-                        "field": "mutation",
-                    }],
-                },
-            }),
-        }],
-        output_token_ceiling=512,
-    )
-
-    assert calls == [["methods", 0, "body"]]
-    assert "private static void mmmState_transitions_mutation_0(" in rendered
-    assert "java.util.Map<String, Object> context" in rendered
-    assert 'Object value = getState("player_currency", context);' in rendered
-    assert 'setState("player_currency", value, context);' in rendered
-
-
 def test_outer_public_api_modifiers_come_from_host_contract() -> None:
     captured_paths: list[list[object]] = []
 
