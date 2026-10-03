@@ -92,6 +92,7 @@ def _state_persistence_java(
 import {package_name}.system.MmmPersistentStore;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 
+// MMM:TYPED_STATE_PERSISTENCE_OWNER
 public final class AuthoredStatePersistence {{
     private static boolean registered;
 
@@ -117,6 +118,21 @@ public final class AuthoredStatePersistence {{
     }}
 }}
 """
+
+
+def _assert_exact_or_absent(
+    root: Path,
+    relative: str,
+    *,
+    expected: str,
+) -> None:
+    target = root / relative
+    if not target.exists():
+        return
+    if not target.is_file() or target.is_symlink():
+        raise ValueError(f"TYPED_PLAN_TARGET_INVALID: {relative}")
+    if target.read_text(encoding="utf-8") != expected:
+        raise ValueError(f"TYPED_PLAN_OWNERSHIP_CONFLICT: {relative}")
 
 
 def _persistence_files(
@@ -227,7 +243,26 @@ def generate_typed_plan_module(
         marker="// MMM:TYPED_PLAN_OWNER",
     )
 
-    if typed_plan_uses_state(raw_plan):
+    if raw_state_store is not None:
+        package_path = package_name.replace(".", "/")
+        store_path = (
+            f"src/main/java/{package_path}/system/MmmPersistentStore.java"
+        )
+        bridge_path = (
+            f"src/main/java/{package_path}/AuthoredStatePersistence.java"
+        )
+        _assert_exact_or_absent(
+            root,
+            store_path,
+            expected=files[store_path],
+        )
+        _assert_host_owned_or_absent(
+            root,
+            bridge_path,
+            marker="// MMM:TYPED_STATE_PERSISTENCE_OWNER",
+        )
+
+    if typed_plan_uses_state(raw_plan) or raw_state_store is not None:
         raw_state = config.get("typed_plan_state_section")
         if not isinstance(raw_state, Mapping) or not raw_state:
             raise ValueError("TYPED_PLAN_STATE_AUTHORITY_REQUIRED")
