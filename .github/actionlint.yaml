@@ -9,3 +9,8 @@ paths:
   ".github/workflows/build-gradle-runtime-cache.yml":
     ignore:
       - 'shellcheck reported issue in this script: SC2129:.+'
+  ".github/workflows/partial-ci.yml":
+    # GitHub Actions supports concurrency.queue, but actionlint 1.7.12 does not
+    # recognize that newly added key yet. Ignore only this compatibility gap.
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section\.'
