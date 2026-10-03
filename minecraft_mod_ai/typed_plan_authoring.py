@@ -2,9 +2,9 @@ from __future__ import annotations
 
 """Native-tool authoring for typed PlanIR.
 
-The planner emits one scalar typed decision at a time. It never emits Java or an
-opaque JSON blob, and a hard call bound prevents recursive authoring from running
-without a host-observed termination measure.
+The planner emits one bounded typed AST node or host-requested decision at a time.
+It never emits Java or an opaque full-program blob.  The host owns the finite work
+graph, semantic coverage, AST depth, fan-out and termination measure.
 """
 
 import hashlib
@@ -290,7 +290,7 @@ class TypedOperationAuthor:
             "field": field,
             "decision_index": self.call_count,
             "policy": (
-                "Choose only the requested bounded typed value. Do not emit Java, prose, "
+                "Choose only the requested bounded typed value or AST node. Do not emit Java, prose, "
                 "markdown, or additional fields. Stop at the compile-ready semantic unit; "
                 "the host owns iteration and completion."
             ),
@@ -302,7 +302,7 @@ class TypedOperationAuthor:
                     "role": "system",
                     "content": (
                         "Author executable behavior through the host typed PlanIR only. "
-                        "Every answer is one required native scalar decision."
+                        "Every answer is one bounded host-requested typed decision."
                     ),
                 },
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
@@ -381,131 +381,276 @@ class TypedOperationAuthor:
         _depth: int = 0,
     ) -> dict[str, Any]:
         bindings = dict(env or {})
-        if _depth >= 4:
-            expression_ops = ["literal"]
-            if bindings:
-                expression_ops.append("ref")
-        else:
-            expression_ops = [
-                "literal", "unary", "binary", "list", "map", "state_get"
-            ]
-            if bindings:
-                expression_ops.append("ref")
+
+        def closed(
+            properties: Mapping[str, Any],
+            required: Sequence[str],
+        ) -> dict[str, Any]:
+            return {
+                "type": "object",
+                "properties": dict(properties),
+                "required": list(required),
+                "additionalProperties": False,
+            }
+
+        branches: list[dict[str, Any]] = []
+        literal_values = {
+            "boolean": {"type": "boolean"},
+            "int": {
+                "type": "integer",
+                "minimum": -(2**31),
+                "maximum": 2**31 - 1,
+            },
+            "long": {
+                "type": "integer",
+                "minimum": -(2**63),
+                "maximum": 2**63 - 1,
+            },
+            "double": {"type": "number"},
+            "string": {"type": "string", "maxLength": 1024},
+            "object": {
+                "type": [
+                    "string",
+                    "number",
+                    "integer",
+                    "boolean",
+                    "null",
+                ],
+            },
+        }
+        for kind in _TYPES:
+            branches.append(closed(
+                {
+                    "op": {"const": "literal"},
+                    "type": {"const": kind},
+                    "value": literal_values[kind],
+                },
+                ("op", "type", "value"),
+            ))
+
+        if bindings:
+            branches.append(closed(
+                {
+                    "op": {"const": "ref"},
+                    "name": {
+                        "type": "string",
+                        "enum": sorted(bindings),
+                    },
+                },
+                ("op", "name"),
+            ))
+
+        if _depth < 4:
+            branches.extend([
+                closed(
+                    {
+                        "op": {"const": "unary"},
+                        "operator": {
+                            "type": "string",
+                            "enum": ["!", "-"],
+                        },
+                    },
+                    ("op", "operator"),
+                ),
+                closed(
+                    {
+                        "op": {"const": "binary"},
+                        "operator": {
+                            "type": "string",
+                            "enum": [
+                                "+", "-", "*", "/", "%",
+                                "==", "!=", "<", "<=", ">", ">=",
+                                "&&", "||",
+                            ],
+                        },
+                    },
+                    ("op", "operator"),
+                ),
+                closed(
+                    {
+                        "op": {"const": "list"},
+                        "count": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 8,
+                        },
+                    },
+                    ("op", "count"),
+                ),
+                closed(
+                    {
+                        "op": {"const": "map"},
+                        "count": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 8,
+                        },
+                    },
+                    ("op", "count"),
+                ),
+                closed(
+                    {
+                        "op": {"const": "state_get"},
+                        "type": {
+                            "type": "string",
+                            "enum": list(_TYPES),
+                        },
+                    },
+                    ("op", "type"),
+                ),
+            ])
             if self.function_signatures:
-                expression_ops.append("call")
+                branches.append(closed(
+                    {
+                        "op": {"const": "call"},
+                        "function": {
+                            "type": "string",
+                            "enum": sorted(self.function_signatures),
+                        },
+                    },
+                    ("op", "function"),
+                ))
             if self.capabilities:
-                expression_ops.append("capability")
-        op = self._enum(
-            "expression_op",
-            expression_ops,
+                branches.append(closed(
+                    {
+                        "op": {"const": "capability"},
+                        "id": {
+                            "type": "string",
+                            "enum": sorted(self.capabilities),
+                        },
+                    },
+                    ("op", "id"),
+                ))
+
+        head = self._ask(
+            "expression_node",
+            {"oneOf": branches},
             scope=scope,
         )
-        if op == "literal":
-            return self._literal(scope=scope)
-        if op == "ref":
-            name = self._enum(
-                "reference_name",
-                sorted(bindings),
-                scope=scope,
+        if not isinstance(head, Mapping):
+            raise ValueError(
+                f"TYPED_PLAN_AUTHORING_RESPONSE_INVALID: {scope}.expression_node"
             )
-            return {"op": "ref", "name": name}
+        op = str(head.get("op") or "")
+
+        if op == "literal":
+            return {
+                "op": "literal",
+                "type": str(head["type"]),
+                "value": head["value"],
+            }
+        if op == "ref":
+            return {"op": "ref", "name": str(head["name"])}
         if op == "unary":
-            operator = self._enum("unary_operator", ["!", "-"], scope=scope)
             return {
                 "op": "unary",
-                "operator": operator,
-                "value": self.expression(scope + ".unary", bindings, _depth=_depth + 1),
+                "operator": str(head["operator"]),
+                "value": self.expression(
+                    scope + ".unary",
+                    bindings,
+                    _depth=_depth + 1,
+                ),
             }
         if op == "binary":
-            operator = self._enum(
-                "binary_operator",
-                ["+", "-", "*", "/", "%", "==", "!=", "<", "<=", ">", ">=", "&&", "||"],
-                scope=scope,
-            )
             return {
                 "op": "binary",
-                "operator": operator,
-                "left": self.expression(scope + ".left", bindings, _depth=_depth + 1),
-                "right": self.expression(scope + ".right", bindings, _depth=_depth + 1),
+                "operator": str(head["operator"]),
+                "left": self.expression(
+                    scope + ".left",
+                    bindings,
+                    _depth=_depth + 1,
+                ),
+                "right": self.expression(
+                    scope + ".right",
+                    bindings,
+                    _depth=_depth + 1,
+                ),
             }
         if op == "list":
-            count = int(self._ask(
-                "list_item_count",
-                {"type": "integer", "minimum": 0, "maximum": 8},
-                scope=scope,
-            ))
+            count = int(head["count"])
             return {
                 "op": "list",
                 "items": [
-                    self.expression(f"{scope}.item[{i}]", bindings, _depth=_depth + 1)
-                    for i in range(count)
+                    self.expression(
+                        f"{scope}.item[{index}]",
+                        bindings,
+                        _depth=_depth + 1,
+                    )
+                    for index in range(count)
                 ],
             }
         if op == "map":
-            count = int(self._ask(
-                "map_entry_count",
-                {"type": "integer", "minimum": 0, "maximum": 8},
-                scope=scope,
-            ))
-            entries = []
-            for index in range(count):
-                entries.append({
-                    "key": self.expression(
-                        f"{scope}.entry[{index}].key",
-                        bindings,
-                        _depth=_depth + 1,
-                    ),
-                    "value": self.expression(
-                        f"{scope}.entry[{index}].value",
-                        bindings,
-                        _depth=_depth + 1,
-                    ),
-                })
-            return {"op": "map", "entries": entries}
+            count = int(head["count"])
+            return {
+                "op": "map",
+                "entries": [
+                    {
+                        "key": self.expression(
+                            f"{scope}.entry[{index}].key",
+                            bindings,
+                            _depth=_depth + 1,
+                        ),
+                        "value": self.expression(
+                            f"{scope}.entry[{index}].value",
+                            bindings,
+                            _depth=_depth + 1,
+                        ),
+                    }
+                    for index in range(count)
+                ],
+            }
         if op == "call":
-            function = self._enum(
-                "function_id",
-                sorted(self.function_signatures),
-                scope=scope,
-            )
+            function = str(head["function"])
             parameter_types = self.function_signatures[function]
             return {
                 "op": "call",
                 "function": function,
                 "args": [
-                    self.expression(f"{scope}.arg[{i}]", bindings, _depth=_depth + 1)
-                    for i in range(len(parameter_types))
+                    self.expression(
+                        f"{scope}.arg[{index}]",
+                        bindings,
+                        _depth=_depth + 1,
+                    )
+                    for index in range(len(parameter_types))
                 ],
             }
         if op == "capability":
-            ids = sorted(self.capabilities)
-            cap_id = self._enum("capability_id", ids, scope=scope)
-            params = self.capabilities.get(cap_id, {}).get("parameters", [])
+            cap_id = str(head["id"])
+            params = self.capabilities.get(cap_id, {}).get(
+                "parameters",
+                [],
+            )
             count = len(params) if isinstance(params, list) else 0
             return {
                 "op": "capability",
                 "id": cap_id,
                 "args": [
                     self.expression(
-                        f"{scope}.capability_arg[{i}]",
+                        f"{scope}.capability_arg[{index}]",
                         bindings,
                         _depth=_depth + 1,
                     )
-                    for i in range(count)
+                    for index in range(count)
                 ],
             }
         if op == "state_get":
             return {
                 "op": "state_get",
-                "key": self.expression(scope + ".state_key", bindings, _depth=_depth + 1),
-                "type": self._type("state_type", scope=scope),
+                "key": self.expression(
+                    scope + ".state_key",
+                    bindings,
+                    _depth=_depth + 1,
+                ),
+                "type": str(head["type"]),
                 "context": self.expression(
                     scope + ".state_context",
                     bindings,
                     _depth=_depth + 1,
                 ),
             }
-        raise AssertionError(op)
+        raise ValueError(
+            f"TYPED_PLAN_AUTHORING_RESPONSE_INVALID: unsupported expression {op!r}"
+        )
 
     def statement(
         self,
@@ -516,26 +661,76 @@ class TypedOperationAuthor:
         _depth: int = 0,
     ) -> dict[str, Any] | None:
         bindings = dict(env or {})
-        statement_ops = [
-            "let", "return", "assert", "state_set", "expr", "done",
-        ]
-        if _depth < 3:
-            statement_ops[3:3] = ["if", "while", "foreach"]
-        if bindings:
-            statement_ops.insert(1, "set")
-        op = self._enum(
-            "statement_op",
-            statement_ops,
-            scope=scope,
-        )
-        if op == "done":
-            return None
-        if op == "let":
-            binding = self._ask(
-                "local_binding",
+
+        def closed(
+            properties: Mapping[str, Any],
+            required: Sequence[str],
+        ) -> dict[str, Any]:
+            return {
+                "type": "object",
+                "properties": dict(properties),
+                "required": list(required),
+                "additionalProperties": False,
+            }
+
+        branches: list[dict[str, Any]] = [
+            closed({"op": {"const": "done"}}, ("op",)),
+            closed(
                 {
-                    "type": "object",
-                    "properties": {
+                    "op": {"const": "let"},
+                    "name": {
+                        "type": "string",
+                        "pattern": r"^[A-Za-z_$][A-Za-z0-9_$]*$",
+                    },
+                    "type": {
+                        "type": "string",
+                        "enum": list(_TYPES),
+                    },
+                },
+                ("op", "name", "type"),
+            ),
+            closed({"op": {"const": "return"}}, ("op",)),
+            closed(
+                {
+                    "op": {"const": "assert"},
+                    "message": {
+                        "type": "string",
+                        "maxLength": 512,
+                    },
+                },
+                ("op", "message"),
+            ),
+            closed({"op": {"const": "state_set"}}, ("op",)),
+            closed({"op": {"const": "expr"}}, ("op",)),
+        ]
+        if bindings:
+            branches.append(closed(
+                {
+                    "op": {"const": "set"},
+                    "name": {
+                        "type": "string",
+                        "enum": sorted(bindings),
+                    },
+                },
+                ("op", "name"),
+            ))
+        if _depth < 3:
+            branches.extend([
+                closed({"op": {"const": "if"}}, ("op",)),
+                closed(
+                    {
+                        "op": {"const": "while"},
+                        "max_iterations": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 1_000_000,
+                        },
+                    },
+                    ("op", "max_iterations"),
+                ),
+                closed(
+                    {
+                        "op": {"const": "foreach"},
                         "name": {
                             "type": "string",
                             "pattern": r"^[A-Za-z_$][A-Za-z0-9_$]*$",
@@ -545,45 +740,59 @@ class TypedOperationAuthor:
                             "enum": list(_TYPES),
                         },
                     },
-                    "required": ["name", "type"],
-                    "additionalProperties": False,
-                },
-                scope=scope,
+                    ("op", "name", "type"),
+                ),
+            ])
+
+        head = self._ask(
+            "statement_node",
+            {"oneOf": branches},
+            scope=scope,
+        )
+        if not isinstance(head, Mapping):
+            raise ValueError(
+                f"TYPED_PLAN_AUTHORING_RESPONSE_INVALID: {scope}.statement_node"
             )
-            if not isinstance(binding, Mapping):
+        op = str(head.get("op") or "")
+        if op == "done":
+            return None
+        if op == "let":
+            name = str(head["name"])
+            if name in bindings:
                 raise ValueError(
-                    f"TYPED_PLAN_AUTHORING_RESPONSE_INVALID: {scope}.local_binding"
+                    f"TYPED_PLAN_AUTHORING_DUPLICATE_LOCAL: {scope}.{name}"
                 )
             return {
                 "op": "let",
-                "name": str(binding["name"]),
-                "type": str(binding["type"]),
-                "value": self.expression(scope + ".value", bindings),
+                "name": name,
+                "type": str(head["type"]),
+                "value": self.expression(
+                    scope + ".value",
+                    bindings,
+                ),
             }
         if op == "set":
-            name = self._enum(
-                "local_name",
-                sorted(bindings),
-                scope=scope,
-            )
             return {
                 "op": "set",
-                "name": name,
-                "value": self.expression(scope + ".value", bindings),
+                "name": str(head["name"]),
+                "value": self.expression(
+                    scope + ".value",
+                    bindings,
+                ),
             }
         if op == "return":
-            if return_type is None:
-                has_value = bool(self._ask(
-                    "return_has_value",
-                    {"type": "boolean"},
-                    scope=scope,
-                ))
-            else:
-                has_value = return_type != "void"
+            has_value = (
+                bool(head.get("has_value"))
+                if return_type is None
+                else return_type != "void"
+            )
             return (
                 {
                     "op": "return",
-                    "value": self.expression(scope + ".value", bindings),
+                    "value": self.expression(
+                        scope + ".value",
+                        bindings,
+                    ),
                 }
                 if has_value
                 else {"op": "return"}
@@ -595,11 +804,7 @@ class TypedOperationAuthor:
                     scope + ".condition",
                     bindings,
                 ),
-                "message": str(self._ask(
-                    "assert_message",
-                    {"type": "string"},
-                    scope=scope,
-                )),
+                "message": str(head["message"]),
             }
         if op == "if":
             return {
@@ -628,11 +833,7 @@ class TypedOperationAuthor:
                     scope + ".condition",
                     bindings,
                 ),
-                "max_iterations": int(self._ask(
-                    "max_iterations",
-                    {"type": "integer", "minimum": 1, "maximum": 1000000},
-                    scope=scope,
-                )),
+                "max_iterations": int(head["max_iterations"]),
                 "body": self.body(
                     scope + ".body",
                     env=bindings,
@@ -641,31 +842,12 @@ class TypedOperationAuthor:
                 ),
             }
         if op == "foreach":
-            item = self._ask(
-                "foreach_binding",
-                {
-                    "type": "object",
-                    "properties": {
-                        "name": {
-                            "type": "string",
-                            "pattern": r"^[A-Za-z_$][A-Za-z0-9_$]*$",
-                        },
-                        "type": {
-                            "type": "string",
-                            "enum": list(_TYPES),
-                        },
-                    },
-                    "required": ["name", "type"],
-                    "additionalProperties": False,
-                },
-                scope=scope,
-            )
-            if not isinstance(item, Mapping):
+            name = str(head["name"])
+            if name in bindings:
                 raise ValueError(
-                    f"TYPED_PLAN_AUTHORING_RESPONSE_INVALID: {scope}.foreach_binding"
+                    f"TYPED_PLAN_AUTHORING_DUPLICATE_LOCAL: {scope}.{name}"
                 )
-            name = str(item["name"])
-            item_type = str(item["type"])
+            item_type = str(head["type"])
             nested = dict(bindings)
             nested[name] = item_type
             return {
@@ -697,15 +879,19 @@ class TypedOperationAuthor:
                 "context": self.expression(
                     scope + ".state_context",
                     bindings,
-                    _depth=_depth + 1,
                 ),
             }
         if op == "expr":
             return {
                 "op": "expr",
-                "value": self.expression(scope + ".value", bindings),
+                "value": self.expression(
+                    scope + ".value",
+                    bindings,
+                ),
             }
-        raise AssertionError(op)
+        raise ValueError(
+            f"TYPED_PLAN_AUTHORING_RESPONSE_INVALID: unsupported statement {op!r}"
+        )
 
     def body(
         self,
