@@ -1585,13 +1585,6 @@ class CompleteProductionOrchestrator:
 
             def generate_custom(module: ProductionModule) -> dict[str, Any]:
                 nonlocal node_custom_generator
-                if isinstance(module.config.get("typed_plan_ir"), dict):
-                    from .typed_plan_production import generate_typed_plan_module
-
-                    return generate_typed_plan_module(
-                        project_root,
-                        module=module,
-                    )
                 if node_custom_generator is None:
                     node_custom_generator = new_custom_generator()
 
@@ -1765,6 +1758,16 @@ class CompleteProductionOrchestrator:
                     )
                     if config.get("requires_custom_generation"):
                         receipts.append(generate_custom(module))
+            elif stage == 'host':
+                from .typed_plan_production import generate_typed_plan_module
+
+                receipts.extend(
+                    generate_typed_plan_module(
+                        project_root,
+                        module=module,
+                    )
+                    for module in members
+                )
             elif stage == 'custom':
                 receipts.extend(generate_custom(module) for module in members)
             else:
