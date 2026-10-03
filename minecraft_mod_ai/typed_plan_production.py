@@ -7,7 +7,9 @@ from pathlib import Path
 from typing import Any
 
 from .complete_spec import ProductionModule
+from .production_state_compiler import render_production_state_java
 from .project_edit import inspect_fabric_project, write_text_files
+from .typed_plan_ir import typed_plan_uses_state
 from .typed_plan_java import render_typed_plan_java
 
 
@@ -17,6 +19,22 @@ def _typed_program_path(package_name: str) -> str:
         + str(package_name).replace(".", "/")
         + "/AuthoredProgram.java"
     )
+
+
+def _assert_host_owned_or_absent(
+    root: Path,
+    relative: str,
+    *,
+    marker: str,
+) -> None:
+    target = root / relative
+    if not target.exists():
+        return
+    if not target.is_file() or target.is_symlink():
+        raise ValueError(f"TYPED_PLAN_TARGET_INVALID: {relative}")
+    current = target.read_text(encoding="utf-8")
+    if marker not in current:
+        raise ValueError(f"TYPED_PLAN_OWNERSHIP_CONFLICT: {relative}")
 
 
 def generate_typed_plan_module(
@@ -74,17 +92,44 @@ def generate_typed_plan_module(
         package=package_name,
         capabilities=capabilities,
     )
+    files = {expected_path: source}
+    _assert_host_owned_or_absent(
+        root,
+        expected_path,
+        marker="// MMM:TYPED_PLAN_OWNER",
+    )
+
+    if typed_plan_uses_state(raw_plan):
+        raw_state = config.get("typed_plan_state_section")
+        if not isinstance(raw_state, Mapping) or not raw_state:
+            raise ValueError("TYPED_PLAN_STATE_AUTHORITY_REQUIRED")
+        state_path = (
+            "src/main/java/"
+            + package_name.replace(".", "/")
+            + "/AuthoredStateModel.java"
+        )
+        _assert_host_owned_or_absent(
+            root,
+            state_path,
+            marker="// MMM:TYPED_PLAN_STATE_OWNER",
+        )
+        files[state_path] = render_production_state_java(
+            raw_state,
+            package_name=package_name,
+        )
+
     patch_receipt = write_text_files(
         info,
-        {expected_path: source},
+        files,
         replace_existing=True,
     )
+    touched_paths = sorted(files)
     return {
         "schema_version": "mmm/custom-module-result-v3",
         "module_id": module.module_id,
         "kind": module.kind,
         "status": "SOURCE_GENERATED",
-        "touched_paths": [expected_path],
+        "touched_paths": touched_paths,
         "patch_receipt": patch_receipt,
         "operation_count": len(patch_receipt.get("operations") or ()),
         "required_gates": list(module.required_gates),
