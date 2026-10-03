@@ -7,7 +7,6 @@ on:
       - 'minecraft_mod_ai/execution_contract_policy.py'
       - 'minecraft_mod_ai/java_generation_policy.py'
       - 'minecraft_mod_ai/java_region_parser.py'
-      - 'minecraft_mod_ai/host_declaration_compiler.py'
       - 'minecraft_mod_ai/authored_production.py'
       - 'minecraft_mod_ai/typed_plan_ir.py'
       - 'minecraft_mod_ai/typed_plan_production.py'
