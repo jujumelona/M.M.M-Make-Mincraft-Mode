@@ -55,6 +55,14 @@ def generate_typed_plan_module(
             f"{configured_path!r} != {expected_path!r}"
         )
 
+    target = root / expected_path
+    if target.exists():
+        if not target.is_file() or target.is_symlink():
+            raise ValueError("TYPED_PLAN_TARGET_INVALID")
+        current = target.read_text(encoding="utf-8")
+        if "// MMM:TYPED_PLAN_OWNER" not in current:
+            raise ValueError("TYPED_PLAN_OWNERSHIP_CONFLICT")
+
     raw_capabilities = config.get("typed_plan_capabilities")
     capabilities = (
         dict(raw_capabilities)
