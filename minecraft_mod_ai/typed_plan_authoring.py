@@ -9,7 +9,7 @@ without a host-observed termination measure.
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 
@@ -751,7 +751,7 @@ def author_typed_plan_ir(
             "config": config,
         })
 
-    uncovered_logic = {
+    logic_refs = {
         ref
         for ref in coverage_refs
         if ref.startswith((
@@ -760,84 +760,98 @@ def author_typed_plan_ir(
             "failure_and_limits.",
         ))
     }
-    logic_index = 0
-    while uncovered_logic:
-        if len(specs) >= 64:
-            raise ValueError(
-                "TYPED_PLAN_FUNCTION_LIMIT: logic coverage did not converge."
-            )
+    logic_groups: list[tuple[str, list[str]]] = []
+    for section in (
+        "behavior_contract",
+        "algorithm",
+        "failure_and_limits",
+    ):
+        covers = sorted(
+            ref for ref in logic_refs if ref.startswith(section + ".")
+        )
+        if covers:
+            logic_groups.append((section, covers))
+
+    for logic_index, (section, covers) in enumerate(logic_groups):
         scope = f"function[{logic_index}]"
-        function_id = author._identifier("function_id", scope=scope)
+        function_id = f"logic_{section}"
         if function_id in known_ids:
             raise ValueError(
                 f"TYPED_PLAN_AUTHORING_DUPLICATE_FUNCTION: {function_id}"
             )
         known_ids.add(function_id)
+        author.set_scope_covers(scope, covers)
 
-        parameter_count = int(author._ask(
-            "parameter_count",
-            {"type": "integer", "minimum": 0, "maximum": 32},
-            scope=scope,
-        ))
-        parameters: list[dict[str, str]] = []
-        parameter_names: set[str] = set()
-        for parameter_index in range(parameter_count):
-            parameter_scope = f"{scope}.parameter[{parameter_index}]"
-            name = author._identifier(
-                "parameter_name",
-                scope=parameter_scope,
-            )
-            if name in parameter_names:
-                raise ValueError(
-                    f"TYPED_PLAN_AUTHORING_DUPLICATE_PARAMETER: "
-                    f"{function_id}.{name}"
-                )
-            parameter_names.add(name)
-            parameters.append({
-                "name": name,
-                "type": author._type(
-                    "parameter_type",
-                    scope=parameter_scope,
-                ),
-            })
-
-        return_type = author._type(
-            "return_type",
-            scope=scope,
-            allow_void=True,
-        )
-        available_covers = tuple(sorted(uncovered_logic))
-        coverage_count = int(author._ask(
-            "coverage_count",
+        signature = author._ask(
+            "function_signature",
             {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": min(128, len(available_covers)),
+                "type": "object",
+                "properties": {
+                    "parameters": {
+                        "type": "array",
+                        "maxItems": 8,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "pattern": r"^[A-Za-z_$][A-Za-z0-9_$]*$",
+                                },
+                                "type": {
+                                    "type": "string",
+                                    "enum": list(_TYPES),
+                                },
+                            },
+                            "required": ["name", "type"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "return_type": {
+                        "type": "string",
+                        "enum": [*_TYPES, "void"],
+                    },
+                },
+                "required": ["parameters", "return_type"],
+                "additionalProperties": False,
             },
             scope=scope,
-        ))
-        covers: list[str] = []
-        for coverage_index in range(coverage_count):
-            cover = author._enum(
-                "coverage_ref",
-                list(available_covers),
-                scope=f"{scope}.coverage[{coverage_index}]",
-            )
-            if cover not in covers:
-                covers.append(cover)
-        if not covers:
+        )
+        if not isinstance(signature, Mapping):
             raise ValueError(
-                "TYPED_PLAN_FUNCTION_COVERAGE_REQUIRED: function made no progress."
+                f"TYPED_PLAN_AUTHORING_RESPONSE_INVALID: {scope}.function_signature"
             )
-        uncovered_logic.difference_update(covers)
+        raw_parameters = signature.get("parameters")
+        if not isinstance(raw_parameters, list):
+            raise ValueError(
+                f"TYPED_PLAN_AUTHORING_RESPONSE_INVALID: {scope}.parameters"
+            )
+        parameters: list[dict[str, str]] = []
+        parameter_names: set[str] = set()
+        for raw_parameter in raw_parameters:
+            if not isinstance(raw_parameter, Mapping):
+                raise ValueError(
+                    f"TYPED_PLAN_AUTHORING_RESPONSE_INVALID: {scope}.parameter"
+                )
+            name = str(raw_parameter.get("name") or "")
+            type_name = str(raw_parameter.get("type") or "")
+            if name in parameter_names or type_name not in _TYPES:
+                raise ValueError(
+                    f"TYPED_PLAN_AUTHORING_RESPONSE_INVALID: {scope}.parameter"
+                )
+            parameter_names.add(name)
+            parameters.append({"name": name, "type": type_name})
 
+        return_type = str(signature.get("return_type") or "")
+        if return_type not in {*_TYPES, "void"}:
+            raise ValueError(
+                f"TYPED_PLAN_AUTHORING_RESPONSE_INVALID: {scope}.return_type"
+            )
         specs.append({
             "id": function_id,
             "parameters": parameters,
             "return_type": return_type,
             "covers": covers,
         })
-        logic_index += 1
 
     author.function_signatures = {
         str(spec["id"]): tuple(
@@ -847,20 +861,68 @@ def author_typed_plan_ir(
         for spec in specs
     }
 
-    functions: list[dict[str, Any]] = []
-    for index, spec in enumerate(specs):
+    def author_function_body(
+        item: tuple[int, dict[str, Any]],
+    ) -> tuple[int, dict[str, Any]]:
+        index, spec = item
+        scope = f"function[{index}].body"
+        body_author = TypedOperationAuthor(
+            router,
+            source_text,
+            structured_sections,
+            capabilities,
+            max_calls=256,
+        )
+        body_author.function_signatures = dict(author.function_signatures)
+        body_author.set_scope_covers(scope, spec["covers"])
+        statement_limit = body_author._semantic_statement_budget(scope)
+        # The model-call ceiling is derived from this function's actual semantic
+        # work.  It is only a runaway guard; normal completion happens at done or
+        # a terminal statement.
+        body_author.max_calls = max(24, min(256, statement_limit * 10))
         env = {
             str(parameter["name"]): str(parameter["type"])
             for parameter in spec["parameters"]
         }
-        functions.append({
+        return index, {
             **spec,
-            "body": author.body(
-                f"function[{index}].body",
+            "body": body_author.body(
+                scope,
                 env=env,
                 return_type=str(spec["return_type"]),
+                max_statements=statement_limit,
             ),
-        })
+        }
+
+    indexed_specs = list(enumerate(specs))
+    if len(indexed_specs) <= 1:
+        authored_functions = [
+            author_function_body(item)
+            for item in indexed_specs
+        ]
+    else:
+        from concurrent.futures import ThreadPoolExecutor
+        from .model_concurrency import active_llama_parallelism
+
+        workers = min(
+            len(indexed_specs),
+            max(1, active_llama_parallelism()),
+        )
+        if workers == 1:
+            authored_functions = [
+                author_function_body(item)
+                for item in indexed_specs
+            ]
+        else:
+            with ThreadPoolExecutor(
+                max_workers=workers,
+                thread_name_prefix="mmm-typed-body",
+            ) as executor:
+                authored_functions = list(
+                    executor.map(author_function_body, indexed_specs)
+                )
+    authored_functions.sort(key=lambda item: item[0])
+    functions = [value for _, value in authored_functions]
 
     signature_map = {
         str(spec["id"]): (
