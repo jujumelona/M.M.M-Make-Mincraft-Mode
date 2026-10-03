@@ -3580,6 +3580,26 @@ class AtomicConcernExecutor:
         )
         concern_authority = _concern_authority(self.task, concern)
 
+        if name in JAVA_DECLARATION_ONLY_CONCERNS:
+            from .host_declaration_compiler import compile_declaration_concern
+
+            if response_region != "members":
+                # Declaration initialization is entirely in host-owned fields.
+                return ""
+            host_members = compile_declaration_concern(
+                self.task, section=str(self.section or "").strip(),
+                concern=name, host_symbol=self.symbol,
+            )
+            _trace_region_generation(
+                "atomic_concern_region_host_lowered",
+                result="PASS", concern=name, region=response_region,
+                attempt=1, attempt_limit=1,
+                output_sha256=hashlib.sha256(host_members.encode("utf-8")).hexdigest(),
+                output_chars=len(host_members),
+            )
+            self.host_owned_concerns.add(name)
+            return host_members
+
         if (
             not failure
             and response_region == "members"
@@ -4077,6 +4097,10 @@ class AtomicConcernExecutor:
         # exactly the declarations that would be committed, never a temporary duplicate
         # that the host plans to discard afterward.
         owners = self._sibling_symbol_owners(exclude=name)
+        if name in self.host_owned_concerns:
+            # Host declarations are compiler output, not disposable model
+            # redeclarations. Never silently remove their fields or types.
+            self._assert_symbol_ownership(concern=name, members=members)
         members, dropped_redeclarations = _drop_authoritative_sibling_redeclarations(
             members,
             owners=owners,

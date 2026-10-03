@@ -106,9 +106,11 @@ def decide_region_completion(router, payload: Mapping) -> dict:
     Java source remains ordinary text. Neither a missing comment nor Markdown
     layout may decide whether the implementation is complete.
     """
+    from .execution_contract_policy import assert_java_coder_ownership
     from .model_adapters.base import ModelConfigurationError, NativeToolDecisionRejected
     from .model_output_atomicity_contract import assert_atomic_model_schema
 
+    assert_java_coder_ownership(payload)
     schema = deepcopy(ATOMIC_REGION_COMPLETION_PARAMETERS)
     assert_atomic_model_schema(schema, surface="atomic region completion")
     context = deepcopy(dict(payload))
@@ -178,6 +180,10 @@ def generate_region(
     completion_decider: Callable[[Mapping], Mapping] | None = None,
 ) -> str:
     """One normal region decode, then smaller semantic units on output pressure."""
+    from .custom_module_generator import _atomic_request_payload
+    from .execution_contract_policy import assert_java_coder_ownership
+
+    assert_java_coder_ownership(_atomic_request_payload(messages))
     try:
         return call_coder(messages)
     except OutputBudgetExhausted:
@@ -195,6 +201,7 @@ def _generate_pages(call_coder, messages, *, completion_decider=None) -> str:
         _member_declaration_symbols,
         _parse_region_content,
     )
+    from .execution_contract_policy import assert_java_coder_ownership
     from .java_region_parser import (
         class_body_member_contracts,
         strict_initialize_statements,
@@ -203,6 +210,7 @@ def _generate_pages(call_coder, messages, *, completion_decider=None) -> str:
     from .root_cause_trace import emit_root_cause
 
     payload = json.loads(messages[-1]["content"])
+    assert_java_coder_ownership(payload)
     region = payload["response_region"]
     emit_root_cause(
         "atomic_concern_region_subdivided", stage="production", result="START",

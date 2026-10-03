@@ -55,6 +55,15 @@ The optional local CUDA llama-server cell uses the same resolved planner configu
 
 ## Local Python
 
+Production compiles `persistence.stored_state` directly from canonical
+`{state, owner, scope}` records into a host-selected Java record and immutable
+list. Declaration-only concerns never invoke a coder, Java structure assembly,
+paging, completion decisions or model repair. Missing or invalid canonical
+records fail before writing Java; they are not reconstructed from prose.
+These declarations preserve storage descriptions, not executable save/load
+algorithms. Other executable concerns still use model generation; a complete
+typed-operation PlanIR compiler remains a separate migration.
+
 ```python
 from minecraft_mod_ai import CompleteModAISession, resolve_mod_development_methods
 

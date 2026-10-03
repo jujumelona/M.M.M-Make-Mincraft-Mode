@@ -551,7 +551,7 @@ def test_atomic_java_region_host_renders_malformed_semantic_member_names() -> No
     assert "STOP_PROPULSION_IMMEDIATELY_EMERGENCY_BRAKE_APPLIED" in result
 
 
-def test_stored_state_semantic_type_name_is_not_rejected_as_model_protocol() -> None:
+def test_payload_semantic_type_name_is_not_rejected_as_model_protocol() -> None:
     responses = iter([
         {"part": "classes"},
         {"name": "stored_state"},
@@ -573,7 +573,7 @@ def test_stored_state_semantic_type_name_is_not_rejected_as_model_protocol() -> 
                     {
                         "response_region": "members",
                         "host_selected_class": "AuthoredPersistence",
-                        "concern": {"name": "stored_state"},
+                        "concern": {"name": "payloads"},
                         "available_sibling_api": [
                             {
                                 "kind": "type",
@@ -591,34 +591,13 @@ def test_stored_state_semantic_type_name_is_not_rejected_as_model_protocol() -> 
     assert "class stored_state" in result
 
 
-def test_host_selected_outer_name_is_renamed_by_host_not_rejected_by_model_schema() -> None:
-    responses = iter([
-        {"part": "classes"},
-        {"name": "AuthoredPersistence"},
-        {"part": "done"},
-        {"part": "done"},
-    ])
+def test_host_renderer_resolves_outer_nested_type_name_collision() -> None:
+    from minecraft_mod_ai.custom_module_generator import _render_atomic_java_structure
 
-    class _Router:
-        def generate_tool_decision(self, role, messages, **kwargs):
-            return next(responses)
-
-    result = _call_atomic_java_region(
-        _Router(),
-        (
-            {"role": "system", "content": "structured only"},
-            {
-                "role": "user",
-                "content": json.dumps(
-                    {
-                        "response_region": "members",
-                        "host_selected_class": "AuthoredPersistence",
-                        "concern": {"name": "stored_state"},
-                    }
-                ),
-            },
-        ),
-        output_token_ceiling=1536,
+    result = _render_atomic_java_structure(
+        {"classes": [{"name": "AuthoredPersistence"}]},
+        response_region="members",
+        host_symbol="AuthoredPersistence",
     )
 
     assert "class AuthoredPersistence_2" in result
@@ -2665,12 +2644,9 @@ def test_noncanonical_record_constructor_must_delegate() -> None:
         )
 
 
-def test_stored_state_invalid_shape_fails_first_pass_without_regeneration() -> None:
-    calls = {"count": 0}
-
+def test_stored_state_without_records_never_asks_coder_for_declarations() -> None:
     def call_coder(_messages):
-        calls["count"] += 1
-        return "private static void registerState(String key, String value) {}"
+        raise AssertionError("coder must not be called")
 
     executor = AtomicConcernExecutor(
         root=Path("."),
@@ -2700,11 +2676,9 @@ def test_stored_state_invalid_shape_fails_first_pass_without_regeneration() -> N
 
     with pytest.raises(
         CustomModuleGenerationError,
-        match="ATOMIC_CONCERN_FIRST_PASS_RESPONSE_INVALID",
+        match="HOST_DECLARATION_RECORDS_INVALID",
     ):
         executor.run()
-
-    assert calls["count"] == 1
 
 
 def test_behavior_actor_records_consumes_canonical_structured_records() -> None:

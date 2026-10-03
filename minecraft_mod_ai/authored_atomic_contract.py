@@ -268,6 +268,8 @@ def bind_task_authored_atomic_contract(
 def task_concern_authority(
     task: Mapping[str, Any],
     concern: str,
+    *,
+    strict_records: bool = False,
 ) -> dict[str, Any]:
     """Read concern authority through the same resolver used by the producer."""
 
@@ -282,6 +284,14 @@ def task_concern_authority(
             dict(raw_sources or {}),
             concern=name,
         )
+        if strict_records and (
+            not isinstance(raw_records, Sequence)
+            or isinstance(raw_records, (str, bytes, bytearray))
+            or any(not isinstance(item, Mapping) for item in raw_records)
+        ):
+            raise ValueError(
+                f"AUTHORED_CONCERN_RECORDS_INVALID: {name} requires a sequence of record objects."
+            )
         records = (
             [deepcopy(dict(item)) for item in raw_records if isinstance(item, Mapping)]
             if isinstance(raw_records, Sequence)

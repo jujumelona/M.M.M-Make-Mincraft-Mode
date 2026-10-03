@@ -302,7 +302,16 @@ def test_schema_selector_and_prompt_share_type_owning_concerns() -> None:
     selector_source = inspect.getsource(java_atomic_parameters_for_request)
     assert "_ATOMIC_TYPE_OWNING_CONCERNS" not in generator_source
     assert "JAVA_TYPE_OWNING_CONCERNS" in selector_source
-    assert "JAVA_DECLARATION_ONLY_CONCERNS" in selector_source
+    from minecraft_mod_ai.custom_module_errors import CustomModuleGenerationError
+    from minecraft_mod_ai.execution_contract_policy import (
+        JAVA_DECLARATION_ONLY_CONCERNS,
+    )
+
+    for concern in JAVA_DECLARATION_ONLY_CONCERNS:
+        with pytest.raises(CustomModuleGenerationError, match="ATOMIC_HOST_ONLY_CONCERN_CODER_FORBIDDEN"):
+            java_atomic_parameters_for_request(
+                {"concern": {"name": concern}}, response_region="members",
+            )
     assert {"variables", "inputs", "outputs", "stored_state", "payloads"} == set(
         JAVA_TYPE_OWNING_CONCERNS
     )
@@ -362,18 +371,12 @@ def test_model_facing_java_schema_is_owned_by_canonical_contract() -> None:
 
 def test_model_facing_java_schema_factory_never_returns_shared_mutable_state() -> None:
     from minecraft_mod_ai.execution_contract_policy import (
-        JAVA_ATOMIC_DECLARATION_MEMBERS_PARAMETERS,
         JAVA_ATOMIC_INITIALIZE_PARAMETERS,
         JAVA_ATOMIC_LOGIC_MEMBERS_PARAMETERS,
         JAVA_ATOMIC_MEMBERS_PARAMETERS,
     )
 
     cases = (
-        (
-            {"concern": {"name": "stored_state"}},
-            "members",
-            JAVA_ATOMIC_DECLARATION_MEMBERS_PARAMETERS,
-        ),
         (
             {"concern": {"name": "diagnostics"}},
             "members",

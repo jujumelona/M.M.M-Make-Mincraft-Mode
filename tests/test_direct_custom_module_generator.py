@@ -618,6 +618,71 @@ def test_behavior_actors_are_host_compiled_without_model_java(
     assert result["generation_verification"]["atomic_concern_count"] == 1
 
 
+def test_stored_state_production_entry_compiles_without_router_calls(tmp_path, monkeypatch):
+    import shutil
+    import subprocess
+
+    from minecraft_mod_ai.authored_atomic_contract import build_authored_atomic_contract
+    from minecraft_mod_ai.authored_execution_schema import concern_contracts
+    from minecraft_mod_ai.canonical_concern_authority import CanonicalConcernAuthority
+
+    javac = shutil.which("javac")
+    if not javac:
+        pytest.skip("JDK required")
+    root, path, symbol = _project(tmp_path)
+    base = _atomic_module(path, symbol)
+    config = dict(base.config)
+    contract = build_authored_atomic_contract(
+        section="persistence", concerns=concern_contracts("persistence"),
+        requirements={}, raw_obligations=[],
+        canonical_concern_authority=CanonicalConcernAuthority({"persistence": {
+            "stored_state": [{"state": "credits", "owner": "player", "scope": "world"}],
+        }}),
+    )
+    config["implementation_section"] = "persistence"
+    config["implementation_atomic_concerns"] = contract["active_concerns"]
+    config["evidence_task"] = {
+        **config["evidence_task"], "authored_atomic_contract": contract,
+        "implementation_obligations": contract["implementation_obligations"],
+    }
+    module = ProductionModule(
+        module_id=base.module_id, kind=base.kind, config=config,
+        required_gates=base.required_gates,
+    )
+
+    class Router:
+        def generate_text(self, *args, **kwargs):
+            raise AssertionError("coder must not be called")
+
+        generate_tool_decision = generate_text
+        generate_tool_decisions = generate_text
+
+    class Runner:
+        def __init__(self, _cache):
+            pass
+
+        def compile_java(self, project_root):
+            result = subprocess.run(
+                [javac, "-encoding", "UTF-8", str(project_root / path)],
+                cwd=project_root, capture_output=True, text=True, timeout=30, check=False,
+            )
+            return SimpleNamespace(
+                status="PASS" if result.returncode == 0 else "FAIL",
+                error=result.stderr, commands=(),
+            )
+
+    monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
+    monkeypatch.setattr(direct, "GradleRunner", Runner)
+    result = direct.CustomModuleGenerator(Router()).generate(
+        root, module=module, minecraft_version="1.21.1", loader="fabric",
+    )
+    assert result["status"] == "SOURCE_GENERATED"
+    assert result["generation_verification"]["atomic_concern_count"] == 1
+    assert result["generation_verification"]["atomic_repair_count"] == 0
+    assert (root / path).with_suffix(".class").is_file()
+    assert 'new StoredState("credits", "player", "world")' in (root / path).read_text(encoding="utf-8")
+
+
 def test_behavior_actors_recover_from_exact_requirement_when_structured_sections_missing(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -770,73 +835,34 @@ def _stored_state_atomic_module(path: str, symbol: str) -> ProductionModule:
     )
 
 
-def test_stored_state_receives_semantic_shape_and_compact_output_budget(
+def test_stored_state_missing_canonical_records_restores_original_source(
     tmp_path: Path, monkeypatch
 ) -> None:
     root, path, symbol = _project(tmp_path)
-    router = _StructuredDecisionRouter(
-        _native_field_parts(
-            "java.util.Map<String, Object>",
-            "storedState",
-            "new java.util.HashMap<>()",
-        )
-    )
+    original = (root / path).read_bytes()
+
+    class Router:
+        def generate_tool_decision(self, *args, **kwargs):
+            raise AssertionError("coder must not be called")
 
     class Runner:
         def __init__(self, _cache):
             pass
 
         def compile_java(self, _root):
-            return SimpleNamespace(status="PASS", commands=(), error=None)
+            raise AssertionError("invalid records must fail before compilation")
 
     monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
     monkeypatch.setattr(direct, "GradleRunner", Runner)
 
-    direct.CustomModuleGenerator(router).generate(
-        root,
-        module=_stored_state_atomic_module(path, symbol),
-        minecraft_version="1.21.1",
-        loader="fabric",
-    )
-
-    source = (root / path).read_text(encoding="utf-8")
-    assert "storedState" in source
-    assert router.calls
-    first_payload_kwargs = router.calls[0][1]
-    assert first_payload_kwargs.get("output_token_ceiling") == 4096
-
-def test_stored_state_structured_contract_cannot_emit_outer_methods(
-    tmp_path: Path, monkeypatch
-) -> None:
-    root, path, symbol = _project(tmp_path)
-    router = _StructuredDecisionRouter(
-        _native_field_parts(
-            "java.util.Map<String, String>",
-            "STATE_MAPPINGS",
-            "new java.util.HashMap<>()",
+    with pytest.raises(direct.CustomModuleGenerationError, match="HOST_DECLARATION_RECORDS_INVALID"):
+        direct.CustomModuleGenerator(Router()).generate(
+            root,
+            module=_stored_state_atomic_module(path, symbol),
+            minecraft_version="1.21.1",
+            loader="fabric",
         )
-    )
-
-    class Runner:
-        def __init__(self, _cache):
-            pass
-
-        def compile_java(self, _root):
-            return SimpleNamespace(status="PASS", commands=(), error=None)
-
-    monkeypatch.setattr(direct, "adapter_for_target", lambda *_args: _adapter())
-    monkeypatch.setattr(direct, "GradleRunner", Runner)
-    direct.CustomModuleGenerator(router).generate(
-        root,
-        module=_stored_state_atomic_module(path, symbol),
-        minecraft_version="1.21.1",
-        loader="fabric",
-    )
-
-    source = (root / path).read_text(encoding="utf-8")
-    assert "STATE_MAPPINGS" in source
-    assert "registerStateMapping" not in source
-    assert "getStateForOwner" not in source
+    assert (root / path).read_bytes() == original
 
 def test_atomic_first_candidate_canonicalizes_jdk_lock_semantics_before_compile(
     tmp_path: Path, monkeypatch

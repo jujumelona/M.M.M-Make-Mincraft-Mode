@@ -21,6 +21,7 @@ from .execution_contract_policy import (
     JAVA_ATOMIC_ASSEMBLY_CONTEXT_MARGIN_BYTES,
     JAVA_ATOMIC_ASSEMBLY_MAX_CALLS as MAX_ASSEMBLY_CALLS,
     JAVA_ATOMIC_ASSEMBLY_MAX_PART_ITEMS as MAX_PART_ITEMS,
+    assert_java_coder_ownership,
     java_atomic_assembly_system_prompt,
 )
 from .implementation_ir import OutputBudgetExhausted
@@ -419,5 +420,6 @@ class JavaStructureAssembly:
                 )
 
     def run(self, parameters: Mapping[str, Any]) -> dict[str, Any]:
+        assert_java_coder_ownership(self.payload)
         self._object(parameters, self.root, [])
         return self.root

@@ -467,17 +467,6 @@ JAVA_ATOMIC_LOGIC_MEMBERS_PARAMETERS: dict[str, Any] = {
     "required": [],
     "additionalProperties": False,
 }
-JAVA_ATOMIC_DECLARATION_MEMBERS_PARAMETERS: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "records": {"type": "array", "items": JAVA_ATOMIC_RECORD_SCHEMA},
-        "enums": {"type": "array", "items": JAVA_ATOMIC_ENUM_SCHEMA},
-        "classes": {"type": "array", "items": JAVA_ATOMIC_CLASS_SCHEMA},
-        "fields": {"type": "array", "items": JAVA_ATOMIC_FIELD_SCHEMA},
-    },
-    "required": [],
-    "additionalProperties": False,
-}
 JAVA_ATOMIC_INITIALIZE_PARAMETERS: dict[str, Any] = {
     "type": "object",
     "properties": {"statements": {"type": "array", "items": {"type": "string"}}},
@@ -555,11 +544,31 @@ def atomic_error_terminal_after_normalization(reason: str) -> bool:
 
 
 
+def assert_java_coder_ownership(payload: Mapping[str, Any]) -> None:
+    """Host-owned declarations cannot enter any model generation/repair route."""
+    from .custom_module_errors import CustomModuleGenerationError
+
+    concern = payload.get("concern")
+    name = str(concern.get("name") or "").strip() if isinstance(concern, Mapping) else ""
+    if name in JAVA_DECLARATION_ONLY_CONCERNS:
+        raise CustomModuleGenerationError(
+            "ATOMIC_HOST_ONLY_CONCERN_CODER_FORBIDDEN: "
+            f"{name} must be compiled from canonical records by the host."
+        )
+    section = str(payload.get("section") or "").strip()
+    if section in {"state_model", "behavior_contract"}:
+        raise CustomModuleGenerationError(
+            "ATOMIC_HOST_ONLY_SECTION_CODER_FORBIDDEN: "
+            f"{section} must be compiled by deterministic host lowering."
+        )
+
+
 def java_atomic_parameters_for_request(
     payload: Mapping[str, Any],
     *,
     response_region: str,
 ) -> tuple[dict[str, Any], str]:
+    assert_java_coder_ownership(payload)
     if response_region == "initialize":
         return deepcopy(JAVA_ATOMIC_INITIALIZE_PARAMETERS), "initialize_statements"
 
@@ -581,10 +590,7 @@ def java_atomic_parameters_for_request(
         if str(item).strip()
     )
 
-    if concern_name in JAVA_DECLARATION_ONLY_CONCERNS:
-        parameters = deepcopy(JAVA_ATOMIC_DECLARATION_MEMBERS_PARAMETERS)
-        shape = preferred or "declarations_only_fields_or_private_nested_types"
-    elif (
+    if (
         concern_name
         and concern_name not in JAVA_TYPE_OWNING_CONCERNS
         and not authorized_nested
@@ -1009,7 +1015,6 @@ __all__ = [
     "JAVA_ATOMIC_ASSEMBLY_SYSTEM_PROMPT",
     "JAVA_ATOMIC_CLASS_SCHEMA",
     "JAVA_ATOMIC_CONSTRUCTOR_SCHEMA",
-    "JAVA_ATOMIC_DECLARATION_MEMBERS_PARAMETERS",
     "JAVA_ATOMIC_ENUM_SCHEMA",
     "JAVA_ATOMIC_FIELD_SCHEMA",
     "JAVA_ATOMIC_IDENTIFIER_PATTERN",

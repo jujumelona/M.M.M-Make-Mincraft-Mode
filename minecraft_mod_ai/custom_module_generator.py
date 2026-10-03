@@ -1849,6 +1849,10 @@ def _call_atomic_java_region(
     *,
     output_token_ceiling: int | None,
 ) -> str:
+    from .execution_contract_policy import assert_java_coder_ownership
+
+    payload = _atomic_request_payload(messages)
+    assert_java_coder_ownership(payload)
     callback = getattr(router, "generate_tool_decision", None)
     if not callable(callback):
         raise CustomModuleGenerationError(
@@ -1859,13 +1863,6 @@ def _call_atomic_java_region(
         multi_callback = None
     from .atomic_java_assembly import JavaStructureAssembly
 
-    payload = _atomic_request_payload(messages)
-    section = str(payload.get("section") or "").strip()
-    if section in {"state_model", "behavior_contract"}:
-        raise CustomModuleGenerationError(
-            "ATOMIC_HOST_ONLY_SECTION_CODER_FORBIDDEN: "
-            f"{section} must be compiled by deterministic host lowering."
-        )
     response_region = str(payload.get("response_region") or "members").strip()
     parameters, _ = _atomic_parameters_for_request(payload, response_region=response_region)
     registry = getattr(router, "registry", None)
@@ -2161,8 +2158,8 @@ def _run_atomic_ir_generation(
         grounding=context.host_grounding,
         dependency_source=context.dependency_context,
         require_initialize=context.require_initialize,
-        # Atomic production has one model->source path only:
-        # native structured decisions -> host Java renderer -> AST/compiler admission.
+        # Host-owned concerns bypass this callback. Remaining executable concerns
+        # use native decisions -> Java renderer -> AST/compiler admission.
         call_coder=lambda messages: _call_atomic_java_region(
             generator.router,
             messages,
