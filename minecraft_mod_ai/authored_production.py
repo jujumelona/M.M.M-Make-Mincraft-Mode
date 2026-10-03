@@ -479,6 +479,7 @@ def _implementation_authored_plan(plan: AuthoredPlan) -> tuple[AuthoredPlan, dic
         media_paths=plan.media_paths,
         schema_version=plan.schema_version,
         structured_sections=deepcopy(plan.structured_sections),
+        typed_plan_ir=deepcopy(plan.typed_plan_ir),
     )
     provenance = {
         "schema_version": "mmm/authored-source-projection-v1",
@@ -697,6 +698,7 @@ def _compile_existing_authored_modules(
             media_paths=plan.media_paths,
             schema_version=plan.schema_version,
             structured_sections=structured_sections,
+            typed_plan_ir=deepcopy(plan.typed_plan_ir),
         )
         modules.append(
             ProductionModule(
@@ -1032,6 +1034,7 @@ def _execution_plan_projection(
         media_paths=plan.media_paths,
         schema_version=plan.schema_version,
         structured_sections=deepcopy(plan.structured_sections),
+        typed_plan_ir=deepcopy(plan.typed_plan_ir),
     )
     return execution_plan, {
         "_authored_document_normalization": normalization,
@@ -1072,6 +1075,7 @@ def compile_authored_design(
             media_paths=implementation_plan.media_paths,
             schema_version=implementation_plan.schema_version,
             structured_sections=structured,
+            typed_plan_ir=deepcopy(implementation_plan.typed_plan_ir),
         )
 
     execution_plan, execution_projection = _execution_plan_projection(implementation_plan)
