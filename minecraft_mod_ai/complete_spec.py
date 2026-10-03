@@ -319,7 +319,14 @@ class CompleteProposal:
                 raise SpecValidationError(
                     f"Invalid evidence-first implementation plan: {exc}"
                 ) from exc
-        if not self.modules and not retained_only:
+        fixture = self.game_design.get("fixture")
+        host_fixture_only = (
+            self.game_design.get("mode") == "debug_fixture"
+            and isinstance(fixture, Mapping)
+            and fixture.get("deterministic") is True
+            and isinstance(fixture.get("source_contract"), Mapping)
+        )
+        if not self.modules and not retained_only and not host_fixture_only:
             raise SpecValidationError(
                 "A complete proposal must contain at least one production module."
             )
