@@ -421,6 +421,9 @@ def _implementation_authored_plan(plan: AuthoredPlan) -> tuple[AuthoredPlan, dic
     is recoverable here. Mentions in prose, examples and ambiguous drafts stay intact.
     """
 
+    if plan.typed_plan_ir:
+        return plan, None
+
     text = plan.text
     start = 0
     # These are response envelopes, not tags embedded in a design or fenced example.
@@ -1209,6 +1212,9 @@ def _compile_coherent_authored_module(
 def _execution_plan_projection(
     plan: AuthoredPlan,
 ) -> tuple[AuthoredPlan, dict[str, Any]]:
+    if plan.typed_plan_ir:
+        return plan, {}
+
     from .authored_document_contract import normalize_authored_document
 
     normalized_text, normalization = normalize_authored_document(plan.text)
