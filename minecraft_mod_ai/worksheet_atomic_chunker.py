@@ -66,10 +66,6 @@ class WorksheetConcernChunk(tuple):
 
 
 def _meaningful_text(value: Any) -> bool:
-    if isinstance(value, Mapping):
-        return bool(value)
-    if isinstance(value, (list, tuple)):
-        return bool(value)
     text = str(value or "").strip()
     return bool(text) and text.casefold() not in _PLACEHOLDERS
 
@@ -149,7 +145,6 @@ def worksheet_chunk_schema(
     include_evidence: bool = False,
     record_counts: Mapping[str, int] | None = None,
     model_transport: bool = False,
-    state_symbols: Any = None,
 ) -> dict[str, Any]:
     """Return one complete-concern schema.
 
@@ -166,26 +161,20 @@ def worksheet_chunk_schema(
     properties: dict[str, Any] = {}
     authored_signal: list[dict[str, Any]] = []
     for concern in active:
+        fields = projection[concern]
+        field_schemas = {
+            field: deepcopy(record_field_schema(key, concern, field))
+            for field in fields
+        }
+        item_schema: dict[str, Any] = {
+            "type": "object",
+            "properties": field_schemas,
+            "required": list(fields) if key == "state_model" else [],
+            "minProperties": 1,
+            "additionalProperties": False,
+        }
         if key == "state_model":
-            from .state_contract import state_concern_schema
-            item_schema = state_concern_schema(
-                concern,
-                allowed_state_symbols=state_symbols,
-                allow_string=False,
-            )
-        else:
-            fields = projection[concern]
-            field_schemas = {
-                field: deepcopy(record_field_schema(key, concern, field))
-                for field in fields
-            }
-            item_schema: dict[str, Any] = {
-                "type": "object",
-                "properties": field_schemas,
-                "required": [],
-                "minProperties": 1,
-                "additionalProperties": False,
-            }
+            item_schema = constrain_state_record_schema(concern, item_schema)
         properties[concern] = {
             "type": "array",
             "maxItems": 4,
@@ -470,10 +459,7 @@ def merge_worksheet_section_chunks(
                 array_capable = raw_type == "array" or (
                     isinstance(raw_type, list) and "array" in raw_type
                 )
-                if isinstance(raw_value, list):
-                    clean_item[field_name] = deepcopy(raw_value)
-                    continue
-                if isinstance(raw_value, Mapping):
+                if array_capable and isinstance(raw_value, list):
                     clean_item[field_name] = deepcopy(raw_value)
                     continue
                 if raw_value is None and isinstance(raw_type, list) and "null" in raw_type:

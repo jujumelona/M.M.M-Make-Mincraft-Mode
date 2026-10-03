@@ -40,11 +40,11 @@ def record_field_schema(section: str, concern: str, field: str) -> dict:
             "maxItems": 4,
             "items": {"type": "string", "maxLength": 256},
         }
-    if section == "state_model":
-        from .state_contract import state_concern_schema
-        schema = state_concern_schema(concern, allow_string=True)
-        if field in schema.get("properties", {}):
-            return schema["properties"][field]
+    if (
+        section == "state_model"
+        and field in {"guard", "mutation", "condition", "initial_state", "action"}
+    ):
+        return {"type": "string", "maxLength": 512}
     return {"type": "string", "minLength": 1, "maxLength": 512}
 
 
@@ -60,19 +60,7 @@ def _model_transport_schema(schema, *, is_properties_map: bool = False):
     return schema
 
 
-def specification_schema(
-    section: str,
-    *,
-    model_transport: bool = False,
-    state_symbols: Any = None,
-) -> dict:
-    if section == "state_model":
-        from .state_contract import state_section_schema
-        schema = state_section_schema(allowed_state_symbols=state_symbols, allow_string=True)
-        if model_transport:
-            return _model_transport_schema(schema)
-        return schema
-
+def specification_schema(section, *, model_transport: bool = False):
     records = DETAIL_RECORDS[section]
     properties = {}
     for concern, columns in records.items():
@@ -86,6 +74,8 @@ def specification_schema(
             "required": fields,
             "additionalProperties": False,
         }
+        if section == "state_model":
+            item_schema = constrain_state_record_schema(concern, item_schema)
         properties[concern] = {
             "type": "array",
             "maxItems": 4,

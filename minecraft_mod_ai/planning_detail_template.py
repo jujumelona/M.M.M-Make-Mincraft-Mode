@@ -329,10 +329,10 @@ def validate_worksheet_section(
             f"DETAILED_PLAN_WORKSHEET: {key}.{path} violates fixed specification template: {error.message}"
         )
     if key == "state_model":
-        from .state_contract import validate_state_section
+        from .structured_state_runtime import validate_structured_state_section
 
         try:
-            validate_state_section(specification)
+            validate_structured_state_section(specification)
         except ValueError as exc:
             raise ValueError(
                 "DETAILED_PLAN_WORKSHEET: state_model is outside the host-compiled "
