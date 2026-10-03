@@ -4535,7 +4535,7 @@ class AtomicConcernExecutor:
                 output_sha256=output_sha,
                 output_chars=len(output_text),
             )
-            return "\n\n".join(part for part in (state_members, parsed) if part)
+            return parsed
 
         raise AssertionError("atomic concern region attempt loop terminated unexpectedly")
 
