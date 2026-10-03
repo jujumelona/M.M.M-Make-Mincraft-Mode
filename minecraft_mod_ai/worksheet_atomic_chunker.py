@@ -14,6 +14,7 @@ from typing import Any
 
 from .model_output_atomicity_contract import _assert_closed_object_schemas
 from .planning_detail_slots import DETAIL_RECORDS, record_field_schema
+from .structured_state_runtime import constrain_state_record_schema
 from .planning_detail_template import (
     _PLACEHOLDERS,
     _normalize_section_name,
@@ -155,10 +156,12 @@ def worksheet_chunk_schema(
         item_schema: dict[str, Any] = {
             "type": "object",
             "properties": field_schemas,
-            "required": [],
+            "required": list(fields) if key == "state_model" else [],
             "minProperties": 1,
             "additionalProperties": False,
         }
+        if key == "state_model":
+            item_schema = constrain_state_record_schema(concern, item_schema)
         properties[concern] = {
             "type": "array",
             "maxItems": 4,
@@ -279,8 +282,15 @@ def worksheet_chunk_prompt(
         if include_evidence
         else ""
     )
+    state_instruction = (
+        "For state_model, guard/condition and mutation/initial_state/action are host DSL, "
+        "not prose and not Java. Use only the operators and identifiers admitted by the schema. "
+        "Put external subsystem actions in algorithm/integration instead of state mutation fields."
+        if key == "state_model"
+        else ""
+    )
     return "\n".join(
-        (
+        item for item in (
             f"ENGINEERING WORKSHEET — concern chunk {chunk_index}/{chunk_count}:",
             f"Section: {key}",
             f"Active Concerns: {', '.join(concerns)}",
@@ -292,9 +302,10 @@ def worksheet_chunk_prompt(
             "Return each active concern key. Use an empty array when no record applies; the host owns applicability reconciliation and does not require a model-authored reason.",
             "Never use N/A, none, TODO, TBD, unknown, same-as-above, or another placeholder as the authored content.",
             "DO NOT output JSON Schema keywords (never output 'type', 'properties', 'required', or 'additionalProperties').",
+            state_instruction,
             "Return only a JSON object following this data template skeleton:",
             json.dumps(skeleton, ensure_ascii=False, indent=2),
-        )
+        ) if item
     )
 
 
