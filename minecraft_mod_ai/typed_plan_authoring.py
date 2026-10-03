@@ -531,19 +531,22 @@ def author_typed_plan_ir(
             "config": config,
         })
 
-    max_additional = max(0, 64 - len(specs))
-    additional_count = int(author._ask(
-        "additional_function_count",
-        {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": max_additional,
-        },
-        scope="program",
-    ))
-
-    for index in range(additional_count):
-        scope = f"function[{index}]"
+    uncovered_logic = {
+        ref
+        for ref in coverage_refs
+        if ref.startswith((
+            "behavior_contract.",
+            "algorithm.",
+            "failure_and_limits.",
+        ))
+    }
+    logic_index = 0
+    while uncovered_logic:
+        if len(specs) >= 64:
+            raise ValueError(
+                "TYPED_PLAN_FUNCTION_LIMIT: logic coverage did not converge."
+            )
+        scope = f"function[{logic_index}]"
         function_id = author._identifier("function_id", scope=scope)
         if function_id in known_ids:
             raise ValueError(
@@ -583,25 +586,30 @@ def author_typed_plan_ir(
             scope=scope,
             allow_void=True,
         )
+        available_covers = tuple(sorted(uncovered_logic))
+        coverage_count = int(author._ask(
+            "coverage_count",
+            {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": min(128, len(available_covers)),
+            },
+            scope=scope,
+        ))
         covers: list[str] = []
-        if coverage_refs:
-            coverage_count = int(author._ask(
-                "coverage_count",
-                {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": min(128, len(coverage_refs)),
-                },
-                scope=scope,
-            ))
-            for coverage_index in range(coverage_count):
-                cover = author._enum(
-                    "coverage_ref",
-                    list(coverage_refs),
-                    scope=f"{scope}.coverage[{coverage_index}]",
-                )
-                if cover not in covers:
-                    covers.append(cover)
+        for coverage_index in range(coverage_count):
+            cover = author._enum(
+                "coverage_ref",
+                list(available_covers),
+                scope=f"{scope}.coverage[{coverage_index}]",
+            )
+            if cover not in covers:
+                covers.append(cover)
+        if not covers:
+            raise ValueError(
+                "TYPED_PLAN_FUNCTION_COVERAGE_REQUIRED: function made no progress."
+            )
+        uncovered_logic.difference_update(covers)
 
         specs.append({
             "id": function_id,
@@ -609,6 +617,7 @@ def author_typed_plan_ir(
             "return_type": return_type,
             "covers": covers,
         })
+        logic_index += 1
 
     author.function_signatures = {
         str(spec["id"]): tuple(
