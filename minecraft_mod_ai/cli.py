@@ -73,8 +73,6 @@ def _build_parser() -> argparse.ArgumentParser:
     execute.add_argument("--source-only", action="store_true")
     execute.add_argument("--skip-jdt", action="store_true")
     execute.add_argument("--skip-gametest", action="store_true")
-    execute.add_argument("--no-repair", action="store_true")
-    execute.add_argument("--repair-attempts", type=int)
     execute.add_argument("--skip-blockbench", action="store_true")
     execute.add_argument("--skip-runtime", action="store_true")
     execute.add_argument("--skip-client", action="store_true")
@@ -230,8 +228,6 @@ def main(argv: list[str] | None = None) -> int:
                 source_only=args.source_only,
                 run_jdt=not args.skip_jdt,
                 run_gametest=not args.skip_gametest,
-                auto_repair=not args.no_repair,
-                max_repair_attempts=args.repair_attempts,
                 run_blockbench=not args.skip_blockbench,
                 run_runtime=not args.skip_runtime,
                 run_client=not args.skip_client,
