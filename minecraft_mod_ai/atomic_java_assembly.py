@@ -137,16 +137,11 @@ class JavaStructureAssembly:
         output_token_ceiling: int | None,
         config: Any = None,
         multi_callback: Callable | None = None,
-        initial_structure: Mapping[str, Any] | None = None,
-        required_nonempty_arrays: tuple[tuple[Any, ...], ...] = (),
     ):
         self.callback = callback
         self.multi_callback = multi_callback if callable(multi_callback) else None
         self.payload = dict(payload)
-        self.root: dict[str, Any] = deepcopy(dict(initial_structure or {}))
-        self.required_nonempty_arrays = {
-            tuple(path) for path in required_nonempty_arrays
-        }
+        self.root: dict[str, Any] = {}
         self.calls = 0
         self.output_token_ceiling = output_token_ceiling
         self.config = config
@@ -315,62 +310,15 @@ class JavaStructureAssembly:
             if value.get("type") == "array"
         }
         remaining_parts = list(array_specs)
-
-        # Host-seeded arrays are authoritative structure, not model decisions.
-        # Recurse into seeded object items so only their missing nested parts
-        # (typically executable bodies) remain model-authored.
-        for selected in tuple(remaining_parts):
-            if selected not in target:
-                continue
-            values = target[selected]
-            if not isinstance(values, list):
-                raise AtomicJavaDecisionError(
-                    f"ATOMIC_JAVA_ASSEMBLY_INVALID: {path + [selected]}: "
-                    "host-seeded array must be a list.",
-                    response=values,
-                )
-            if len(values) > MAX_PART_ITEMS:
-                raise OutputBudgetExhausted(
-                    f"OUTPUT_BUDGET_EXHAUSTED: {path + [selected]} needs decomposition."
-                )
-            remaining_parts.remove(selected)
-            item_schema = array_specs[selected]["items"]
-            if item_schema.get("type") == "object":
-                for index, item in enumerate(values):
-                    if not isinstance(item, dict):
-                        raise AtomicJavaDecisionError(
-                            f"ATOMIC_JAVA_ASSEMBLY_INVALID: "
-                            f"{path + [selected, index]}: host-seeded item must be an object.",
-                            response=item,
-                        )
-                    self._object(
-                        item_schema,
-                        item,
-                        [*path, selected, index],
-                        scalars_seeded=True,
-                    )
-
         while remaining_parts:
-            required_part = next(
-                (
-                    candidate
-                    for candidate in remaining_parts
-                    if tuple([*path, candidate]) in self.required_nonempty_arrays
-                    and not target.get(candidate)
+            selected = self._ask(
+                _closed(
+                    {"part": {"type": "string", "enum": [*remaining_parts, "done"]}},
+                    ["part"],
                 ),
-                None,
-            )
-            if required_part is not None:
-                selected = required_part
-            else:
-                selected = self._ask(
-                    _closed(
-                        {"part": {"type": "string", "enum": [*remaining_parts, "done"]}},
-                        ["part"],
-                    ),
-                    path,
-                    "Select the next necessary part of this component; done closes it.",
-                )["part"]
+                path,
+                "Select the next necessary part of this component; done closes it.",
+            )["part"]
             if selected == "done":
                 break
             values = target.setdefault(selected, [])
