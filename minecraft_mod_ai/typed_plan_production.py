@@ -318,6 +318,359 @@ def _persistence_files(
     }
 
 
+
+def _structured_rows(
+    structured: Mapping[str, Any],
+    section: str,
+    concern: str,
+) -> tuple[Mapping[str, Any], ...]:
+    raw_section = structured.get(section)
+    if not isinstance(raw_section, Mapping):
+        return ()
+    raw_spec = raw_section.get("specification")
+    specification = raw_spec if isinstance(raw_spec, Mapping) else raw_section
+    rows = specification.get(concern)
+    if not isinstance(rows, Sequence) or isinstance(
+        rows, (str, bytes, bytearray)
+    ):
+        return ()
+    return tuple(row for row in rows if isinstance(row, Mapping))
+
+
+def _identifier_signature(value: Any) -> str:
+    return "".join(
+        char
+        for char in str(value or "").casefold()
+        if char.isalnum()
+    )
+
+
+def _matched_state_name(
+    value: Any,
+    state_names: tuple[str, ...],
+) -> str:
+    signature = _identifier_signature(value)
+    for name in state_names:
+        if _identifier_signature(name) == signature:
+            return name
+    raise ValueError(
+        "TYPED_NETWORK_STATE_REQUIRED: no canonical state variable matches "
+        + repr(str(value or ""))
+    )
+
+
+def _network_payload_guard(field: str, type_name: str) -> str:
+    literal = json.dumps(field, ensure_ascii=True)
+    lowered = str(type_name or "").casefold()
+    if any(token in lowered for token in ("int", "long", "float", "double", "number", "numeric")):
+        condition = "value instanceof Number"
+    elif any(token in lowered for token in ("bool", "boolean")):
+        condition = "value instanceof Boolean"
+    elif any(token in lowered for token in ("string", "text", "id", "uuid", "name")):
+        condition = "value instanceof String"
+    else:
+        condition = "value != null"
+    return f"            case {literal} -> {condition};"
+
+
+def _network_policy_files(
+    *,
+    package_name: str,
+    mod_id: str,
+    structured: Mapping[str, Any],
+    state_section: Mapping[str, Any],
+    config: Mapping[str, Any],
+) -> dict[str, str]:
+    state_names = _state_variable_names(state_section)
+    payload_rows = _structured_rows(
+        structured,
+        "authority_and_network",
+        "payloads",
+    )
+    sync_rows = _structured_rows(
+        structured,
+        "authority_and_network",
+        "synchronization",
+    )
+
+    fields: list[str] = []
+    field_types: dict[str, str] = {}
+    for row in sync_rows:
+        name = _matched_state_name(row.get("state"), state_names)
+        if name not in fields:
+            fields.append(name)
+    for row in payload_rows:
+        name = _matched_state_name(row.get("field"), state_names)
+        if name not in fields:
+            fields.append(name)
+        field_types[name] = str(row.get("type") or "object")
+    if not fields:
+        fields = list(state_names)
+    if not fields:
+        raise ValueError(
+            "TYPED_NETWORK_STATE_REQUIRED: network synchronization requires "
+            "at least one canonical state variable."
+        )
+
+    interval = int(config.get("sync_interval_ticks", 20))
+    max_bytes = int(config.get("max_payload_bytes", 32767))
+    channel_path = "typed_state_sync"
+
+    write_lines: list[str] = []
+    guard_lines: list[str] = []
+    for name in fields:
+        literal = json.dumps(name, ensure_ascii=True)
+        write_lines.extend([
+            f"        value = AuthoredStateModel.getState({literal}, context);",
+            f"        if (value != null && accepted({literal}, value)) {{",
+            f"            payload.add({literal}, GSON.toJsonTree(value));",
+            "        }",
+        ])
+        guard_lines.append(
+            _network_payload_guard(name, field_types.get(name, "object"))
+        )
+
+    server_source = f"""package {package_name};
+
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonObject;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.fabricmc.fabric.api.networking.v1.PacketByteBufs;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.minecraft.network.PacketByteBuf;
+import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.util.Identifier;
+
+import java.nio.charset.StandardCharsets;
+import java.util.Map;
+
+// MMM:TYPED_NETWORK_SYNC_OWNER
+public final class AuthoredNetworkSync {{
+    public static final Identifier CHANNEL =
+            new Identifier({json.dumps(mod_id)}, {json.dumps(channel_path)});
+    private static final Gson GSON = new GsonBuilder().create();
+    private static final int SYNC_INTERVAL_TICKS = {interval};
+    private static final int MAX_PAYLOAD_BYTES = {max_bytes};
+    private static boolean registered;
+    private static int ticks;
+
+    private AuthoredNetworkSync() {{}}
+
+    public static synchronized void register() {{
+        if (registered) return;
+        registered = true;
+        ServerPlayConnectionEvents.JOIN.register(
+                (handler, sender, server) -> sync(handler.player)
+        );
+        ServerTickEvents.END_SERVER_TICK.register(server -> {{
+            ticks++;
+            if (ticks < SYNC_INTERVAL_TICKS) return;
+            ticks = 0;
+            for (ServerPlayerEntity player :
+                    server.getPlayerManager().getPlayerList()) {{
+                sync(player);
+            }}
+        }});
+    }}
+
+    private static void sync(ServerPlayerEntity player) {{
+        JsonObject payload = new JsonObject();
+        Map<String, Object> context = Map.of(
+                "player",
+                player.getUuidAsString()
+        );
+        Object value;
+{chr(10).join(write_lines)}
+        String encoded = GSON.toJson(payload);
+        if (encoded.getBytes(StandardCharsets.UTF_8).length
+                > MAX_PAYLOAD_BYTES) {{
+            throw new IllegalStateException(
+                    "Typed synchronization payload exceeds configured bound"
+            );
+        }}
+        PacketByteBuf buffer = PacketByteBufs.create();
+        buffer.writeString(encoded, MAX_PAYLOAD_BYTES);
+        ServerPlayNetworking.send(player, CHANNEL, buffer);
+    }}
+
+    private static boolean accepted(String field, Object value) {{
+        return switch (field) {{
+{chr(10).join(guard_lines)}
+            default -> false;
+        }};
+    }}
+}}
+"""
+
+    client_source = f"""package {package_name};
+
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
+import net.minecraft.util.Identifier;
+
+// MMM:TYPED_NETWORK_CLIENT_OWNER
+public final class AuthoredNetworkClient implements ClientModInitializer {{
+    private static final Identifier CHANNEL =
+            new Identifier({json.dumps(mod_id)}, {json.dumps(channel_path)});
+    private static final Gson GSON = new GsonBuilder().create();
+    private static final int MAX_PAYLOAD_BYTES = {max_bytes};
+    private static JsonObject snapshot = new JsonObject();
+
+    @Override
+    public void onInitializeClient() {{
+        ClientPlayNetworking.registerGlobalReceiver(
+                CHANNEL,
+                (client, handler, buffer, responseSender) -> {{
+                    String encoded = buffer.readString(MAX_PAYLOAD_BYTES);
+                    JsonObject parsed = JsonParser.parseString(encoded)
+                            .getAsJsonObject();
+                    client.execute(() -> update(parsed));
+                }}
+        );
+    }}
+
+    private static synchronized void update(JsonObject value) {{
+        snapshot = value.deepCopy();
+    }}
+
+    public static synchronized JsonObject snapshot() {{
+        return snapshot.deepCopy();
+    }}
+
+    public static synchronized Object value(String key) {{
+        if (!snapshot.has(key)) return null;
+        return GSON.fromJson(snapshot.get(key), Object.class);
+    }}
+}}
+"""
+
+    package_path = package_name.replace(".", "/")
+    return {{
+        f"src/main/java/{{package_path}}/AuthoredNetworkSync.java":
+            server_source,
+        f"src/main/java/{{package_path}}/AuthoredNetworkClient.java":
+            client_source,
+    }}
+
+
+def _merged_lang_text(
+    root: Path,
+    relative: str,
+    additions: Mapping[str, str],
+) -> str:
+    target = root / relative
+    existing: dict[str, Any] = {{}}
+    if target.is_file() and not target.is_symlink():
+        try:
+            parsed = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                f"TYPED_RESOURCE_LANGUAGE_INVALID: {{relative}}"
+            ) from exc
+        if not isinstance(parsed, dict):
+            raise ValueError(
+                f"TYPED_RESOURCE_LANGUAGE_INVALID: {{relative}}"
+            )
+        existing = {{str(key): value for key, value in parsed.items()}}
+    for key, value in additions.items():
+        existing[str(key)] = str(value)
+    return json.dumps(
+        existing,
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    ) + "\n"
+
+
+def _resource_policy_files(
+    *,
+    root: Path,
+    package_name: str,
+    mod_id: str,
+    structured: Mapping[str, Any],
+) -> dict[str, str]:
+    missing_rows = _structured_rows(
+        structured,
+        "resources_and_ui",
+        "missing_resources",
+    )
+    accessibility_rows = _structured_rows(
+        structured,
+        "resources_and_ui",
+        "accessibility",
+    )
+    package_path = package_name.replace(".", "/")
+    files: dict[str, str] = {{}}
+
+    if missing_rows:
+        files[
+            f"src/main/resources/assets/{{mod_id}}/models/item/"
+            "mmm_missing_resource.json"
+        ] = json.dumps(
+            {{
+                "parent": "minecraft:item/generated",
+                "textures": {{"layer0": "minecraft:item/barrier"}},
+            }},
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        ) + "\n"
+
+    if accessibility_rows:
+        en: dict[str, str] = {{}}
+        ko: dict[str, str] = {{}}
+        message_keys: list[str] = []
+        for index, row in enumerate(accessibility_rows, 1):
+            key = f"text.{{mod_id}}.accessibility_{{index}}"
+            feedback = str(row.get("feedback") or "").strip()
+            localization = str(row.get("localization") or "").strip()
+            observation = str(row.get("observation") or "").strip()
+            en[key] = feedback or observation or localization
+            ko[key] = localization or feedback or observation
+            message_keys.append(key)
+
+        en_path = f"src/main/resources/assets/{{mod_id}}/lang/en_us.json"
+        ko_path = f"src/main/resources/assets/{{mod_id}}/lang/ko_kr.json"
+        files[en_path] = _merged_lang_text(root, en_path, en)
+        files[ko_path] = _merged_lang_text(root, ko_path, ko)
+
+        send_lines = "\n".join(
+            "            handler.player.sendMessage("
+            f"net.minecraft.text.Text.translatable({json.dumps(key)}), false);"
+            for key in message_keys
+        )
+        files[
+            f"src/main/java/{{package_path}}/AuthoredAccessibility.java"
+        ] = f"""package {{package_name}};
+
+import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
+
+// MMM:TYPED_ACCESSIBILITY_OWNER
+public final class AuthoredAccessibility {{
+    private static boolean registered;
+
+    private AuthoredAccessibility() {{}}
+
+    public static synchronized void register() {{
+        if (registered) return;
+        registered = true;
+        ServerPlayConnectionEvents.JOIN.register(
+                (handler, sender, server) -> {{
+{{send_lines}}
+                }}
+        );
+    }}
+}}
+"""
+    return files
+
+
 def generate_typed_plan_module(
     project_root: str | Path,
     *,
