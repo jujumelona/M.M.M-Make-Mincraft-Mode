@@ -55,6 +55,17 @@ def typed_plan_support_issues(
         for cover in module.get("covers", ())
         if isinstance(cover, str)
     }
+    function_covered = {
+        str(cover)
+        for function in (
+            typed_plan_ir.get("functions", ())
+            if isinstance(typed_plan_ir, Mapping)
+            else ()
+        )
+        if isinstance(function, Mapping)
+        for cover in function.get("covers", ())
+        if isinstance(cover, str)
+    }
 
     phantom = sorted(covered - active_refs)
     issues.extend(
@@ -67,6 +78,17 @@ def typed_plan_support_issues(
         for concern, rows in active.items():
             ref = f"{section}.{concern}"
             if rows and ref not in covered:
+                issues.append(ref)
+
+    for section in (
+        "behavior_contract",
+        "algorithm",
+        "failure_and_limits",
+    ):
+        active = active_concern_records(normalized, section)
+        for concern, rows in active.items():
+            ref = f"{section}.{concern}"
+            if rows and ref not in function_covered:
                 issues.append(ref)
 
     integration = active_concern_records(normalized, "integration")
