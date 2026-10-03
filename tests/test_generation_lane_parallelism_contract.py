@@ -81,6 +81,7 @@ def test_anchor_fencing_is_additive_to_fail_closed_stage_admission() -> None:
         "generate:content",
         "generate:system",
         "generate:entity",
+        "generate:host",
     )
 
 
