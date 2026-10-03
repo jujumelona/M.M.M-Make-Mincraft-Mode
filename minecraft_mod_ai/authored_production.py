@@ -413,199 +413,6 @@ def _orphan_reasoning_close_projection_start(text: str) -> int:
             return start
     return 0
 
-def _implementation_authored_plan(plan: AuthoredPlan) -> tuple[AuthoredPlan, dict[str, Any] | None]:
-    """Project a delimited final design without interpreting or rewriting its content.
-
-    Legacy saved responses sometimes contain an explicitly labelled reasoning prefix.
-    Only a leading envelope or a labelled prefix followed by a final-design boundary
-    is recoverable here. Mentions in prose, examples and ambiguous drafts stay intact.
-    """
-
-    if getattr(plan, "typed_plan_ir", {}):
-        return plan, None
-
-    text = plan.text
-    start = 0
-    # These are response envelopes, not tags embedded in a design or fenced example.
-    envelope = re.compile(
-        r"\A\s*<(think|analysis)>.*?</\1>[ \t]*(?:\r?\n)*", re.IGNORECASE | re.DOTALL
-    )
-    while match := envelope.match(text[start:]):
-        start += match.end()
-    remainder = text[start:]
-    labelled_reasoning = re.match(
-        r"\A\s*(?:#{1,6}[ \t]+)?(?:\*\*)?"
-        r"(?:thinking process|사고 과정|생각 과정)[ \t]*:?(?:\*\*)?[ \t]*\r?\n",
-        remainder, re.IGNORECASE,
-    )
-    if labelled_reasoning is not None:
-        # Ignore fenced examples when looking for the actual final document.
-        fence = ""
-        offset = 0
-        for line in remainder.splitlines(keepends=True):
-            marker = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
-            if fence:
-                if (marker and marker[1][0] == fence[0]
-                        and len(marker[1]) >= len(fence)
-                        and not line[marker.end():].strip()):
-                    fence = ""
-            elif marker:
-                fence = marker[1]
-            else:
-                heading = re.match(r"^ {0,3}#{1,6}[ \t]+(.+?)\s*$", line)
-                if heading:
-                    title = re.sub(r"[ \t]+#+[ \t]*$", "", heading[1]).strip("*_` ")
-                    final_heading = re.fullmatch(
-                        r"(?:behavior[ _-]+contract|행동[ _-]*계약|동작[ _-]*계약|"
-                        r"(?:.+[ \t]+)?(?:design|설계)(?:[ \t]+(?:document|문서)|서)?)",
-                        title, re.IGNORECASE,
-                    )
-                    prefix = remainder[:offset].casefold()
-                    has_analysis = any(token in prefix for token in (
-                        "analyze the request", "deconstruct the template", "drafting content",
-                        "요청 분석", "요청을 분석",
-                    ))
-                    if final_heading and has_analysis:
-                        start += offset
-                        break
-            offset += len(line)
-    if not start:
-        start = _orphan_reasoning_close_projection_start(text)
-    if not start or not text[start:].strip():
-        return plan, None
-    prefix = text[:start]
-    implementation_text = text[start:]
-    projected = AuthoredPlan(
-        requested_prompt=plan.requested_prompt,
-        text=implementation_text,
-        existing_input_sha256=plan.existing_input_sha256,
-        media_paths=plan.media_paths,
-        schema_version=plan.schema_version,
-        structured_sections=deepcopy(plan.structured_sections),
-        typed_plan_ir=deepcopy(getattr(plan, "typed_plan_ir", {})),
-    )
-    provenance = {
-        "schema_version": "mmm/authored-source-projection-v1",
-        "policy": "strip_leaked_model_reasoning_prefix_only",
-        # Keep the source recoverable; modules receive only the projected exact suffix.
-        "source_plan": plan.to_dict(),
-        "source_text_sha256": "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest(),
-        "implementation_text_sha256": "sha256:"
-        + hashlib.sha256(implementation_text.encode("utf-8")).hexdigest(),
-        "stripped_prefix_bytes": len(prefix.encode("utf-8")),
-    }
-    return projected, provenance
-
-
-def _authored_execution_units(text: str) -> tuple[dict[str, Any], ...]:
-    """Lower saved prose to semantic Markdown-section obligations.
-
-    Byte length never creates a new class or implementation task. Generic document
-    wrappers may expose peer child features, but one semantic feature remains one unit
-    even when its prose is long.
-    """
-
-    encoded = text.encode("utf-8")
-    if not encoded:
-        return ({
-            "index": 1,
-            "start_byte": 0,
-            "end_byte": 0,
-            "text": "",
-            "implementation_text": "",
-            "section": "",
-            "text_sha256": "sha256:" + hashlib.sha256(b"").hexdigest(),
-            "implementation_text_sha256": "sha256:" + hashlib.sha256(b"").hexdigest(),
-        },)
-
-    chunks = [
-        (block, _authored_block_section(block))
-        for block in _semantic_authored_blocks(text)
-    ]
-
-    if "".join(chunk for chunk, _section in chunks) != text:
-        raise ValueError("Authored execution lowering changed the approved design text.")
-
-    units: list[dict[str, Any]] = []
-    start = 0
-    for index, (chunk, section) in enumerate(chunks, start=1):
-        raw = chunk.encode("utf-8")
-        end = start + len(raw)
-        implementation_text = _authored_block_implementation_text(chunk, section)
-        units.append({
-            "index": index,
-            "start_byte": start,
-            "end_byte": end,
-            "text": chunk,
-            "implementation_text": implementation_text,
-            "section": section,
-            "text_sha256": "sha256:" + hashlib.sha256(raw).hexdigest(),
-            "implementation_text_sha256": "sha256:"
-            + hashlib.sha256(implementation_text.encode("utf-8")).hexdigest(),
-        })
-        start = end
-    return tuple(units)
-
-
-def _task_sha(task: Mapping[str, Any]) -> str:
-    payload = dict(task)
-    payload.pop("task_sha256", None)
-    return _sha256_json(payload)
-
-
-def _exact_authored_task(
-    *,
-    task_id: str,
-    path: str,
-    symbol: str,
-    target: Mapping[str, Any],
-    obligation: str,
-    semantic_outcome: str,
-    depends_on: tuple[str, ...],
-    consumes: tuple[str, ...],
-    provides: tuple[str, ...],
-    worksheet: Mapping[str, Any],
-    required_gates: tuple[str, ...],
-    target_status: str = "existing",
-    execution_role: str = "coder",
-) -> dict[str, Any]:
-    anchor = {
-        "kind": "symbol",
-        "locator": f"{path}#{symbol}",
-        # Fresh authored projects materialize this exact target before execution.
-        # The selected executor therefore never chooses a path or top-level symbol.
-        "status": target_status,
-        "ownership": "host_exact_authored_lowering",
-        "module_id": task_id,
-        "source_set": "main",
-    }
-    task: dict[str, Any] = {
-        "task_id": task_id,
-        "task_sha256": "",
-        "execution_role": execution_role,
-        "semantic_outcome": semantic_outcome,
-        "implementation_obligations": [obligation],
-        "engineering_worksheet": dict(worksheet),
-        "target_cell": dict(target),
-        "owned_anchors": [anchor],
-        "production_bindings": [{
-            "task_ref": task_id,
-            "reuse_action": "fresh",
-            "owned_anchors": [dict(anchor)],
-        }],
-        "depends_on": list(depends_on),
-        "consumes": list(consumes),
-        "provides": list(provides),
-        "required_gates": list(required_gates),
-        "acceptance": [
-            "Only the exact host-owned target is mutated.",
-            "The generated Java passes host verification for the selected platform.",
-        ],
-    }
-    task["task_sha256"] = _task_sha(task)
-    return task
-
-
 def _compile_new_authored_modules(
     plan: AuthoredPlan,
     *,
@@ -614,358 +421,217 @@ def _compile_new_authored_modules(
     target: Mapping[str, Any],
     production_state_section: Mapping[str, Any] | None = None,
 ) -> tuple[tuple[ProductionModule, ...], dict[str, Any]]:
-    """Lower fresh authored work through its persisted execution authority.
-
-    Typed PlanIR is compiled directly by the host. Legacy plans without Typed
-    PlanIR retain the implementation-graph compatibility route. The saved
-    document remains exact and recoverable in either case.
-    """
+    """Lower the persisted Typed PlanIR through deterministic host backends only."""
     main_symbol = _main_class_name(mod_id)
     main_path = f"src/main/java/{package_name.replace('.', '/')}/{main_symbol}.java"
 
-    if getattr(plan, "typed_plan_ir", {}):
-        from .typed_plan_ir import (
-            typed_plan_capability_ids,
-            typed_plan_uses_state,
-            validate_typed_plan_ir,
-        )
-        from .typed_plan_support import assert_typed_plan_host_support
+    if not getattr(plan, "typed_plan_ir", {}):
+    raise ValueError(
+        "TYPED_PLAN_REQUIRED: untyped authored production has been removed."
+    )
+    from .typed_plan_ir import (
+        typed_plan_capability_ids,
+        typed_plan_uses_state,
+        validate_typed_plan_ir,
+    )
+    from .typed_plan_support import assert_typed_plan_host_support
 
-        source_sha = "sha256:" + hashlib.sha256(plan.text.encode("utf-8")).hexdigest()
-        stored_sha = str(plan.typed_plan_ir.get("source_sha256") or "")
-        normalized_stored_sha = (
-            stored_sha if stored_sha.startswith("sha256:") else "sha256:" + stored_sha
-        )
-        if normalized_stored_sha != source_sha:
-            raise ValueError("TYPED_PLAN_SOURCE_HASH_MISMATCH")
+    source_sha = "sha256:" + hashlib.sha256(plan.text.encode("utf-8")).hexdigest()
+    stored_sha = str(plan.typed_plan_ir.get("source_sha256") or "")
+    normalized_stored_sha = (
+        stored_sha if stored_sha.startswith("sha256:") else "sha256:" + stored_sha
+    )
+    if normalized_stored_sha != source_sha:
+        raise ValueError("TYPED_PLAN_SOURCE_HASH_MISMATCH")
 
-        from .typed_host_capabilities import (
-            typed_host_capability_contracts,
-        )
+    from .typed_host_capabilities import (
+        typed_host_capability_contracts,
+    )
 
-        capability_contracts = typed_host_capability_contracts()
-        validated_plan = validate_typed_plan_ir(
-            plan.typed_plan_ir,
-            capabilities=capability_contracts,
-        )
-        capability_ids = typed_plan_capability_ids(validated_plan)
-        bound_capabilities = {
-            capability_id: deepcopy(capability_contracts[capability_id])
-            for capability_id in capability_ids
-        }
-        assert_typed_plan_host_support(
-            plan.structured_sections,
-            validated_plan,
-        )
-
-        raw_platform_modules = validated_plan.get("platform_modules", [])
-        platform_modules: list[ProductionModule] = []
-        state_store_config: dict[str, Any] | None = None
-        network_sync_config: dict[str, Any] | None = None
-        resource_policy_config: dict[str, Any] | None = None
-        for item in raw_platform_modules:
-            module_id = str(item["module_id"])
-            kind = str(item["kind"])
-            if module_id == "authored_typed_plan":
-                raise ValueError(
-                    "TYPED_PLATFORM_MODULE_ID_CONFLICT: authored_typed_plan"
-                )
-            if kind == "state_store":
-                if state_store_config is not None:
-                    raise ValueError(
-                        "TYPED_PLATFORM_STATE_STORE_DUPLICATE"
-                    )
-                state_store_config = deepcopy(dict(item["config"]))
-                continue
-            if kind == "network_sync":
-                if network_sync_config is not None:
-                    raise ValueError("TYPED_PLATFORM_NETWORK_SYNC_DUPLICATE")
-                network_sync_config = {
-                    **deepcopy(dict(item["config"])),
-                    "__covers": list(item["covers"]),
-                }
-                continue
-            if kind == "resource_policy":
-                if resource_policy_config is not None:
-                    raise ValueError("TYPED_PLATFORM_RESOURCE_POLICY_DUPLICATE")
-                resource_policy_config = deepcopy(dict(item["config"]))
-                continue
-            platform_modules.append(
-                ProductionModule(
-                    module_id=module_id,
-                    kind=kind,
-                    config=deepcopy(dict(item["config"])),
-                    required_gates=("target_compile",),
-                )
-            )
-
-        from .authored_structured_design import active_concern_records
-
-        state_section = (
-            deepcopy(dict(production_state_section))
-            if isinstance(production_state_section, Mapping)
-            else {}
-        )
-        active_state = active_concern_records(
-            plan.structured_sections,
-            "state_model",
-        )
-        network_sync_covers = set(
-            network_sync_config.get("__covers", ())
-            if isinstance(network_sync_config, Mapping)
-            else ()
-        )
-        network_sync_needs_state = bool(
-            network_sync_covers
-            & {
-                "authority_and_network.payloads",
-                "authority_and_network.synchronization",
-                "authority_and_network.reconnection",
-            }
-        )
-        state_required = (
-            typed_plan_uses_state(validated_plan)
-            or state_store_config is not None
-            or network_sync_needs_state
-            or any(bool(rows) for rows in active_state.values())
-        )
-        if state_required and not state_section:
-            raise ValueError(
-                "TYPED_PLAN_STATE_AUTHORITY_REQUIRED: active state semantics, "
-                "state operations, or persistent state require canonical "
-                "structured state_model authority."
-            )
-
-        program_symbol = "AuthoredProgram"
-        program_path = (
-            f"src/main/java/{package_name.replace('.', '/')}/{program_symbol}.java"
-        )
-        task_id = "authored_typed_plan"
-        task = _exact_authored_task(
-            task_id=task_id,
-            path=program_path,
-            symbol=program_symbol,
-            target=target,
-            obligation=(
-                "Compile the persisted Typed PlanIR exactly through the host Java backend. "
-                "Do not invoke a coder or reinterpret authored behavior."
-            ),
-            semantic_outcome="Materialize the approved Typed PlanIR deterministically.",
-            depends_on=(),
-            consumes=(),
-            provides=("authored_typed_program_ready",),
-            worksheet={
-                "typed_plan_ir": deepcopy(validated_plan),
-                "typed_plan_source_sha256": source_sha,
-            },
-            required_gates=("target_compile",),
-            target_status="host_reserved",
-            execution_role="host_compiler",
-        )
-        module = ProductionModule(
-            module_id=task_id,
-            kind="custom_java",
-            config={
-                "implementation": "custom",
-                "evidence_task": task,
-                "typed_plan_ir": deepcopy(validated_plan),
-                "typed_plan_package": package_name,
-                "typed_plan_path": program_path,
-                "typed_plan_capabilities": deepcopy(bound_capabilities),
-                "typed_plan_state_section": state_section,
-                "typed_plan_structured_sections": deepcopy(plan.structured_sections),
-                "typed_state_store": state_store_config,
-                "typed_network_sync": network_sync_config,
-                "typed_resource_policy": resource_policy_config,
-                **dict(target),
-            },
-            required_gates=("target_compile",),
-        )
-        manifest = {
-            "schema_version": _AUTHORED_EXECUTION_SCHEMA,
-            "policy": "host_typed_plan_ir",
-            "source_text_sha256": source_sha,
-            "source_bytes": len(plan.text.encode("utf-8")),
-            "unit_count": 1 + len(platform_modules),
-            "units": [{
-                "module_id": task_id,
-                "path": program_path,
-                "symbol": program_symbol,
-                "source_sha256": source_sha,
-            }],
-            "graph_status": "not_required",
-            "typed_program": {
-                "path": program_path,
-                "symbol": program_symbol,
-                "state_required": state_required,
-                "state_store": state_store_config is not None,
-                "network_sync": network_sync_config is not None,
-                "resource_policy": resource_policy_config is not None,
-                "capabilities": list(capability_ids),
-            },
-            "platform_modules": [
-                {
-                    "module_id": str(item["module_id"]),
-                    "kind": str(item["kind"]),
-                    "covers": list(item["covers"]),
-                }
-                for item in raw_platform_modules
-            ],
-            "entrypoint": {
-                "owner": "host_scaffold",
-                "path": main_path,
-                "symbol": main_symbol,
-                "feature_symbols": [program_symbol],
-            },
-        }
-        manifest["manifest_sha256"] = _sha256_json(manifest)
-        return (module, *platform_modules), manifest
-
-    task_id = "authored_implementation_graph"
-    from .canonical_concern_authority import CanonicalConcernAuthority
-
-    structured_sections = deepcopy(plan.structured_sections)
-    authority = CanonicalConcernAuthority.from_structured_sections(structured_sections)
-    request = {
-        "text": plan.text,
-        "package": package_name,
-        "mod_id": mod_id,
-        "target": dict(target),
-        "entrypoint_path": main_path,
-        "entrypoint_symbol": main_symbol,
-        "structured_sections": structured_sections,
-        "structured_sections_sha256": structured_sections_sha256(structured_sections),
-        "canonical_concern_authority": authority.to_dict(),
+    capability_contracts = typed_host_capability_contracts()
+    validated_plan = validate_typed_plan_ir(
+        plan.typed_plan_ir,
+        capabilities=capability_contracts,
+    )
+    capability_ids = typed_plan_capability_ids(validated_plan)
+    bound_capabilities = {
+        capability_id: deepcopy(capability_contracts[capability_id])
+        for capability_id in capability_ids
     }
-    if production_state_section is not None:
-        request["production_state_section"] = deepcopy(dict(production_state_section))
+    assert_typed_plan_host_support(
+        plan.structured_sections,
+        validated_plan,
+    )
+
+    raw_platform_modules = validated_plan.get("platform_modules", [])
+    platform_modules: list[ProductionModule] = []
+    state_store_config: dict[str, Any] | None = None
+    network_sync_config: dict[str, Any] | None = None
+    resource_policy_config: dict[str, Any] | None = None
+    for item in raw_platform_modules:
+        module_id = str(item["module_id"])
+        kind = str(item["kind"])
+        if module_id == "authored_typed_plan":
+            raise ValueError(
+                "TYPED_PLATFORM_MODULE_ID_CONFLICT: authored_typed_plan"
+            )
+        if kind == "state_store":
+            if state_store_config is not None:
+                raise ValueError(
+                    "TYPED_PLATFORM_STATE_STORE_DUPLICATE"
+                )
+            state_store_config = deepcopy(dict(item["config"]))
+            continue
+        if kind == "network_sync":
+            if network_sync_config is not None:
+                raise ValueError("TYPED_PLATFORM_NETWORK_SYNC_DUPLICATE")
+            network_sync_config = {
+                **deepcopy(dict(item["config"])),
+                "__covers": list(item["covers"]),
+            }
+            continue
+        if kind == "resource_policy":
+            if resource_policy_config is not None:
+                raise ValueError("TYPED_PLATFORM_RESOURCE_POLICY_DUPLICATE")
+            resource_policy_config = deepcopy(dict(item["config"]))
+            continue
+        platform_modules.append(
+            ProductionModule(
+                module_id=module_id,
+                kind=kind,
+                config=deepcopy(dict(item["config"])),
+                required_gates=("target_compile",),
+            )
+        )
+
+    from .authored_structured_design import active_concern_records
+
+    state_section = (
+        deepcopy(dict(production_state_section))
+        if isinstance(production_state_section, Mapping)
+        else {}
+    )
+    active_state = active_concern_records(
+        plan.structured_sections,
+        "state_model",
+    )
+    network_sync_covers = set(
+        network_sync_config.get("__covers", ())
+        if isinstance(network_sync_config, Mapping)
+        else ()
+    )
+    network_sync_needs_state = bool(
+        network_sync_covers
+        & {
+            "authority_and_network.payloads",
+            "authority_and_network.synchronization",
+            "authority_and_network.reconnection",
+        }
+    )
+    state_required = (
+        typed_plan_uses_state(validated_plan)
+        or state_store_config is not None
+        or network_sync_needs_state
+        or any(bool(rows) for rows in active_state.values())
+    )
+    if state_required and not state_section:
+        raise ValueError(
+            "TYPED_PLAN_STATE_AUTHORITY_REQUIRED: active state semantics, "
+            "state operations, or persistent state require canonical "
+            "structured state_model authority."
+        )
+
+    program_symbol = "AuthoredProgram"
+    program_path = (
+        f"src/main/java/{package_name.replace('.', '/')}/{program_symbol}.java"
+    )
+    task_id = "authored_typed_plan"
     task = _exact_authored_task(
-        task_id=task_id, path=main_path, symbol=main_symbol, target=target,
-        obligation="Compile the complete saved design into a responsibility/dependency IR, then execute admitted source units.",
-        semantic_outcome="Implement the saved design through budgeted collaborating source units.",
-        depends_on=(), consumes=(), provides=("authored_implementation_ready",),
-        worksheet={"implementation_graph_request": request}, required_gates=("target_compile",),
+        task_id=task_id,
+        path=program_path,
+        symbol=program_symbol,
+        target=target,
+        obligation=(
+            "Compile the persisted Typed PlanIR exactly through the host Java backend. "
+            "Do not invoke a coder or reinterpret authored behavior."
+        ),
+        semantic_outcome="Materialize the approved Typed PlanIR deterministically.",
+        depends_on=(),
+        consumes=(),
+        provides=("authored_typed_program_ready",),
+        worksheet={
+            "typed_plan_ir": deepcopy(validated_plan),
+            "typed_plan_source_sha256": source_sha,
+        },
+        required_gates=("target_compile",),
+        target_status="host_reserved",
+        execution_role="host_compiler",
     )
     module = ProductionModule(
-        module_id=task_id, kind="custom_java",
-        config={"implementation": "custom", "evidence_task": task,
-                "implementation_graph_request": request, **dict(target)},
+        module_id=task_id,
+        kind="custom_java",
+        config={
+            "implementation": "custom",
+            "evidence_task": task,
+            "typed_plan_ir": deepcopy(validated_plan),
+            "typed_plan_package": package_name,
+            "typed_plan_path": program_path,
+            "typed_plan_capabilities": deepcopy(bound_capabilities),
+            "typed_plan_state_section": state_section,
+            "typed_plan_structured_sections": deepcopy(plan.structured_sections),
+            "typed_state_store": state_store_config,
+            "typed_network_sync": network_sync_config,
+            "typed_resource_policy": resource_policy_config,
+            **dict(target),
+        },
         required_gates=("target_compile",),
     )
     manifest = {
         "schema_version": _AUTHORED_EXECUTION_SCHEMA,
-        "policy": "host_implementation_graph_before_source",
-        "source_text_sha256": "sha256:" + hashlib.sha256(plan.text.encode()).hexdigest(),
-        "source_bytes": len(plan.text.encode()), "unit_count": 0,
-        "units": [], "graph_status": "pending_production_context",
-        "entrypoint": {"owner": "host_scaffold", "path": main_path,
-                       "symbol": main_symbol, "feature_symbols": []},
-    }
-    manifest["manifest_sha256"] = _sha256_json(manifest)
-    return (module,), manifest
-
-
-def _compile_existing_authored_modules(
-    plan: AuthoredPlan,
-    *,
-    target: Mapping[str, Any],
-) -> tuple[tuple[ProductionModule, ...], dict[str, Any]]:
-    """Split existing-project authored work into small semantic localization/edit tasks.
-
-    Existing source files may be shared by multiple authored sections, so units are serialized.
-    Each unit localizes a minimal exact target set immediately before editing.
-    """
-
-    units = _authored_execution_units(plan.text)
-    modules: list[ProductionModule] = []
-    manifest_units: list[dict[str, Any]] = []
-    previous_id = ""
-    for unit in units:
-        index = int(unit["index"])
-        task_id = f"authored_existing_{index:03d}"
-        depends_on = (previous_id,) if previous_id else ()
-        unit_section = str(unit.get("section") or "").strip()
-        structured_sections = deepcopy(plan.structured_sections)
-        if structured_sections:
-            from .authored_ir_parser import authored_section_id
-
-            section_id = authored_section_id(unit_section)
-            structured_sections = (
-                {section_id: deepcopy(structured_sections[section_id])}
-                if section_id and section_id in structured_sections
-                else structured_sections
-            )
-        unit_plan = AuthoredPlan(
-            requested_prompt=plan.requested_prompt,
-            text=str(unit["text"]),
-            existing_input_sha256=plan.existing_input_sha256,
-            media_paths=plan.media_paths,
-            schema_version=plan.schema_version,
-            structured_sections=structured_sections,
-            typed_plan_ir=deepcopy(getattr(plan, "typed_plan_ir", {})),
-        )
-        modules.append(
-            ProductionModule(
-                module_id=task_id,
-                kind="custom_java",
-                config={
-                    "implementation": "custom",
-                    "authored_plan": unit_plan.to_dict(),
-                    "authored_localization_required": True,
-                    "authored_unit": {
-                        "index": index,
-                        "count": len(units),
-                        "section": str(unit.get("section") or ""),
-                        "start_byte": int(unit["start_byte"]),
-                        "end_byte": int(unit["end_byte"]),
-                        "text_sha256": str(unit["text_sha256"]),
-                    },
-                    **dict(target),
-                },
-                depends_on=depends_on,
-                required_gates=("target_compile",),
-            )
-        )
-        manifest_units.append(
+        "policy": "host_typed_plan_ir",
+        "source_text_sha256": source_sha,
+        "source_bytes": len(plan.text.encode("utf-8")),
+        "unit_count": 1 + len(platform_modules),
+        "units": [{
+            "module_id": task_id,
+            "path": program_path,
+            "symbol": program_symbol,
+            "source_sha256": source_sha,
+        }],
+        "graph_status": "not_required",
+        "typed_program": {
+            "path": program_path,
+            "symbol": program_symbol,
+            "state_required": state_required,
+            "state_store": state_store_config is not None,
+            "network_sync": network_sync_config is not None,
+            "resource_policy": resource_policy_config is not None,
+            "capabilities": list(capability_ids),
+        },
+        "platform_modules": [
             {
-                "module_id": task_id,
-                "start_byte": int(unit["start_byte"]),
-                "end_byte": int(unit["end_byte"]),
-                "text_sha256": str(unit["text_sha256"]),
-                "section": str(unit.get("section") or ""),
-                "depends_on": list(depends_on),
+                "module_id": str(item["module_id"]),
+                "kind": str(item["kind"]),
+                "covers": list(item["covers"]),
             }
-        )
-        previous_id = task_id
-
-    raw = plan.text.encode("utf-8")
-    manifest: dict[str, Any] = {
-        "schema_version": _AUTHORED_EXECUTION_SCHEMA,
-        "source_text_sha256": "sha256:" + hashlib.sha256(raw).hexdigest(),
-        "source_bytes": len(raw),
-        "unit_count": len(manifest_units),
-        "policy": "host_localize_freeze_exact_targets_before_coder",
-        "units": manifest_units,
+            for item in raw_platform_modules
+        ],
         "entrypoint": {
-            "owner": "existing_project",
-            "path": "",
-            "symbol": "",
-            "feature_symbols": [],
+            "owner": "host_scaffold",
+            "path": main_path,
+            "symbol": main_symbol,
+            "feature_symbols": [program_symbol],
         },
     }
     manifest["manifest_sha256"] = _sha256_json(manifest)
-    return tuple(modules), manifest
+    return (module, *platform_modules), manifest
 
 
 def materialize_authored_execution_scaffold(
     proposal: CompleteProposal,
     project_root: Any,
 ) -> Any:
-    """Materialize all fresh-authored architecture before the small coder is called.
-
-    The host owns file names, package/type identity and the single Fabric entrypoint
-    integration. The coder receives only already-existing exact feature files.
-    """
+    """Materialize the deterministic Typed PlanIR scaffold only."""
 
     import re
     from pathlib import Path
@@ -979,209 +645,96 @@ def materialize_authored_execution_scaffold(
     if manifest.get("schema_version") != _AUTHORED_EXECUTION_SCHEMA:
         raise ValueError("AUTHORED_SCAFFOLD_SCHEMA_MISMATCH")
     policy = str(manifest.get("policy") or "")
-    if policy not in {
-        "host_exact_task_queue_no_coder_file_planning",
-        "host_bounded_coherent_authored_design",
-        "host_implementation_graph_before_source",
-        "host_typed_plan_ir",
-    }:
-        raise ValueError("AUTHORED_SCAFFOLD_POLICY_MISMATCH")
+    if policy != "host_typed_plan_ir":
+        raise ValueError(
+            "AUTHORED_SCAFFOLD_POLICY_MISMATCH: only Typed PlanIR is supported"
+        )
 
     expected_manifest = dict(manifest)
     supplied_digest = str(expected_manifest.pop("manifest_sha256", "") or "")
     if supplied_digest != _sha256_json(expected_manifest):
         raise ValueError("AUTHORED_SCAFFOLD_MANIFEST_HASH_MISMATCH")
 
-    if policy == "host_typed_plan_ir":
-        from .production_state_compiler import render_production_state_java
-        from .project_edit import (
-            ensure_main_initializer_call,
-            inspect_fabric_project,
-            write_text_files,
-        )
+    from .production_state_compiler import render_production_state_java
+    from .project_edit import (
+        ensure_main_initializer_call,
+        inspect_fabric_project,
+        write_text_files,
+    )
 
-        info = inspect_fabric_project(root)
-        package_name = proposal.base_proposal.spec.package_name
-        if info.package_name != package_name:
-            raise ValueError(
-                "AUTHORED_TYPED_PACKAGE_MISMATCH: "
-                f"{info.package_name!r} != {package_name!r}"
-            )
-
-        typed_program = manifest.get("typed_program")
-        if not isinstance(typed_program, Mapping):
-            raise ValueError("AUTHORED_TYPED_PROGRAM_MANIFEST_MISSING")
-        program_path = str(typed_program.get("path") or "").replace("\\", "/").strip()
-        expected_program_path = (
-            f"src/main/java/{package_name.replace('.', '/')}/AuthoredProgram.java"
-        )
-        if program_path != expected_program_path:
-            raise ValueError("AUTHORED_TYPED_PROGRAM_PATH_DRIFT")
-
-        program_target = root / program_path
-        if program_target.exists():
-            if not program_target.is_file() or program_target.is_symlink():
-                raise ValueError("AUTHORED_TYPED_PROGRAM_TARGET_INVALID")
-            current_program = program_target.read_text(encoding="utf-8")
-            if "// MMM:TYPED_PLAN_OWNER" not in current_program:
-                raise ValueError("AUTHORED_TYPED_PROGRAM_OWNERSHIP_CONFLICT")
-        else:
-            placeholder = (
-                f"package {package_name};\n\n"
-                "// MMM:TYPED_PLAN_OWNER\n"
-                "public final class AuthoredProgram {\n"
-                "    private AuthoredProgram() {}\n"
-                "    public static void initialize() {}\n"
-                "}\n"
-            )
-            write_text_files(
-                info,
-                {program_path: placeholder},
-                replace_existing=False,
-            )
-
-        if bool(typed_program.get("state_required")):
-            raw_state = design.get("_production_state_section")
-            if not isinstance(raw_state, Mapping) or not raw_state:
-                raise ValueError("AUTHORED_TYPED_STATE_AUTHORITY_MISSING")
-            state_path = (
-                f"src/main/java/{package_name.replace('.', '/')}/"
-                "AuthoredStateModel.java"
-            )
-            state_target = root / state_path
-            replace_state = False
-            if state_target.exists():
-                if not state_target.is_file() or state_target.is_symlink():
-                    raise ValueError("AUTHORED_TYPED_STATE_TARGET_INVALID")
-                current_state = state_target.read_text(encoding="utf-8")
-                if "// MMM:TYPED_PLAN_STATE_OWNER" not in current_state:
-                    raise ValueError("AUTHORED_TYPED_STATE_OWNERSHIP_CONFLICT")
-                replace_state = True
-            state_source = render_production_state_java(
-                raw_state,
-                package_name=package_name,
-            )
-            write_text_files(
-                info,
-                {state_path: state_source},
-                replace_existing=replace_state,
-            )
-
-        ensure_main_initializer_call(
-            info,
-            import_line=f"import {package_name}.AuthoredProgram",
-            call_line="AuthoredProgram.initialize()",
-            marker="typed-plan",
-        )
-        return root
-
-    if policy in {"host_bounded_coherent_authored_design", "host_implementation_graph_before_source"}:
-        # The canonical Fabric template is already materialized by the host. Coherent
-        # authored generation owns architecture inside bounded package/resource roots,
-        # so creating synthetic AuthoredFeatureNNN placeholders here would reintroduce
-        # the document-section-equals-class bug.
-        return root
-
+    info = inspect_fabric_project(root)
     package_name = proposal.base_proposal.spec.package_name
-    package_path = package_name.replace(".", "/")
-    units = manifest.get("units")
-    if not isinstance(units, list) or not units:
-        raise ValueError("AUTHORED_SCAFFOLD_UNITS_MISSING")
+    if info.package_name != package_name:
+        raise ValueError(
+            "AUTHORED_TYPED_PACKAGE_MISMATCH: "
+            f"{info.package_name!r} != {package_name!r}"
+        )
 
-    feature_symbols: list[str] = []
-    for index, raw_unit in enumerate(units, start=1):
-        if not isinstance(raw_unit, Mapping):
-            raise ValueError("AUTHORED_SCAFFOLD_UNIT_INVALID")  # noqa: TRY004 - persisted manifest error contract
-        symbol = str(raw_unit.get("symbol") or "").strip()
-        path = str(raw_unit.get("path") or "").replace("\\", "/").strip()
-        expected_symbol = f"AuthoredFeature{index:03d}"
-        expected_path = f"src/main/java/{package_path}/{expected_symbol}.java"
-        if symbol != expected_symbol or path != expected_path:
-            raise ValueError("AUTHORED_SCAFFOLD_UNIT_IDENTITY_DRIFT")
-        if re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", symbol) is None:
-            raise ValueError("AUTHORED_SCAFFOLD_SYMBOL_INVALID")
-        target = (root / path).resolve()
-        try:
-            target.relative_to(root)
-        except ValueError as exc:
-            raise ValueError("AUTHORED_SCAFFOLD_PATH_ESCAPE") from exc
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if target.exists():
-            if not target.is_file() or target.is_symlink():
-                raise ValueError("AUTHORED_SCAFFOLD_TARGET_NOT_REGULAR")
-            source = target.read_text(encoding="utf-8")
-            if (
-                f"package {package_name};" not in source
-                or re.search(
-                    rf"\bclass\s+{re.escape(symbol)}\b",
-                    source,
-                )
-                is None
-            ):
-                raise ValueError("AUTHORED_SCAFFOLD_EXISTING_IDENTITY_MISMATCH")
-        else:
-            target.write_text(
-                (
-                    f"package {package_name};\n\n"
-                    f"/** Host-owned authored feature slot {index}/{len(units)}. */\n"
-                    f"public final class {symbol} {{\n"
-                    f"    private {symbol}() {{}}\n\n"
-                    "    public static void initialize() {\n"
-                    f"        // MMM_AUTHORED_FEATURE_BODY_{index:03d}\n"
-                    "    }\n"
-                    "}\n"
-                ),
-                encoding="utf-8",
-                newline="\n",
-            )
-        feature_symbols.append(symbol)
-
-    entry = manifest.get("entrypoint")
-    if not isinstance(entry, Mapping):
-        raise ValueError("AUTHORED_SCAFFOLD_ENTRYPOINT_MISSING")  # noqa: TRY004 - persisted manifest error contract
-    main_symbol = _main_class_name(proposal.base_proposal.spec.mod_id)
-    main_path = f"src/main/java/{package_path}/{main_symbol}.java"
-    if str(entry.get("symbol") or "") != main_symbol or str(
-        entry.get("path") or ""
-    ).replace("\\", "/") != main_path:
-        raise ValueError("AUTHORED_SCAFFOLD_ENTRYPOINT_IDENTITY_DRIFT")
-    if list(entry.get("feature_symbols") or ()) != feature_symbols:
-        raise ValueError("AUTHORED_SCAFFOLD_ENTRYPOINT_FEATURE_DRIFT")
-
-    main_source = (root / main_path).resolve()
-    try:
-        main_source.relative_to(root)
-    except ValueError as exc:
-        raise ValueError("AUTHORED_SCAFFOLD_ENTRYPOINT_ESCAPE") from exc
-    if not main_source.is_file() or main_source.is_symlink():
-        raise ValueError("AUTHORED_SCAFFOLD_ENTRYPOINT_SOURCE_MISSING")
-
-    main_text = main_source.read_text(encoding="utf-8")
-    marker = "// MMM_AUTHORED_HOST_ENTRYPOINT_BINDING"
-    calls = [f"{symbol}.initialize();" for symbol in feature_symbols]
-    if marker in main_text:
-        if any(main_text.count(call) != 1 for call in calls):
-            raise ValueError("AUTHORED_SCAFFOLD_ENTRYPOINT_BINDING_CORRUPT")
-        return root
-
-    if any(call in main_text for call in calls):
-        raise ValueError("AUTHORED_SCAFFOLD_ENTRYPOINT_UNMARKED_BINDING")
-
-    match = re.search(
-        r"public\s+void\s+onInitialize\s*\(\s*\)\s*\{",
-        main_text,
+    typed_program = manifest.get("typed_program")
+    if not isinstance(typed_program, Mapping):
+        raise ValueError("AUTHORED_TYPED_PROGRAM_MANIFEST_MISSING")
+    program_path = str(typed_program.get("path") or "").replace("\\", "/").strip()
+    expected_program_path = (
+        f"src/main/java/{package_name.replace('.', '/')}/AuthoredProgram.java"
     )
-    if match is None:
-        raise ValueError("AUTHORED_SCAFFOLD_ENTRYPOINT_METHOD_MISSING")
-    injection = (
-        match.group(0)
-        + "\n        "
-        + marker
-        + "\n"
-        + "\n".join(f"        {call}" for call in calls)
+    if program_path != expected_program_path:
+        raise ValueError("AUTHORED_TYPED_PROGRAM_PATH_DRIFT")
+
+    program_target = root / program_path
+    if program_target.exists():
+        if not program_target.is_file() or program_target.is_symlink():
+            raise ValueError("AUTHORED_TYPED_PROGRAM_TARGET_INVALID")
+        current_program = program_target.read_text(encoding="utf-8")
+        if "// MMM:TYPED_PLAN_OWNER" not in current_program:
+            raise ValueError("AUTHORED_TYPED_PROGRAM_OWNERSHIP_CONFLICT")
+    else:
+        placeholder = (
+            f"package {package_name};\n\n"
+            "// MMM:TYPED_PLAN_OWNER\n"
+            "public final class AuthoredProgram {\n"
+            "    private AuthoredProgram() {}\n"
+            "    public static void initialize() {}\n"
+            "}\n"
+        )
+        write_text_files(
+            info,
+            {program_path: placeholder},
+            replace_existing=False,
+        )
+
+    if bool(typed_program.get("state_required")):
+        raw_state = design.get("_production_state_section")
+        if not isinstance(raw_state, Mapping) or not raw_state:
+            raise ValueError("AUTHORED_TYPED_STATE_AUTHORITY_MISSING")
+        state_path = (
+            f"src/main/java/{package_name.replace('.', '/')}/"
+            "AuthoredStateModel.java"
+        )
+        state_target = root / state_path
+        replace_state = False
+        if state_target.exists():
+            if not state_target.is_file() or state_target.is_symlink():
+                raise ValueError("AUTHORED_TYPED_STATE_TARGET_INVALID")
+            current_state = state_target.read_text(encoding="utf-8")
+            if "// MMM:TYPED_PLAN_STATE_OWNER" not in current_state:
+                raise ValueError("AUTHORED_TYPED_STATE_OWNERSHIP_CONFLICT")
+            replace_state = True
+        state_source = render_production_state_java(
+            raw_state,
+            package_name=package_name,
+        )
+        write_text_files(
+            info,
+            {state_path: state_source},
+            replace_existing=replace_state,
+        )
+
+    ensure_main_initializer_call(
+        info,
+        import_line=f"import {package_name}.AuthoredProgram",
+        call_line="AuthoredProgram.initialize()",
+        marker="typed-plan",
     )
-    main_text = main_text[: match.start()] + injection + main_text[match.end() :]
-    main_source.write_text(main_text, encoding="utf-8", newline="\n")
     return root
 
 
@@ -1256,123 +809,34 @@ def _contract_shaped_authored_design(text: str) -> bool:
     return False
 
 
-def _compile_coherent_authored_module(
-    plan: AuthoredPlan,
-    *,
-    mod_id: str,
-    package_name: str,
-    target: Mapping[str, Any],
-) -> tuple[tuple[ProductionModule, ...], dict[str, Any]]:
-    """Keep one engineering contract coherent and let the coder choose bounded files."""
-
-    raw = plan.text.encode("utf-8")
-    module_id = "authored_design"
-    main_symbol = _main_class_name(mod_id)
-    main_path = f"src/main/java/{package_name.replace('.', '/')}/{main_symbol}.java"
-    module = ProductionModule(
-        module_id=module_id,
-        kind="custom_java",
-        config={
-            "implementation": "custom",
-            "authored_plan": plan.to_dict(),
-            "authored_execution_mode": "bounded_coherent",
-            "authored_bounded_scope": True,
-            "authored_java_package": package_name,
-            "authored_mod_id": mod_id,
-            **dict(target),
-        },
-        required_gates=("project build",),
-    )
-    unit = {
-        "module_id": module_id,
-        "start_byte": 0,
-        "end_byte": len(raw),
-        "text_sha256": "sha256:" + hashlib.sha256(raw).hexdigest(),
-    }
-    manifest: dict[str, Any] = {
-        "schema_version": _AUTHORED_EXECUTION_SCHEMA,
-        "source_text_sha256": "sha256:" + hashlib.sha256(raw).hexdigest(),
-        "source_bytes": len(raw),
-        "unit_count": 1,
-        "policy": "host_bounded_coherent_authored_design",
-        "units": [unit],
-        "entrypoint": {
-            "owner": "host_template",
-            "path": main_path,
-            "symbol": main_symbol,
-            "feature_symbols": [],
-        },
-    }
-    manifest["manifest_sha256"] = _sha256_json(manifest)
-    return (module,), manifest
-
-
-def _execution_plan_projection(
-    plan: AuthoredPlan,
-) -> tuple[AuthoredPlan, dict[str, Any]]:
-    if getattr(plan, "typed_plan_ir", {}):
-        return plan, {}
-
-    from .authored_document_contract import normalize_authored_document
-
-    normalized_text, normalization = normalize_authored_document(plan.text)
-    if normalization is None:
-        return plan, {}
-    execution_plan = AuthoredPlan(
-        requested_prompt=plan.requested_prompt,
-        text=normalized_text,
-        existing_input_sha256=plan.existing_input_sha256,
-        media_paths=plan.media_paths,
-        schema_version=plan.schema_version,
-        structured_sections=deepcopy(plan.structured_sections),
-        typed_plan_ir=deepcopy(getattr(plan, "typed_plan_ir", {})),
-    )
-    return execution_plan, {
-        "_authored_document_normalization": normalization,
-        "_authored_execution_plan": execution_plan.to_dict(),
-    }
-
-
 def compile_authored_design(
     router: Any, plan: AuthoredPlan, *, existing_input_sha256: str = ""
 ) -> CompleteProposal:
-    from .authored_structured_design import (
-        author_structured_sections,
-        normalize_structured_sections,
-    )
+    from .authored_structured_design import normalize_structured_sections
+    from .production_state_compiler import compile_production_state_section
 
-    implementation_plan, source_projection = _implementation_authored_plan(plan)
+    if not isinstance(plan, AuthoredPlan):
+        raise TypeError("compile_authored_design requires AuthoredPlan")
+    if not getattr(plan, "typed_plan_ir", {}):
+        raise ValueError(
+            "TYPED_PLAN_REQUIRED: legacy authored production routes have been removed."
+        )
+
+    structured = normalize_structured_sections(plan.structured_sections)
+    if not structured:
+        raise ValueError(
+            "TYPED_STRUCTURED_AUTHORITY_REQUIRED: canonical structured design is required."
+        )
+    if structured != plan.structured_sections:
+        raise ValueError(
+            "TYPED_STRUCTURED_AUTHORITY_NONCANONICAL: planning must persist canonical records."
+        )
+
     effective_existing = str(
-        existing_input_sha256 or implementation_plan.existing_input_sha256 or ""
+        existing_input_sha256 or plan.existing_input_sha256 or ""
     ).strip()
 
-    structured = normalize_structured_sections(implementation_plan.structured_sections)
-    if (
-        not implementation_plan.typed_plan_ir
-        and not effective_existing
-        and not structured
-        and callable(getattr(router, "generate_text", None))
-    ):
-        structured = author_structured_sections(
-            router,
-            implementation_plan.requested_prompt or implementation_plan.text,
-            media_paths=implementation_plan.media_paths,
-        )
-
-    if structured != implementation_plan.structured_sections:
-        implementation_plan = AuthoredPlan(
-            requested_prompt=implementation_plan.requested_prompt,
-            text=implementation_plan.text,
-            existing_input_sha256=implementation_plan.existing_input_sha256,
-            media_paths=implementation_plan.media_paths,
-            schema_version=implementation_plan.schema_version,
-            structured_sections=structured,
-            typed_plan_ir=deepcopy(getattr(implementation_plan, "typed_plan_ir", {})),
-        )
-
-    execution_plan, execution_projection = _execution_plan_projection(implementation_plan)
-    # These are host project coordinates, not inferred gameplay or placeholder content.
-    mod_id = "authored_" + execution_plan.calculate_hash()[:12]
+    mod_id = "authored_" + plan.calculate_hash()[:12]
     acceptance = (
         "Implement the behaviors in the saved authored design and exercise them in Minecraft.",
         "Build the project and verify that the mod loads and runs without errors.",
@@ -1390,73 +854,49 @@ def compile_authored_design(
             summary=plan.requested_prompt,
             contents=(),
         ),
-        assumptions=(), exclusions=(), deferred_requests=(),
-        acceptance_tests=acceptance, evidence_sources=(),
+        assumptions=(),
+        exclusions=(),
+        deferred_requests=(),
+        acceptance_tests=acceptance,
+        evidence_sources=(),
     )
-    design = {"authored_plan": implementation_plan.to_dict()}
-    design.update(execution_projection)
-    if source_projection is not None:
-        design["_authored_source_projection"] = source_projection
-    # Bind the actual build toolchain and existing project only. Never enter prepare(),
-    # requirement extraction, design validation, or the old PlanIR compiler.
+
+    design = {"authored_plan": plan.to_dict()}
     binding = PlanningPipeline(router)
     design = binding._bind_existing_project(design)
-    design, base, _, _ = binding._bind_platform(plan.requested_prompt, design, base)
-
-    # The saved-plan route previously preserved the binding only in game_design while
-    # its production module dropped the target triple. Official RAG validates the
-    # production-side host contract, so make the bound target explicit at that boundary.
+    design, base, _, _ = binding._bind_platform(
+        plan.requested_prompt,
+        design,
+        base,
+    )
     target = _bound_target(design)
     design = {**design, **target}
-    effective_existing = existing_input_sha256 or plan.existing_input_sha256
-    production_state_section: dict[str, Any] | None = None
-    if getattr(execution_plan, "typed_plan_ir", {}):
-        from .production_state_compiler import compile_production_state_section
 
-        production_state_section = compile_production_state_section(
-            router,
-            execution_plan,
-        )
-        modules, manifest = _compile_new_authored_modules(
-            execution_plan,
-            mod_id=base.spec.mod_id,
-            package_name=base.spec.package_name,
-            target=target,
-            production_state_section=production_state_section,
-        )
-        design = {
-            **design,
-            "_authored_execution_manifest": manifest,
-            "_production_state_section": deepcopy(production_state_section),
-        }
-    elif not effective_existing:
-        # Legacy saved plans without Typed PlanIR retain the previous compatibility
-        # route. New planner output never enters this model-dependent path.
-        modules, manifest = _compile_new_authored_modules(
-            execution_plan,
-            mod_id=base.spec.mod_id,
-            package_name=base.spec.package_name,
-            target=target,
-        )
-        design = {**design, "_authored_execution_manifest": manifest}
-    else:
-        modules, manifest = _compile_existing_authored_modules(
-            execution_plan,
-            target=target,
-        )
-        design = {**design, "_authored_execution_manifest": manifest}
+    production_state_section = compile_production_state_section(plan)
+    modules, manifest = _compile_new_authored_modules(
+        plan,
+        mod_id=base.spec.mod_id,
+        package_name=base.spec.package_name,
+        target=target,
+        production_state_section=production_state_section,
+    )
+    design = {
+        **design,
+        "_authored_execution_manifest": manifest,
+        "_production_state_section": deepcopy(production_state_section),
+    }
 
     from .root_cause_trace import emit_root_cause
 
     emit_root_cause(
-        "authored_design_lowering_selected", stage="production",
-        operation="compile_authored_production", gate="authored_execution_route", result="PASS",
+        "authored_design_lowering_selected",
+        stage="production",
+        operation="compile_authored_production",
+        gate="typed_host_execution_only",
+        result="PASS",
         details={
-            "policy": manifest["policy"], "existing_input": bool(effective_existing),
-            "headings": [
-                {"line": line + 1, "depth": depth, "title": title}
-                for line, depth, title in _authored_heading_records(execution_plan.text)[1]
-            ],
+            "policy": manifest["policy"],
+            "existing_input": bool(effective_existing),
             "module_ids": [module.module_id for module in modules],
             "source_text_sha256": manifest["source_text_sha256"],
             "manifest": manifest,
