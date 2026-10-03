@@ -1576,6 +1576,13 @@ class CompleteProductionOrchestrator:
 
             def generate_custom(module: ProductionModule) -> dict[str, Any]:
                 nonlocal node_custom_generator
+                if isinstance(module.config.get("typed_plan_ir"), dict):
+                    from .typed_plan_production import generate_typed_plan_module
+
+                    return generate_typed_plan_module(
+                        project_root,
+                        module=module,
+                    )
                 if node_custom_generator is None:
                     node_custom_generator = new_custom_generator()
 
