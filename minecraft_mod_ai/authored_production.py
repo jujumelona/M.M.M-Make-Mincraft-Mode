@@ -51,9 +51,9 @@ def _compile_new_authored_modules(
     main_path = f"src/main/java/{package_name.replace('.', '/')}/{main_symbol}.java"
 
     if not getattr(plan, "typed_plan_ir", {}):
-    raise ValueError(
-        "TYPED_PLAN_REQUIRED: untyped authored production has been removed."
-    )
+        raise ValueError(
+            "TYPED_PLAN_REQUIRED: untyped authored production has been removed."
+        )
     from .typed_plan_ir import (
         typed_plan_capability_ids,
         typed_plan_uses_state,
