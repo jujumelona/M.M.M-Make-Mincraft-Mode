@@ -1671,24 +1671,18 @@ class CompleteProductionOrchestrator:
                 if not member_ids or any(item not in module_lookup for item in member_ids):
                     raise CompleteProductionError(f'Work node {node.node_id} has invalid module members.')
                 members = [module_lookup[item] for item in member_ids]
-                uncommitted_custom_results: list[dict[str, Any]] = []
                 receipt = self._run_work_node(
                     ledger,
                     node,
                     action=lambda node=node, members=members: module_node_action(
                         node,
                         members,
-                        uncommitted_custom_results,
                     ),
                     validate_cached=lambda value: self._receipt_outputs_exist(
                         value,
                         project_root=project_root,
                     ),
                     shared_index=shared_project_index,
-                    on_commit=_finalize_committed_generation_receipts,
-                    on_abort=lambda _receipt: _release_uncommitted_generation_receipts(
-                        {'receipts': uncommitted_custom_results}
-                    ),
                 )
                 children = [item for item in receipt.get('receipts', []) if isinstance(item, dict)]
                 module_receipts.extend(children)
