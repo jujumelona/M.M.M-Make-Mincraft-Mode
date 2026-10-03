@@ -609,6 +609,8 @@ def java_atomic_parameters_for_request(
                 "The host maps it to any exact requirement-owned type name, owns collision handling, "
                 "and owns outer/nested placement. Place outer fields in fields, not in a class wrapper."
             )
+            if host_symbol:
+                name_schema["not"] = {"enum": [host_symbol]}
     return parameters, shape
 
 
