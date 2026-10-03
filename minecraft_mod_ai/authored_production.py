@@ -1221,9 +1221,29 @@ def compile_authored_design(
     target = _bound_target(design)
     design = {**design, **target}
     effective_existing = existing_input_sha256 or plan.existing_input_sha256
-    if not effective_existing:
-        # Reserve semantic graph compilation in the actual production context.
-        # No document section is assumed to be a class or executable source unit.
+    production_state_section: dict[str, Any] | None = None
+    if execution_plan.typed_plan_ir:
+        from .production_state_compiler import compile_production_state_section
+
+        production_state_section = compile_production_state_section(
+            router,
+            execution_plan,
+        )
+        modules, manifest = _compile_new_authored_modules(
+            execution_plan,
+            mod_id=base.spec.mod_id,
+            package_name=base.spec.package_name,
+            target=target,
+            production_state_section=production_state_section,
+        )
+        design = {
+            **design,
+            "_authored_execution_manifest": manifest,
+            "_production_state_section": deepcopy(production_state_section),
+        }
+    elif not effective_existing:
+        # Legacy saved plans without Typed PlanIR retain the previous compatibility
+        # route. New planner output never enters this model-dependent path.
         modules, manifest = _compile_new_authored_modules(
             execution_plan,
             mod_id=base.spec.mod_id,
