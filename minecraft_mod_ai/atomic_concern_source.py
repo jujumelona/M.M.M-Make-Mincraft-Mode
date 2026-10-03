@@ -3926,20 +3926,11 @@ class AtomicConcernExecutor:
             from .authored_state_lowering import prepare_state_concern
 
             first = _slug(self.ordered[0]["concern"]) if self.ordered else name
-            host_members, state_contract = prepare_state_concern(
+            host_members = prepare_state_concern(
                 self.task,
                 name,
                 include_runtime=name == first,
             )
-            if host_members is None and name == "variables":
-                host_members = _deterministic_state_variable_members(
-                    self.task,
-                    concern,
-                )
-            if state_contract.get("work"):
-                raise CustomModuleGenerationError(
-                    "STATE_MODEL_CODER_FORBIDDEN: state_model produced deferred coder work."
-                )
             if host_members is None:
                 raise CustomModuleGenerationError(
                     "STRUCTURED_STATE_HOST_DSL_REQUIRED: state_model has no deterministic "
