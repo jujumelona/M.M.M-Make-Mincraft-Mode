@@ -2984,17 +2984,13 @@ class CompleteProductionOrchestrator:
         if not isinstance(build_report, dict) or not isinstance(build_report.get('gametest_report'), str):
             return False
         mode = str(build_report.get('gametest_mode') or '').strip()
-        if mode == 'integrated_build':
-            execution_passed = (
-                CompleteProductionOrchestrator._full_gradle_build_receipt_passed(
-                    build_report
-                )
+        if mode != 'integrated_build':
+            return False
+        execution_passed = (
+            CompleteProductionOrchestrator._full_gradle_build_receipt_passed(
+                build_report
             )
-        else:
-            # Backward compatible with older receipts that had no gametest_mode.
-            execution_passed = CompleteProductionOrchestrator._command_receipt_passed(
-                build_report, 'gametest'
-            )
+        )
         if not execution_passed:
             return False
         raw_report_path = Path(build_report['gametest_report']).expanduser()
