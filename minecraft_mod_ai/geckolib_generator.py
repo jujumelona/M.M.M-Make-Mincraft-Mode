@@ -124,12 +124,6 @@ def generate_geckolib_entity_assets(
     package_path = package_name.replace(".", "/")
     base = f"src/main/java/{package_path}"
     assets = f"src/main/resources/assets/{mod_id}"
-    manifest_path = info.root / ".minecraft_ai/geckolib-entities.json"
-    legacy_entries: list[dict[str, Any]] = []
-    if manifest_path.is_file():
-        raw = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if isinstance(raw, dict) and isinstance(raw.get("entities"), list):
-            legacy_entries = [_legacy_entity_record(value) for value in raw["entities"]]
     entry = {
         "entity_id": entity_id,
         "class_name": cls,
@@ -182,15 +176,6 @@ def generate_geckolib_entity_assets(
             package_name,
         ),
     }
-    for legacy in legacy_entries:
-        files.update(
-            _registration_unit_files(
-                package_name,
-                mod_id,
-                base,
-                legacy,
-            )
-        )
     files.update(
         _registration_unit_files(
             package_name,
@@ -539,7 +524,7 @@ def _renderer_java(package: str, name: str, cls: str, width: float) -> str:
 def iter_geckolib_entity_records(
     project_root: str | Path,
 ):
-    """Yield legacy or per-entity metadata without an aggregate manifest."""
+    """Yield current per-entity GeckoLib metadata records."""
 
     root = Path(project_root).expanduser().resolve()
     manifest = root / ".minecraft_ai/geckolib-entities.json"
@@ -548,11 +533,6 @@ def iter_geckolib_entity_records(
     raw = json.loads(manifest.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise GeckoLibGenerationError("GeckoLib entity index must be an object.")
-    legacy = raw.get("entities")
-    if isinstance(legacy, list):
-        for value in legacy:
-            yield _legacy_entity_record(value)
-        return
     if raw.get("schema_version") != "mmm/geckolib-entity-index-v1":
         raise GeckoLibGenerationError("Unsupported GeckoLib entity index.")
     relative = raw.get("record_directory")
@@ -568,12 +548,13 @@ def iter_geckolib_entity_records(
             raise GeckoLibGenerationError("GeckoLib entity record is unsafe.")
         loaded = json.loads(path.read_text(encoding="utf-8"))
         if (
-            isinstance(loaded, dict)
-            and loaded.get("schema_version") == "mmm/geckolib-entity-record-v1"
+            not isinstance(loaded, dict)
+            or loaded.get("schema_version") != "mmm/geckolib-entity-record-v1"
         ):
-            value = _legacy_entity_record(loaded.get("entity"))
-        else:
-            value = _legacy_entity_record(loaded)
+            raise GeckoLibGenerationError(
+                "Unsupported GeckoLib entity record schema."
+            )
+        value = _entity_record(loaded.get("entity"))
         if path.stem != value["entity_id"]:
             raise GeckoLibGenerationError(
                 "GeckoLib entity record name does not match its entity ID."
@@ -581,7 +562,7 @@ def iter_geckolib_entity_records(
         yield value
 
 
-def _legacy_entity_record(value: Any) -> dict[str, Any]:
+def _entity_record(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise GeckoLibGenerationError("GeckoLib entity record must be an object.")
     required = {
