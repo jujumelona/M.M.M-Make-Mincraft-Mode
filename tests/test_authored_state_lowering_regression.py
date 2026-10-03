@@ -64,7 +64,7 @@ def test_host_state_runtime_exports_context_aware_access_overloads() -> None:
     assert "setState(name, value);" in source
 
 
-def test_state_planning_schema_remains_authored_text_not_production_dsl() -> None:
+def test_state_planning_schema_is_host_compilable_before_generation() -> None:
     schema = worksheet_chunk_schema(
         "state_model",
         ("transitions",),
@@ -74,10 +74,15 @@ def test_state_planning_schema_remains_authored_text_not_production_dsl() -> Non
     guard = item["properties"]["guard"]
     mutation = item["properties"]["mutation"]
 
-    assert "pattern" not in guard
-    assert "pattern" not in mutation
+    assert "pattern" in guard
+    assert "pattern" in mutation
+    assert set(item["required"]) == {
+        "from_state", "trigger", "guard", "mutation", "to_state"
+    }
     assert guard["type"] == "string"
     assert mutation["type"] == "string"
+    assert "host" in guard["description"].casefold()
+    assert "host" in mutation["description"].casefold()
 
 
 STATE_REQUIREMENTS = {
