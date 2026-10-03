@@ -920,8 +920,10 @@ def _node(node_id: str, stage: str, dependencies: Iterable[str], payload: dict[s
         res_class = 'image_gpu'
     elif kind == 'module-shard' and gen_stage in {'content', 'system', 'entity'}:
         res_class = 'llm' if gen_stage == 'content' and not _content_node_is_cpu_safe(payload) else 'cpu_io'
+    elif kind == 'module-shard' and gen_stage == 'host':
+        res_class = 'cpu_io'
     elif kind == 'module-shard' and gen_stage == 'custom':
-        res_class = 'cpu_io' if _custom_node_is_cpu_safe(payload) else 'llm'
+        res_class = 'llm'
     elif stage.startswith('validate:'):
         res_class = 'commit'
     else:
@@ -984,6 +986,8 @@ def _module_stage(
     *,
     deterministic_module_kinds: frozenset[str] | None = None,
 ) -> str:
+    if isinstance(module.config.get("typed_plan_ir"), dict):
+        return "host"
     if is_research_shard(module) or module.kind == 'research_shard':
         return 'content'
     if module.kind == 'integration':
@@ -1096,6 +1100,8 @@ def _module_shards(
                 2,
                 max(1, int(policy.entity_shard_size)),
             )
+        if stage == 'host':
+            return 1
         if stage == 'custom':
             count = max(1, stage_counts.get(stage, 1))
             slots = min(_active_llm_slots(), count)
@@ -1115,7 +1121,7 @@ def _module_shards(
         batch_key = _module_batch_key(module, stage)
         dependency_groups = {module_group[dependency] for dependency in module.depends_on}
 
-        if stage == "custom" and _is_host_exact_authored_module(module):
+        if stage in {"custom", "host"} and _is_host_exact_authored_module(module):
             # One authored task owns one exact host target and one independent
             # target_compile gate. Keep deterministic Typed PlanIR work isolated from
             # legacy LLM custom work so resource classification and retry semantics
