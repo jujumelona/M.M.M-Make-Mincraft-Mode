@@ -69,13 +69,7 @@ def _structured_capability_id(value: Any) -> str:
 
 
 def _router_payload(router: Any, span: str) -> Any:
-    """Invoke either the production ``ModelRouter`` contract or a legacy callable.
-
-    Production passes a ModelRouter instance, which is intentionally not callable.
-    Treating only ``callable(router)`` as usable silently disabled semantic inference
-    in reuse planning and caused opaque ``semantic_<hash>`` capabilities to leak into
-    retrieval. This adapter keeps one semantic contract across both call sites.
-    """
+    """Invoke the current ModelRouter semantic contract only."""
 
     if router is None:
         return None
@@ -106,11 +100,6 @@ def _router_payload(router: Any, span: str) -> Any:
         if isinstance(raw, str):
             return json.loads(raw)
         return raw
-    if callable(router):
-        return router(
-            "Decompose this Minecraft mod requirement into independent gameplay "
-            "capabilities actually supported by the request: " + span
-        )
     return None
 
 
