@@ -362,11 +362,17 @@ def _matched_state_name(
 def _network_payload_guard(field: str, type_name: str) -> str:
     literal = json.dumps(field, ensure_ascii=True)
     lowered = str(type_name or "").casefold()
-    if any(token in lowered for token in ("int", "long", "float", "double", "number", "numeric")):
+    if any(
+        token in lowered
+        for token in ("int", "long", "float", "double", "number", "numeric")
+    ):
         condition = "value instanceof Number"
     elif any(token in lowered for token in ("bool", "boolean")):
         condition = "value instanceof Boolean"
-    elif any(token in lowered for token in ("string", "text", "id", "uuid", "name")):
+    elif any(
+        token in lowered
+        for token in ("string", "text", "id", "uuid", "name")
+    ):
         condition = "value instanceof String"
     else:
         condition = "value != null"
@@ -551,12 +557,12 @@ public final class AuthoredNetworkClient implements ClientModInitializer {{
 """
 
     package_path = package_name.replace(".", "/")
-    return {{
-        f"src/main/java/{{package_path}}/AuthoredNetworkSync.java":
+    return {
+        f"src/main/java/{package_path}/AuthoredNetworkSync.java":
             server_source,
-        f"src/main/java/{{package_path}}/AuthoredNetworkClient.java":
+        f"src/main/java/{package_path}/AuthoredNetworkClient.java":
             client_source,
-    }}
+    }
 
 
 def _merged_lang_text(
@@ -565,19 +571,22 @@ def _merged_lang_text(
     additions: Mapping[str, str],
 ) -> str:
     target = root / relative
-    existing: dict[str, Any] = {{}}
+    existing: dict[str, Any] = {}
     if target.is_file() and not target.is_symlink():
         try:
             parsed = json.loads(target.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise ValueError(
-                f"TYPED_RESOURCE_LANGUAGE_INVALID: {{relative}}"
+                f"TYPED_RESOURCE_LANGUAGE_INVALID: {relative}"
             ) from exc
         if not isinstance(parsed, dict):
             raise ValueError(
-                f"TYPED_RESOURCE_LANGUAGE_INVALID: {{relative}}"
+                f"TYPED_RESOURCE_LANGUAGE_INVALID: {relative}"
             )
-        existing = {{str(key): value for key, value in parsed.items()}}
+        existing = {
+            str(key): value
+            for key, value in parsed.items()
+        }
     for key, value in additions.items():
         existing[str(key)] = str(value)
     return json.dumps(
@@ -606,37 +615,62 @@ def _resource_policy_files(
         "accessibility",
     )
     package_path = package_name.replace(".", "/")
-    files: dict[str, str] = {{}}
+    files: dict[str, str] = {}
 
     if missing_rows:
         files[
-            f"src/main/resources/assets/{{mod_id}}/models/item/"
+            f"src/main/resources/assets/{mod_id}/models/item/"
             "mmm_missing_resource.json"
         ] = json.dumps(
-            {{
+            {
                 "parent": "minecraft:item/generated",
-                "textures": {{"layer0": "minecraft:item/barrier"}},
-            }},
+                "textures": {
+                    "layer0": "minecraft:item/barrier"
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        ) + "\n"
+        files[
+            f"src/main/resources/data/{mod_id}/mmm_policies/"
+            "missing_resources.json"
+        ] = json.dumps(
+            {
+                "schema_version": "mmm/missing-resource-policy-v1",
+                "fallback_model": (
+                    f"{mod_id}:item/mmm_missing_resource"
+                ),
+                "rules": [dict(row) for row in missing_rows],
+            },
             ensure_ascii=False,
             indent=2,
             sort_keys=True,
         ) + "\n"
 
     if accessibility_rows:
-        en: dict[str, str] = {{}}
-        ko: dict[str, str] = {{}}
+        en: dict[str, str] = {}
+        ko: dict[str, str] = {}
         message_keys: list[str] = []
         for index, row in enumerate(accessibility_rows, 1):
-            key = f"text.{{mod_id}}.accessibility_{{index}}"
+            key = f"text.{mod_id}.accessibility_{index}"
             feedback = str(row.get("feedback") or "").strip()
-            localization = str(row.get("localization") or "").strip()
-            observation = str(row.get("observation") or "").strip()
+            localization = str(
+                row.get("localization") or ""
+            ).strip()
+            observation = str(
+                row.get("observation") or ""
+            ).strip()
             en[key] = feedback or observation or localization
             ko[key] = localization or feedback or observation
             message_keys.append(key)
 
-        en_path = f"src/main/resources/assets/{{mod_id}}/lang/en_us.json"
-        ko_path = f"src/main/resources/assets/{{mod_id}}/lang/ko_kr.json"
+        en_path = (
+            f"src/main/resources/assets/{mod_id}/lang/en_us.json"
+        )
+        ko_path = (
+            f"src/main/resources/assets/{mod_id}/lang/ko_kr.json"
+        )
         files[en_path] = _merged_lang_text(root, en_path, en)
         files[ko_path] = _merged_lang_text(root, ko_path, ko)
 
@@ -646,8 +680,9 @@ def _resource_policy_files(
             for key in message_keys
         )
         files[
-            f"src/main/java/{{package_path}}/AuthoredAccessibility.java"
-        ] = f"""package {{package_name}};
+            f"src/main/java/{package_path}/"
+            "AuthoredAccessibility.java"
+        ] = f"""package {package_name};
 
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 
@@ -662,14 +697,13 @@ public final class AuthoredAccessibility {{
         registered = true;
         ServerPlayConnectionEvents.JOIN.register(
                 (handler, sender, server) -> {{
-{{send_lines}}
+{send_lines}
                 }}
         );
     }}
 }}
 """
     return files
-
 
 def generate_typed_plan_module(
     project_root: str | Path,
