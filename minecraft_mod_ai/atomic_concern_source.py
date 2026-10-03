@@ -4044,8 +4044,6 @@ class AtomicConcernExecutor:
             else max(1, int(self.region_attempt_limit))
         )
         concern_authority = _concern_authority(self.task, concern)
-        state_members = ""
-        state_lowering = None
 
         if (
             not failure
@@ -4071,62 +4069,44 @@ class AtomicConcernExecutor:
             return host_members
 
         if (
-            not failure
-            and response_region == "members"
+            response_region == "members"
             and str(self.section or "").strip() == "state_model"
         ):
             from .authored_state_lowering import prepare_state_concern
 
             first = _slug(self.ordered[0]["concern"]) if self.ordered else name
-            host_members, state_lowering = prepare_state_concern(
+            host_members, state_contract = prepare_state_concern(
                 self.task,
                 name,
                 include_runtime=name == first,
             )
-            if host_members is not None and not state_lowering["work"]:
-                output_sha = hashlib.sha256(
-                    host_members.encode("utf-8")
-                ).hexdigest()
-                _trace_region_generation(
-                    "atomic_concern_region_host_lowered",
-                    result="PASS",
-                    concern=name,
-                    region=response_region,
-                    attempt=1,
-                    attempt_limit=1,
-                    output_sha256=output_sha,
-                    output_chars=len(host_members),
+            if host_members is None and name == "variables":
+                host_members = _deterministic_state_variable_members(
+                    self.task,
+                    concern,
                 )
-                self.host_owned_concerns.add(name)
-                return host_members
-            state_members = host_members or ""
-
-        if (
-            not failure
-            and response_region == "members"
-            and str(self.section or "").strip() == "state_model"
-            and name == "variables"
-        ):
-            host_members = _deterministic_state_variable_members(
-                self.task,
-                concern,
+            if state_contract.get("work"):
+                raise CustomModuleGenerationError(
+                    "STATE_MODEL_CODER_FORBIDDEN: state_model produced deferred coder work."
+                )
+            if host_members is None:
+                raise CustomModuleGenerationError(
+                    "STRUCTURED_STATE_HOST_DSL_REQUIRED: state_model has no deterministic "
+                    f"host lowering for concern {name!r}."
+                )
+            output_sha = hashlib.sha256(host_members.encode("utf-8")).hexdigest()
+            _trace_region_generation(
+                "atomic_concern_region_host_lowered",
+                result="PASS",
+                concern=name,
+                region=response_region,
+                attempt=1,
+                attempt_limit=1,
+                output_sha256=output_sha,
+                output_chars=len(host_members),
             )
-            if host_members:
-                output_sha = hashlib.sha256(
-                    host_members.encode("utf-8")
-                ).hexdigest()
-                _trace_region_generation(
-                    "atomic_concern_region_host_lowered",
-                    result="PASS",
-                    concern=name,
-                    region=response_region,
-                    attempt=1,
-                    attempt_limit=1,
-                    output_sha256=output_sha,
-                    output_chars=len(host_members),
-                )
-                self.host_owned_concerns.add(name)
-                return host_members
+            self.host_owned_concerns.add(name)
+            return host_members
 
         repair_baseline_region = (
             _region_content(
@@ -4170,18 +4150,6 @@ class AtomicConcernExecutor:
                     ),
                     host_symbol=self.symbol,
                 )
-                if state_lowering and state_lowering["work"]:
-                    payload = json.loads(messages[-1]["content"])
-                    payload["state_lowering"] = state_lowering
-                    payload["state_lowering"]["variables"] = _concern_authority(
-                        self.task, {"concern": "variables"}
-                    )["structured_records"]
-                    payload["concern"]["implementation_goal"] = (
-                        "The host already owns the exact state_lowering.work helper signatures. "
-                        "Implement only each helper body from its authored record field; never "
-                        "repeat a declaration/header. Host runtime registration calls these helpers."
-                    )
-                    messages[-1]["content"] = json.dumps(payload, ensure_ascii=False)
                 if rejected_region:
                     payload = json.loads(messages[-1]["content"])
                     payload["current_selected_region_source"] = rejected_region
@@ -4225,18 +4193,6 @@ class AtomicConcernExecutor:
                 if correction is not None:
                     parsed = correction.merge(parsed)
                 candidate_merged = True
-                if state_lowering and state_lowering["work"]:
-                    from .authored_state_lowering import validate_state_helpers
-
-                    validate_state_helpers(parsed, state_lowering)
-                    collisions = set(_member_declaration_symbols(parsed)) & set(
-                        _member_declaration_symbols(state_members)
-                    )
-                    if collisions:
-                        raise CustomModuleGenerationError(
-                            "ATOMIC_CONCERN_OWNERSHIP_VIOLATION: state runtime is host-owned: "
-                            + ", ".join(sorted(collisions))
-                        )
                 parsed, lifecycle_changes = (
                     _strip_host_orchestrated_dependency_lifecycle_calls(
                         parsed,
