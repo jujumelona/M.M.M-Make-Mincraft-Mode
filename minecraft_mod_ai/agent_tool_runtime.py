@@ -385,16 +385,6 @@ class AgentToolRuntime:
                     normalized_files.append(relative)
                 payload["relative_files"] = list(dict.fromkeys(normalized_files))
             payload["project_root"] = str(project_root)
-            for legacy in (
-                "diagnostics_path",
-                "file_path",
-                "diagnostics_command",
-                "diagnostics_config",
-                "arguments",
-                "args",
-                "parameters",
-            ):
-                payload.pop(legacy, None)
         emit_root_cause(
             "agent_tool_call_normalized",
             stage=selected,
