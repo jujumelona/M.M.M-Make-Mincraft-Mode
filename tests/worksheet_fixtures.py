@@ -9,7 +9,6 @@ from minecraft_mod_ai.planning_detail_slots import (
 
 def _fixture_value(schema: dict[str, Any], text: str) -> Any:
     description = str(schema.get("description") or "")
-    pattern = str(schema.get("pattern") or "")
     if "Stable ASCII internal state identifier" in description:
         return "stateValue"
     if "Host state-" in description and "DSL" in description:
