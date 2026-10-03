@@ -628,7 +628,9 @@ def _compile_new_authored_modules(
             typed_plan_uses_state,
             validate_typed_plan_ir,
         )
+        from .typed_plan_support import assert_typed_plan_host_support
 
+        assert_typed_plan_host_support(plan.structured_sections)
         source_sha = "sha256:" + hashlib.sha256(plan.text.encode("utf-8")).hexdigest()
         stored_sha = str(plan.typed_plan_ir.get("source_sha256") or "")
         normalized_stored_sha = (
