@@ -1133,53 +1133,28 @@ def normalize_structured_state_section(
 
 
 def compile_production_state_section(router: Any, plan: AuthoredPlan) -> dict[str, Any]:
+    """Return canonical structured state without invoking a production model.
+
+    The small model may translate authored intent into the bounded state worksheet
+    during planning. Production accepts only that canonical worksheet and performs
+    deterministic normalization/validation.
+    """
+
+    _ = router  # Compatibility only; production state compilation is model-free.
+    structured = plan.structured_sections
+    if not isinstance(structured, Mapping):
+        structured = {}
+    raw_state = structured.get("state_model")
+    if isinstance(raw_state, Mapping):
+        return normalize_structured_state_section(raw_state)
+
     source = _section_text(plan.text, "state_model")
-    if not source:
-        return {}
-
-    raw: dict[str, list[dict[str, str]]] = {}
-    declared_names: list[str] = []
-    for concern in _STATE_CONCERNS:
-        rows = _generate_concern_records(
-            router,
-            source=source,
-            concern=concern,
-            declared_names=declared_names,
-        )
-        raw[concern] = rows
-        if concern == "variables":
-            declared_names = [
-                _stable_identifier(str(row.get("name") or row.get("unit") or ""), fallback=f"state_{index + 1}")
-                for index, row in enumerate(rows)
-            ]
-
-    normalized = _normalize_records(raw)
-    specification: dict[str, Any] = {
-        concern: normalized.get(concern, [])
-        for concern in _STATE_CONCERNS
-    }
-    specification["inapplicable_concerns"] = [
-        {
-            "concern": concern,
-            "reason": "No concrete requirement for this concern in the approved state_model.",
-        }
-        for concern in _STATE_CONCERNS
-        if not specification[concern]
-    ]
-    if not any(specification[concern] for concern in _STATE_CONCERNS) and any(
-        _concern_has_explicit_payload(source, concern)
-        for concern in _STATE_CONCERNS
-    ):
+    if source:
         raise ValueError(
-            "PRODUCTION_STATE_LOWERING_EMPTY_CONTRADICTION: approved state_model "
-            "contains explicit authored values but canonical production state is empty"
+            "PRODUCTION_STATE_STRUCTURED_AUTHORITY_REQUIRED: state_model exists in "
+            "the authored design but no canonical structured state worksheet was supplied"
         )
-    section = {
-        "specification": specification,
-        "constraint_evidence_refs": [],
-    }
-    validate_structured_state_section(section)
-    return section
+    return {}
 
 
 __all__ = [
