@@ -279,6 +279,19 @@ def _coverage_allowed(kind: str, cover: str) -> bool:
     return False
 
 
+def platform_coverable_refs(
+    kind: str,
+    refs: Sequence[str],
+) -> tuple[str, ...]:
+    if kind not in PLATFORM_KINDS:
+        raise ValueError(f"TYPED_PLATFORM_KIND_UNSUPPORTED: {kind!r}")
+    return tuple(
+        ref
+        for ref in refs
+        if isinstance(ref, str) and _coverage_allowed(kind, ref)
+    )
+
+
 def _validate_content_config(kind: str, config: Mapping[str, Any], module_id: str) -> None:
     common = {"display_name_en", "display_name_ko", "ingredients"}
     allowed_by_kind = {
@@ -451,6 +464,7 @@ __all__ = [
     "PLATFORM_KINDS",
     "PLATFORM_SYSTEM_KIND_TO_PACK",
     "platform_config_schema",
+    "platform_coverable_refs",
     "platform_module_authoring_schema",
     "validate_platform_modules",
 ]
