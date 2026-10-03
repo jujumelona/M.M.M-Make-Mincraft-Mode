@@ -231,8 +231,16 @@ def worksheet_prompt(required_sections: Iterable[str] | None = None) -> str:
 
 def worksheet_section_prompt(section: str) -> str:
     key = _normalize_section_name(section)
+    state_instruction = (
+        "For state_model, executable fields use the host state DSL only: guards/conditions "
+        "are expressions and mutation/initial_state/action are state assignments. "
+        "Do not put prose, Java, or external subsystem calls in those fields; place those "
+        "behaviors in algorithm/integration."
+        if key == "state_model"
+        else ""
+    )
     return "\n".join(
-        (
+        item for item in (
             "ENGINEERING WORKSHEET — single-section protocol:",
             f"Section: {key}",
             f"Purpose: {_section_description(key)}",
@@ -245,7 +253,8 @@ def worksheet_section_prompt(section: str) -> str:
             "Use only host-supplied evidence identifiers; use an empty constraint_evidence_refs array for authored design decisions not constrained by evidence.",
             "Never use a bare N/A, none, TODO, TBD, unknown, same-as-above, or generic placeholder.",
             "Do not invent target API names, symbols, versions, repository paths, external facts, or evidence identifiers.",
-        )
+            state_instruction,
+        ) if item
     )
 
 
@@ -319,6 +328,16 @@ def validate_worksheet_section(
         raise ValueError(
             f"DETAILED_PLAN_WORKSHEET: {key}.{path} violates fixed specification template: {error.message}"
         )
+    if key == "state_model":
+        from .structured_state_runtime import validate_structured_state_section
+
+        try:
+            validate_structured_state_section(specification)
+        except ValueError as exc:
+            raise ValueError(
+                "DETAILED_PLAN_WORKSHEET: state_model is outside the host-compiled "
+                f"state DSL: {exc}"
+            ) from exc
     # Applicability explanations and wording are authored design. Do not grade
     # them or require the author to justify every omitted concern.
 
