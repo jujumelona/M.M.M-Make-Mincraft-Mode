@@ -984,11 +984,7 @@ def _module_stage(
         if str(module.config.get('integration_type', '')) == 'mmm_local_ai_sidecar':
             return 'content'
         raise WorkGraphError(
-            f"CUSTOM_GENERATION_REMOVED: unsupported integration module {module.module_id}"
-        )
-    if module.kind == 'custom_java' or module.config.get('implementation') == 'custom':
-        raise WorkGraphError(
-            f"CUSTOM_GENERATION_REMOVED: module {module.module_id} is not Typed host work"
+            f"DETERMINISTIC_BACKEND_REQUIRED: unsupported integration module {module.module_id}"
         )
     if module.kind in {'entity', 'boss', 'npc'}:
         return 'entity'
@@ -999,10 +995,10 @@ def _module_stage(
         if deterministic_module_kinds is None or module.kind in deterministic_module_kinds:
             return 'content'
         raise WorkGraphError(
-            f"CUSTOM_GENERATION_REMOVED: no deterministic backend for {module.kind}"
+            f"DETERMINISTIC_BACKEND_REQUIRED: no deterministic backend for {module.kind}"
         )
     raise WorkGraphError(
-        f"CUSTOM_GENERATION_REMOVED: unsupported module kind {module.kind!r}"
+        f"DETERMINISTIC_BACKEND_REQUIRED: unsupported module kind {module.kind!r}"
     )
 
 def _is_typed_host_module(module: ProductionModule) -> bool:
@@ -1085,7 +1081,7 @@ def _module_shards(
 
         if stage == "host" and _is_typed_host_module(module):
             # Typed PlanIR host work owns one deterministic target and must never
-            # be batched into or classified with model-backed custom generation.
+            # be batched into any model-backed generation lane.
             chosen = len(groups)
             groups.append(
                 {
