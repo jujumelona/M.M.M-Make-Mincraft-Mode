@@ -170,7 +170,7 @@ def _authored_chunk_messages(
     state_symbols: Any = None,
     section_context: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, str], ...]:
-    from .planning_state_implementation import SECTION_DEPENDENCIES
+    from .planning_section_dependencies import SECTION_DEPENDENCIES
     from .worksheet_atomic_chunker import worksheet_chunk_prompt
 
     dependencies = {
