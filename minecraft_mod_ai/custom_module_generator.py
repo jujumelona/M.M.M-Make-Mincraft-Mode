@@ -2260,17 +2260,8 @@ class CustomModuleGenerator:
         execution_feedback: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         if isinstance(module.config.get("typed_plan_ir"), Mapping):
-            from .typed_plan_production import generate_typed_plan_module
-
-            return generate_typed_plan_module(
-                project_root,
-                module=module,
-            )
-        if "implementation_graph_request" in module.config:
-            from .implementation_graph_execution import execute_implementation_graph
-
-            return execute_implementation_graph(
-                self, project_root, module=module, execution_feedback=execution_feedback,
+            raise CustomModuleGenerationError(
+                "TYPED_PLAN_ROUTING_BUG: Typed PlanIR must execute in the host stage."
             )
         del research_modules
         module.validate(policy=self.policy)
