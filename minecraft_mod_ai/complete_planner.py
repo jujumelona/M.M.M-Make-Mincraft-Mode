@@ -178,7 +178,7 @@ class CompleteGameDesignPlanner:
                     prompt,
                     media_paths=media_paths,
                 )
-            from .typed_minecraft_capabilities import (
+            from .typed_host_capabilities import (
                 typed_host_capability_contracts,
             )
 
