@@ -308,135 +308,6 @@ def _debug_target(*, minecraft_version: str, loader: str):
     return newest_adapter(loader=selected_loader)
 
 
-def _debug_task_contract(platform: Any) -> dict[str, Any]:
-    """Build the same task-local authority shape consumed by the normal custom coder path."""
-
-    from .json_stream import canonical_json_sha256
-
-    task_id = "debug_token"
-    locator = "src/main/java/dev/mmm/debugfixture/DebugToken.java#DebugToken"
-    anchor = {
-        "kind": "symbol",
-        "locator": locator,
-        "ownership": "exclusive",
-        "status": "host_reserved",
-        "module_id": ":",
-        "source_set": "main",
-    }
-    from .host_item_registration import item_registration_epoch
-
-    item_epoch = item_registration_epoch(str(platform.minecraft_version))
-    required_host_symbol_keys = [
-        "register_item",
-        "builtin_item_registry",
-        "registries_item",
-        "resource_key_create",
-        "identifier_factory",
-    ]
-    required_host_symbol_specs: dict[str, dict[str, Any]] = {}
-    if item_epoch.get("requires_set_id") is True:
-        required_host_symbol_keys.append("item_set_id")
-        required_host_symbol_specs["item_set_id"] = {
-            "owner": "net.minecraft.world.item.Item$Properties",
-            "name": "setId",
-            "descriptor": (
-                "(Lnet/minecraft/resources/ResourceKey;)"
-                "Lnet/minecraft/world/item/Item$Properties;"
-            ),
-            "kind": "method",
-            "static": False,
-            "side": "common",
-            "namespace": "minecraft",
-        }
-
-    observable_source_contract = {
-        "schema_version": "mmm/debug-source-contract-v1",
-        "path": "src/main/java/dev/mmm/debugfixture/DebugToken.java",
-        "identifier": "debug_token",
-        "binding_field": "DEBUG_TOKEN",
-        "semantic_kind": "item",
-        "required_host_symbol_keys": required_host_symbol_keys,
-        "required_host_symbol_specs": required_host_symbol_specs,
-        "forbidden_lifecycle_symbols": [
-            "ModInitializer",
-            "ClientModInitializer",
-            "DedicatedServerModInitializer",
-            "onInitialize",
-            "onInitializeClient",
-            "onInitializeServer",
-        ],
-    }
-    task: dict[str, Any] = {
-        "task_id": task_id,
-        "task_sha256": "",
-        "sequence": 0,
-        "semantic_outcome": (
-            "Generate one deterministic compile-backed debug_token item-registration source "
-            "fixture in the exact host-owned Java target. This Debug fixture validates coder "
-            "grounding and target compilation; it does not authorize a second Fabric entrypoint."
-        ),
-        "execution_role": "production",
-        "requirement_refs": ["debug_fixture_requirement"],
-        "gap_refs": [],
-        "owned_anchors": [anchor],
-        "reuse_refs": [],
-        "consumes": [],
-        "provides": ["requirement_done:debug_fixture_requirement"],
-        "depends_on": [],
-        "implementation_obligations": [
-            "Use only the host-grounded item registration API admitted for the immutable target.",
-            "Materialize the debug_token identifier through the host symbols register_item, builtin_item_registry, registries_item, resource_key_create, and identifier_factory.",
-            "When the target item epoch requires it, bind the same ResourceKey into Item.Properties.setId before constructing the Item.",
-            "Expose the registered item as public static field DEBUG_TOKEN so the host-owned entrypoint can force class initialization.",
-            "Keep all model-authored production source changes inside the owned DebugToken.java target.",
-            "Do not implement ModInitializer, create another entrypoint, add item groups/tabs, or invent lifecycle hooks; this is a compile-backed API fixture.",
-        ],
-        "observable_source_contract": observable_source_contract,
-        "engineering_worksheet": {
-            "schema_version": "mmm/debug-engineering-worksheet-v1",
-            "objective": "Exercise the real task-local custom coding path without running the planner.",
-            "implementation": [
-                "Create the exact owned DebugToken Java source.",
-                "Use the host-projected target item API/template facts instead of remembered mappings or package names.",
-                "Resolve and use the host symbol keys register_item, builtin_item_registry, registries_item, resource_key_create, and identifier_factory.",
-                "Preserve target-required Item.Properties.setId(ResourceKey) semantics from the host item epoch.",
-                "Assign the direct result of the host register_item call to public static field DEBUG_TOKEN.",
-                "Implement only the minimal debug_token item-registration source needed to exercise target compilation and host runtime binding.",
-                "Keep the fixture deterministic and self-contained for repeatable pipeline debugging.",
-            ],
-            "boundaries": [
-                "Do not edit files outside the declared owned target.",
-                "Do not replace host verification with model self-report.",
-            ],
-            "verification": ["target_compile"],
-        },
-        "target_cell": {
-            "minecraft_version": platform.minecraft_version,
-            "loader": platform.loader,
-            "mappings": platform.yarn_mappings,
-            "java_version": platform.java_version,
-        },
-        "production_bindings": [
-            {
-                "task_ref": task_id,
-                "reuse_action": "fresh",
-                "owned_anchors": [anchor],
-            }
-        ],
-        "required_gates": ["target_compile"],
-        "acceptance": [
-            "The exact owned DebugToken.java source contains the host-grounded debug_token item-registration fixture.",
-            "The registered item is exposed as DebugToken.DEBUG_TOKEN for the host-owned main entrypoint binding.",
-            "The source does not introduce a second Fabric entrypoint or unrelated lifecycle/API surface.",
-            "The selected target compile gate passes for the generated project.",
-        ],
-        "public_acceptance": [],
-        "runtime_acceptance": [],
-        "impact_probes": ["changed_symbols"],
-    }
-    task["task_sha256"] = canonical_json_sha256(task)
-    return task
-
 
 def write_debug_example_plan(
     target: str | Path,
@@ -452,7 +323,6 @@ def write_debug_example_plan(
         CompleteProposalStatus,
         ProductionModule,
     )
-    from .implementation_template_contract import build_implementation_template
     from .knowledge import evidence_catalog_for_version, evidence_snapshot_hash
     from .platform_resolver import lock_from_adapter
     from .spec import ModSpec, Proposal, ProposalStatus
@@ -461,13 +331,13 @@ def write_debug_example_plan(
     platform = lock_from_adapter(adapter)
     evidence = evidence_catalog_for_version(platform.minecraft_version)
     prompt = (
-        "M.M.M Debug Mode fixture: add one deterministic debug token item and "
-        "run the normal implementation/verification pipeline."
+        "M.M.M Debug Mode fixture: add one deterministic host-generated debug "
+        "token item and run the normal implementation/verification pipeline."
     )
     acceptance = (
-        "The generated project contains a target-API compile-verified debug_token item-registration fixture.",
-        "The packaged debug_token includes an installable item texture, item resource definition, and English/Korean display names.",
-        "The generated Fabric project passes the normal build and validation pipeline.",
+        "The generated project contains a deterministic host-generated debug_token item registration.",
+        "The generated project contains the deterministic debug_token item resource definition.",
+        "The generated project passes the normal build and validation pipeline.",
     )
     base = Proposal(
         schema_version="minecraft-mod-ai/proposal-v1",
@@ -494,8 +364,6 @@ def write_debug_example_plan(
         risk_approvals=(),
         approval_hash="",
     ).with_hash()
-    evidence_task = _debug_task_contract(platform)
-    coder_contract = build_implementation_template(evidence_task)
     proposal = CompleteProposal(
         schema_version="mmm/complete-proposal-v1",
         proposal_version=1,
@@ -504,10 +372,13 @@ def write_debug_example_plan(
         base_proposal=base,
         game_design={
             "mode": "debug_fixture",
-            "goal": "Exercise implementation and verification without planner/model planning.",
+            "goal": (
+                "Exercise deterministic host implementation and verification "
+                "without planner or coder generation."
+            ),
             "fixture": {
                 "module_id": "debug_token",
-                "kind": "custom_java",
+                "kind": "item",
                 "semantic_kind": "item",
                 "deterministic": True,
             },
@@ -515,17 +386,12 @@ def write_debug_example_plan(
         modules=(
             ProductionModule(
                 module_id="debug_token",
-                kind="custom_java",
+                kind="item",
                 config={
-                    "summary": "Deterministic debug_token implementation fixture.",
-                    "semantic_kind": "item",
-                    "implementation_responsibilities": ["registry"],
-                    "registry_path": "debug_token",
-                    "observable_source_contract": evidence_task["observable_source_contract"],
-                    "evidence_task": evidence_task,
-                    "coder_execution_contract": coder_contract,
+                    "name": "Debug Token",
+                    "display_name": "Debug Token",
                 },
-                required_gates=tuple(evidence_task["required_gates"]),
+                required_gates=("target_compile",),
             ),
         ),
         assets=(),
