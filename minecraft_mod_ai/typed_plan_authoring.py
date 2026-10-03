@@ -339,54 +339,6 @@ class TypedOperationAuthor:
             raise ValueError(f"TYPED_PLAN_AUTHORING_RESPONSE_INVALID: {field}")
         return str(value)
 
-    def _identifier(self, field: str, *, scope: str) -> str:
-        return str(self._ask(
-            field,
-            {"type": "string", "pattern": r"^[A-Za-z_$][A-Za-z0-9_$]*$"},
-            scope=scope,
-        ))
-
-    def _type(self, field: str, *, scope: str, allow_void: bool = False) -> str:
-        values = [*_TYPES, *(["void"] if allow_void else [])]
-        return self._enum(field, values, scope=scope)
-
-    def _literal(self, *, scope: str) -> dict[str, Any]:
-        branches: list[dict[str, Any]] = []
-        value_schemas = {
-            "boolean": {"type": "boolean"},
-            "int": {"type": "integer", "minimum": -(2**31), "maximum": 2**31 - 1},
-            "long": {"type": "integer", "minimum": -(2**63), "maximum": 2**63 - 1},
-            "double": {"type": "number"},
-            "string": {"type": "string", "maxLength": 1024},
-            "object": {
-                "type": ["string", "number", "integer", "boolean", "null"],
-            },
-        }
-        for kind in _TYPES:
-            branches.append({
-                "type": "object",
-                "properties": {
-                    "type": {"const": kind},
-                    "value": value_schemas[kind],
-                },
-                "required": ["type", "value"],
-                "additionalProperties": False,
-            })
-        raw = self._ask(
-            "literal",
-            {"oneOf": branches},
-            scope=scope,
-        )
-        if not isinstance(raw, Mapping):
-            raise ValueError(
-                f"TYPED_PLAN_AUTHORING_RESPONSE_INVALID: {scope}.literal"
-            )
-        return {
-            "op": "literal",
-            "type": str(raw["type"]),
-            "value": raw["value"],
-        }
-
     def expression(
         self,
         scope: str,
@@ -571,7 +523,7 @@ class TypedOperationAuthor:
                     scope + ".unary",
                     bindings,
                     _depth=_depth + 1,
-                _node_budget=_node_budget,
+                    _node_budget=_node_budget,
                 ),
             }
         if op == "binary":
@@ -582,13 +534,13 @@ class TypedOperationAuthor:
                     scope + ".left",
                     bindings,
                     _depth=_depth + 1,
-                _node_budget=_node_budget,
+                    _node_budget=_node_budget,
                 ),
                 "right": self.expression(
                     scope + ".right",
                     bindings,
                     _depth=_depth + 1,
-                _node_budget=_node_budget,
+                    _node_budget=_node_budget,
                 ),
             }
         if op == "list":
@@ -600,7 +552,7 @@ class TypedOperationAuthor:
                         f"{scope}.item[{index}]",
                         bindings,
                         _depth=_depth + 1,
-                    _node_budget=_node_budget,
+                        _node_budget=_node_budget,
                     )
                     for index in range(count)
                 ],
@@ -615,13 +567,13 @@ class TypedOperationAuthor:
                             f"{scope}.entry[{index}].key",
                             bindings,
                             _depth=_depth + 1,
-                        _node_budget=_node_budget,
+                            _node_budget=_node_budget,
                         ),
                         "value": self.expression(
                             f"{scope}.entry[{index}].value",
                             bindings,
                             _depth=_depth + 1,
-                        _node_budget=_node_budget,
+                            _node_budget=_node_budget,
                         ),
                     }
                     for index in range(count)
@@ -638,7 +590,7 @@ class TypedOperationAuthor:
                         f"{scope}.arg[{index}]",
                         bindings,
                         _depth=_depth + 1,
-                    _node_budget=_node_budget,
+                        _node_budget=_node_budget,
                     )
                     for index in range(len(parameter_types))
                 ],
@@ -658,7 +610,7 @@ class TypedOperationAuthor:
                         f"{scope}.capability_arg[{index}]",
                         bindings,
                         _depth=_depth + 1,
-                    _node_budget=_node_budget,
+                        _node_budget=_node_budget,
                     )
                     for index in range(count)
                 ],
@@ -670,14 +622,14 @@ class TypedOperationAuthor:
                     scope + ".state_key",
                     bindings,
                     _depth=_depth + 1,
-                _node_budget=_node_budget,
+                    _node_budget=_node_budget,
                 ),
                 "type": str(head["type"]),
                 "context": self.expression(
                     scope + ".state_context",
                     bindings,
                     _depth=_depth + 1,
-                _node_budget=_node_budget,
+                    _node_budget=_node_budget,
                 ),
             }
         raise ValueError(
