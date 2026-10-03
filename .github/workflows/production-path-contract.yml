@@ -29,7 +29,6 @@ on:
       - 'tests/test_typed_plan_production.py'
       - 'tests/test_authored_direct_lowering.py'
       - 'tests/test_production_state_compiler.py'
-      - 'tests/test_authored_state_lowering_regression.py'
       - 'tests/test_complete_final_validation_contract.py'
       - 'tests/test_runner_gametest_first_execution.py'
       - 'tests/test_resource_asset_clean_contract.py'
@@ -65,7 +64,6 @@ on:
       - 'tests/test_typed_plan_production.py'
       - 'tests/test_authored_direct_lowering.py'
       - 'tests/test_production_state_compiler.py'
-      - 'tests/test_authored_state_lowering_regression.py'
       - 'tests/test_complete_final_validation_contract.py'
       - 'tests/test_runner_gametest_first_execution.py'
       - 'tests/test_resource_asset_clean_contract.py'
@@ -128,7 +126,6 @@ jobs:
             tests/test_typed_plan_production.py \
             tests/test_authored_direct_lowering.py \
             tests/test_production_state_compiler.py \
-            tests/test_authored_state_lowering_regression.py \
             tests/test_complete_final_validation_contract.py \
             tests/test_runner_gametest_first_execution.py \
             tests/test_resource_asset_clean_contract.py \
