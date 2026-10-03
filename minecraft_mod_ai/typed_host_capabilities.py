@@ -72,7 +72,14 @@ public final class AuthoredHostCapabilities {{
             return player;
         }}
         if (value instanceof ServerCommandSource source) {{
-            return source.getPlayerOrThrow();
+            try {{
+                return source.getPlayerOrThrow();
+            }} catch (com.mojang.brigadier.exceptions.CommandSyntaxException exception) {{
+                throw new IllegalArgumentException(
+                        "Typed capability command source has no player",
+                        exception
+                );
+            }}
         }}
         throw new IllegalArgumentException(
                 "Typed capability requires a server player or command source"
