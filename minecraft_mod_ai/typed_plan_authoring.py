@@ -31,6 +31,7 @@ class TypedOperationAuthor:
         self.capabilities = dict(capabilities or {})
         self.max_calls = max(1, int(max_calls))
         self.call_count = 0
+        self.function_signatures: dict[str, tuple[str, ...]] = {}
 
     def _ask(self, field: str, schema: Mapping[str, Any], *, scope: str) -> Any:
         if self.call_count >= self.max_calls:
@@ -48,6 +49,10 @@ class TypedOperationAuthor:
             "source_text": self.source_text,
             "structured_sections": self.structured_sections,
             "available_capabilities": sorted(self.capabilities),
+            "known_functions": {
+                name: list(parameters)
+                for name, parameters in self.function_signatures.items()
+            },
             "scope": scope,
             "field": field,
             "decision_index": self.call_count,
@@ -107,10 +112,19 @@ class TypedOperationAuthor:
             schema = {"type": ["string", "number", "integer", "boolean", "null"]}
         return self._ask("literal_value", schema, scope=scope)
 
-    def expression(self, scope: str) -> dict[str, Any]:
+    def expression(
+        self,
+        scope: str,
+        env: Mapping[str, str] | None = None,
+    ) -> dict[str, Any]:
+        bindings = dict(env or {})
         expression_ops = [
-            "literal", "ref", "unary", "binary", "list", "map", "call", "state_get"
+            "literal", "unary", "binary", "list", "map", "state_get"
         ]
+        if bindings:
+            expression_ops.append("ref")
+        if self.function_signatures:
+            expression_ops.append("call")
         if self.capabilities:
             expression_ops.append("capability")
         op = self._enum(
@@ -120,14 +134,25 @@ class TypedOperationAuthor:
         )
         if op == "literal":
             kind = self._type("literal_type", scope=scope)
-            return {"op": "literal", "type": kind,
-                    "value": self._literal_value(kind, scope=scope)}
+            return {
+                "op": "literal",
+                "type": kind,
+                "value": self._literal_value(kind, scope=scope),
+            }
         if op == "ref":
-            return {"op": "ref", "name": self._identifier("reference_name", scope=scope)}
+            name = self._enum(
+                "reference_name",
+                sorted(bindings),
+                scope=scope,
+            )
+            return {"op": "ref", "name": name}
         if op == "unary":
             operator = self._enum("unary_operator", ["!", "-"], scope=scope)
-            return {"op": "unary", "operator": operator,
-                    "value": self.expression(scope + ".unary")}
+            return {
+                "op": "unary",
+                "operator": operator,
+                "value": self.expression(scope + ".unary", bindings),
+            }
         if op == "binary":
             operator = self._enum(
                 "binary_operator",
@@ -135,9 +160,10 @@ class TypedOperationAuthor:
                 scope=scope,
             )
             return {
-                "op": "binary", "operator": operator,
-                "left": self.expression(scope + ".left"),
-                "right": self.expression(scope + ".right"),
+                "op": "binary",
+                "operator": operator,
+                "left": self.expression(scope + ".left", bindings),
+                "right": self.expression(scope + ".right", bindings),
             }
         if op == "list":
             count = int(self._ask(
@@ -147,7 +173,10 @@ class TypedOperationAuthor:
             ))
             return {
                 "op": "list",
-                "items": [self.expression(f"{scope}.item[{i}]") for i in range(count)],
+                "items": [
+                    self.expression(f"{scope}.item[{i}]", bindings)
+                    for i in range(count)
+                ],
             }
         if op == "map":
             count = int(self._ask(
@@ -158,48 +187,76 @@ class TypedOperationAuthor:
             entries = []
             for index in range(count):
                 entries.append({
-                    "key": self.expression(f"{scope}.entry[{index}].key"),
-                    "value": self.expression(f"{scope}.entry[{index}].value"),
+                    "key": self.expression(
+                        f"{scope}.entry[{index}].key",
+                        bindings,
+                    ),
+                    "value": self.expression(
+                        f"{scope}.entry[{index}].value",
+                        bindings,
+                    ),
                 })
             return {"op": "map", "entries": entries}
         if op == "call":
-            function = self._identifier("function_id", scope=scope)
-            count = int(self._ask(
-                "argument_count",
-                {"type": "integer", "minimum": 0, "maximum": 32},
+            function = self._enum(
+                "function_id",
+                sorted(self.function_signatures),
                 scope=scope,
-            ))
+            )
+            parameter_types = self.function_signatures[function]
             return {
-                "op": "call", "function": function,
-                "args": [self.expression(f"{scope}.arg[{i}]") for i in range(count)],
+                "op": "call",
+                "function": function,
+                "args": [
+                    self.expression(f"{scope}.arg[{i}]", bindings)
+                    for i in range(len(parameter_types))
+                ],
             }
         if op == "capability":
             ids = sorted(self.capabilities)
-            if not ids:
-                raise ValueError("TYPED_PLAN_AUTHORING_CAPABILITY_UNAVAILABLE")
             cap_id = self._enum("capability_id", ids, scope=scope)
             params = self.capabilities.get(cap_id, {}).get("parameters", [])
             count = len(params) if isinstance(params, list) else 0
             return {
-                "op": "capability", "id": cap_id,
+                "op": "capability",
+                "id": cap_id,
                 "args": [
-                    self.expression(f"{scope}.capability_arg[{i}]")
+                    self.expression(
+                        f"{scope}.capability_arg[{i}]",
+                        bindings,
+                    )
                     for i in range(count)
                 ],
             }
         if op == "state_get":
             return {
                 "op": "state_get",
-                "key": self.expression(scope + ".state_key"),
+                "key": self.expression(scope + ".state_key", bindings),
                 "type": self._type("state_type", scope=scope),
-                "context": self.expression(scope + ".state_context"),
+                "context": self.expression(
+                    scope + ".state_context",
+                    bindings,
+                ),
             }
         raise AssertionError(op)
 
-    def statement(self, scope: str) -> dict[str, Any] | None:
+    def statement(
+        self,
+        scope: str,
+        *,
+        env: Mapping[str, str] | None = None,
+        return_type: str | None = None,
+    ) -> dict[str, Any] | None:
+        bindings = dict(env or {})
+        statement_ops = [
+            "let", "return", "assert", "if", "while", "foreach",
+            "state_set", "expr", "done",
+        ]
+        if bindings:
+            statement_ops.insert(1, "set")
         op = self._enum(
             "statement_op",
-            ["let", "set", "return", "assert", "if", "while", "foreach", "state_set", "expr", "done"],
+            statement_ops,
             scope=scope,
         )
         if op == "done":
@@ -209,75 +266,147 @@ class TypedOperationAuthor:
                 "op": "let",
                 "name": self._identifier("local_name", scope=scope),
                 "type": self._type("local_type", scope=scope),
-                "value": self.expression(scope + ".value"),
+                "value": self.expression(scope + ".value", bindings),
             }
         if op == "set":
+            name = self._enum(
+                "local_name",
+                sorted(bindings),
+                scope=scope,
+            )
             return {
                 "op": "set",
-                "name": self._identifier("local_name", scope=scope),
-                "value": self.expression(scope + ".value"),
+                "name": name,
+                "value": self.expression(scope + ".value", bindings),
             }
         if op == "return":
-            has_value = bool(self._ask(
-                "return_has_value", {"type": "boolean"}, scope=scope
-            ))
+            if return_type is None:
+                has_value = bool(self._ask(
+                    "return_has_value",
+                    {"type": "boolean"},
+                    scope=scope,
+                ))
+            else:
+                has_value = return_type != "void"
             return (
-                {"op": "return", "value": self.expression(scope + ".value")}
+                {
+                    "op": "return",
+                    "value": self.expression(scope + ".value", bindings),
+                }
                 if has_value
                 else {"op": "return"}
             )
         if op == "assert":
             return {
                 "op": "assert",
-                "condition": self.expression(scope + ".condition"),
+                "condition": self.expression(
+                    scope + ".condition",
+                    bindings,
+                ),
                 "message": str(self._ask(
-                    "assert_message", {"type": "string"}, scope=scope
+                    "assert_message",
+                    {"type": "string"},
+                    scope=scope,
                 )),
             }
         if op == "if":
             return {
                 "op": "if",
-                "condition": self.expression(scope + ".condition"),
-                "then": self.body(scope + ".then"),
-                "else": self.body(scope + ".else"),
+                "condition": self.expression(
+                    scope + ".condition",
+                    bindings,
+                ),
+                "then": self.body(
+                    scope + ".then",
+                    env=bindings,
+                    return_type=return_type,
+                ),
+                "else": self.body(
+                    scope + ".else",
+                    env=bindings,
+                    return_type=return_type,
+                ),
             }
         if op == "while":
             return {
                 "op": "while",
-                "condition": self.expression(scope + ".condition"),
+                "condition": self.expression(
+                    scope + ".condition",
+                    bindings,
+                ),
                 "max_iterations": int(self._ask(
                     "max_iterations",
                     {"type": "integer", "minimum": 1, "maximum": 1000000},
                     scope=scope,
                 )),
-                "body": self.body(scope + ".body"),
+                "body": self.body(
+                    scope + ".body",
+                    env=bindings,
+                    return_type=return_type,
+                ),
             }
         if op == "foreach":
+            name = self._identifier("item_name", scope=scope)
+            item_type = self._type("item_type", scope=scope)
+            nested = dict(bindings)
+            nested[name] = item_type
             return {
                 "op": "foreach",
-                "name": self._identifier("item_name", scope=scope),
-                "type": self._type("item_type", scope=scope),
-                "collection": self.expression(scope + ".collection"),
-                "body": self.body(scope + ".body"),
+                "name": name,
+                "type": item_type,
+                "collection": self.expression(
+                    scope + ".collection",
+                    bindings,
+                ),
+                "body": self.body(
+                    scope + ".body",
+                    env=nested,
+                    return_type=return_type,
+                ),
             }
         if op == "state_set":
             return {
                 "op": "state_set",
-                "key": self.expression(scope + ".state_key"),
-                "value": self.expression(scope + ".state_value"),
-                "context": self.expression(scope + ".state_context"),
+                "key": self.expression(
+                    scope + ".state_key",
+                    bindings,
+                ),
+                "value": self.expression(
+                    scope + ".state_value",
+                    bindings,
+                ),
+                "context": self.expression(
+                    scope + ".state_context",
+                    bindings,
+                ),
             }
         if op == "expr":
-            return {"op": "expr", "value": self.expression(scope + ".value")}
+            return {
+                "op": "expr",
+                "value": self.expression(scope + ".value", bindings),
+            }
         raise AssertionError(op)
 
-    def body(self, scope: str) -> list[dict[str, Any]]:
+    def body(
+        self,
+        scope: str,
+        *,
+        env: Mapping[str, str] | None = None,
+        return_type: str | None = None,
+    ) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
+        bindings = dict(env or {})
         while True:
-            statement = self.statement(f"{scope}.statement[{len(result)}]")
+            statement = self.statement(
+                f"{scope}.statement[{len(result)}]",
+                env=bindings,
+                return_type=return_type,
+            )
             if statement is None:
                 return result
             result.append(statement)
+            if statement.get("op") == "let":
+                bindings[str(statement["name"])] = str(statement["type"])
 
 
 def author_typed_plan_ir(
@@ -304,7 +433,8 @@ def author_typed_plan_ir(
         {"type": "integer", "minimum": 1, "maximum": 64},
         scope="program",
     ))
-    functions: list[dict[str, Any]] = []
+
+    specs: list[dict[str, Any]] = []
     known_ids: set[str] = set()
     for index in range(function_count):
         scope = f"function[{index}]"
@@ -314,25 +444,34 @@ def author_typed_plan_ir(
                 f"TYPED_PLAN_AUTHORING_DUPLICATE_FUNCTION: {function_id}"
             )
         known_ids.add(function_id)
+
         parameter_count = int(author._ask(
             "parameter_count",
             {"type": "integer", "minimum": 0, "maximum": 32},
             scope=scope,
         ))
-        parameters = []
+        parameters: list[dict[str, str]] = []
         parameter_names: set[str] = set()
         for parameter_index in range(parameter_count):
             parameter_scope = f"{scope}.parameter[{parameter_index}]"
-            name = author._identifier("parameter_name", scope=parameter_scope)
+            name = author._identifier(
+                "parameter_name",
+                scope=parameter_scope,
+            )
             if name in parameter_names:
                 raise ValueError(
-                    f"TYPED_PLAN_AUTHORING_DUPLICATE_PARAMETER: {function_id}.{name}"
+                    f"TYPED_PLAN_AUTHORING_DUPLICATE_PARAMETER: "
+                    f"{function_id}.{name}"
                 )
             parameter_names.add(name)
             parameters.append({
                 "name": name,
-                "type": author._type("parameter_type", scope=parameter_scope),
+                "type": author._type(
+                    "parameter_type",
+                    scope=parameter_scope,
+                ),
             })
+
         return_type = author._type(
             "return_type",
             scope=scope,
@@ -351,19 +490,47 @@ def author_typed_plan_ir(
             ))
             for coverage_index in range(coverage_count)
         ]
-        functions.append({
+        specs.append({
             "id": function_id,
             "parameters": parameters,
             "return_type": return_type,
-            "body": author.body(scope + ".body"),
             "covers": covers,
+        })
+
+    author.function_signatures = {
+        str(spec["id"]): tuple(
+            str(parameter["type"])
+            for parameter in spec["parameters"]
+        )
+        for spec in specs
+    }
+
+    functions: list[dict[str, Any]] = []
+    for index, spec in enumerate(specs):
+        env = {
+            str(parameter["name"]): str(parameter["type"])
+            for parameter in spec["parameters"]
+        }
+        functions.append({
+            **spec,
+            "body": author.body(
+                f"function[{index}].body",
+                env=env,
+                return_type=str(spec["return_type"]),
+            ),
         })
 
     plan = {
         "schema_version": "mmm/typed-plan-ir-v1",
-        "source_sha256": hashlib.sha256(source_text.encode("utf-8")).hexdigest(),
+        "source_sha256": hashlib.sha256(
+            source_text.encode("utf-8")
+        ).hexdigest(),
         "functions": functions,
-        "initialize": author.body("initialize"),
+        "initialize": author.body(
+            "initialize",
+            env={},
+            return_type="void",
+        ),
     }
     from .typed_plan_ir import validate_typed_plan_ir
 
