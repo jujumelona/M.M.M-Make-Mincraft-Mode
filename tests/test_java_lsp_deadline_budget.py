@@ -72,6 +72,7 @@ def test_diagnostics_gets_fresh_budget_after_cold_start_and_shares_it_across_pag
     assert seen[0][1] == pytest.approx(190.0)
     assert seen[1][1] == pytest.approx(270.0)
     assert seen[2][1] == pytest.approx(270.0)
+    assert seen[1][1] - seen[0][1] == pytest.approx(80.0)
     assert seen[1][2] == pytest.approx(90.0)
     assert seen[2][2] == pytest.approx(90.0)
 

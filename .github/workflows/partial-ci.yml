@@ -11,9 +11,11 @@ permissions:
 
 concurrency:
   group: partial-ci-${{ github.ref }}
-  # Every push is scoped to its own HEAD^..HEAD diff. Cancelling an older run can
-  # therefore erase coverage for files changed only by the older commit.
+  # Every push is scoped to its own HEAD^..HEAD diff. GitHub otherwise keeps only
+  # one pending run and replaces an older pending run when another push arrives.
+  # Queue every pending commit so changed-file coverage cannot disappear.
   cancel-in-progress: false
+  queue: max
 
 jobs:
   impact:
