@@ -247,6 +247,28 @@ def _json_scalar_tree(value: Any, where: str) -> None:
     raise ValueError(f"{where}: unsupported JSON value {type(value).__name__}")
 
 
+_PERSISTENT_SYSTEM_KINDS = frozenset({
+    "quest", "class", "skill", "economy", "shop", "party", "guild",
+})
+
+
+def _coverage_allowed(kind: str, cover: str) -> bool:
+    if cover.startswith("resources_and_ui."):
+        concern = cover.split(".", 1)[1]
+        if concern in {"registries", "data_resources", "assets", "paths", "missing_resources"}:
+            return kind in PLATFORM_CONTENT_KINDS or kind == "gui"
+        if concern in {"interactions", "displayed_state", "accessibility"}:
+            return kind in {"command", "machine", "gui", "networking"}
+        return False
+    if cover.startswith("authority_and_network."):
+        return kind in {"networking", "gui"}
+    if cover.startswith("persistence."):
+        return kind in _PERSISTENT_SYSTEM_KINDS
+    if cover.startswith("integration."):
+        return True
+    return False
+
+
 def _validate_content_config(kind: str, config: Mapping[str, Any], module_id: str) -> None:
     common = {"display_name_en", "display_name_ko", "ingredients"}
     allowed_by_kind = {
@@ -346,7 +368,13 @@ def validate_platform_modules(raw_modules: Any) -> list[dict[str, Any]]:
         for cover in covers:
             if not isinstance(cover, str) or not cover.strip():
                 raise ValueError(f"{where}.covers: invalid coverage ref")
-            normalized_covers.append(cover.strip())
+            normalized_cover = cover.strip()
+            if not _coverage_allowed(kind, normalized_cover):
+                raise ValueError(
+                    f"{where}.covers: {kind!r} cannot implement "
+                    f"{normalized_cover!r}"
+                )
+            normalized_covers.append(normalized_cover)
 
         seen.add(module_id)
         record = {
