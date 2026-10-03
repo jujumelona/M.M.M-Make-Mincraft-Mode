@@ -336,47 +336,72 @@ class TypedOperationAuthor:
         values = [*_TYPES, *(["void"] if allow_void else [])]
         return self._enum(field, values, scope=scope)
 
-    def _literal_value(self, kind: str, *, scope: str) -> Any:
-        schema: dict[str, Any]
-        if kind == "boolean":
-            schema = {"type": "boolean"}
-        elif kind in {"int", "long"}:
-            schema = {"type": "integer"}
-        elif kind == "double":
-            schema = {"type": "number"}
-        elif kind == "string":
-            schema = {"type": "string"}
-        else:
-            schema = {"type": ["string", "number", "integer", "boolean", "null"]}
-        return self._ask("literal_value", schema, scope=scope)
+    def _literal(self, *, scope: str) -> dict[str, Any]:
+        branches: list[dict[str, Any]] = []
+        value_schemas = {
+            "boolean": {"type": "boolean"},
+            "int": {"type": "integer", "minimum": -(2**31), "maximum": 2**31 - 1},
+            "long": {"type": "integer", "minimum": -(2**63), "maximum": 2**63 - 1},
+            "double": {"type": "number"},
+            "string": {"type": "string", "maxLength": 1024},
+            "object": {
+                "type": ["string", "number", "integer", "boolean", "null"],
+            },
+        }
+        for kind in _TYPES:
+            branches.append({
+                "type": "object",
+                "properties": {
+                    "type": {"const": kind},
+                    "value": value_schemas[kind],
+                },
+                "required": ["type", "value"],
+                "additionalProperties": False,
+            })
+        raw = self._ask(
+            "literal",
+            {"oneOf": branches},
+            scope=scope,
+        )
+        if not isinstance(raw, Mapping):
+            raise ValueError(
+                f"TYPED_PLAN_AUTHORING_RESPONSE_INVALID: {scope}.literal"
+            )
+        return {
+            "op": "literal",
+            "type": str(raw["type"]),
+            "value": raw["value"],
+        }
 
     def expression(
         self,
         scope: str,
         env: Mapping[str, str] | None = None,
+        *,
+        _depth: int = 0,
     ) -> dict[str, Any]:
         bindings = dict(env or {})
-        expression_ops = [
-            "literal", "unary", "binary", "list", "map", "state_get"
-        ]
-        if bindings:
-            expression_ops.append("ref")
-        if self.function_signatures:
-            expression_ops.append("call")
-        if self.capabilities:
-            expression_ops.append("capability")
+        if _depth >= 4:
+            expression_ops = ["literal"]
+            if bindings:
+                expression_ops.append("ref")
+        else:
+            expression_ops = [
+                "literal", "unary", "binary", "list", "map", "state_get"
+            ]
+            if bindings:
+                expression_ops.append("ref")
+            if self.function_signatures:
+                expression_ops.append("call")
+            if self.capabilities:
+                expression_ops.append("capability")
         op = self._enum(
             "expression_op",
             expression_ops,
             scope=scope,
         )
         if op == "literal":
-            kind = self._type("literal_type", scope=scope)
-            return {
-                "op": "literal",
-                "type": kind,
-                "value": self._literal_value(kind, scope=scope),
-            }
+            return self._literal(scope=scope)
         if op == "ref":
             name = self._enum(
                 "reference_name",
@@ -389,7 +414,7 @@ class TypedOperationAuthor:
             return {
                 "op": "unary",
                 "operator": operator,
-                "value": self.expression(scope + ".unary", bindings),
+                "value": self.expression(scope + ".unary", bindings, _depth=_depth + 1),
             }
         if op == "binary":
             operator = self._enum(
@@ -400,26 +425,26 @@ class TypedOperationAuthor:
             return {
                 "op": "binary",
                 "operator": operator,
-                "left": self.expression(scope + ".left", bindings),
-                "right": self.expression(scope + ".right", bindings),
+                "left": self.expression(scope + ".left", bindings, _depth=_depth + 1),
+                "right": self.expression(scope + ".right", bindings, _depth=_depth + 1),
             }
         if op == "list":
             count = int(self._ask(
                 "list_item_count",
-                {"type": "integer", "minimum": 0, "maximum": 64},
+                {"type": "integer", "minimum": 0, "maximum": 8},
                 scope=scope,
             ))
             return {
                 "op": "list",
                 "items": [
-                    self.expression(f"{scope}.item[{i}]", bindings)
+                    self.expression(f"{scope}.item[{i}]", bindings, _depth=_depth + 1)
                     for i in range(count)
                 ],
             }
         if op == "map":
             count = int(self._ask(
                 "map_entry_count",
-                {"type": "integer", "minimum": 0, "maximum": 64},
+                {"type": "integer", "minimum": 0, "maximum": 8},
                 scope=scope,
             ))
             entries = []
@@ -428,10 +453,12 @@ class TypedOperationAuthor:
                     "key": self.expression(
                         f"{scope}.entry[{index}].key",
                         bindings,
+                        _depth=_depth + 1,
                     ),
                     "value": self.expression(
                         f"{scope}.entry[{index}].value",
                         bindings,
+                        _depth=_depth + 1,
                     ),
                 })
             return {"op": "map", "entries": entries}
@@ -446,7 +473,7 @@ class TypedOperationAuthor:
                 "op": "call",
                 "function": function,
                 "args": [
-                    self.expression(f"{scope}.arg[{i}]", bindings)
+                    self.expression(f"{scope}.arg[{i}]", bindings, _depth=_depth + 1)
                     for i in range(len(parameter_types))
                 ],
             }
@@ -462,6 +489,7 @@ class TypedOperationAuthor:
                     self.expression(
                         f"{scope}.capability_arg[{i}]",
                         bindings,
+                        _depth=_depth + 1,
                     )
                     for i in range(count)
                 ],
@@ -469,11 +497,12 @@ class TypedOperationAuthor:
         if op == "state_get":
             return {
                 "op": "state_get",
-                "key": self.expression(scope + ".state_key", bindings),
+                "key": self.expression(scope + ".state_key", bindings, _depth=_depth + 1),
                 "type": self._type("state_type", scope=scope),
                 "context": self.expression(
                     scope + ".state_context",
                     bindings,
+                    _depth=_depth + 1,
                 ),
             }
         raise AssertionError(op)
@@ -616,6 +645,7 @@ class TypedOperationAuthor:
                 "context": self.expression(
                     scope + ".state_context",
                     bindings,
+                    _depth=_depth + 1,
                 ),
             }
         if op == "expr":
