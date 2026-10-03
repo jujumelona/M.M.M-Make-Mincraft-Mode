@@ -224,9 +224,11 @@ def test_unanchored_section_prose_is_owned_once_without_synthetic_sibling_work()
     assert router.calls == []
 
 
-def test_ir_leaf_preserves_primary_concern_for_unanchored_section_prose():
-    from minecraft_mod_ai.authored_execution_schema import concern_names
-    from minecraft_mod_ai.implementation_graph_execution import _leaf_module
+def test_ir_leaf_rejects_unstructured_state_prose_instead_of_inventing_work():
+    from minecraft_mod_ai.implementation_graph_execution import (
+        ImplementationGraphError,
+        _leaf_module,
+    )
 
     router = NoPlanningModelRouter()
     graph = compile_with(router, text=STRICT_DESIGN, authored_schema=True)
@@ -240,11 +242,11 @@ def test_ir_leaf_preserves_primary_concern_for_unanchored_section_prose():
             "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
         ),
     }
-    leaf = _leaf_module(node, graph, request)
-    concerns = leaf.config["implementation_atomic_concerns"]
-    assert [item["concern"] for item in concerns] == [concern_names("state_model")[0]]
-    assert leaf.config["implementation_section"] == "state_model"
-    assert len(leaf.config["evidence_task"]["implementation_obligations"]) == 1
+    with pytest.raises(
+        ImplementationGraphError,
+        match="IMPLEMENTATION_IR_STRUCTURED_STATE_REQUIRED",
+    ):
+        _leaf_module(node, graph, request)
 
 
 def test_localized_canonical_headings_keep_nested_concerns_and_drop_preamble():
