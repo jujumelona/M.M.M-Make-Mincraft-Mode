@@ -639,13 +639,20 @@ def _compile_new_authored_modules(
         if normalized_stored_sha != source_sha:
             raise ValueError("TYPED_PLAN_SOURCE_HASH_MISMATCH")
 
-        capabilities = typed_plan_capability_ids(plan.typed_plan_ir)
-        if capabilities:
-            raise ValueError(
-                "TYPED_PLAN_CAPABILITY_BINDING_REQUIRED: "
-                + ", ".join(capabilities)
-            )
-        validated_plan = validate_typed_plan_ir(plan.typed_plan_ir)
+        from .typed_host_capabilities import (
+            typed_host_capability_contracts,
+        )
+
+        capability_contracts = typed_host_capability_contracts()
+        validated_plan = validate_typed_plan_ir(
+            plan.typed_plan_ir,
+            capabilities=capability_contracts,
+        )
+        capability_ids = typed_plan_capability_ids(validated_plan)
+        bound_capabilities = {
+            capability_id: deepcopy(capability_contracts[capability_id])
+            for capability_id in capability_ids
+        }
         assert_typed_plan_host_support(
             plan.structured_sections,
             validated_plan,
@@ -735,7 +742,7 @@ def _compile_new_authored_modules(
                 "typed_plan_ir": deepcopy(validated_plan),
                 "typed_plan_package": package_name,
                 "typed_plan_path": program_path,
-                "typed_plan_capabilities": {},
+                "typed_plan_capabilities": deepcopy(bound_capabilities),
                 "typed_plan_state_section": state_section,
                 "typed_state_store": state_store_config,
                 **dict(target),
@@ -760,6 +767,7 @@ def _compile_new_authored_modules(
                 "symbol": program_symbol,
                 "state_required": state_required,
                 "state_store": state_store_config is not None,
+                "capabilities": list(capability_ids),
             },
             "platform_modules": [
                 {
