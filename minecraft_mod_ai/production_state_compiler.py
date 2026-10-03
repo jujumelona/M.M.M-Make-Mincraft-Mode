@@ -732,6 +732,7 @@ def render_production_state_java(
     prefix = f"package {package};\n\n" if package else ""
     return (
         prefix
+        + "// MMM:TYPED_PLAN_STATE_OWNER\n"
         + f"public final class {symbol} {{\n"
         + f"    private {symbol}() {{}}\n\n"
         + indented
