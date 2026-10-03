@@ -3222,21 +3222,12 @@ def _task_evidence_payload(
             continue
         task = module.get("evidence_task")
         if isinstance(task, Mapping):
-            contract = task.get("coder_execution_contract")
-            if isinstance(contract, Mapping):
-                return contract
             return task
-        authored = module.get("authored_plan")
-        if isinstance(authored, Mapping):
-            return authored
         config = module.get("config")
         if isinstance(config, Mapping):
             task = config.get("evidence_task")
             if isinstance(task, Mapping):
                 return task
-            authored = config.get("authored_plan")
-            if isinstance(authored, Mapping):
-                return authored
     return None
 
 
