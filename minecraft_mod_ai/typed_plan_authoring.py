@@ -722,28 +722,7 @@ def author_typed_plan_ir(
                 f"TYPED_PLAN_PLATFORM_COVERAGE_REQUIRED: {kind} has no "
                 "uncovered canonical concern to implement."
             )
-        coverage_count = int(author._ask(
-            "platform_coverage_count",
-            {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": min(64, len(coverable_refs)),
-            },
-            scope=scope,
-        ))
-        covers: list[str] = []
-        for coverage_index in range(coverage_count):
-            cover = author._enum(
-                "platform_coverage_ref",
-                list(coverable_refs),
-                scope=f"{scope}.coverage[{coverage_index}]",
-            )
-            if cover not in covers:
-                covers.append(cover)
-        if not covers:
-            raise ValueError(
-                "TYPED_PLAN_PLATFORM_COVERAGE_REQUIRED: module made no progress."
-            )
+        covers = list(coverable_refs)
         uncovered.difference_update(covers)
         platform_modules.append({
             "module_id": module_id,
