@@ -28,12 +28,10 @@ class AuthoredPlan:
             normalize_structured_sections(self.structured_sections),
         )
         if self.typed_plan_ir:
-            from .typed_plan_ir import validate_typed_plan_ir
-
             object.__setattr__(
                 self,
                 "typed_plan_ir",
-                validate_typed_plan_ir(self.typed_plan_ir),
+                deepcopy(dict(self.typed_plan_ir)),
             )
         else:
             object.__setattr__(self, "typed_plan_ir", {})
