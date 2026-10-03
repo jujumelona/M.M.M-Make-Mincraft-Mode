@@ -7,12 +7,6 @@ here. A requirement may legitimately expose any number of independently observab
 checks; serialization may compose them into one stable requirement-scoped public statement,
 but it must never discard checks or reinterpret the contract downstream.
 
-Verified legacy plans are the only compatibility exception: after the evidence-plan hash and
-structure have already been validated, the old compiler may temporarily ingest historical
-internal acceptance text solely so this module can project it back to a safe public contract.
-That compatibility state is also owned here, so downstream adapters cannot invent their own
-legacy bypass semantics.
-
 Host ownership alone does not prove donor behavior. A contract may only authorize
 BEHAVIOR_VERIFIED when ``implementation_bound`` is true and the generated test directly
 binds to the reused implementation. Generic host smoke tests remain useful build/runtime
@@ -20,9 +14,7 @@ evidence but are deliberately capped below behavioral proof.
 """
 
 import hashlib
-from collections.abc import Iterable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
-from contextvars import ContextVar
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -40,10 +32,6 @@ PUBLIC_ACCEPTANCE_INTERNAL_MARKERS = (
     "task_sha256",
     "done_predicate",
 )
-_VERIFIED_LEGACY_ACCEPTANCE = ContextVar(
-    "mmm_verified_legacy_acceptance", default=False
-)
-
 
 class AcceptanceContractError(ValueError):
     """Raised when canonical public requirement acceptance is invalid."""
@@ -89,26 +77,9 @@ def validate_runtime_public_acceptance(
     *,
     error_type: type[Exception] = AcceptanceContractError,
 ) -> str:
-    """Validate the production input boundary under the central legacy policy.
+    """Validate the production input boundary with the canonical strict policy."""
 
-    The legacy relaxation is legal only inside ``verified_legacy_acceptance_context``.
-    Callers cannot select a different rule locally.
-    """
-
-    if _VERIFIED_LEGACY_ACCEPTANCE.get():
-        return _nonempty_public_text(statement, error_type=error_type)
     return validate_public_acceptance(statement, error_type=error_type)
-
-
-@contextmanager
-def verified_legacy_acceptance_context(enabled: bool) -> Iterator[None]:
-    """Temporarily permit already-verified legacy input before safe reprojection."""
-
-    token = _VERIFIED_LEGACY_ACCEPTANCE.set(bool(enabled))
-    try:
-        yield
-    finally:
-        _VERIFIED_LEGACY_ACCEPTANCE.reset(token)
 
 
 def is_public_acceptance(value: Any) -> bool:
@@ -121,8 +92,7 @@ def is_public_acceptance(value: Any) -> bool:
     return True
 
 
-# Compatibility marker used by existing runtime-integrity tests. The function itself is
-# the policy owner now; no downstream wrapper is allowed to redefine the rule.
+# The strict policy owner; downstream wrappers must not redefine the rule.
 is_public_acceptance._mmm_production_public_acceptance_guard = True
 is_public_acceptance._mmm_acceptance_contract_owner = CANONICAL_ACCEPTANCE_OWNER
 validate_runtime_public_acceptance._mmm_acceptance_contract_owner = (
