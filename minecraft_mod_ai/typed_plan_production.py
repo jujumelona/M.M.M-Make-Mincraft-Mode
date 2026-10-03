@@ -387,6 +387,36 @@ def _network_policy_files(
     state_section: Mapping[str, Any],
     config: Mapping[str, Any],
 ) -> dict[str, str]:
+    covers = set(config.get("__covers", ()))
+    stateful = bool(
+        covers
+        & {
+            "authority_and_network.payloads",
+            "authority_and_network.synchronization",
+            "authority_and_network.reconnection",
+        }
+    )
+    if not stateful:
+        package_path = package_name.replace(".", "/")
+        source = f"""package {package_name};
+
+// MMM:TYPED_NETWORK_SYNC_OWNER
+public final class AuthoredNetworkSync {{
+    private AuthoredNetworkSync() {{}}
+
+    public static void register() {{
+        // Server-authoritative boundary: no client mutation channel is generated.
+    }}
+
+    public static boolean clientMutationAllowed() {{
+        return false;
+    }}
+}}
+"""
+        return {
+            f"src/main/java/{package_path}/AuthoredNetworkSync.java": source,
+        }
+
     state_names = _state_variable_names(state_section)
     payload_rows = _structured_rows(
         structured,
@@ -813,17 +843,30 @@ def generate_typed_plan_module(
         )
 
     raw_network_sync = config.get("typed_network_sync")
+    network_sync_needs_state = False
     if raw_network_sync is not None:
         if not isinstance(raw_network_sync, Mapping):
             raise ValueError("TYPED_NETWORK_SYNC_CONFIG_INVALID")
-        if not state_authority_present:
+        network_sync_needs_state = bool(
+            set(raw_network_sync.get("__covers", ()))
+            & {
+                "authority_and_network.payloads",
+                "authority_and_network.synchronization",
+                "authority_and_network.reconnection",
+            }
+        )
+        if network_sync_needs_state and not state_authority_present:
             raise ValueError("TYPED_NETWORK_STATE_AUTHORITY_REQUIRED")
         files.update(
             _network_policy_files(
                 package_name=package_name,
                 mod_id=info.mod_id,
                 structured=structured,
-                state_section=raw_state,
+                state_section=(
+                    raw_state
+                    if isinstance(raw_state, Mapping)
+                    else {}
+                ),
                 config=raw_network_sync,
             )
         )
@@ -894,7 +937,7 @@ def generate_typed_plan_module(
     if (
         typed_plan_uses_state(raw_plan)
         or raw_state_store is not None
-        or raw_network_sync is not None
+        or network_sync_needs_state
         or state_authority_present
     ):
         if not state_authority_present:
@@ -933,10 +976,15 @@ def generate_typed_plan_module(
             call_line="AuthoredNetworkSync.register()",
             marker="typed-network-sync",
         )
-        ensure_client_entrypoint(
-            info,
-            entrypoint=f"{package_name}.AuthoredNetworkClient",
-        )
+        package_path = package_name.replace(".", "/")
+        if (
+            f"src/main/java/{package_path}/AuthoredNetworkClient.java"
+            in files
+        ):
+            ensure_client_entrypoint(
+                info,
+                entrypoint=f"{package_name}.AuthoredNetworkClient",
+            )
     if raw_resource_policy is not None:
         package_path = package_name.replace(".", "/")
         accessibility_path = (
