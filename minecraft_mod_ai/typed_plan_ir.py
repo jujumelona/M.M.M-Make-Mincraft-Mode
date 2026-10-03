@@ -425,4 +425,34 @@ def validate_typed_plan_ir(
     return _Validator(plan, capabilities).run()
 
 
-__all__ = ["TYPED_PLAN_IR_SCHEMA_VERSION", "validate_typed_plan_ir"]
+def _walk_nodes(value: Any):
+    if isinstance(value, Mapping):
+        yield value
+        for item in value.values():
+            yield from _walk_nodes(item)
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for item in value:
+            yield from _walk_nodes(item)
+
+
+def typed_plan_uses_state(plan: Mapping[str, Any]) -> bool:
+    return any(
+        node.get("op") in {"state_get", "state_set"}
+        for node in _walk_nodes(plan)
+    )
+
+
+def typed_plan_capability_ids(plan: Mapping[str, Any]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(
+        str(node.get("id") or "")
+        for node in _walk_nodes(plan)
+        if node.get("op") == "capability" and str(node.get("id") or "")
+    ))
+
+
+__all__ = [
+    "TYPED_PLAN_IR_SCHEMA_VERSION",
+    "typed_plan_capability_ids",
+    "typed_plan_uses_state",
+    "validate_typed_plan_ir",
+]
