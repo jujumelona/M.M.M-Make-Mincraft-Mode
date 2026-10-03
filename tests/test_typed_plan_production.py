@@ -66,7 +66,7 @@ def test_typed_plan_backend_generates_compileable_java_without_router(tmp_path: 
     root = _project(tmp_path)
     module = ProductionModule(
         module_id="authored_typed_plan",
-        kind="custom_java",
+        kind="typed_host",
         config={
             "implementation": "custom",
             "typed_plan_ir": _plan(),
@@ -165,7 +165,7 @@ def test_typed_state_backend_generates_state_owner_without_router(
     }
     module = ProductionModule(
         module_id="authored_typed_state",
-        kind="custom_java",
+        kind="typed_host",
         config={
             "implementation": "custom",
             "typed_plan_ir": typed,
@@ -275,7 +275,7 @@ def test_typed_plan_backend_refuses_unowned_existing_source(tmp_path: Path) -> N
     )
     module = ProductionModule(
         module_id="authored_typed_plan",
-        kind="custom_java",
+        kind="typed_host",
         config={
             "implementation": "custom",
             "typed_plan_ir": _plan(),
@@ -306,8 +306,8 @@ def test_typed_plan_host_work_is_isolated_from_llm_shards() -> None:
     )
     legacy = ProductionModule(
         module_id="legacy",
-        kind="custom_java",
-        config={"implementation": "custom"},
+        kind="item",
+        config={},
     )
 
     assert _is_typed_host_module(typed) is True
@@ -410,7 +410,7 @@ def test_typed_state_store_generates_state_owner_and_persistence_bridge(
     }
     module = ProductionModule(
         module_id="authored_typed_plan",
-        kind="custom_java",
+        kind="typed_host",
         config={
             "implementation": "custom",
             "typed_plan_ir": {
@@ -650,7 +650,7 @@ def test_typed_host_capability_generates_owned_java_without_router(
     contracts = typed_host_capability_contracts()
     module = ProductionModule(
         module_id="authored_typed_plan",
-        kind="custom_java",
+        kind="typed_host",
         config={
             "implementation": "custom",
             "typed_plan_ir": typed,
