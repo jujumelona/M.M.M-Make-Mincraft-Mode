@@ -58,7 +58,16 @@ def _plan(text: str = "typed behavior") -> dict:
                 "covers": ["design:compute"],
             }
         ],
-        "initialize": [],
+        "initialize": [
+            {
+                "op": "expr",
+                "value": {
+                    "op": "call",
+                    "function": "compute",
+                    "args": [],
+                },
+            }
+        ],
     }
 
 
@@ -245,7 +254,16 @@ def test_typed_state_operations_fail_closed_without_canonical_state_authority() 
                 "covers": ["state:coins"],
             }
         ],
-        "initialize": [],
+        "initialize": [
+            {
+                "op": "expr",
+                "value": {
+                    "op": "call",
+                    "function": "readCoins",
+                    "args": [],
+                },
+            }
+        ],
     }
     plan = AuthoredPlan(
         requested_prompt="stateful mod",
@@ -352,6 +370,17 @@ def test_typed_platform_modules_lower_to_deterministic_production_modules() -> N
     plan = AuthoredPlan(
         requested_prompt="add marker token",
         text=text,
+        structured_sections=_structured_section(
+            "resources_and_ui",
+            "registries",
+            [
+                {
+                    "purpose": "item",
+                    "identifier": "marker_token",
+                    "binding_requirement": "register the marker token",
+                }
+            ],
+        ),
         typed_plan_ir=typed,
     )
 
@@ -510,7 +539,7 @@ def test_typed_platform_content_lowers_to_deterministic_module() -> None:
     )
 
     assert [(module.module_id, module.kind) for module in modules] == [
-        ("authored_typed_plan", "custom_java"),
+        ("authored_typed_plan", "typed_host"),
         ("marker_item", "item"),
     ]
     assert modules[1].config == {"display_name_en": "Marker"}
