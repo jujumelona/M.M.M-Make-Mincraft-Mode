@@ -2681,6 +2681,12 @@ def test_stored_state_without_records_never_asks_coder_for_declarations() -> Non
         executor.run()
 
 
+def test_stored_state_invalid_shape_fails_first_pass_without_regeneration() -> None:
+    """Stable CI node: declaration-only invalid input must fail before any coder call."""
+
+    test_stored_state_without_records_never_asks_coder_for_declarations()
+
+
 def test_behavior_actor_records_consumes_canonical_structured_records() -> None:
     import json
 
