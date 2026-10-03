@@ -24,6 +24,7 @@ _SERIAL_CPU_STAGES = (
     "generate:content",
     "generate:system",
     "generate:entity",
+    "generate:host",
 )
 _SHARED_LOCAL_GPU_LANE: ContextVar[bool] = ContextVar(
     "mmm_shared_local_gpu_lane",
