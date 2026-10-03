@@ -225,7 +225,7 @@ def generate_extended_content(
 def iter_extended_module_records(
     project_root: str | Path,
 ) -> Iterator[dict[str, Any]]:
-    """Read both legacy monoliths and the bounded catalog tree."""
+    """Read the bounded extended-module catalog tree."""
 
     root = Path(project_root).expanduser().resolve()
     catalog = root / ".minecraft_ai/extended-modules.json"
@@ -234,15 +234,6 @@ def iter_extended_module_records(
     raw = json.loads(catalog.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise ExtendedContentError("Extended module catalog must be an object.")
-    legacy = raw.get("modules")
-    if isinstance(legacy, list):
-        for item in legacy:
-            if not isinstance(item, dict) or not item.get("module_id"):
-                raise ExtendedContentError(
-                    "Legacy extended module catalog contains an invalid module."
-                )
-            yield item
-        return
     if raw.get("schema_version") == _DIRECTORY_CATALOG_SCHEMA:
         relative = raw.get("directory")
         expected = raw.get("module_count")
