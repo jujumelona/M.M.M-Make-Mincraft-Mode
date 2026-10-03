@@ -24,16 +24,13 @@ from .importer import inspect_existing_project_archive
 from .knowledge import AuthoritativeEvidenceRetriever
 from .model_router import ModelRouter
 from .plan_render import render_complete_plan
-from .planning_pipeline import PlanningPipeline
 from .production_contract import quality_contract_summary, quality_unresolved
 from .proposal_store import (
     load_sharded_complete_proposal,
     read_sharded_complete_proposal_section,
     write_sharded_complete_proposal,
 )
-from .repair_engine import RepairEngine
 from .runner import GradleRunner
-from .scalable_pipeline import ScalableMinecraftModPipeline
 from .scalable_validator import ScalableProjectValidator
 from .scale_policy import ScalePolicy
 from .source_patch import TransactionalSourcePatcher
@@ -90,13 +87,8 @@ class MMMToolService:
         return assess_technology_candidate(requirement, assessed_candidate, receipt_key=self._technology_receipt_key)
 
     def plan_game(self, prompt: str, media_paths: Sequence[str]=()) -> dict[str, Any]:
-        artifacts = PlanningPipeline(self.router_factory()).prepare(
-            prompt,
-            media_paths=self._scoped_media_paths(media_paths),
-        )
-        design = artifacts.game_design
-        proposal = artifacts.base_proposal
-        return {'schema_version': 'mmm/plan-result-v2', 'profile': self.profile, 'game_design': design, 'proposal': proposal.to_dict(), 'approval_hash': proposal.calculate_hash()}
+        """Compatibility alias for the canonical complete planning path."""
+        return self.plan_complete_game(prompt, media_paths=media_paths)
 
     def plan_complete_game(self, prompt: str, media_paths: Sequence[str]=(), existing_input_sha256: str='') -> dict[str, Any]:
         return self._plan_complete_game_impl(prompt, media_paths=media_paths, existing_input_sha256=existing_input_sha256)
@@ -217,10 +209,20 @@ class MMMToolService:
         return TransactionalSourcePatcher(root).apply(operations)
 
     def repair_project(self, project_root: str, run_gametest: bool=True, max_attempts: int | None=None) -> dict[str, Any]:
-        root = self._existing_dir(project_root)
+        """Reject the retired standalone repair loop.
+
+        Production validation/repair ownership now lives inside
+        execute_complete_project; keeping a second model repair engine would recreate
+        the deleted authority split.
+        """
+        self._existing_dir(project_root)
+        del run_gametest
         if max_attempts is not None and (type(max_attempts) is not int or max_attempts < 1):
             raise SpecValidationError('max_attempts must be null or a positive integer.')
-        return RepairEngine(router=self.router_factory(), gradle_cache=self.workspace_root / '.cache' / 'gradle', policy=self.policy).repair(root, run_gametest=run_gametest, max_attempts=max_attempts)
+        raise SpecValidationError(
+            'REPAIR_PROJECT_REMOVED: use execute_complete_project so validation and '
+            'recovery stay inside the canonical production pipeline.'
+        )
 
     def revise_plan(self, original_prompt: str, revision: str, media_paths: Sequence[str]=()) -> dict[str, Any]:
         if not revision.strip():
@@ -250,10 +252,12 @@ class MMMToolService:
         return inspect_existing_project_archive(archive).to_dict()
 
     def generate_fabric_project(self, proposal: dict[str, Any], approval_hash: str, run_name: str='mcp-run') -> dict[str, Any]:
-        parsed = Proposal.from_dict(proposal)
-        run_root = self._new_child(run_name)
-        result = ScalableMinecraftModPipeline(policy=self.policy).execute(parsed, approval_hash=approval_hash, output_root=run_root, build=False, run_gametest=False)
-        return result.to_dict()
+        """Reject the retired base-Proposal generation path."""
+        del proposal, approval_hash, run_name
+        raise SpecValidationError(
+            'LEGACY_GENERATION_REMOVED: use plan_complete_game followed by '
+            'execute_complete_project.'
+        )
 
     def generate_assets(self, assets: dict[str, str], output_dir: str='assets-generated', seed: int=0) -> dict[str, Any]:
         if not isinstance(assets, dict) or not assets:
