@@ -475,6 +475,46 @@ def typed_plan_uses_state(plan: Mapping[str, Any]) -> bool:
     )
 
 
+def typed_plan_reachable_function_ids(
+    plan: Mapping[str, Any],
+) -> tuple[str, ...]:
+    """Return functions reachable from runtime event bindings or initialize."""
+
+    functions = {
+        str(function.get("id") or ""): function
+        for function in plan.get("functions", ())
+        if isinstance(function, Mapping) and str(function.get("id") or "")
+    }
+
+    def calls(value: Any) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(
+            str(node.get("function") or "")
+            for node in _walk_nodes(value)
+            if node.get("op") == "call" and str(node.get("function") or "")
+        ))
+
+    roots = [
+        str(binding.get("function") or "")
+        for binding in plan.get("event_bindings", ())
+        if isinstance(binding, Mapping) and str(binding.get("function") or "")
+    ]
+    roots.extend(calls(plan.get("initialize", ())))
+
+    reachable: list[str] = []
+    pending = list(dict.fromkeys(root for root in roots if root in functions))
+    seen: set[str] = set()
+    while pending:
+        function_id = pending.pop(0)
+        if function_id in seen:
+            continue
+        seen.add(function_id)
+        reachable.append(function_id)
+        for target in calls(functions[function_id].get("body", ())):
+            if target in functions and target not in seen:
+                pending.append(target)
+    return tuple(reachable)
+
+
 def typed_plan_capability_ids(plan: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(
         str(node.get("id") or "")
@@ -486,6 +526,7 @@ def typed_plan_capability_ids(plan: Mapping[str, Any]) -> tuple[str, ...]:
 __all__ = [
     "TYPED_PLAN_IR_SCHEMA_VERSION",
     "typed_plan_capability_ids",
+    "typed_plan_reachable_function_ids",
     "typed_plan_uses_state",
     "validate_typed_plan_ir",
 ]
