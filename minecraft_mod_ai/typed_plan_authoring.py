@@ -7,6 +7,7 @@ opaque JSON blob, and a hard call bound prevents recursive authoring from runnin
 without a host-observed termination measure.
 """
 
+import hashlib
 import json
 from collections.abc import Mapping
 from typing import Any
@@ -155,6 +156,113 @@ class TypedOperationAuthor:
         self.max_calls = max(1, int(max_calls))
         self.call_count = 0
         self.function_signatures: dict[str, tuple[str, ...]] = {}
+        self.scope_covers: dict[str, tuple[str, ...]] = {}
+
+    def set_scope_covers(
+        self,
+        scope: str,
+        covers: Sequence[str],
+    ) -> None:
+        self.scope_covers[str(scope)] = tuple(
+            dict.fromkeys(str(item) for item in covers if str(item))
+        )
+
+    def _scope_semantic_context(self, scope: str) -> dict[str, Any]:
+        from .authored_structured_design import active_concern_records
+
+        selected_covers: tuple[str, ...] = ()
+        for prefix in sorted(self.scope_covers, key=len, reverse=True):
+            if scope == prefix or scope.startswith(prefix + "."):
+                selected_covers = self.scope_covers[prefix]
+                break
+
+        selected: dict[str, Any] = {}
+        if selected_covers:
+            by_section: dict[str, set[str]] = {}
+            for ref in selected_covers:
+                section, dot, concern = ref.partition(".")
+                if dot:
+                    by_section.setdefault(section, set()).add(concern)
+            for section, concerns in by_section.items():
+                active = active_concern_records(
+                    self.structured_sections,
+                    section,
+                )
+                rows = {
+                    concern: active[concern]
+                    for concern in sorted(concerns)
+                    if concern in active
+                }
+                if rows:
+                    selected[section] = rows
+        else:
+            if scope.startswith("integration"):
+                sections = ("integration",)
+            elif scope.startswith("platform"):
+                sections = (
+                    "authority_and_network",
+                    "persistence",
+                    "resources_and_ui",
+                )
+            elif scope.startswith("initialize"):
+                sections = ("integration", "behavior_contract", "algorithm")
+            else:
+                sections = (
+                    "behavior_contract",
+                    "algorithm",
+                    "failure_and_limits",
+                )
+            for section in sections:
+                active = active_concern_records(
+                    self.structured_sections,
+                    section,
+                )
+                if active:
+                    selected[section] = active
+
+        # State symbols are the only cross-cutting execution context needed by
+        # expressions.  Include just that section rather than retransmitting the
+        # complete worksheet on every scalar decision.
+        state = active_concern_records(
+            self.structured_sections,
+            "state_model",
+        )
+        if state:
+            selected.setdefault("state_model", state)
+        return selected
+
+    def _semantic_statement_budget(self, scope: str) -> int:
+        context = self._scope_semantic_context(scope)
+        units = 0
+        for concerns in context.values():
+            if not isinstance(concerns, Mapping):
+                continue
+            for rows in concerns.values():
+                if isinstance(rows, Sequence) and not isinstance(
+                    rows, (str, bytes, bytearray)
+                ):
+                    units += max(1, len(rows))
+        # This is a fail-closed emergency ceiling derived from actual semantic
+        # records, not a normal completion target.  Normal bodies stop on done or
+        # an unconditional terminal statement well before it.
+        return min(24, max(2, 2 + units * 2))
+
+    @staticmethod
+    def _statement_terminates(statement: Mapping[str, Any]) -> bool:
+        if statement.get("op") == "return":
+            return True
+        if statement.get("op") == "if":
+            then = statement.get("then")
+            otherwise = statement.get("else")
+            return (
+                isinstance(then, list)
+                and isinstance(otherwise, list)
+                and bool(then)
+                and bool(otherwise)
+                and TypedOperationAuthor._statement_terminates(then[-1])
+                and TypedOperationAuthor._statement_terminates(otherwise[-1])
+            )
+        return False
 
     def _ask(self, field: str, schema: Mapping[str, Any], *, scope: str) -> Any:
         if self.call_count >= self.max_calls:
@@ -169,8 +277,10 @@ class TypedOperationAuthor:
             "additionalProperties": False,
         }
         payload = {
-            "source_text": self.source_text,
-            "structured_sections": self.structured_sections,
+            "source_sha256": hashlib.sha256(
+                self.source_text.encode("utf-8")
+            ).hexdigest(),
+            "semantic_context": self._scope_semantic_context(scope),
             "available_capabilities": sorted(self.capabilities),
             "known_functions": {
                 name: list(parameters)
@@ -180,8 +290,9 @@ class TypedOperationAuthor:
             "field": field,
             "decision_index": self.call_count,
             "policy": (
-                "Choose only one typed PlanIR scalar. Do not emit Java, prose, markdown, "
-                "or additional fields. Preserve approved behavior exactly."
+                "Choose only the requested bounded typed value. Do not emit Java, prose, "
+                "markdown, or additional fields. Stop at the compile-ready semantic unit; "
+                "the host owns iteration and completion."
             ),
         }
         result = self.router.generate_tool_decision(
@@ -520,10 +631,16 @@ class TypedOperationAuthor:
         *,
         env: Mapping[str, str] | None = None,
         return_type: str | None = None,
+        max_statements: int | None = None,
     ) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         bindings = dict(env or {})
-        while True:
+        limit = (
+            self._semantic_statement_budget(scope)
+            if max_statements is None
+            else max(1, int(max_statements))
+        )
+        for _ in range(limit):
             statement = self.statement(
                 f"{scope}.statement[{len(result)}]",
                 env=bindings,
@@ -534,6 +651,12 @@ class TypedOperationAuthor:
             result.append(statement)
             if statement.get("op") == "let":
                 bindings[str(statement["name"])] = str(statement["type"])
+            if self._statement_terminates(statement):
+                return result
+        raise ValueError(
+            "TYPED_PLAN_SEMANTIC_BUDGET_EXHAUSTED: "
+            f"{scope} exceeded {limit} statements before semantic completion"
+        )
 
 
 def author_typed_plan_ir(
