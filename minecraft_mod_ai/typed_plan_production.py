@@ -8,8 +8,12 @@ from pathlib import Path
 from typing import Any
 
 from .complete_spec import ProductionModule
-from .production_state_compiler import render_production_state_java
+from .production_state_compiler import (
+    normalize_structured_state_section,
+    render_production_state_java,
+)
 from .project_edit import (
+    ensure_client_entrypoint,
     ensure_main_initializer_call,
     inspect_fabric_project,
     write_text_files,
@@ -46,13 +50,8 @@ def _assert_host_owned_or_absent(
 
 
 def _state_variable_names(section: Mapping[str, Any]) -> tuple[str, ...]:
-    raw_specification = section.get("specification")
-    specification = (
-        raw_specification
-        if isinstance(raw_specification, Mapping)
-        else section
-    )
-    rows = specification.get("variables")
+    normalized = normalize_structured_state_section(section)
+    rows = normalized["specification"].get("variables")
     if not isinstance(rows, Sequence) or isinstance(
         rows, (str, bytes, bytearray)
     ):
