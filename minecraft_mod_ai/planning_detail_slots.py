@@ -3,6 +3,7 @@
 # Each concern is a required array of records with exactly these string fields.
 # Empty arrays are allowed only with a concrete reason in inapplicable_concerns.
 from .task_template_catalog import detail_records
+from .structured_state_runtime import constrain_state_record_schema
 
 DETAIL_RECORDS = detail_records()
 
@@ -56,6 +57,8 @@ def specification_schema(section):
             "required": fields,
             "additionalProperties": False,
         }
+        if section == "state_model":
+            item_schema = constrain_state_record_schema(concern, item_schema)
         properties[concern] = {
             "type": "array",
             "maxItems": 4,
