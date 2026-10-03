@@ -91,26 +91,26 @@ jobs:
           }
 
           targeted_source_tests = {
-              "minecraft_mod_ai/authored_ir_parser.py": (
-                  "tests/test_authored_heading_contract.py",
-                  "tests/test_authored_state_lowering_regression.py",
-              ),
               "minecraft_mod_ai/complete_planner.py": (
-                  "tests/test_authored_heading_contract.py",
+                  "tests/test_planner_structured_router.py",
                   "tests/test_authored_production.py",
+                  "tests/test_typed_plan_authoring.py",
               ),
-              "minecraft_mod_ai/atomic_concern_source.py": (
-                  "tests/test_atomic_concern_response_contract.py",
-                  "tests/test_authored_state_lowering_regression.py",
+              "minecraft_mod_ai/authored_production.py": (
+                  "tests/test_authored_production.py",
+                  "tests/test_authored_direct_lowering.py",
+                  "tests/test_typed_plan_production.py",
+              ),
+              "minecraft_mod_ai/typed_plan_ir.py": (
+                  "tests/test_typed_plan_ir.py",
+                  "tests/test_typed_plan_authoring.py",
+                  "tests/test_typed_plan_production.py",
+              ),
+              "minecraft_mod_ai/typed_plan_production.py": (
+                  "tests/test_typed_plan_production.py",
               ),
           }
-          targeted_path_tests = {
-              "minecraft_mod_ai/templates/feature/state_model/": (
-                  "tests/test_worksheet_atomic_chunker.py",
-                  "tests/test_planning_structured_worksheet_execution.py",
-                  "tests/test_authored_state_lowering_regression.py",
-              ),
-          }
+          targeted_path_tests = {}
           for prefix, candidates in targeted_path_tests.items():
               if not any(path.startswith(prefix) for path in changed):
                   continue
@@ -173,13 +173,6 @@ jobs:
                   for stem in source_stems
               ):
                   selected_tests.add(test_path.as_posix())
-
-          # Explicit ownership regression: this test exercises task-capsule authority
-          # and progress-aware tool-loop routing together.
-          if "minecraft_mod_ai/progress_aware_tool_loop.py" in changed:
-              candidate = Path("tests/test_small_model_task_capsule_contract.py")
-              if candidate.is_file():
-                  selected_tests.add(candidate.as_posix())
 
           output = Path(os.environ["GITHUB_OUTPUT"])
           with output.open("a", encoding="utf-8") as handle:
