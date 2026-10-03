@@ -661,6 +661,8 @@ def _compile_new_authored_modules(
         raw_platform_modules = validated_plan.get("platform_modules", [])
         platform_modules: list[ProductionModule] = []
         state_store_config: dict[str, Any] | None = None
+        network_sync_config: dict[str, Any] | None = None
+        resource_policy_config: dict[str, Any] | None = None
         for item in raw_platform_modules:
             module_id = str(item["module_id"])
             kind = str(item["kind"])
@@ -674,6 +676,16 @@ def _compile_new_authored_modules(
                         "TYPED_PLATFORM_STATE_STORE_DUPLICATE"
                     )
                 state_store_config = deepcopy(dict(item["config"]))
+                continue
+            if kind == "network_sync":
+                if network_sync_config is not None:
+                    raise ValueError("TYPED_PLATFORM_NETWORK_SYNC_DUPLICATE")
+                network_sync_config = deepcopy(dict(item["config"]))
+                continue
+            if kind == "resource_policy":
+                if resource_policy_config is not None:
+                    raise ValueError("TYPED_PLATFORM_RESOURCE_POLICY_DUPLICATE")
+                resource_policy_config = deepcopy(dict(item["config"]))
                 continue
             platform_modules.append(
                 ProductionModule(
@@ -744,7 +756,10 @@ def _compile_new_authored_modules(
                 "typed_plan_path": program_path,
                 "typed_plan_capabilities": deepcopy(bound_capabilities),
                 "typed_plan_state_section": state_section,
+                "typed_plan_structured_sections": deepcopy(plan.structured_sections),
                 "typed_state_store": state_store_config,
+                "typed_network_sync": network_sync_config,
+                "typed_resource_policy": resource_policy_config,
                 **dict(target),
             },
             required_gates=("target_compile",),
@@ -767,6 +782,8 @@ def _compile_new_authored_modules(
                 "symbol": program_symbol,
                 "state_required": state_required,
                 "state_store": state_store_config is not None,
+                "network_sync": network_sync_config is not None,
+                "resource_policy": resource_policy_config is not None,
                 "capabilities": list(capability_ids),
             },
             "platform_modules": [
