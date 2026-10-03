@@ -38,7 +38,7 @@ def prepare_state_concern(task: Mapping[str, Any], concern: str, *, include_runt
         "work": work,
         "runtime_api": list(PUBLIC_API),
         "rules": [
-            "Implement every listed private static helper using its exact declaration and authored record field.",
+            "The host already owns every listed helper declaration/signature; emit only executable body statements for each helper's authored record field.",
             "The host owns the state storage, runtime API, guards already compiled from DSL, and event registration. Do not redeclare them or emit registration code.",
             "Use getState/setState with the supplied context; use context for event inputs. Never duplicate state in new fields.",
             "Domain calls in authored text describe required behavior, not existing Java APIs. Implement their semantics; never emit unresolved pseudocode calls.",

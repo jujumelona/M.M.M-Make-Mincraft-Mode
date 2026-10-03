@@ -1916,6 +1916,35 @@ def _state_lowering_assembly_seed(
     return initial, tuple(required)
 
 
+
+def _state_lowering_model_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Remove host-owned Java declarations from the state body-generation prompt."""
+
+    result = deepcopy(dict(payload))
+    lowering = result.get("state_lowering")
+    if not isinstance(lowering, Mapping):
+        return result
+    raw_work = lowering.get("work")
+    if (
+        not isinstance(raw_work, Sequence)
+        or isinstance(raw_work, (str, bytes, bytearray))
+    ):
+        return result
+
+    clean_lowering = dict(lowering)
+    clean_work: list[Any] = []
+    for raw_item in raw_work:
+        if not isinstance(raw_item, Mapping):
+            clean_work.append(raw_item)
+            continue
+        item = dict(raw_item)
+        item.pop("declaration", None)
+        clean_work.append(item)
+    clean_lowering["work"] = clean_work
+    result["state_lowering"] = clean_lowering
+    return result
+
+
 def _call_atomic_java_region(
     router: Any,
     messages: Sequence[Mapping[str, str]],
@@ -1942,9 +1971,14 @@ def _call_atomic_java_region(
         parameters,
         response_region=response_region,
     )
+    assembly_payload = (
+        _state_lowering_model_payload(payload)
+        if initial_structure is not None
+        else payload
+    )
     decision = JavaStructureAssembly(
         callback,
-        payload,
+        assembly_payload,
         output_token_ceiling=output_token_ceiling,
         config=config,
         multi_callback=multi_callback,

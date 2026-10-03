@@ -4177,8 +4177,9 @@ class AtomicConcernExecutor:
                         self.task, {"concern": "variables"}
                     )["structured_records"]
                     payload["concern"]["implementation_goal"] = (
-                        "Implement the exact state_lowering.work helper declarations from "
-                        "their authored record fields. Host runtime registration calls these helpers."
+                        "The host already owns the exact state_lowering.work helper signatures. "
+                        "Implement only each helper body from its authored record field; never "
+                        "repeat a declaration/header. Host runtime registration calls these helpers."
                     )
                     messages[-1]["content"] = json.dumps(payload, ensure_ascii=False)
                 if rejected_region:

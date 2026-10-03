@@ -332,6 +332,10 @@ def test_state_lowering_helper_signature_is_host_owned_and_only_body_is_decoded(
             assert kwargs["tool_name"] == "emit_java_statement"
             payload = json.loads(messages[-1]["content"])
             assert payload["assembly"]["path"] == ["methods", 0, "body"]
+            assert "declaration" not in payload["state_lowering"]["work"][0]
+            assert "body" in payload["concern"]["implementation_goal"].lower() or (
+                payload["concern"].get("implementation_goal") is None
+            )
             calls.append(payload["assembly"]["path"])
             return (
                 {"statement": 'Object value = getState("player_currency", context);'},
