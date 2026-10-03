@@ -617,6 +617,109 @@ def _compile_new_authored_modules(
     """
     main_symbol = _main_class_name(mod_id)
     main_path = f"src/main/java/{package_name.replace('.', '/')}/{main_symbol}.java"
+
+    if plan.typed_plan_ir:
+        from .typed_plan_ir import (
+            typed_plan_capability_ids,
+            typed_plan_uses_state,
+            validate_typed_plan_ir,
+        )
+
+        source_sha = "sha256:" + hashlib.sha256(plan.text.encode("utf-8")).hexdigest()
+        stored_sha = str(plan.typed_plan_ir.get("source_sha256") or "")
+        normalized_stored_sha = (
+            stored_sha if stored_sha.startswith("sha256:") else "sha256:" + stored_sha
+        )
+        if normalized_stored_sha != source_sha:
+            raise ValueError("TYPED_PLAN_SOURCE_HASH_MISMATCH")
+
+        capabilities = typed_plan_capability_ids(plan.typed_plan_ir)
+        if capabilities:
+            raise ValueError(
+                "TYPED_PLAN_CAPABILITY_BINDING_REQUIRED: "
+                + ", ".join(capabilities)
+            )
+        validated_plan = validate_typed_plan_ir(plan.typed_plan_ir)
+
+        state_section = (
+            deepcopy(dict(production_state_section))
+            if isinstance(production_state_section, Mapping)
+            else {}
+        )
+        if typed_plan_uses_state(validated_plan) and not state_section:
+            raise ValueError(
+                "TYPED_PLAN_STATE_AUTHORITY_REQUIRED: state operations require "
+                "canonical structured state_model authority."
+            )
+
+        program_symbol = "AuthoredProgram"
+        program_path = (
+            f"src/main/java/{package_name.replace('.', '/')}/{program_symbol}.java"
+        )
+        task_id = "authored_typed_plan"
+        task = _exact_authored_task(
+            task_id=task_id,
+            path=program_path,
+            symbol=program_symbol,
+            target=target,
+            obligation=(
+                "Compile the persisted Typed PlanIR exactly through the host Java backend. "
+                "Do not invoke a coder or reinterpret authored behavior."
+            ),
+            semantic_outcome="Materialize the approved Typed PlanIR deterministically.",
+            depends_on=(),
+            consumes=(),
+            provides=("authored_typed_program_ready",),
+            worksheet={
+                "typed_plan_ir": deepcopy(validated_plan),
+                "typed_plan_source_sha256": source_sha,
+            },
+            required_gates=("target_compile",),
+            target_status="host_reserved",
+        )
+        module = ProductionModule(
+            module_id=task_id,
+            kind="custom_java",
+            config={
+                "implementation": "custom",
+                "evidence_task": task,
+                "typed_plan_ir": deepcopy(validated_plan),
+                "typed_plan_package": package_name,
+                "typed_plan_path": program_path,
+                "typed_plan_capabilities": {},
+                "typed_plan_state_section": state_section,
+                **dict(target),
+            },
+            required_gates=("target_compile",),
+        )
+        manifest = {
+            "schema_version": _AUTHORED_EXECUTION_SCHEMA,
+            "policy": "host_typed_plan_ir",
+            "source_text_sha256": source_sha,
+            "source_bytes": len(plan.text.encode("utf-8")),
+            "unit_count": 1,
+            "units": [{
+                "module_id": task_id,
+                "path": program_path,
+                "symbol": program_symbol,
+                "source_sha256": source_sha,
+            }],
+            "graph_status": "not_required",
+            "typed_program": {
+                "path": program_path,
+                "symbol": program_symbol,
+                "state_required": typed_plan_uses_state(validated_plan),
+            },
+            "entrypoint": {
+                "owner": "host_scaffold",
+                "path": main_path,
+                "symbol": main_symbol,
+                "feature_symbols": [program_symbol],
+            },
+        }
+        manifest["manifest_sha256"] = _sha256_json(manifest)
+        return (module,), manifest
+
     task_id = "authored_implementation_graph"
     from .canonical_concern_authority import CanonicalConcernAuthority
 
