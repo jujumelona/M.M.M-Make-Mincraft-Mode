@@ -10,9 +10,15 @@ import pytest
 from minecraft_mod_ai.authored_plan import AuthoredPlan
 from minecraft_mod_ai.authored_production import _compile_new_authored_modules
 from minecraft_mod_ai.complete_spec import ProductionModule
+from minecraft_mod_ai.custom_module_generator import CustomModuleGenerator
 from minecraft_mod_ai.generator import FabricProjectGenerator
 from minecraft_mod_ai.spec import ContentKind, ContentSpec, ModSpec
-from minecraft_mod_ai.typed_plan_production import generate_typed_plan_module
+
+
+
+class ForbiddenRouter:
+    def __getattr__(self, name):
+        raise AssertionError(f"Typed PlanIR production touched router attribute {name!r}")
 
 
 def _project(root: Path) -> Path:
@@ -74,7 +80,10 @@ def test_typed_plan_backend_generates_compileable_java_without_router(tmp_path: 
         required_gates=("target_compile",),
     )
 
-    receipt = generate_typed_plan_module(root, module=module)
+    receipt = CustomModuleGenerator(ForbiddenRouter()).generate(
+        root,
+        module=module,
+    )
 
     assert receipt["generation_verification"]["model_calls"] == 0
     source_path = (
