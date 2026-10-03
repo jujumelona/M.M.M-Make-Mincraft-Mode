@@ -164,6 +164,7 @@ class CompleteGameDesignPlanner:
                 response_format="text",
                 response_schema=None,
                 enable_tools=False,
+                force_non_thinking=True,
             )
         return AuthoredPlan(
             requested_prompt=prompt,
