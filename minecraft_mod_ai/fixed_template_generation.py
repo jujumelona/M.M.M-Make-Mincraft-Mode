@@ -396,14 +396,20 @@ def generate_fixed_template_value(
             "enable_tools": False if role == "planner" else enable_tools,
         }
         if role == "planner":
-            if output_token_ceiling is None:
-                from .worksheet_atomic_chunker import planner_page_output_token_ceiling
+            from .worksheet_atomic_chunker import planner_page_output_token_ceiling
 
-                resolved_output_ceiling = planner_page_output_token_ceiling(
-                    transport_schema
-                )
-            else:
-                resolved_output_ceiling = max(1, int(output_token_ceiling))
+            schema_output_ceiling = planner_page_output_token_ceiling(
+                transport_schema
+            )
+            requested_output_ceiling = (
+                schema_output_ceiling
+                if output_token_ceiling is None
+                else max(1, int(output_token_ceiling))
+            )
+            resolved_output_ceiling = min(
+                requested_output_ceiling,
+                schema_output_ceiling,
+            )
             fixture_kwargs["output_token_ceiling"] = resolved_output_ceiling
             fixture_kwargs["force_non_thinking"] = True
         # A missing stage means there is no tool-capability route to describe. Omitting the
