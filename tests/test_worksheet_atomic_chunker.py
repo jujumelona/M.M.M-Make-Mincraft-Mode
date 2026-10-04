@@ -38,6 +38,16 @@ def _fixed_count(chunk, count: int = 1) -> dict[str, int]:
     return {str(chunk[0]): count}
 
 
+def test_field_page_schema_requires_host_fixed_cardinality():
+    page = pack_section_concerns("behavior_contract")[0]
+
+    with pytest.raises(
+        ValueError,
+        match="requires a host-fixed record count",
+    ):
+        worksheet_chunk_schema("behavior_contract", page)
+
+
 @pytest.mark.parametrize("section", WORKSHEET_SECTIONS)
 def test_all_packed_chunks_satisfy_atomicity_contract(section: str):
     chunks = pack_section_concerns(section)
