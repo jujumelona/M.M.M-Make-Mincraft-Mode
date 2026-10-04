@@ -8,7 +8,10 @@ from typing import Any
 
 from .generator import make_texture_png
 from .platform_catalog import adapter_from_project
-from .platform_backend_contract import geckolib_entity_capabilities
+from .platform_backend_contract import (
+    effective_target_backend_capabilities,
+    geckolib_entity_capabilities,
+)
 from .project_edit import (
     ensure_client_entrypoint,
     ensure_dependency,
@@ -120,7 +123,7 @@ def generate_geckolib_entity_assets(
         ) from exc
     required_backend = geckolib_entity_capabilities(geckolib_version)
     missing_backend = sorted(
-        required_backend - set(adapter.deterministic_module_kinds)
+        required_backend - set(effective_target_backend_capabilities(adapter))
     )
     if missing_backend:
         raise GeckoLibGenerationError(
