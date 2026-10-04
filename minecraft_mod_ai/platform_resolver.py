@@ -450,32 +450,39 @@ def _require_supported_kinds(
     if not kinds:
         return
 
-    # WorkGraph executes standard content modules only when the immutable target
-    # receipt explicitly declares the corresponding deterministic backend. Keep
-    # target selection on that same authority instead of accepting a broader
-    # host-fact capability and failing later at DETERMINISTIC_BACKEND_REQUIRED.
-    from .typed_platform_ir import PLATFORM_CONTENT_KINDS
+    from .platform_backend_contract import production_module_backend_capabilities
 
-    content_kinds = kinds & set(PLATFORM_CONTENT_KINDS)
-    unsupported_content = sorted(
-        content_kinds - set(adapter.deterministic_module_kinds)
-    )
-    if unsupported_content:
+    required: set[str] = set()
+    routed_kinds: set[str] = set()
+    for kind in kinds:
+        capabilities = production_module_backend_capabilities(kind)
+        if capabilities:
+            routed_kinds.add(kind)
+            required.update(capabilities)
+
+    missing = sorted(required - set(adapter.deterministic_module_kinds))
+    if missing:
         prefix = "명시한 target" if explicit else "선택된 target"
         raise SpecValidationError(
             f"{prefix} {adapter.minecraft_version}/{adapter.loader}에 실행 가능한 "
-            f"deterministic content backend가 없습니다: {unsupported_content}."
+            f"deterministic backend capability가 없습니다: {missing}."
         )
 
+    # Unknown/non-built-in kinds keep their existing provider capability contract.
+    # Built-in production routes above are admitted solely by the same immutable
+    # deterministic receipt consumed by WorkGraph and the concrete generators.
+    residual = kinds - routed_kinds
+    if not residual:
+        return
     if adapter.host_facts_json:
         context = adapter.version_context
-        for kind in kinds:
+        for kind in residual:
             context.require_capability(kind)
         return
     if adapter.source_api_family == "fabric_live_ai":
         return
 
-    unsupported = sorted(kinds - adapter.deterministic_module_kinds)
+    unsupported = sorted(residual - adapter.deterministic_module_kinds)
     if not unsupported:
         return
     prefix = "명시한 target" if explicit else "선택된 target"
