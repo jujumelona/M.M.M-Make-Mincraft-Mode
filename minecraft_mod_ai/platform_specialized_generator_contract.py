@@ -26,8 +26,8 @@ def _require_deterministic_capability(
     feature: str,
 ) -> None:
     adapter = adapter_from_project(project_root)
-    effective_capabilities = deterministic_backend_capabilities(adapter)
-    if required_kinds and required_kinds.issubset(effective_capabilities):
+    deterministic_capabilities = deterministic_backend_capabilities(adapter)
+    if required_kinds and required_kinds.issubset(deterministic_capabilities):
         return
     raise ValueError(
         f"{feature} deterministic templates are not declared by provider "
