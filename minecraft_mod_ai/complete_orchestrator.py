@@ -890,6 +890,9 @@ class CompleteProductionOrchestrator:
             _requested_verification_failures(
                 run_jdt=options.run_jdt,
                 jdt_receipt=jdt_receipt,
+                source_report=source_report,
+                build_report=build,
+                jar_validation=jar_validation,
             )
         )
         unresolved.extend(
