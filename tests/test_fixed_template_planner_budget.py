@@ -80,7 +80,8 @@ def test_planner_fixed_template_uses_schema_json_not_native_tool() -> None:
     assert kwargs["response_schema"] == _SCHEMA
     assert kwargs["enable_tools"] is False
     assert kwargs["force_non_thinking"] is True
-    assert kwargs["output_token_ceiling"] == ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING
+    assert kwargs["output_token_ceiling"] == planner_page_output_token_ceiling(_SCHEMA)
+    assert kwargs["output_token_ceiling"] < ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING
 
 
 def test_planner_fixed_template_honors_host_page_ceiling() -> None:
@@ -354,3 +355,25 @@ def test_planner_page_budget_is_schema_derived_and_rejects_unbounded_numeric() -
                 "additionalProperties": False,
             }
         )
+
+
+def test_planner_fixed_template_without_explicit_ceiling_fails_before_unbounded_decode() -> None:
+    router = _PlannerRouter()
+    schema = {
+        "type": "object",
+        "properties": {"value": {"type": "number"}},
+        "required": ["value"],
+        "additionalProperties": False,
+    }
+
+    with pytest.raises(ValueError, match="unbounded lexical output"):
+        generate_fixed_template_value(
+            router,
+            "planner",
+            ({"role": "user", "content": "fill the numeric value"},),
+            response_schema=schema,
+            enable_tools=False,
+        )
+
+    assert router.tool_calls == 0
+    assert router.text_calls == []
