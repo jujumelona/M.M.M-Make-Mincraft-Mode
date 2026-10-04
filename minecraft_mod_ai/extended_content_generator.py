@@ -8,7 +8,10 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .complete_spec import ProductionModule
-from .platform_backend_contract import EXTENDED_CONTENT_KINDS
+from .platform_backend_contract import (
+    EXTENDED_CONTENT_KINDS,
+    missing_production_backend_capabilities,
+)
 from .extended_record_cache import read_cached_directory_records
 from .project_edit import (
     ensure_main_initializer_call,
@@ -93,8 +96,22 @@ def generate_extended_content(
     selected = tuple(module for module in modules if module.kind in _SUPPORTED)
     if not selected:
         return {"schema_version": "mmm/extended-content-v2", "status": "SKIPPED", "modules": []}
+    from .platform_catalog import adapter_from_project
+
+    adapter = adapter_from_project(info.root)
     for module in selected:
         module.validate(policy=policy)
+        missing_backend = missing_production_backend_capabilities(
+            adapter.deterministic_module_kinds,
+            module.kind,
+            module.config,
+        )
+        if missing_backend:
+            raise ExtendedContentError(
+                "DETERMINISTIC_BACKEND_REQUIRED: "
+                f"{module.kind} requires missing backend capabilities "
+                f"{sorted(missing_backend)}"
+            )
 
     selected_records = [_module_record(module) for module in selected]
     with project_write_lock(info.root):
