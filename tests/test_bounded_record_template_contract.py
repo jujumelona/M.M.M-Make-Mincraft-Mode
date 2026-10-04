@@ -7,6 +7,9 @@ from minecraft_mod_ai import bounded_record_template as bounded
 from minecraft_mod_ai.execution_contract_policy import (
     PLANNER_RECORD_COUNT_OUTPUT_TOKEN_CEILING,
 )
+from minecraft_mod_ai.model_output_atomicity_contract import (
+    structured_output_token_ceiling,
+)
 
 
 _TEMPLATE = {
@@ -49,11 +52,12 @@ class _PlannerRouter:
         assert kwargs["response_format"] == "json"
         assert kwargs["enable_tools"] is False
         assert kwargs["force_non_thinking"] is True
+        schema = kwargs["response_schema"]
+        assert kwargs["output_token_ceiling"] == structured_output_token_ceiling(schema)
         assert (
             kwargs["output_token_ceiling"]
-            == PLANNER_RECORD_COUNT_OUTPUT_TOKEN_CEILING
+            <= PLANNER_RECORD_COUNT_OUTPUT_TOKEN_CEILING
         )
-        schema = kwargs["response_schema"]
         assert set(schema["properties"]) == {"count"}
         assert schema["required"] == ["count"]
         assert "records" not in schema["properties"]
