@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+import subprocess
+import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,3 +44,27 @@ def test_fixed_template_generation_exports_only_current_value_api() -> None:
 
     assert CURRENT_SYMBOL in exported
     assert REMOVED_SYMBOL not in exported
+
+
+def test_colab_bootstrap_import_chain_loads_in_clean_interpreter() -> None:
+    code = (
+        "import minecraft_mod_ai; "
+        "import minecraft_mod_ai.jdtls_bootstrap; "
+        "import minecraft_mod_ai.complete_orchestrator_services; "
+        "import minecraft_mod_ai.model_smoke; "
+        "import minecraft_mod_ai.central_intelligence_amplifier"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 0, (
+        "Clean-process Colab bootstrap import chain failed.\n"
+        f"stdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
