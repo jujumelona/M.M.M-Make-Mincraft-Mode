@@ -402,16 +402,16 @@ def generate_fixed_template_value(
             schema_output_ceiling = structured_output_token_ceiling(
                 transport_schema
             )
-            requested_output_ceiling = (
-                schema_output_ceiling
-                if output_token_ceiling is None
-                else max(1, int(output_token_ceiling))
-            )
-            resolved_output_ceiling = min(
-                requested_output_ceiling,
-                schema_output_ceiling,
-            )
-            fixture_kwargs["output_token_ceiling"] = resolved_output_ceiling
+            if output_token_ceiling is not None:
+                requested_output_ceiling = max(1, int(output_token_ceiling))
+                if requested_output_ceiling < schema_output_ceiling:
+                    raise ValueError(
+                        "FIXED_TEMPLATE_OUTPUT_BUDGET_TOO_SMALL: planner structured "
+                        "output requires the schema-proven decode bound before inference: "
+                        f"requested={requested_output_ceiling} "
+                        f"required={schema_output_ceiling}"
+                    )
+            fixture_kwargs["output_token_ceiling"] = schema_output_ceiling
             fixture_kwargs["force_non_thinking"] = True
         # A missing stage means there is no tool-capability route to describe. Omitting the
         # key keeps read-only fixed-template transports inert instead of publishing a
