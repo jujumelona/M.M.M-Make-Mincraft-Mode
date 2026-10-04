@@ -13,10 +13,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from .execution_contract_policy import (
-    ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING,
-    SCHEMA_CONTRACT_PROFILE_KEY,
-)
+from .execution_contract_policy import SCHEMA_CONTRACT_PROFILE_KEY
 from .model_output_atomicity_contract import assert_atomic_model_schema
 from .structured_output import validate_structured_output
 
@@ -399,11 +396,15 @@ def generate_fixed_template_value(
             "enable_tools": False if role == "planner" else enable_tools,
         }
         if role == "planner":
-            fixture_kwargs["output_token_ceiling"] = (
-                max(1, int(output_token_ceiling))
-                if output_token_ceiling is not None
-                else ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING
-            )
+            if output_token_ceiling is None:
+                from .worksheet_atomic_chunker import planner_page_output_token_ceiling
+
+                resolved_output_ceiling = planner_page_output_token_ceiling(
+                    transport_schema
+                )
+            else:
+                resolved_output_ceiling = max(1, int(output_token_ceiling))
+            fixture_kwargs["output_token_ceiling"] = resolved_output_ceiling
             fixture_kwargs["force_non_thinking"] = True
         # A missing stage means there is no tool-capability route to describe. Omitting the
         # key keeps read-only fixed-template transports inert instead of publishing a
