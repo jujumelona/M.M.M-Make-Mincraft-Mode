@@ -658,7 +658,11 @@ class CompleteProductionOrchestrator:
                     'validate-jdt-final',
                     {'graph_hash': work_plan.graph_hash, 'project_manifest': final_manifest},
                 ),
-                action=lambda: _run_release_jdt_verification(project_root),
+                action=lambda: _run_release_jdt_verification(
+                    project_root,
+                    timeout_seconds=30,
+                    attempts=1,
+                ),
                 encode=lambda value: value,
                 decode=lambda cached: cached,
                 validate_cached=lambda cached: cached_validation_is_reusable('validate-jdt-final', cached),
