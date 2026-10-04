@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from copy import deepcopy
 import os
 import shutil
 import threading
@@ -175,6 +176,17 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
     elif getattr(request, "response_format", None) == "json":
         payload["reasoning_effort"] = "none"
         payload["chat_template_kwargs"] = {"enable_thinking": False}
+        response_schema = getattr(request, "response_schema", None)
+        if isinstance(response_schema, Mapping):
+            # llama.cpp converts this schema to an output grammar before decoding.
+            # Use the json_object+schema form because it is supported across both
+            # older and current llama-server OpenAI-compatible endpoints.
+            payload["response_format"] = {
+                "type": "json_object",
+                "schema": deepcopy(dict(response_schema)),
+            }
+        else:
+            payload["response_format"] = {"type": "json_object"}
 
     # Qwen family behavior is part of the direct request path now.  The legacy
     # runtime bootstrap/wrapper stack is gone, so family-specific non-thinking
