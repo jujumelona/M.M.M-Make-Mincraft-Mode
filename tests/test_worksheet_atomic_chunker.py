@@ -4,6 +4,10 @@ import json
 
 import pytest
 
+from minecraft_mod_ai.execution_contract_policy import (
+    PLANNER_RECORD_FIELD_MAX_CHARS,
+    PLANNER_RECORD_PAGE_MAX_FIELDS,
+)
 from minecraft_mod_ai.model_output_atomicity_contract import assert_atomic_model_schema
 from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
 from minecraft_mod_ai.planning_detail_template import WORKSHEET_SECTIONS, validate_worksheet_section
@@ -18,6 +22,14 @@ from minecraft_mod_ai.worksheet_atomic_chunker import (
     worksheet_chunk_schema,
 )
 from worksheet_fixtures import row
+
+
+def _page_for_field(section: str, concern: str, field: str):
+    for chunk in pack_section_concerns(section):
+        projection = getattr(chunk, "field_projection", {})
+        if concern in chunk and field in projection.get(concern, ()):
+            return chunk
+    raise AssertionError(f"missing planner page for {section}.{concern}.{field}")
 
 
 @pytest.mark.parametrize("section", WORKSHEET_SECTIONS)
@@ -70,37 +82,51 @@ def test_deterministic_merge_reconstructs_canonical_section(section: str):
     assert validate_worksheet_section(merged, allowed_refs, section) == canonical
 
 
-def test_each_concern_is_generated_once_without_cross_page_count_identity():
+def test_planner_pages_are_prebounded_and_continuations_fix_cardinality():
     chunks = pack_section_concerns("behavior_contract")
-    occurrences = {
-        concern: sum(concern in chunk for chunk in chunks)
-        for concern in DETAIL_RECORDS["behavior_contract"]
-    }
-    assert set(occurrences.values()) == {1}
+    assert chunks
 
-    target = next(chunk for chunk in chunks if "actors" in chunk)
-    unconstrained = worksheet_chunk_schema("behavior_contract", target)
-    compatible = worksheet_chunk_schema(
+    for chunk in chunks:
+        assert len(chunk) == 1
+        concern = str(chunk[0])
+        projection = getattr(chunk, "field_projection", {})
+        fields = projection[concern]
+        assert 1 <= len(fields) <= PLANNER_RECORD_PAGE_MAX_FIELDS
+
+        schema = worksheet_chunk_schema("behavior_contract", chunk)
+        item_properties = schema["properties"][concern]["items"]["properties"]
+        assert set(item_properties) == set(fields)
+        for field_schema in item_properties.values():
+            raw_type = field_schema.get("type")
+            types = set(raw_type) if isinstance(raw_type, list) else {raw_type}
+            if "string" in types:
+                assert field_schema["maxLength"] <= PLANNER_RECORD_FIELD_MAX_CHARS
+
+    actors_pages = [chunk for chunk in chunks if "actors" in chunk]
+    assert actors_pages
+    continued = worksheet_chunk_schema(
         "behavior_contract",
-        target,
+        actors_pages[-1],
         record_counts={"actors": 3},
     )
-    assert compatible == unconstrained
+    actors_array = continued["properties"]["actors"]
+    assert actors_array["minItems"] == 3
+    assert actors_array["maxItems"] == 3
 
     prompt = worksheet_chunk_prompt(
         "behavior_contract",
         1,
         len(chunks),
-        target,
+        actors_pages[-1],
         record_counts={"actors": 3},
     )
-    assert "Host-fixed Record Counts" not in prompt
-    assert "record indices from another call" in prompt
+    assert "fixed record cardinality" in prompt
+    assert "actors=3 row(s)" in prompt
 
 
 def test_state_model_symbols_do_not_change_planning_chunk_field_types():
     chunks = pack_section_concerns("state_model")
-    target = next(chunk for chunk in chunks if "transitions" in chunk)
+    target = _page_for_field("state_model", "transitions", "guard")
 
     baseline = worksheet_chunk_schema("state_model", target)
     with_symbols = worksheet_chunk_schema(
@@ -116,7 +142,7 @@ def test_state_model_symbols_do_not_change_planning_chunk_field_types():
 
 def test_root_integration_prerequisite_accepts_null_and_canonicalizes():
     chunks = pack_section_concerns("integration")
-    target = next(chunk for chunk in chunks if "initialization_order" in chunk)
+    target = _page_for_field("integration", "initialization_order", "prerequisite")
     schema = worksheet_chunk_schema("integration", target)
     prerequisite = schema["properties"]["initialization_order"]["items"]["properties"]["prerequisite"]
     assert prerequisite["type"] == ["string", "null"]
@@ -142,7 +168,7 @@ def test_root_integration_prerequisite_accepts_null_and_canonicalizes():
 
 def test_synchronization_recipients_preserve_bounded_array_type():
     chunks = pack_section_concerns("authority_and_network")
-    target = next(chunk for chunk in chunks if "synchronization" in chunk)
+    target = _page_for_field("authority_and_network", "synchronization", "recipients")
     schema = worksheet_chunk_schema("authority_and_network", target)
     recipients = schema["properties"]["synchronization"]["items"]["properties"]["recipients"]
     assert recipients["type"] == "array"
@@ -183,7 +209,7 @@ def test_synchronization_recipients_survive_merge_as_list():
 
 def test_persistence_missing_default_accepts_and_preserves_empty_list():
     chunks = pack_section_concerns("persistence")
-    target = next(chunk for chunk in chunks if "missing_defaults" in chunk)
+    target = _page_for_field("persistence", "missing_defaults", "default")
     schema = worksheet_chunk_schema("persistence", target)
     validate_structured_output(
         json.dumps({
