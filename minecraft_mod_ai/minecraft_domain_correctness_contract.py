@@ -13,7 +13,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
-from .platform_backend_contract import effective_target_backend_capabilities
+from .platform_backend_contract import deterministic_backend_capabilities
 
 _MARKER = "_mmm_minecraft_domain_correctness_v3"
 
@@ -35,7 +35,7 @@ def _normalize_kind(value: Any) -> str:
 
 
 def _advertised_kinds(adapter: Any) -> frozenset[str]:
-    return effective_target_backend_capabilities(adapter)
+    return deterministic_backend_capabilities(adapter)
 
 
 def _supported_kinds(extended_module: Any) -> frozenset[str]:
