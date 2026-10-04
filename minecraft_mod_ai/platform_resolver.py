@@ -452,7 +452,6 @@ def _require_supported_kinds(
 
     from .platform_backend_contract import (
         deterministic_backend_capabilities,
-        effective_target_backend_capabilities,
         production_module_backend_capabilities,
     )
 
