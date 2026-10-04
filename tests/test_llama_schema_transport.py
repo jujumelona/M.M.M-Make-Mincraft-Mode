@@ -184,4 +184,7 @@ def test_state_expr_schema_preserves_discriminated_oneof_and_variant_required_fi
     assert call["type"] == "object"
     assert call["required"] == ["kind", "name", "args"]
     assert call["properties"]["kind"]["const"] == "call"
+    assert call["properties"]["name"]["enum"] == [
+        "abs", "count", "len", "max", "min", "size", "sum"
+    ]
 

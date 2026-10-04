@@ -854,9 +854,16 @@ def mutations_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
         "maxLength": 32,
         **({"enum": symbols} if symbols else {"pattern": r"^[A-Za-z_][A-Za-z0-9_]*$", "minLength": 1}),
     }
-    fn_or_name_schema = {
+    context_name_schema = {
         "type": "string",
         "maxLength": 24,
+        "pattern": r"^[A-Za-z_$][A-Za-z0-9_$.]*$",
+        "minLength": 1,
+    }
+    function_name_schema = {
+        "type": "string",
+        "enum": sorted(_SUPPORTED_STATE_FUNCTIONS),
+        "maxLength": max(len(name) for name in _SUPPORTED_STATE_FUNCTIONS),
     }
     literal_branch = {
         "type": "object",
@@ -893,7 +900,7 @@ def mutations_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
         "type": "object",
         "properties": {
             "kind": {"type": "string", "const": "context_ref"},
-            "name": fn_or_name_schema,
+            "name": context_name_schema,
         },
         "required": ["kind", "name"],
         "additionalProperties": False,
@@ -922,7 +929,7 @@ def mutations_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
         "type": "object",
         "properties": {
             "kind": {"type": "string", "const": "call"},
-            "name": fn_or_name_schema,
+            "name": function_name_schema,
             "args": {
                 "type": "array",
                 "maxItems": 2,
@@ -973,9 +980,16 @@ def state_expr_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
         "maxLength": 24,
         **({"enum": symbols} if symbols else {"pattern": r"^[A-Za-z_][A-Za-z0-9_]*$", "minLength": 1}),
     }
-    fn_or_name_schema = {
+    context_name_schema = {
         "type": "string",
         "maxLength": 24,
+        "pattern": r"^[A-Za-z_$][A-Za-z0-9_$.]*$",
+        "minLength": 1,
+    }
+    function_name_schema = {
+        "type": "string",
+        "enum": sorted(_SUPPORTED_STATE_FUNCTIONS),
+        "maxLength": max(len(name) for name in _SUPPORTED_STATE_FUNCTIONS),
     }
     literal_branch = {
         "type": "object",
@@ -1012,7 +1026,7 @@ def state_expr_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
         "type": "object",
         "properties": {
             "kind": {"type": "string", "const": "context_ref"},
-            "name": fn_or_name_schema,
+            "name": context_name_schema,
         },
         "required": ["kind", "name"],
         "additionalProperties": False,
@@ -1041,7 +1055,7 @@ def state_expr_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
         "type": "object",
         "properties": {
             "kind": {"type": "string", "const": "call"},
-            "name": fn_or_name_schema,
+            "name": function_name_schema,
             "args": {
                 "type": "array",
                 "maxItems": 2,
