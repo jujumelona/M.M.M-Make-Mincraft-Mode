@@ -13,7 +13,7 @@ import json
 import math
 import re
 from copy import deepcopy
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from .fixed_template_generation import generate_fixed_template_value
@@ -2080,7 +2080,7 @@ def author_typed_plan_ir(
     structured_sections: Mapping[str, Any] | None = None,
     capabilities: Mapping[str, Any] | None = None,
     *,
-    deterministic_module_kinds: Iterable[str] = (),
+    deterministic_module_kinds: Iterable[str] | None = None,
     max_calls: int | None = None,
     budget: Any = None,
 ) -> dict[str, Any]:
@@ -2331,12 +2331,20 @@ def author_typed_plan_ir(
             "resources_and_ui.",
         ))
     }
-    target_deterministic_kinds = frozenset(
-        str(kind).strip()
-        for kind in (deterministic_module_kinds or ())
-        if str(kind).strip()
+    # None means the target is not bound yet (AUTO planning may still choose a
+    # compatible target later). An empty iterable is different: the bound target
+    # explicitly exposes zero deterministic content backends and must therefore
+    # not fall back to every syntactically valid platform kind.
+    target_deterministic_kinds = (
+        frozenset(
+            str(kind).strip()
+            for kind in deterministic_module_kinds
+            if str(kind).strip()
+        )
+        if deterministic_module_kinds is not None
+        else None
     )
-    if target_deterministic_kinds:
+    if target_deterministic_kinds is not None:
         allowed_platform_kinds = (
             set(PLATFORM_HOST_KINDS)
             | (
