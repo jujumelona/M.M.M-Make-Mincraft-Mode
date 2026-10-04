@@ -14,7 +14,10 @@ from pathlib import Path
 from typing import Any
 
 from .execution_contract_policy import SCHEMA_CONTRACT_PROFILE_KEY
-from .model_output_atomicity_contract import assert_atomic_model_schema
+from .model_output_atomicity_contract import (
+    assert_atomic_model_schema,
+    structured_output_token_ceiling,
+)
 from .structured_output import validate_structured_output
 
 _JSON_FIXTURE_FORMAT = "json"
@@ -396,9 +399,7 @@ def generate_fixed_template_value(
             "enable_tools": False if role == "planner" else enable_tools,
         }
         if role == "planner":
-            from .worksheet_atomic_chunker import planner_page_output_token_ceiling
-
-            schema_output_ceiling = planner_page_output_token_ceiling(
+            schema_output_ceiling = structured_output_token_ceiling(
                 transport_schema
             )
             requested_output_ceiling = (
