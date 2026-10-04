@@ -833,6 +833,11 @@ class JavaLanguageService:
                         "text": source_text,
                     }})
                 try:
+                    _await_open_document_resolution(
+                        rpc,
+                        expected_uris=expected_uris,
+                        deadline=diagnostic_deadline,
+                    )
                     _refresh_open_document_diagnostics(
                         rpc,
                         expected_uris=expected_uris,
@@ -1236,6 +1241,62 @@ def _raise_diagnostic_deadline(
         f"after all {len(expected_uris)} opened Java files were observed."
     )
 
+
+
+def _await_open_document_resolution(
+    rpc: _JsonRpcProcess,
+    *,
+    expected_uris: set[str],
+    deadline: float,
+) -> None:
+    """Require JDT to resolve every opened URI to an ICompilationUnit.
+
+    refreshDiagnostics silently produces no publication when
+    JDTUtils.resolveCompilationUnit(uri) returns null. java.project.isTestFile
+    uses that same resolver and fails when the compilation unit is unavailable,
+    so it is a deterministic readiness fence for the exact documents we verify.
+    """
+
+    from .root_cause_trace import emit_root_cause
+
+    for uri in sorted(expected_uris):
+        last_error = ""
+        while True:
+            remaining = _remaining_jdt_deadline(
+                deadline,
+                operation="opened document resolution",
+            )
+            try:
+                result = rpc.request(
+                    "workspace/executeCommand",
+                    {
+                        "command": "java.project.isTestFile",
+                        "arguments": [uri],
+                    },
+                    timeout=min(3.0, remaining),
+                )
+                emit_root_cause(
+                    "jdt_compilation_unit_ready",
+                    stage="verify",
+                    operation="java_diagnostics",
+                    gate="jdt_compilation_unit",
+                    result="PASS",
+                    details={
+                        "uri": uri,
+                        "is_test_file": bool(result),
+                    },
+                )
+                break
+            except (JDTLanguageServerError, TimeoutError) as exc:
+                last_error = f"{type(exc).__name__}: {exc}"
+
+            remaining = float(deadline) - time.monotonic()
+            if remaining <= 0:
+                raise JDTWorkspaceBootstrapError(
+                    "JDT workspace bootstrap failure: opened Java document was never "
+                    f"resolved to a compilation unit: uri={uri}. Last error: {last_error}"
+                )
+            time.sleep(min(0.25, remaining))
 
 def _refresh_open_document_diagnostics(
     rpc: _JsonRpcProcess,
