@@ -93,7 +93,7 @@ def deterministic_backend_capabilities(target: Any) -> frozenset[str]:
         values = getattr(target, "deterministic_module_kinds", ())
     return normalize_capabilities(values)
 
-def effective_target_backend_capabilities(target: Any) -> frozenset[str]:
+def target_semantic_capabilities(target: Any) -> frozenset[str]:
     """Return the union of provider backend tokens and immutable host capability facts.
 
     Use this for semantic/API capability reasoning only. Fixed deterministic generator
@@ -131,6 +131,16 @@ def effective_target_backend_capabilities(target: Any) -> frozenset[str]:
         if supported and str(name).strip():
             result.add(str(name).strip())
     return frozenset(result)
+
+def effective_target_backend_capabilities(target: Any) -> frozenset[str]:
+    """Compatibility name with fail-closed backend semantics.
+
+    Historical callers used this ambiguous name for both host API facts and fixed
+    generator admission. It now deliberately returns only reviewed deterministic
+    backend tokens. Use target_semantic_capabilities() for host-fact reasoning.
+    """
+
+    return deterministic_backend_capabilities(target)
 
 def normalize_capabilities(values: Iterable[str] | None) -> frozenset[str]:
     if values is None:
@@ -269,4 +279,5 @@ __all__ = [
     "production_module_backend_capabilities",
     "supported_extended_content_kinds",
     "system_pack_capabilities",
+    "target_semantic_capabilities",
 ]
