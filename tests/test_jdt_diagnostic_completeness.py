@@ -110,6 +110,26 @@ def test_clean_file_diagnostics_are_forced_instead_of_inferred_from_silence(
     }
 
 
+def test_equivalent_file_uri_spellings_match_diagnostics() -> None:
+    message = _published("file:/tmp/Project/A.java", [])
+    matched = java_lsp._published_diagnostics(
+        message,
+        {"file:///tmp/Project/A.java"},
+    )
+
+    assert matched == ("file:///tmp/Project/A.java", [])
+
+
+def test_percent_encoded_file_uri_matches_open_document() -> None:
+    message = _published("file:///tmp/My%20Project/A.java", [])
+    matched = java_lsp._published_diagnostics(
+        message,
+        {"file:///tmp/My%20Project/A.java"},
+    )
+
+    assert matched == ("file:///tmp/My%20Project/A.java", [])
+
+
 def test_empty_expected_uri_set_is_trivially_complete() -> None:
     assert java_lsp._collect_diagnostics(
         _FakeRpc([]),
