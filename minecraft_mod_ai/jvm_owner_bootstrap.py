@@ -78,17 +78,30 @@ def owner_command(
     if len(frameworks) != 1:
         raise OwnerRPCError('Owner runtime must contain exactly one Equinox framework')
     # The owner hosts both JDT Core and Gradle Tooling API model resolution.
-    # Modern Fabric Loom plugins require a Java 21+ runtime even when the project
-    # itself targets an older Java release (for example Minecraft 1.20.1 / Java 17).
-    # Keep that runtime separate from each source set's Gradle JavaCompile toolchain.
-    from .java_lsp import _resolve_project_java_home
+    # Two constraints govern the owner JVM major version:
+    #   1. >= 21  – Modern Fabric Loom plugins require Java 21+ even when the
+    #      project itself targets an older release (e.g. Minecraft 1.20.1 / Java 17).
+    #   2. >= project release target  – JDT Core's COMPILER_RELEASE option resolves
+    #      the --release system image from the *running* JVM.  If the owner JVM is
+    #      older than the project's --release target (e.g. owner=21, release=25),
+    #      JDT fails with "release N is not found in the system".
+    # Therefore the owner JVM must be max(21, project_release_major).
+    from .java_lsp import _requested_project_java_major, _resolve_project_java_home
 
-    owner_java_home = _resolve_project_java_home(21)
+    _OWNER_MINIMUM_JAVA = 21
+    try:
+        project_major = _requested_project_java_major()
+    except Exception:
+        project_major = _OWNER_MINIMUM_JAVA
+    owner_major = max(_OWNER_MINIMUM_JAVA, project_major)
+    owner_java_home = _resolve_project_java_home(owner_major)
     java = str(
         owner_java_home / 'bin' / ('java.exe' if os.name == 'nt' else 'java')
     )
     if not Path(java).is_file():
-        raise OwnerRPCError('Java 21 or newer is required to launch the JVM owner')
+        raise OwnerRPCError(
+            f'Java {owner_major} or newer is required to launch the JVM owner'
+        )
     configuration = workspace / 'configuration'
     configuration.mkdir(parents=True, exist_ok=True)
     shutil.copy2(distribution / 'configuration' / 'config.ini', configuration / 'config.ini')
