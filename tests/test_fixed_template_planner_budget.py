@@ -84,7 +84,7 @@ def test_planner_fixed_template_uses_schema_json_not_native_tool() -> None:
     assert kwargs["output_token_ceiling"] < ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING
 
 
-def test_planner_fixed_template_honors_host_page_ceiling() -> None:
+def test_planner_fixed_template_clamps_explicit_ceiling_to_schema_proof() -> None:
     router = _PlannerRouter()
 
     value = generate_fixed_template_value(
@@ -98,7 +98,10 @@ def test_planner_fixed_template_honors_host_page_ceiling() -> None:
 
     assert value == {"value": "ok"}
     assert router.tool_calls == 0
-    assert router.text_calls[0][1]["output_token_ceiling"] == 777
+    assert (
+        router.text_calls[0][1]["output_token_ceiling"]
+        == planner_page_output_token_ceiling(_SCHEMA)
+    )
 
 
 def test_planner_router_keeps_schema_out_of_model_messages() -> None:
