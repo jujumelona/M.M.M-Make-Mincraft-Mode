@@ -854,41 +854,91 @@ def mutations_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
         "maxLength": 32,
         **({"enum": symbols} if symbols else {"pattern": r"^[A-Za-z_][A-Za-z0-9_]*$", "minLength": 1}),
     }
-    value_operand = {
+    fn_or_name_schema = {
+        "type": "string",
+        "maxLength": 24,
+    }
+    literal_branch = {
         "type": "object",
         "properties": {
-            "kind": {
-                "type": "string",
-                "enum": ["literal", "number", "state_ref", "context_ref"],
-                "maxLength": 16,
-            },
-            "name": name_schema,
+            "kind": {"type": "string", "const": "literal"},
             "value": {"type": ["string", "null"], "maxLength": 24},
         },
-        "required": ["kind"],
+        "required": ["kind", "value"],
         "additionalProperties": False,
     }
-    value_schema = {
+    number_branch = {
         "type": "object",
         "properties": {
-            "kind": {
+            "kind": {"type": "string", "const": "number"},
+            "value": {
                 "type": "string",
-                "enum": ["literal", "number", "state_ref", "context_ref", "arithmetic", "call"],
-                "maxLength": 16,
+                "maxLength": 24,
+                "pattern": r"^-?[0-9]+(\.[0-9]+)?$",
             },
+        },
+        "required": ["kind", "value"],
+        "additionalProperties": False,
+    }
+    state_ref_branch = {
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string", "const": "state_ref"},
             "name": name_schema,
-            "value": {"type": ["string", "null"], "maxLength": 24},
+        },
+        "required": ["kind", "name"],
+        "additionalProperties": False,
+    }
+    context_ref_branch = {
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string", "const": "context_ref"},
+            "name": fn_or_name_schema,
+        },
+        "required": ["kind", "name"],
+        "additionalProperties": False,
+    }
+    leaf_operand_branches = [
+        state_ref_branch,
+        context_ref_branch,
+        literal_branch,
+        number_branch,
+    ]
+    leaf_operand = {
+        "oneOf": leaf_operand_branches,
+    }
+    arithmetic_branch = {
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string", "const": "arithmetic"},
             "op": {"type": "string", "enum": ["+", "-", "*", "/", "%"], "maxLength": 2},
-            "left": value_operand,
-            "right": value_operand,
+            "left": leaf_operand,
+            "right": leaf_operand,
+        },
+        "required": ["kind", "op", "left", "right"],
+        "additionalProperties": False,
+    }
+    call_branch = {
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string", "const": "call"},
+            "name": fn_or_name_schema,
             "args": {
                 "type": "array",
                 "maxItems": 2,
-                "items": value_operand,
+                "items": leaf_operand,
             },
         },
-        "required": ["kind"],
+        "required": ["kind", "name", "args"],
         "additionalProperties": False,
+    }
+    operand_branches = [
+        *leaf_operand_branches,
+        arithmetic_branch,
+        call_branch,
+    ]
+    value_schema = {
+        "oneOf": operand_branches,
     }
     return {
         "type": "array",
@@ -927,72 +977,134 @@ def state_expr_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
         "type": "string",
         "maxLength": 24,
     }
-    leaf_operand = {
+    literal_branch = {
         "type": "object",
         "properties": {
-            "kind": {
-                "type": "string",
-                "enum": ["state_ref", "context_ref", "literal"],
-                "maxLength": 16,
-            },
-            "name": name_schema,
+            "kind": {"type": "string", "const": "literal"},
             "value": {"type": ["string", "null"], "maxLength": 24},
         },
-        "required": ["kind"],
+        "required": ["kind", "value"],
         "additionalProperties": False,
     }
-    operand_schema = {
+    number_branch = {
         "type": "object",
         "properties": {
-            "kind": {
+            "kind": {"type": "string", "const": "number"},
+            "value": {
                 "type": "string",
-                "enum": ["state_ref", "context_ref", "literal", "arithmetic", "call"],
-                "maxLength": 16,
+                "maxLength": 24,
+                "pattern": r"^-?[0-9]+(\.[0-9]+)?$",
             },
+        },
+        "required": ["kind", "value"],
+        "additionalProperties": False,
+    }
+    state_ref_branch = {
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string", "const": "state_ref"},
+            "name": name_schema,
+        },
+        "required": ["kind", "name"],
+        "additionalProperties": False,
+    }
+    context_ref_branch = {
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string", "const": "context_ref"},
             "name": fn_or_name_schema,
-            "value": {"type": ["string", "null"], "maxLength": 24},
+        },
+        "required": ["kind", "name"],
+        "additionalProperties": False,
+    }
+    leaf_operand_branches = [
+        state_ref_branch,
+        context_ref_branch,
+        literal_branch,
+        number_branch,
+    ]
+    leaf_operand = {
+        "oneOf": leaf_operand_branches,
+    }
+    arithmetic_branch = {
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string", "const": "arithmetic"},
             "op": {"type": "string", "enum": ["+", "-", "*", "/", "%"], "maxLength": 2},
             "left": leaf_operand,
             "right": leaf_operand,
         },
-        "required": ["kind"],
+        "required": ["kind", "op", "left", "right"],
         "additionalProperties": False,
     }
-    compare_term_schema = {
+    call_branch = {
         "type": "object",
         "properties": {
-            "kind": {"type": "string", "enum": ["compare", "state_ref", "literal", "call"], "maxLength": 16},
-            "op": {"type": "string", "enum": ["==", "!=", ">=", "<=", ">", "<", "="], "maxLength": 2},
-            "left": operand_schema,
-            "right": leaf_operand,
+            "kind": {"type": "string", "const": "call"},
             "name": fn_or_name_schema,
-            "value": {"type": ["string", "null"], "maxLength": 24},
-        },
-        "required": ["kind"],
-        "additionalProperties": False,
-    }
-    return {
-        "type": "object",
-        "properties": {
-            "kind": {"type": "string", "enum": ["and", "or", "compare", "not", "literal", "call", "state_ref", "context_ref"], "maxLength": 16},
-            "terms": {
-                "type": "array",
-                "maxItems": 2,
-                "items": compare_term_schema,
-            },
-            "op": {"type": "string", "enum": ["==", "!=", ">=", "<=", ">", "<", "="], "maxLength": 2},
-            "left": leaf_operand,
-            "right": leaf_operand,
-            "name": fn_or_name_schema,
-            "value": {"type": ["string", "null"], "maxLength": 24},
             "args": {
                 "type": "array",
                 "maxItems": 2,
                 "items": leaf_operand,
             },
         },
-        "required": ["kind"],
+        "required": ["kind", "name", "args"],
         "additionalProperties": False,
+    }
+    operand_branches = [
+        *leaf_operand_branches,
+        arithmetic_branch,
+        call_branch,
+    ]
+    operand_schema = {
+        "oneOf": operand_branches,
+    }
+    compare_branch = {
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string", "const": "compare"},
+            "op": {"type": "string", "enum": ["==", "!=", ">=", "<=", ">", "<", "="], "maxLength": 2},
+            "left": operand_schema,
+            "right": operand_schema,
+        },
+        "required": ["kind", "op", "left", "right"],
+        "additionalProperties": False,
+    }
+    and_or_branch = {
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string", "enum": ["and", "or"], "maxLength": 16},
+            "terms": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 2,
+                "items": {
+                    "oneOf": [
+                        compare_branch,
+                        *leaf_operand_branches,
+                    ]
+                },
+            },
+        },
+        "required": ["kind", "terms"],
+        "additionalProperties": False,
+    }
+    not_branch = {
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string", "const": "not"},
+            "term": operand_schema,
+        },
+        "required": ["kind", "term"],
+        "additionalProperties": False,
+    }
+    return {
+        "oneOf": [
+            compare_branch,
+            and_or_branch,
+            not_branch,
+            *operand_branches,
+        ]
     }
 
 

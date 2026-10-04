@@ -172,8 +172,11 @@ def test_structured_ir_validation_and_compilation():
     assert target_enum == ["player_currency", "ship_phase"]
 
     schema_expr = state_expr_schema(symbols)
-    op_name_enum = schema_expr["properties"]["left"]["properties"]["name"]["enum"]
-    assert op_name_enum == ["player_currency", "ship_phase"]
+    state_ref_branch = next(
+        b for b in schema_expr["oneOf"]
+        if b["properties"]["kind"].get("const") == "state_ref"
+    )
+    assert state_ref_branch["properties"]["name"]["enum"] == ["player_currency", "ship_phase"]
 
 
 def test_author_structured_sections_passes_symbols_and_fails_undeclared_early():

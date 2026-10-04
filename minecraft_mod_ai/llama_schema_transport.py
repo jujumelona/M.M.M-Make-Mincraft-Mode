@@ -14,7 +14,7 @@ from typing import Any
 _JSON_TYPES = frozenset(
     {"object", "array", "string", "number", "integer", "boolean", "null"}
 )
-_BRANCH_KEYS = ("oneOf", "anyOf", "allOf")
+_BRANCH_KEYS = ("allOf",)
 
 
 def _project_type(value: Any) -> str | list[str] | None:
@@ -33,27 +33,25 @@ def _project_enum(value: Any) -> list[Any] | None:
 
 
 def _fallback_branch(schema: Mapping[str, Any]) -> dict[str, Any]:
-    for keyword in _BRANCH_KEYS:
-        variants = schema.get(keyword)
-        if not isinstance(variants, Sequence) or isinstance(
-            variants, (str, bytes, bytearray)
-        ):
-            continue
+    variants = schema.get("allOf")
+    if isinstance(variants, Sequence) and not isinstance(
+        variants, (str, bytes, bytearray)
+    ):
         for branch in variants:
             projected = project_llama_transport_schema(branch)
             if projected:
                 return projected
     if "const" in schema:
-        return {"enum": [copy.deepcopy(schema["const"])]}
+        return {"const": copy.deepcopy(schema["const"])}
     return {}
 
 
 def project_llama_transport_schema(schema: Any) -> dict[str, Any]:
     """Return a structural schema suitable for llama.cpp sampler initialization.
 
-    Explicit base structure always wins over ``allOf``/``if`` branches.  Detailed
-    requirements such as conditionals, numeric/string bounds, refs and cardinality are
-    intentionally omitted because the host validates the original schema after decoding.
+    Explicit base structure always wins over ``allOf``/``if`` branches. Structural
+    variant unions (``oneOf``/``anyOf``) preserve their discriminated branches, required
+    keys, and literal const values so the sampler cannot emit partial variants.
     """
 
     if not isinstance(schema, Mapping):
@@ -62,6 +60,48 @@ def project_llama_transport_schema(schema: Any) -> dict[str, Any]:
     projected_type = _project_type(schema.get("type"))
     has_properties = isinstance(schema.get("properties"), Mapping)
     has_items = isinstance(schema.get("items"), Mapping)
+
+    for combinator in ("oneOf", "anyOf"):
+        raw_branches = schema.get(combinator)
+        if isinstance(raw_branches, Sequence) and not isinstance(
+            raw_branches, (str, bytes, bytearray)
+        ):
+            branches = [
+                project_llama_transport_schema(branch)
+                for branch in raw_branches
+                if isinstance(branch, Mapping)
+            ]
+            branches = [b for b in branches if b]
+            if branches:
+                res: dict[str, Any] = {}
+                if projected_type is not None:
+                    res["type"] = projected_type
+                if has_properties:
+                    raw_properties = schema.get("properties")
+                    if isinstance(raw_properties, Mapping):
+                        res["properties"] = {
+                            str(name): project_llama_transport_schema(child)
+                            for name, child in raw_properties.items()
+                            if isinstance(name, str)
+                        }
+                    raw_required = schema.get("required")
+                    if isinstance(raw_required, Sequence) and not isinstance(
+                        raw_required, (str, bytes, bytearray)
+                    ):
+                        req = [
+                            name
+                            for name in raw_required
+                            if isinstance(name, str) and name in res.get("properties", {})
+                        ]
+                        if req:
+                            res["required"] = req
+                    additional = schema.get("additionalProperties")
+                    if additional is False:
+                        res["additionalProperties"] = False
+                    elif isinstance(additional, Mapping):
+                        res["additionalProperties"] = project_llama_transport_schema(additional)
+                res[combinator] = branches
+                return res
 
     # Preserve an explicit/base object before considering combinators.  This is important
     # for schemas that append conditional allOf clauses to an otherwise normal object.
@@ -107,6 +147,8 @@ def project_llama_transport_schema(schema: Any) -> dict[str, Any]:
     enum = _project_enum(schema.get("enum"))
     if enum is not None:
         result["enum"] = enum
+    if "const" in schema:
+        result["const"] = copy.deepcopy(schema["const"])
     if result:
         return result
 

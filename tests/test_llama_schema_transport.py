@@ -128,3 +128,60 @@ def test_host_only_validation_keywords_are_removed_recursively():
             "required": ["value"],
         },
     }
+
+
+def test_state_expr_schema_preserves_discriminated_oneof_and_variant_required_fields():
+    from minecraft_mod_ai.structured_state_runtime import state_expr_schema
+
+    schema = state_expr_schema(["ship_hull", "shield_level"])
+    projected = project_llama_transport_schema(schema)
+
+    assert "oneOf" in projected
+    branches = projected["oneOf"]
+
+    # state_ref variant
+    state_ref = next(
+        b for b in branches
+        if b.get("properties", {}).get("kind", {}).get("const") == "state_ref"
+    )
+    assert state_ref["type"] == "object"
+    assert state_ref["required"] == ["kind", "name"]
+    assert state_ref["properties"]["kind"]["const"] == "state_ref"
+    assert state_ref["properties"]["name"]["enum"] == ["shield_level", "ship_hull"]
+
+    # literal variant
+    literal = next(
+        b for b in branches
+        if b.get("properties", {}).get("kind", {}).get("const") == "literal"
+    )
+    assert literal["type"] == "object"
+    assert literal["required"] == ["kind", "value"]
+    assert literal["properties"]["kind"]["const"] == "literal"
+
+    # compare variant
+    compare = next(
+        b for b in branches
+        if b.get("properties", {}).get("kind", {}).get("const") == "compare"
+    )
+    assert compare["type"] == "object"
+    assert compare["required"] == ["kind", "op", "left", "right"]
+    assert compare["properties"]["kind"]["const"] == "compare"
+
+    # number variant
+    number = next(
+        b for b in branches
+        if b.get("properties", {}).get("kind", {}).get("const") == "number"
+    )
+    assert number["type"] == "object"
+    assert number["required"] == ["kind", "value"]
+    assert number["properties"]["kind"]["const"] == "number"
+
+    # call variant
+    call = next(
+        b for b in branches
+        if b.get("properties", {}).get("kind", {}).get("const") == "call"
+    )
+    assert call["type"] == "object"
+    assert call["required"] == ["kind", "name", "args"]
+    assert call["properties"]["kind"]["const"] == "call"
+

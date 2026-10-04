@@ -214,3 +214,61 @@ def test_state_executable_page_fails_closed_if_not_singleton() -> None:
 
     with pytest.raises(ValueError, match="STATE_EXECUTABLE_PAGE_MUST_BE_SINGLETON"):
         _generate_authored_page_value(DummyRouter(), (), page, schema, None)
+
+
+@pytest.mark.parametrize("invalid_variant", [
+    {"kind": "state_ref"},
+    {"kind": "compare", "op": ">"},
+    {"kind": "number"},
+    {"kind": "call"},
+])
+def test_incomplete_state_expression_variants_rejected_at_schema_stage(invalid_variant):
+    from minecraft_mod_ai.structured_output import validate_structured_output
+    from minecraft_mod_ai.structured_state_runtime import state_expr_schema
+
+    schema = {
+        "type": "object",
+        "properties": {"guard": state_expr_schema(["starship_hull_integrity"])},
+        "required": ["guard"],
+        "additionalProperties": False,
+    }
+    with pytest.raises(StructuredOutputValidationError):
+        validate_structured_output(
+            json.dumps({"guard": invalid_variant}),
+            response_format="json",
+            response_schema=schema,
+        )
+
+
+@pytest.mark.parametrize("invalid_variant", [
+    {"kind": "state_ref"},
+    {"kind": "compare", "op": ">"},
+    {"kind": "number"},
+    {"kind": "call"},
+])
+def test_incomplete_state_mutation_variants_rejected_at_schema_stage(invalid_variant):
+    from minecraft_mod_ai.structured_output import validate_structured_output
+    from minecraft_mod_ai.structured_state_runtime import mutations_schema
+
+    schema = {
+        "type": "object",
+        "properties": {"mutation": mutations_schema(["starship_hull_integrity"])},
+        "required": ["mutation"],
+        "additionalProperties": False,
+    }
+    payload = {
+        "mutation": [
+            {
+                "target": "starship_hull_integrity",
+                "operator": "=",
+                "value": invalid_variant,
+            }
+        ]
+    }
+    with pytest.raises(StructuredOutputValidationError):
+        validate_structured_output(
+            json.dumps(payload),
+            response_format="json",
+            response_schema=schema,
+        )
+
