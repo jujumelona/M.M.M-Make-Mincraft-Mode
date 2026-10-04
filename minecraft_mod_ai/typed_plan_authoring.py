@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-"""Native-tool authoring for typed PlanIR.
+"""Host-paged schema authoring for typed PlanIR.
 
-The planner emits one bounded typed AST node or host-requested decision at a time.
-It never emits Java or an opaque full-program blob.  The host owns the finite work
-graph, semantic coverage, AST depth, fan-out and termination measure.
+The planner emits one bounded typed AST node or host-requested decision at a time
+through tools=0 schema-constrained JSON. It never emits Java or an opaque full-program
+blob. The host owns the finite work graph, semantic coverage, AST depth, fan-out and
+termination measure.
 """
 
 import hashlib
@@ -12,6 +13,8 @@ import json
 from copy import deepcopy
 from collections.abc import Mapping, Sequence
 from typing import Any
+
+from .fixed_template_generation import generate_fixed_template_value
 
 
 _TYPES = ["boolean", "int", "long", "double", "string", "object"]
@@ -359,7 +362,7 @@ class TypedOperationAuthor:
 
         if self.call_count >= self.max_calls:
             raise ValueError(
-                f"TYPED_PLAN_AUTHORING_LIMIT: exceeded {self.max_calls} native decisions"
+                f"TYPED_PLAN_AUTHORING_LIMIT: exceeded {self.max_calls} bounded decisions"
             )
         self.call_count += 1
         parameters = {
@@ -391,30 +394,22 @@ class TypedOperationAuthor:
                 "the host owns iteration and completion."
             ),
         }
-        token_ceiling = {
-            "statement_node": 256,
-            "expression_node": 512,
-            "event_config": 192,
-            "function_signature": 768,
-            "platform_config": 1024,
-        }.get(field, 256)
-        result = self.router.generate_tool_decision(
+        result = generate_fixed_template_value(
+            self.router,
             "planner",
             (
                 {
                     "role": "system",
                     "content": (
                         "Author executable behavior through the host typed PlanIR only. "
-                        "Every answer is one bounded host-requested typed decision."
+                        "Return exactly one bounded host-requested typed decision."
                     ),
                 },
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
             ),
-            tool_name="emit_typed_plan_value",
-            parameters=parameters,
+            response_schema=parameters,
+            enable_tools=False,
             description="Emit exactly one host-requested typed PlanIR value.",
-            output_token_ceiling=token_ceiling,
-            force_non_thinking=True,
         )
         if not isinstance(result, Mapping) or set(result) != {"value"}:
             raise ValueError("TYPED_PLAN_AUTHORING_RESPONSE_INVALID")
@@ -461,26 +456,28 @@ class TypedOperationAuthor:
         branches: list[dict[str, Any]] = []
         literal_values = {
             "boolean": {"type": "boolean"},
+            # Wide JSON numeric lexical surfaces are not model-owned. The model emits
+            # a bounded decimal spelling and the host parses/range-checks it below.
             "int": {
-                "type": "integer",
-                "minimum": -(2**31),
-                "maximum": 2**31 - 1,
+                "type": "string",
+                "maxLength": 11,
+                "description": "Base-10 signed 32-bit integer spelling.",
             },
             "long": {
-                "type": "integer",
-                "minimum": -(2**63),
-                "maximum": 2**63 - 1,
+                "type": "string",
+                "maxLength": 20,
+                "description": "Base-10 signed 64-bit integer spelling.",
             },
-            "double": {"type": "number"},
-            "string": {"type": "string", "maxLength": 1024},
+            "double": {
+                "type": "string",
+                "maxLength": 32,
+                "description": "Finite decimal floating-point spelling.",
+            },
+            "string": {"type": "string", "maxLength": 512},
             "object": {
-                "type": [
-                    "string",
-                    "number",
-                    "integer",
-                    "boolean",
-                    "null",
-                ],
+                "type": "string",
+                "maxLength": 256,
+                "description": "Compact JSON encoding of the literal value.",
             },
         }
         for kind in _TYPES:
@@ -599,10 +596,33 @@ class TypedOperationAuthor:
         op = str(head.get("op") or "")
 
         if op == "literal":
+            literal_type = str(head["type"])
+            raw_value = head["value"]
+            if literal_type == "int":
+                value = int(str(raw_value))
+                if not -(2**31) <= value <= 2**31 - 1:
+                    raise ValueError("TYPED_PLAN_LITERAL_INT_RANGE")
+            elif literal_type == "long":
+                value = int(str(raw_value))
+                if not -(2**63) <= value <= 2**63 - 1:
+                    raise ValueError("TYPED_PLAN_LITERAL_LONG_RANGE")
+            elif literal_type == "double":
+                import math
+
+                value = float(str(raw_value))
+                if not math.isfinite(value):
+                    raise ValueError("TYPED_PLAN_LITERAL_DOUBLE_FINITE")
+            elif literal_type == "object":
+                try:
+                    value = json.loads(str(raw_value))
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("TYPED_PLAN_LITERAL_OBJECT_JSON") from exc
+            else:
+                value = raw_value
             return {
                 "op": "literal",
-                "type": str(head["type"]),
-                "value": head["value"],
+                "type": literal_type,
+                "value": value,
             }
         if op == "ref":
             return {"op": "ref", "name": str(head["name"])}
@@ -796,9 +816,9 @@ class TypedOperationAuthor:
                     {
                         "op": {"const": "while"},
                         "max_iterations": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "maximum": 1_000_000,
+                            "type": "string",
+                            "maxLength": 7,
+                            "description": "Base-10 integer from 1 through 1000000.",
                         },
                     },
                     ("op", "max_iterations"),
