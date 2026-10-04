@@ -9,8 +9,8 @@ human review and provenance only; executable production consumes the records.
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -385,7 +385,6 @@ def _generate_authored_chunk(
 ) -> dict[str, Any]:
     """Generate exactly one host-bounded concern field page."""
 
-    from .fixed_template_generation import generate_fixed_template_value
     from .worksheet_atomic_chunker import (
         worksheet_chunk_schema,
     )
@@ -407,32 +406,59 @@ def _generate_authored_chunk(
         record_counts=record_counts,
         state_symbols=state_symbols,
     )
-    value = generate_fixed_template_value(
-        router,
-        "planner",
-        _authored_chunk_messages(
-            prompt,
-            section=page.section,
-            chunk_index=page.chunk_index,
-            chunk_count=page.chunk_count,
-            concerns=page.concerns,
-            completed=page.completed,
-            state_symbols=state_symbols,
-            section_context=section_context,
-            record_counts=record_counts,
-        ),
-        response_schema=schema,
-        media_paths=page.media_paths,
-        enable_tools=False,
-        description=f"Author bounded canonical {page.section} field page.",
-        output_token_ceiling=structured_output_token_ceiling(schema),
+    messages = _authored_chunk_messages(
+        prompt,
+        section=page.section,
+        chunk_index=page.chunk_index,
+        chunk_count=page.chunk_count,
+        concerns=page.concerns,
+        completed=page.completed,
+        state_symbols=state_symbols,
+        section_context=section_context,
+        record_counts=record_counts,
     )
+    value = _generate_authored_page_value(router, messages, page, schema, state_symbols)
     if not isinstance(value, Mapping):
         raise ValueError(
             f"AUTHORED_STRUCTURED_DESIGN: {page.section} page "
             f"{page.chunk_index} must be an object"
         )
     return dict(value)
+
+
+def _generate_authored_page_value(
+    router: Any,
+    messages: Sequence[Mapping[str, Any]],
+    page: _PlannerPageRequest,
+    schema: Mapping[str, Any],
+    state_symbols: Any,
+) -> Any:
+    from .fixed_template_generation import generate_fixed_template_value
+
+    if page.section == "state_model":
+        from .planner_state_authoring import (
+            STATE_EXECUTABLE_FIELDS,
+            author_state_field_page,
+        )
+
+        concern = str(page.concerns[0])
+        concern_schema = schema["properties"][concern]
+        fields = concern_schema["items"]["required"]
+        if len(fields) == 1 and fields[0] in STATE_EXECUTABLE_FIELDS:
+            return author_state_field_page(
+                router, messages, concern=concern, field=fields[0],
+                count=concern_schema["minItems"], symbols=state_symbols,
+            )
+    return generate_fixed_template_value(
+        router,
+        "planner",
+        messages,
+        response_schema=schema,
+        media_paths=page.media_paths,
+        enable_tools=False,
+        description=f"Author bounded canonical {page.section} field page.",
+        output_token_ceiling=structured_output_token_ceiling(schema),
+    )
 
 
 def _index_concern_pages(

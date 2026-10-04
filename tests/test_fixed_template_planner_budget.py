@@ -5,26 +5,26 @@ from types import SimpleNamespace
 
 import pytest
 
+from minecraft_mod_ai.authored_structured_design import (
+    _generate_authored_chunk,
+    _generate_concern_record_count,
+    _PlannerPageRequest,
+)
 from minecraft_mod_ai.execution_contract_policy import (
     ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING,
     PLANNER_RECORD_COUNT_OUTPUT_TOKEN_CEILING,
     PLANNER_RECORD_PAGE_OUTPUT_TOKEN_CEILING,
 )
-from minecraft_mod_ai.authored_structured_design import (
-    _PlannerPageRequest,
-    _generate_authored_chunk,
-    _generate_concern_record_count,
-)
 from minecraft_mod_ai.fixed_template_generation import (
-    _generate_native_template_arguments,
     generate_fixed_template_value,
+)
+from minecraft_mod_ai.model_output_atomicity_contract import (
+    structured_output_token_ceiling,
 )
 from minecraft_mod_ai.model_router import ModelRouter
 from minecraft_mod_ai.worksheet_atomic_chunker import (
     pack_section_concerns,
-    planner_page_output_token_ceiling,
 )
-
 
 _SCHEMA = {
     "type": "object",
@@ -80,7 +80,7 @@ def test_planner_fixed_template_uses_schema_json_not_native_tool() -> None:
     assert kwargs["response_schema"] == _SCHEMA
     assert kwargs["enable_tools"] is False
     assert kwargs["force_non_thinking"] is True
-    assert kwargs["output_token_ceiling"] == planner_page_output_token_ceiling(_SCHEMA)
+    assert kwargs["output_token_ceiling"] == structured_output_token_ceiling(_SCHEMA)
     assert kwargs["output_token_ceiling"] < ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING
 
 
@@ -100,7 +100,7 @@ def test_planner_fixed_template_clamps_explicit_ceiling_to_schema_proof() -> Non
     assert router.tool_calls == 0
     assert (
         router.text_calls[0][1]["output_token_ceiling"]
-        == planner_page_output_token_ceiling(_SCHEMA)
+        == structured_output_token_ceiling(_SCHEMA)
     )
 
 
@@ -143,23 +143,28 @@ def test_planner_router_keeps_schema_out_of_model_messages() -> None:
     assert "host owns the JSON shape" in rendered_messages
 
 
-def test_planner_native_tool_transport_is_fail_closed() -> None:
-    router = _PlannerRouter()
+def test_planner_schema_failure_is_terminal_without_native_repair() -> None:
+    class InvalidPlanner(_PlannerRouter):
+        def generate_text(self, role, messages, **kwargs):
+            self.text_calls.append((messages, kwargs))
+            return json.dumps({"value": ""})
+
+    router = InvalidPlanner()
 
     with pytest.raises(
         RuntimeError,
-        match="FIXED_TEMPLATE_PLANNER_NATIVE_TOOL_FORBIDDEN",
+        match="structured output is invalid",
     ):
-        _generate_native_template_arguments(
+        generate_fixed_template_value(
             router,
             "planner",
             ({"role": "user", "content": "x"},),
-            tool_name="forbidden",
-            parameters=_SCHEMA,
-            description="must not run",
+            response_schema=_SCHEMA,
+            enable_tools=False,
         )
 
     assert router.tool_calls == 0
+    assert len(router.text_calls) == 1
 
 
 def _schema_value(schema):
@@ -250,7 +255,6 @@ def test_field_page_cannot_run_without_host_fixed_cardinality() -> None:
                 chunk_count=1,
                 concerns=page,
                 completed={},
-                include_evidence=False,
                 media_paths=(),
             ),
         )
@@ -276,7 +280,7 @@ def test_authored_planner_uses_tiny_count_then_fixed_single_field_page() -> None
     assert count_call["enable_tools"] is False
     assert count_call["force_non_thinking"] is True
     count_schema = count_call["response_schema"]
-    assert count_call["output_token_ceiling"] == planner_page_output_token_ceiling(
+    assert count_call["output_token_ceiling"] == structured_output_token_ceiling(
         count_schema
     )
     assert (
@@ -294,7 +298,6 @@ def test_authored_planner_uses_tiny_count_then_fixed_single_field_page() -> None
             chunk_count=1,
             concerns=page,
             completed={},
-            include_evidence=False,
             media_paths=(),
         ),
         record_counts={concern: count},
@@ -305,7 +308,7 @@ def test_authored_planner_uses_tiny_count_then_fixed_single_field_page() -> None
     assert page_call["enable_tools"] is False
     assert page_call["force_non_thinking"] is True
     concern_schema = page_call["response_schema"]["properties"][concern]
-    expected_ceiling = planner_page_output_token_ceiling(
+    expected_ceiling = structured_output_token_ceiling(
         page_call["response_schema"]
     )
     assert page_call["output_token_ceiling"] == expected_ceiling
@@ -337,11 +340,11 @@ def test_planner_page_budget_is_schema_derived_and_rejects_unbounded_numeric() -
         "additionalProperties": False,
     }
 
-    ceiling = planner_page_output_token_ceiling(bounded)
+    ceiling = structured_output_token_ceiling(bounded)
     assert 64 <= ceiling < PLANNER_RECORD_PAGE_OUTPUT_TOKEN_CEILING
 
     with pytest.raises(ValueError, match="unbounded lexical output"):
-        planner_page_output_token_ceiling(
+        structured_output_token_ceiling(
             {
                 "type": "object",
                 "properties": {"value": {"type": "number"}},
@@ -352,7 +355,7 @@ def test_planner_page_budget_is_schema_derived_and_rejects_unbounded_numeric() -
 
 
     with pytest.raises(ValueError, match="exceeds the global atomic output bound"):
-        planner_page_output_token_ceiling(
+        structured_output_token_ceiling(
             {
                 "type": "object",
                 "properties": {
@@ -388,7 +391,7 @@ def test_planner_fixed_template_without_explicit_ceiling_fails_before_unbounded_
 
 def test_planner_fixed_template_rejects_explicit_ceiling_below_schema_proof() -> None:
     router = _PlannerRouter()
-    required = planner_page_output_token_ceiling(_SCHEMA)
+    required = structured_output_token_ceiling(_SCHEMA)
 
     with pytest.raises(ValueError, match="FIXED_TEMPLATE_OUTPUT_BUDGET_TOO_SMALL"):
         generate_fixed_template_value(

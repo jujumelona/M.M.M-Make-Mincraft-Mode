@@ -10,7 +10,6 @@ worksheet section.
 
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
-import json
 from typing import Any
 
 from .execution_contract_policy import (
@@ -22,12 +21,12 @@ from .execution_contract_policy import (
 )
 from .model_output_atomicity_contract import _assert_closed_object_schemas
 from .planning_detail_slots import DETAIL_RECORDS, record_field_schema
-from .structured_state_runtime import constrain_state_record_schema
 from .planning_detail_template import (
     _normalize_section_name,
     _section_description,
     validate_worksheet_section,
 )
+from .structured_state_runtime import constrain_state_record_schema
 
 _PLACEHOLDERS = frozenset({
     "n/a",
@@ -445,6 +444,24 @@ def worksheet_chunk_prompt(
     )
 
 
+def _worksheet_record_fields(
+    section: str,
+    source: Mapping[str, Any],
+    fields: Sequence[str],
+) -> tuple[dict[str, Any], Sequence[str]]:
+    """Keep authored executable strings outside generic prose normalization."""
+    if section != "state_model":
+        return {}, fields
+    from .planner_state_authoring import STATE_EXECUTABLE_FIELDS
+
+    preserved = {
+        field: source[field].strip()
+        for field in fields
+        if field in STATE_EXECUTABLE_FIELDS and isinstance(source.get(field), str)
+    }
+    return preserved, tuple(field for field in fields if field not in preserved)
+
+
 def merge_worksheet_section_chunks(
     section: str,
     chunks: Sequence[Mapping[str, Any]],
@@ -547,8 +564,8 @@ def merge_worksheet_section_chunks(
             )
             if not has_meaningful:
                 continue
-            clean_item: dict[str, Any] = {}
-            for field_name in expected_fields:
+            clean_item, prose_fields = _worksheet_record_fields(key, item, expected_fields)
+            for field_name in prose_fields:
                 raw_value = item.get(field_name)
                 if (
                     key == "integration"

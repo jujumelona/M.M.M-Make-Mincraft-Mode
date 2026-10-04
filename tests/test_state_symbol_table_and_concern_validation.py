@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
+
 import pytest
 
+from minecraft_mod_ai.authored_structured_design import author_structured_sections
+from minecraft_mod_ai.structured_output import StructuredOutputValidationError
 from minecraft_mod_ai.structured_state_runtime import (
     StateSymbolTable,
     validate_state_concern,
 )
-from minecraft_mod_ai.authored_structured_design import author_structured_sections
 
 
 def test_state_symbol_table_basics():
@@ -218,11 +220,21 @@ def test_author_structured_sections_passes_symbols_and_fails_undeclared_early():
     class MockRouter:
         def generate_text(self, role, messages, **kwargs):
             assert role == "planner"
-            content = messages[-1]["content"]
+            content = "\n".join(message["content"] for message in messages)
             seen_prompts.append(content)
             schema = kwargs.get("response_schema", {})
             seen_schemas.append(schema)
             properties = schema.get("properties", {})
+
+            if "Current semantic state component:" in content:
+                if "kind" in properties:
+                    return json.dumps({"kind": "boolean"})
+                if "value" in properties:
+                    return json.dumps({"value": True})
+                if "count" in properties:
+                    return json.dumps({"count": 1})
+                if "target" in properties:
+                    return json.dumps({"target": "current_phase", "operator": "="})
 
             if "record_count" in properties:
                 section = content.split("Section: ", 1)[1].splitlines()[0]
@@ -258,23 +270,16 @@ def test_author_structured_sections_passes_symbols_and_fails_undeclared_early():
     router = MockRouter()
 
     with pytest.raises(
-        ValueError,
-        match="STRUCTURED_STATE_MUTATION: undeclared state variable 'current_phase'",
+        StructuredOutputValidationError,
+        match="current_phase.*not one of",
     ):
         author_structured_sections(router, "create a mod with trading")
 
-    # Planner pages stay tiny: mutation is one bounded string field, not a nested
-    # model-authored IR. Symbol authority is enforced after the concern is merged.
-    mutation_schemas = []
-    for schema in seen_schemas:
-        transitions = schema.get("properties", {}).get("transitions")
-        if not isinstance(transitions, dict):
-            continue
-        item_properties = transitions.get("items", {}).get("properties", {})
-        if "mutation" in item_properties:
-            mutation_schemas.append(item_properties["mutation"])
-    assert mutation_schemas
-    assert all(schema["type"] == "string" for schema in mutation_schemas)
+    # The target decision itself rejects undeclared names before another field
+    # or section can consume a malformed state assignment.
+    targets = [schema["properties"]["target"] for schema in seen_schemas
+               if "target" in schema.get("properties", {})]
+    assert targets and all(schema["enum"] == ["player_currency"] for schema in targets)
 
     # The canonical variable symbol table is still supplied to every later
     # transition field page before host-side validation rejects current_phase.
@@ -285,4 +290,3 @@ def test_author_structured_sections_passes_symbols_and_fails_undeclared_early():
     assert transition_prompts
     assert all("Canonical state symbols:" in prompt for prompt in transition_prompts)
     assert all("- player_currency" in prompt for prompt in transition_prompts)
-

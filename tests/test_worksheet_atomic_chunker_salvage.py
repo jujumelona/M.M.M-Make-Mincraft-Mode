@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from jsonschema import Draft202012Validator
+
 from minecraft_mod_ai.worksheet_atomic_chunker import (
     merge_worksheet_section_chunks,
     pack_section_concerns,
@@ -29,20 +31,17 @@ def _behavior_chunks(*, actors=None, inputs_marker=None):
     return chunks
 
 
-def test_model_facing_chunk_schema_allows_partial_bounded_records() -> None:
+def test_model_facing_chunk_requires_complete_bounded_field_page() -> None:
+    page = pack_section_concerns("behavior_contract")[0]
     schema = worksheet_chunk_schema(
         "behavior_contract",
-        ("actors", "inputs"),
-        include_evidence=True,
+        page,
+        record_counts={"actors": 1},
     )
-
-    assert schema["required"] == []
-    assert schema["additionalProperties"] is False
-    assert schema["properties"]["actors"]["items"]["required"] == []
-    assert schema["properties"]["inputs"]["items"]["required"] == []
-    name_schema = schema["properties"]["actors"]["items"]["properties"]["name"]
-    assert name_schema["minLength"] == 1
-    assert "maxLength" not in name_schema
+    validator = Draft202012Validator(schema)
+    assert validator.is_valid({"actors": [{"name": "player"}]})
+    assert not validator.is_valid({"actors": [{}]})
+    assert not validator.is_valid({"actors": [{"name": "a" * 65}]})
 
 
 def test_merge_salvages_partial_chunk_and_host_fills_omissions() -> None:

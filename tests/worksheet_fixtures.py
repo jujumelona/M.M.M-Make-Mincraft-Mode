@@ -8,6 +8,8 @@ from minecraft_mod_ai.planning_detail_slots import (
 
 
 def _fixture_value(schema: dict[str, Any], text: str) -> Any:
+    if schema.get("enum"):
+        return schema["enum"][0]
     description = str(schema.get("description") or "")
     if "Stable ASCII internal state identifier" in description:
         return "stateValue"

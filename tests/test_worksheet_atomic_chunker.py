@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from worksheet_fixtures import row
 
 from minecraft_mod_ai.execution_contract_policy import (
     PLANNER_RECORD_FIELD_MAX_CHARS,
@@ -10,7 +11,10 @@ from minecraft_mod_ai.execution_contract_policy import (
 )
 from minecraft_mod_ai.model_output_atomicity_contract import assert_atomic_model_schema
 from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
-from minecraft_mod_ai.planning_detail_template import WORKSHEET_SECTIONS, validate_worksheet_section
+from minecraft_mod_ai.planning_detail_template import (
+    WORKSHEET_SECTIONS,
+    validate_worksheet_section,
+)
 from minecraft_mod_ai.structured_output import (
     StructuredOutputValidationError,
     validate_structured_output,
@@ -23,7 +27,6 @@ from minecraft_mod_ai.worksheet_atomic_chunker import (
     worksheet_concern_cardinality_prompt,
     worksheet_concern_cardinality_schema,
 )
-from worksheet_fixtures import row
 
 
 def _page_for_field(section: str, concern: str, field: str):
@@ -42,8 +45,8 @@ def test_field_page_schema_requires_host_fixed_cardinality():
     page = pack_section_concerns("behavior_contract")[0]
 
     with pytest.raises(
-        ValueError,
-        match="requires a host-fixed record count",
+        TypeError,
+        match="record_counts",
     ):
         worksheet_chunk_schema("behavior_contract", page)
 
@@ -55,11 +58,9 @@ def test_all_packed_chunks_satisfy_atomicity_contract(section: str):
 
     projected_fields: dict[str, set[str]] = {}
     for index, concern_group in enumerate(chunks):
-        is_first = index == 0
         schema = worksheet_chunk_schema(
             section,
             concern_group,
-            include_evidence=is_first,
             record_counts=_fixed_count(concern_group),
         )
         # Every model-facing field page must satisfy the strict atomicity boundary.
@@ -69,7 +70,6 @@ def test_all_packed_chunks_satisfy_atomicity_contract(section: str):
             index + 1,
             len(chunks),
             concern_group,
-            include_evidence=is_first,
             record_counts=_fixed_count(concern_group),
         )
         assert f"Section: {section}" in prompt
@@ -185,7 +185,6 @@ def test_cardinality_decision_is_tiny_and_content_free():
     assert "0 through 4" in prompt
 
 def test_state_model_symbols_do_not_change_planning_chunk_field_types():
-    chunks = pack_section_concerns("state_model")
     target = _page_for_field("state_model", "transitions", "guard")
 
     baseline = worksheet_chunk_schema(
@@ -236,7 +235,6 @@ def test_root_integration_prerequisite_accepts_null_and_canonicalizes():
 
 
 def test_synchronization_recipients_preserve_bounded_array_type():
-    chunks = pack_section_concerns("authority_and_network")
     target = _page_for_field("authority_and_network", "synchronization", "recipients")
     schema = worksheet_chunk_schema(
         "authority_and_network",
@@ -338,7 +336,6 @@ def test_chunk_schema_rejects_undeclared_fields_before_merge():
     schema = worksheet_chunk_schema(
         "behavior_contract",
         concern_group,
-        include_evidence=True,
         record_counts=_fixed_count(concern_group),
     )
     concern = str(concern_group[0])
