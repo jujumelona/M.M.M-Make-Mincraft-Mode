@@ -404,33 +404,10 @@ class ModelRouter:
             raise ModelConfigurationError("Tool-decision name must not be empty.")
 
         if role == "planner":
-            force_non_thinking = True
-            from .model_output_atomicity_contract import (
-                _model_transport_schema,
-                structured_output_token_ceiling,
+            raise ModelConfigurationError(
+                "PLANNER_NATIVE_TOOL_TRANSPORT_REMOVED: planner decisions must use "
+                "tools=0 schema-constrained JSON through the host planner contract"
             )
-
-            transport_parameters = _model_transport_schema(parameters)
-            try:
-                schema_output_ceiling = structured_output_token_ceiling(
-                    transport_parameters
-                )
-            except Exception as exc:
-                raise ModelConfigurationError(
-                    "PLANNER_TOOL_DECISION_BUDGET_UNPROVABLE: planner native tool "
-                    "schemas must have a finite host-provable decode bound"
-                ) from exc
-            if output_token_ceiling is not None:
-                requested_output_ceiling = max(1, int(output_token_ceiling))
-                if requested_output_ceiling < schema_output_ceiling:
-                    raise ModelConfigurationError(
-                        "PLANNER_TOOL_DECISION_BUDGET_TOO_SMALL: planner native tool "
-                        "decision would be able to exhaust its decode allowance before "
-                        "closing the schema-constrained arguments: "
-                        f"requested={requested_output_ceiling} "
-                        f"required={schema_output_ceiling}"
-                    )
-            output_token_ceiling = schema_output_ceiling
 
         schema = {
             "type": "function",
