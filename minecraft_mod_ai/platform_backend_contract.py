@@ -79,12 +79,26 @@ def native_production_route_available(
     return integration_type in NATIVE_INTEGRATION_TYPES
 
 
-def effective_target_backend_capabilities(target: Any) -> frozenset[str]:
-    """Return the immutable executable capability set for an approved target.
+def deterministic_backend_capabilities(target: Any) -> frozenset[str]:
+    """Return only provider-reviewed fixed-generator backend capabilities.
 
-    Host-authoritative catalog targets store reviewed capability facts in
-    host_facts_json while legacy providers may still use
-    deterministic_module_kinds. Consumers must never choose one field ad hoc.
+    This deliberately does not infer support from host_facts.capabilities. Host facts
+    describe API/leaf availability and are consumed by artifact/template admission;
+    they do not prove that a legacy fixed generator was reviewed for the target.
+    """
+
+    if isinstance(target, Mapping):
+        values = target.get("deterministic_module_kinds", ())
+    else:
+        values = getattr(target, "deterministic_module_kinds", ())
+    return normalize_capabilities(values)
+
+def effective_target_backend_capabilities(target: Any) -> frozenset[str]:
+    """Return the union of provider backend tokens and immutable host capability facts.
+
+    Use this for semantic/API capability reasoning only. Fixed deterministic generator
+    admission must use deterministic_backend_capabilities() so host API facts cannot
+    accidentally authorize an unreviewed generator.
     """
 
     if isinstance(target, Mapping):
@@ -237,6 +251,7 @@ def supported_extended_content_kinds(
 
 __all__ = [
     "DEFAULT_GECKOLIB_VERSION",
+    "deterministic_backend_capabilities",
     "bootstrap_boss_capabilities",
     "bootstrap_content_capabilities",
     "ENTITY_PIPELINE_KINDS",
