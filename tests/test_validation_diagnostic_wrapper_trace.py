@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 
+from minecraft_mod_ai.owner_rpc import OwnerRPCError
 from minecraft_mod_ai.validation_diagnostic_contract import (
     diagnostic_errors,
     diagnostic_items,
+    run_diagnostics,
     unwrap_diagnostic_receipt,
 )
 
@@ -129,3 +131,47 @@ def test_diagnostic_items_unwraps_transport_before_uri_normalization() -> None:
     )
 
     assert items == [{"severity": 2, "message": "warning", "uri": uri}]
+
+def test_diagnostic_service_is_closed_after_success(tmp_path) -> None:
+    closed: list[bool] = []
+
+    class Service:
+        def diagnostics(self, project_root, *, timeout_seconds):
+            assert project_root == tmp_path
+            assert timeout_seconds == 7
+            return {
+                "status": "PASS",
+                "diagnostics": {},
+                "files_opened": 1,
+                "error_count": 0,
+            }
+
+        def close(self):
+            closed.append(True)
+
+    receipt = run_diagnostics(Service, tmp_path, timeout_seconds=7)
+
+    assert receipt["status"] == "PASS"
+    assert closed == [True]
+
+
+def test_jdt_core_owner_rpc_failure_is_structured_unavailable_and_closed(
+    tmp_path,
+) -> None:
+    closed: list[bool] = []
+
+    class Service:
+        def diagnostics(self, project_root, *, timeout_seconds):
+            del project_root, timeout_seconds
+            raise OwnerRPCError("owner project import failed")
+
+        def close(self):
+            closed.append(True)
+
+    receipt = run_diagnostics(Service, tmp_path, timeout_seconds=7)
+
+    assert receipt["status"] == "UNAVAILABLE"
+    assert receipt["error_type"] == "OwnerRPCError"
+    assert "owner project import failed" in receipt["error"]
+    assert closed == [True]
+
