@@ -20,11 +20,15 @@ def _behavior_contract_templates():
     return [(path, yaml.safe_load(path.read_text(encoding="utf-8"))) for path in paths]
 
 
-def test_behavior_contract_generation_never_requires_a_model_owned_count():
+def test_behavior_contract_generation_uses_only_bounded_count_decision():
     for path, template in _behavior_contract_templates():
         schema = record_cardinality_response_schema(template)
-        assert schema["required"] == ["records"], path.name
-        assert "count" not in schema["properties"], path.name
+        assert schema["required"] == ["count"], path.name
+        assert set(schema["properties"]) == {"count"}, path.name
+        count = schema["properties"]["count"]
+        assert count["enum"] == list(range(17)), path.name
+        assert count["minimum"] == 0, path.name
+        assert count["maximum"] == 16, path.name
         assert "blocked_reason" not in schema["properties"], path.name
 
 
@@ -36,8 +40,8 @@ def test_behavior_contract_records_do_not_delegate_loop_protocol_to_model():
             assert phrase not in rules, f"{path.name}: {phrase}"
 
 
-def test_record_set_contract_is_closed_without_cardinality_metadata():
+def test_cardinality_contract_is_closed_and_contains_no_loop_protocol():
     schema = record_cardinality_response_schema({})
-    assert schema["required"] == ["records"]
-    assert set(schema["properties"]) == {"records"}
+    assert schema["required"] == ["count"]
+    assert set(schema["properties"]) == {"count"}
     assert schema["additionalProperties"] is False
