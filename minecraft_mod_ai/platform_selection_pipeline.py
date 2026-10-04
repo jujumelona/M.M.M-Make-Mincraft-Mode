@@ -90,6 +90,7 @@ def _provider_only_adapter(
     loaders: tuple[str, ...],
     *,
     version_constraint: str | None,
+    module_kinds: Iterable[str] = (),
 ):
     """Resolve one executable receipt without consulting ecosystem/live catalogues."""
 
@@ -123,6 +124,13 @@ def _provider_only_adapter(
                         requested=version,
                         actual=adapter.minecraft_version,
                     )
+                from . import platform_resolver as resolver
+
+                resolver._require_supported_kinds(
+                    adapter,
+                    module_kinds,
+                    explicit=bool(requested),
+                )
                 return adapter
             except Exception as exc:  # noqa: BLE001
                 if requested:
@@ -316,11 +324,7 @@ def resolve_platform_fail_closed(
                 if existing_version and not migration_requested
                 else explicit_version
             ),
-        )
-        resolver._require_supported_kinds(
-            adapter,
-            kinds,
-            explicit=bool(explicit_version or existing_version),
+            module_kinds=kinds,
         )
         return PlatformSelection(
             adapter=adapter,
