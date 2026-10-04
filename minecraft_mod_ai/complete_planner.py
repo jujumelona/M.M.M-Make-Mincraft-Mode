@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from .platform_backend_contract import effective_target_backend_capabilities
 from pathlib import Path
 from typing import Any
 
@@ -64,17 +65,17 @@ class CompleteGameDesignPlanner:
 
         kinds = deterministic_module_kinds
         if kinds is None and adapter is not None:
-            kinds = getattr(adapter, "deterministic_module_kinds", None)
+            kinds = effective_target_backend_capabilities(adapter)
         if kinds is None:
             kinds = self.deterministic_module_kinds
         if kinds is None and self.adapter is not None:
-            kinds = getattr(self.adapter, "deterministic_module_kinds", None)
+            kinds = effective_target_backend_capabilities(self.adapter)
         if kinds is None:
             kinds = getattr(self.router, "_mmm_deterministic_module_kinds", None)
         if kinds is None:
             router_adapter = getattr(self.router, "_mmm_target_adapter", None)
             if router_adapter is not None:
-                kinds = getattr(router_adapter, "deterministic_module_kinds", None)
+                kinds = effective_target_backend_capabilities(router_adapter)
         if kinds is None:
             version = getattr(self.router, "_mmm_requested_minecraft_version", None)
             loader = getattr(self.router, "_mmm_requested_loader", None)
@@ -82,7 +83,7 @@ class CompleteGameDesignPlanner:
                 try:
                     from .platform_catalog import adapter_for_target
                     resolved_adapter = adapter_for_target(str(version), str(loader))
-                    kinds = getattr(resolved_adapter, "deterministic_module_kinds", None)
+                    kinds = effective_target_backend_capabilities(resolved_adapter)
                 except Exception:
                     pass
         effective_kinds = tuple(sorted(kinds)) if kinds is not None else None
