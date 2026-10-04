@@ -73,7 +73,7 @@ class CompleteGameDesignPlanner:
 
     def compile_for_production(
         self,
-        prompt: AuthoredPlan | str,
+        prompt: AuthoredPlan,
         *,
         media_paths: Sequence[str | Path] = (),
         existing_input_sha256: str = "",
@@ -81,10 +81,7 @@ class CompleteGameDesignPlanner:
         from .authored_production import compile_authored_design
 
         if not isinstance(prompt, AuthoredPlan):
-            raise TypeError(
-                "compile_for_production requires an AuthoredPlan with Typed PlanIR; "
-                "the legacy raw-text production route has been removed."
-            )
+            raise TypeError("compile_for_production requires AuthoredPlan")
         plan = prompt
         with trace_scope("production_preparation", trace_id=uuid.uuid4().hex):
             emit_root_cause(
