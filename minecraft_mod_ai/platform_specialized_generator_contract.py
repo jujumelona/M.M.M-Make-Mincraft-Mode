@@ -32,7 +32,7 @@ def _require_deterministic_capability(
     raise ValueError(
         f"{feature} deterministic templates are not declared by provider "
         f"{adapter.adapter_id} for {adapter.minecraft_version}/{adapter.loader}; "
-        "route this work through target-aware custom_java/RAG generation."
+        "use an admitted target-aware artifact or typed-host backend instead."
     )
 
 
