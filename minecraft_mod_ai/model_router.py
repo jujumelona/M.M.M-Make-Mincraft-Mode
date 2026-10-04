@@ -405,17 +405,32 @@ class ModelRouter:
 
         if role == "planner":
             force_non_thinking = True
-            if output_token_ceiling is None:
-                from .worksheet_atomic_chunker import planner_page_output_token_ceiling
+            from .model_output_atomicity_contract import (
+                _model_transport_schema,
+                structured_output_token_ceiling,
+            )
 
-                try:
-                    output_token_ceiling = planner_page_output_token_ceiling(parameters)
-                except Exception as exc:
+            transport_parameters = _model_transport_schema(parameters)
+            try:
+                schema_output_ceiling = structured_output_token_ceiling(
+                    transport_parameters
+                )
+            except Exception as exc:
+                raise ModelConfigurationError(
+                    "PLANNER_TOOL_DECISION_BUDGET_UNPROVABLE: planner native tool "
+                    "schemas must have a finite host-provable decode bound"
+                ) from exc
+            if output_token_ceiling is not None:
+                requested_output_ceiling = max(1, int(output_token_ceiling))
+                if requested_output_ceiling < schema_output_ceiling:
                     raise ModelConfigurationError(
-                        "PLANNER_TOOL_DECISION_BUDGET_REQUIRED: planner native tool "
-                        "schemas must prove a finite decode bound or provide an explicit "
-                        "output_token_ceiling"
-                    ) from exc
+                        "PLANNER_TOOL_DECISION_BUDGET_TOO_SMALL: planner native tool "
+                        "decision would be able to exhaust its decode allowance before "
+                        "closing the schema-constrained arguments: "
+                        f"requested={requested_output_ceiling} "
+                        f"required={schema_output_ceiling}"
+                    )
+            output_token_ceiling = schema_output_ceiling
 
         schema = {
             "type": "function",
