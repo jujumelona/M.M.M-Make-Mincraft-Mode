@@ -2345,11 +2345,16 @@ def author_typed_plan_ir(
         else None
     )
     if target_deterministic_kinds is not None:
-        allowed_platform_kinds = (
-            set(PLATFORM_HOST_KINDS)
-            | (
-                set(PLATFORM_KINDS)
-                & set(target_deterministic_kinds)
+        from .platform_backend_contract import production_backend_is_supported
+
+        allowed_platform_kinds = set(PLATFORM_HOST_KINDS)
+        allowed_platform_kinds.update(
+            kind
+            for kind in PLATFORM_KINDS
+            if kind not in PLATFORM_HOST_KINDS
+            and production_backend_is_supported(
+                target_deterministic_kinds,
+                kind,
             )
         )
     else:
