@@ -87,6 +87,7 @@ from .local_ai_sidecar_generator import (
 )
 from .model_concurrency import run_with_model_execution_deadline
 from .model_router import ModelRouter
+from .platform_backend_contract import EXTENDED_CONTENT_KINDS
 from .platform_catalog import adapter_for_lock_values, adapter_from_project
 from .prepared_project_resume_integrity import (
     prepared_project_cache_valid,
@@ -1440,7 +1441,7 @@ class CompleteProductionOrchestrator:
         generation_nodes = tuple(node for node in work_plan.nodes if node.stage.startswith('generate:'))
         node_by_id = {node.node_id: node for node in generation_nodes}
         generation_stages = tuple(sorted({node.stage for node in generation_nodes}))
-        extended_kinds = {'item', 'block', 'tool', 'weapon', 'armor', 'food', 'crop', 'machine', 'effect', 'enchantment', 'command', 'recipe', 'tag', 'advancement', 'loot'}
+        extended_kinds = EXTENDED_CONTENT_KINDS
         module_receipts: list[dict[str, Any]] = []
         blockbench_receipts: list[dict[str, Any]] = []
         unresolved: list[str] = []
