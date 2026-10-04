@@ -300,13 +300,6 @@ def worksheet_schema(required_sections: Iterable[str] | None = None) -> dict[str
 
 WORKSHEET_SCHEMA = worksheet_schema()
 
-# Compatibility vocabulary for the legacy chunk assembler. The authored worksheet
-# boundary does not use wording as an admission criterion.
-_PLACEHOLDERS = {
-    "n/a", "na", "none", "not applicable", "not-applicable", "todo", "tbd",
-    "unknown", "same as above", "same-as-above",
-}
-
 def validate_worksheet_section(
     value: Any,
     allowed_refs: set[str],
