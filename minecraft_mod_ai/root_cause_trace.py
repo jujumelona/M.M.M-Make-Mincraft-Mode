@@ -572,6 +572,7 @@ def emit_root_cause(
             "jdt_server_progress",
             "jdt_workspace_isolated",
             "jdt_project_model_ready",
+            "jdt_compilation_unit_ready",
             "jdt_explicit_diagnostics_refresh",
             "jdt_diagnostics_publication",
             "jdt_diagnostics_uri_unmatched",
