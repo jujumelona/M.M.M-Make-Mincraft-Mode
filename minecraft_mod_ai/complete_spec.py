@@ -367,15 +367,12 @@ class CompleteProposal:
                     f"Artifact job {index} must be an object."
                 )
             owner = str(raw_job.get("owner_module") or "").strip()
-            if not owner:
-                raise SpecValidationError(
-                    f"Artifact job {index} must declare owner_module."
-                )
-            if owner not in module_ids:
-                raise SpecValidationError(
-                    f"Artifact job {index} references unknown owner module {owner!r}."
-                )
-            artifact_owners.add(owner)
+            if owner:
+                if owner not in module_ids:
+                    raise SpecValidationError(
+                        f"Artifact job {index} references unknown owner module {owner!r}."
+                    )
+                artifact_owners.add(owner)
 
         from .platform_backend_contract import native_production_route_available
 
