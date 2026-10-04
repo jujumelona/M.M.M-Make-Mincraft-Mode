@@ -34,6 +34,10 @@ def _page_for_field(section: str, concern: str, field: str):
     raise AssertionError(f"missing planner page for {section}.{concern}.{field}")
 
 
+def _fixed_count(chunk, count: int = 1) -> dict[str, int]:
+    return {str(chunk[0]): count}
+
+
 @pytest.mark.parametrize("section", WORKSHEET_SECTIONS)
 def test_all_packed_chunks_satisfy_atomicity_contract(section: str):
     chunks = pack_section_concerns(section)
@@ -42,10 +46,22 @@ def test_all_packed_chunks_satisfy_atomicity_contract(section: str):
     projected_fields: dict[str, set[str]] = {}
     for index, concern_group in enumerate(chunks):
         is_first = index == 0
-        schema = worksheet_chunk_schema(section, concern_group, include_evidence=is_first)
+        schema = worksheet_chunk_schema(
+            section,
+            concern_group,
+            include_evidence=is_first,
+            record_counts=_fixed_count(concern_group),
+        )
         # Every model-facing field page must satisfy the strict atomicity boundary.
         assert_atomic_model_schema(schema, surface=f"{section} chunk {index}")
-        prompt = worksheet_chunk_prompt(section, index + 1, len(chunks), concern_group, include_evidence=is_first)
+        prompt = worksheet_chunk_prompt(
+            section,
+            index + 1,
+            len(chunks),
+            concern_group,
+            include_evidence=is_first,
+            record_counts=_fixed_count(concern_group),
+        )
         assert f"Section: {section}" in prompt
         projection = getattr(concern_group, "field_projection", {})
         for concern in concern_group:
@@ -95,7 +111,11 @@ def test_planner_pages_are_prebounded_and_continuations_fix_cardinality():
         fields = projection[concern]
         assert 1 <= len(fields) <= PLANNER_RECORD_PAGE_MAX_FIELDS
 
-        schema = worksheet_chunk_schema("behavior_contract", chunk)
+        schema = worksheet_chunk_schema(
+            "behavior_contract",
+            chunk,
+            record_counts=_fixed_count(chunk),
+        )
         assert set(schema["properties"]) == {concern}
         assert schema["required"] == [concern]
         assert "anyOf" not in schema
@@ -158,11 +178,16 @@ def test_state_model_symbols_do_not_change_planning_chunk_field_types():
     chunks = pack_section_concerns("state_model")
     target = _page_for_field("state_model", "transitions", "guard")
 
-    baseline = worksheet_chunk_schema("state_model", target)
+    baseline = worksheet_chunk_schema(
+        "state_model",
+        target,
+        record_counts=_fixed_count(target),
+    )
     with_symbols = worksheet_chunk_schema(
         "state_model",
         target,
         state_symbols={"ship_blueprint", "player_currency"},
+        record_counts=_fixed_count(target),
     )
 
     assert with_symbols == baseline
@@ -173,7 +198,11 @@ def test_state_model_symbols_do_not_change_planning_chunk_field_types():
 def test_root_integration_prerequisite_accepts_null_and_canonicalizes():
     chunks = pack_section_concerns("integration")
     target = _page_for_field("integration", "initialization_order", "prerequisite")
-    schema = worksheet_chunk_schema("integration", target)
+    schema = worksheet_chunk_schema(
+        "integration",
+        target,
+        record_counts=_fixed_count(target),
+    )
     prerequisite = schema["properties"]["initialization_order"]["items"]["properties"]["prerequisite"]
     assert prerequisite["type"] == ["string", "null"]
 
@@ -199,7 +228,11 @@ def test_root_integration_prerequisite_accepts_null_and_canonicalizes():
 def test_synchronization_recipients_preserve_bounded_array_type():
     chunks = pack_section_concerns("authority_and_network")
     target = _page_for_field("authority_and_network", "synchronization", "recipients")
-    schema = worksheet_chunk_schema("authority_and_network", target)
+    schema = worksheet_chunk_schema(
+        "authority_and_network",
+        target,
+        record_counts=_fixed_count(target),
+    )
     recipients = schema["properties"]["synchronization"]["items"]["properties"]["recipients"]
     assert recipients["type"] == "array"
     assert recipients["maxItems"] == 4
@@ -240,7 +273,11 @@ def test_synchronization_recipients_survive_merge_as_list():
 def test_persistence_missing_default_accepts_and_preserves_empty_list():
     chunks = pack_section_concerns("persistence")
     target = _page_for_field("persistence", "missing_defaults", "default")
-    schema = worksheet_chunk_schema("persistence", target)
+    schema = worksheet_chunk_schema(
+        "persistence",
+        target,
+        record_counts=_fixed_count(target),
+    )
     validate_structured_output(
         json.dumps({
             "missing_defaults": [
@@ -292,6 +329,7 @@ def test_chunk_schema_rejects_undeclared_fields_before_merge():
         "behavior_contract",
         concern_group,
         include_evidence=True,
+        record_counts=_fixed_count(concern_group),
     )
     concern = str(concern_group[0])
     output = json.dumps({
