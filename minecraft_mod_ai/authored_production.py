@@ -218,7 +218,7 @@ def _compile_new_authored_modules(
         "policy": "host_typed_plan_ir",
         "source_text_sha256": source_sha,
         "source_bytes": len(plan.text.encode("utf-8")),
-        "unit_count": 1 + len(platform_modules),
+        "unit_count": 1,
         "units": [{
             "module_id": task_id,
             "path": program_path,
