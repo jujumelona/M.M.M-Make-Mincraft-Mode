@@ -442,7 +442,25 @@ def optimize_platform_evidence(
     discovery_client: EcosystemDiscoveryClient | None = None,
     target_research_fn: TargetResearchFn | None = None,
 ) -> PlatformOptimization:
-    queries = capability_queries(prompt, design=design, module_kinds=module_kinds)
+    requested_module_kinds = tuple(
+        dict.fromkeys(
+            str(value).strip()
+            for value in module_kinds
+            if str(value).strip()
+        )
+    )
+    queries = capability_queries(
+        prompt,
+        design=design,
+        module_kinds=requested_module_kinds,
+    )
+    from .platform_backend_contract import production_module_backend_capabilities
+
+    required_backend_capabilities: set[str] = set()
+    for kind in requested_module_kinds:
+        required_backend_capabilities.update(
+            production_module_backend_capabilities(kind)
+        )
     client = discovery_client or EcosystemDiscoveryClient()
     discovery_mode = (
         __import__("os").environ.get("MMM_ECOSYSTEM_DISCOVERY", "auto").strip().lower()
@@ -553,6 +571,56 @@ def optimize_platform_evidence(
             "No executable platform target survived provider resolution. Diagnostics: "
             + detail
         )
+
+    if required_backend_capabilities:
+        backend_compatible: list[PlatformAdapter] = []
+        backend_failures: list[str] = []
+        for adapter in adapters:
+            missing_backend = sorted(
+                required_backend_capabilities
+                - set(adapter.deterministic_module_kinds)
+            )
+            if missing_backend:
+                backend_failures.append(
+                    f"{adapter.minecraft_version}/{adapter.loader}: "
+                    f"missing {missing_backend}"
+                )
+                _emit_platform_trace(
+                    "target_backend_rejected",
+                    adapter=adapter,
+                    gate="deterministic_backend",
+                    passed=False,
+                    reason="target lacks executable production backend capabilities",
+                    details={
+                        "module_kinds": requested_module_kinds,
+                        "required_backend_capabilities": sorted(
+                            required_backend_capabilities
+                        ),
+                        "missing_backend_capabilities": missing_backend,
+                    },
+                )
+                continue
+            backend_compatible.append(adapter)
+            _emit_platform_trace(
+                "target_backend_admitted",
+                adapter=adapter,
+                gate="deterministic_backend",
+                passed=True,
+                reason="target covers executable production backend capabilities",
+                details={
+                    "module_kinds": requested_module_kinds,
+                    "required_backend_capabilities": sorted(
+                        required_backend_capabilities
+                    ),
+                },
+            )
+        adapters = tuple(backend_compatible)
+        if not adapters:
+            raise SpecValidationError(
+                "No resolved platform target can execute the requested production "
+                f"module kinds {list(requested_module_kinds)}. Diagnostics: "
+                + "; ".join(backend_failures)
+            )
 
     evidence: list[TargetEvidence] = []
     failures: list[str] = []
