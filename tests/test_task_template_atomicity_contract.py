@@ -44,10 +44,12 @@ def test_every_model_facing_worksheet_chunk_is_closed() -> None:
         chunks = pack_section_concerns(section)
         assert chunks, f"{section} must compile to at least one model-facing chunk"
         for index, concerns in enumerate(chunks, start=1):
+            concern = str(concerns[0])
             schema = worksheet_chunk_schema(
                 section,
                 concerns,
                 include_evidence=index == 1,
+                record_counts={concern: 1},
             )
             assert_atomic_model_schema(
                 schema,
