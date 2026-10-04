@@ -543,17 +543,11 @@ class ModelRouter:
             else tuple(dict(message) for message in messages)
         )
         if role == "planner" and response_format == "json" and response_schema is not None:
-            import json
-            from .model_output_atomicity_contract import _model_transport_schema
-
-            planner_transport_schema = _model_transport_schema(response_schema)
             request_messages = _inject_system_context(
                 request_messages,
-                "Author the requested design values. You may choose missing gameplay details "
-                "and expand the design coherently with the user's request. Return one JSON "
-                "value in the following finite interchange shape, without a function call or Markdown. "
-                "This shape is for storing your design, not a judgement of its correctness.\n"
-                + json.dumps(planner_transport_schema, ensure_ascii=False),
+                "Author only the requested bounded design values. The host owns the JSON "
+                "shape and enforces it at decode time; do not restate, explain, or infer the "
+                "schema, do not use a function call, and do not emit Markdown.",
             )
         if self._tools_enabled(
             enable_tools=enable_tools,
