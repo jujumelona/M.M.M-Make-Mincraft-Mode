@@ -85,6 +85,14 @@ PRODUCTION_RETRY_STRUCTURAL_REJECTIONS = True
 PRODUCTION_CANONICALIZE_LOCAL_FINAL_REBINDINGS = True
 PRODUCTION_COMPILE_REPAIR_LIMIT = 2
 ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING = 4_096
+
+# Planner authoring is pre-paged by the host before inference. These limits are not
+# semantic/storage limits: they bound one small-model transport page. Canonical records
+# may contain more fields and longer logical values across multiple pages.
+PLANNER_RECORD_PAGE_MAX_FIELDS = 2
+PLANNER_RECORD_FIELD_MAX_CHARS = 192
+PLANNER_RECORD_PAGE_OUTPUT_TOKEN_CEILING = 2_048
+
 # A response is a transport page, not a Java ownership boundary. The host
 # admits complete AST units transactionally and bounds total work separately.
 ATOMIC_REGION_MAX_PAGES = 64
