@@ -76,7 +76,7 @@ def _record_count_messages(
             "content": (
                 "Choose only the number of distinct authored/applicable records required "
                 "by the authoritative context. Return count 0 when no records apply. "
-                "Do not author record content and do not emit record/done/continuation, "
+                "Do not author record content and do not emit completion, continuation, "
                 "retry, ordinal, blocked, or other loop-control metadata.\n"
                 + str(template.get("task") or "Determine required record cardinality.")
                 + ("\n" + rules if rules else "")
