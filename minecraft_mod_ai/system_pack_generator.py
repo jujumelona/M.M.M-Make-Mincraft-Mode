@@ -64,8 +64,8 @@ def generate_system_pack(
 
     All module validation is centralized in ``system_pack_validation`` so the
     accepted JSON contract and generated Java cannot drift apart. Unsupported
-    semantics must be routed to indexed custom generation instead of being
-    silently reduced.
+    semantics fail closed until an admitted target-aware backend owns them; they
+    are never routed to the retired custom-Java path.
     """
 
     policy = policy or ScalePolicy.from_environment()
