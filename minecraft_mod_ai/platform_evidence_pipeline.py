@@ -34,7 +34,7 @@ from .ecosystem_discovery import (
 )
 from .platform_backend_contract import (
     deterministic_backend_capabilities,
-    effective_target_backend_capabilities,
+    target_semantic_capabilities,
 )
 from .platform_catalog import PlatformAdapter, executable_loaders, provider_for_loader
 from .platform_live_discovery import discover_game_versions
@@ -1113,7 +1113,7 @@ def _build_target_evidence(
         if query in verified_by_query:
             mode = "reuse"
             covered.append(query)
-        elif query in effective_target_backend_capabilities(adapter):
+        elif query in target_semantic_capabilities(adapter):
             mode = "direct"
             covered.append(query)
         else:
