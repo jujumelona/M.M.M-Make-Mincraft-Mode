@@ -332,9 +332,21 @@ def test_requested_gametest_requires_structured_matching_evidence(tmp_path) -> N
     )
     build = {
         "status": "PASS",
+        "gametest_mode": "explicit_task",
+        "gametest_task": "runGameTest",
         "commands": [
-            {"name": "build", "exit_code": 0, "timed_out": False},
-            {"name": "gametest", "exit_code": 0, "timed_out": False},
+            {
+                "name": "build",
+                "command": ["gradle", "build", "-x", "runGameTest"],
+                "exit_code": 0,
+                "timed_out": False,
+            },
+            {
+                "name": "gametest",
+                "command": ["gradle", "runGameTest", "--stacktrace"],
+                "exit_code": 0,
+                "timed_out": False,
+            },
         ],
         "gametest_report": str(report),
     }
