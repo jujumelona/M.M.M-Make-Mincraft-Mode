@@ -105,10 +105,6 @@ def install(complete_spec_module: Any, complete_planner_module: Any) -> None:
             module.module_id
             for module in modules
             if module.kind in _WORLDGEN_MODULE_KINDS
-            or (
-                module.kind == "custom_java"
-                and module.config.get("requested_kind") in _WORLDGEN_MODULE_KINDS
-            )
         )
         if not worldgen_selected and worldgen_modules:
             raise SpecValidationError(
