@@ -7,11 +7,18 @@ import pytest
 
 from minecraft_mod_ai.execution_contract_policy import (
     ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING,
+    PLANNER_RECORD_COUNT_OUTPUT_TOKEN_CEILING,
+    PLANNER_RECORD_PAGE_OUTPUT_TOKEN_CEILING,
+)
+from minecraft_mod_ai.authored_structured_design import (
+    _generate_authored_chunk,
+    _generate_concern_record_count,
 )
 from minecraft_mod_ai.fixed_template_generation import (
     _generate_native_template_arguments,
     generate_fixed_template_value,
 )
+from minecraft_mod_ai.worksheet_atomic_chunker import pack_section_concerns
 
 
 _SCHEMA = {
@@ -105,3 +112,123 @@ def test_planner_native_tool_transport_is_fail_closed() -> None:
         )
 
     assert router.tool_calls == 0
+
+
+def _schema_value(schema):
+    enum = schema.get("enum")
+    if isinstance(enum, list) and enum:
+        return enum[0]
+    raw_type = schema.get("type")
+    types = raw_type if isinstance(raw_type, list) else [raw_type]
+    if "string" in types:
+        return "x"
+    if "integer" in types:
+        return 1
+    if "number" in types:
+        return 1.0
+    if "boolean" in types:
+        return True
+    if "array" in types:
+        minimum = int(schema.get("minItems", 0) or 0)
+        return [_schema_value(schema.get("items", {})) for _ in range(minimum)]
+    if "null" in types:
+        return None
+    if "object" in types or isinstance(schema.get("properties"), dict):
+        properties = schema.get("properties", {})
+        return {
+            name: _schema_value(properties[name])
+            for name in schema.get("required", [])
+        }
+    raise AssertionError(f"unsupported schema in fixture: {schema!r}")
+
+
+class _WorksheetRouter:
+    profile = "test"
+    registry = _Registry()
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def generate_tool_decision(self, *_args, **_kwargs):
+        raise AssertionError("planner worksheet generation must never use native tools")
+
+    def generate_text(self, role, messages, **kwargs):
+        assert role == "planner"
+        del messages
+        self.calls.append(dict(kwargs))
+        schema = kwargs["response_schema"]
+        properties = schema["properties"]
+        if "record_count" in properties:
+            return json.dumps({"record_count": 2})
+
+        result = {}
+        for name in schema["required"]:
+            field_schema = properties[name]
+            if (
+                field_schema.get("type") == "array"
+                and isinstance(field_schema.get("items"), dict)
+                and field_schema["items"].get("type") == "object"
+            ):
+                count = int(field_schema.get("minItems", 0) or 0)
+                assert count == int(field_schema.get("maxItems", count))
+                item_schema = field_schema["items"]
+                result[name] = [
+                    {
+                        field: _schema_value(item_schema["properties"][field])
+                        for field in item_schema["required"]
+                    }
+                    for _ in range(count)
+                ]
+            else:
+                result[name] = _schema_value(field_schema)
+        return json.dumps(result)
+
+
+def test_authored_planner_uses_tiny_count_then_fixed_single_field_page() -> None:
+    router = _WorksheetRouter()
+    section = "behavior_contract"
+    page = pack_section_concerns(section)[0]
+    concern = str(page[0])
+
+    count = _generate_concern_record_count(
+        router,
+        "make the requested gameplay feature",
+        section=section,
+        concern=concern,
+        completed={},
+    )
+    assert count == 2
+    count_call = router.calls[-1]
+    assert count_call["enable_tools"] is False
+    assert count_call["force_non_thinking"] is True
+    assert (
+        count_call["output_token_ceiling"]
+        == PLANNER_RECORD_COUNT_OUTPUT_TOKEN_CEILING
+    )
+    assert list(count_call["response_schema"]["properties"]) == ["record_count"]
+
+    value = _generate_authored_chunk(
+        router,
+        "make the requested gameplay feature",
+        section=section,
+        chunk_index=1,
+        chunk_count=1,
+        concerns=page,
+        completed={},
+        include_evidence=False,
+        media_paths=(),
+        record_counts={concern: count},
+    )
+    assert len(value[concern]) == 2
+
+    page_call = router.calls[-1]
+    assert page_call["enable_tools"] is False
+    assert page_call["force_non_thinking"] is True
+    assert (
+        page_call["output_token_ceiling"]
+        == PLANNER_RECORD_PAGE_OUTPUT_TOKEN_CEILING
+    )
+    concern_schema = page_call["response_schema"]["properties"][concern]
+    assert concern_schema["minItems"] == 2
+    assert concern_schema["maxItems"] == 2
+    assert len(concern_schema["items"]["properties"]) == 1
