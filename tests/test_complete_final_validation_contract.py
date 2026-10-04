@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 from types import SimpleNamespace
 
+from minecraft_mod_ai import complete_orchestrator as complete_orchestrator_module
+
 from minecraft_mod_ai.final_artifact import (
     sha256_file,
     write_build_artifact_bundle,
@@ -1422,6 +1424,60 @@ def test_generic_native_gametest_name_is_not_release_attestation(tmp_path) -> No
         SimpleNamespace(mod_id="demo"),
         requested=True,
     ) == "NO_EVIDENCE"
+
+
+def test_release_jdt_verification_uses_build_model_owner_and_shared_budget(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    observed: dict[str, object] = {}
+
+    def fake_run(factory, project_root, *, timeout_seconds, **kwargs):
+        observed["factory"] = factory
+        observed["project_root"] = project_root
+        observed["timeout_seconds"] = timeout_seconds
+        observed["kwargs"] = kwargs
+        return {
+            "schema_version": "mmm/java-diagnostics-v3",
+            "verification_backend": "jdt_core",
+            "complete": True,
+            "error_count": 0,
+            "diagnostics": {},
+            "model_id": "model",
+            "model_revision": "revision",
+            "session_id": "session",
+        }
+
+    monkeypatch.setattr(
+        complete_orchestrator_module,
+        "release_diagnostics_timeout_seconds",
+        lambda: 137,
+    )
+    monkeypatch.setattr(
+        complete_orchestrator_module,
+        "run_jdt_diagnostics",
+        fake_run,
+    )
+
+    receipt = complete_orchestrator_module._run_release_jdt_verification(tmp_path)
+
+    assert receipt["verification_backend"] == "jdt_core"
+    assert observed["factory"] is complete_orchestrator_module.JavaCoreService
+    assert observed["project_root"] == tmp_path
+    assert observed["timeout_seconds"] == 137
+    assert observed["kwargs"] == {}
+    assert "attempts" not in inspect.signature(
+        complete_orchestrator_module._run_release_jdt_verification
+    ).parameters
+
+
+def test_complete_release_has_no_30_second_legacy_jdt_override() -> None:
+    source = inspect.getsource(CompleteProductionOrchestrator.execute)
+
+    assert "timeout_seconds=30,\n                    attempts=1" not in source
+    assert "run_diagnostics_with_bootstrap_retry" not in inspect.getsource(
+        complete_orchestrator_module._run_release_jdt_verification
+    )
 
 
 def test_jdt_verification_timeout_defaults_to_colab_safe_window(monkeypatch) -> None:
