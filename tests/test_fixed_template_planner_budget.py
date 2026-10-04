@@ -11,6 +11,7 @@ from minecraft_mod_ai.execution_contract_policy import (
     PLANNER_RECORD_PAGE_OUTPUT_TOKEN_CEILING,
 )
 from minecraft_mod_ai.authored_structured_design import (
+    _PlannerPageRequest,
     _generate_authored_chunk,
     _generate_concern_record_count,
 )
@@ -210,13 +211,15 @@ def test_authored_planner_uses_tiny_count_then_fixed_single_field_page() -> None
     value = _generate_authored_chunk(
         router,
         "make the requested gameplay feature",
-        section=section,
-        chunk_index=1,
-        chunk_count=1,
-        concerns=page,
-        completed={},
-        include_evidence=False,
-        media_paths=(),
+        page=_PlannerPageRequest(
+            section=section,
+            chunk_index=1,
+            chunk_count=1,
+            concerns=page,
+            completed={},
+            include_evidence=False,
+            media_paths=(),
+        ),
         record_counts={concern: count},
     )
     assert len(value[concern]) == 2
