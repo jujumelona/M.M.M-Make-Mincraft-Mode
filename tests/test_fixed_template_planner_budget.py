@@ -275,11 +275,15 @@ def test_authored_planner_uses_tiny_count_then_fixed_single_field_page() -> None
     count_call = router.calls[-1]
     assert count_call["enable_tools"] is False
     assert count_call["force_non_thinking"] is True
+    count_schema = count_call["response_schema"]
+    assert count_call["output_token_ceiling"] == planner_page_output_token_ceiling(
+        count_schema
+    )
     assert (
         count_call["output_token_ceiling"]
-        == PLANNER_RECORD_COUNT_OUTPUT_TOKEN_CEILING
+        <= PLANNER_RECORD_COUNT_OUTPUT_TOKEN_CEILING
     )
-    assert list(count_call["response_schema"]["properties"]) == ["record_count"]
+    assert list(count_schema["properties"]) == ["record_count"]
 
     value = _generate_authored_chunk(
         router,
@@ -376,6 +380,24 @@ def test_planner_fixed_template_without_explicit_ceiling_fails_before_unbounded_
             ({"role": "user", "content": "fill the numeric value"},),
             response_schema=schema,
             enable_tools=False,
+        )
+
+    assert router.tool_calls == 0
+    assert router.text_calls == []
+
+
+def test_planner_fixed_template_rejects_explicit_ceiling_below_schema_proof() -> None:
+    router = _PlannerRouter()
+    required = planner_page_output_token_ceiling(_SCHEMA)
+
+    with pytest.raises(ValueError, match="FIXED_TEMPLATE_OUTPUT_BUDGET_TOO_SMALL"):
+        generate_fixed_template_value(
+            router,
+            "planner",
+            ({"role": "user", "content": "author one bounded page"},),
+            response_schema=_SCHEMA,
+            enable_tools=False,
+            output_token_ceiling=required - 1,
         )
 
     assert router.tool_calls == 0
