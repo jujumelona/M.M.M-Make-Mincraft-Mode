@@ -48,7 +48,7 @@ def blocking_jdt_errors(
 
 
 def jdt_release_evidence_passed(receipt: dict[str, Any] | None) -> bool:
-    """Require one real, clean JDT receipt for release authority."""
+    """Require one real, clean, identity-bound Java verifier receipt."""
 
     if receipt is None:
         return False
@@ -62,10 +62,32 @@ def jdt_release_evidence_passed(receipt: dict[str, Any] | None) -> bool:
         return False
     try:
         error_count = int(normalized.get("error_count", -1))
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if error_count != 0:
+        return False
+
+    # The persistent JDT Core owner proves completeness with a resolved build-model
+    # identity and a concrete owner session. Unlike the legacy LSP adapter it does not
+    # need to synthesize one publishDiagnostics event per clean source file, so
+    # files_opened is intentionally not part of this receipt shape.
+    if (
+        normalized.get("complete") is True
+        and str(normalized.get("verification_backend") or "").strip().casefold()
+        == "jdt_core"
+    ):
+        return all(
+            bool(str(normalized.get(key) or "").strip())
+            for key in ("model_id", "model_revision", "session_id")
+        )
+
+    # Keep accepting the legacy LSP receipt shape for callers that still use the
+    # standalone adapter outside complete-production release verification.
+    try:
         files_opened = int(normalized.get("files_opened", 0))
     except (TypeError, ValueError, OverflowError):
         return False
-    return error_count == 0 and files_opened > 0
+    return files_opened > 0
 
 
 def _jdt_infrastructure_unavailable(receipt: dict[str, Any] | None) -> bool:
