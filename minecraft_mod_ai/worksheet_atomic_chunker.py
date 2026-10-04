@@ -20,10 +20,7 @@ from .execution_contract_policy import (
     PLANNER_RECORD_NESTED_ARRAY_MAX_ITEMS,
     PLANNER_RECORD_PAGE_MAX_FIELDS,
 )
-from .model_output_atomicity_contract import (
-    _assert_closed_object_schemas,
-    structured_output_token_ceiling,
-)
+from .model_output_atomicity_contract import _assert_closed_object_schemas
 from .planning_detail_slots import DETAIL_RECORDS, record_field_schema
 from .structured_state_runtime import constrain_state_record_schema
 from .planning_detail_template import (
@@ -171,34 +168,12 @@ def _planner_page_field_schema(
     return result
 
 
-def planner_page_output_token_ceiling(schema: Mapping[str, Any]) -> int:
-    """Compatibility wrapper around the single structured-output budget authority."""
-
-    return structured_output_token_ceiling(schema)
-
-
-def pack_section_concerns(
-    section: str,
-    *,
-    max_chunk_size: int | None = None,
-) -> list[tuple[str, ...]]:
-    """Page every concern deterministically before inference.
-
-    max_chunk_size is retained as a compatibility override for the number of
-    record fields exposed per model page. Production uses the central planner page
-    width from execution_contract_policy.
-    """
+def pack_section_concerns(section: str) -> list[tuple[str, ...]]:
+    """Page every concern deterministically with the host-owned page width."""
 
     key = _normalize_section_name(section)
     records = DETAIL_RECORDS[key]
-    if max_chunk_size is not None:
-        if max_chunk_size < 1:
-            raise ValueError("max_chunk_size must be positive when supplied")
-        if max_chunk_size > PLANNER_RECORD_PAGE_MAX_FIELDS:
-            raise ValueError(
-                "planner page width override cannot exceed the host-owned field bound"
-            )
-    page_width = max_chunk_size or PLANNER_RECORD_PAGE_MAX_FIELDS
+    page_width = PLANNER_RECORD_PAGE_MAX_FIELDS
 
     chunks: list[tuple[str, ...]] = []
     for concern, columns in records.items():
@@ -216,7 +191,6 @@ def pack_section_concerns(
             schema = worksheet_chunk_schema(
                 key,
                 chunk,
-                include_evidence=False,
                 # Static packing validation must exercise the same count-fixed
                 # field-page contract as production.
                 record_counts={concern: 1},
@@ -291,9 +265,7 @@ def worksheet_chunk_schema(
     section: str,
     concerns: Sequence[str],
     *,
-    include_evidence: bool = False,
-    record_counts: Mapping[str, int] | None = None,
-    model_transport: bool = False,
+    record_counts: Mapping[str, int],
     state_symbols: Any = None,
 ) -> dict[str, Any]:
     """Return one bounded planner field-page schema with host-fixed cardinality.
@@ -356,9 +328,6 @@ def worksheet_chunk_schema(
             "items": item_schema,
         }
 
-    # include_evidence remains a compatibility argument for old callers, but
-    # evidence/applicability are host-owned and never widen a planner field page.
-    del include_evidence
     required = list(active)
     schema = {
         "type": "object",
@@ -367,25 +336,7 @@ def worksheet_chunk_schema(
         "required": required,
         "additionalProperties": False,
     }
-    if model_transport:
-        return _model_transport_schema(schema)
     return schema
-
-
-def worksheet_chunk_model_schema(
-    section: str,
-    concerns: Sequence[str],
-    *,
-    include_evidence: bool = False,
-    record_counts: Mapping[str, int] | None = None,
-) -> dict[str, Any]:
-    return worksheet_chunk_schema(
-        section,
-        concerns,
-        include_evidence=include_evidence,
-        record_counts=record_counts,
-        model_transport=True,
-    )
 
 
 def validate_worksheet_chunk_signal(
@@ -437,8 +388,7 @@ def worksheet_chunk_prompt(
     chunk_count: int,
     concerns: Sequence[str],
     *,
-    include_evidence: bool = False,
-    record_counts: Mapping[str, int] | None = None,
+    record_counts: Mapping[str, int],
 ) -> str:
     key = _normalize_section_name(section)
     # The host/schema transport owns JSON shape. The small model receives only the
@@ -446,7 +396,6 @@ def worksheet_chunk_prompt(
     worksheet_chunk_schema(
         key,
         concerns,
-        include_evidence=include_evidence,
         record_counts=record_counts,
     )
     projection = _chunk_projection(key, concerns)
