@@ -19,9 +19,11 @@ from .execution_contract_policy import (
     PLANNER_RECORD_FIELD_MAX_CHARS,
     PLANNER_RECORD_NESTED_ARRAY_MAX_ITEMS,
     PLANNER_RECORD_PAGE_MAX_FIELDS,
-    PLANNER_RECORD_PAGE_OUTPUT_TOKEN_CEILING,
 )
-from .model_output_atomicity_contract import _assert_closed_object_schemas
+from .model_output_atomicity_contract import (
+    _assert_closed_object_schemas,
+    structured_output_token_ceiling,
+)
 from .planning_detail_slots import DETAIL_RECORDS, record_field_schema
 from .structured_state_runtime import constrain_state_record_schema
 from .planning_detail_template import (
@@ -169,84 +171,10 @@ def _planner_page_field_schema(
     return result
 
 
-def _planner_schema_max_json_chars(schema: Mapping[str, Any]) -> int:
-    """Conservative upper bound for one grammar-constrained planner JSON page."""
-
-    if "const" in schema:
-        return len(json.dumps(schema["const"], ensure_ascii=True, separators=(",", ":")))
-    enum = schema.get("enum")
-    if isinstance(enum, list) and enum:
-        return max(
-            len(json.dumps(value, ensure_ascii=True, separators=(",", ":")))
-            for value in enum
-        )
-
-    types = _schema_types(schema)
-    candidates: list[int] = []
-
-    if "object" in types or isinstance(schema.get("properties"), Mapping):
-        properties = schema.get("properties")
-        if not isinstance(properties, Mapping):
-            raise ValueError("planner object schema must declare properties")
-        parts = 2  # {}
-        for index, (name, child) in enumerate(properties.items()):
-            if not isinstance(child, Mapping):
-                raise ValueError("planner object property schema must be an object")
-            if index:
-                parts += 1
-            parts += len(json.dumps(str(name), ensure_ascii=True)) + 1
-            parts += _planner_schema_max_json_chars(child)
-        candidates.append(parts)
-
-    if "array" in types:
-        try:
-            max_items = int(schema["maxItems"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise ValueError("planner array schema must declare finite maxItems") from exc
-        items = schema.get("items")
-        if not isinstance(items, Mapping):
-            raise ValueError("planner array schema must declare item schema")
-        item_chars = _planner_schema_max_json_chars(items)
-        candidates.append(2 + max_items * item_chars + max(0, max_items - 1))
-
-    if "string" in types:
-        try:
-            max_length = int(schema["maxLength"])
-        except (KeyError, TypeError, ValueError) as exc:
-            raise ValueError("planner string schema must declare finite maxLength") from exc
-        # A single logical character may be emitted as a six-character \\uXXXX escape.
-        candidates.append(2 + 6 * max(0, max_length))
-
-    if types & {"integer", "number"}:
-        # Numeric JSON spellings can be lexically unbounded even with numeric min/max
-        # (for example arbitrarily long fractional zeros). Planner pages must narrow
-        # such values to a bounded string/enum surface before inference.
-        raise ValueError("planner numeric schema has unbounded lexical output")
-
-    if "boolean" in types:
-        candidates.append(5)
-    if "null" in types:
-        candidates.append(4)
-
-    if not candidates:
-        raise ValueError(f"planner schema has no bounded serializable type: {schema!r}")
-    return max(candidates)
-
-
 def planner_page_output_token_ceiling(schema: Mapping[str, Any]) -> int:
-    """Derive one finite decode ceiling from the exact host-owned page schema."""
+    """Compatibility wrapper around the single structured-output budget authority."""
 
-    max_json_chars = _planner_schema_max_json_chars(schema)
-    # One tokenizer token cannot consume fewer than one serialized byte. Using the
-    # escaped-JSON character bound as a token bound is therefore conservative.
-    derived = max(64, max_json_chars + 32)
-    if derived > PLANNER_RECORD_PAGE_OUTPUT_TOKEN_CEILING:
-        raise ValueError(
-            "planner page schema exceeds the global atomic output bound; "
-            "split the page further before inference: "
-            f"derived={derived} limit={PLANNER_RECORD_PAGE_OUTPUT_TOKEN_CEILING}"
-        )
-    return derived
+    return structured_output_token_ceiling(schema)
 
 
 def pack_section_concerns(
