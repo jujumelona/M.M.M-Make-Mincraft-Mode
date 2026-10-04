@@ -248,7 +248,10 @@ def assert_all_planning_contracts_valid() -> None:
         for index, concerns in enumerate(chunks, start=1):
             is_first = index == 1
             chunk_schema = worksheet_chunk_schema(
-                section, concerns, include_evidence=is_first
+                section,
+                concerns,
+                include_evidence=is_first,
+                record_counts={str(concern): 1 for concern in concerns},
             )
             surface = f"worksheet_chunk:{section}:{index}"
             _assert_closed_object_schemas(chunk_schema, path=surface)
