@@ -80,7 +80,7 @@ from .final_artifact import (
 )
 from .geckolib_generator import generate_geckolib_entity_assets
 from .importer import ExistingProjectImportError, inspect_existing_project_archive
-from .java_lsp import JavaLanguageService
+from .java_core import JavaCoreService
 from .local_ai_sidecar_generator import (
     INTEGRATION_TYPE as LOCAL_AI_SIDECAR_INTEGRATION_TYPE,
     generate_local_ai_sidecar,
@@ -135,8 +135,8 @@ from .validation_checkpoint_policy import (
     validation_checkpoint_input,
 )
 from .validation_diagnostic_contract import (
+    release_diagnostics_timeout_seconds,
     run_diagnostics as run_jdt_diagnostics,
-    run_diagnostics_with_bootstrap_retry,
 )
 from .validator import validate_jar
 from .work_graph import (
@@ -154,16 +154,18 @@ def _run_release_jdt_verification(
     project_root: str | Path,
     *,
     timeout_seconds: int | None = None,
-    attempts: int | None = None,
 ) -> dict[str, Any]:
-    """Delegate release JDT retry policy to the shared diagnostic contract."""
+    """Verify release Java with the build-model-owned persistent JDT Core service."""
 
-    return run_diagnostics_with_bootstrap_retry(
-        JavaLanguageService,
+    effective_timeout = (
+        release_diagnostics_timeout_seconds()
+        if timeout_seconds is None
+        else timeout_seconds
+    )
+    return run_jdt_diagnostics(
+        JavaCoreService,
         project_root,
-        timeout_seconds=timeout_seconds,
-        attempts=attempts,
-        run_once=run_jdt_diagnostics,
+        timeout_seconds=effective_timeout,
     )
 
 
@@ -658,11 +660,7 @@ class CompleteProductionOrchestrator:
                     'validate-jdt-final',
                     {'graph_hash': work_plan.graph_hash, 'project_manifest': final_manifest},
                 ),
-                action=lambda: _run_release_jdt_verification(
-                    project_root,
-                    timeout_seconds=30,
-                    attempts=1,
-                ),
+                action=lambda: _run_release_jdt_verification(project_root),
                 encode=lambda value: value,
                 decode=lambda cached: cached,
                 validate_cached=lambda cached: cached_validation_is_reusable('validate-jdt-final', cached),
