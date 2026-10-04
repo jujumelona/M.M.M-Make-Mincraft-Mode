@@ -7,7 +7,9 @@ import pytest
 from minecraft_mod_ai.execution_contract_policy import (
     ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING,
 )
+from minecraft_mod_ai.authored_structured_design import _generate_authored_chunk
 from minecraft_mod_ai.fixed_template_generation import generate_fixed_template_value
+from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
 from minecraft_mod_ai.llama_finish_reason_contract import (
     LlamaCompletionBoundaryError,
     OUTPUT_EXHAUSTED,
@@ -106,3 +108,86 @@ def test_planner_completion_boundary_is_not_reclassified_as_semantic_rejection()
     assert "FIXED_TEMPLATE_PLANNER_SEMANTIC_UNIT_REJECTED" not in str(
         captured.value
     )
+
+
+class _ExhaustThenProjectRouter:
+    profile = "test"
+    registry = _Registry()
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def generate_tool_decision(self, role, messages, **kwargs):
+        del role, messages
+        parameters = kwargs["parameters"]
+        self.calls.append(dict(parameters))
+
+        if len(self.calls) == 1:
+            boundary = LlamaCompletionBoundaryError(
+                "bounded output exhausted",
+                kind=OUTPUT_EXHAUSTED,
+                completion_tokens=ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING,
+                max_tokens=ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING,
+            )
+            raise ModelBackendError(
+                role="planner",
+                model_id="test/model",
+                cause=boundary,
+            )
+
+        properties = parameters["properties"]
+        concern_names = [
+            name
+            for name, schema in properties.items()
+            if isinstance(schema, dict)
+            and schema.get("type") == "array"
+            and isinstance(schema.get("items"), dict)
+            and schema["items"].get("type") == "object"
+            and name != "inapplicable_concerns"
+        ]
+        assert len(concern_names) == 1
+        concern = concern_names[0]
+        item_properties = properties[concern]["items"]["properties"]
+        assert len(item_properties) == 1
+        field_name = next(iter(item_properties))
+        return {concern: [{field_name: f"value-{field_name}"}]}
+
+
+def test_single_concern_output_exhaustion_narrows_to_host_field_projections() -> None:
+    selected_section = ""
+    selected_concern = ""
+    selected_fields: tuple[str, ...] = ()
+    for section, concerns in DETAIL_RECORDS.items():
+        if section == "state_model":
+            continue
+        for concern, columns in concerns.items():
+            fields = tuple(columns.split())
+            if len(fields) >= 2:
+                selected_section = section
+                selected_concern = concern
+                selected_fields = fields
+                break
+        if selected_concern:
+            break
+
+    assert selected_section
+    assert selected_concern
+    router = _ExhaustThenProjectRouter()
+
+    value = _generate_authored_chunk(
+        router,
+        "build the requested feature",
+        section=selected_section,
+        chunk_index=1,
+        chunk_count=1,
+        concerns=(selected_concern,),
+        completed={},
+        include_evidence=False,
+        media_paths=(),
+    )
+
+    assert len(router.calls) == 1 + len(selected_fields)
+    assert len(value[selected_concern]) == 1
+    assert set(value[selected_concern][0]) == set(selected_fields)
+    for field_name in selected_fields:
+        assert value[selected_concern][0][field_name] == f"value-{field_name}"
