@@ -150,6 +150,16 @@ class ProductionModule(Mapping[str, Any]):
             raise SpecValidationError(f"Unsupported production module kind: {self.kind!r}")
         if not isinstance(self.config, dict):
             raise SpecValidationError(f"Module config must be an object: {self.module_id}")
+        typed_plan_ir = self.config.get("typed_plan_ir")
+        if self.kind == "typed_host":
+            if not isinstance(typed_plan_ir, dict):
+                raise SpecValidationError(
+                    f"TYPED_HOST_PLAN_REQUIRED: {self.module_id}"
+                )
+        elif isinstance(typed_plan_ir, dict):
+            raise SpecValidationError(
+                f"TYPED_HOST_KIND_REQUIRED: {self.module_id}"
+            )
         if self.kind == "integration" and self.config.get("integration_type") == "mmm_local_ai_sidecar":
             from .local_ai_sidecar_generator import (
                 LocalAiSidecarGenerationError,
@@ -339,6 +349,48 @@ class CompleteProposal:
                     f"Module {module.module_id} may not depend on itself."
                 )
         self._validate_acyclic()
+
+        raw_artifact_jobs = self.game_design.get("_artifact_jobs", ())
+        if raw_artifact_jobs is None:
+            raw_artifact_jobs = ()
+        if (
+            not isinstance(raw_artifact_jobs, (list, tuple))
+            or isinstance(raw_artifact_jobs, (str, bytes, bytearray))
+        ):
+            raise SpecValidationError(
+                "game_design._artifact_jobs must be an array when supplied."
+            )
+        artifact_owners: set[str] = set()
+        for index, raw_job in enumerate(raw_artifact_jobs):
+            if not isinstance(raw_job, Mapping):
+                raise SpecValidationError(
+                    f"Artifact job {index} must be an object."
+                )
+            owner = str(raw_job.get("owner_module") or "").strip()
+            if not owner:
+                raise SpecValidationError(
+                    f"Artifact job {index} must declare owner_module."
+                )
+            if owner not in module_ids:
+                raise SpecValidationError(
+                    f"Artifact job {index} references unknown owner module {owner!r}."
+                )
+            artifact_owners.add(owner)
+
+        from .platform_backend_contract import native_production_route_available
+
+        unroutable_modules = [
+            f"{module.module_id}/{module.kind}"
+            for module in self.modules
+            if module.module_id not in artifact_owners
+            and not native_production_route_available(module.kind, module.config)
+        ]
+        if unroutable_modules:
+            raise SpecValidationError(
+                "DETERMINISTIC_BACKEND_REQUIRED: production module has neither "
+                "a native deterministic route nor an artifact owner: "
+                + ", ".join(unroutable_modules[:20])
+            )
 
         asset_ids: set[str] = set()
         for asset in self.assets:
