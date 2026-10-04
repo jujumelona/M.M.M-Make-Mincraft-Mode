@@ -10,6 +10,7 @@ from minecraft_mod_ai.model_output_atomicity_contract import (
     assert_installed,
     install,
     is_atomic_model_schema,
+    structured_output_token_ceiling,
     _model_transport_schema,
 )
 
@@ -274,3 +275,88 @@ def test_model_transport_preserves_explicit_domain_bounds() -> None:
     assert projected["properties"]["value"]["maxLength"] == 4096
     assert projected["properties"]["items"]["maxItems"] == 12
     assert projected["properties"]["items"]["items"]["maxLength"] == 1024
+
+
+def test_structured_output_ceiling_is_schema_derived() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "value": {"type": "string", "maxLength": 32},
+        },
+        "required": ["value"],
+        "additionalProperties": False,
+    }
+
+    ceiling = structured_output_token_ceiling(schema)
+
+    assert 64 <= ceiling < 4096
+
+
+def test_transport_projects_small_integer_range_to_finite_enum() -> None:
+    logical = {
+        "type": "object",
+        "properties": {
+            "count": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 4,
+            }
+        },
+        "required": ["count"],
+        "additionalProperties": False,
+    }
+
+    projected = _model_transport_schema(logical)
+
+    assert projected["properties"]["count"]["enum"] == [0, 1, 2, 3, 4]
+    assert structured_output_token_ceiling(projected) >= 64
+
+
+def test_structured_output_ceiling_supports_oneof_and_local_ref() -> None:
+    schema = {
+        "$defs": {
+            "short_text": {
+                "type": "string",
+                "maxLength": 12,
+            }
+        },
+        "type": "object",
+        "properties": {
+            "choice": {
+                "oneOf": [
+                    {"$ref": "#/$defs/short_text"},
+                    {"type": "boolean"},
+                ]
+            }
+        },
+        "required": ["choice"],
+        "additionalProperties": False,
+    }
+
+    assert 64 <= structured_output_token_ceiling(schema) < 4096
+
+
+def test_structured_output_ceiling_rejects_unbounded_numeric_lexical_surface() -> None:
+    schema = {
+        "type": "object",
+        "properties": {"value": {"type": "number"}},
+        "required": ["value"],
+        "additionalProperties": False,
+    }
+
+    with pytest.raises(ValueError, match="unbounded lexical output"):
+        structured_output_token_ceiling(schema)
+
+
+def test_structured_output_ceiling_rejects_oversized_page_before_inference() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "value": {"type": "string", "maxLength": 1024},
+        },
+        "required": ["value"],
+        "additionalProperties": False,
+    }
+
+    with pytest.raises(ValueError, match="exceeds the global atomic output bound"):
+        structured_output_token_ceiling(schema)
