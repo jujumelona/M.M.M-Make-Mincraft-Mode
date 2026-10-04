@@ -4,15 +4,11 @@ import math
 import re
 from typing import Any
 
+from .platform_backend_contract import SYSTEM_PACK_KINDS
+
 _ID = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 _RESOURCE_ID = re.compile(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$")
-_PACK_KINDS = {
-    "quest-system": {"quest"},
-    "class-skill-system": {"class", "skill"},
-    "economy-shop": {"economy", "shop"},
-    "gui-networking": {"gui", "networking"},
-    "party-guild": {"party", "guild"},
-}
+_PACK_KINDS = SYSTEM_PACK_KINDS
 _QUEST_OBJECTIVES = {"kill", "break", "manual"}
 _ACTION_TYPES = {"message", "grant_item", "status_effect"}
 
