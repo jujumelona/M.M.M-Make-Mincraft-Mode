@@ -162,8 +162,13 @@ def pack_section_concerns(
 
     key = _normalize_section_name(section)
     records = DETAIL_RECORDS[key]
-    if max_chunk_size is not None and max_chunk_size < 1:
-        raise ValueError("max_chunk_size must be positive when supplied")
+    if max_chunk_size is not None:
+        if max_chunk_size < 1:
+            raise ValueError("max_chunk_size must be positive when supplied")
+        if max_chunk_size > PLANNER_RECORD_PAGE_MAX_FIELDS:
+            raise ValueError(
+                "planner page width override cannot exceed the host-owned field bound"
+            )
     page_width = max_chunk_size or PLANNER_RECORD_PAGE_MAX_FIELDS
 
     chunks: list[tuple[str, ...]] = []
@@ -223,14 +228,20 @@ def worksheet_chunk_schema(
     del state_symbols
     key = _normalize_section_name(section)
     active = tuple(concerns)
-    if not active:
-        raise ValueError(f"worksheet chunk for {key!r} cannot be empty")
+    if len(active) != 1:
+        raise ValueError(
+            f"worksheet planner page for {key!r} must contain exactly one concern"
+        )
     projection = _chunk_projection(key, concerns)
 
     properties: dict[str, Any] = {}
-    authored_signal: list[dict[str, Any]] = []
     for concern in active:
         fields = projection[concern]
+        if len(fields) > PLANNER_RECORD_PAGE_MAX_FIELDS:
+            raise ValueError(
+                f"worksheet planner page for {key}.{concern} exposes "
+                f"{len(fields)} fields; maximum is {PLANNER_RECORD_PAGE_MAX_FIELDS}"
+            )
         field_schemas = {
             field: _planner_page_field_schema(
                 record_field_schema(key, concern, field)
@@ -269,7 +280,6 @@ def worksheet_chunk_schema(
         if count is not None:
             concern_array["minItems"] = count
         properties[concern] = concern_array
-        authored_signal.append({"required": [concern]})
 
     properties["inapplicable_concerns"] = {
         "type": "array",
@@ -288,13 +298,6 @@ def worksheet_chunk_schema(
             "additionalProperties": False,
         },
     }
-    authored_signal.append(
-        {
-            "required": ["inapplicable_concerns"],
-            "properties": {"inapplicable_concerns": {"minItems": 1}},
-        }
-    )
-
     if include_evidence:
         properties["constraint_evidence_refs"] = {
             "type": "array",
@@ -307,12 +310,14 @@ def worksheet_chunk_schema(
             "items": {"type": "string", "minLength": 1, "maxLength": 128},
         }
 
+    required = list(active)
+    if include_evidence:
+        required.append("constraint_evidence_refs")
     schema = {
         "type": "object",
-        "description": f"Complete concern chunk for {key}: {', '.join(active)}",
+        "description": f"Bounded concern field page for {key}: {active[0]}",
         "properties": properties,
-        "required": [],
-        "anyOf": authored_signal,
+        "required": required,
         "additionalProperties": False,
     }
     if model_transport:
