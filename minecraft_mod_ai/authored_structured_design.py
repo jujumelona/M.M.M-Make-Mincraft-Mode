@@ -15,7 +15,10 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from .execution_contract_policy import PLANNER_RECORD_PAGE_OUTPUT_TOKEN_CEILING
+from .execution_contract_policy import (
+    PLANNER_RECORD_COUNT_OUTPUT_TOKEN_CEILING,
+    PLANNER_RECORD_PAGE_OUTPUT_TOKEN_CEILING,
+)
 from .planning_detail_slots import DETAIL_RECORDS
 from .planning_detail_template import WORKSHEET_SECTIONS, worksheet_section_schema
 
@@ -246,6 +249,113 @@ def _authored_chunk_messages(
     )
 
 
+
+def _authored_cardinality_messages(
+    prompt: str,
+    *,
+    section: str,
+    concern: str,
+    completed: Mapping[str, Mapping[str, Any]],
+    state_symbols: Any = None,
+    section_context: Mapping[str, Any] | None = None,
+) -> tuple[dict[str, str], ...]:
+    from .planning_section_dependencies import SECTION_DEPENDENCIES
+    from .worksheet_atomic_chunker import worksheet_concern_cardinality_prompt
+
+    dependencies = {
+        dependency: deepcopy(completed[dependency])
+        for dependency in SECTION_DEPENDENCIES.get(section, ())
+        if dependency in completed
+    }
+    user_parts = [
+        "User request:\n" + prompt,
+        "Canonical prerequisite sections:\n"
+        + json.dumps(
+            dependencies,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+    ]
+    if state_symbols:
+        symbols_text = (
+            state_symbols.prompt_text()
+            if hasattr(state_symbols, "prompt_text")
+            else str(state_symbols)
+        )
+        if symbols_text:
+            user_parts.append(symbols_text)
+    if section_context:
+        user_parts.append(
+            f"Canonical {section} records authored so far:\n"
+            + json.dumps(
+                section_context,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+    user_parts.append(
+        worksheet_concern_cardinality_prompt(section, concern)
+    )
+    return (
+        {
+            "role": "system",
+            "content": (
+                "Make exactly one bounded semantic decision: how many records the declared "
+                "concern requires. Do not author record fields, prose, loop control, or tool "
+                "calls. The host owns iteration and all subsequent field pages."
+            ),
+        },
+        {
+            "role": "user",
+            "content": "\n\n".join(user_parts),
+        },
+    )
+
+
+def _generate_concern_record_count(
+    router: Any,
+    prompt: str,
+    *,
+    section: str,
+    concern: str,
+    completed: Mapping[str, Mapping[str, Any]],
+    state_symbols: Any = None,
+    section_context: Mapping[str, Any] | None = None,
+) -> int:
+    from .fixed_template_generation import generate_fixed_template_value
+    from .worksheet_atomic_chunker import worksheet_concern_cardinality_schema
+
+    value = generate_fixed_template_value(
+        router,
+        "planner",
+        _authored_cardinality_messages(
+            prompt,
+            section=section,
+            concern=concern,
+            completed=completed,
+            state_symbols=state_symbols,
+            section_context=section_context,
+        ),
+        response_schema=worksheet_concern_cardinality_schema(section, concern),
+        media_paths=(),
+        enable_tools=False,
+        description=f"Choose bounded record cardinality for {section}.{concern}.",
+        output_token_ceiling=PLANNER_RECORD_COUNT_OUTPUT_TOKEN_CEILING,
+    )
+    if not isinstance(value, Mapping):
+        raise ValueError(
+            f"AUTHORED_STRUCTURED_DESIGN: cardinality for {section}.{concern} must be an object"
+        )
+    try:
+        return int(value["record_count"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(
+            f"AUTHORED_STRUCTURED_DESIGN: invalid cardinality for {section}.{concern}"
+        ) from exc
+
+
 def _generate_authored_chunk(
     router: Any,
     prompt: str,
@@ -366,23 +476,28 @@ def author_structured_sections(
             base_context: Mapping[str, Any] | None = None,
         ) -> tuple[list[dict[str, Any]], list[tuple[int, dict[str, Any]]]]:
             authored_rows: list[dict[str, Any]] = []
-            fixed_count: int | None = None
+            fixed_count = _generate_concern_record_count(
+                router,
+                prompt,
+                section=section,
+                concern=concern,
+                completed=completed_snapshot,
+                state_symbols=state_symbols,
+                section_context=base_context,
+            )
             results: list[tuple[int, dict[str, Any]]] = []
 
-            for page_position, (index, page) in enumerate(pages):
-                if fixed_count == 0 and page_position > 0:
-                    results.append((index, {concern: []}))
-                    continue
+            if fixed_count == 0:
+                return [], [
+                    (index, {concern: []})
+                    for index, _page in pages
+                ]
 
+            for index, page in pages:
                 context = deepcopy(dict(base_context or {}))
                 if authored_rows:
                     context[concern] = deepcopy(authored_rows)
 
-                counts = (
-                    {concern: fixed_count}
-                    if fixed_count is not None
-                    else None
-                )
                 value = _generate_authored_chunk(
                     router,
                     prompt,
@@ -391,11 +506,11 @@ def author_structured_sections(
                     chunk_count=len(chunks),
                     concerns=page,
                     completed=completed_snapshot,
-                    include_evidence=index == 1,
+                    include_evidence=False,
                     media_paths=media_paths,
                     state_symbols=state_symbols,
                     section_context=context or None,
-                    record_counts=counts,
+                    record_counts={concern: fixed_count},
                 )
                 rows = value.get(concern, [])
                 if not isinstance(rows, list):
@@ -403,9 +518,7 @@ def author_structured_sections(
                         f"AUTHORED_STRUCTURED_DESIGN: {section}.{concern} page "
                         f"{index} must return a record array"
                     )
-                if fixed_count is None:
-                    fixed_count = len(rows)
-                elif len(rows) != fixed_count:
+                if len(rows) != fixed_count:
                     raise ValueError(
                         f"AUTHORED_STRUCTURED_DESIGN_CARDINALITY_DRIFT: "
                         f"{section}.{concern} expected {fixed_count} rows, got {len(rows)}"
