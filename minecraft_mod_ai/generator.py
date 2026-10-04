@@ -874,7 +874,7 @@ public final class {renderer_class}
         )
 
     def _write_contract(self, root: Path, spec: ModSpec) -> None:
-        reviewed_kinds = tuple(getattr(spec.platform, "deterministic_module_kinds", ()) or ())
+        reviewed_kinds = effective_target_backend_capabilities(spec.platform)
         if not reviewed_kinds:
             raise GenerationError(
                 f"Target {spec.platform.minecraft_version} has no reviewed deterministic module templates."
