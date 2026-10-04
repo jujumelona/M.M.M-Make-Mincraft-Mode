@@ -7,7 +7,7 @@ from collections.abc import Callable
 from functools import wraps
 from typing import Any
 
-from .platform_backend_contract import effective_target_backend_capabilities
+from .platform_backend_contract import deterministic_backend_capabilities
 from .platform_catalog import adapter_for_lock_values, adapter_for_target
 
 
@@ -81,13 +81,13 @@ def _plan_complete_game_impl(
         router._mmm_requested_minecraft_version = adapter.minecraft_version
         router._mmm_requested_loader = adapter.loader
         router._mmm_target_adapter = adapter
-        router._mmm_deterministic_module_kinds = effective_target_backend_capabilities(adapter)
+        router._mmm_deterministic_module_kinds = deterministic_backend_capabilities(adapter)
     if existing_minecraft_version:
         adapter = _required_adapter(module, existing_minecraft_version, existing_loader or loader)
         router._mmm_existing_minecraft_version = adapter.minecraft_version
         router._mmm_existing_loader = adapter.loader
         router._mmm_target_adapter = adapter
-        router._mmm_deterministic_module_kinds = effective_target_backend_capabilities(adapter)
+        router._mmm_deterministic_module_kinds = deterministic_backend_capabilities(adapter)
     proposal = module.CompleteGameDesignPlanner(router).plan(
         prompt, media_paths=self._scoped_media_paths(media_paths),
         existing_input_sha256=existing_input_sha256,
