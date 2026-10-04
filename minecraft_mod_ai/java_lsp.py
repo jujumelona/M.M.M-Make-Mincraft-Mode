@@ -9,6 +9,8 @@ import shutil
 import subprocess
 import threading
 import time
+import urllib.parse
+import urllib.request
 from collections import deque
 from collections.abc import Iterable, Mapping
 from pathlib import Path
@@ -969,6 +971,27 @@ def _diagnostic_wait_seconds(
     return wait_seconds
 
 
+def _file_uri_identity(uri: str) -> str | None:
+    """Normalize equivalent file URI spellings without weakening workspace scope."""
+
+    try:
+        parsed = urllib.parse.urlsplit(uri)
+    except ValueError:
+        return None
+    if parsed.scheme.casefold() != "file":
+        return None
+    try:
+        path_text = urllib.request.url2pathname(urllib.parse.unquote(parsed.path))
+    except (ValueError, UnicodeError):
+        return None
+    if parsed.netloc and parsed.netloc.casefold() != "localhost":
+        path_text = f"//{parsed.netloc}{path_text}"
+    try:
+        return os.path.normcase(os.path.abspath(path_text))
+    except (OSError, ValueError):
+        return None
+
+
 def _published_diagnostics(
     message: dict[str, Any],
     expected_uris: set[str],
@@ -978,9 +1001,31 @@ def _published_diagnostics(
     params = message.get("params", {})
     if not isinstance(params, dict):
         return None
-    uri = str(params.get("uri", ""))
+    published_uri = str(params.get("uri", ""))
+    uri = published_uri
     if uri not in expected_uris:
-        return None
+        published_identity = _file_uri_identity(published_uri)
+        expected_by_identity = {
+            identity: expected
+            for expected in expected_uris
+            if (identity := _file_uri_identity(expected)) is not None
+        }
+        uri = expected_by_identity.get(published_identity, "")
+        if not uri:
+            from .root_cause_trace import emit_root_cause
+
+            emit_root_cause(
+                "jdt_diagnostics_uri_unmatched",
+                stage="verify",
+                operation="java_diagnostics",
+                gate="diagnostic_transport",
+                result="INFO",
+                details={
+                    "published_uri": published_uri,
+                    "expected_uris": sorted(expected_uris),
+                },
+            )
+            return None
     values = params.get("diagnostics")
     if not isinstance(values, list) or any(not isinstance(item, dict) for item in values):
         raise JDTLanguageServerError(
@@ -1021,6 +1066,8 @@ def _refresh_open_document_diagnostics(
     being inferred from silence.
     """
 
+    from .root_cause_trace import emit_root_cause
+
     for uri in sorted(expected_uris):
         rpc.request(
             "workspace/executeCommand",
@@ -1032,6 +1079,17 @@ def _refresh_open_document_diagnostics(
                 deadline,
                 operation="explicit diagnostics refresh",
             ),
+        )
+        emit_root_cause(
+            "jdt_explicit_diagnostics_refresh",
+            stage="verify",
+            operation="java_diagnostics",
+            gate="diagnostic_transport",
+            result="PASS",
+            details={
+                "uri": uri,
+                "queued_messages_after_refresh": rpc.messages.qsize(),
+            },
         )
 
 
