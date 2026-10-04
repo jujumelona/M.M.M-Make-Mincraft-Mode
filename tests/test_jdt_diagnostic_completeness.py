@@ -17,9 +17,14 @@ class _FakeRpc:
         self.stderr: list[str] = []
         self._mmm_reader_failure = None
         self.sent: list[dict[str, object]] = []
+        self.requests: list[tuple[str, dict[str, object], float]] = []
 
     def send(self, payload: dict[str, object]) -> None:
         self.sent.append(payload)
+
+    def request(self, method: str, params: dict[str, object], timeout: float):
+        self.requests.append((method, params, timeout))
+        return None
 
 
 def _published(uri: str, diagnostics: object) -> dict[str, object]:
@@ -27,6 +32,81 @@ def _published(uri: str, diagnostics: object) -> dict[str, object]:
         "jsonrpc": "2.0",
         "method": "textDocument/publishDiagnostics",
         "params": {"uri": uri, "diagnostics": diagnostics},
+    }
+
+
+def test_explicit_refresh_requests_each_open_document_with_lifecycle_fence() -> None:
+    rpc = _FakeRpc([])
+    deadline = java_lsp.time.monotonic() + 1.0
+
+    java_lsp._refresh_open_document_diagnostics(
+        rpc,
+        expected_uris={"file:///B.java", "file:///A.java"},
+        deadline=deadline,
+    )
+
+    assert [method for method, _params, _timeout in rpc.requests] == [
+        "workspace/executeCommand",
+        "workspace/executeCommand",
+    ]
+    assert [params for _method, params, _timeout in rpc.requests] == [
+        {
+            "command": "java.project.refreshDiagnostics",
+            "arguments": ["file:///A.java", "thisFile", False, True],
+        },
+        {
+            "command": "java.project.refreshDiagnostics",
+            "arguments": ["file:///B.java", "thisFile", False, True],
+        },
+    ]
+    assert all(timeout > 0 for _method, _params, timeout in rpc.requests)
+
+
+def test_clean_file_diagnostics_are_forced_instead_of_inferred_from_silence(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    source_root = tmp_path / "src" / "main" / "java"
+    source_root.mkdir(parents=True)
+    source = source_root / "Clean.java"
+    source.write_text("final class Clean {}\n", encoding="utf-8")
+
+    class RefreshingRpc(_FakeRpc):
+        def __init__(self) -> None:
+            super().__init__([])
+            self.notifications: list[tuple[str, dict[str, object]]] = []
+
+        def notify(self, method: str, params: dict[str, object]) -> None:
+            self.notifications.append((method, params))
+
+        def request(self, method: str, params: dict[str, object], timeout: float):
+            self.requests.append((method, params, timeout))
+            assert method == "workspace/executeCommand"
+            arguments = params["arguments"]
+            assert isinstance(arguments, list)
+            uri = str(arguments[0])
+            self.messages.put(_published(uri, []))
+            return None
+
+    service = java_lsp.JavaLanguageService(diagnostic_quiet_seconds=0.0)
+    rpc = RefreshingRpc()
+    monkeypatch.setattr(java_lsp, "assert_server_safe_source_sets", lambda _root: None)
+    monkeypatch.setattr(
+        service,
+        "_ensure_rpc_locked",
+        lambda _root, *, timeout_seconds, deadline=None: rpc,
+    )
+
+    result = service.diagnostics(tmp_path, timeout_seconds=1)
+
+    uri = source.resolve().as_uri()
+    assert result["diagnostics"] == {uri: []}
+    assert result["files_opened"] == 1
+    assert result["error_count"] == 0
+    assert result["warning_count"] == 0
+    assert rpc.requests[0][1] == {
+        "command": "java.project.refreshDiagnostics",
+        "arguments": [uri, "thisFile", False, True],
     }
 
 
