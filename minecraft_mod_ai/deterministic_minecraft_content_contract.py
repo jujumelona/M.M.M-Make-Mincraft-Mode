@@ -19,7 +19,10 @@ from .minecraft_generation_contract import (
     config_schema_for_kind,
     validate_generation_config,
 )
-from .platform_backend_contract import supported_extended_content_kinds
+from .platform_backend_contract import (
+    effective_target_backend_capabilities,
+    supported_extended_content_kinds,
+)
 
 _TOOL_NAME = "apply_minecraft_content_spec"
 _PARTIAL_EDIT_TOOL = "apply_source_edit"
@@ -271,7 +274,7 @@ def _execute(
             set(extended_module._SUPPORTED)
             & set(
                 supported_extended_content_kinds(
-                    adapter.deterministic_module_kinds
+                    effective_target_backend_capabilities(adapter)
                 )
             )
         )
@@ -332,8 +335,8 @@ def _install_runtime(runtime_module: Any, extended_module: Any) -> None:
                         set(extended_module._SUPPORTED)
                         & set(
                             supported_extended_content_kinds(
-                                adapter.deterministic_module_kinds
-                            )
+                    effective_target_backend_capabilities(adapter)
+                )
                         )
                     )
                 )
