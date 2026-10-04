@@ -297,11 +297,6 @@ def _build_research_graph(
     return payload
 
 
-# Temporary compatibility name for callers pinned to the old graph-builder symbol.
-# It is not a fallback path: both names resolve to the same strict implementation.
-_serial_retrieve_domain_evidence = _build_research_graph
-
-
 def retrieve_domain_evidence(
     research_brief: dict[str, Any],
     *,
