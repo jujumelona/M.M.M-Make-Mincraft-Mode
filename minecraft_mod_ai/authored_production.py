@@ -99,7 +99,7 @@ def _compile_new_authored_modules(
         if deterministic_module_kinds is not None
         else None
     )
-    from .typed_platform_ir import PLATFORM_CONTENT_KINDS
+    from .platform_backend_contract import missing_production_backend_capabilities
 
     platform_modules: list[ProductionModule] = []
     state_store_config: dict[str, Any] | None = None
@@ -132,15 +132,18 @@ def _compile_new_authored_modules(
                 raise ValueError("TYPED_PLATFORM_RESOURCE_POLICY_DUPLICATE")
             resource_policy_config = deepcopy(dict(item["config"]))
             continue
-        if (
-            target_deterministic_kinds is not None
-            and kind in PLATFORM_CONTENT_KINDS
-            and kind not in target_deterministic_kinds
-        ):
-            raise ValueError(
-                "TYPED_PLATFORM_DETERMINISTIC_BACKEND_REQUIRED: "
-                f"bound target has no deterministic backend for {kind!r}"
+        if target_deterministic_kinds is not None:
+            missing_backend = missing_production_backend_capabilities(
+                target_deterministic_kinds,
+                kind,
+                item["config"],
             )
+            if missing_backend:
+                raise ValueError(
+                    "TYPED_PLATFORM_DETERMINISTIC_BACKEND_REQUIRED: "
+                    f"{kind!r} requires missing backend capabilities "
+                    f"{sorted(missing_backend)}"
+                )
         platform_modules.append(
             ProductionModule(
                 module_id=module_id,
