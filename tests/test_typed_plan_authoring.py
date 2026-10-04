@@ -312,6 +312,16 @@ def test_all_platform_authoring_schemas_satisfy_atomic_ceiling():
                 return "minecraft:stone"
             if "a-z" in pat:
                 return "test"
+            # When the effective decoder schema drops pattern (llama.cpp
+            # precedence fix), maxLength is the only remaining hint.
+            max_len = s.get("maxLength", 0)
+            if not pat and isinstance(max_len, int):
+                # Transport-encoded integer (maxLength=20) or number (maxLength=32)
+                if max_len == 20 or max_len == 32:
+                    return "1"
+                # Resource ID fields use maxLength >= 64
+                if max_len >= 64:
+                    return "minecraft:stone"
             return "mock_name"
         if t == "integer":
             return int(s.get("minimum", 1))

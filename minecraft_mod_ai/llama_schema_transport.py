@@ -158,12 +158,24 @@ def project_llama_transport_schema(schema: Any) -> dict[str, Any]:
         result["enum"] = enum
     if "const" in schema:
         result["const"] = copy.deepcopy(schema["const"])
-    if "pattern" in schema and isinstance(schema["pattern"], str):
+    # llama.cpp keyword precedence: its JSON-schema → grammar conversion checks
+    # "pattern" first and returns immediately, so "maxLength" / "minLength" are
+    # never reached when "pattern" is present.  To guarantee a finite decode
+    # bound, keep maxLength (sampler-enforced) and drop pattern (host-validated
+    # after generation) when both coexist.
+    has_pattern = "pattern" in schema and isinstance(schema["pattern"], str)
+    has_max_length = "maxLength" in schema and isinstance(schema["maxLength"], int)
+    if has_pattern and not has_max_length:
+        # Pattern is the only string constraint — pass it through.
         result["pattern"] = schema["pattern"]
-    if "maxLength" in schema and isinstance(schema["maxLength"], int):
+    if has_max_length:
+        # maxLength guarantees finite output.  Drop pattern so llama.cpp
+        # actually reaches the length-constraint code path.
         result["maxLength"] = schema["maxLength"]
     if "minLength" in schema and isinstance(schema["minLength"], int):
-        result["minLength"] = schema["minLength"]
+        if not has_pattern or has_max_length:
+            # minLength is only reachable in llama.cpp when pattern is absent.
+            result["minLength"] = schema["minLength"]
     if result:
         return result
 

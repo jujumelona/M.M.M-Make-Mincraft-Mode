@@ -68,7 +68,7 @@ def test_non_qwen_receives_only_structural_transport_schema():
     assert payload["json_schema"] == {
         "type": "object",
         "properties": {
-            "status": {"type": "string", "minLength": 3, "pattern": "^[a-z]+$"},
+            "status": {"type": "string", "pattern": "^[a-z]+$"},
             "items": {"type": "array", "items": {"type": "integer"}, "minItems": 2},
         },
         "required": ["status", "items"],
@@ -189,3 +189,61 @@ def test_state_expr_schema_preserves_discriminated_oneof_and_variant_required_fi
         "abs", "count", "len", "max", "min", "size", "sum"
     ]
 
+
+def test_pattern_plus_maxlength_drops_pattern_for_llama_cpp_precedence():
+    """llama.cpp returns early on 'pattern', skipping maxLength/minLength.
+
+    When both coexist, only maxLength must reach the decoder to guarantee
+    finite output.  Pattern validation is host-only.
+    """
+    schema = {
+        "type": "string",
+        "pattern": r"^[a-z0-9_.-]+:[a-z0-9_./-]+$",
+        "maxLength": 128,
+        "minLength": 1,
+    }
+
+    projected = project_llama_transport_schema(schema)
+
+    assert projected == {"type": "string", "maxLength": 128, "minLength": 1}
+    assert "pattern" not in projected
+
+
+def test_pattern_only_without_maxlength_is_preserved():
+    """If pattern is the only string constraint, pass it through."""
+    schema = {
+        "type": "string",
+        "pattern": r"^[a-z]+$",
+    }
+
+    projected = project_llama_transport_schema(schema)
+
+    assert projected == {"type": "string", "pattern": "^[a-z]+$"}
+    assert "maxLength" not in projected
+
+
+def test_integer_transport_schema_drops_pattern_keeps_maxlength():
+    """_model_transport_schema converts integers to string+pattern+maxLength.
+
+    After project_llama_transport_schema, only maxLength should remain so
+    the decoder enforces finite output and the host validates the digit pattern.
+    """
+    from minecraft_mod_ai.model_output_atomicity_contract import (
+        effective_model_transport_schema,
+    )
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "count": {"type": "integer"},
+        },
+        "required": ["count"],
+        "additionalProperties": False,
+    }
+
+    effective = effective_model_transport_schema(schema)
+
+    count_schema = effective["properties"]["count"]
+    assert count_schema["type"] == "string"
+    assert count_schema["maxLength"] == 20
+    assert "pattern" not in count_schema
