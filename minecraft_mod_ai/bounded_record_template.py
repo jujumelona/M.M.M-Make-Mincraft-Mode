@@ -5,9 +5,6 @@ import json
 from copy import deepcopy
 from typing import Any
 
-from jsonschema import Draft202012Validator
-
-from .design_generation_schema import context_bound_record_schema
 from .execution_contract_policy import PLANNER_RECORD_COUNT_OUTPUT_TOKEN_CEILING
 from .fixed_template_generation import generate_fixed_template_value
 from .parallel_model_tasks import deterministic_model_map, serialized_callback
@@ -32,6 +29,7 @@ def record_cardinality_response_schema(
                 "type": "integer",
                 "minimum": 0,
                 "maximum": _MAX_RECORD_SET_ITEMS,
+                "enum": list(range(_MAX_RECORD_SET_ITEMS + 1)),
             },
         },
         "required": ["count"],
