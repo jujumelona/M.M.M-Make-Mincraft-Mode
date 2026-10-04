@@ -68,7 +68,7 @@ def test_non_qwen_receives_only_structural_transport_schema():
     assert payload["json_schema"] == {
         "type": "object",
         "properties": {
-            "status": {"type": "string", "pattern": "^[a-z]+$"},
+            "status": {"type": "string", "minLength": 3, "pattern": "^[a-z]+$"},
             "items": {"type": "array", "items": {"type": "integer"}, "minItems": 2},
         },
         "required": ["status", "items"],
@@ -190,11 +190,10 @@ def test_state_expr_schema_preserves_discriminated_oneof_and_variant_required_fi
     ]
 
 
-def test_pattern_plus_maxlength_drops_pattern_for_llama_cpp_precedence():
-    """llama.cpp returns early on 'pattern', skipping maxLength/minLength.
-
-    When both coexist, only maxLength must reach the decoder to guarantee
-    finite output.  Pattern validation is host-only.
+def test_pattern_plus_maxlength_synthesizes_bounded_pattern():
+    """When both pattern and maxLength coexist, unbounded quantifiers in the
+    pattern are replaced with bounded versions so llama.cpp enforces both
+    grammar and length in a single grammar pass.
     """
     schema = {
         "type": "string",
@@ -205,12 +204,14 @@ def test_pattern_plus_maxlength_drops_pattern_for_llama_cpp_precedence():
 
     projected = project_llama_transport_schema(schema)
 
-    assert projected == {"type": "string", "maxLength": 128, "minLength": 1}
-    assert "pattern" not in projected
+    # Both pattern (now bounded) and maxLength are preserved.
+    assert projected["pattern"] == "^[a-z0-9_.-]{1,128}:[a-z0-9_./-]{1,128}$"
+    assert projected["maxLength"] == 128
+    assert projected["minLength"] == 1
 
 
 def test_pattern_only_without_maxlength_is_preserved():
-    """If pattern is the only string constraint, pass it through."""
+    """If pattern is the only string constraint, pass it through unchanged."""
     schema = {
         "type": "string",
         "pattern": r"^[a-z]+$",
@@ -222,11 +223,12 @@ def test_pattern_only_without_maxlength_is_preserved():
     assert "maxLength" not in projected
 
 
-def test_integer_transport_schema_drops_pattern_keeps_maxlength():
+def test_integer_transport_schema_preserves_bounded_pattern():
     """_model_transport_schema converts integers to string+pattern+maxLength.
 
-    After project_llama_transport_schema, only maxLength should remain so
-    the decoder enforces finite output and the host validates the digit pattern.
+    The integer pattern already uses bounded quantifiers ({0,18}), so
+    _bound_pattern_quantifiers leaves it unchanged.  Both pattern and
+    maxLength survive into the effective schema.
     """
     from minecraft_mod_ai.model_output_atomicity_contract import (
         effective_model_transport_schema,
@@ -246,4 +248,20 @@ def test_integer_transport_schema_drops_pattern_keeps_maxlength():
     count_schema = effective["properties"]["count"]
     assert count_schema["type"] == "string"
     assert count_schema["maxLength"] == 20
-    assert "pattern" not in count_schema
+    # Integer pattern has no unbounded quantifiers — preserved unchanged.
+    assert count_schema["pattern"] == r"^-?(?:0|[1-9][0-9]{0,18})$"
+
+
+def test_identifier_pattern_is_bounded_by_maxlength():
+    """Context ref names use pattern + maxLength — both must be enforced."""
+    schema = {
+        "type": "string",
+        "pattern": r"^[A-Za-z_$][A-Za-z0-9_$.]*$",
+        "maxLength": 24,
+    }
+
+    projected = project_llama_transport_schema(schema)
+
+    assert projected["pattern"] == "^[A-Za-z_$][A-Za-z0-9_$.]{0,24}$"
+    assert projected["maxLength"] == 24
+

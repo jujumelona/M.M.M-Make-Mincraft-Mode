@@ -17,6 +17,49 @@ _JSON_TYPES = frozenset(
 _BRANCH_KEYS = ("allOf",)
 
 
+def _bound_pattern_quantifiers(pattern: str, max_length: int) -> str:
+    """Fold *maxLength* into a regex by bounding ``*`` and ``+`` quantifiers.
+
+    llama.cpp processes ``pattern`` before ``maxLength``, so the length limit
+    must live inside the regex itself.  Each ``*`` outside a character class
+    becomes ``{0,N}`` and each ``+`` becomes ``{1,N}`` where *N* = *max_length*.
+    Already-bounded quantifiers (``?``, ``{n,m}``) are left unchanged.
+    """
+    parts: list[str] = []
+    i = 0
+    in_char_class = False
+    n = len(pattern)
+    while i < n:
+        ch = pattern[i]
+        # Skip escaped characters (e.g. \\. \\* \\+)
+        if ch == "\\" and i + 1 < n:
+            parts.append(pattern[i : i + 2])
+            i += 2
+            continue
+        if ch == "[" and not in_char_class:
+            in_char_class = True
+            parts.append(ch)
+            i += 1
+            continue
+        if ch == "]" and in_char_class:
+            in_char_class = False
+            parts.append(ch)
+            i += 1
+            continue
+        if not in_char_class:
+            if ch == "*":
+                parts.append("{0," + str(max_length) + "}")
+                i += 1
+                continue
+            if ch == "+":
+                parts.append("{1," + str(max_length) + "}")
+                i += 1
+                continue
+        parts.append(ch)
+        i += 1
+    return "".join(parts)
+
+
 def _project_type(value: Any) -> str | list[str] | None:
     if isinstance(value, str):
         return value if value in _JSON_TYPES else None
@@ -158,24 +201,29 @@ def project_llama_transport_schema(schema: Any) -> dict[str, Any]:
         result["enum"] = enum
     if "const" in schema:
         result["const"] = copy.deepcopy(schema["const"])
-    # llama.cpp keyword precedence: its JSON-schema → grammar conversion checks
-    # "pattern" first and returns immediately, so "maxLength" / "minLength" are
-    # never reached when "pattern" is present.  To guarantee a finite decode
-    # bound, keep maxLength (sampler-enforced) and drop pattern (host-validated
-    # after generation) when both coexist.
+    # ── llama.cpp keyword precedence fix ──
+    # llama.cpp processes "pattern" first and returns immediately, skipping
+    # "maxLength" / "minLength".  Dropping either keyword breaks one contract:
+    #   drop pattern  → sampler loses grammar enforcement (allows >=, etc.)
+    #   drop maxLength → sampler produces unbounded output (token exhaustion)
+    #
+    # Solution: fold maxLength INTO the regex by replacing unbounded ``*``/``+``
+    # with ``{0,N}``/``{1,N}``.  The resulting bounded pattern enforces both
+    # grammar and length in a single llama.cpp grammar pass.  maxLength is kept
+    # in the schema for the host-side token ceiling calculator.
     has_pattern = "pattern" in schema and isinstance(schema["pattern"], str)
     has_max_length = "maxLength" in schema and isinstance(schema["maxLength"], int)
-    if has_pattern and not has_max_length:
-        # Pattern is the only string constraint — pass it through.
-        result["pattern"] = schema["pattern"]
+    if has_pattern:
+        if has_max_length:
+            result["pattern"] = _bound_pattern_quantifiers(
+                schema["pattern"], schema["maxLength"]
+            )
+        else:
+            result["pattern"] = schema["pattern"]
     if has_max_length:
-        # maxLength guarantees finite output.  Drop pattern so llama.cpp
-        # actually reaches the length-constraint code path.
         result["maxLength"] = schema["maxLength"]
     if "minLength" in schema and isinstance(schema["minLength"], int):
-        if not has_pattern or has_max_length:
-            # minLength is only reachable in llama.cpp when pattern is absent.
-            result["minLength"] = schema["minLength"]
+        result["minLength"] = schema["minLength"]
     if result:
         return result
 
