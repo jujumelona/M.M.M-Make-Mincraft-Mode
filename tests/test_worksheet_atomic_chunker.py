@@ -96,6 +96,11 @@ def test_planner_pages_are_prebounded_and_continuations_fix_cardinality():
         assert 1 <= len(fields) <= PLANNER_RECORD_PAGE_MAX_FIELDS
 
         schema = worksheet_chunk_schema("behavior_contract", chunk)
+        assert set(schema["properties"]) == {concern}
+        assert schema["required"] == [concern]
+        assert "anyOf" not in schema
+        assert "inapplicable_concerns" not in schema["properties"]
+        assert "constraint_evidence_refs" not in schema["properties"]
         item_properties = schema["properties"][concern]["items"]["properties"]
         assert set(item_properties) == set(fields)
         for field_schema in item_properties.values():
@@ -291,7 +296,6 @@ def test_chunk_schema_rejects_undeclared_fields_before_merge():
     concern = str(concern_group[0])
     output = json.dumps({
         concern: [],
-        "constraint_evidence_refs": [],
         "extra_hallucinated_field": "bad",
     })
 
