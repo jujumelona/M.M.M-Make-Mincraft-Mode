@@ -64,6 +64,7 @@ class CompleteGameDesignPlanner:
         text = render_structured_sections(structured_sections)
 
         kinds = deterministic_module_kinds
+        auto_allowed_platform_kinds: frozenset[str] | None = None
         if kinds is None and adapter is not None:
             kinds = effective_target_backend_capabilities(adapter)
         if kinds is None:
@@ -108,29 +109,42 @@ class CompleteGameDesignPlanner:
                 except Exception:
                     pass
         if kinds is None:
-            # AUTO planning must not expose semantic kinds that no executable target
-            # can ever satisfy.  Use the union of immutable provider receipts as the
-            # planner envelope; final target selection still chooses one exact receipt
-            # and revalidates the authored kinds fail-closed.
+            # AUTO planning filters semantic kinds by *per-target* executability.
+            # Never union primitive capabilities from different targets: doing so can
+            # synthesize support that no single immutable target receipt actually has.
             try:
+                from .platform_backend_contract import production_backend_is_supported
                 from .platform_catalog import (
                     adapter_for_target,
                     discover_target_keys,
                 )
+                from .typed_platform_ir import PLATFORM_HOST_KINDS, PLATFORM_KINDS
 
                 loader_hint = getattr(
                     self.router,
                     "_mmm_requested_loader",
                     None,
                 )
+                version_hint = getattr(
+                    self.router,
+                    "_mmm_requested_minecraft_version",
+                    None,
+                )
                 target_keys = discover_target_keys(
                     loader=str(loader_hint) if loader_hint else None,
                     limit_per_loader=32,
                 )
-                envelope: set[str] = set()
+                if version_hint:
+                    target_keys = tuple(
+                        (target_loader, target_version)
+                        for target_loader, target_version in target_keys
+                        if str(target_version) == str(version_hint)
+                    )
+
+                target_capability_sets: list[frozenset[str]] = []
                 for target_loader, target_version in target_keys:
                     try:
-                        envelope.update(
+                        target_capability_sets.append(
                             effective_target_backend_capabilities(
                                 adapter_for_target(
                                     str(target_version),
@@ -140,9 +154,20 @@ class CompleteGameDesignPlanner:
                         )
                     except Exception:
                         continue
-                kinds = frozenset(envelope)
+
+                executable_kinds = set(PLATFORM_HOST_KINDS)
+                executable_kinds.update(
+                    kind
+                    for kind in PLATFORM_KINDS
+                    if kind not in PLATFORM_HOST_KINDS
+                    and any(
+                        production_backend_is_supported(capabilities, kind)
+                        for capabilities in target_capability_sets
+                    )
+                )
+                auto_allowed_platform_kinds = frozenset(executable_kinds)
             except Exception:
-                kinds = frozenset()
+                auto_allowed_platform_kinds = frozenset()
         effective_kinds = tuple(sorted(kinds)) if kinds is not None else None
 
         with planner_operation("author_typed_plan_ir"):
@@ -152,6 +177,7 @@ class CompleteGameDesignPlanner:
                 structured_sections,
                 typed_host_capability_contracts(),
                 deterministic_module_kinds=effective_kinds,
+                allowed_platform_kinds=auto_allowed_platform_kinds,
                 budget=budget,
             )
         from .typed_plan_support import assert_typed_plan_host_support
