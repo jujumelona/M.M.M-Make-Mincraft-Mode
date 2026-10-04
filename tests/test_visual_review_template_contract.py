@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 
 from minecraft_mod_ai.model_response_templates import response_schema
@@ -8,6 +9,13 @@ from minecraft_mod_ai.task_template_catalog import load_template
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVICES = ROOT / "minecraft_mod_ai" / "complete_orchestrator_services.py"
+
+
+def test_complete_orchestrator_services_imports_current_fixed_template_api() -> None:
+    services = importlib.import_module("minecraft_mod_ai.complete_orchestrator_services")
+
+    assert callable(services.generate_fixed_template_value)
+    assert not hasattr(services, "generate_fixed_template_text")
 
 
 def test_visual_review_policy_is_template_owned_and_schema_reused() -> None:
@@ -25,6 +33,9 @@ def test_visual_review_policy_is_template_owned_and_schema_reused() -> None:
     source = SERVICES.read_text(encoding="utf-8")
     assert 'load_template("validation/visual_review")' in source
     assert "response_schema(response_contract)" in source
+    assert "generate_fixed_template_value(" in source
+    assert "generate_fixed_template_text" not in source
+    assert "_extract_json(" not in source
     assert "response_template_prompt" not in source
     assert "Return JSON {status: PASS|FAIL" not in source
     assert "Reject missing textures" not in source
