@@ -24,6 +24,7 @@ from minecraft_mod_ai.complete_orchestrator import (
     _final_validation_failure,
     _gametest_attestation_status,
     _generation_receipt_sort_key,
+    _jdt_release_evidence_passed,
     _persisted_runtime_evidence,
     _refresh_runtime_receipt_status,
     _runtime_verification_passed,
@@ -262,6 +263,26 @@ def test_final_jdt_source_error_blocks_success_even_after_gradle_build() -> None
         jdt_receipt=receipt,
         run_jdt=True,
     ) == "Final JDT validation still reports source errors after build/repair."
+
+
+def test_identity_bound_jdt_core_receipt_is_release_grade_evidence() -> None:
+    receipt = {
+        "schema_version": "mmm/java-diagnostics-v3",
+        "verification_backend": "jdt_core",
+        "verification_scope": "full",
+        "complete": True,
+        "error_count": 0,
+        "warning_count": 0,
+        "diagnostics": {},
+        "model_id": "model-sha256",
+        "model_revision": "revision-sha256",
+        "session_id": "owner-session",
+    }
+
+    assert _jdt_release_evidence_passed(receipt)
+
+    assert not _jdt_release_evidence_passed({**receipt, "complete": False})
+    assert not _jdt_release_evidence_passed({**receipt, "session_id": ""})
 
 
 def test_jdt_infrastructure_unavailable_is_not_misclassified_as_source_error() -> None:
