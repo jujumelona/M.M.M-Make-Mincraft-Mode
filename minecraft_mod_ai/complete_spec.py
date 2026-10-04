@@ -375,7 +375,7 @@ class CompleteProposal:
                 artifact_owners.add(owner)
 
         from .platform_backend_contract import (
-            effective_target_backend_capabilities,
+            deterministic_backend_capabilities,
             missing_production_backend_capabilities,
             native_production_route_available,
         )
@@ -393,7 +393,7 @@ class CompleteProposal:
                 + ", ".join(unroutable_modules[:20])
             )
 
-        target_capabilities = effective_target_backend_capabilities(
+        target_capabilities = deterministic_backend_capabilities(
             self.base_proposal.spec.platform
         )
         unsupported_native_modules: list[str] = []
