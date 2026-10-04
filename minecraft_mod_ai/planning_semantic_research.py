@@ -345,58 +345,18 @@ def _semantic_windows(
         start = end
 
 
-def _legacy_excerpt_range(
-    window: str,
-    units: list[dict[str, Any]],
-    excerpt: Any,
-) -> tuple[int, int] | None:
-    if not isinstance(excerpt, str) or not excerpt:
-        return None
-    start = window.find(excerpt)
-    if start < 0:
-        return None
-    end = start + len(excerpt)
-    selected = [
-        unit["id"]
-        for unit in units
-        if unit["end"] > start and unit["start"] < end
-    ]
-    if not selected:
-        return None
-    return selected[0], selected[-1]
-
-
 def _normalize_assessment(
     value: Mapping[str, Any],
-    window: str,
-    units: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Accept legacy test fixtures while real runtime always receives the new fixed schema."""
-    if "verdict" in value:
-        return dict(value)
-    if "supports" not in value:
+    if "verdict" not in value:
         return {"verdict": "invalid_output", "evidence_start": -1, "evidence_end": -1}
-    if value.get("supports") is not True:
-        return {"verdict": "insufficient", "evidence_start": -1, "evidence_end": -1}
-    selected = _legacy_excerpt_range(window, units, value.get("excerpt"))
-    if selected is None:
-        return {"verdict": "invalid_output", "evidence_start": -1, "evidence_end": -1}
-    return {
-        "verdict": "supported",
-        "evidence_start": selected[0],
-        "evidence_end": selected[1],
-    }
+    return dict(value)
 
 
 def _normalize_verification(value: Mapping[str, Any]) -> dict[str, Any]:
-    if "verdict" in value:
-        return dict(value)
-    if "supports" in value:
-        return {
-            "verdict": "supported" if value.get("supports") is True else "insufficient"
-        }
-    return {"verdict": "invalid_output"}
-
+    if "verdict" not in value:
+        return {"verdict": "invalid_output"}
+    return dict(value)
 
 def _assessment_span(
     assessment: Mapping[str, Any],
@@ -585,7 +545,7 @@ def review_requirement_sources(
                 "evidence_end": -1,
             }
             assessment_error = "model_structured_output_invalid"
-        assessment = _normalize_assessment(raw_assessment, window, units)
+        assessment = _normalize_assessment(raw_assessment)
         span = _assessment_span(assessment, units)
 
         verified = False
