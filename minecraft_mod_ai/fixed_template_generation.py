@@ -13,7 +13,10 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from .execution_contract_policy import SCHEMA_CONTRACT_PROFILE_KEY
+from .execution_contract_policy import (
+    ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING,
+    SCHEMA_CONTRACT_PROFILE_KEY,
+)
 from .model_output_atomicity_contract import assert_atomic_model_schema
 from .structured_output import validate_structured_output
 
@@ -480,6 +483,14 @@ def _architecture_impl__generate_native_template_arguments(_ctx):
     initial_messages = tuple(dict(message) for message in messages)
     host_parameters = parameters
     transport_parameters = _model_transport_schema(host_parameters)
+    decision_kwargs = (
+        {
+            "output_token_ceiling": ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING,
+            "force_non_thinking": True,
+        }
+        if role == "planner"
+        else {}
+    )
     try:
         arguments = router.generate_tool_decision(
             role,
@@ -487,6 +498,7 @@ def _architecture_impl__generate_native_template_arguments(_ctx):
             tool_name=tool_name,
             parameters=transport_parameters,
             description=description,
+            **decision_kwargs,
         )
         if not isinstance(arguments, Mapping):
             raise ValueError("fixed-template function call did not return an argument mapping")
@@ -498,6 +510,13 @@ def _architecture_impl__generate_native_template_arguments(_ctx):
         # transport call immediately; the caller may narrow only at a complete
         # concern boundary.
         if role == "planner":
+            # Completion-boundary failures are transport/resource failures, not
+            # semantic rejection. Preserve the typed boundary so the owning
+            # scheduler can narrow work without corrupting the failure taxonomy.
+            from .llama_finish_reason_contract import completion_boundary_error
+
+            if completion_boundary_error(initial_error) is not None:
+                raise
             raise RuntimeError(
                 "FIXED_TEMPLATE_PLANNER_SEMANTIC_UNIT_REJECTED"
             ) from initial_error
