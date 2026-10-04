@@ -289,7 +289,7 @@ def test_persistence_missing_default_accepts_and_preserves_empty_list():
     validate_structured_output(
         json.dumps({
             "missing_defaults": [
-                {"default": []}
+                {"field": "unlockable_blueprint_ids", "default": []}
             ]
         }),
         response_format="json",

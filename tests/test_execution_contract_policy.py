@@ -198,7 +198,7 @@ def test_host_owned_sections_never_enter_the_small_model_java_route() -> None:
 
 def test_atomic_contract_caps_remain_bounded_and_canonical() -> None:
     assert DEFAULT_ATOMIC_SCHEMA_LIMITS.max_fields > 0
-    assert PLANNER_RECORD_PAGE_MAX_FIELDS == 1
+    assert PLANNER_RECORD_PAGE_MAX_FIELDS == 3
     assert 0 < PLANNER_RECORD_ARRAY_ITEM_MAX_CHARS <= PLANNER_RECORD_FIELD_MAX_CHARS
     assert PLANNER_RECORD_COUNT_OUTPUT_TOKEN_CEILING < PLANNER_RECORD_PAGE_OUTPUT_TOKEN_CEILING
     assert JAVA_ATOMIC_ASSEMBLY_MAX_CALLS > 0

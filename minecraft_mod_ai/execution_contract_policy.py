@@ -89,7 +89,7 @@ ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING = 4_096
 # Planner authoring is pre-paged by the host before inference. These limits are not
 # semantic/storage limits: they bound one small-model transport page. Canonical records
 # may contain more fields and longer logical values across multiple pages.
-PLANNER_RECORD_PAGE_MAX_FIELDS = 1
+PLANNER_RECORD_PAGE_MAX_FIELDS = 3
 PLANNER_CONCERN_MAX_RECORDS = 4
 PLANNER_RECORD_NESTED_ARRAY_MAX_ITEMS = 4
 PLANNER_RECORD_FIELD_MAX_CHARS = 64

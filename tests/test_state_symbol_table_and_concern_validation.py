@@ -226,15 +226,12 @@ def test_author_structured_sections_passes_symbols_and_fails_undeclared_early():
             seen_schemas.append(schema)
             properties = schema.get("properties", {})
 
-            if "Current semantic state component:" in content:
-                if "kind" in properties:
-                    return json.dumps({"kind": "boolean"})
-                if "value" in properties:
-                    return json.dumps({"value": True})
-                if "count" in properties:
-                    return json.dumps({"count": 1})
-                if "target" in properties:
-                    return json.dumps({"target": "current_phase", "operator": "="})
+            if "Author state mutation for" in content or any(f in properties for f in ("mutation", "initial_state", "action")):
+                field = next(f for f in ("mutation", "initial_state", "action") if f in properties)
+                return json.dumps({field: [{"target": "current_phase", "operator": "=", "value": {"kind": "literal", "value": "1"}}]})
+            if "Author state expression for" in content or any(f in properties for f in ("guard", "condition")):
+                field = next(f for f in ("guard", "condition") if f in properties)
+                return json.dumps({field: {"kind": "literal", "value": "true"}})
 
             if "record_count" in properties:
                 section = content.split("Section: ", 1)[1].splitlines()[0]
@@ -242,8 +239,6 @@ def test_author_structured_sections_passes_symbols_and_fails_undeclared_early():
                 if section == "state_model":
                     count = 1 if concern in {"variables", "transitions"} else 0
                 else:
-                    # The dependency section only needs valid bounded records so the
-                    # test can reach state-model symbol validation.
                     count = 1
                 return json.dumps({"record_count": count})
 
@@ -263,17 +258,16 @@ def test_author_structured_sections_passes_symbols_and_fails_undeclared_early():
                     count = 1
             item_schema = concern_schema["items"]
             fields = list(item_schema.get("required", ()))
-            assert len(fields) == 1
-            field = fields[0]
+            assert 1 <= len(fields) <= 3
 
             if "Section: state_model" in content and concern == "variables":
-                value = variable_values[field]
+                record = {f: variable_values[f] for f in fields}
             elif "Section: state_model" in content and concern == "transitions":
-                value = transition_values[field]
+                record = {f: transition_values[f] for f in fields}
             else:
-                value = schema_value(item_schema["properties"][field])
+                record = {f: schema_value(item_schema["properties"][f]) for f in fields}
 
-            return json.dumps({concern: [{field: value} for _ in range(count)]})
+            return json.dumps({concern: [record for _ in range(count)]})
 
     router = MockRouter()
 
@@ -285,9 +279,15 @@ def test_author_structured_sections_passes_symbols_and_fails_undeclared_early():
 
     # The target decision itself rejects undeclared names before another field
     # or section can consume a malformed state assignment.
-    targets = [schema["properties"]["target"] for schema in seen_schemas
-               if "target" in schema.get("properties", {})]
-    assert targets and all(schema["enum"] == ["player_currency"] for schema in targets)
+    targets = [
+        schema["properties"][f]["items"]["properties"]["target"]
+        for schema in seen_schemas
+        for f in ("mutation", "initial_state", "action")
+        if f in schema.get("properties", {})
+        and "items" in schema["properties"][f]
+        and "target" in schema["properties"][f]["items"].get("properties", {})
+    ]
+    assert targets and all(s["enum"] == ["player_currency"] for s in targets)
 
     # The canonical variable symbol table is still supplied to every later
     # transition field page before host-side validation rejects current_phase.

@@ -530,27 +530,6 @@ def _generate_concern_pages(
     results: list[tuple[int, dict[str, Any]]] = []
     fixed_count: int | None = None
 
-    if request.section == "state_model" and pages:
-        from .planner_state_authoring import STATE_EXECUTABLE_FIELDS
-        from .worksheet_atomic_chunker import _chunk_projection
-
-        projection = _chunk_projection(request.section, pages[0][1])
-        first_fields = projection.get(concern, ())
-        if any(field in STATE_EXECUTABLE_FIELDS for field in first_fields):
-            fixed_count = _generate_concern_record_count(
-                request.router,
-                request.prompt,
-                section=request.section,
-                concern=concern,
-                completed=request.completed,
-                state_symbols=state_symbols,
-                section_context=base_context,
-            )
-            if request.budget is not None:
-                request.budget.consume(f"structured.{request.section}.cardinality")
-            if fixed_count == 0:
-                return [], [(idx, {concern: []}) for idx, _page in pages]
-
     for i, (index, concerns) in enumerate(pages):
         context = deepcopy(dict(base_context or {}))
         if authored_rows:

@@ -584,6 +584,12 @@ def validate_state_expr_ir(
             raise ValueError("STRUCTURED_STATE_EXPRESSION: context_ref requires string 'name'")
         return
 
+    if kind == "number":
+        val = str(expr.get("value") or "").strip()
+        if not re.fullmatch(r"^-?[0-9]+([.][0-9]+)?$", val):
+            raise ValueError(f"STRUCTURED_STATE_EXPRESSION: invalid number literal {val!r}")
+        return
+
     if kind == "literal":
         return
 
@@ -838,25 +844,26 @@ def mutations_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
         if isinstance(allowed_state_symbols, (set, list, tuple)) and allowed_state_symbols
         else []
     )
-    target_schema = (
-        {"type": "string", "enum": symbols}
-        if symbols
-        else {"type": "string", "minLength": 1, "maxLength": 128}
-    )
-    name_schema = (
-        {"type": "string", "enum": symbols}
-        if symbols
-        else {"type": "string", "minLength": 1, "maxLength": 128}
-    )
+    target_schema = {
+        "type": "string",
+        "maxLength": 32,
+        **({"enum": symbols} if symbols else {"pattern": r"^[A-Za-z_][A-Za-z0-9_]*$", "minLength": 1}),
+    }
+    name_schema = {
+        "type": "string",
+        "maxLength": 32,
+        **({"enum": symbols} if symbols else {"pattern": r"^[A-Za-z_][A-Za-z0-9_]*$", "minLength": 1}),
+    }
     value_operand = {
         "type": "object",
         "properties": {
             "kind": {
                 "type": "string",
-                "enum": ["literal", "state_ref", "context_ref"],
+                "enum": ["literal", "number", "state_ref", "context_ref"],
+                "maxLength": 16,
             },
-            "value": {"type": ["string", "number", "boolean", "null"]},
             "name": name_schema,
+            "value": {"type": ["string", "null"], "maxLength": 24},
         },
         "required": ["kind"],
         "additionalProperties": False,
@@ -866,16 +873,17 @@ def mutations_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
         "properties": {
             "kind": {
                 "type": "string",
-                "enum": ["literal", "state_ref", "context_ref", "arithmetic", "call"],
+                "enum": ["literal", "number", "state_ref", "context_ref", "arithmetic", "call"],
+                "maxLength": 16,
             },
-            "value": {"type": ["string", "number", "boolean", "null"]},
             "name": name_schema,
-            "op": {"type": "string", "enum": ["+", "-", "*", "/", "%"]},
+            "value": {"type": ["string", "null"], "maxLength": 24},
+            "op": {"type": "string", "enum": ["+", "-", "*", "/", "%"], "maxLength": 2},
             "left": value_operand,
             "right": value_operand,
             "args": {
                 "type": "array",
-                "maxItems": 4,
+                "maxItems": 2,
                 "items": value_operand,
             },
         },
@@ -884,7 +892,7 @@ def mutations_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
     }
     return {
         "type": "array",
-        "maxItems": 8,
+        "maxItems": 2,
         "items": {
             "type": "object",
             "properties": {
@@ -892,6 +900,7 @@ def mutations_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
                 "operator": {
                     "type": "string",
                     "enum": ["=", "+=", "-=", "*=", "/="],
+                    "maxLength": 2,
                 },
                 "value": value_schema,
             },
@@ -909,41 +918,42 @@ def state_expr_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
         if isinstance(allowed_state_symbols, (set, list, tuple)) and allowed_state_symbols
         else []
     )
-    name_schema = (
-        {"type": "string", "enum": symbols}
-        if symbols
-        else {"type": "string", "minLength": 1, "maxLength": 128}
-    )
+    name_schema = {
+        "type": "string",
+        "maxLength": 24,
+        **({"enum": symbols} if symbols else {"pattern": r"^[A-Za-z_][A-Za-z0-9_]*$", "minLength": 1}),
+    }
+    fn_or_name_schema = {
+        "type": "string",
+        "maxLength": 24,
+    }
+    leaf_operand = {
+        "type": "object",
+        "properties": {
+            "kind": {
+                "type": "string",
+                "enum": ["state_ref", "context_ref", "literal"],
+                "maxLength": 16,
+            },
+            "name": name_schema,
+            "value": {"type": ["string", "null"], "maxLength": 24},
+        },
+        "required": ["kind"],
+        "additionalProperties": False,
+    }
     operand_schema = {
         "type": "object",
         "properties": {
             "kind": {
                 "type": "string",
                 "enum": ["state_ref", "context_ref", "literal", "arithmetic", "call"],
+                "maxLength": 16,
             },
-            "name": name_schema,
-            "value": {"type": ["string", "number", "boolean", "null"]},
-            "op": {"type": "string", "enum": ["+", "-", "*", "/", "%"]},
-            "left": {
-                "type": "object",
-                "properties": {
-                    "kind": {"type": "string", "enum": ["state_ref", "context_ref", "literal"]},
-                    "name": name_schema,
-                    "value": {"type": ["string", "number", "boolean", "null"]},
-                },
-                "required": ["kind"],
-                "additionalProperties": False,
-            },
-            "right": {
-                "type": "object",
-                "properties": {
-                    "kind": {"type": "string", "enum": ["state_ref", "context_ref", "literal"]},
-                    "name": name_schema,
-                    "value": {"type": ["string", "number", "boolean", "null"]},
-                },
-                "required": ["kind"],
-                "additionalProperties": False,
-            },
+            "name": fn_or_name_schema,
+            "value": {"type": ["string", "null"], "maxLength": 24},
+            "op": {"type": "string", "enum": ["+", "-", "*", "/", "%"], "maxLength": 2},
+            "left": leaf_operand,
+            "right": leaf_operand,
         },
         "required": ["kind"],
         "additionalProperties": False,
@@ -951,12 +961,12 @@ def state_expr_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
     compare_term_schema = {
         "type": "object",
         "properties": {
-            "kind": {"type": "string", "enum": ["compare", "state_ref", "literal"]},
-            "op": {"type": "string", "enum": ["==", "!=", ">=", "<=", ">", "<", "="]},
+            "kind": {"type": "string", "enum": ["compare", "state_ref", "literal", "call"], "maxLength": 16},
+            "op": {"type": "string", "enum": ["==", "!=", ">=", "<=", ">", "<", "="], "maxLength": 2},
             "left": operand_schema,
-            "right": operand_schema,
-            "name": name_schema,
-            "value": {"type": ["string", "number", "boolean", "null"]},
+            "right": leaf_operand,
+            "name": fn_or_name_schema,
+            "value": {"type": ["string", "null"], "maxLength": 24},
         },
         "required": ["kind"],
         "additionalProperties": False,
@@ -964,16 +974,22 @@ def state_expr_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
     return {
         "type": "object",
         "properties": {
-            "kind": {"type": "string", "enum": ["and", "or", "compare", "not", "literal"]},
+            "kind": {"type": "string", "enum": ["and", "or", "compare", "not", "literal", "call", "state_ref", "context_ref"], "maxLength": 16},
             "terms": {
                 "type": "array",
-                "maxItems": 8,
+                "maxItems": 2,
                 "items": compare_term_schema,
             },
-            "op": {"type": "string", "enum": ["==", "!=", ">=", "<=", ">", "<", "="]},
-            "left": operand_schema,
-            "right": operand_schema,
-            "value": {"type": ["string", "number", "boolean", "null"]},
+            "op": {"type": "string", "enum": ["==", "!=", ">=", "<=", ">", "<", "="], "maxLength": 2},
+            "left": leaf_operand,
+            "right": leaf_operand,
+            "name": fn_or_name_schema,
+            "value": {"type": ["string", "null"], "maxLength": 24},
+            "args": {
+                "type": "array",
+                "maxItems": 2,
+                "items": leaf_operand,
+            },
         },
         "required": ["kind"],
         "additionalProperties": False,

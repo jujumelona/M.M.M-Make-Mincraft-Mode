@@ -20,11 +20,12 @@ def test_authored_schema_has_host_fixed_cardinality_and_one_field_bounds() -> No
     section = next(iter(DETAIL_RECORDS))
     page = pack_section_concerns(section)[0]
     concern = str(page[0])
-    field = page.field_projection[concern][0]
+    expected_fields = page.field_projection[concern]
 
-    logical_field_schema = record_field_schema(section, concern, field)
-    if logical_field_schema.get("type") == "string":
-        assert logical_field_schema["maxLength"] <= 512
+    for field in expected_fields:
+        logical_field_schema = record_field_schema(section, concern, field)
+        if logical_field_schema.get("type") == "string":
+            assert logical_field_schema["maxLength"] <= 512
 
     chunk = worksheet_chunk_schema(
         section,
@@ -36,8 +37,8 @@ def test_authored_schema_has_host_fixed_cardinality_and_one_field_bounds() -> No
     assert chunk["properties"][concern]["minItems"] == 2
     assert chunk["properties"][concern]["maxItems"] == 2
     item = chunk["properties"][concern]["items"]
-    assert tuple(item["properties"]) == (field,)
-    assert item["required"] == [field]
+    assert tuple(item["properties"]) == expected_fields
+    assert item["required"] == list(expected_fields)
 
 
 def test_required_tool_sampling_keeps_native_repeat_penalty() -> None:

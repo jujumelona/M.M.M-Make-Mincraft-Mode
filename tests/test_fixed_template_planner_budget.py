@@ -13,6 +13,7 @@ from minecraft_mod_ai.authored_structured_design import (
 from minecraft_mod_ai.execution_contract_policy import (
     ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING,
     PLANNER_RECORD_COUNT_OUTPUT_TOKEN_CEILING,
+    PLANNER_RECORD_PAGE_MAX_FIELDS,
     PLANNER_RECORD_PAGE_OUTPUT_TOKEN_CEILING,
 )
 from minecraft_mod_ai.fixed_template_generation import (
@@ -315,7 +316,7 @@ def test_authored_planner_uses_tiny_count_then_fixed_single_field_page() -> None
     assert expected_ceiling < PLANNER_RECORD_PAGE_OUTPUT_TOKEN_CEILING
     assert concern_schema["minItems"] == 2
     assert concern_schema["maxItems"] == 2
-    assert len(concern_schema["items"]["properties"]) == 1
+    assert len(concern_schema["items"]["properties"]) <= PLANNER_RECORD_PAGE_MAX_FIELDS
 
 
 def test_planner_page_budget_is_schema_derived_and_rejects_unbounded_numeric() -> None:

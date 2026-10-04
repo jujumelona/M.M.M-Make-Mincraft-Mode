@@ -187,30 +187,57 @@ def pack_section_concerns(section: str) -> list[tuple[str, ...]]:
     page_width = PLANNER_RECORD_PAGE_MAX_FIELDS
 
     chunks: list[tuple[str, ...]] = []
+
+    def add_page(concern_name: str, selected_fields: Sequence[str]) -> None:
+        if not selected_fields:
+            return
+        chunk = WorksheetConcernChunk(
+            (concern_name,),
+            {concern_name: tuple(selected_fields)},
+        )
+        schema = worksheet_chunk_schema(
+            key,
+            chunk,
+            # Static packing validation must exercise the same count-fixed
+            # field-page contract as production.
+            record_counts={concern_name: 1},
+        )
+        _assert_closed_object_schemas(
+            schema,
+            path=f"worksheet page {key}.{concern_name}.{len(chunks) + 1}",
+        )
+        chunks.append(chunk)
+
     for concern, columns in records.items():
         fields = tuple(columns.split())
         if not fields:
             raise ValueError(
                 f"worksheet concern {key}.{concern} has no declared record fields"
             )
-        for start in range(0, len(fields), page_width):
-            selected_fields = fields[start : start + page_width]
-            chunk = WorksheetConcernChunk(
-                (concern,),
-                {concern: selected_fields},
-            )
-            schema = worksheet_chunk_schema(
-                key,
-                chunk,
-                # Static packing validation must exercise the same count-fixed
-                # field-page contract as production.
-                record_counts={concern: 1},
-            )
-            _assert_closed_object_schemas(
-                schema,
-                path=f"worksheet page {key}.{concern}.{start // page_width + 1}",
-            )
-            chunks.append(chunk)
+
+        if key == "state_model":
+            from .planner_state_authoring import STATE_EXECUTABLE_FIELDS
+
+            normal = [
+                field for field in fields
+                if field not in STATE_EXECUTABLE_FIELDS
+            ]
+            executable = [
+                field for field in fields
+                if field in STATE_EXECUTABLE_FIELDS
+            ]
+
+            # Normal semantic fields are paged first to establish row cardinality.
+            for start in range(0, len(normal), page_width):
+                add_page(concern, normal[start : start + page_width])
+
+            # DSL/IR executable fields are each an independent semantic page.
+            for field in executable:
+                add_page(concern, (field,))
+        else:
+            for start in range(0, len(fields), page_width):
+                add_page(concern, fields[start : start + page_width])
+
     return chunks
 
 
@@ -324,10 +351,11 @@ def worksheet_chunk_schema(
             )
         raw_count = record_counts[concern]
         if raw_count is None:
+            page_max_records = 2 if len(fields) >= 3 else PLANNER_CONCERN_MAX_RECORDS
             properties[concern] = {
                 "type": "array",
                 "minItems": 0,
-                "maxItems": PLANNER_CONCERN_MAX_RECORDS,
+                "maxItems": page_max_records,
                 "items": item_schema,
             }
         else:

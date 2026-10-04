@@ -12,6 +12,7 @@ from minecraft_mod_ai.authored_structured_design import (
     author_structured_sections,
     render_structured_sections,
 )
+from minecraft_mod_ai.planner_state_authoring import lower_state_expr_to_dsl
 from minecraft_mod_ai.planning_detail_template import WORKSHEET_SECTIONS
 from minecraft_mod_ai.structured_output import StructuredOutputValidationError
 from minecraft_mod_ai.structured_state_runtime import (
@@ -58,39 +59,39 @@ def generate(field, concern, responses, names=("starship_hull_integrity",)):
 ])
 def test_state_assignment_is_assembled_from_complete_semantic_choices(concern, field):
     value, router = generate(field, concern, [
-        {"count": 1}, {"target": "starship_hull_integrity", "operator": "="},
-        {"kind": "number"}, {"value": "100"},
+        {field: [{"target": "starship_hull_integrity", "operator": "=", "value": {"kind": "literal", "value": "100"}}]}
     ])
     assert value == "starship_hull_integrity = 100"
     validate_state_concern(concern, [{field: value}], symbols={"starship_hull_integrity"})
     assert compile_mutation_ir(value, declared={"starship_hull_integrity"}) == (
         'setState("starship_hull_integrity", Double.valueOf("100"));'
     )
-    assert len(router.calls) == 4
+    assert len(router.calls) == 1
 
 
 def test_long_expression_keeps_both_operands_and_compiles():
-    value, _ = generate("mutation", "updates", [
-        {"count": 1}, {"target": "starship_hull_integrity", "operator": "="},
-        {"kind": "binary"}, {"operator": "+"},
-        {"kind": "state_ref"}, {"value": "starship_hull_integrity"},
-        {"kind": "state_ref"}, {"value": "starship_repair_amount"},
+    value, router = generate("mutation", "updates", [
+        {"mutation": [{"target": "starship_hull_integrity", "operator": "=", "value": {
+            "kind": "arithmetic", "op": "+",
+            "left": {"kind": "state_ref", "name": "starship_hull_integrity"},
+            "right": {"kind": "state_ref", "name": "starship_repair_amount"},
+        }}]}
     ], names=("starship_hull_integrity", "starship_repair_amount"))
     assert value == "starship_hull_integrity = (starship_hull_integrity + starship_repair_amount)"
     assert len(value) > 64
     java = compile_mutation_ir(value, declared={"starship_hull_integrity", "starship_repair_amount"})
     assert '$mmmRead("starship_repair_amount", context)' in java
+    assert len(router.calls) == 1
 
 
 @pytest.mark.parametrize("concern,field", [("transitions", "guard"), ("invariants", "condition")])
 def test_state_predicate_uses_complete_operands(concern, field):
-    value, _ = generate(field, concern, [
-        {"kind": "binary"}, {"operator": ">"},
-        {"kind": "state_ref"}, {"value": "starship_hull_integrity"},
-        {"kind": "number"}, {"value": "0"},
+    value, router = generate(field, concern, [
+        {field: {"kind": "compare", "op": ">", "left": {"kind": "state_ref", "name": "starship_hull_integrity"}, "right": {"kind": "literal", "value": "0"}}}
     ])
     assert value == "(starship_hull_integrity > 0)"
     validate_state_concern(concern, [{field: value}], symbols={"starship_hull_integrity"})
+    assert len(router.calls) == 1
 
 
 def test_empty_state_action_survives_canonical_merge():
@@ -108,52 +109,52 @@ def test_empty_state_action_survives_canonical_merge():
 
 
 def test_no_mutation_is_an_explicit_zero_count_decision():
-    value, router = generate("action", "cleanup", [{"count": 0}])
+    value, router = generate("action", "cleanup", [{"action": []}])
     assert value == ""
     assert len(router.calls) == 1
 
 
 @pytest.mark.parametrize("value", ["", "100; ghost = 1", "starship_hull_integrity="])
 def test_incomplete_or_injected_operand_is_rejected_at_its_component(value):
-    with pytest.raises(StructuredOutputValidationError):
+    with pytest.raises((StructuredOutputValidationError, ValueError)):
         generate("mutation", "updates", [
-            {"count": 1}, {"target": "starship_hull_integrity", "operator": "="},
-            {"kind": "number"}, {"value": value},
+            {"mutation": [{"target": "starship_hull_integrity", "operator": "=", "value": {"kind": "number", "value": value}}]}
         ])
 
 
 def test_quoted_semicolon_is_data_not_an_extra_assignment():
-    value, _ = generate("mutation", "updates", [
-        {"count": 1}, {"target": "status", "operator": "="},
-        {"kind": "string"}, {"value": 'docked; "safe"'},
+    value, router = generate("mutation", "updates", [
+        {"mutation": [{"target": "status", "operator": "=", "value": {"kind": "literal", "value": 'docked; "safe"'}}]}
     ], names=("status",))
     assert value == 'status = "docked; \\"safe\\""'
     java = compile_mutation_ir(value, declared={"status"})
     assert java.count("setState(") == 1
+    assert len(router.calls) == 1
 
 
 def test_expression_growth_stops_at_finite_host_frontier():
+    deep_not = {"kind": "literal", "value": "1"}
+    for _ in range(32):
+        deep_not = {"kind": "not", "term": deep_not}
     with pytest.raises(ValueError, match="PLANNER_STATE_EXPRESSION_BOUND"):
-        generate("guard", "transitions", [{"kind": "not"}] * 31)
+        lower_state_expr_to_dsl(deep_not)
 
 
 @pytest.mark.parametrize("name", ["abs", "count", "size", "len"])
 def test_host_fixes_unary_function_arity(name):
     value, router = generate("guard", "transitions", [
-        {"kind": "call"}, {"name": name},
-        {"kind": "state_ref"}, {"value": "starship_hull_integrity"},
+        {"guard": {"kind": "call", "name": name, "args": [{"kind": "state_ref", "name": "starship_hull_integrity"}, {"kind": "literal", "value": "10"}]}}
     ])
     assert value == f"{name}(starship_hull_integrity)"
-    assert len(router.calls) == 4
+    assert len(router.calls) == 1
 
 
 def test_variadic_function_preserves_all_authored_arguments():
-    value, _ = generate("guard", "transitions", [
-        {"kind": "call"}, {"name": "min"}, {"count": 2},
-        {"kind": "number"}, {"value": "10"},
-        {"kind": "state_ref"}, {"value": "starship_hull_integrity"},
+    value, router = generate("guard", "transitions", [
+        {"guard": {"kind": "call", "name": "min", "args": [{"kind": "literal", "value": "10"}, {"kind": "state_ref", "name": "starship_hull_integrity"}]}}
     ])
     assert value == "min(10, starship_hull_integrity)"
+    assert len(router.calls) == 1
 
 
 def test_complete_structured_authoring_finishes_after_state_assembly():
@@ -162,14 +163,12 @@ def test_complete_structured_authoring_finishes_after_state_assembly():
             text = "\n".join(message["content"] for message in messages)
             section = re.search(r"^Section: (\w+)", text, re.MULTILINE)[1]
             properties = kwargs["response_schema"]["properties"]
-            if "Current semantic state component:" in text:
-                if "target" in properties:
-                    return json.dumps({"target": "stateValue", "operator": "="})
-                if "count" in properties:
-                    return json.dumps({"count": 1})
-                if "kind" in properties:
-                    return json.dumps({"kind": "number"})
-                return json.dumps({"value": "100"})
+            if "Author state mutation for" in text or any(f in properties for f in ("mutation", "initial_state", "action")):
+                field = next(f for f in ("mutation", "initial_state", "action") if f in properties)
+                return json.dumps({field: [{"target": "stateValue", "operator": "=", "value": {"kind": "literal", "value": "100"}}]})
+            if "Author state expression for" in text or any(f in properties for f in ("guard", "condition")):
+                field = next(f for f in ("guard", "condition") if f in properties)
+                return json.dumps({field: {"kind": "literal", "value": "100"}})
             if "record_count" in properties:
                 return json.dumps({"record_count": 1})
             concern = next(iter(properties))
@@ -187,7 +186,6 @@ def test_complete_structured_authoring_finishes_after_state_assembly():
     assert set(sections) == set(WORKSHEET_SECTIONS)
     assert sections["state_model"]["specification"]["transitions"][0]["mutation"] == "stateValue = 100"
     assert "mutation=stateValue = 100" in render_structured_sections(sections)
-    # invariants.condition was also host-authored via StateAuthor, not free string fallback
     assert sections["state_model"]["specification"]["invariants"][0]["condition"] == "100"
 
 
@@ -216,4 +214,3 @@ def test_state_executable_page_fails_closed_if_not_singleton() -> None:
 
     with pytest.raises(ValueError, match="STATE_EXECUTABLE_PAGE_MUST_BE_SINGLETON"):
         _generate_authored_page_value(DummyRouter(), (), page, schema, None)
-
