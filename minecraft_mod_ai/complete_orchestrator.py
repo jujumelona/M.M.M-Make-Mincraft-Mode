@@ -2992,18 +2992,46 @@ class CompleteProductionOrchestrator:
         return False
 
     @staticmethod
+    def _gametest_execution_passed(build_report: dict[str, Any] | None) -> bool:
+        """Verify the structured execution path that produced GameTest evidence."""
+
+        if not isinstance(build_report, dict):
+            return False
+        if not CompleteProductionOrchestrator._full_gradle_build_receipt_passed(
+            build_report
+        ):
+            return False
+
+        mode = str(build_report.get('gametest_mode') or '').strip()
+        task = str(build_report.get('gametest_task') or '').strip()
+        if task not in {'runGameTest', 'runGameTestServer'}:
+            return False
+
+        if mode == 'integrated_build':
+            return True
+        if mode != 'explicit_task':
+            return False
+
+        for command in build_report.get('commands', ()):
+            if (
+                not isinstance(command, dict)
+                or command.get('name') != 'gametest'
+                or command.get('exit_code') != 0
+                or command.get('timed_out') is True
+            ):
+                continue
+            argv = command.get('command')
+            if not isinstance(argv, (list, tuple)):
+                continue
+            if any(str(argument) == task for argument in argv):
+                return True
+        return False
+
+    @staticmethod
     def _gametest_receipt_passed(build_report: dict[str, Any] | None, spec: Any) -> bool:
         if not isinstance(build_report, dict) or not isinstance(build_report.get('gametest_report'), str):
             return False
-        mode = str(build_report.get('gametest_mode') or '').strip()
-        if mode != 'integrated_build':
-            return False
-        execution_passed = (
-            CompleteProductionOrchestrator._full_gradle_build_receipt_passed(
-                build_report
-            )
-        )
-        if not execution_passed:
+        if not CompleteProductionOrchestrator._gametest_execution_passed(build_report):
             return False
         raw_report_path = Path(build_report['gametest_report']).expanduser()
         if raw_report_path.is_symlink():
