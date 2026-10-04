@@ -494,9 +494,21 @@ def test_cached_build_requires_real_build_command_and_requested_gametest(tmp_pat
     build = {
         "status": "PASS",
         "jar_path": str(jar),
+        "gametest_mode": "explicit_task",
+        "gametest_task": "runGameTest",
         "commands": [
-            {"name": "build", "exit_code": 0, "timed_out": False},
-            {"name": "gametest", "exit_code": 0, "timed_out": False},
+            {
+                "name": "build",
+                "command": ["gradle", "build", "-x", "runGameTest"],
+                "exit_code": 0,
+                "timed_out": False,
+            },
+            {
+                "name": "gametest",
+                "command": ["gradle", "runGameTest", "--stacktrace"],
+                "exit_code": 0,
+                "timed_out": False,
+            },
         ],
         "gametest_report": str(report),
     }
@@ -507,6 +519,27 @@ def test_cached_build_requires_real_build_command_and_requested_gametest(tmp_pat
         require_gametest=True,
         spec=SimpleNamespace(mod_id="demo"),
     )
+    assert _gametest_attestation_status(
+        build,
+        SimpleNamespace(mod_id="demo"),
+        requested=True,
+    ) == "PASS"
+
+    mismatched_task = {
+        **build,
+        "commands": [
+            build["commands"][0],
+            {
+                **build["commands"][1],
+                "command": ["gradle", "runOtherGameTest", "--stacktrace"],
+            },
+        ],
+    }
+    assert _gametest_attestation_status(
+        mismatched_task,
+        SimpleNamespace(mod_id="demo"),
+        requested=True,
+    ) == "NO_EVIDENCE"
 
     no_build_receipt = {**build, "commands": build["commands"][1:]}
     assert not CompleteProductionOrchestrator._cached_build_exists(no_build_receipt)
