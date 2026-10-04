@@ -402,6 +402,21 @@ class ModelRouter:
         name = str(tool_name or "").strip()
         if not name:
             raise ModelConfigurationError("Tool-decision name must not be empty.")
+
+        if role == "planner":
+            force_non_thinking = True
+            if output_token_ceiling is None:
+                from .worksheet_atomic_chunker import planner_page_output_token_ceiling
+
+                try:
+                    output_token_ceiling = planner_page_output_token_ceiling(parameters)
+                except Exception as exc:
+                    raise ModelConfigurationError(
+                        "PLANNER_TOOL_DECISION_BUDGET_REQUIRED: planner native tool "
+                        "schemas must prove a finite decode bound or provide an explicit "
+                        "output_token_ceiling"
+                    ) from exc
+
         schema = {
             "type": "function",
             "function": {
