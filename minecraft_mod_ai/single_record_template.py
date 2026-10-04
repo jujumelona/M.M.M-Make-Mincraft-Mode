@@ -14,8 +14,8 @@ from .fixed_template_generation import generate_fixed_template_value
 from .model_output_atomicity_contract import (
     _model_transport_schema,
     assert_atomic_model_schema,
+    structured_output_token_ceiling,
 )
-from .worksheet_atomic_chunker import planner_page_output_token_ceiling
 from .task_template_catalog import load_record_template
 from .task_template_input import task_binding, task_context
 
@@ -126,7 +126,7 @@ def _atomic_record_schema_slices(
                 surface=f"single record field {identifier}.{name}",
             )
             # Prove that one field page has a finite decode bound before any model call.
-            planner_page_output_token_ceiling(
+            structured_output_token_ceiling(
                 _model_transport_schema(part_schema)
             )
         except Exception as exc:
@@ -226,7 +226,7 @@ def run_single_record_template(
             tool_name = "submit_one_" + identifier.replace("/", "_")
             if len(slices) > 1:
                 tool_name += f"_part_{part_index}_of_{len(slices)}"
-            output_ceiling = planner_page_output_token_ceiling(
+            output_ceiling = structured_output_token_ceiling(
                 _model_transport_schema(part_schema)
             )
             part = generate(
