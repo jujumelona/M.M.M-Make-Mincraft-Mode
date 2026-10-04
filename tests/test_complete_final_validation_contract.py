@@ -30,6 +30,7 @@ from minecraft_mod_ai.complete_orchestrator import (
     _runtime_visual_download_artifacts,
     _replace_stale_directory_target,
     _replace_stale_file_target,
+    _requested_verification_failures,
     _stable_payload_sha256,
     _validate_external_execution_preflight,
     _validate_required_gate_contract,
@@ -276,6 +277,41 @@ def test_jdt_infrastructure_unavailable_is_not_misclassified_as_source_error() -
         jdt_receipt=receipt,
         run_jdt=True,
     ) is None
+
+
+def test_jdt_infrastructure_unavailable_is_advisory_after_full_build_proof() -> None:
+    receipt = {
+        "status": "UNAVAILABLE",
+        "error": (
+            "JDTLanguageServerError: JDT LS did not publish diagnostics for every "
+            "opened Java file before the validation deadline"
+        ),
+        "diagnostics": {},
+    }
+
+    assert _requested_verification_failures(
+        run_jdt=True,
+        jdt_receipt=receipt,
+        source_report={"status": "PASS"},
+        build_report={"status": "PASS"},
+        jar_validation={"status": "PASS"},
+    ) == []
+
+
+def test_jdt_infrastructure_unavailable_still_blocks_without_full_build_proof() -> None:
+    receipt = {
+        "status": "UNAVAILABLE",
+        "error": "JDTLanguageServerError: workspace unavailable",
+        "diagnostics": {},
+    }
+
+    assert _requested_verification_failures(
+        run_jdt=True,
+        jdt_receipt=receipt,
+        source_report={"status": "PASS"},
+        build_report=None,
+        jar_validation=None,
+    ) == ["execution-gate:jdt:missing-jdt"]
 
 
 def test_jdt_receipt_is_ignored_when_jdt_was_not_requested() -> None:
