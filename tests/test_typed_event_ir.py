@@ -83,8 +83,8 @@ def test_runtime_entry_point_without_event_binding_fails_support_gate() -> None:
     validated = validate_typed_plan_ir(plan)
     issues = typed_plan_support_issues(structured, validated)
 
-    assert len(issues) == 1
-    assert issues[0].startswith("integration.entry_points[0].trigger=")
+    assert "function.unreachable:handleEvent" in issues
+    assert any(issue.startswith("integration.entry_points[0].trigger=") for issue in issues)
 
 
 def test_mod_initialize_uses_host_scaffold_without_duplicate_event_binding() -> None:
@@ -92,6 +92,7 @@ def test_mod_initialize_uses_host_scaffold_without_duplicate_event_binding() -> 
         parameters=[],
         event_bindings=[],
     )
+    plan["initialize"] = [{"op": "expr", "value": {"op": "call", "function": "handleEvent", "args": []}}]
     structured = _structured_entry_point("mod initialize")
 
     validated = validate_typed_plan_ir(plan)

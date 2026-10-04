@@ -276,13 +276,13 @@ def worksheet_chunk_schema(
     section: str,
     concerns: Sequence[str],
     *,
-    record_counts: Mapping[str, int],
+    record_counts: Mapping[str, int | None],
     state_symbols: Any = None,
 ) -> dict[str, Any]:
-    """Return one bounded planner field-page schema with host-fixed cardinality.
+    """Return one bounded planner field-page schema with host-fixed or bounded cardinality.
 
-    Cardinality is decided in a separate tiny planner call before any field page.
-    Count-free field pages are invalid by construction.
+    Initial concern pages admit 0..PLANNER_CONCERN_MAX_RECORDS rows; subsequent pages
+    lock to the exact cardinality established by the initial page.
     """
     # Planning owns the canonical worksheet contract. Structured state IR is an
     # authoring/production representation and must not leak back into planning.
@@ -322,22 +322,31 @@ def worksheet_chunk_schema(
                 "worksheet planner field page requires a host-fixed record count for "
                 f"{key}.{concern}"
             )
-        try:
-            count = int(record_counts[concern])
-        except (TypeError, ValueError) as exc:
-            raise ValueError(
-                f"Invalid host record count for {key}.{concern}"
-            ) from exc
-        if count < 0 or count > PLANNER_CONCERN_MAX_RECORDS:
-            raise ValueError(
-                f"Host record count for {key}.{concern} is outside planner bounds: {count}"
-            )
-        properties[concern] = {
-            "type": "array",
-            "minItems": count,
-            "maxItems": count,
-            "items": item_schema,
-        }
+        raw_count = record_counts[concern]
+        if raw_count is None:
+            properties[concern] = {
+                "type": "array",
+                "minItems": 0,
+                "maxItems": PLANNER_CONCERN_MAX_RECORDS,
+                "items": item_schema,
+            }
+        else:
+            try:
+                count = int(raw_count)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Invalid host record count for {key}.{concern}"
+                ) from exc
+            if count < 0 or count > PLANNER_CONCERN_MAX_RECORDS:
+                raise ValueError(
+                    f"Host record count for {key}.{concern} is outside planner bounds: {count}"
+                )
+            properties[concern] = {
+                "type": "array",
+                "minItems": count,
+                "maxItems": count,
+                "items": item_schema,
+            }
 
     required = list(active)
     schema = {
@@ -399,7 +408,7 @@ def worksheet_chunk_prompt(
     chunk_count: int,
     concerns: Sequence[str],
     *,
-    record_counts: Mapping[str, int],
+    record_counts: Mapping[str, int | None],
 ) -> str:
     key = _normalize_section_name(section)
     # The host/schema transport owns JSON shape. The small model receives only the
@@ -420,13 +429,20 @@ def worksheet_chunk_prompt(
         if key == "state_model"
         else ""
     )
-    cardinality_text = (
-        "The host fixed record cardinality in a separate bounded decision. Return exactly "
-        + ", ".join(
-            f"{name}={count} row(s)" for name, count in record_counts.items()
+    has_unfixed = any(count is None for count in record_counts.values())
+    if has_unfixed:
+        cardinality_text = (
+            f"Generate between 0 and {PLANNER_CONCERN_MAX_RECORDS} rows for the primary record page. "
+            "Keep rows concise, necessary, and high-signal."
         )
-        + " in the same row order; do not add, remove, or reorder records."
-    )
+    else:
+        cardinality_text = (
+            "The host fixed record cardinality in a separate bounded decision. Return exactly "
+            + ", ".join(
+                f"{name}={count} row(s)" for name, count in record_counts.items()
+            )
+            + " in the same row order; do not add, remove, or reorder records."
+        )
     return "\n".join(
         item for item in (
             f"ENGINEERING WORKSHEET — concern chunk {chunk_index}/{chunk_count}:",

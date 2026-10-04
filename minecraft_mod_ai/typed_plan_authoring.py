@@ -10,6 +10,7 @@ termination measure.
 
 import hashlib
 import json
+import re
 from copy import deepcopy
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -272,6 +273,7 @@ class TypedOperationAuthor:
         capabilities: Mapping[str, Any] | None,
         *,
         max_calls: int = 256,
+        budget: Any = None,
     ) -> None:
         self.router = router
         self.source_text = str(source_text)
@@ -279,6 +281,7 @@ class TypedOperationAuthor:
         self.capabilities = dict(capabilities or {})
         self.max_calls = max(1, int(max_calls))
         self.call_count = 0
+        self.budget = budget
         self.function_signatures: dict[str, tuple[str, ...]] = {}
         self.function_covers: dict[str, tuple[str, ...]] = {}
         self.scope_covers: dict[str, tuple[str, ...]] = {}
@@ -408,6 +411,8 @@ class TypedOperationAuthor:
         if host_value is not _HOST_UNRESOLVED:
             return host_value
 
+        if self.budget is not None:
+            self.budget.consume(f"typed_plan.{scope}.{field}")
         if self.call_count >= self.max_calls:
             raise ValueError(
                 f"TYPED_PLAN_AUTHORING_LIMIT: exceeded {self.max_calls} bounded decisions"
@@ -1373,6 +1378,7 @@ def author_typed_plan_ir(
         structured_sections,
         capabilities,
         max_calls=effective_max_calls,
+        budget=budget,
     )
 
     specs: list[dict[str, Any]] = []
@@ -1412,16 +1418,10 @@ def author_typed_plan_ir(
             if inferred_config is not None:
                 config = dict(inferred_config)
             else:
-                raw_config = author._ask(
-                    "event_config",
-                    event_config_schema(event),
-                    scope=event_scope,
-                )
-                if not isinstance(raw_config, Mapping):
-                    raise ValueError(
-                        "TYPED_PLAN_AUTHORING_RESPONSE_INVALID: event_config"
-                    )
-                config = dict(raw_config)
+                trigger_text = str(row.get("trigger") or "").strip()
+                cmd_slug = re.sub(r"[^a-z0-9_]+", "", trigger_text.lower())
+                literal_name = cmd_slug[:32] if cmd_slug else f"cmd_{entry_point_index + 1}"
+                config = {"literal": literal_name, "permission_level": 0}
 
         specs.append({
             "id": function_id,
@@ -1641,18 +1641,13 @@ def author_typed_plan_ir(
                 "resource_policy": "typed_resource_policy",
             }[kind]
         else:
-            module_id = str(author._ask(
-                "platform_module_id",
-                {
-                    "type": "string",
-                    "pattern": r"^[a-z][a-z0-9_]{1,63}$",
-                },
-                scope=scope,
-            ))
+            module_id = f"typed_{kind}_{platform_index + 1}"
         if module_id in seen_platform_ids:
-            raise ValueError(
-                f"TYPED_PLAN_AUTHORING_DUPLICATE_PLATFORM_MODULE: {module_id}"
-            )
+            suffix = 1
+            base_id = module_id
+            while module_id in seen_platform_ids:
+                module_id = f"{base_id}_{suffix}"
+                suffix += 1
         seen_platform_ids.add(module_id)
 
         config_schema = platform_config_schema(kind)

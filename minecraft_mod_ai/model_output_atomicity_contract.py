@@ -245,6 +245,34 @@ def _model_transport_schema(
             if minimum <= maximum and maximum - minimum <= 256:
                 result["enum"] = list(range(minimum, maximum + 1))
         if (
+            _schema_has_type(value, "integer")
+            and "enum" not in result
+            and "const" not in result
+        ):
+            raw_type = value.get("type")
+            if isinstance(raw_type, (list, tuple)) and "null" in raw_type:
+                result["type"] = ["string", "null"]
+            else:
+                result["type"] = "string"
+            result["pattern"] = r"^-?(?:0|[1-9][0-9]{0,18})$"
+            result["maxLength"] = 20
+            for k in ("minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf"):
+                result.pop(k, None)
+        if (
+            _schema_has_type(value, "number")
+            and "enum" not in result
+            and "const" not in result
+        ):
+            raw_type = value.get("type")
+            if isinstance(raw_type, (list, tuple)) and "null" in raw_type:
+                result["type"] = ["string", "null"]
+            else:
+                result["type"] = "string"
+            result["pattern"] = r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$"
+            result["maxLength"] = 32
+            for k in ("minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf"):
+                result.pop(k, None)
+        if (
             (_schema_has_type(value, "object") or "properties" in value)
             and value.get("additionalProperties") is not False
             and "maxProperties" not in result

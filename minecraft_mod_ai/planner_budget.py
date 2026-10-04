@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 class PlannerBudget:
     """Track and enforce global model invocation limits across planning stages."""
 
-    max_calls: int = 1000
+    max_calls: int = 64
     call_count: int = 0
     stage_counts: Counter[str] = field(default_factory=Counter)
 

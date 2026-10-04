@@ -19,7 +19,7 @@ def _base_plan() -> dict:
                 "parameters": [],
                 "return_type": "void",
                 "body": [{"op": "return"}],
-                "covers": ["behavior_contract.outputs"],
+                "covers": [],
             }
         ],
         "initialize": [],

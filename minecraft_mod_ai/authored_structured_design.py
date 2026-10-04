@@ -171,7 +171,7 @@ def _authored_chunk_messages(
     completed: Mapping[str, Mapping[str, Any]],
     state_symbols: Any = None,
     section_context: Mapping[str, Any] | None = None,
-    record_counts: Mapping[str, int] | None = None,
+    record_counts: Mapping[str, int | None] | None = None,
 ) -> tuple[dict[str, str], ...]:
     from .planning_section_dependencies import SECTION_DEPENDENCIES
     from .worksheet_atomic_chunker import worksheet_chunk_prompt
@@ -382,7 +382,7 @@ def _generate_authored_chunk(
     page: _PlannerPageRequest,
     state_symbols: Any = None,
     section_context: Mapping[str, Any] | None = None,
-    record_counts: Mapping[str, int] | None = None,
+    record_counts: Mapping[str, int | None] | None = None,
 ) -> dict[str, Any]:
     """Generate exactly one host-bounded concern field page."""
 
@@ -446,10 +446,12 @@ def _generate_authored_page_value(
         concern_schema = schema["properties"][concern]
         fields = concern_schema["items"]["required"]
         if len(fields) == 1 and fields[0] in STATE_EXECUTABLE_FIELDS:
-            return author_state_field_page(
-                router, messages, concern=concern, field=fields[0],
-                count=concern_schema["minItems"], symbols=state_symbols,
-            )
+            count = concern_schema.get("minItems", 0)
+            if count == concern_schema.get("maxItems", count) and count > 0:
+                return author_state_field_page(
+                    router, messages, concern=concern, field=fields[0],
+                    count=count, symbols=state_symbols,
+                )
     return generate_fixed_template_value(
         router,
         "planner",
@@ -510,23 +512,11 @@ def _generate_concern_pages(
     if not pages:
         return [], []
 
-    if request.budget is not None:
-        request.budget.consume(f"structured.{request.section}.cardinality")
-    fixed_count = _generate_concern_record_count(
-        request.router,
-        request.prompt,
-        section=request.section,
-        concern=concern,
-        completed=request.completed,
-        state_symbols=state_symbols,
-        section_context=base_context,
-    )
-    if fixed_count == 0:
-        return [], [(index, {concern: []}) for index, _page in pages]
-
     authored_rows: list[dict[str, Any]] = []
     results: list[tuple[int, dict[str, Any]]] = []
-    for index, concerns in pages:
+    fixed_count: int | None = None
+
+    for i, (index, concerns) in enumerate(pages):
         context = deepcopy(dict(base_context or {}))
         if authored_rows:
             context[concern] = deepcopy(authored_rows)
@@ -554,7 +544,11 @@ def _generate_concern_pages(
                 f"AUTHORED_STRUCTURED_DESIGN: {request.section}.{concern} page "
                 f"{index} must return a record array"
             )
-        if len(rows) != fixed_count:
+        if i == 0:
+            fixed_count = len(rows)
+            if fixed_count == 0:
+                return [], [(idx, {concern: []}) for idx, _page in pages]
+        elif len(rows) != fixed_count:
             raise ValueError(
                 f"AUTHORED_STRUCTURED_DESIGN_CARDINALITY_DRIFT: "
                 f"{request.section}.{concern} expected {fixed_count} rows, "

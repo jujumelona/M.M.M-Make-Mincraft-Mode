@@ -367,8 +367,14 @@ def test_planner_page_budget_is_schema_derived_and_rejects_unbounded_numeric() -
         )
 
 
-def test_planner_fixed_template_without_explicit_ceiling_fails_before_unbounded_decode() -> None:
-    router = _PlannerRouter()
+def test_planner_fixed_template_numeric_schema_uses_bounded_transport_and_decodes() -> None:
+    class NumericPlanner(_PlannerRouter):
+        def generate_text(self, role, messages, **kwargs):
+            copied = tuple(dict(message) for message in messages)
+            self.text_calls.append((copied, dict(kwargs)))
+            return json.dumps({"value": "42.5"})
+
+    router = NumericPlanner()
     schema = {
         "type": "object",
         "properties": {"value": {"type": "number"}},
@@ -376,17 +382,21 @@ def test_planner_fixed_template_without_explicit_ceiling_fails_before_unbounded_
         "additionalProperties": False,
     }
 
-    with pytest.raises(ValueError, match="unbounded lexical output"):
-        generate_fixed_template_value(
-            router,
-            "planner",
-            ({"role": "user", "content": "fill the numeric value"},),
-            response_schema=schema,
-            enable_tools=False,
-        )
+    result = generate_fixed_template_value(
+        router,
+        "planner",
+        ({"role": "user", "content": "fill the numeric value"},),
+        response_schema=schema,
+        enable_tools=False,
+    )
 
+    assert result == {"value": 42.5}
     assert router.tool_calls == 0
-    assert router.text_calls == []
+    assert len(router.text_calls) == 1
+    _messages, kwargs = router.text_calls[0]
+    transport_prop = kwargs["response_schema"]["properties"]["value"]
+    assert transport_prop["type"] == "string"
+    assert transport_prop["maxLength"] == 32
 
 
 def test_planner_fixed_template_rejects_explicit_ceiling_below_schema_proof() -> None:

@@ -251,8 +251,16 @@ def test_author_structured_sections_passes_symbols_and_fails_undeclared_early():
             assert len(required) == 1
             concern = required[0]
             concern_schema = properties[concern]
-            count = int(concern_schema.get("minItems", 0) or 0)
-            assert count == int(concern_schema.get("maxItems", count) or count)
+            min_items = int(concern_schema.get("minItems", 0) or 0)
+            max_items = int(concern_schema.get("maxItems", min_items) or min_items)
+            if min_items == max_items:
+                count = min_items
+            else:
+                section = content.split("Section: ", 1)[1].splitlines()[0]
+                if section == "state_model":
+                    count = 1 if concern in {"variables", "transitions"} else 0
+                else:
+                    count = 1
             item_schema = concern_schema["items"]
             fields = list(item_schema.get("required", ()))
             assert len(fields) == 1

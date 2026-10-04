@@ -176,15 +176,16 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
     elif getattr(request, "response_format", None) == "json":
         payload["reasoning_effort"] = "none"
         payload["chat_template_kwargs"] = {"enable_thinking": False}
-        response_schema = getattr(request, "response_schema", None)
-        payload["response_format"] = {"type": "json_object"}
-        if isinstance(response_schema, Mapping):
-            # Use llama.cpp's native top-level json_schema input as the grammar
-            # authority. The server converts this field directly to GBNF before
-            # inference, while response_format remains the OpenAI-compatible JSON
-            # declaration. Keeping the schema out of chat-parser-specific formatting
-            # prevents a model/parser path from silently bypassing the constraint.
-            payload["json_schema"] = deepcopy(dict(response_schema))
+        if getattr(request, "role", "") == "planner":
+            response_schema = getattr(request, "response_schema", None)
+            payload["response_format"] = {"type": "json_object"}
+            if isinstance(response_schema, Mapping):
+                # Use llama.cpp's native top-level json_schema input as the grammar
+                # authority. The server converts this field directly to GBNF before
+                # inference, while response_format remains the OpenAI-compatible JSON
+                # declaration. Keeping the schema out of chat-parser-specific formatting
+                # prevents a model/parser path from silently bypassing the constraint.
+                payload["json_schema"] = deepcopy(dict(response_schema))
 
     # Qwen family behavior is part of the direct request path now.  The legacy
     # runtime bootstrap/wrapper stack is gone, so family-specific non-thinking

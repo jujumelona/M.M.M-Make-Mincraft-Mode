@@ -45,6 +45,67 @@ def _validator_for(schema: Mapping[str, Any]):
     return validator_cls(schema_dict)
 
 
+def decode_bounded_numeric_transport(data: Any, schema: Mapping[str, Any] | None) -> tuple[Any, bool]:
+    """Decode bounded lexical strings into original int/float types with range validation."""
+    if schema is None or not isinstance(schema, Mapping):
+        return data, False
+
+    if data is None:
+        return None, False
+
+    schema_type = schema.get("type")
+    is_int_schema = schema_type == "integer" or (isinstance(schema_type, (list, tuple)) and "integer" in schema_type)
+    is_num_schema = schema_type == "number" or (isinstance(schema_type, (list, tuple)) and "number" in schema_type)
+
+    if is_int_schema and isinstance(data, str):
+        import re
+        if re.fullmatch(r"^-?(?:0|[1-9][0-9]{0,18})$", data):
+            int_val = int(data)
+            if "minimum" in schema and int_val < schema["minimum"]:
+                raise ValueError(f"NUMERIC_TRANSPORT_RANGE_ERROR: {int_val} < minimum {schema['minimum']}")
+            if "maximum" in schema and int_val > schema["maximum"]:
+                raise ValueError(f"NUMERIC_TRANSPORT_RANGE_ERROR: {int_val} > maximum {schema['maximum']}")
+            return int_val, True
+
+    if is_num_schema and isinstance(data, str):
+        import re, math
+        if re.fullmatch(r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$", data):
+            float_val = float(data)
+            if math.isfinite(float_val):
+                if "minimum" in schema and float_val < schema["minimum"]:
+                    raise ValueError(f"NUMERIC_TRANSPORT_RANGE_ERROR: {float_val} < minimum {schema['minimum']}")
+                if "maximum" in schema and float_val > schema["maximum"]:
+                    raise ValueError(f"NUMERIC_TRANSPORT_RANGE_ERROR: {float_val} > maximum {schema['maximum']}")
+                return float_val, True
+
+    if isinstance(data, Mapping):
+        changed_any = False
+        res = dict(data)
+        props = schema.get("properties")
+        if isinstance(props, Mapping):
+            for key, prop_schema in props.items():
+                if key in res and isinstance(prop_schema, Mapping):
+                    sub_val, sub_changed = decode_bounded_numeric_transport(res[key], prop_schema)
+                    if sub_changed:
+                        res[key] = sub_val
+                        changed_any = True
+        return res, changed_any
+
+    if isinstance(data, list):
+        items_schema = schema.get("items")
+        if isinstance(items_schema, Mapping):
+            changed_any = False
+            new_list = []
+            for item in data:
+                sub_val, sub_changed = decode_bounded_numeric_transport(item, items_schema)
+                new_list.append(sub_val)
+                if sub_changed:
+                    changed_any = True
+            return new_list, changed_any
+
+    return data, False
+
+
 def _sha256_text(value: str) -> str:
     return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
 
@@ -381,6 +442,20 @@ def validate_structured_output(
         # transport-layer semantic validator.
         return json.dumps(dict(value), ensure_ascii=False, separators=(",", ":"))
 
+    changed = False
+    if response_schema is not None and isinstance(response_schema, Mapping):
+        try:
+            value, changed = decode_bounded_numeric_transport(value, response_schema)
+        except ValueError as exc:
+            errors = (f"$: numeric transport decode error: {exc}",)
+            _emit_validation_failure(
+                output=output,
+                errors=errors,
+                response_format=response_format,
+                response_schema=response_schema,
+            )
+            raise StructuredOutputValidationError(output=output, errors=errors) from exc
+
     errors = _schema_errors(value, response_schema)
     if errors:
         _emit_validation_failure(
@@ -393,7 +468,7 @@ def validate_structured_output(
             output=output,
             errors=errors,
         )
-    return output
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":")) if changed else output
 
 
 __all__ = [
