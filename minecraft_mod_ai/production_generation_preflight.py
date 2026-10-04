@@ -17,21 +17,12 @@ from .geckolib_generation_contract import (
     preflight_geckolib_generation_target,
     validate_existing_geckolib_records,
 )
+from .platform_backend_contract import (
+    ENTITY_PIPELINE_KINDS as _ENTITY_KINDS,
+    SYSTEM_KIND_TO_PACK as _SYSTEM_PACK_BY_KIND,
+)
 from .scale_policy import ScalePolicy
 from .system_pack_validation import validate_system_modules
-
-_ENTITY_KINDS = frozenset({"entity", "boss", "npc"})
-_SYSTEM_PACK_BY_KIND = {
-    "quest": "quest-system",
-    "class": "class-skill-system",
-    "skill": "class-skill-system",
-    "economy": "economy-shop",
-    "shop": "economy-shop",
-    "gui": "gui-networking",
-    "networking": "gui-networking",
-    "party": "party-guild",
-    "guild": "party-guild",
-}
 
 
 class ProductionGenerationPreflightError(ValueError):
