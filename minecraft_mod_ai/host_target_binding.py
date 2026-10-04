@@ -7,7 +7,7 @@ or implementation fallback. It binds immutable host observations to an authored
 Typed PlanIR production request.
 """
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from . import central_research
@@ -80,6 +80,8 @@ def bind_platform(
     prompt: str,
     design: Mapping[str, Any],
     base_proposal: Proposal,
+    *,
+    module_kinds: Iterable[str] = (),
 ) -> tuple[dict[str, Any], Proposal]:
     from .platform_selection_pipeline import resolve_platform_fail_closed
     from .platform_target_research import target_research_callback
@@ -111,6 +113,7 @@ def bind_platform(
     selection = resolve_platform_fail_closed(
         effective_prompt,
         design=dict(design),
+        module_kinds=module_kinds,
         existing_version=existing_version,
         existing_loader=existing_loader,
         target_research_fn=target_research,
