@@ -19,6 +19,7 @@ from .minecraft_generation_contract import (
     config_schema_for_kind,
     validate_generation_config,
 )
+from .platform_backend_contract import supported_extended_content_kinds
 
 _TOOL_NAME = "apply_minecraft_content_spec"
 _PARTIAL_EDIT_TOOL = "apply_source_edit"
@@ -47,8 +48,19 @@ def _module_config_conditions(supported: Sequence[str]) -> list[dict[str, Any]]:
     ]
 
 
-def _tool_schema(extended_module: Any) -> dict[str, Any]:
-    supported = sorted(str(kind) for kind in extended_module._SUPPORTED)
+def _tool_schema(
+    extended_module: Any,
+    *,
+    supported_kinds: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    supported = sorted(
+        str(kind)
+        for kind in (
+            supported_kinds
+            if supported_kinds is not None
+            else extended_module._SUPPORTED
+        )
+    )
     return {
         "type": "function",
         "function": {
@@ -56,9 +68,9 @@ def _tool_schema(extended_module: Any) -> dict[str, Any]:
             "description": (
                 "Generate standard Minecraft/Fabric content from compact semantic module "
                 "intent. Prefer this over emitting routine registry/resource boilerplate "
-                "or whole JSON/Java files for supported item, block, tool, weapon, armor, "
-                "food, crop, machine, effect, enchantment, command, recipe, advancement "
-                "and loot modules. The host discovers the bound project, mod id and Java "
+                "or whole JSON/Java files for the kinds exposed by this schema. The host "
+                "filters those kinds from the bound target's immutable deterministic "
+                "backend receipt. The host discovers the bound project, mod id and Java "
                 "package, applies the pinned platform generator, and writes canonical "
                 "artifacts. Every semantic generation field exposed by the per-kind config "
                 "schema is authoritative; do not omit it and rely on generator defaults. "
@@ -107,7 +119,12 @@ def _tool_schema(extended_module: Any) -> dict[str, Any]:
     }
 
 
-def _compile_modules(extended_module: Any, payload: Mapping[str, Any]) -> tuple[Any, ...]:
+def _compile_modules(
+    extended_module: Any,
+    payload: Mapping[str, Any],
+    *,
+    supported_kinds: Sequence[str] | None = None,
+) -> tuple[Any, ...]:
     extra = set(payload) - {"modules"}
     if extra:
         raise ValueError(
@@ -120,7 +137,14 @@ def _compile_modules(extended_module: Any, payload: Mapping[str, Any]) -> tuple[
     if len(raw_modules) > _MAX_MODULES:
         raise ValueError(f"modules exceeds the {_MAX_MODULES}-module batch limit")
 
-    supported = frozenset(str(kind) for kind in extended_module._SUPPORTED)
+    supported = frozenset(
+        str(kind)
+        for kind in (
+            supported_kinds
+            if supported_kinds is not None
+            else extended_module._SUPPORTED
+        )
+    )
     seen: set[str] = set()
     compiled: list[Any] = []
     for raw in raw_modules:
@@ -234,13 +258,29 @@ def _execute(
     workspace_root: str | Path,
     payload: Mapping[str, Any],
 ) -> dict[str, Any]:
+    from .platform_catalog import adapter_from_project
     from .project_edit import inspect_fabric_project
 
-    modules = _compile_modules(extended_module, payload)
     project_root, _project_argument = runtime_module._discover_model_project_root(
         workspace_root
     )
     info = inspect_fabric_project(project_root)
+    adapter = adapter_from_project(info.root)
+    supported = tuple(
+        sorted(
+            set(extended_module._SUPPORTED)
+            & set(
+                supported_extended_content_kinds(
+                    adapter.deterministic_module_kinds
+                )
+            )
+        )
+    )
+    modules = _compile_modules(
+        extended_module,
+        payload,
+        supported_kinds=supported,
+    )
     record = extended_module.generate_extended_content(
         project_root=info.root,
         mod_id=info.mod_id,
@@ -280,7 +320,31 @@ def _install_runtime(runtime_module: Any, extended_module: Any) -> None:
                 if isinstance(item, Mapping)
             ):
                 return schemas
-            content_tool = _tool_schema(extended_module)
+            try:
+                project_root, _project_argument = (
+                    runtime_module._discover_model_project_root(self.workspace_root)
+                )
+                from .platform_catalog import adapter_from_project
+
+                adapter = adapter_from_project(project_root)
+                supported = tuple(
+                    sorted(
+                        set(extended_module._SUPPORTED)
+                        & set(
+                            supported_extended_content_kinds(
+                                adapter.deterministic_module_kinds
+                            )
+                        )
+                    )
+                )
+            except Exception:
+                supported = ()
+            if not supported:
+                return schemas
+            content_tool = _tool_schema(
+                extended_module,
+                supported_kinds=supported,
+            )
             result = (*schemas, content_tool)
             with self._lock:
                 self._schema_cache[selected] = result
