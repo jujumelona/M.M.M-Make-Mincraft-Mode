@@ -276,3 +276,145 @@ def test_planner_budget_enforces_limit_and_tracks_stages():
         budget.consume("typed.dispatch", 1)
 
 
+def test_all_platform_authoring_schemas_satisfy_atomic_ceiling():
+    from minecraft_mod_ai.model_output_atomicity_contract import structured_output_token_ceiling
+    from minecraft_mod_ai.typed_plan_authoring import (
+        TypedOperationAuthor,
+        _author_platform_config,
+    )
+    from minecraft_mod_ai.typed_platform_ir import (
+        PLATFORM_HOST_KINDS,
+        PLATFORM_KINDS,
+        validate_platform_modules,
+    )
+
+    class AtomicBudgetTrackingRouter:
+        def __init__(self):
+            self.queried_schemas = []
+
+        def generate_tool_decision(self, role, messages, *, tool_name, parameters, **kwargs):
+            raise NotImplementedError()
+
+        def generate_text(self, role, messages, *, response_schema=None, **kwargs):
+            import json
+            if response_schema:
+                self.queried_schemas.append(response_schema)
+                structured_output_token_ceiling(response_schema, absolute_ceiling=4096)
+            return json.dumps({"value": {}})
+
+    for kind in sorted(PLATFORM_KINDS):
+        router = AtomicBudgetTrackingRouter()
+        author = TypedOperationAuthor(router, "test prompt", {}, {}, max_calls=10)
+        cfg = _author_platform_config(
+            author,
+            kind,
+            scope="test_scope",
+            structured_sections={},
+            module_id=f"mod_{kind}",
+            uncovered=set(),
+        )
+        if kind in {"recipe", "advancement", "loot", "tag", "command"}:
+            covers = ["resources_and_ui.paths"]
+        elif kind == "networking":
+            covers = ["authority_and_network.packets"]
+        elif kind == "network_sync":
+            covers = ["authority_and_network.synchronization"]
+        elif kind == "state_store":
+            covers = ["persistence.stored_state"]
+        elif kind == "resource_policy":
+            covers = ["resources_and_ui.accessibility"]
+        else:
+            covers = ["resources_and_ui.registries"]
+
+        modules = [{"module_id": f"mod_{kind}", "kind": kind, "config": cfg, "covers": covers}]
+        if kind == "skill":
+            modules.insert(0, {
+                "module_id": "warrior",
+                "kind": "class",
+                "config": {"display_name": "Warrior"},
+                "covers": ["resources_and_ui.registries"],
+            })
+        validated = validate_platform_modules(modules)
+        assert len(validated) >= 1
+
+        if kind in PLATFORM_HOST_KINDS or kind in {"recipe", "advancement", "loot"}:
+            assert author.call_count == 0, f"{kind} must be resolved deterministically by host"
+        else:
+            assert author.call_count == 1, f"{kind} should ask the model exactly once"
+            for schema in router.queried_schemas:
+                ceiling = structured_output_token_ceiling(schema, absolute_ceiling=4096)
+                assert ceiling <= 4096, f"{kind} schema ceiling {ceiling} exceeds 4096"
+
+
+def test_author_typed_plan_ir_shop_platform_module_within_budget():
+    specification = {
+        name: []
+        for name in DETAIL_RECORDS["resources_and_ui"]
+    }
+    specification["registries"] = [
+        {
+            "purpose": "shop",
+            "identifier": "shop_keeper",
+            "binding_requirement": "register one shop keeper",
+        }
+    ]
+    specification["inapplicable_concerns"] = []
+    structured = {
+        "resources_and_ui": {
+            "specification": specification,
+            "constraint_evidence_refs": [],
+        }
+    }
+
+    class ShopPlanner:
+        def __init__(self):
+            self.calls = []
+
+        def generate_tool_decision(self, role, messages, *, tool_name, parameters, **kwargs):
+            raise NotImplementedError()
+
+        def generate_text(self, role, messages, *, response_schema=None, **kwargs):
+            import json
+            from minecraft_mod_ai.model_output_atomicity_contract import structured_output_token_ceiling
+
+            if response_schema:
+                structured_output_token_ceiling(response_schema, absolute_ceiling=4096)
+
+            self.calls.append((messages, response_schema))
+            if len(self.calls) == 1:
+                return json.dumps({"value": "shop"})
+            return json.dumps({
+                "value": {
+                    "entries": [
+                        {
+                            "id": "gem_blade",
+                            "item": "minecraft:diamond_sword",
+                            "count": 1,
+                            "price": 150.0,
+                        }
+                    ]
+                }
+            })
+
+    router = ShopPlanner()
+    plan = author_typed_plan_ir(
+        router,
+        "create a shop with custom items",
+        structured,
+        {},
+        max_calls=16,
+    )
+    assert len(plan["platform_modules"]) == 1
+    shop_module = plan["platform_modules"][0]
+    assert shop_module["kind"] == "shop"
+    assert shop_module["config"]["entries"] == [
+        {
+            "id": "gem_blade",
+            "item": "minecraft:diamond_sword",
+            "count": 1,
+            "price": 150.0,
+        }
+    ]
+
+
+

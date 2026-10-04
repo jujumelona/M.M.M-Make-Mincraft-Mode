@@ -10,6 +10,7 @@ termination measure.
 
 import hashlib
 import json
+import math
 import re
 from copy import deepcopy
 from collections.abc import Mapping, Sequence
@@ -1334,6 +1335,668 @@ def author_semantic_game_dispatch(
     }]
 
 
+def _platform_schema(properties: Mapping[str, Any], *, required: Sequence[str] = ()) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": dict(properties),
+        "required": list(required),
+        "additionalProperties": False,
+    }
+
+
+def _content_config_author_schema(kind: str) -> dict[str, Any]:
+    common = {
+        "display_name_en": {"type": "string", "minLength": 1, "maxLength": 64},
+        "display_name_ko": {"type": "string", "minLength": 1, "maxLength": 64},
+        "ingredients": {
+            "type": "array",
+            "maxItems": 2,
+            "items": {
+                "type": "string",
+                "pattern": r"^[a-z0-9_.-]+:[a-z0-9_./-]+$",
+                "maxLength": 64,
+            },
+        },
+    }
+    if kind == "item":
+        return _platform_schema(common)
+    if kind == "block":
+        return _platform_schema({
+            **common,
+            "hardness": {"type": "number", "minimum": 0, "maximum": 100},
+        })
+    if kind == "food":
+        return _platform_schema({
+            **common,
+            "hunger": {"type": "integer", "minimum": 0, "maximum": 20},
+            "saturation": {"type": "number", "minimum": 0, "maximum": 20},
+        })
+    if kind in {"weapon", "tool"}:
+        return _platform_schema({
+            **common,
+            "attack_damage": {"type": "integer", "minimum": 0, "maximum": 100},
+            "attack_speed": {"type": "number", "minimum": 0, "maximum": 10},
+        })
+    if kind == "armor":
+        return _platform_schema({
+            **common,
+            "slot": {
+                "type": "string",
+                "enum": ["helmet", "chestplate", "leggings", "boots"],
+            },
+        })
+    if kind == "machine":
+        return _platform_schema({
+            **common,
+            "input_item": {
+                "type": "string",
+                "pattern": r"^[a-z0-9_.-]+:[a-z0-9_./-]+$",
+                "maxLength": 64,
+            },
+            "output_item": {
+                "type": "string",
+                "pattern": r"^[a-z0-9_.-]+:[a-z0-9_./-]+$",
+                "maxLength": 64,
+            },
+            "output_count": {"type": "integer", "minimum": 1, "maximum": 64},
+            "processing_ticks": {"type": "integer", "minimum": 1, "maximum": 72000},
+        })
+    if kind == "crop":
+        return _platform_schema(common)
+    if kind == "effect":
+        return _platform_schema({
+            **common,
+            "color": {
+                "type": "string",
+                "pattern": r"^#[0-9A-Fa-f]{6}$",
+                "maxLength": 7,
+            },
+        })
+    if kind == "enchantment":
+        return _platform_schema({
+            **common,
+            "max_level": {"type": "integer", "minimum": 1, "maximum": 10},
+        })
+    raise ValueError(f"TYPED_PLATFORM_CONTENT_KIND_UNSUPPORTED: {kind!r}")
+
+
+def _normalize_content_config(kind: str, raw: Any, module_id: str) -> dict[str, Any]:
+    config: dict[str, Any] = {}
+    if not isinstance(raw, Mapping):
+        raw = {}
+
+    default_name = module_id.replace("_", " ").title()
+    name_en = str(raw.get("display_name_en") or default_name).strip()[:128]
+    config["display_name_en"] = name_en or default_name
+    name_ko = str(raw.get("display_name_ko") or config["display_name_en"]).strip()[:128]
+    config["display_name_ko"] = name_ko or config["display_name_en"]
+
+    if "ingredients" in raw and isinstance(raw["ingredients"], Sequence) and not isinstance(raw["ingredients"], (str, bytes, bytearray)):
+        valid_ings = [
+            str(ing) for ing in raw["ingredients"]
+            if isinstance(ing, str) and re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", ing)
+        ]
+        if valid_ings:
+            config["ingredients"] = valid_ings[:64]
+
+    if kind == "block":
+        hardness = 1.5
+        if "hardness" in raw:
+            try:
+                val = float(raw["hardness"])
+                if math.isfinite(val) and val >= 0:
+                    hardness = val
+            except (TypeError, ValueError):
+                pass
+        config["hardness"] = hardness
+    elif kind == "food":
+        hunger = 4
+        if "hunger" in raw and type(raw["hunger"]) is int and raw["hunger"] >= 0:
+            hunger = raw["hunger"]
+        saturation = 2.0
+        if "saturation" in raw:
+            try:
+                val = float(raw["saturation"])
+                if math.isfinite(val) and val >= 0:
+                    saturation = val
+            except (TypeError, ValueError):
+                pass
+        config["hunger"] = hunger
+        config["saturation"] = saturation
+    elif kind in {"weapon", "tool"}:
+        damage = 6 if kind == "weapon" else 3
+        if "attack_damage" in raw and type(raw["attack_damage"]) is int:
+            damage = raw["attack_damage"]
+        speed = 1.6 if kind == "weapon" else 1.2
+        if "attack_speed" in raw:
+            try:
+                val = float(raw["attack_speed"])
+                if math.isfinite(val):
+                    speed = val
+            except (TypeError, ValueError):
+                pass
+        config["attack_damage"] = damage
+        config["attack_speed"] = speed
+    elif kind == "armor":
+        slot = raw.get("slot")
+        if slot in {"helmet", "chestplate", "leggings", "boots"}:
+            config["slot"] = slot
+        else:
+            config["slot"] = "chestplate"
+    elif kind == "machine":
+        for field, default in (("input_item", "minecraft:iron_ingot"), ("output_item", "minecraft:gold_ingot")):
+            val = str(raw.get(field) or default)
+            config[field] = val if re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", val) else default
+        count = 1
+        if "output_count" in raw and type(raw["output_count"]) is int and raw["output_count"] >= 1:
+            count = raw["output_count"]
+        ticks = 100
+        if "processing_ticks" in raw and type(raw["processing_ticks"]) is int and raw["processing_ticks"] >= 1:
+            ticks = raw["processing_ticks"]
+        config["output_count"] = count
+        config["processing_ticks"] = ticks
+    elif kind == "effect":
+        color = str(raw.get("color") or "#336699")
+        config["color"] = color if re.fullmatch(r"^#[0-9A-Fa-f]{6}$", color) else "#336699"
+    elif kind == "enchantment":
+        max_lvl = 1
+        if "max_level" in raw and type(raw["max_level"]) is int and raw["max_level"] >= 1:
+            max_lvl = raw["max_level"]
+        config["max_level"] = max_lvl
+
+    return config
+
+
+def _normalize_entity_config(raw: Any, module_id: str) -> dict[str, Any]:
+    if not isinstance(raw, Mapping):
+        raw = {}
+
+    def _float_val(key: str, default: float, positive: bool = True) -> float:
+        try:
+            val = float(raw[key])
+            if math.isfinite(val) and ((val > 0) if positive else (val >= 0)):
+                return val
+        except (KeyError, TypeError, ValueError):
+            pass
+        return default
+
+    archetype = str(raw.get("archetype") or "biped")
+    if archetype not in {"biped", "quadruped", "flying", "serpentine", "construct"}:
+        archetype = "biped"
+
+    behavior = str(raw.get("behavior") or "hostile_melee")
+    if behavior not in {"hostile_melee", "neutral_melee", "passive", "npc"}:
+        behavior = "hostile_melee"
+
+    spawn_group = str(raw.get("spawn_group") or "monster")
+    if spawn_group not in {"monster", "creature", "ambient", "water_creature", "misc"}:
+        spawn_group = "monster"
+
+    color = str(raw.get("main_color") or "#FF0000")
+    if not re.fullmatch(r"^#[0-9A-Fa-f]{6}$", color):
+        color = "#FF0000"
+
+    attack_damage = _float_val("attack_damage", 2.0, positive=False)
+    if behavior in {"hostile_melee", "neutral_melee"} and attack_damage <= 0:
+        attack_damage = 2.0
+
+    return {
+        "max_health": _float_val("max_health", 20.0),
+        "attack_damage": attack_damage,
+        "movement_speed": _float_val("movement_speed", 0.25),
+        "follow_range": _float_val("follow_range", 16.0),
+        "archetype": archetype,
+        "behavior": behavior,
+        "entity_width": _float_val("entity_width", 0.6),
+        "entity_height": _float_val("entity_height", 1.8),
+        "spawn_group": spawn_group,
+        "main_color": color,
+    }
+
+
+def _normalize_quest_config(raw: Any, module_id: str) -> dict[str, Any]:
+    if not isinstance(raw, Mapping):
+        raw = {}
+    obj = str(raw.get("objective") or "manual")
+    if obj not in {"kill", "break", "manual"}:
+        obj = "manual"
+    target = str(raw.get("target") or module_id)
+    if obj in {"kill", "break"} and not re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", target):
+        target = "minecraft:zombie" if obj == "kill" else "minecraft:stone"
+    elif obj == "manual":
+        target = module_id
+
+    reward_item = str(raw.get("reward_item") or "")
+    if reward_item and not re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", reward_item):
+        reward_item = ""
+
+    return {
+        "objective": obj,
+        "target": target,
+        "required": max(1, int(raw.get("required", 1))),
+        "reward_item": reward_item,
+        "reward_count": max(1, int(raw.get("reward_count", 1))),
+        "reward_currency": max(0.0, float(raw.get("reward_currency", 0.0))),
+    }
+
+
+def _normalize_skill_config(raw: Any, module_id: str) -> dict[str, Any]:
+    if not isinstance(raw, Mapping):
+        raw = {}
+    effect = str(raw.get("effect") or "minecraft:speed")
+    if not re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", effect):
+        effect = "minecraft:speed"
+    cfg: dict[str, Any] = {
+        "effect": effect,
+        "duration_ticks": max(1, int(raw.get("duration_ticks", 100))),
+        "amplifier": max(0, min(255, int(raw.get("amplifier", 0)))),
+        "cooldown_ticks": max(1, int(raw.get("cooldown_ticks", 100))),
+    }
+    req_class = str(raw.get("required_class") or "")
+    if req_class and re.fullmatch(r"^[a-z][a-z0-9_]{1,63}$", req_class):
+        cfg["required_class"] = req_class
+    return cfg
+
+
+def _normalize_display_config(raw: Any, module_id: str) -> dict[str, Any]:
+    if isinstance(raw, Mapping) and "display_name" in raw and isinstance(raw["display_name"], str) and raw["display_name"].strip():
+        return {"display_name": raw["display_name"].strip()[:128]}
+    return {"display_name": module_id.title()}
+
+
+def _normalize_economy_config(raw: Any) -> dict[str, Any]:
+    balance = 0.0
+    if isinstance(raw, Mapping) and "initial_balance" in raw:
+        try:
+            val = float(raw["initial_balance"])
+            if math.isfinite(val) and val >= 0:
+                balance = val
+        except (TypeError, ValueError):
+            pass
+    return {"initial_balance": balance}
+
+
+def _author_platform_config(
+    author: TypedOperationAuthor,
+    kind: str,
+    *,
+    scope: str,
+    structured_sections: Mapping[str, Any] | None,
+    module_id: str,
+    uncovered: set[str],
+) -> dict[str, Any]:
+    from .typed_platform_ir import (
+        PLATFORM_CONTENT_KINDS,
+        PLATFORM_ENTITY_KINDS,
+        platform_config_schema,
+    )
+
+    if kind == "state_store":
+        return _state_store_config_from_structured(
+            structured_sections,
+            transfer_required=("persistence.transfers" in uncovered),
+        )
+    if kind in {"network_sync", "resource_policy"}:
+        return {}
+    if kind == "recipe":
+        return {"json": {"type": "minecraft:crafting_shapeless"}}
+    if kind == "advancement":
+        return {"json": {"display": {"title": module_id}}}
+    if kind == "loot":
+        return {"json": {"type": "minecraft:empty"}}
+
+    if kind == "shop":
+        entry_schema = {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "pattern": r"^[a-z][a-z0-9_]{1,63}$",
+                    "maxLength": 64,
+                },
+                "item": {
+                    "type": "string",
+                    "pattern": r"^[a-z0-9_.-]+:[a-z0-9_./-]+$",
+                    "maxLength": 128,
+                },
+                "count": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 64,
+                },
+                "price": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 100000,
+                },
+            },
+            "required": ["id", "item", "price"],
+            "additionalProperties": False,
+        }
+        shop_schema = {
+            "type": "object",
+            "properties": {
+                "entries": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 2,
+                    "items": entry_schema,
+                },
+            },
+            "additionalProperties": False,
+        }
+        raw = author._ask("platform_config", shop_schema, scope=scope)
+        entries: list[dict[str, Any]] = []
+        seen_entry_ids: set[str] = set()
+        raw_list: list[Any] = []
+        if isinstance(raw, Mapping):
+            if "entries" in raw and isinstance(raw["entries"], Sequence) and not isinstance(raw["entries"], (str, bytes, bytearray)):
+                raw_list = list(raw["entries"])
+            elif "id" in raw and "item" in raw:
+                raw_list = [raw]
+        for item in raw_list:
+            if not isinstance(item, Mapping):
+                continue
+            raw_id = str(item.get("id") or "").strip()
+            cleaned_id = re.sub(r"[^a-z0-9_]+", "", raw_id.lower())
+            if not cleaned_id or not cleaned_id[0].isalpha():
+                cleaned_id = f"entry_{len(entries) + 1}"
+            if cleaned_id in seen_entry_ids:
+                cleaned_id = f"{cleaned_id}_{len(entries) + 1}"
+            seen_entry_ids.add(cleaned_id)
+            raw_item = str(item.get("item") or "").strip()
+            if not re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", raw_item):
+                raw_item = "minecraft:iron_ingot"
+            count = max(1, int(item.get("count", 1)))
+            price = max(0.0, float(item.get("price", 10.0)))
+            entries.append({
+                "id": cleaned_id,
+                "item": raw_item,
+                "count": count,
+                "price": price,
+            })
+        if not entries:
+            entries = [{
+                "id": f"{module_id}_entry_1",
+                "item": "minecraft:iron_ingot",
+                "count": 1,
+                "price": 10.0,
+            }]
+        return {"entries": entries}
+
+    if kind == "networking":
+        action_schema = {
+            "oneOf": [
+                {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string", "pattern": r"^[a-z][a-z0-9_]{1,63}$", "maxLength": 64},
+                        "type": {"const": "message"},
+                        "message": {"type": "string", "minLength": 1, "maxLength": 128},
+                    },
+                    "required": ["id", "type", "message"],
+                    "additionalProperties": False,
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string", "pattern": r"^[a-z][a-z0-9_]{1,63}$", "maxLength": 64},
+                        "type": {"const": "grant_item"},
+                        "item": {"type": "string", "pattern": r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", "maxLength": 128},
+                        "count": {"type": "integer", "minimum": 1, "maximum": 64},
+                    },
+                    "required": ["id", "type", "item"],
+                    "additionalProperties": False,
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string", "pattern": r"^[a-z][a-z0-9_]{1,63}$", "maxLength": 64},
+                        "type": {"const": "status_effect"},
+                        "effect": {"type": "string", "pattern": r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", "maxLength": 128},
+                        "duration_ticks": {"type": "integer", "minimum": 1, "maximum": 72000},
+                        "amplifier": {"type": "integer", "minimum": 0, "maximum": 255},
+                    },
+                    "required": ["id", "type", "effect"],
+                    "additionalProperties": False,
+                },
+            ],
+        }
+        net_schema = {
+            "type": "object",
+            "properties": {
+                "actions": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 2,
+                    "items": action_schema,
+                },
+            },
+            "additionalProperties": False,
+        }
+        raw = author._ask("platform_config", net_schema, scope=scope)
+        actions: list[dict[str, Any]] = []
+        seen_action_ids: set[str] = set()
+        raw_list: list[Any] = []
+        if isinstance(raw, Mapping):
+            if "actions" in raw and isinstance(raw["actions"], Sequence) and not isinstance(raw["actions"], (str, bytes, bytearray)):
+                raw_list = list(raw["actions"])
+            elif "id" in raw and "type" in raw:
+                raw_list = [raw]
+        for item in raw_list:
+            if not isinstance(item, Mapping):
+                continue
+            raw_id = str(item.get("id") or "").strip()
+            cleaned_id = re.sub(r"[^a-z0-9_]+", "", raw_id.lower())
+            if not cleaned_id or not cleaned_id[0].isalpha():
+                cleaned_id = f"action_{len(actions) + 1}"
+            if cleaned_id in seen_action_ids:
+                cleaned_id = f"{cleaned_id}_{len(actions) + 1}"
+            seen_action_ids.add(cleaned_id)
+            action_type = str(item.get("type") or "message")
+            if action_type not in {"message", "grant_item", "status_effect"}:
+                action_type = "message"
+            if action_type == "message":
+                actions.append({
+                    "id": cleaned_id,
+                    "type": "message",
+                    "message": str(item.get("message") or "action").strip() or "action",
+                })
+            elif action_type == "grant_item":
+                item_res = str(item.get("item") or "minecraft:iron_ingot")
+                if not re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", item_res):
+                    item_res = "minecraft:iron_ingot"
+                actions.append({
+                    "id": cleaned_id,
+                    "type": "grant_item",
+                    "item": item_res,
+                    "count": max(1, int(item.get("count", 1))),
+                })
+            elif action_type == "status_effect":
+                effect_res = str(item.get("effect") or "minecraft:speed")
+                if not re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", effect_res):
+                    effect_res = "minecraft:speed"
+                actions.append({
+                    "id": cleaned_id,
+                    "type": "status_effect",
+                    "effect": effect_res,
+                    "duration_ticks": max(1, int(item.get("duration_ticks", 100))),
+                    "amplifier": max(0, min(255, int(item.get("amplifier", 0)))),
+                })
+        if not actions:
+            actions = [{
+                "id": f"{module_id}_action",
+                "type": "message",
+                "message": "action received",
+            }]
+        return {
+            "template": "validated_action_channel",
+            "actions": actions,
+        }
+
+    if kind == "gui":
+        gui_schema = {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "minLength": 1, "maxLength": 64},
+                "rows": {"type": "integer", "minimum": 1, "maximum": 6},
+                "entries": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "slot": {"type": "integer", "minimum": 0, "maximum": 53},
+                            "item": {"type": "string", "pattern": r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", "maxLength": 128},
+                            "count": {"type": "integer", "minimum": 1, "maximum": 64},
+                        },
+                        "required": ["slot", "item"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "additionalProperties": False,
+        }
+        raw = author._ask("platform_config", gui_schema, scope=scope)
+        title = str(raw.get("title") or "Menu").strip() if isinstance(raw, Mapping) else "Menu"
+        rows = max(1, min(6, int(raw.get("rows", 3)))) if isinstance(raw, Mapping) else 3
+        entries: list[dict[str, Any]] = []
+        seen_slots: set[int] = set()
+        raw_list: list[Any] = []
+        if isinstance(raw, Mapping):
+            if "entries" in raw and isinstance(raw["entries"], Sequence) and not isinstance(raw["entries"], (str, bytes, bytearray)):
+                raw_list = list(raw["entries"])
+            elif "slot" in raw and "item" in raw:
+                raw_list = [raw]
+        for item in raw_list:
+            if not isinstance(item, Mapping):
+                continue
+            slot = int(item.get("slot", 0))
+            if not 0 <= slot < rows * 9 or slot in seen_slots:
+                continue
+            seen_slots.add(slot)
+            item_res = str(item.get("item") or "minecraft:iron_ingot")
+            if not re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", item_res):
+                item_res = "minecraft:iron_ingot"
+            entries.append({
+                "slot": slot,
+                "item": item_res,
+                "count": max(1, int(item.get("count", 1))),
+            })
+        return {
+            "template": "read_only_menu",
+            "title": title or "Menu",
+            "rows": rows,
+            "entries": entries,
+        }
+
+    if kind == "tag":
+        tag_schema = {
+            "type": "object",
+            "properties": {
+                "registry": {
+                    "type": "string",
+                    "enum": ["items", "blocks", "entity_types", "fluids", "functions"],
+                },
+                "values": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 2,
+                    "items": {"type": "string", "pattern": r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", "maxLength": 128},
+                },
+                "replace": {"type": "boolean"},
+            },
+            "additionalProperties": False,
+        }
+        raw = author._ask("platform_config", tag_schema, scope=scope)
+        registry = "items"
+        values = ["minecraft:iron_ingot"]
+        replace = False
+        if isinstance(raw, Mapping):
+            reg = str(raw.get("registry") or "")
+            if reg in {"items", "blocks", "entity_types", "fluids", "functions"}:
+                registry = reg
+            raw_vals = raw.get("values")
+            if isinstance(raw_vals, Sequence) and not isinstance(raw_vals, (str, bytes, bytearray)):
+                filtered = [
+                    str(v)
+                    for v in raw_vals
+                    if isinstance(v, str) and re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", v)
+                ]
+                if filtered:
+                    values = filtered
+            elif isinstance(raw_vals, str) and re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", raw_vals):
+                values = [raw_vals]
+            if "replace" in raw and isinstance(raw["replace"], bool):
+                replace = raw["replace"]
+        return {
+            "registry": registry,
+            "values": values,
+            "replace": replace,
+        }
+
+    if kind == "command":
+        cmd_schema = {
+            "type": "object",
+            "properties": {
+                "literal": {"type": "string", "pattern": r"^[a-z0-9_]+$", "minLength": 1, "maxLength": 32},
+                "message": {"type": "string", "maxLength": 128},
+                "permission_level": {"type": "integer", "minimum": 0, "maximum": 4},
+            },
+            "additionalProperties": False,
+        }
+        raw = author._ask("platform_config", cmd_schema, scope=scope)
+        literal = module_id
+        message = f"Executed {module_id}"
+        perm = 0
+        if isinstance(raw, Mapping):
+            raw_lit = str(raw.get("literal") or "")
+            cleaned = re.sub(r"[^a-z0-9_]+", "", raw_lit.lower())
+            if cleaned:
+                literal = cleaned[:32]
+            if "message" in raw and isinstance(raw["message"], str):
+                message = raw["message"][:128]
+            if "permission_level" in raw and type(raw["permission_level"]) is int:
+                perm = max(0, min(4, raw["permission_level"]))
+        return {
+            "literal": literal,
+            "message": message,
+            "permission_level": perm,
+        }
+
+    if kind in PLATFORM_CONTENT_KINDS:
+        content_schema = _content_config_author_schema(kind)
+        raw = author._ask("platform_config", content_schema, scope=scope)
+        return _normalize_content_config(kind, raw, module_id)
+
+    if kind in PLATFORM_ENTITY_KINDS:
+        entity_schema = {**platform_config_schema(kind), "required": []}
+        raw = author._ask("platform_config", entity_schema, scope=scope)
+        return _normalize_entity_config(raw, module_id)
+
+    if kind == "quest":
+        quest_schema = {**platform_config_schema(kind), "required": []}
+        raw = author._ask("platform_config", quest_schema, scope=scope)
+        return _normalize_quest_config(raw, module_id)
+
+    if kind == "skill":
+        skill_schema = {**platform_config_schema(kind), "required": []}
+        raw = author._ask("platform_config", skill_schema, scope=scope)
+        return _normalize_skill_config(raw, module_id)
+
+    if kind in {"class", "party", "guild"}:
+        disp_schema = {**platform_config_schema(kind), "required": []}
+        raw = author._ask("platform_config", disp_schema, scope=scope)
+        return _normalize_display_config(raw, module_id)
+
+    if kind == "economy":
+        econ_schema = {**platform_config_schema(kind), "required": []}
+        raw = author._ask("platform_config", econ_schema, scope=scope)
+        return _normalize_economy_config(raw)
+
+    raise ValueError(f"TYPED_PLATFORM_KIND_UNSUPPORTED: {kind!r}")
+
+
 def author_typed_plan_ir(
     router: Any,
     source_text: str,
@@ -1650,34 +2313,14 @@ def author_typed_plan_ir(
                 suffix += 1
         seen_platform_ids.add(module_id)
 
-        config_schema = platform_config_schema(kind)
-        if kind == "network_sync":
-            config = {}
-        elif kind == "resource_policy":
-            config = {}
-        elif kind == "state_store":
-            config = _state_store_config_from_structured(
-                structured_sections,
-                transfer_required=(
-                    "persistence.transfers" in uncovered
-                ),
-            )
-        elif (
-            config_schema.get("type") == "object"
-            and config_schema.get("properties") == {}
-            and config_schema.get("additionalProperties") is False
-        ):
-            config = {}
-        else:
-            config = author._ask(
-                "platform_config",
-                config_schema,
-                scope=scope,
-            )
-            if not isinstance(config, Mapping):
-                raise ValueError(
-                    f"TYPED_PLAN_AUTHORING_RESPONSE_INVALID: {scope}.platform_config"
-                )
+        config = _author_platform_config(
+            author,
+            kind,
+            scope=scope,
+            structured_sections=structured_sections,
+            module_id=module_id,
+            uncovered=uncovered,
+        )
         coverable_refs = candidate_covers
         if not coverable_refs:
             raise ValueError(
