@@ -20,6 +20,7 @@ from .geckolib_generation_contract import (
 from .platform_backend_contract import (
     ENTITY_PIPELINE_KINDS as _ENTITY_KINDS,
     SYSTEM_KIND_TO_PACK as _SYSTEM_PACK_BY_KIND,
+    missing_production_backend_capabilities,
 )
 from .scale_policy import ScalePolicy
 from .system_pack_validation import validate_system_modules
@@ -120,6 +121,29 @@ def validate_production_generation_project(
         policy=policy,
         validate_system_packs=False,
     )
+
+    from .platform_catalog import adapter_from_project
+
+    try:
+        adapter = adapter_from_project(project_root)
+    except Exception as exc:
+        raise ProductionGenerationPreflightError(
+            f"Production target receipt is unavailable before generation: {exc}"
+        ) from exc
+    for module in materialized:
+        if _is_custom(module):
+            continue
+        missing_backend = missing_production_backend_capabilities(
+            adapter.deterministic_module_kinds,
+            str(module.kind),
+            module.config,
+        )
+        if missing_backend:
+            raise ProductionGenerationPreflightError(
+                "DETERMINISTIC_BACKEND_REQUIRED: "
+                f"{module.module_id}/{module.kind} requires missing backend "
+                f"capabilities {sorted(missing_backend)}"
+            )
 
     has_entities = any(
         not _is_custom(module) and str(module.kind) in _ENTITY_KINDS
