@@ -17,6 +17,7 @@ from typing import Any
 from jsonschema import Draft202012Validator
 
 from .execution_contract_policy import PLANNER_RECORD_COUNT_OUTPUT_TOKEN_CEILING
+from .model_output_atomicity_contract import structured_output_token_ceiling
 from .planning_detail_slots import DETAIL_RECORDS
 from .planning_detail_template import WORKSHEET_SECTIONS, worksheet_section_schema
 
@@ -168,7 +169,6 @@ def _authored_chunk_messages(
     chunk_count: int,
     concerns: Sequence[str],
     completed: Mapping[str, Mapping[str, Any]],
-    include_evidence: bool,
     state_symbols: Any = None,
     section_context: Mapping[str, Any] | None = None,
     record_counts: Mapping[str, int] | None = None,
@@ -222,7 +222,6 @@ def _authored_chunk_messages(
             chunk_index,
             chunk_count,
             concerns,
-            include_evidence=include_evidence,
             record_counts=record_counts,
         )
     )
@@ -361,7 +360,6 @@ class _PlannerPageRequest:
     chunk_count: int
     concerns: Sequence[str]
     completed: Mapping[str, Mapping[str, Any]]
-    include_evidence: bool
     media_paths: Sequence[str | Path]
 
 
@@ -389,7 +387,6 @@ def _generate_authored_chunk(
 
     from .fixed_template_generation import generate_fixed_template_value
     from .worksheet_atomic_chunker import (
-        planner_page_output_token_ceiling,
         worksheet_chunk_schema,
     )
 
@@ -407,7 +404,6 @@ def _generate_authored_chunk(
     schema = worksheet_chunk_schema(
         page.section,
         page.concerns,
-        include_evidence=page.include_evidence,
         record_counts=record_counts,
         state_symbols=state_symbols,
     )
@@ -421,7 +417,6 @@ def _generate_authored_chunk(
             chunk_count=page.chunk_count,
             concerns=page.concerns,
             completed=page.completed,
-            include_evidence=page.include_evidence,
             state_symbols=state_symbols,
             section_context=section_context,
             record_counts=record_counts,
@@ -430,7 +425,7 @@ def _generate_authored_chunk(
         media_paths=page.media_paths,
         enable_tools=False,
         description=f"Author bounded canonical {page.section} field page.",
-        output_token_ceiling=planner_page_output_token_ceiling(schema),
+        output_token_ceiling=structured_output_token_ceiling(schema),
     )
     if not isinstance(value, Mapping):
         raise ValueError(
@@ -509,7 +504,6 @@ def _generate_concern_pages(
             chunk_count=len(request.chunks),
             concerns=concerns,
             completed=request.completed,
-            include_evidence=False,
             media_paths=request.media_paths,
         )
         value = _generate_authored_chunk(
