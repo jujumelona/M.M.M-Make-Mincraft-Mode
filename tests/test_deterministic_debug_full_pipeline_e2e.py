@@ -151,7 +151,7 @@ def test_debug_fixture_runs_real_build_and_packaging_without_live_model(
         run_name="debug-full-pipeline-e2e",
         options=CompleteExecutionOptions(
             source_only=False,
-            run_jdt=False,
+            run_jdt=True,
             run_gametest=True,
             run_blockbench=False,
             run_runtime=False,
@@ -173,6 +173,15 @@ def test_debug_fixture_runs_real_build_and_packaging_without_live_model(
     )
     assert result.jar_validation is not None
     assert result.jar_validation["status"] == "PASS"
+    jdt_receipts = [
+        receipt
+        for receipt in result.module_receipts
+        if receipt.get("schema_version") == "mmm/jdt-gate-v1"
+    ]
+    assert len(jdt_receipts) == 1
+    assert jdt_receipts[0]["status"] == "PASS"
+    assert int(jdt_receipts[0].get("files_opened", 0)) >= 1
+    assert "execution-gate:jdt:missing-jdt" not in result.unresolved_gates
     texture = (
         project_root
         / "src/main/resources/assets/mmm_debug_fixture/textures/item/debug_token.png"
