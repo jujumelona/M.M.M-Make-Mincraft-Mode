@@ -8,6 +8,7 @@ from typing import Any
 
 from .generator import make_texture_png
 from .platform_catalog import adapter_from_project
+from .platform_backend_contract import geckolib_entity_capabilities
 from .project_edit import (
     ensure_client_entrypoint,
     ensure_dependency,
@@ -112,11 +113,20 @@ def generate_geckolib_entity_assets(
     from . import geckolib_generation_contract as generation_contract
 
     try:
-        generation_contract.validate_geckolib_project_preflight(info)
+        adapter = generation_contract.validate_geckolib_project_preflight(info)
     except generation_contract.GeckoLibGenerationContractError as exc:
         raise GeckoLibGenerationError(
             f"GeckoLib generation preflight failed: {exc}"
         ) from exc
+    required_backend = geckolib_entity_capabilities(geckolib_version)
+    missing_backend = sorted(
+        required_backend - set(adapter.deterministic_module_kinds)
+    )
+    if missing_backend:
+        raise GeckoLibGenerationError(
+            "DETERMINISTIC_BACKEND_REQUIRED: GeckoLib entity generation "
+            f"requires missing backend capabilities {missing_backend}"
+        )
     if info.mod_id != mod_id or info.package_name != package_name:
         raise GeckoLibGenerationError("GeckoLib target does not match fabric.mod.json.")
     cls = "".join(part.capitalize() for part in entity_id.split("_"))
@@ -196,7 +206,6 @@ def generate_geckolib_entity_assets(
                 size=max(texture_width, texture_height),
             )
         )
-    adapter = adapter_from_project(info.root)
     dependency = ensure_dependency(
         info,
         repository_block="""maven {\n    name = 'GeckoLib'\n    url = 'https://dl.cloudsmith.io/public/geckolib3/geckolib/maven/'\n}""",
