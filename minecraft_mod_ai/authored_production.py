@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from copy import deepcopy
 import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from .authored_plan import AuthoredPlan
@@ -45,6 +45,7 @@ def _compile_new_authored_modules(
     package_name: str,
     target: Mapping[str, Any],
     production_state_section: Mapping[str, Any] | None = None,
+    deterministic_module_kinds: Iterable[str] | None = None,
 ) -> tuple[tuple[ProductionModule, ...], dict[str, Any]]:
     """Lower the persisted Typed PlanIR through deterministic host backends only."""
     main_symbol = _main_class_name(mod_id)
@@ -89,6 +90,17 @@ def _compile_new_authored_modules(
     )
 
     raw_platform_modules = validated_plan.get("platform_modules", [])
+    target_deterministic_kinds = (
+        frozenset(
+            str(kind).strip()
+            for kind in deterministic_module_kinds
+            if str(kind).strip()
+        )
+        if deterministic_module_kinds is not None
+        else None
+    )
+    from .typed_platform_ir import PLATFORM_CONTENT_KINDS
+
     platform_modules: list[ProductionModule] = []
     state_store_config: dict[str, Any] | None = None
     network_sync_config: dict[str, Any] | None = None
@@ -120,6 +132,15 @@ def _compile_new_authored_modules(
                 raise ValueError("TYPED_PLATFORM_RESOURCE_POLICY_DUPLICATE")
             resource_policy_config = deepcopy(dict(item["config"]))
             continue
+        if (
+            target_deterministic_kinds is not None
+            and kind in PLATFORM_CONTENT_KINDS
+            and kind not in target_deterministic_kinds
+        ):
+            raise ValueError(
+                "TYPED_PLATFORM_DETERMINISTIC_BACKEND_REQUIRED: "
+                f"bound target has no deterministic backend for {kind!r}"
+            )
         platform_modules.append(
             ProductionModule(
                 module_id=module_id,
@@ -407,12 +428,27 @@ def compile_authored_design(
 
     design = {"authored_plan": plan.to_dict()}
     design = bind_existing_project(router, design)
+    from .typed_platform_ir import PLATFORM_HOST_KINDS
+
+    platform_module_kinds = tuple(
+        dict.fromkeys(
+            str(item.get("kind") or "").strip()
+            for item in plan.typed_plan_ir.get("platform_modules", ())
+            if isinstance(item, Mapping)
+            and str(item.get("kind") or "").strip()
+            and str(item.get("kind") or "").strip() not in PLATFORM_HOST_KINDS
+        )
+    )
     design, base = bind_platform(
         router,
         plan.requested_prompt,
         design,
         base,
+        module_kinds=platform_module_kinds,
     )
+    from .platform_catalog import adapter_for_lock_values
+
+    adapter = adapter_for_lock_values(base.spec.platform)
     target = _bound_target(design)
     design = {**design, **target}
 
@@ -423,6 +459,7 @@ def compile_authored_design(
         package_name=base.spec.package_name,
         target=target,
         production_state_section=production_state_section,
+        deterministic_module_kinds=adapter.deterministic_module_kinds,
     )
     design = {
         **design,
