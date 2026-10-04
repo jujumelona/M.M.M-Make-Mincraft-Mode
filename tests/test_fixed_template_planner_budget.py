@@ -19,6 +19,7 @@ from minecraft_mod_ai.fixed_template_generation import (
     _generate_native_template_arguments,
     generate_fixed_template_value,
 )
+from minecraft_mod_ai.model_router import ModelRouter
 from minecraft_mod_ai.worksheet_atomic_chunker import pack_section_concerns
 
 
@@ -94,6 +95,45 @@ def test_planner_fixed_template_honors_host_page_ceiling() -> None:
     assert value == {"value": "ok"}
     assert router.tool_calls == 0
     assert router.text_calls[0][1]["output_token_ceiling"] == 777
+
+
+def test_planner_router_keeps_schema_out_of_model_messages() -> None:
+    router = object.__new__(ModelRouter)
+    schema = {
+        "type": "object",
+        "properties": {
+            "private_transport_field": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 31,
+            }
+        },
+        "required": ["private_transport_field"],
+        "additionalProperties": False,
+    }
+
+    _stage, _runtime, tools, request = router._prepare_generation_request_impl(
+        "planner",
+        ({"role": "user", "content": "fill the bounded leaf"},),
+        config=SimpleNamespace(adapter="llama_cpp"),
+        response_format="json",
+        response_schema=schema,
+        enable_tools=False,
+        output_token_ceiling=333,
+        force_non_thinking=True,
+    )
+
+    assert tools == ()
+    assert request.response_schema == schema
+    assert request.metadata["mmm_output_token_ceiling"] == 333
+    assert request.metadata["mmm_force_non_thinking"] is True
+    rendered_messages = "\n".join(
+        str(message.get("content") or "")
+        for message in request.messages
+    )
+    assert "private_transport_field" not in rendered_messages
+    assert '"properties"' not in rendered_messages
+    assert "host owns the JSON shape" in rendered_messages
 
 
 def test_planner_native_tool_transport_is_fail_closed() -> None:
