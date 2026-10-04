@@ -5,6 +5,7 @@ import re
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .platform_backend_contract import system_pack_capabilities
 from .platform_catalog import adapter_from_project
 from .project_edit import (
     ensure_main_initializer_call,
@@ -80,6 +81,16 @@ def generate_system_pack(
     if info.mod_id != mod_id or info.package_name != package_name:
         raise ValueError("System pack target does not match fabric.mod.json.")
     adapter = adapter_from_project(info.root)
+    required_backend = system_pack_capabilities(pack_id)
+    missing_backend = sorted(
+        required_backend - set(adapter.deterministic_module_kinds)
+    )
+    if missing_backend:
+        raise ValueError(
+            "DETERMINISTIC_BACKEND_REQUIRED: "
+            f"system pack {pack_id!r} requires missing backend capabilities "
+            f"{missing_backend}"
+        )
     merged_by_id = {
         str(item["module_id"]): item
         for item in iter_system_module_records(
