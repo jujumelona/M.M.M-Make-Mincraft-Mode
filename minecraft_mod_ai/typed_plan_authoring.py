@@ -931,13 +931,16 @@ class TypedOperationAuthor:
                 ),
             }
         if op == "while":
+            max_iterations = int(str(head["max_iterations"]))
+            if not 1 <= max_iterations <= 1_000_000:
+                raise ValueError("TYPED_PLAN_WHILE_ITERATION_RANGE")
             return {
                 "op": "while",
                 "condition": expr(
                     scope + ".condition",
                     bindings,
                 ),
-                "max_iterations": int(head["max_iterations"]),
+                "max_iterations": max_iterations,
                 "body": self.body(
                     scope + ".body",
                     env=bindings,
