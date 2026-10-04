@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .fixed_template_generation import generate_fixed_template_text
+from .fixed_template_generation import generate_fixed_template_value
 
 import argparse
 import hashlib
@@ -94,7 +94,8 @@ def run_model_smoke(
         else:
             media = [media_path] if media_path is not None else []
             with router.generation_session(role):
-                text = generate_fixed_template_text(router,
+                value = generate_fixed_template_value(
+                    router,
                     role,
                     [
                         {
@@ -104,10 +105,15 @@ def run_model_smoke(
                         {"role": "user", "content": "Fill the supplied empty fixed template."},
                     ],
                     media_paths=media,
-                    response_schema={"type": "object", "properties": {}, "additionalProperties": False},
+                    response_schema={
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": False,
+                    },
                     enable_tools=False,
                 )
-            if not str(text).strip():
+            text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+            if not text.strip():
                 raise RuntimeError("model returned an empty smoke response")
             output = {"text": text}
         elapsed = time.perf_counter() - started
