@@ -397,6 +397,12 @@ def _generate_authored_chunk(
         raise ValueError(
             "AUTHORED_STRUCTURED_DESIGN: planner page must contain exactly one concern"
         )
+    concern = str(page.concerns[0])
+    if not isinstance(record_counts, Mapping) or concern not in record_counts:
+        raise ValueError(
+            "AUTHORED_STRUCTURED_DESIGN: planner field page requires a host-fixed "
+            f"record count for {page.section}.{concern}"
+        )
 
     schema = worksheet_chunk_schema(
         page.section,
