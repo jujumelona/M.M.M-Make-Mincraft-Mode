@@ -51,6 +51,32 @@ SYSTEM_PACK_KINDS = {
 ENTITY_PIPELINE_KINDS = frozenset({"entity", "boss", "npc"})
 DEFAULT_GECKOLIB_VERSION = "4.8.2"
 
+NATIVE_PRODUCTION_MODULE_KINDS = frozenset(
+    set(EXTENDED_CONTENT_KINDS)
+    | set(SYSTEM_KIND_TO_PACK)
+    | set(ENTITY_PIPELINE_KINDS)
+    | {"typed_host"}
+)
+NATIVE_INTEGRATION_TYPES = frozenset({
+    "mmm_local_ai_sidecar",
+    "mmm_research_shard",
+})
+
+
+def native_production_route_available(
+    kind: str,
+    config: Mapping[str, Any] | None = None,
+) -> bool:
+    normalized = str(kind or "").strip()
+    if normalized in NATIVE_PRODUCTION_MODULE_KINDS:
+        return True
+    if normalized != "integration":
+        return False
+    integration_type = str(
+        (config or {}).get("integration_type") or ""
+    ).strip()
+    return integration_type in NATIVE_INTEGRATION_TYPES
+
 
 def normalize_capabilities(values: Iterable[str] | None) -> frozenset[str]:
     if values is None:
@@ -174,11 +200,14 @@ __all__ = [
     "bootstrap_boss_capabilities",
     "bootstrap_content_capabilities",
     "ENTITY_PIPELINE_KINDS",
+    "NATIVE_INTEGRATION_TYPES",
+    "NATIVE_PRODUCTION_MODULE_KINDS",
     "EXTENDED_CONTENT_KINDS",
     "SYSTEM_KIND_TO_PACK",
     "SYSTEM_PACK_KINDS",
     "geckolib_entity_capabilities",
     "missing_production_backend_capabilities",
+    "native_production_route_available",
     "normalize_capabilities",
     "production_backend_is_supported",
     "production_module_backend_capabilities",
