@@ -32,15 +32,6 @@ class SingleRecordTemplateError(ValueError):
     pass
 
 
-def _context_bound_record_schema(
-    identifier: str,
-    schema: dict[str, Any],
-    context: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Compatibility seam for tests and callers using the former private helper."""
-    return context_bound_record_schema(identifier, schema, context)
-
-
 def _contains_blank_string(value: Any, schema: dict[str, Any] | None = None) -> bool:
     schema = schema or {}
     if isinstance(value, str):
@@ -172,7 +163,7 @@ def run_single_record_template(
     """Generate exactly one record; the model never owns iteration or completion."""
     template = load_record_template(identifier)
     normalized_context = task_context(template, context)
-    schema = _context_bound_record_schema(
+    schema = context_bound_record_schema(
         identifier,
         template["record_schema"],
         normalized_context,
