@@ -17,6 +17,7 @@ from .platform_backend_contract import (
     ENTITY_PIPELINE_KINDS,
     EXTENDED_CONTENT_KINDS,
     SYSTEM_KIND_TO_PACK,
+    effective_target_backend_capabilities,
     missing_production_backend_capabilities,
 )
 from .research_ledger import is_research_shard
@@ -115,11 +116,7 @@ def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolic
 
     from .platform_catalog import adapter_for_lock_values
     adapter = adapter_for_lock_values(proposal.base_proposal.spec.platform)
-    deterministic_module_kinds = frozenset(
-        str(kind).strip()
-        for kind in getattr(adapter, 'deterministic_module_kinds', ())
-        if str(kind).strip()
-    )
+    deterministic_module_kinds = effective_target_backend_capabilities(adapter)
     nodes: list[WorkNode] = [_node('prepare-project', 'prepare', (), {'kind': 'prepare', 'proposal_hash': proposal_hash, 'existing_input_sha256': proposal.existing_input_sha256})]
     module_node: dict[str, str] = {}
     exclusive_anchor_node: dict[str, str] = {}
