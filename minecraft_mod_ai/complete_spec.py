@@ -374,7 +374,10 @@ class CompleteProposal:
                     )
                 artifact_owners.add(owner)
 
-        from .platform_backend_contract import native_production_route_available
+        from .platform_backend_contract import (
+            missing_production_backend_capabilities,
+            native_production_route_available,
+        )
 
         unroutable_modules = [
             f"{module.module_id}/{module.kind}"
@@ -387,6 +390,28 @@ class CompleteProposal:
                 "DETERMINISTIC_BACKEND_REQUIRED: production module has neither "
                 "a native deterministic route nor an artifact owner: "
                 + ", ".join(unroutable_modules[:20])
+            )
+
+        target_capabilities = self.base_proposal.spec.platform.deterministic_module_kinds
+        unsupported_native_modules: list[str] = []
+        for module in self.modules:
+            if module.module_id in artifact_owners:
+                continue
+            missing_backend = missing_production_backend_capabilities(
+                target_capabilities,
+                module.kind,
+                module.config,
+            )
+            if missing_backend:
+                unsupported_native_modules.append(
+                    f"{module.module_id}/{module.kind}:"
+                    f"{sorted(missing_backend)}"
+                )
+        if unsupported_native_modules:
+            raise SpecValidationError(
+                "DETERMINISTIC_BACKEND_REQUIRED: approved target cannot execute "
+                "native production modules: "
+                + ", ".join(unsupported_native_modules[:20])
             )
 
         asset_ids: set[str] = set()
