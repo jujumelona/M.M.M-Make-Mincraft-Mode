@@ -35,6 +35,52 @@ def _published(uri: str, diagnostics: object) -> dict[str, object]:
     }
 
 
+def test_open_documents_must_resolve_to_compilation_units_before_refresh() -> None:
+    class ResolvingRpc(_FakeRpc):
+        def request(self, method: str, params: dict[str, object], timeout: float):
+            self.requests.append((method, params, timeout))
+            assert method == "workspace/executeCommand"
+            assert params["command"] == "java.project.isTestFile"
+            return str(params["arguments"][0]).endswith("Test.java")
+
+    rpc = ResolvingRpc([])
+    java_lsp._await_open_document_resolution(
+        rpc,
+        expected_uris={"file:///Main.java", "file:///FeatureTest.java"},
+        deadline=java_lsp.time.monotonic() + 1.0,
+    )
+
+    assert [params["arguments"][0] for _method, params, _timeout in rpc.requests] == [
+        "file:///FeatureTest.java",
+        "file:///Main.java",
+    ]
+
+
+def test_open_document_resolution_retries_transient_unresolved_file() -> None:
+    class EventuallyResolvingRpc(_FakeRpc):
+        def __init__(self) -> None:
+            super().__init__([])
+            self.calls = 0
+
+        def request(self, method: str, params: dict[str, object], timeout: float):
+            self.requests.append((method, params, timeout))
+            self.calls += 1
+            if self.calls == 1:
+                raise java_lsp.JDTLanguageServerError(
+                    "Given URI does not belong to an existing Java source file."
+                )
+            return False
+
+    rpc = EventuallyResolvingRpc()
+    java_lsp._await_open_document_resolution(
+        rpc,
+        expected_uris={"file:///Main.java"},
+        deadline=java_lsp.time.monotonic() + 1.0,
+    )
+
+    assert rpc.calls == 2
+
+
 def test_explicit_refresh_requests_each_open_document_with_lifecycle_fence() -> None:
     rpc = _FakeRpc([])
     deadline = java_lsp.time.monotonic() + 1.0
