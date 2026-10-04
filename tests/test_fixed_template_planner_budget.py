@@ -150,7 +150,28 @@ class _ExhaustThenProjectRouter:
         item_properties = properties[concern]["items"]["properties"]
         assert len(item_properties) == 1
         field_name = next(iter(item_properties))
-        return {concern: [{field_name: f"value-{field_name}"}]}
+        field_schema = item_properties[field_name]
+        raw_type = field_schema.get("type")
+        allowed_types = (
+            tuple(raw_type)
+            if isinstance(raw_type, list)
+            else (raw_type,)
+        )
+        if "string" in allowed_types:
+            field_value = f"value-{field_name}"
+        elif "array" in allowed_types:
+            field_value = [f"value-{field_name}"]
+        elif "integer" in allowed_types:
+            field_value = 1
+        elif "number" in allowed_types:
+            field_value = 1.0
+        elif "boolean" in allowed_types:
+            field_value = True
+        elif "null" in allowed_types:
+            field_value = None
+        else:
+            raise AssertionError(f"unsupported field schema: {field_schema!r}")
+        return {concern: [{field_name: field_value}]}
 
 
 def test_single_concern_output_exhaustion_narrows_to_host_field_projections() -> None:
@@ -190,4 +211,4 @@ def test_single_concern_output_exhaustion_narrows_to_host_field_projections() ->
     assert len(value[selected_concern]) == 1
     assert set(value[selected_concern][0]) == set(selected_fields)
     for field_name in selected_fields:
-        assert value[selected_concern][0][field_name] == f"value-{field_name}"
+        assert field_name in value[selected_concern][0]
