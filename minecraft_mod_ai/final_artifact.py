@@ -832,11 +832,12 @@ def build_authored_design_coverage_receipt(
     gametest_passed: bool,
     unresolved_gates: tuple[str, ...] | list[str],
 ) -> dict[str, Any]:
-    """Bind a planner-bypassed saved design to exact host-lowered execution evidence.
+    """Bind a saved Typed PlanIR design to exact host-lowered execution evidence.
 
-    Saved authored production deliberately bypasses requirement extraction and the normal
-    production contract. Release coverage therefore comes from the immutable authored
-    text plus the exact-task manifest that partitions every UTF-8 byte of that text.
+    The current authored-production contract has one or more source-bound typed units
+    plus separately declared deterministic platform modules. Release coverage binds the
+    immutable authored text, manifest digest, approved module set and generated sources;
+    legacy byte-partition task manifests are not accepted.
     """
 
     findings: list[str] = []
@@ -862,12 +863,10 @@ def build_authored_design_coverage_receipt(
     if manifest.get("schema_version") != "mmm/authored-execution-manifest-v2":
         findings.append("authored execution manifest is missing or has an unsupported schema")
     authored_policy = str(manifest.get("policy") or "")
-    if authored_policy not in {
-        "host_exact_task_queue_no_coder_file_planning",
-        "host_localize_freeze_exact_targets_before_coder",
-        "host_bounded_coherent_authored_design",
-    }:
-        findings.append("authored execution manifest policy is not a host-owned task policy")
+    if authored_policy != "host_typed_plan_ir":
+        findings.append(
+            "authored execution manifest policy is not the current Typed PlanIR policy"
+        )
     if manifest.get("source_text_sha256") != source_text_sha256:
         findings.append("authored execution manifest does not bind the approved design text")
     if manifest.get("source_bytes") != len(text_bytes):
@@ -888,13 +887,89 @@ def build_authored_design_coverage_receipt(
     elif unit_count != len(units):
         findings.append("authored execution manifest unit_count does not match units")
     if not units:
-        findings.append("authored execution manifest contains no authored units")
+        findings.append("authored execution manifest contains no source-bound typed units")
 
     expected_module_ids = [str(value).strip() for value in module_ids]
     if not expected_module_ids or any(not value for value in expected_module_ids):
         findings.append("approved authored module IDs are missing or invalid")
 
-    manifest_module_ids: list[str] = []
+    typed_module_ids: list[str] = []
+    for ordinal, raw_unit in enumerate(units, start=1):
+        if not isinstance(raw_unit, Mapping):
+            findings.append(f"authored execution unit {ordinal} is not an object")
+            continue
+        module_id = str(raw_unit.get("module_id") or "").strip()
+        relative = str(raw_unit.get("path") or "").replace("\\", "/").strip()
+        symbol = str(raw_unit.get("symbol") or "").strip()
+        bound_source_sha256 = str(raw_unit.get("source_sha256") or "")
+        if not module_id:
+            findings.append(f"authored execution unit {ordinal} has no module binding")
+        else:
+            typed_module_ids.append(module_id)
+        if (
+            not relative
+            or not symbol
+            or Path(relative).is_absolute()
+            or ".." in Path(relative).parts
+            or not relative.casefold().endswith(".java")
+        ):
+            findings.append(
+                f"authored execution unit {ordinal} has no safe Typed Java source binding"
+            )
+        if bound_source_sha256 != source_text_sha256:
+            findings.append(
+                f"authored execution unit {ordinal} is not bound to the approved authored text"
+            )
+
+    typed_program = manifest.get("typed_program")
+    if not isinstance(typed_program, Mapping):
+        findings.append("authored execution manifest typed_program is missing")
+    elif units and isinstance(units[0], Mapping):
+        if (
+            str(typed_program.get("path") or "") != str(units[0].get("path") or "")
+            or str(typed_program.get("symbol") or "") != str(units[0].get("symbol") or "")
+        ):
+            findings.append(
+                "authored execution manifest typed_program disagrees with its source unit"
+            )
+
+    raw_platform_modules = manifest.get("platform_modules")
+    platform_modules = (
+        raw_platform_modules if isinstance(raw_platform_modules, list) else []
+    )
+    if raw_platform_modules is not None and not isinstance(raw_platform_modules, list):
+        findings.append("authored execution manifest platform_modules must be a list")
+    platform_module_ids: list[str] = []
+    for ordinal, raw_module in enumerate(platform_modules, start=1):
+        if not isinstance(raw_module, Mapping):
+            findings.append(f"authored platform module {ordinal} is not an object")
+            continue
+        module_id = str(raw_module.get("module_id") or "").strip()
+        kind = str(raw_module.get("kind") or "").strip()
+        covers = raw_module.get("covers")
+        if not module_id or not kind:
+            findings.append(
+                f"authored platform module {ordinal} has incomplete identity"
+            )
+            continue
+        platform_module_ids.append(module_id)
+        if (
+            not isinstance(covers, list)
+            or not covers
+            or any(not isinstance(value, str) or not value.strip() for value in covers)
+        ):
+            findings.append(
+                f"authored platform module {module_id} has invalid coverage bindings"
+            )
+
+    manifest_module_ids = typed_module_ids + platform_module_ids
+    if len(manifest_module_ids) != len(set(manifest_module_ids)):
+        findings.append("authored execution manifest contains duplicate module bindings")
+    if manifest_module_ids != expected_module_ids:
+        findings.append(
+            "authored execution manifest modules do not match the approved proposal modules"
+        )
+
     requirement_rows: list[dict[str, str]] = []
     if plan_prompt:
         requirement_rows.append(
@@ -904,62 +979,19 @@ def build_authored_design_coverage_receipt(
                 "coverage_group_ref": "saved-authored-design:request",
             }
         )
+    if text.strip():
+        requirement_rows.append(
+            {
+                "requirement_ref": (
+                    "authored-design:"
+                    + source_text_sha256.removeprefix("sha256:")
+                ),
+                "statement": text.strip(),
+                "coverage_group_ref": "saved-authored-design:typed-plan",
+            }
+        )
 
-    cursor = 0
-    for ordinal, raw_unit in enumerate(units, start=1):
-        if not isinstance(raw_unit, Mapping):
-            findings.append(f"authored execution unit {ordinal} is not an object")
-            continue
-        start = raw_unit.get("start_byte")
-        end = raw_unit.get("end_byte")
-        if type(start) is not int or type(end) is not int:
-            findings.append(f"authored execution unit {ordinal} has invalid byte bounds")
-            continue
-        if start != cursor or end <= start or end > len(text_bytes):
-            findings.append(f"authored execution unit {ordinal} does not form a contiguous text partition")
-            if 0 <= end <= len(text_bytes):
-                cursor = end
-            continue
-
-        piece = text_bytes[start:end]
-        try:
-            statement = piece.decode("utf-8").strip()
-        except UnicodeDecodeError:
-            statement = ""
-            findings.append(f"authored execution unit {ordinal} splits invalid UTF-8")
-        unit_sha256 = "sha256:" + hashlib.sha256(piece).hexdigest()
-        if str(raw_unit.get("text_sha256") or "") != unit_sha256:
-            findings.append(f"authored execution unit {ordinal} text hash does not match")
-        module_id = str(raw_unit.get("module_id") or "").strip()
-        if not module_id:
-            findings.append(f"authored execution unit {ordinal} has no module binding")
-        manifest_module_ids.append(module_id)
-        if not statement:
-            findings.append(f"authored execution unit {ordinal} has no authored statement")
-        else:
-            requirement_rows.append(
-                {
-                    "requirement_ref": (
-                        f"authored-unit:{ordinal:08d}:"
-                        + unit_sha256.removeprefix("sha256:")
-                    ),
-                    "statement": statement,
-                    "coverage_group_ref": (
-                        f"authored-module:{module_id}" if module_id else "authored-module:missing"
-                    ),
-                }
-            )
-        cursor = end
-
-    if cursor != len(text_bytes):
-        findings.append("authored execution units do not cover every byte of the approved design")
-    if manifest_module_ids != expected_module_ids:
-        findings.append("authored execution manifest modules do not match the approved proposal modules")
-
-    if (
-        authored_policy == "host_exact_task_queue_no_coder_file_planning"
-        and project_root is not None
-    ):
+    if authored_policy == "host_typed_plan_ir" and project_root is not None:
         findings.extend(_authored_feature_semantic_findings(project_root, units))
 
     unresolved = sorted(
@@ -1021,6 +1053,7 @@ def build_authored_design_coverage_receipt(
             "source_text_sha256": source_text_sha256,
             "manifest_sha256": supplied_manifest_sha256,
             "unit_count": len(units),
+            "platform_module_count": len(platform_modules),
             "source_bytes": len(text_bytes),
         },
         "verification": {
