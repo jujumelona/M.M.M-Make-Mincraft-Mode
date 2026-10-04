@@ -251,20 +251,43 @@ def resolve_platform_fail_closed(
                 raise SpecValidationError(
                     "Host-authoritative platform provider returned no executable target."
                 )
-            adapter = provider.resolve(versions[0])
-            adapter.validate()
-            if (
-                adapter.minecraft_version != versions[0]
-                or adapter.loader != provider.loader
-            ):
-                from .resolved_version_context import VersionContextError
+            adapter = None
+            capability_failures: list[str] = []
+            for version in versions:
+                try:
+                    candidate = provider.resolve(version)
+                    candidate.validate()
+                    if (
+                        candidate.minecraft_version != version
+                        or candidate.loader != provider.loader
+                    ):
+                        from .resolved_version_context import VersionContextError
 
-                raise VersionContextError(
-                    "PINNED_VERSION_SUBSTITUTION",
-                    requested=versions[0],
-                    actual=adapter.minecraft_version,
+                        raise VersionContextError(
+                            "PINNED_VERSION_SUBSTITUTION",
+                            requested=version,
+                            actual=candidate.minecraft_version,
+                        )
+                    resolver._require_supported_kinds(
+                        candidate,
+                        kinds,
+                        explicit=False,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    capability_failures.append(
+                        f"{version}: {type(exc).__name__}: {exc}"
+                    )
+                    continue
+                adapter = candidate
+                break
+            if adapter is None:
+                detail = "; ".join(capability_failures[:8])
+                raise SpecValidationError(
+                    "No host-authoritative target supports the authored module kinds "
+                    f"{list(kinds)}. Diagnostics: {detail}"
                 )
-        resolver._require_supported_kinds(adapter, kinds, explicit=bool(requested))
+        if requested:
+            resolver._require_supported_kinds(adapter, kinds, explicit=True)
         return PlatformSelection(
             adapter=adapter,
             source="host_coherent_bundle",
