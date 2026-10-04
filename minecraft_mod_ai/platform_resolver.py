@@ -446,14 +446,35 @@ def _require_supported_kinds(
     *,
     explicit: bool,
 ) -> None:
+    kinds = {str(value).strip() for value in module_kinds if str(value).strip()}
+    if not kinds:
+        return
+
+    # WorkGraph executes standard content modules only when the immutable target
+    # receipt explicitly declares the corresponding deterministic backend. Keep
+    # target selection on that same authority instead of accepting a broader
+    # host-fact capability and failing later at DETERMINISTIC_BACKEND_REQUIRED.
+    from .typed_platform_ir import PLATFORM_CONTENT_KINDS
+
+    content_kinds = kinds & set(PLATFORM_CONTENT_KINDS)
+    unsupported_content = sorted(
+        content_kinds - set(adapter.deterministic_module_kinds)
+    )
+    if unsupported_content:
+        prefix = "명시한 target" if explicit else "선택된 target"
+        raise SpecValidationError(
+            f"{prefix} {adapter.minecraft_version}/{adapter.loader}에 실행 가능한 "
+            f"deterministic content backend가 없습니다: {unsupported_content}."
+        )
+
     if adapter.host_facts_json:
         context = adapter.version_context
-        for kind in module_kinds:
-            context.require_capability(str(kind))
+        for kind in kinds:
+            context.require_capability(kind)
         return
     if adapter.source_api_family == "fabric_live_ai":
         return
-    kinds = {str(value).strip() for value in module_kinds if str(value).strip()}
+
     unsupported = sorted(kinds - adapter.deterministic_module_kinds)
     if not unsupported:
         return
