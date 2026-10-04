@@ -195,7 +195,7 @@ def pack_section_concerns(
             schema = worksheet_chunk_schema(
                 key,
                 chunk,
-                include_evidence=not chunks,
+                include_evidence=False,
             )
             _assert_closed_object_schemas(
                 schema,
@@ -335,38 +335,10 @@ def worksheet_chunk_schema(
             concern_array["minItems"] = count
         properties[concern] = concern_array
 
-    properties["inapplicable_concerns"] = {
-        "type": "array",
-        "maxItems": max(1, len(active)),
-        "items": {
-            "type": "object",
-            "properties": {
-                "concern": {"type": "string", "enum": list(active)},
-                "reason": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": PLANNER_RECORD_FIELD_MAX_CHARS,
-                },
-            },
-            "required": ["concern", "reason"],
-            "additionalProperties": False,
-        },
-    }
-    if include_evidence:
-        properties["constraint_evidence_refs"] = {
-            "type": "array",
-            "uniqueItems": True,
-            "maxItems": 8,
-            "description": (
-                "Evidence references supplied by the host that constrain this authored design section. "
-                "Use an empty array when the section is a design decision rather than an external fact."
-            ),
-            "items": {"type": "string", "minLength": 1, "maxLength": 128},
-        }
-
+    # include_evidence remains a compatibility argument for old callers, but
+    # evidence/applicability are host-owned and never widen a planner field page.
+    del include_evidence
     required = list(active)
-    if include_evidence:
-        required.append("constraint_evidence_refs")
     schema = {
         "type": "object",
         "description": f"Bounded concern field page for {key}: {active[0]}",
@@ -461,11 +433,6 @@ def worksheet_chunk_prompt(
     field_text = "; ".join(
         f"{concern}=[{', '.join(fields)}]" for concern, fields in projection.items()
     )
-    evidence_instruction = (
-        " Also supply constraint_evidence_refs as an array of host-supplied evidence IDs (or empty array)."
-        if include_evidence
-        else ""
-    )
     state_instruction = (
         "For state_model, guard/condition and mutation/initial_state/action are host DSL, "
         "not prose and not Java. Use only the operators and identifiers admitted by the schema. "
@@ -480,12 +447,12 @@ def worksheet_chunk_prompt(
             f"Active Concerns: {', '.join(concerns)}",
             f"Active Record Fields: {field_text}",
             f"Purpose: {_section_description(key)}",
-            f"Fill the complete shown fields for these concern arrays.{evidence_instruction}",
+            "Fill exactly the shown field for the host-fixed record rows.",
             (
-                "This is the first field page for the concern. Choose 0-4 semantic records; "
-                "that row count becomes host-owned for all later pages."
+                "This schema is being inspected before execution; production fixes record "
+                "cardinality in a separate bounded decision before this page."
                 if not record_counts
-                else "The host has fixed record cardinality from the first page. Return exactly "
+                else "The host has fixed record cardinality. Return exactly "
                 + ", ".join(
                     f"{name}={count} row(s)" for name, count in record_counts.items()
                 )
@@ -493,7 +460,7 @@ def worksheet_chunk_prompt(
             ),
             "Fill every shown field for every returned row. Keep each value concise and concrete; do not restate the prompt.",
             "Do not invent external facts; the host normalizes harmless omissions only after all field pages are merged.",
-            "Return each active concern key. Use an empty array when no record applies; the host owns applicability reconciliation and does not require a model-authored reason.",
+            "Return exactly the active concern key and no sibling control metadata.",
             "Never use N/A, none, TODO, TBD, unknown, same-as-above, or another placeholder as the authored content.",
             "DO NOT output JSON Schema keywords (never output 'type', 'properties', 'required', or 'additionalProperties').",
             state_instruction,
