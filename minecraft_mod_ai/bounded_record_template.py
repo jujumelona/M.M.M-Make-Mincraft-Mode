@@ -8,7 +8,10 @@ from typing import Any
 from jsonschema import Draft202012Validator
 
 from .design_generation_schema import context_bound_record_schema
+from .execution_contract_policy import PLANNER_RECORD_COUNT_OUTPUT_TOKEN_CEILING
 from .fixed_template_generation import generate_fixed_template_value
+from .parallel_model_tasks import deterministic_model_map, serialized_callback
+from .single_record_template import run_single_record_template
 from .task_template_catalog import load_record_template
 from .task_template_input import task_binding, task_context
 
@@ -19,25 +22,21 @@ _MAX_RECORD_SET_ITEMS = 16
 def record_cardinality_response_schema(
     template: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Compatibility name for the semantic record-set contract.
+    """Tiny semantic cardinality decision; the host owns all record iteration."""
 
-    There is deliberately no count/done/continuation field. The model returns only
-    authored records; the host validates and de-duplicates the resulting set.
-    """
-    record_schema = deepcopy((template or {}).get("record_schema", {}))
+    del template
     return {
         "type": "object",
         "properties": {
-            "records": {
-                "type": "array",
-                "maxItems": _MAX_RECORD_SET_ITEMS,
-                "items": record_schema,
+            "count": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": _MAX_RECORD_SET_ITEMS,
             },
         },
-        "required": ["records"],
+        "required": ["count"],
         "additionalProperties": False,
     }
-
 
 record_batch_response_schema = record_cardinality_response_schema
 
@@ -65,28 +64,38 @@ def _host_evidence_refs(context: dict[str, Any], allowed_refs: set[str]) -> list
     return refs
 
 
-def _record_set_schema(
+def _record_count_messages(
     identifier: str,
     template: dict[str, Any],
     context: dict[str, Any],
-) -> dict[str, Any]:
-    record_schema = context_bound_record_schema(
-        identifier,
-        template["record_schema"],
-        context,
-    )
-    return {
-        "type": "object",
-        "properties": {
-            "records": {
-                "type": "array",
-                "maxItems": _MAX_RECORD_SET_ITEMS,
-                "items": record_schema,
-            },
+) -> list[dict[str, str]]:
+    rules = "\n".join(str(rule) for rule in template.get("rules", ()))
+    return [
+        {
+            "role": "system",
+            "content": (
+                "Choose only the number of distinct authored/applicable records required "
+                "by the authoritative context. Return count 0 when no records apply. "
+                "Do not author record content and do not emit record/done/continuation, "
+                "retry, ordinal, blocked, or other loop-control metadata.\n"
+                + str(template.get("task") or "Determine required record cardinality.")
+                + ("\n" + rules if rules else "")
+            ),
         },
-        "required": ["records"],
-        "additionalProperties": False,
-    }
+        {
+            "role": "user",
+            "content": json.dumps(context, ensure_ascii=False),
+        },
+    ]
+
+
+def _record_key(record: dict[str, Any]) -> str:
+    return json.dumps(
+        record,
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
 
 def run_bounded_record_template(
@@ -98,18 +107,12 @@ def run_bounded_record_template(
     progress=None,
     checkpoint=None,
 ):
-    """Generate semantic records in one host-owned set operation.
+    """Generate a finite record set as tiny count + host-owned ordinal record jobs."""
 
-    No count pre-pass, ordinal contract, done flag, null sentinel, retry protocol or
-    model-owned continuation exists here. The model authors only records. The host
-    validates the complete data shape and projects exact duplicates away.
-    """
     template = load_record_template(identifier)
     normalized_context = task_context(template, context)
     admitted_refs = {str(ref) for ref in allowed_refs}
-    schema = _record_set_schema(identifier, template, normalized_context)
-    validator = Draft202012Validator(schema)
-    binding = "record-set-v1:" + task_binding(
+    binding = "record-set-v2:" + task_binding(
         template,
         normalized_context,
         admitted_refs,
@@ -117,57 +120,93 @@ def run_bounded_record_template(
     saved = (progress or {}).get(binding)
 
     if isinstance(saved, dict) and isinstance(saved.get("records"), list):
-        value = deepcopy(saved)
+        records = [deepcopy(item) for item in saved["records"] if isinstance(item, dict)]
+        expected = saved.get("count")
+        if type(expected) is int and expected != len(records):
+            raise ValueError(
+                f"TEMPLATE_RECORD_SET_CARDINALITY_DRIFT: expected {expected}, "
+                f"saved {len(records)} records"
+            )
     else:
-        rules = "\n".join(str(rule) for rule in template.get("rules", ()))
-        system_prompt = (
-            "Author the complete set of distinct records supported by the supplied "
-            "authoritative context. The template task/rules below describe one record's "
-            "semantics; the outer records array is host-owned transport for the complete "
-            "set. Return an empty records array when none apply. Do not emit count, done, "
-            "continuation, retry, ordinal, blocked, or other loop-control metadata.\n"
-            + str(template.get("task") or "Produce the requested records.")
-            + ("\n" + rules if rules else "")
-        )
-        value = generate_fixed_template_value(
-            router,
-            "planner",
-            [
-                {"role": "system", "content": system_prompt},
-                {
-                    "role": "user",
-                    "content": json.dumps(normalized_context, ensure_ascii=False),
-                },
-            ],
-            response_schema=schema,
-            enable_tools=False,
-            tool_name="submit_records_" + identifier.replace("/", "_"),
-        )
-        validator.validate(value)
-        if checkpoint is not None:
-            checkpoint(binding, deepcopy(value))
+        if isinstance(saved, dict) and type(saved.get("count")) is int:
+            count = int(saved["count"])
+        else:
+            count_value = generate_fixed_template_value(
+                router,
+                "planner",
+                _record_count_messages(
+                    identifier,
+                    template,
+                    normalized_context,
+                ),
+                response_schema=record_cardinality_response_schema(template),
+                enable_tools=False,
+                tool_name="submit_record_count_" + identifier.replace("/", "_"),
+                output_token_ceiling=PLANNER_RECORD_COUNT_OUTPUT_TOKEN_CEILING,
+            )
+            count = int(count_value["count"])
+            if checkpoint is not None:
+                checkpoint(binding, {"count": count})
 
-    validator.validate(value)
-    records: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for record in value["records"]:
-        key = json.dumps(
-            record,
-            sort_keys=True,
-            ensure_ascii=False,
-            separators=(",", ":"),
+        if count < 0 or count > _MAX_RECORD_SET_ITEMS:
+            raise ValueError(
+                f"TEMPLATE_RECORD_SET_COUNT: {identifier} count {count} is outside "
+                f"0..{_MAX_RECORD_SET_ITEMS}"
+            )
+
+        safe_checkpoint = serialized_callback(checkpoint)
+        ordinals = tuple(range(count))
+
+        def author_record(index: int) -> dict[str, Any]:
+            return run_single_record_template(
+                router,
+                identifier,
+                context={
+                    **normalized_context,
+                    "record_index": index,
+                    "record_ordinal": index + 1,
+                    "record_count": count,
+                    # Ordinal identity makes sibling calls independent. The host checks
+                    # distinctness after collection instead of growing later prompts.
+                    "accepted_records": [],
+                },
+                progress=progress,
+                checkpoint=safe_checkpoint,
+            )
+
+        records = deterministic_model_map(
+            router,
+            ordinals,
+            author_record,
+            role="planner",
+            thread_name_prefix="bounded-record",
         )
-        if key in seen:
-            continue
-        seen.add(key)
-        records.append(deepcopy(record))
+
+        if len(records) != count:
+            raise RuntimeError(
+                f"TEMPLATE_RECORD_SET_CARDINALITY_DRIFT: expected {count}, "
+                f"received {len(records)}"
+            )
+        keys = [_record_key(record) for record in records]
+        if len(keys) != len(set(keys)):
+            raise ValueError(
+                f"TEMPLATE_RECORD_SET_DUPLICATE: {identifier} returned duplicate "
+                "ordinal records"
+            )
+        if checkpoint is not None:
+            checkpoint(
+                binding,
+                {
+                    "count": count,
+                    "records": deepcopy(records),
+                },
+            )
 
     return {
         "records": records,
         "reason": "" if records else _EMPTY_REASON,
         "evidence_refs": _host_evidence_refs(normalized_context, admitted_refs),
     }
-
 
 run_record_template = run_bounded_record_template
 
