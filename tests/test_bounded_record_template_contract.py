@@ -167,3 +167,51 @@ def test_zero_count_performs_no_record_generation(monkeypatch) -> None:
     assert result["records"] == []
     assert result["reason"]
     assert router.tool_calls == 0
+
+
+def test_record_cardinality_schema_is_finite_enum() -> None:
+    schema = bounded.record_cardinality_response_schema()
+    count = schema["properties"]["count"]
+    assert count["minimum"] == 0
+    assert count["maximum"] == 16
+    assert count["enum"] == list(range(17))
+
+
+def test_duplicate_ordinal_records_are_rejected(monkeypatch) -> None:
+    router = _PlannerRouter()
+    monkeypatch.setattr(
+        bounded,
+        "load_record_template",
+        lambda identifier: dict(_TEMPLATE),
+    )
+    monkeypatch.setattr(
+        bounded,
+        "task_context",
+        lambda template, context: dict(context),
+    )
+
+    def duplicate_record(
+        model_router,
+        identifier,
+        *,
+        context,
+        progress,
+        checkpoint,
+    ):
+        del model_router, identifier, context, progress, checkpoint
+        return {"name": "same"}
+
+    monkeypatch.setattr(
+        bounded,
+        "run_single_record_template",
+        duplicate_record,
+    )
+
+    import pytest
+
+    with pytest.raises(ValueError, match="TEMPLATE_RECORD_SET_DUPLICATE"):
+        bounded.run_bounded_record_template(
+            router,
+            "feature/test/items",
+            context={"requirement": "make two distinct items"},
+        )
