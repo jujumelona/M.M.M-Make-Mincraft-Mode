@@ -16,10 +16,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from .execution_contract_policy import (
-    PLANNER_RECORD_COUNT_OUTPUT_TOKEN_CEILING,
-    PLANNER_RECORD_PAGE_OUTPUT_TOKEN_CEILING,
-)
+from .execution_contract_policy import PLANNER_RECORD_COUNT_OUTPUT_TOKEN_CEILING
 from .planning_detail_slots import DETAIL_RECORDS
 from .planning_detail_template import WORKSHEET_SECTIONS, worksheet_section_schema
 
@@ -391,7 +388,10 @@ def _generate_authored_chunk(
     """Generate exactly one host-bounded concern field page."""
 
     from .fixed_template_generation import generate_fixed_template_value
-    from .worksheet_atomic_chunker import worksheet_chunk_schema
+    from .worksheet_atomic_chunker import (
+        planner_page_output_token_ceiling,
+        worksheet_chunk_schema,
+    )
 
     if len(page.concerns) != 1:
         raise ValueError(
@@ -430,7 +430,7 @@ def _generate_authored_chunk(
         media_paths=page.media_paths,
         enable_tools=False,
         description=f"Author bounded canonical {page.section} field page.",
-        output_token_ceiling=PLANNER_RECORD_PAGE_OUTPUT_TOKEN_CEILING,
+        output_token_ceiling=planner_page_output_token_ceiling(schema),
     )
     if not isinstance(value, Mapping):
         raise ValueError(
