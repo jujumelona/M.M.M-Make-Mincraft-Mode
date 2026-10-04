@@ -16,6 +16,7 @@ from .complete_spec import (
 )
 from .host_target_binding import bind_existing_project, bind_platform
 from .spec import ModSpec, Proposal, ProposalStatus
+from .platform_backend_contract import effective_target_backend_capabilities
 from .target_contract import target_coordinates_from_mapping
 
 _TARGET_KEYS = ("minecraft_version", "loader", "mappings")
@@ -462,7 +463,7 @@ def compile_authored_design(
         package_name=base.spec.package_name,
         target=target,
         production_state_section=production_state_section,
-        deterministic_module_kinds=adapter.deterministic_module_kinds,
+        deterministic_module_kinds=effective_target_backend_capabilities(adapter),
     )
     design = {
         **design,
