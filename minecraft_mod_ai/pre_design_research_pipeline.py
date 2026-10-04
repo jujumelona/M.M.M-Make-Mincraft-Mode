@@ -381,18 +381,13 @@ def _claim_refs(claim: Mapping[str, Any]) -> tuple[str, ...]:
 
 
 def _validate_document_grounding(
-    _legacy_agentic_owner: Any,
     project_rag: Any,
     note: Mapping[str, Any],
     document: Mapping[str, Any],
     *,
     domain_id: str,
 ) -> None:
-    """Validate all note/card provenance against host-materialized evidence pages.
-
-    The first positional argument is intentionally ignored so current callers can be
-    migrated without resurrecting the deleted agentic private validator.
-    """
+    """Validate all note/card provenance against host-materialized evidence pages."""
     try:
         pages = project_rag._read_evidence_pages(document)
     except Exception:
@@ -583,7 +578,6 @@ def collect_design_research(
                 trace_metadata=trace_metadata,
             )
         _validate_document_grounding(
-            None,
             project_rag,
             raw_note,
             document,
