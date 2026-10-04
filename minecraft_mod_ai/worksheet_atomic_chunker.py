@@ -419,16 +419,15 @@ def worksheet_chunk_prompt(
     include_evidence: bool = False,
     record_counts: Mapping[str, int] | None = None,
 ) -> str:
-    from .planning_contract_ssot import schema_skeleton_template
-
     key = _normalize_section_name(section)
-    schema = worksheet_chunk_schema(
+    # The host/schema transport owns JSON shape. The small model receives only the
+    # semantic leaf obligation and fixed row count, never a serialized schema copy.
+    worksheet_chunk_schema(
         key,
         concerns,
         include_evidence=include_evidence,
         record_counts=record_counts,
     )
-    skeleton = schema_skeleton_template(schema)
     projection = _chunk_projection(key, concerns)
     field_text = "; ".join(
         f"{concern}=[{', '.join(fields)}]" for concern, fields in projection.items()
@@ -459,8 +458,7 @@ def worksheet_chunk_prompt(
             "Never use N/A, none, TODO, TBD, unknown, same-as-above, or another placeholder as the authored content.",
             "DO NOT output JSON Schema keywords (never output 'type', 'properties', 'required', or 'additionalProperties').",
             state_instruction,
-            "Return only a JSON object following this data template skeleton:",
-            json.dumps(skeleton, ensure_ascii=False, indent=2),
+            "Return only the values for the host-constrained JSON page; do not echo or describe the schema.",
         ) if item
     )
 
