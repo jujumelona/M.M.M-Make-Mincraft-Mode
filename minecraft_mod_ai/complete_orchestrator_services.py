@@ -9,9 +9,9 @@ from pathlib import Path
 from typing import Any
 
 from .blockbench_client import BlockbenchMCPClient
-from .complete_orchestrator_support import CompleteProductionError, _extract_json
+from .complete_orchestrator_support import CompleteProductionError
 from .complete_spec import CompleteProposal
-from .fixed_template_generation import generate_fixed_template_text
+from .fixed_template_generation import generate_fixed_template_value
 from .mineflayer_bridge import MineflayerBridge
 from .model_response_templates import response_schema
 from .model_router import ModelRouter
@@ -250,7 +250,8 @@ def visual_review(
             "Every visual-review screenshot must be a regular file."
         )
     instruction, response_contract = _visual_review_instruction()
-    text = generate_fixed_template_text(router,
+    value = generate_fixed_template_value(
+        router,
         "visual_critic",
         [
             {
@@ -271,7 +272,10 @@ def visual_review(
         media_paths=paths,
         response_schema=response_schema(response_contract),
     )
-    value = _extract_json(text)
+    if not isinstance(value, dict):
+        raise CompleteProductionError(
+            "VisualCritic returned a non-object result."
+        )
     if set(value) != {
         "status",
         "findings",
