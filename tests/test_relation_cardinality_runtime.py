@@ -1,12 +1,12 @@
 import json
 
 from minecraft_mod_ai.design_record_runtime import run_record_template
-from minecraft_mod_ai.model_output_atomicity_contract import assert_atomic_model_schema
 
 
 class RelationRouter:
     def __init__(self):
-        self.calls = []
+        self.text_calls = []
+        self.tool_calls = 0
         self.edges = [
             "consumes",
             "produces",
@@ -15,21 +15,42 @@ class RelationRouter:
             "requires",
         ]
 
-    def generate_tool_decision(
-        self, role, messages, *, tool_name, parameters, **kwargs
-    ):
-        self.calls.append(tool_name)
-        assert_atomic_model_schema(parameters, surface=tool_name)
-        context = json.loads(messages[-1]["content"])
+    def generate_text(self, role, messages, **kwargs):
+        assert role == "planner"
+        assert kwargs["response_format"] == "json"
+        assert kwargs["enable_tools"] is False
+        assert kwargs["force_non_thinking"] is True
+        schema = kwargs["response_schema"]
+        self.text_calls.append(
+            {
+                "messages": tuple(messages),
+                "schema": schema,
+                "ceiling": kwargs["output_token_ceiling"],
+            }
+        )
+
+        context = json.loads(messages[1]["content"])
         source_id = context["source_id"]
         target_id = context["target_id"]
-        pair_edges = self.edges if (source_id, target_id) == ("source", "target") else []
+        pair_edges = (
+            self.edges
+            if (source_id, target_id) == ("source", "target")
+            else []
+        )
 
-        assert tool_name == "submit_records_design_content_relation"
-        return {"records": [{"relation_type": edge} for edge in pair_edges]}
+        if set(schema["properties"]) == {"count"}:
+            return json.dumps({"count": len(pair_edges)})
+
+        assert set(schema["properties"]) == {"relation_type"}
+        index = int(context["record_index"])
+        return json.dumps({"relation_type": pair_edges[index]})
+
+    def generate_tool_decision(self, *_args, **_kwargs):
+        self.tool_calls += 1
+        raise AssertionError("planner relation authoring must not use native tools")
 
 
-def test_relation_cardinality_is_derived_from_semantic_record_set_without_count_prepass():
+def test_relation_cardinality_is_bounded_count_then_host_owned_ordinals():
     router = RelationRouter()
     result = run_record_template(
         router,
@@ -42,8 +63,25 @@ def test_relation_cardinality_is_derived_from_semantic_record_set_without_count_
     )
 
     assert result["records"] == [
-        {"relation_type": relation_type, "source_id": "source", "target_id": "target"}
+        {
+            "relation_type": relation_type,
+            "source_id": "source",
+            "target_id": "target",
+        }
         for relation_type in router.edges
     ]
-    assert all("count" not in call for call in router.calls)
-    assert router.calls.count("submit_records_design_content_relation") == 2
+    assert router.tool_calls == 0
+
+    count_calls = [
+        call
+        for call in router.text_calls
+        if set(call["schema"]["properties"]) == {"count"}
+    ]
+    record_calls = [
+        call
+        for call in router.text_calls
+        if set(call["schema"]["properties"]) == {"relation_type"}
+    ]
+    assert len(count_calls) == 2
+    assert len(record_calls) == len(router.edges)
+    assert all(int(call["ceiling"]) > 0 for call in router.text_calls)
