@@ -602,7 +602,7 @@ class ModSpec:
         from .platform_backend_contract import (
             bootstrap_boss_capabilities,
             bootstrap_content_capabilities,
-            effective_target_backend_capabilities,
+            deterministic_backend_capabilities,
         )
 
         required_backend_capabilities: set[str] = set()
@@ -619,7 +619,7 @@ class ModSpec:
             )
         missing_backend_capabilities = sorted(
             required_backend_capabilities
-            - set(effective_target_backend_capabilities(self.platform))
+            - set(deterministic_backend_capabilities(self.platform))
         )
         if missing_backend_capabilities:
             raise SpecValidationError(
