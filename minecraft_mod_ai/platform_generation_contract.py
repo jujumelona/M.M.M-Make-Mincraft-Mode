@@ -5,6 +5,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
+from .platform_backend_contract import effective_target_backend_capabilities
 from .platform_catalog import adapter_for_lock_values
 from .spec import platform_receipt_sha256
 
@@ -20,7 +21,7 @@ def install(generator_module: Any) -> None:
 
     @wraps(original_generate)
     def generate(self: Any, spec: Any, root: Path):
-        reviewed_kinds = tuple(getattr(spec.platform, "deterministic_module_kinds", ()) or ())
+        reviewed_kinds = effective_target_backend_capabilities(spec.platform)
         if not reviewed_kinds:
             raise generator_module.GenerationError(
                 f"Target {spec.platform.minecraft_version} has no reviewed deterministic module templates."
