@@ -2,7 +2,7 @@ from minecraft_mod_ai.bounded_record_template import record_cardinality_response
 from minecraft_mod_ai.task_template_catalog import load_record_template, load_template
 
 
-def test_prompt_record_set_never_asks_model_for_total_count():
+def test_prompt_record_set_asks_only_for_bounded_total_count():
     workflow = load_template("prompt/workflow")
     record_identifiers = [
         identifier
@@ -14,13 +14,14 @@ def test_prompt_record_set_never_asks_model_for_total_count():
     for identifier in record_identifiers:
         template = load_record_template(identifier)
         schema = record_cardinality_response_schema(template)
-        assert schema["required"] == ["records"], identifier
-        assert "count" not in schema["properties"], identifier
+        assert schema["required"] == ["count"], identifier
+        assert set(schema["properties"]) == {"count"}, identifier
+        assert schema["properties"]["count"]["enum"] == list(range(17)), identifier
         assert "blocked_reason" not in schema["properties"], identifier
 
 
-def test_record_set_contract_has_no_cardinality_or_loop_control_fields():
+def test_record_set_contract_has_only_cardinality_and_no_loop_control_fields():
     schema = record_cardinality_response_schema({})
-    assert schema["required"] == ["records"]
-    assert set(schema["properties"]) == {"records"}
+    assert schema["required"] == ["count"]
+    assert set(schema["properties"]) == {"count"}
     assert schema["additionalProperties"] is False
