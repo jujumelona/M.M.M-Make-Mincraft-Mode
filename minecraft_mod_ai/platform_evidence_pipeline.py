@@ -32,7 +32,10 @@ from .ecosystem_discovery import (
     _code_license_policy,
     _normalize_modrinth_version,
 )
-from .platform_backend_contract import effective_target_backend_capabilities
+from .platform_backend_contract import (
+    deterministic_backend_capabilities,
+    effective_target_backend_capabilities,
+)
 from .platform_catalog import PlatformAdapter, executable_loaders, provider_for_loader
 from .platform_live_discovery import discover_game_versions
 from .spec import SpecValidationError
@@ -580,7 +583,7 @@ def optimize_platform_evidence(
         for adapter in adapters:
             missing_backend = sorted(
                 required_backend_capabilities
-                - set(effective_target_backend_capabilities(adapter))
+                - set(deterministic_backend_capabilities(adapter))
             )
             if missing_backend:
                 backend_failures.append(
