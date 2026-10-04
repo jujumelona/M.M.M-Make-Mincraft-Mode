@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .fabric_official_template_provider import _install_host_gametest_contract
-from .platform_backend_contract import effective_target_backend_capabilities
+from .platform_backend_contract import deterministic_backend_capabilities
 from .platform_catalog import adapter_for_lock_values
 from .spec import BossSpec, ContentKind, ContentSpec, ModSpec
 from .toolchain_contract import fabric_dependency_predicates
@@ -53,7 +53,7 @@ class FabricProjectGenerator:
 
     def generate(self, spec: ModSpec, root: Path) -> GeneratedProject:
         spec.validate()
-        reviewed_kinds = effective_target_backend_capabilities(spec.platform)
+        reviewed_kinds = deterministic_backend_capabilities(spec.platform)
         if not reviewed_kinds:
             raise GenerationError(
                 f"Target {spec.platform.minecraft_version} has no reviewed deterministic module templates."
@@ -874,7 +874,7 @@ public final class {renderer_class}
         )
 
     def _write_contract(self, root: Path, spec: ModSpec) -> None:
-        reviewed_kinds = effective_target_backend_capabilities(spec.platform)
+        reviewed_kinds = deterministic_backend_capabilities(spec.platform)
         if not reviewed_kinds:
             raise GenerationError(
                 f"Target {spec.platform.minecraft_version} has no reviewed deterministic module templates."
