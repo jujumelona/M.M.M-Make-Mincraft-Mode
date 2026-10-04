@@ -279,3 +279,99 @@ def test_owner_jvm_respects_minimum_21_for_older_projects(tmp_path, monkeypatch)
         f"Owner JVM should be Java 21 (minimum), got {owner_major}"
     )
 
+
+def test_java_core_switches_owner_to_resolved_model_toolchain(tmp_path, monkeypatch):
+    """When the initial owner starts on Java 21, but Gradle model resolution
+    reveals the project targets Java 25, JavaCoreService switches the owner
+    process to Java 25 before calling 'open'."""
+    from minecraft_mod_ai import jvm_owner_bootstrap
+
+    jdk25 = _jdk(tmp_path, 25)
+
+    commands_issued: list[dict] = []
+
+    def mock_owner_command(workspace, *, timeout_seconds=600, java_home=None, required_major=None):
+        info = {
+            "workspace": workspace,
+            "java_home": java_home,
+            "required_major": required_major,
+        }
+        commands_issued.append(info)
+        return ["owner-cmd", str(required_major or 21)]
+
+    class MockRPC:
+        instances = []
+
+        def __init__(self, cmd):
+            self.cmd = cmd
+            self.closed = False
+            self.requests = []
+            MockRPC.instances.append(self)
+
+        def request(self, method, params=None, timeout=None):
+            self.requests.append((method, params))
+            if method == "resolve":
+                return {
+                    "project_root": str(tmp_path.resolve()),
+                    "gradle_version": "9.1.0",
+                    "model_id": "test-model-1",
+                    "source_sets": [
+                        {
+                            "id": "main",
+                            "project_path": ":",
+                            "name": "main",
+                            "source_roots": [str(tmp_path / "src/main/java")],
+                            "classpath": [],
+                            "output_dirs": [str(tmp_path / "build/classes")],
+                            "java_home": str(jdk25.resolve()),
+                            "source_compatibility": "25",
+                            "target_compatibility": "25",
+                            "release": 25,
+                            "compiler_args": [],
+                            "annotation_processor_path": [],
+                        }
+                    ],
+                }
+            if method == "open":
+                return {
+                    "complete": True,
+                    "session_id": "session-1",
+                    "generation": 1,
+                    "diagnostics": [],
+                }
+            return {}
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.delenv("MMM_JAVA_VERSION", raising=False)
+    monkeypatch.setattr(jvm_owner_bootstrap, "owner_command", mock_owner_command)
+    monkeypatch.setattr(java_core_module, "OwnerRPC", MockRPC)
+
+    service = JavaCoreService()
+    try:
+        service._prepare_project(tmp_path.resolve(), timeout_seconds=60)
+        assert len(commands_issued) == 1
+        assert commands_issued[0]["required_major"] == 21
+        assert len(MockRPC.instances) == 1
+        tooling_rpc = MockRPC.instances[0]
+        assert not tooling_rpc.closed
+
+        response = service._resolve_and_open(tmp_path.resolve(), timeout=60)
+        assert response["complete"] is True
+
+        assert tooling_rpc.closed
+        assert len(MockRPC.instances) == 2
+        jdt_rpc = MockRPC.instances[1]
+        assert not jdt_rpc.closed
+
+        assert len(commands_issued) == 2
+        assert commands_issued[1]["required_major"] == 25
+        assert Path(commands_issued[1]["java_home"]) == jdk25.resolve()
+
+        assert [m for m, _ in tooling_rpc.requests] == ["resolve"]
+        assert [m for m, _ in jdt_rpc.requests] == ["open"]
+    finally:
+        service.close()
+
+

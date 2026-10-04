@@ -20,6 +20,8 @@ def owner_command(
     workspace: Path,
     *,
     timeout_seconds: int | float = 600,
+    java_home: Path | str | None = None,
+    required_major: int | None = None,
 ) -> list[str]:
     if isinstance(timeout_seconds, bool):
         raise OwnerRPCError("JVM owner bootstrap timeout must be a positive number")
@@ -86,15 +88,31 @@ def owner_command(
     #      older than the project's --release target (e.g. owner=21, release=25),
     #      JDT fails with "release N is not found in the system".
     # Therefore the owner JVM must be max(21, project_release_major).
-    from .java_lsp import _requested_project_java_major, _resolve_project_java_home
+    from .java_lsp import (
+        _java_major_version,
+        _requested_project_java_major,
+        _resolve_project_java_home,
+    )
 
     _OWNER_MINIMUM_JAVA = 21
-    try:
-        project_major = _requested_project_java_major()
-    except Exception:
-        project_major = _OWNER_MINIMUM_JAVA
-    owner_major = max(_OWNER_MINIMUM_JAVA, project_major)
-    owner_java_home = _resolve_project_java_home(owner_major)
+    if java_home is not None:
+        owner_java_home = Path(java_home).resolve()
+        owner_major = (
+            int(required_major)
+            if required_major is not None
+            else (_java_major_version(owner_java_home) or _OWNER_MINIMUM_JAVA)
+        )
+    else:
+        if required_major is not None:
+            project_major = int(required_major)
+        else:
+            try:
+                project_major = _requested_project_java_major()
+            except Exception:
+                project_major = _OWNER_MINIMUM_JAVA
+        owner_major = max(_OWNER_MINIMUM_JAVA, project_major)
+        owner_java_home = _resolve_project_java_home(owner_major)
+
     java = str(
         owner_java_home / 'bin' / ('java.exe' if os.name == 'nt' else 'java')
     )

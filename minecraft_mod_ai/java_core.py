@@ -21,6 +21,28 @@ def _remaining_verifier_seconds(deadline: float, *, operation: str) -> float:
     return remaining
 
 
+def _safe_owner_command(
+    command_fn: Any,
+    workspace: Path,
+    *,
+    timeout_seconds: int | float,
+    java_home: Path | str | None = None,
+    required_major: int | None = None,
+) -> list[str]:
+    try:
+        return command_fn(
+            workspace,
+            timeout_seconds=timeout_seconds,
+            java_home=java_home,
+            required_major=required_major,
+        )
+    except TypeError:
+        try:
+            return command_fn(workspace, timeout_seconds=timeout_seconds)
+        except TypeError:
+            return command_fn(workspace)
+
+
 class JavaCoreService:
     def __init__(self) -> None:
         self._rpc: OwnerRPC | None = None
@@ -31,6 +53,8 @@ class JavaCoreService:
         self._model: ResolvedBuildModel | None = None
         self._revision = None
         self._lock = threading.RLock()
+        self._owner_major: int | None = None
+        self._owner_java_home: Path | None = None
 
     def abort(self) -> None:
         """Interrupt an in-flight owner request without waiting on the service lock."""
@@ -108,7 +132,14 @@ class JavaCoreService:
             normalized.append(resolved.relative_to(root).as_posix())
         return tuple(dict.fromkeys(normalized))
 
-    def _prepare_project(self, root: Path, timeout_seconds: int | float) -> None:
+    def _prepare_project(
+        self,
+        root: Path,
+        timeout_seconds: int | float,
+        *,
+        java_home: Path | str | None = None,
+        required_major: int | None = None,
+    ) -> None:
         from .jvm_owner_bootstrap import owner_command
 
         if self._root != root:
@@ -116,13 +147,29 @@ class JavaCoreService:
             self._root = root
             self._inputs = ProjectModelInputs(root)
         if self._rpc is None:
+            target_major = required_major
+            target_home = java_home
+            if target_major is None and target_home is None:
+                try:
+                    from .project_java_diagnostics import _infer_project_java_major
+
+                    inferred = _infer_project_java_major(root)
+                    if inferred is not None:
+                        target_major = inferred
+                except Exception:
+                    pass
+
             self._workspace = tempfile.TemporaryDirectory(prefix='mmm-jdt-core-')
-            self._rpc = OwnerRPC(
-                owner_command(
-                    Path(self._workspace.name),
-                    timeout_seconds=timeout_seconds,
-                )
+            self._owner_major = max(21, target_major) if target_major is not None else 21
+            self._owner_java_home = Path(target_home).resolve() if target_home else None
+            cmd = _safe_owner_command(
+                owner_command,
+                Path(self._workspace.name),
+                timeout_seconds=timeout_seconds,
+                java_home=self._owner_java_home,
+                required_major=self._owner_major,
             )
+            self._rpc = OwnerRPC(cmd)
 
     def _resolve_and_open(self, root: Path, timeout: float) -> dict[str, Any]:
         assert self._rpc is not None
@@ -145,6 +192,57 @@ class JavaCoreService:
         model = ResolvedBuildModel.from_dict(raw)
         if Path(model.project_root).resolve() != root:
             raise OwnerRPCError('Resolved model belongs to another project')
+
+        # Connect the resolved Gradle source-set toolchain to the JDT Core owner JVM.
+        # Gradle source sets define the authoritative java_home and release target.
+        # If the resolved model requires a higher JVM than the current owner
+        # (e.g. model targets Java 25, but owner was launched on Java 21),
+        # restart the owner with the resolved project JDK before 'open'.
+        from .java_lsp import _parse_java_major, _resolve_project_java_home
+        from .jvm_owner_bootstrap import owner_command
+
+        target_majors: list[int] = []
+        target_homes: list[Path] = []
+        for s in model.source_sets:
+            if s.release is not None:
+                target_majors.append(int(s.release))
+            major = _parse_java_major(s.source_compatibility)
+            if major is not None:
+                target_majors.append(major)
+            if s.java_home and Path(s.java_home).is_dir():
+                target_homes.append(Path(s.java_home).resolve())
+
+        needed_major = max(target_majors) if target_majors else 21
+        needed_owner_major = max(21, needed_major)
+
+        if self._owner_major is None or self._owner_major < needed_owner_major:
+            target_jdk = (
+                target_homes[0]
+                if target_homes
+                else _resolve_project_java_home(needed_owner_major)
+            )
+            if self._rpc is not None:
+                try:
+                    self._rpc.close()
+                except Exception:
+                    pass
+                self._rpc = None
+
+            assert self._workspace is not None
+            cmd = _safe_owner_command(
+                owner_command,
+                Path(self._workspace.name),
+                timeout_seconds=_remaining_verifier_seconds(
+                    deadline,
+                    operation="JDT owner switch to target JDK",
+                ),
+                java_home=target_jdk,
+                required_major=needed_owner_major,
+            )
+            self._rpc = OwnerRPC(cmd)
+            self._owner_major = needed_owner_major
+            self._owner_java_home = target_jdk
+
         response = self._rpc.request(
             'open',
             {'model': model.to_dict()},
@@ -377,3 +475,5 @@ class JavaCoreService:
             self._model = None
             self._model_revision = None
             self._revision = None
+            self._owner_major = None
+            self._owner_java_home = None

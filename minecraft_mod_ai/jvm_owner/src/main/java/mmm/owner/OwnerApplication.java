@@ -256,28 +256,33 @@ public final class OwnerApplication implements IApplication {
         String release = set.get("release") instanceof Number n ? Integer.toString(n.intValue()) : null;
         String source = release != null ? release : required(set, "source_compatibility");
         String target = release != null ? release : required(set, "target_compatibility");
-        // When the owner JVM is older than the project's --release target (e.g.
-        // owner=21 but release=25), JavaCore.getAllVersions() will not contain
-        // the source version.  The classpath already includes the correct
-        // jrt-fs.jar from the project JDK, so disable COMPILER_RELEASE and
-        // continue with source/target level set to the highest version known
-        // to this JDT runtime.  This is a defensive fallback; the primary fix
-        // is in jvm_owner_bootstrap.py which should pick an owner JVM >= the
-        // project release target.
+        // JDT Core --release requires that the host running JVM actually contains
+        // the target system image (ct.sym). A Java 21 host JVM does NOT have
+        // system images for release 25+, so COMPILER_RELEASE must only be enabled
+        // when the running JVM feature version is >= release target.
+        int jvmFeature = Runtime.version().feature();
+        int releaseVersion = -1;
+        if (release != null) {
+            try {
+                releaseVersion = Integer.parseInt(release);
+            } catch (NumberFormatException ignored) {}
+        }
+        boolean canEnableRelease = releaseVersion > 0 && releaseVersion <= jvmFeature;
+
         List<String> allVersions = JavaCore.getAllVersions();
-        if (allVersions.contains(source)) {
-            JavaCore.setComplianceOptions(source, options);
-            options.put(JavaCore.COMPILER_SOURCE, source);
-            options.put(JavaCore.COMPILER_CODEGEN_TARGET_PLATFORM, target);
-            if (release != null) options.put(JavaCore.COMPILER_RELEASE, JavaCore.ENABLED);
-        } else {
-            String fallback = allVersions.isEmpty() ? source : allVersions.get(allVersions.size() - 1);
-            stage("configure.release_fallback:" + source + "->" + fallback + ":" + required(set, "id"));
-            JavaCore.setComplianceOptions(fallback, options);
-            options.put(JavaCore.COMPILER_SOURCE, fallback);
-            options.put(JavaCore.COMPILER_CODEGEN_TARGET_PLATFORM, fallback);
-            // Do NOT enable COMPILER_RELEASE — the running JVM cannot resolve
-            // the requested --release system image.
+        String compliance = allVersions.contains(source)
+            ? source
+            : (allVersions.isEmpty() ? source : allVersions.get(allVersions.size() - 1));
+        JavaCore.setComplianceOptions(compliance, options);
+        options.put(JavaCore.COMPILER_SOURCE, compliance);
+        options.put(
+            JavaCore.COMPILER_CODEGEN_TARGET_PLATFORM,
+            allVersions.contains(target) ? target : compliance
+        );
+        if (canEnableRelease) {
+            options.put(JavaCore.COMPILER_RELEASE, JavaCore.ENABLED);
+        } else if (release != null) {
+            stage("configure.release_disabled_older_jvm:target=" + release + ":jvm=" + jvmFeature + ":" + required(set, "id"));
         }
         if (args.contains("-parameters")) options.put(JavaCore.COMPILER_CODEGEN_METHOD_PARAMETERS_ATTR, JavaCore.GENERATE);
         boolean processingEnabled = !processors.isEmpty() && !args.contains("-proc:none");
