@@ -136,6 +136,78 @@ def test_readiness_waits_for_service_ready_without_feature_requests(tmp_path: Pa
     assert rpc.requests == []
     assert rpc.notifications == []
 
+def test_managed_project_waits_until_jdt_reports_imported_project(tmp_path: Path) -> None:
+    (tmp_path / "build.gradle").write_text("plugins { id 'java' }\n", encoding="utf-8")
+
+    class FakeRpc:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def request(self, method, params, timeout):
+            assert method == "workspace/executeCommand"
+            assert params == {
+                "command": "java.project.getAll",
+                "arguments": [],
+            }
+            assert timeout > 0
+            self.calls += 1
+            if self.calls == 1:
+                return []
+            return [(tmp_path / "subproject").resolve().as_uri()]
+
+    rpc = FakeRpc()
+    java_lsp._await_jdt_project_model_ready(
+        rpc,
+        tmp_path.resolve(),
+        deadline=java_lsp.time.monotonic() + 2.0,
+    )
+
+    assert rpc.calls == 2
+
+
+def test_unmanaged_source_folder_does_not_require_project_import(tmp_path: Path) -> None:
+    class FakeRpc:
+        def request(self, method, params, timeout):
+            raise AssertionError("standalone Java diagnostics must not require project import")
+
+    java_lsp._await_jdt_project_model_ready(
+        FakeRpc(),
+        tmp_path.resolve(),
+        deadline=java_lsp.time.monotonic() + 1.0,
+    )
+
+
+def test_jdt_command_uses_fresh_isolated_data_workspace(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    workspace_home = tmp_path / "jdt-workspaces"
+    monkeypatch.setenv("MMM_JDTLS_WORKSPACE_HOME", str(workspace_home))
+
+    first_command, first_data = java_lsp._isolated_jdt_command(["jdtls"], project)
+    second_command, second_data = java_lsp._isolated_jdt_command(["jdtls"], project)
+
+    assert first_data is not None
+    assert second_data is not None
+    assert first_data != second_data
+    assert first_command[-2:] == ["-data", str(first_data)]
+    assert second_command[-2:] == ["-data", str(second_data)]
+    assert first_data.parent == workspace_home.resolve()
+    assert second_data.parent == workspace_home.resolve()
+
+    java_lsp.shutil.rmtree(first_data)
+    java_lsp.shutil.rmtree(second_data)
+
+
+def test_explicit_jdt_data_argument_is_preserved(tmp_path: Path) -> None:
+    command, data_dir = java_lsp._isolated_jdt_command(
+        ["jdtls", "-data", "/custom/workspace"],
+        tmp_path,
+    )
+
+    assert command == ["jdtls", "-data", "/custom/workspace"]
+    assert data_dir is None
+
+
 def test_core_type_diagnostic_is_workspace_bootstrap_failure() -> None:
     diagnostics = {
         "file:///workspace/src/main/java/example/Broken.java": [
