@@ -7,6 +7,7 @@ maps each built-in production route to the exact provider receipt capabilities t
 must be present before that route may be planned or dispatched.
 """
 
+import json
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -77,6 +78,45 @@ def native_production_route_available(
     ).strip()
     return integration_type in NATIVE_INTEGRATION_TYPES
 
+
+def effective_target_backend_capabilities(target: Any) -> frozenset[str]:
+    """Return the immutable executable capability set for an approved target.
+
+    Host-authoritative catalog targets store reviewed capability facts in
+    host_facts_json while legacy providers may still use
+    deterministic_module_kinds. Consumers must never choose one field ad hoc.
+    """
+
+    if isinstance(target, Mapping):
+        raw_deterministic = target.get("deterministic_module_kinds", ())
+        host_facts_json = target.get("host_facts_json", "")
+    else:
+        raw_deterministic = getattr(target, "deterministic_module_kinds", ())
+        host_facts_json = getattr(target, "host_facts_json", "")
+
+    result = set(normalize_capabilities(raw_deterministic))
+    raw_host_facts = str(host_facts_json or "").strip()
+    if not raw_host_facts:
+        return frozenset(result)
+
+    try:
+        host_facts = json.loads(raw_host_facts)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError("TARGET_HOST_FACTS_INVALID: host_facts_json is not valid JSON") from exc
+    if not isinstance(host_facts, Mapping):
+        raise ValueError("TARGET_HOST_FACTS_INVALID: host_facts_json must contain an object")
+
+    capabilities = host_facts.get("capabilities", {})
+    if not isinstance(capabilities, Mapping):
+        raise ValueError("TARGET_HOST_FACTS_INVALID: capabilities must be an object")
+    for name, supported in capabilities.items():
+        if type(supported) is not bool:
+            raise ValueError(
+                f"TARGET_HOST_FACTS_INVALID: capability {name!r} must be boolean"
+            )
+        if supported and str(name).strip():
+            result.add(str(name).strip())
+    return frozenset(result)
 
 def normalize_capabilities(values: Iterable[str] | None) -> frozenset[str]:
     if values is None:
@@ -200,6 +240,7 @@ __all__ = [
     "bootstrap_boss_capabilities",
     "bootstrap_content_capabilities",
     "ENTITY_PIPELINE_KINDS",
+    "effective_target_backend_capabilities",
     "NATIVE_INTEGRATION_TYPES",
     "NATIVE_PRODUCTION_MODULE_KINDS",
     "EXTENDED_CONTENT_KINDS",
