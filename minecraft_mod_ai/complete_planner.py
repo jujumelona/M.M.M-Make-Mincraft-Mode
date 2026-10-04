@@ -86,6 +86,63 @@ class CompleteGameDesignPlanner:
                     kinds = effective_target_backend_capabilities(resolved_adapter)
                 except Exception:
                     pass
+        if kinds is None:
+            existing_version = getattr(
+                self.router,
+                "_mmm_existing_minecraft_version",
+                None,
+            )
+            existing_loader = getattr(
+                self.router,
+                "_mmm_existing_loader",
+                None,
+            )
+            if existing_version and existing_loader:
+                try:
+                    from .platform_catalog import adapter_for_target
+                    existing_adapter = adapter_for_target(
+                        str(existing_version),
+                        str(existing_loader),
+                    )
+                    kinds = effective_target_backend_capabilities(existing_adapter)
+                except Exception:
+                    pass
+        if kinds is None:
+            # AUTO planning must not expose semantic kinds that no executable target
+            # can ever satisfy.  Use the union of immutable provider receipts as the
+            # planner envelope; final target selection still chooses one exact receipt
+            # and revalidates the authored kinds fail-closed.
+            try:
+                from .platform_catalog import (
+                    adapter_for_target,
+                    discover_target_keys,
+                )
+
+                loader_hint = getattr(
+                    self.router,
+                    "_mmm_requested_loader",
+                    None,
+                )
+                target_keys = discover_target_keys(
+                    loader=str(loader_hint) if loader_hint else None,
+                    limit_per_loader=32,
+                )
+                envelope: set[str] = set()
+                for target_loader, target_version in target_keys:
+                    try:
+                        envelope.update(
+                            effective_target_backend_capabilities(
+                                adapter_for_target(
+                                    str(target_version),
+                                    str(target_loader),
+                                )
+                            )
+                        )
+                    except Exception:
+                        continue
+                kinds = frozenset(envelope)
+            except Exception:
+                kinds = frozenset()
         effective_kinds = tuple(sorted(kinds)) if kinds is not None else None
 
         with planner_operation("author_typed_plan_ir"):
