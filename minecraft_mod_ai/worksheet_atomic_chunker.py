@@ -196,6 +196,9 @@ def pack_section_concerns(
                 key,
                 chunk,
                 include_evidence=False,
+                # Static packing validation must exercise the same count-fixed
+                # field-page contract as production.
+                record_counts={concern: 1},
             )
             _assert_closed_object_schemas(
                 schema,
@@ -272,10 +275,10 @@ def worksheet_chunk_schema(
     model_transport: bool = False,
     state_symbols: Any = None,
 ) -> dict[str, Any]:
-    """Return one bounded planner field-page schema.
+    """Return one bounded planner field-page schema with host-fixed cardinality.
 
-    The first page of a concern chooses record cardinality. Continuation pages receive
-    that host-observed count through record_counts and cannot change it.
+    Cardinality is decided in a separate tiny planner call before any field page.
+    Count-free field pages are invalid by construction.
     """
     # Planning owns the canonical worksheet contract. Structured state IR is an
     # authoring/production representation and must not leak back into planning.
@@ -310,30 +313,27 @@ def worksheet_chunk_schema(
         }
         if key == "state_model":
             item_schema = constrain_state_record_schema(concern, item_schema)
-        count = None
-        if isinstance(record_counts, Mapping) and concern in record_counts:
-            try:
-                count = int(record_counts[concern])
-            except (TypeError, ValueError) as exc:
-                raise ValueError(
-                    f"Invalid host record count for {key}.{concern}"
-                ) from exc
-            if count < 0 or count > DEFAULT_ATOMIC_SCHEMA_LIMITS.max_array_items:
-                raise ValueError(
-                    f"Host record count for {key}.{concern} is outside planner bounds: {count}"
-                )
-        concern_array: dict[str, Any] = {
+        if not isinstance(record_counts, Mapping) or concern not in record_counts:
+            raise ValueError(
+                "worksheet planner field page requires a host-fixed record count for "
+                f"{key}.{concern}"
+            )
+        try:
+            count = int(record_counts[concern])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Invalid host record count for {key}.{concern}"
+            ) from exc
+        if count < 0 or count > DEFAULT_ATOMIC_SCHEMA_LIMITS.max_array_items:
+            raise ValueError(
+                f"Host record count for {key}.{concern} is outside planner bounds: {count}"
+            )
+        properties[concern] = {
             "type": "array",
-            "maxItems": (
-                count
-                if count is not None
-                else DEFAULT_ATOMIC_SCHEMA_LIMITS.max_array_items
-            ),
+            "minItems": count,
+            "maxItems": count,
             "items": item_schema,
         }
-        if count is not None:
-            concern_array["minItems"] = count
-        properties[concern] = concern_array
 
     # include_evidence remains a compatibility argument for old callers, but
     # evidence/applicability are host-owned and never widen a planner field page.
@@ -448,16 +448,11 @@ def worksheet_chunk_prompt(
             f"Active Record Fields: {field_text}",
             f"Purpose: {_section_description(key)}",
             "Fill exactly the shown field for the host-fixed record rows.",
-            (
-                "This schema is being inspected before execution; production fixes record "
-                "cardinality in a separate bounded decision before this page."
-                if not record_counts
-                else "The host has fixed record cardinality. Return exactly "
-                + ", ".join(
-                    f"{name}={count} row(s)" for name, count in record_counts.items()
-                )
-                + " in the same row order; do not add, remove, or reorder records."
-            ),
+            "The host fixed record cardinality in a separate bounded decision. Return exactly "
+            + ", ".join(
+                f"{name}={count} row(s)" for name, count in record_counts.items()
+            )
+            + " in the same row order; do not add, remove, or reorder records.",
             "Fill every shown field for every returned row. Keep each value concise and concrete; do not restate the prompt.",
             "Do not invent external facts; the host normalizes harmless omissions only after all field pages are merged.",
             "Return exactly the active concern key and no sibling control metadata.",
