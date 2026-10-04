@@ -20,7 +20,7 @@ from .geckolib_generation_contract import (
 from .platform_backend_contract import (
     ENTITY_PIPELINE_KINDS as _ENTITY_KINDS,
     SYSTEM_KIND_TO_PACK as _SYSTEM_PACK_BY_KIND,
-    effective_target_backend_capabilities,
+    deterministic_backend_capabilities,
     missing_production_backend_capabilities,
 )
 from .scale_policy import ScalePolicy
@@ -135,7 +135,7 @@ def validate_production_generation_project(
         if _is_custom(module):
             continue
         missing_backend = missing_production_backend_capabilities(
-            effective_target_backend_capabilities(adapter),
+            deterministic_backend_capabilities(adapter),
             str(module.kind),
             module.config,
         )
