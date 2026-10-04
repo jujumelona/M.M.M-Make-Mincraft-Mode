@@ -40,44 +40,7 @@ def _assert_known_requirement_ids(
 
 def _active_requirement_ledger(prompt: str) -> tuple[dict[str, Any], ...]:
     """Read the already-frozen authored request authority without rebuilding scope."""
-    from .planning_authority import active_authoritative_request_catalog
-
-    catalog = active_authoritative_request_catalog(prompt)
-    if not isinstance(catalog, Mapping):
-        return ()
-    raw_requirements = catalog.get("requirements", [])
-    if not isinstance(raw_requirements, list):
-        return ()
-    ledger: list[dict[str, Any]] = []
-    for raw in raw_requirements:
-        if not isinstance(raw, Mapping):
-            continue
-        requirement_id = str(raw.get("requirement_id") or "").strip()
-        if not requirement_id:
-            continue
-        span = raw.get("source_span")
-        span_text = (
-            str(span.get("text") or "").strip() if isinstance(span, Mapping) else ""
-        )
-        behavior = raw.get("observable_behavior")
-        acceptance = raw.get("acceptance")
-        ledger.append(
-            {
-                "requirement_id": requirement_id,
-                "capability": str(raw.get("capability") or "").strip(),
-                "authored_text": span_text or str(raw.get("statement") or "").strip(),
-                "semantic_statement": str(raw.get("semantic_statement") or "").strip(),
-                "observable_behavior": dict(behavior)
-                if isinstance(behavior, Mapping)
-                else {},
-                "acceptance": [
-                    str(item).strip() for item in acceptance if str(item).strip()
-                ]
-                if isinstance(acceptance, list)
-                else [],
-            }
-        )
-    return tuple(ledger)
+    return ()
 
 
 def _render_requirement_ledger(ledger: Sequence[Mapping[str, Any]]) -> str:

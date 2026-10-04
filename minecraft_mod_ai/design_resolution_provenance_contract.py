@@ -12,7 +12,10 @@ receipt identifies the exact evaluation payload.
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from . import evidence_first_planning as _planning
+try:
+    from . import evidence_first_planning as _planning
+except ImportError:
+    _planning = None
 from . import task_artifact_contract as _task_contract
 
 _INSTALLED = False

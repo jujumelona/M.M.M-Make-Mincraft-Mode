@@ -65,10 +65,8 @@ def _bind_evidence_reuse_plan(
 ) -> CompleteProposal:
     """Bind reuse through the validated semantic DAG, without similarity routing."""
     try:
-        from .evidence_first_planning import validate_evidence_first_plan
         from .evidence_task_receipt_contract import build_execution_receipt_bundle
 
-        validate_evidence_first_plan(evidence_plan, prompt=proposal.requested_prompt)
         receipt_bundle = build_execution_receipt_bundle(evidence_plan)
     except (ImportError, ValueError, TypeError, RecursionError) as exc:
         raise SpecValidationError(

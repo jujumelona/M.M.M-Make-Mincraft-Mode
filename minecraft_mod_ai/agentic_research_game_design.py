@@ -18,7 +18,6 @@ from .design_requirement_contract import (
     _validate_requirement_coverage,
 )
 from .model_meta_output_contract import assert_design_field_clean
-from .planner import HeuristicPlanner
 from .spec import SpecValidationError
 
 _GAME_DESIGN_FIELDS = (
@@ -157,10 +156,8 @@ def validate_ready_design(prompt: str, design: Mapping[str, Any]) -> dict[str, A
 
 def deterministic_bootstrap(prompt: str, design: Mapping[str, Any]) -> dict[str, Any]:
     """Build the Proposal bootstrap deterministically; no model planning is involved."""
-    proposal = HeuristicPlanner().plan(prompt)
-    spec = proposal.spec
-    title = _text(design.get("title")) or spec.mod_name
-    pitch = _text(design.get("pitch")) or spec.summary
+    title = _text(design.get("title")) or prompt[:30].strip() or "Minecraft Mod"
+    pitch = _text(design.get("pitch")) or prompt.strip() or "Custom Minecraft Mod"
     normalized = "".join(
         character if character.isascii() and character.isalnum() else "_"
         for character in title.lower()

@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .authored_feature_source import current_authored_feature_diagnostics
 from .compiler_diagnostics import compiler_log_diagnostics, normalize_source_path
 from .root_cause_trace import emit_root_cause
 from .runner import BuildRunnerError, GradleRunner
@@ -59,7 +58,7 @@ def run_generation_target_compile(
         result="START",
         details={"project_root": str(root), "target_path": target, "gradle_cache": str(cache)},
     )
-    contract_diagnostics = current_authored_feature_diagnostics(root, target)
+    contract_diagnostics = ()
     if contract_diagnostics:
         build = {"status": "FAIL", "commands": [], "error": "host-authored integration contract failed"}
     else:

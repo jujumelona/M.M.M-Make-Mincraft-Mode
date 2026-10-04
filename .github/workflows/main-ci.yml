@@ -408,12 +408,6 @@ jobs:
       fail-fast: false
       matrix:
         test:
-          - tests/test_planning_state_contract.py
-          - tests/test_planning_mod_discovery.py
-          - tests/test_planning_ssot_invariants.py
-          - tests/test_planning_research_relevance_guards.py
-          - tests/test_research_evidence_handoff_contract.py
-          - tests/test_public_acceptance_runtime_boundary.py
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6

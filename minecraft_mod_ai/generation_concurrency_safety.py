@@ -293,10 +293,9 @@ def install() -> None:
     with _INIT_LOCK:
         if _INSTALLED:
             return
-        from . import custom_module_generator, project_index, work_graph
+        from . import project_index, work_graph
 
         _configure_pipeline_granularity()
-        _install_custom_generator_lock(custom_module_generator)
         _install_project_index_parallel_scan(project_index)
         _install_project_index_snapshot_lock(project_index)
         _install_exact_anchor_fallback(work_graph)

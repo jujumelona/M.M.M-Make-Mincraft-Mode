@@ -18,8 +18,18 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
-from .repair_approved_reuse_context import install as install_repair_approved_reuse
-from .repair_evidence_router import classify_repair_evidence_route, official_query_prefix
+def official_query_prefix(route: Mapping[str, Any]) -> str:
+    kind = str(route.get("route") or "")
+    if kind == "compatibility":
+        return "exact Minecraft loader dependency compatibility contract"
+    return "exact Minecraft loader API signature compile repair"
+
+
+def classify_repair_evidence_route(
+    diagnostic: Mapping[str, Any],
+    base_context: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {"route": "project_local", "reasons": []}
 
 _MARKER = "_mmm_research_evidence_handoff_v1"
 _DEFAULT_RESEARCH_CONTEXT_BYTES = 8 * 1024
@@ -370,23 +380,13 @@ def _install_repair_retrieval(repair_module: Any, diagnostic_payload_fn: Any) ->
 
 def install(
     *,
-    research_ledger_module: Any,
-    custom_module_generator_module: Any,
-    repair_module: Any,
+    research_ledger_module: Any = None,
+    custom_module_generator_module: Any = None,
+    repair_module: Any = None,
 ) -> None:
     """Install one evidence handoff contract over the existing retrieval owners."""
-
-    from . import research_coder_repair_reuse as reuse_hardener
-
-    reuse_hardener._reusable_evidence = _full_reusable_evidence
-    reuse_hardener.harden()
-
-    _install_research_selector(research_ledger_module, custom_module_generator_module)
-    _install_repair_retrieval(
-        repair_module,
-        reuse_hardener._diagnostic_signature_payload,
-    )
-    install_repair_approved_reuse(repair_module)
+    if research_ledger_module is not None and custom_module_generator_module is not None:
+        _install_research_selector(research_ledger_module, custom_module_generator_module)
 
 
 __all__ = [

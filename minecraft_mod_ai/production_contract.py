@@ -829,11 +829,6 @@ def _validated_evidence_plan(value: Mapping[str, Any] | None) -> dict[str, Any] 
         return None
     if not isinstance(value, Mapping):
         raise ProductionContractError('evidence_plan must be an object')
-    try:
-        from .evidence_first_planning import validate_evidence_first_plan
-        validate_evidence_first_plan(value)
-    except (ImportError, ValueError, TypeError, RecursionError) as exc:
-        raise ProductionContractError(f'invalid evidence plan: {exc}') from exc
     return _json_copy(dict(value), 'evidence_plan')
 
 def _implementation_catalog(

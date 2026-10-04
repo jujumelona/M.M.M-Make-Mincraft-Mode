@@ -137,7 +137,6 @@ def execute_artifact_template(
         validate_json_resource,
         validate_registry_identifier,
     )
-    from .atomic_slot_executor import fill_one_slot
     from .implementation_template_renderer import render_template
     from .task_template_catalog import load_template
 
@@ -218,7 +217,9 @@ def execute_artifact_template(
                 f"TEMPLATE_AI_SLOT_ID: {template_id!r} has an unnamed slot"
             )
         if slot_id not in values:
-            values[slot_id] = fill_one_slot(router, slot, values)
+            raise ValueError(
+                f"TEMPLATE_AI_SLOT_UNRESOLVED: {template_id!r} requires value for {slot_id!r}"
+            )
 
     rendered_output = render_template(template, values)
     if hasattr(job, "rendered_output"):

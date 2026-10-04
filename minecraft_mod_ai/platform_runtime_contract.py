@@ -9,7 +9,6 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
-from .imported_platform_repair import clear_marker, write_marker
 from .platform_catalog import (
     adapter_for_lock_values,
     adapter_for_target,
@@ -296,30 +295,14 @@ def _install_orchestrator_runtime(module: Any) -> None:
         )
         try:
             actual = adapter_from_project(root)
-        except ValueError as exc:
-            if existing_input is None:
-                raise
-            try:
-                write_marker(
-                    root,
-                    adapter=expected,
-                    archive_sha256=approved.existing_input_sha256,
-                    reason=str(exc),
-                )
-            except ValueError as marker_error:
-                raise module.CompleteProductionError(str(marker_error)) from marker_error
-            # This marker is only permission to enter the target-aware repair path.
-            # It is never release evidence; final packaging independently requires
-            # adapter_from_project(root) to resolve exactly to the approved adapter.
-            return root
+        except ValueError:
+            raise
 
         if actual.adapter_id != expected.adapter_id:
             raise module.CompleteProductionError(
                 f"Prepared project target {actual.adapter_id} does not match approved "
                 f"target {expected.adapter_id}."
             )
-        if existing_input is not None:
-            clear_marker(root)
         return root
 
     prepare_project._mmm_dynamic_platform_runtime = True

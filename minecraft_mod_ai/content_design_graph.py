@@ -4,7 +4,56 @@ from collections.abc import Mapping
 from hashlib import sha256
 import re
 
-from .atomic_slot_executor import SlotFillError
+class SlotFillError(RuntimeError):
+    pass
+
+ALL_DESIGN_SLOTS: tuple[str, ...] = (
+    "design/audio_identity",
+    "design/combat_role",
+    "design/content_scale",
+    "design/core_action",
+    "design/core_loop",
+    "design/core_loop_step",
+    "design/crafting_role",
+    "design/economy_sink",
+    "design/economy_source",
+    "design/enemy_role",
+    "design/exploration_target",
+    "design/failure_condition",
+    "design/first_goal",
+    "design/goal_prerequisite",
+    "design/machine_role",
+    "design/network_requirement",
+    "design/npc_role",
+    "design/persistence_requirement",
+    "design/player_fantasy",
+    "design/progression_condition",
+    "design/progression_edge",
+    "design/progression_node",
+    "design/resource_sink",
+    "design/resource_source",
+    "design/reward",
+    "design/risk",
+    "design/texture_requirement",
+    "design/theme",
+    "design/ui_requirement",
+    "design/unlock",
+    "design/visual_identity",
+    "design/world_interaction",
+)
+
+
+def _sanitize_stem(name: str) -> str:
+    cleaned = "".join(c if (c.isascii() and c.isalnum()) else "_" for c in name.lower())
+    parts = [p for p in cleaned.split("_") if p]
+    stem = "_".join(parts)
+    if not stem:
+        stem = f"mmm_{sha256(name.encode('utf-8')).hexdigest()[:10]}"
+    if not stem[0].isalpha() or not stem[0].isascii():
+        stem = f"mod_{stem}"
+    return stem[:30]
+
+
 from .complete_spec import AssetRequest, ProductionModule
 from .implementation_fact import FactProvenance, FactType, ImplementationFact
 from .parallel_model_tasks import deterministic_model_map, serialized_callback
@@ -58,7 +107,6 @@ def compile_content_graph(
     progress=None,
     checkpoint=None,
 ):
-    from .atomic_design_pipeline import ALL_DESIGN_SLOTS, _sanitize_stem
     from .design_requirement_contract import _active_requirement_ledger
 
     if router is None:

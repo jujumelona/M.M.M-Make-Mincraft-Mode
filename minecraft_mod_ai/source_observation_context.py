@@ -8,10 +8,16 @@ import re
 from collections.abc import Iterable
 from typing import Any
 
-from .custom_module_errors import CustomModuleGenerationError
-from .generation_checkpoint import _sha256_json
 from .project_index import ProjectIndex
-from .small_model_atomic_coder_execution import bounded_initial_observations
+
+class CustomModuleGenerationError(RuntimeError):
+    pass
+
+def _sha256_json(obj: Any) -> str:
+    return hashlib.sha256(json.dumps(obj, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+
+def bounded_initial_observations(func: Any) -> Any:
+    return func
 
 _MIN_OBSERVATION_FRAGMENT_BYTES = 128
 _OBSERVATION_PAGE_RESERVE_BYTES = 128

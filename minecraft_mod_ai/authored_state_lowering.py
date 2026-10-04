@@ -4,7 +4,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from .custom_module_errors import CustomModuleGenerationError
+class CustomModuleGenerationError(RuntimeError):
+    pass
 from .structured_state_runtime import render_state_model_concern
 
 

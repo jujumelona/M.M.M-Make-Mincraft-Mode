@@ -6,7 +6,10 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from . import evidence_first_planning as _planning
+try:
+    from . import evidence_first_planning as _planning
+except ImportError:
+    _planning = None
 from .translation_runtime import translate_requirement
 
 _INSTALLED = False

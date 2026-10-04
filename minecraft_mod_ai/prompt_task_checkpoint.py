@@ -7,7 +7,7 @@ def is_prompt_checkpoint(value):
 
 
 def restore_prompt_progress(value, prompt):
-    from .planning_state_contract import _hash_without
+    from .planning_detail_checkpoint import _hash_without
 
     if value is None:
         return {}
@@ -25,7 +25,7 @@ def restore_prompt_progress(value, prompt):
 
 
 def prompt_checkpoint(prompt, progress):
-    from .planning_state_contract import _hash_without
+    from .planning_detail_checkpoint import _hash_without
 
     result = {"checkpoint_kind": "prompt_tasks", "original_prompt": prompt,
               "template_progress": deepcopy(progress), "state_sha256": ""}

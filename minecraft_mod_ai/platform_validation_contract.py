@@ -4,7 +4,6 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
-from .imported_platform_repair import read_valid_marker
 from .platform_catalog import adapter_for_lock_values, adapter_from_project
 
 
@@ -171,21 +170,7 @@ def _authorized_import_repair_marker(
     spec: Any,
     adapter: Any,
 ) -> dict[str, Any] | None:
-    findings: list[Any] = []
-    try:
-        complete = module._load_complete_project_proposal(root, spec, findings)
-    except Exception:
-        return None
-    if complete is None or findings:
-        return None
-    archive_sha256 = str(getattr(complete, "existing_input_sha256", ""))
-    if not archive_sha256:
-        return None
-    return read_valid_marker(
-        root,
-        adapter=adapter,
-        archive_sha256=archive_sha256,
-    )
+    return None
 
 
 def _validate_reviewed_project(

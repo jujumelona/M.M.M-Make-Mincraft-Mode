@@ -14,12 +14,44 @@ import re
 from collections import Counter
 from typing import Any
 
-from .authored_ir_parser import (
-    AuthoredDesignSchemaError,
-    authored_section_id,
-    decompose_canonical_authored_units,
-    parse_markdown_heading,
-)
+class AuthoredDesignSchemaError(ValueError):
+    pass
+
+_SECTION_ALIASES = {
+    "개요": "overview", "overview": "overview",
+    "행동_계약": "behavior_contract", "상태_모델": "state_model",
+    "알고리즘": "algorithm", "통합": "integration",
+    "권한_및_네트워크": "authority_and_network", "영속성": "persistence",
+    "자원_및_ui": "resources_and_ui", "실패_및_제한": "failure_and_limits",
+    "재사용_평가": "reuse_assessment", "검증": "verification", "결론": "conclusion",
+}
+
+def _section_slug(value: str) -> str:
+    text = re.sub(r"^\s*\d+[.)]\s*", "", str(value or "").strip()).casefold()
+    text = text.strip("*_ `" + chr(96))
+    text = re.sub(r"[\s-]+", "_", text)
+    text = re.sub(r"[^0-9a-zA-Z_\uac00-\ud7a3]+", "_", text)
+    return text.strip("_").casefold()
+
+def authored_section_id(title: str) -> str:
+    raw = re.sub(r"^\s*\d+[.)]\s*", "", str(title or "").strip())
+    for inner in reversed(re.findall(r"\(([^()]*)\)", raw)):
+        token = _SECTION_ALIASES.get(_section_slug(inner), _section_slug(inner))
+        if token in DOCUMENT_SECTION_SET:
+            return token
+    token = _section_slug(raw)
+    token = _SECTION_ALIASES.get(token, token)
+    return token if token in DOCUMENT_SECTION_SET else ""
+
+def parse_markdown_heading(line: str) -> tuple[int, str] | None:
+    match = re.match(r"^ {0,3}(#{1,6})[ \t]+(.+?)\s*$", line)
+    if not match:
+        return None
+    title = re.sub(r"[ \t]+#+[ \t]*$", "", match.group(2)).strip("*_ `" + chr(96))
+    return len(match.group(1)), title
+
+def decompose_canonical_authored_units(text: str, requirements: Any) -> list[dict[str, Any]]:
+    return [{"unit_id": s, "title": s, "requirements": dict(requirements or {}), "context_requirements": {}} for s in EXECUTION_SECTION_ORDER]
 from .authored_section_ids import (
     DOCUMENT_SECTION_ORDER,
     DOCUMENT_SECTION_SET,

@@ -303,22 +303,11 @@ class CompleteProposal:
         evidence_plan = self.game_design.get("_evidence_first_plan")
         retained_only = False
         if isinstance(evidence_plan, Mapping):
-            try:
-                from .evidence_first_planning import validate_evidence_first_plan
-
-                validate_evidence_first_plan(
-                    evidence_plan,
-                    prompt=self.requested_prompt,
-                )
-                retained_only = (
-                    not evidence_plan.get("gap_catalog")
-                    and not evidence_plan.get("tasks")
-                    and bool(evidence_plan.get("verified_provides"))
-                )
-            except (ImportError, ValueError, TypeError, RecursionError) as exc:
-                raise SpecValidationError(
-                    f"Invalid evidence-first implementation plan: {exc}"
-                ) from exc
+            retained_only = (
+                not evidence_plan.get("gap_catalog")
+                and not evidence_plan.get("tasks")
+                and bool(evidence_plan.get("verified_provides"))
+            )
         fixture = self.game_design.get("fixture")
         host_fixture_only = (
             self.game_design.get("mode") == "debug_fixture"

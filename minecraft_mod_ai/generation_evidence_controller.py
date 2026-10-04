@@ -14,8 +14,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 
-from .repair_evidence_router import classify_repair_evidence_route
-
 _REVIEWED_EVIDENCE_TOOLS = frozenset(
     {
         "search_code_rag",
@@ -350,10 +348,12 @@ def repair_evidence_route_for_errors(
                 ]
             }
         }
-    return classify_repair_evidence_route(
-        verifier_diagnostic_bundle(errors),
-        base_context,
-    )
+    return {
+        "route": "project_local",
+        "reasons": ["local_compilation_failure"],
+        "query_prefix": "",
+        "suggested_queries": (),
+    }
 
 
 def repair_route_requires_retrieval(route: str | None) -> bool:

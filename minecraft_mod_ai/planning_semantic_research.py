@@ -22,8 +22,29 @@ from .fixed_template_generation import generate_fixed_template_value
 from .model_adapters.base import ModelConfigurationError
 from .model_concurrency import router_native_model_parallelism
 from .model_context_budget import _canonical_size, request_message_budget
-from .planning_candidate_evidence import fingerprint, semantic_frontier_pool
-from .planning_criterion_fragments import requirement_acceptance_criteria
+from .acceptance_contracts import (
+    canonical_public_acceptance,
+    project_requirement_public_acceptance,
+)
+
+def requirement_acceptance_criteria(requirement: Mapping[str, Any]) -> tuple[str, ...]:
+    return canonical_public_acceptance(requirement.get("acceptance")) or (
+        project_requirement_public_acceptance(requirement),
+    )
+
+def fingerprint(value: Any) -> str:
+    return "sha256:" + hashlib.sha256(json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str,
+    ).encode("utf-8")).hexdigest()
+
+def semantic_frontier_pool(requirement: Mapping[str, Any], pool: Mapping[str, Any], trace: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    return {
+        "schema_version": "mmm/requirement-semantic-frontier-v1",
+        "requirement_ref": requirement.get("requirement_id"),
+        "requirement_sha256": fingerprint(requirement),
+        "task_pool_sha256": fingerprint(pool),
+        "queries": pool.get("queries", []),
+    }
 from .tool_decision_request_envelope import mandatory_tool_decision_messages
 
 _VERDICTS = ("supported", "partial", "negated", "unrelated", "insufficient")

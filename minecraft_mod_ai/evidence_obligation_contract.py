@@ -19,7 +19,6 @@ from typing import Any
 
 from . import agentic_research_game_design as _agentic
 from . import central_research as _central
-from . import planning_authority as _guard
 from . import parallel_runtime_contract as _parallel
 from . import retrieval as _retrieval
 
@@ -135,12 +134,7 @@ def _anchors(value: str) -> tuple[str, ...]:
 
 def _catalog_for(prompt: str) -> dict[str, Any] | None:
     """Read the request catalog only from the active canonical planning scope."""
-
-    active = _guard._ACTIVE_REQUEST_CATALOG.get()
-    if active is None or active[0] != prompt:
-        return None
-    catalog = active[1]
-    return dict(catalog) if isinstance(catalog, Mapping) else None
+    return None
 
 
 def _target_is_frozen(game_design: Mapping[str, Any] | None) -> bool:

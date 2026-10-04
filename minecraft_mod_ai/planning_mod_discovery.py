@@ -50,7 +50,14 @@ def catalog_queries(
                         and row.get("decision_type") == "requirement"
                         and row.get("requirement_id") == research.get("requirement_ref")), {})
     capability = str(requirement.get("semantic_capability") or "")
-    from .planning_candidate_evidence import terms
+
+_STOP = frozenset(["the", "and", "for", "with", "from", "that", "this", "into", "can", "will", "are", "has", "have", "after", "before", "through", "to", "of", "in", "on", "by", "as", "an", "is", "be", "it", "players", "player", "minecraft", "fabric", "forge", "neoforge", "mod", "mods", "implementation", "concrete", "patterns", "support", "artifacts", "useful", "find", "options", "source", "code", "api", "correctly", "requirement", "systems", "system", "feature"])
+
+def terms(value: Any) -> list[str]:
+    return list(dict.fromkeys(word for word in re.findall(
+        r"[a-z0-9]+|[\uac00-\ud7a3]{2,}", str(value or "").casefold(),
+    ) if len(word) > 2 and word not in _STOP))
+
     parts = terms(capability)
 
     if parts:

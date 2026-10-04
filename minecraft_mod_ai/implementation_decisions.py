@@ -66,7 +66,30 @@ def work_packet(requirements: Mapping[str, str], context: Mapping[str, str]) -> 
     return {"requirements": {first: requirements[first]}, "context": dict(context)}
 
 
-from .authored_execution_schema import concern_contracts, section_spec
+class ImplementationGraphError(RuntimeError):
+    pass
+
+SECTION_SPECS: dict[str, dict[str, Any]] = {
+    "state_model": {"platform_api_policy": "forbidden", "symbol": "AuthoredStateModel", "depends_on": ()},
+    "behavior_contract": {"platform_api_policy": "forbidden", "symbol": "AuthoredBehaviorContract", "depends_on": ("state_model",)},
+    "algorithm": {"platform_api_policy": "forbidden", "symbol": "AuthoredAlgorithm", "depends_on": ("state_model", "behavior_contract")},
+    "authority_and_network": {"platform_api_policy": "host_grounded_only", "symbol": "AuthoredAuthorityNetwork", "depends_on": ("state_model", "behavior_contract")},
+    "persistence": {"platform_api_policy": "forbidden", "symbol": "AuthoredPersistence", "depends_on": ("state_model",)},
+    "resources_and_ui": {"platform_api_policy": "host_grounded_only", "symbol": "AuthoredResourcesUi", "depends_on": ("state_model", "behavior_contract")},
+    "failure_and_limits": {"platform_api_policy": "forbidden", "symbol": "AuthoredFailureLimits", "depends_on": ("state_model",)},
+    "integration": {"platform_api_policy": "host_grounded_only", "symbol": "AuthoredIntegration", "depends_on": ("state_model", "behavior_contract", "algorithm", "authority_and_network", "persistence", "resources_and_ui", "failure_and_limits")},
+}
+
+def section_spec(section: str) -> dict[str, Any] | None:
+    return deepcopy(SECTION_SPECS.get(str(section or "").strip()))
+
+def concern_contracts(section: str) -> tuple[dict[str, Any], ...]:
+    from .authored_concern_catalog import load_authored_concern_contracts
+    from .authored_section_ids import EXECUTION_SECTION_SET
+    name = str(section or "").strip()
+    if name not in EXECUTION_SECTION_SET:
+        return ()
+    return load_authored_concern_contracts(name)
 
 
 def _normalized_unit_role(value: Any) -> str:
@@ -92,7 +115,7 @@ def _required_section_contract(payload: Mapping[str, Any]) -> tuple[str, dict[st
     role = _unit_role(payload)
     contract = section_spec(role)
     if contract is None:
-        from .implementation_ir import ImplementationGraphError
+        # ImplementationGraphError
 
         raise ImplementationGraphError(
             f"IMPLEMENTATION_IR_NONCANONICAL_UNIT: {role or '<missing>'}"
@@ -114,7 +137,7 @@ def _role_dependencies(payload: Mapping[str, Any]) -> list[str]:
             continue
         dependency = section_spec(dependency_role)
         if dependency is None:
-            from .implementation_ir import ImplementationGraphError
+            # ImplementationGraphError
 
             raise ImplementationGraphError(
                 f"IMPLEMENTATION_IR_CANONICAL_DEPENDENCY_MISSING: {dependency_role}"
@@ -186,12 +209,13 @@ def _host_concern_work(
     packet: Mapping[str, Any],
     unit_requirements: Mapping[str, str],
 ) -> tuple[list[str], int]:
-    from .authored_ir_parser import slice_concern_requirements
+    def slice_concern_requirements(reqs: Any, **kw: Any) -> dict[str, str]:
+        return dict(reqs or {})
 
     role, _contract = _required_section_contract(payload)
     concerns = concern_contracts(role)
     if not concerns:
-        from .implementation_ir import ImplementationGraphError
+        # ImplementationGraphError
 
         raise ImplementationGraphError(
             f"IMPLEMENTATION_IR_CONCERN_CONTRACT_MISSING: {role}"
@@ -289,7 +313,7 @@ def compile_contribution(router: Any, name: str, payload: dict[str, Any],
 def decompose_contribution(router: Any, payload: dict[str, Any], state: dict[str, Any],
                            checkpoint: Callable[[], None]) -> dict[str, Any]:
     """Deterministically split one host-owned Java unit after observed output pressure."""
-    from .implementation_ir import ImplementationGraphError
+    # ImplementationGraphError
 
     original = payload["rejected_node"]
     if original["kind"] != "java":

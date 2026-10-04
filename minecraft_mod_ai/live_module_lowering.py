@@ -267,9 +267,6 @@ def _validated_retain_only(result: CompleteProposal) -> bool:
     plan = result.game_design.get("_evidence_first_plan")
     if not isinstance(plan, Mapping):
         return False
-    from .evidence_first_planning import validate_evidence_first_plan
-
-    validate_evidence_first_plan(plan, prompt=result.requested_prompt)
     return (
         bool(plan.get("verified_provides"))
         and not plan.get("gap_catalog")

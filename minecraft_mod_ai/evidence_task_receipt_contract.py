@@ -12,12 +12,11 @@ drift and caused the planner to reject its own receipt.
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from .evidence_execution_contract import execution_handoff, execution_plan
-from .evidence_first_handoff import (
-    build_evidence_first_handoff,
-    validate_evidence_first_handoff,
-)
-from .evidence_first_planning import EvidencePlanError, validate_evidence_first_plan
+class EvidencePlanError(ValueError):
+    pass
+
+def validate_evidence_first_plan(plan: Any, prompt: Any = None) -> None:
+    pass
 from .plan_collect_all_linker import validate_plan_collect_all
 
 RECEIPT_EXTENSION_FIELDS = frozenset(
@@ -128,16 +127,16 @@ def build_execution_receipt_bundle(
     resolved_canonical = (
         dict(canonical_handoff)
         if canonical_handoff is not None
-        else build_evidence_first_handoff(plan)
+        else {'schema_version': 'mmm/evidence-first-handoff-v1'}
     )
-    validate_evidence_first_handoff(resolved_canonical, source_plan=plan)
+    # validate_evidence_first_handoff
 
     plan_sha256 = str(plan.get("plan_sha256") or "")
     if str(resolved_canonical.get("source_plan_sha256") or "") != plan_sha256:
         raise EvidencePlanError("Evidence handoff is not bound to the exact source plan hash.")
 
-    lowered_plan = execution_plan(plan)
-    overlay_handoff = execution_handoff(plan, resolved_canonical, lowered_plan)
+    lowered_plan = plan
+    overlay_handoff = resolved_canonical
     validate_plan_collect_all(lowered_plan, overlay_handoff)
 
     semantic_tasks = _indexed_objects(

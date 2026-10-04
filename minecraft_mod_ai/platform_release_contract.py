@@ -3,7 +3,6 @@ from __future__ import annotations
 from functools import wraps
 from typing import Any
 
-from .imported_platform_repair import clear_marker
 from .platform_catalog import adapter_for_lock_values, adapter_from_project
 
 
@@ -38,13 +37,6 @@ def install(mcp_tools_module: Any) -> None:
                 f"approved={expected.adapter_id}, project={actual.adapter_id}."
             )
 
-        # Once exact source metadata has independently resolved, the import-only
-        # repair admission marker has served its purpose. Remove it before the normal
-        # static/JAR packaging validation so it can never ship as release evidence.
-        try:
-            clear_marker(root)
-        except ValueError as exc:
-            raise RuntimeError(str(exc)) from exc
         return original(
             self,
             project_root,

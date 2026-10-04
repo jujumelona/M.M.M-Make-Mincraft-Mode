@@ -18,18 +18,14 @@ _MEMORY_MARKER = "__mmm_source_free_repair_memory_v1__"
 
 
 def harden_runtime() -> None:
-    """Add verifier-qualified replay and research-style test-time scaling.
-
-    The existing custom/repair search owners remain in charge.  This late hardening
-    only changes candidate evidence, search width and candidate ordering after all
-    isolation/staging contracts are already installed.
-    """
     from . import agentic_optimization_contract as repair_search
-    from . import custom_generation_search_contract as generation_search
-
-    _install_generation_replay(generation_search)
-    _install_search_width(generation_search, repair_search)
-    _install_verifier_first_ranking(generation_search, repair_search)
+    try:
+        from . import custom_generation_search_contract as generation_search
+        _install_generation_replay(generation_search)
+        _install_search_width(generation_search, repair_search)
+        _install_verifier_first_ranking(generation_search, repair_search)
+    except ImportError:
+        pass
     _install_source_free_repair_memory(repair_search)
 
 

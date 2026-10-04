@@ -138,7 +138,7 @@ def complete_generation_fields(
     resource facts are owned by the artifact/resource pipeline, not by a model-authored
     serialized JSON blob.
     """
-    from .atomic_design_pipeline import _sanitize_stem
+    from .content_design_graph import _sanitize_stem
 
     progress = progress if progress is not None else {}
     modules = tuple(graph.get("modules", ()))

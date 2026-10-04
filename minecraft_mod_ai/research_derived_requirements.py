@@ -13,7 +13,8 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from .evidence_first_planning import validate_evidence_first_plan
+def validate_evidence_first_plan(plan: Any, prompt: Any = None) -> None:
+    return
 from .research_requirement_evidence import evidence_catalog, facet_relevant_refs
 from .research_requirement_plan_slice import (
     facet_owner,

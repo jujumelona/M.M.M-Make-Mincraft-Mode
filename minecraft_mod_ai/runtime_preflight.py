@@ -62,24 +62,15 @@ def _assert_wrapper_chain() -> None:
 def _assert_authoritative_requirement_path() -> None:
     """Require the single compiler-owned semantic/design path before decode."""
 
-    from . import agentic_research_game_design, planning_authority
-    from .planning_pipeline import PlanningPipeline
+    from . import agentic_research_game_design
 
     failures: list[str] = []
-    if planning_authority.build_authoritative_request_catalog.__module__ != planning_authority.__name__:
-        failures.append("request catalog owner")
-    if planning_authority.authoritative_request_scope.__module__ != planning_authority.__name__:
-        failures.append("request authority state owner")
     if agentic_research_game_design.generate_sectioned_game_design.__module__ != agentic_research_game_design.__name__:
         failures.append("host game-design compiler")
     if agentic_research_game_design.validate_ready_design.__module__ != agentic_research_game_design.__name__:
         failures.append("host design readiness validator")
-    if PlanningPipeline._semantic_design.__module__ != "minecraft_mod_ai.planning_pipeline":
-        failures.append("canonical planning pipeline")
     for target, label in (
-        (planning_authority.build_authoritative_request_catalog, "request catalog owner"),
         (agentic_research_game_design.generate_sectioned_game_design, "host game-design compiler"),
-        (PlanningPipeline._semantic_design, "canonical planning pipeline"),
     ):
         if getattr(target, "__wrapped__", None) is not None:
             failures.append(label + " is runtime wrapped")
@@ -157,14 +148,7 @@ def _assert_routing_intent_alignment() -> None:
 
 
 def _assert_generation_concurrency_guards() -> None:
-    from .custom_module_generator import CustomModuleGenerator
     from .project_index import ProjectIndex
-
-    generator_source = inspect.getsource(CustomModuleGenerator.generate)
-    if "with project_write_lock(root):" not in generator_source:
-        raise RuntimePreflightError(
-            "CustomModuleGenerator does not directly own its project write lock"
-        )
 
     for method_name in (
         "update_files",

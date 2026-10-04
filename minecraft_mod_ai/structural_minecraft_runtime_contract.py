@@ -92,8 +92,58 @@ def _required_gates(capability, branches, *, semantic_type="gameplay_mechanic", 
     return tuple(dict.fromkeys(gates))
 
 
+class EvidencePlanError(ValueError):
+    pass
+
+def _strings(value: Any) -> tuple[str, ...]:
+    if isinstance(value, str):
+        values = (value,)
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        values = value
+    else:
+        return ()
+    return tuple(dict.fromkeys(text for item in values if (text := str(item).strip())))
+
+def _active(branches: Mapping[str, Mapping[str, Any]], name: str) -> bool:
+    value = branches.get(name)
+    return isinstance(value, Mapping) and value.get("status") == "ACTIVE"
+
+def _requirement_done(requirement_ref: str) -> str:
+    return f"requirement_done:{requirement_ref}"
+
+def _rewrite_root(steps: Sequence[TemplateStep], *, prerequisites: Sequence[str]) -> tuple[TemplateStep, ...]:
+    return tuple(
+        TemplateStep(
+            name=step.name, template_id=step.template_id, outcome=step.outcome,
+            consumes=tuple(dict.fromkeys(value for item in step.consumes for value in ((ROOT_PROVIDE, *prerequisites) if item == ROOT_PROVIDE else (item,)))),
+            provides=step.provides, anchor_kinds=step.anchor_kinds, branch_features=step.branch_features,
+        )
+        for step in steps
+    )
+
+def _loader_leaf_steps(capability: str, steps: Sequence[TemplateStep]) -> tuple[TemplateStep, ...]:
+    common = f"common_contract:{capability}"
+    rewritten = []
+    replaced = False
+    for step in steps:
+        if capability in step.provides:
+            rewritten.append(TemplateStep(name=step.name, template_id=step.template_id, outcome=step.outcome, consumes=step.consumes, provides=tuple(common if item == capability else item for item in step.provides), anchor_kinds=step.anchor_kinds, branch_features=step.branch_features))
+            replaced = True
+        else:
+            rewritten.append(step)
+    return tuple(rewritten)
+
+class _PlanningCompat:
+    EvidencePlanError = EvidencePlanError
+    _strings = staticmethod(_strings)
+    _active = staticmethod(_active)
+    _requirement_done = staticmethod(_requirement_done)
+    _rewrite_root = staticmethod(_rewrite_root)
+    _loader_leaf_steps = staticmethod(_loader_leaf_steps)
+
+planning = _PlanningCompat()
+
 def _compile_tasks(gaps, reuse, target, branches, ownership, *, root_provides=None, emit_trace=True):
-    from . import evidence_first_planning as planning
     roots = set(root_provides or {ROOT_PROVIDE})
     reuse_by_req = {str(item["requirement_ref"]): item for item in reuse}
     tasks = []

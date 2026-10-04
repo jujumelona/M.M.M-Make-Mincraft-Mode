@@ -244,7 +244,7 @@ class NativeLlamaTuningPipeline:
         self.autotune._benchmark = bounded_benchmark
 
     def stages(self) -> tuple[TuningStage, ...]:
-        from . import agentic_optimization_contract, repair_engine
+        from . import agentic_optimization_contract
         from .llama_cache_reuse_efficiency_contract import (
             install as install_cache_reuse,
         )
@@ -256,9 +256,6 @@ class NativeLlamaTuningPipeline:
         from .llama_server_runtime_tuning import install as install_runtime_tuning
         from .llama_structured_decode_policy import bind_structured_decode_policy
         from .llama_vram_parallel_policy import install as install_vram_parallel
-        from .planner_single_stream_search_contract import (
-            install as install_single_stream_agentic_policy,
-        )
         from .qwen35_mtp_hotpath_contract import install as install_qwen35_hotpath
         from .qwen35_request_policy import install as install_qwen35_request_policy
         from .qwen35_runtime_efficiency_contract import (
@@ -285,10 +282,6 @@ class NativeLlamaTuningPipeline:
                 self.runtime_tuning,
             )
             install_qwen35_request_policy(self.autotune, self.hardware_policy)
-            install_single_stream_agentic_policy(
-                agentic_optimization_contract,
-                repair_engine,
-            )
 
         def install_kernel_stage() -> None:
             original_ubatch_candidates = self.runtime_tuning._ubatch_candidates

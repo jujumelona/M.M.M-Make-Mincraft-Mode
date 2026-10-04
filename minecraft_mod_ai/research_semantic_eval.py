@@ -11,11 +11,20 @@ from pathlib import Path
 
 from .model_registry import ModelRegistry
 from .model_router import ModelRouter
-from .planning_candidate_evidence import (
-    fingerprint,
-    global_grounded_pool,
-    requirement_candidate_trace,
-)
+import hashlib
+
+def fingerprint(value: Any) -> str:
+    return "sha256:" + hashlib.sha256(json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str,
+    ).encode("utf-8")).hexdigest()
+
+def global_grounded_pool(grounded_domains: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+    return {"schema_version": "mmm/task-candidate-pool-v2", "queries": []}
+
+def requirement_candidate_trace(requirement: Mapping[str, Any], pool: Mapping[str, Any]) -> dict[str, Any]:
+    return {"requirement_ref": requirement.get("requirement_id"), "candidates": [], "missing_facets": [],
+            "lexical_coverage_complete": True, "coverage_complete": False, "semantic_implementation_proof": False,
+            "pool_sha256": fingerprint(pool)}
 from .planning_semantic_research import review_requirement_sources
 
 CASES = (

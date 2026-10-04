@@ -9,14 +9,12 @@ on:
       - 'minecraft_mod_ai/deadline_executor.py'
       - 'minecraft_mod_ai/model_concurrency.py'
       - 'minecraft_mod_ai/model_router.py'
-      - 'minecraft_mod_ai/planner_structured_router.py'
       - 'minecraft_mod_ai/llama_completion_liveness_contract.py'
       - 'minecraft_mod_ai/llama_stream_efficiency_contract.py'
       - 'minecraft_mod_ai/llama_structured_decode_policy.py'
       - 'tests/test_planner_stream_liveness.py'
       - 'tests/test_agentic_planner_runtime_hardening.py'
       - 'tests/test_pipeline_liveness_regressions.py'
-      - 'tests/test_planner_structured_router.py'
       - 'tests/test_required_tool_decode_liveness.py'
       - '.github/workflows/planner-liveness.yml'
   pull_request:
@@ -25,14 +23,12 @@ on:
       - 'minecraft_mod_ai/deadline_executor.py'
       - 'minecraft_mod_ai/model_concurrency.py'
       - 'minecraft_mod_ai/model_router.py'
-      - 'minecraft_mod_ai/planner_structured_router.py'
       - 'minecraft_mod_ai/llama_completion_liveness_contract.py'
       - 'minecraft_mod_ai/llama_stream_efficiency_contract.py'
       - 'minecraft_mod_ai/llama_structured_decode_policy.py'
       - 'tests/test_planner_stream_liveness.py'
       - 'tests/test_agentic_planner_runtime_hardening.py'
       - 'tests/test_pipeline_liveness_regressions.py'
-      - 'tests/test_planner_structured_router.py'
       - 'tests/test_required_tool_decode_liveness.py'
       - '.github/workflows/planner-liveness.yml'
 
@@ -62,7 +58,6 @@ jobs:
           minecraft_mod_ai/deadline_executor.py
           minecraft_mod_ai/model_concurrency.py
           minecraft_mod_ai/model_router.py
-          minecraft_mod_ai/planner_structured_router.py
           minecraft_mod_ai/llama_completion_liveness_contract.py
           minecraft_mod_ai/llama_stream_efficiency_contract.py
           minecraft_mod_ai/llama_structured_decode_policy.py
@@ -76,7 +71,6 @@ jobs:
           tests/test_planner_stream_liveness.py
           tests/test_agentic_planner_runtime_hardening.py
           tests/test_pipeline_liveness_regressions.py
-          tests/test_planner_structured_router.py
           tests/test_required_tool_decode_liveness.py
       - name: Upload planner liveness diagnostics
         if: ${{ always() }}

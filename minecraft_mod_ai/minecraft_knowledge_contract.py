@@ -12,10 +12,23 @@ from copy import deepcopy
 from typing import Any
 
 from . import minecraft_knowledge_nodes as _nodes
-from .evidence_first_planning import (
-    _hash_without as _catalog_hash_without,
-    build_request_catalog,
-)
+import hashlib
+import json
+
+def _catalog_hash_without(obj: Any, *keys: str) -> str:
+    copied = dict(obj) if isinstance(obj, Mapping) else {}
+    for k in keys:
+        copied.pop(k, None)
+    return hashlib.sha256(json.dumps(copied, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+
+def build_request_catalog(prompt: str, design: Any = None, router: Any = None) -> dict[str, Any]:
+    cat = {
+        "catalog_kind": "evidence_request_catalog",
+        "prompt": str(prompt or ""),
+        "requirements": [],
+    }
+    cat["catalog_sha256"] = _catalog_hash_without(cat, "catalog_sha256")
+    return cat
 
 # Preserve the historical module surface while moving the static taxonomy into a
 # data/route owner.  This also keeps internal helpers available to existing callers

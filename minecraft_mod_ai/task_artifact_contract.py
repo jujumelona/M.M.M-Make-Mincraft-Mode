@@ -12,7 +12,10 @@ from collections.abc import Mapping, Sequence
 from functools import wraps
 from typing import Any
 
-from . import evidence_first_planning as _planning
+try:
+    from . import evidence_first_planning as _planning
+except ImportError:
+    _planning = None
 from .module_identity import logical_module_id
 
 _INSTALLED = False

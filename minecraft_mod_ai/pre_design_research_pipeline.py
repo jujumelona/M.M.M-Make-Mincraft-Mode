@@ -96,39 +96,8 @@ def _exception_payload(exc: BaseException) -> dict[str, Any]:
 
 def _active_requirement_texts(prompt: str) -> list[str]:
     """Return active authored requirements without rebuilding semantic authority."""
-    try:
-        from . import planning_authority
-
-        active = planning_authority._ACTIVE_REQUEST_CATALOG.get()
-    except Exception:
-        active = None
-    values: list[str] = []
-    if active is not None and active[0] == prompt:
-        catalog = active[1]
-        raw_requirements = (
-            catalog.get("requirements", []) if isinstance(catalog, Mapping) else []
-        )
-        for raw in raw_requirements if isinstance(raw_requirements, list) else []:
-            if not isinstance(raw, Mapping):
-                continue
-            span = raw.get("source_span")
-            span_text = (
-                str(span.get("text") or "").strip()
-                if isinstance(span, Mapping)
-                else ""
-            )
-            text = (
-                span_text
-                or str(raw.get("semantic_statement") or "").strip()
-                or str(raw.get("statement") or "").strip()
-            )
-            text = " ".join(text.split()).strip()
-            if text and text not in values:
-                values.append(text)
     normalized_prompt = " ".join(str(prompt or "").split()).strip()
-    if not values and normalized_prompt:
-        values.append(normalized_prompt)
-    return values
+    return [normalized_prompt] if normalized_prompt else []
 
 
 def _pre_design_brief(prompt: str) -> dict[str, Any]:

@@ -21,13 +21,7 @@ _QUERY_WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9_+.#/-]*")
 
 
 def _active_catalog(prompt: str) -> dict[str, Any] | None:
-    from . import planning_authority
-
-    active = planning_authority._ACTIVE_REQUEST_CATALOG.get()
-    if active is None or active[0] != prompt:
-        return None
-    catalog = active[1]
-    return deepcopy(catalog) if isinstance(catalog, Mapping) else None
+    return None
 
 
 def _query_text(value: Any) -> str:

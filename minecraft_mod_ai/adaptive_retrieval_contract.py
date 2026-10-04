@@ -21,7 +21,6 @@ def install(model_router_module: Any) -> None:
     harden_runtime()
     harden_code_search_routes()
     harden_agent_tool_allowlist()
-    _expose_composed_repair_contracts()
 
 
 def _inherit_boolean_contract_markers(current: Any) -> None:
@@ -31,9 +30,3 @@ def _inherit_boolean_contract_markers(current: Any) -> None:
             if name.startswith("_mmm_") and value is True:
                 setattr(current, name, True)
         wrapped = getattr(wrapped, "__wrapped__", None)
-
-
-def _expose_composed_repair_contracts() -> None:
-    from .repair_engine import RepairEngine
-
-    _inherit_boolean_contract_markers(RepairEngine._signature)

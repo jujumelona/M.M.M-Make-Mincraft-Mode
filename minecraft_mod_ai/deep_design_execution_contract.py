@@ -12,7 +12,10 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from . import evidence_first_planning as _evidence
+try:
+    from . import evidence_first_planning as _evidence
+except ImportError:
+    _evidence = None
 
 _INSTALLED = False
 _COMPILE_MARKER = "__mmm_design_leaf_evidence_plan__"
@@ -200,7 +203,7 @@ def install() -> None:
     """Attach design provenance without monkeypatching task architecture."""
 
     global _INSTALLED
-    if _INSTALLED:
+    if _INSTALLED or _evidence is None:
         return
     current = _evidence.compile_evidence_first_plan
     if not getattr(current, _COMPILE_MARKER, False):

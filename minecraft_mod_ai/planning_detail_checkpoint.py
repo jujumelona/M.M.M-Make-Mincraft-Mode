@@ -2,7 +2,15 @@
 from collections.abc import Mapping
 from copy import deepcopy
 
-from .planning_state_contract import _hash_without
+import hashlib
+import json
+from typing import Any
+
+def _hash_without(obj: Any, *keys: str) -> str:
+    copied = dict(obj) if isinstance(obj, Mapping) else {}
+    for k in keys:
+        copied.pop(k, None)
+    return hashlib.sha256(json.dumps(copied, sort_keys=True, default=str).encode("utf-8")).hexdigest()
 from .root_cause_trace import emit_root_cause
 
 

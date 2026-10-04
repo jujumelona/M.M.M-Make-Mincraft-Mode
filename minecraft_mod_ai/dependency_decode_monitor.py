@@ -301,7 +301,10 @@ def active_dependency_monitor() -> Any | None:
 
 
 def _install_research_router_scope() -> None:
-    from . import custom_generation_search_contract as generation
+    try:
+        from . import custom_generation_search_contract as generation
+    except ImportError:
+        return
 
     cls = generation._ResearchEvidenceRouter
     original = cls.generate_text

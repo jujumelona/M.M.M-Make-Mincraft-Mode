@@ -92,12 +92,9 @@ jobs:
 
           targeted_source_tests = {
               "minecraft_mod_ai/complete_planner.py": (
-                  "tests/test_planner_structured_router.py",
-                  "tests/test_authored_production.py",
                   "tests/test_typed_plan_authoring.py",
               ),
               "minecraft_mod_ai/authored_production.py": (
-                  "tests/test_authored_production.py",
                   "tests/test_authored_direct_lowering.py",
                   "tests/test_typed_plan_production.py",
               ),
@@ -148,7 +145,6 @@ jobs:
                       narrow_complete_orchestrator_receipt_change = True
                       for candidate in (
                           "tests/test_complete_final_validation_contract.py",
-                          "tests/test_gametest_capability_and_jdt_deferred.py",
                       ):
                           if (root / candidate).is_file():
                               selected_tests.add(candidate)

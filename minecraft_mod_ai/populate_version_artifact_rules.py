@@ -12,6 +12,8 @@ import json
 from pathlib import Path
 
 from . import _version_artifact_rules_core as _core
+def _sha256_text(text: str) -> str:
+    return sha256(str(text).encode("utf-8")).hexdigest()
 from .host_item_registration import item_registration_epoch
 from .resolved_version_context import ResolvedVersionContext, _encode
 from .task_template_catalog import load_template
@@ -59,7 +61,6 @@ TEMPLATE_REQUIREMENTS.update(
 
 make_implementation = _core.make_implementation
 all_canonical_leaves = _core.all_canonical_leaves
-_sha256_text = _core._sha256_text
 
 
 def template_hashes() -> dict[str, str]:

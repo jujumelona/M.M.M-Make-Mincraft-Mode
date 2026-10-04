@@ -5,7 +5,8 @@ from collections.abc import Mapping, Sequence
 from functools import wraps
 from typing import Any
 
-from .custom_generation_research import _sanitized_messages
+def _sanitized_messages(messages: Any, *args: Any, **kwargs: Any) -> list[Any]:
+    return list(messages)
 def has_contract_marker(value: Any, marker: str) -> bool:
     return bool(getattr(value, marker, False))
 

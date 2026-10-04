@@ -396,7 +396,7 @@ def author_structured_sections(
     """Author the canonical design as a finite host-owned dependency DAG."""
 
     from .model_concurrency import router_native_model_parallelism
-    from .planning_state_implementation import SECTION_DEPENDENCIES
+    from .planning_section_dependencies import SECTION_DEPENDENCIES
     from .worksheet_atomic_chunker import (
         merge_worksheet_section_chunks,
         pack_section_concerns,

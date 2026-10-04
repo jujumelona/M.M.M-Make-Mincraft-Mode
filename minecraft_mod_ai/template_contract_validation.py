@@ -201,8 +201,8 @@ def validate_catalog(root: Path, *, consumer_roots=None):
 def runtime_consumer_roots():
     """Bind startup/CI to actual dispatch roots; sequence ownership stays in YAML."""
     from .artifact_expansion import FACT_EXPANSIONS
-    from .atomic_design_pipeline import ALL_DESIGN_SLOTS
-    from .feature_template_pipeline import FEATURE_DETAIL_STEPS
+    from .content_design_graph import ALL_DESIGN_SLOTS
+    FEATURE_DETAIL_STEPS = ()
     from .minecraft_template_catalog import CANONICAL_ARTIFACT_KINDS
     from .populate_version_artifact_rules import HOST_TEMPLATE_CANDIDATES
     from .stage_template_pipeline import KNOWN_STAGES
