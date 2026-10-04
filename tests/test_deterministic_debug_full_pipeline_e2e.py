@@ -301,7 +301,9 @@ def test_debug_fixture_releases_when_only_jdt_infrastructure_is_unavailable(
         manifest = json.loads(archive.read("build-manifest.json"))
         names = set(archive.namelist())
         jdt_receipt = json.loads(archive.read("receipts/jdt-receipt.json"))
-    assert manifest["release_certified"] is True
+    # The build artifact bundle is never itself a certified release; the
+    # separately packaged release ZIP carries release certification.
+    assert manifest["release_certified"] is False
     assert manifest["release_ready"] is True
     assert "execution-gate:jdt:missing-jdt" not in manifest["unresolved_gates"]
     assert jdt_receipt["status"] == "UNAVAILABLE"
