@@ -75,6 +75,8 @@ loom {
     report = runner._execute_prepared_build(_prepared(project), run_gametest=True)
 
     assert report.status == "PASS"
+    assert report.gametest_mode == "explicit_task"
+    assert report.gametest_task == "runGameTest"
     assert [name for name, _args in runner.calls] == ["build", "gametest"]
     build_args = runner.calls[0][1]
     gametest_args = runner.calls[1][1]
