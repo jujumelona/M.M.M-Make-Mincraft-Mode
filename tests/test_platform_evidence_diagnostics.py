@@ -200,5 +200,5 @@ def test_bad_optional_reuse_dependency_does_not_kill_platform_target() -> None:
 
     assert evidence.reuse_coverage == 0
     assert evidence.residual_cost == 1
-    assert evidence.composition_modes == (("space combat", "custom"),)
+    assert evidence.composition_modes == (("space combat", "uncovered"),)
     assert any("dependency_closure" in error for error in evidence.discovery_errors)
