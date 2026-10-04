@@ -25,7 +25,8 @@ SUPPORTED_MINECRAFT_VERSIONS: tuple[str, ...] = ()
 
 
 def supported_minecraft_versions(*, loader: str | None = None) -> tuple[str, ...]:
-    from .platform_catalog import supported_minecraft_versions as discover
+    from .platform_backend_contract import effective_target_backend_capabilities
+from .platform_catalog import supported_minecraft_versions as discover
 
     return discover(loader=loader)
 
@@ -85,7 +86,7 @@ def _attach_target_constraints(
 
             adapter = adapter_for_target(minecraft_version, loader)
             owner._mmm_target_adapter = adapter
-            owner._mmm_deterministic_module_kinds = adapter.deterministic_module_kinds
+            owner._mmm_deterministic_module_kinds = effective_target_backend_capabilities(adapter)
         except Exception:
             pass
 
@@ -365,7 +366,7 @@ class CompleteModAISession:
             self.router,
             adapter=target_adapter,
             deterministic_module_kinds=(
-                target_adapter.deterministic_module_kinds
+                effective_target_backend_capabilities(target_adapter)
                 if target_adapter is not None
                 else None
             ),
