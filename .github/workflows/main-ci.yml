@@ -18,6 +18,7 @@ on:
       - 'tests/test_execution_contract_policy.py'
       - 'tests/test_fixed_template_planner_budget.py'
       - 'tests/test_worksheet_atomic_chunker.py'
+      - 'tests/test_state_symbol_table_and_concern_validation.py'
       - 'minecraft_mod_ai/model_adapters/**'
       - 'minecraft_mod_ai/model_router.py'
       - 'minecraft_mod_ai/performance_final_tuning.py'
