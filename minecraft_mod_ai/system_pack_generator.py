@@ -6,7 +6,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .platform_backend_contract import (
-    effective_target_backend_capabilities,
+    deterministic_backend_capabilities,
     system_pack_capabilities,
 )
 from .platform_catalog import adapter_from_project
@@ -86,7 +86,7 @@ def generate_system_pack(
     adapter = adapter_from_project(info.root)
     required_backend = system_pack_capabilities(pack_id)
     missing_backend = sorted(
-        required_backend - set(effective_target_backend_capabilities(adapter))
+        required_backend - set(deterministic_backend_capabilities(adapter))
     )
     if missing_backend:
         raise ValueError(
