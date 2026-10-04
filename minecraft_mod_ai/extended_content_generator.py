@@ -10,6 +10,7 @@ from typing import Any
 from .complete_spec import ProductionModule
 from .platform_backend_contract import (
     EXTENDED_CONTENT_KINDS,
+    effective_target_backend_capabilities,
     missing_production_backend_capabilities,
 )
 from .extended_record_cache import read_cached_directory_records
@@ -102,7 +103,7 @@ def generate_extended_content(
     for module in selected:
         module.validate(policy=policy)
         missing_backend = missing_production_backend_capabilities(
-            adapter.deterministic_module_kinds,
+            effective_target_backend_capabilities(adapter),
             module.kind,
             module.config,
         )
