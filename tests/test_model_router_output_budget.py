@@ -7,7 +7,7 @@ import pytest
 
 from minecraft_mod_ai.model_adapters.base import GenerationResponse, ToolCall
 from minecraft_mod_ai.model_router import ModelRouter
-from minecraft_mod_ai.worksheet_atomic_chunker import planner_page_output_token_ceiling
+from minecraft_mod_ai.model_output_atomicity_contract import structured_output_token_ceiling
 
 
 class _Adapter:
@@ -88,7 +88,7 @@ def test_generate_tool_decision_derives_planner_budget_from_schema() -> None:
     assert router.adapter.request is not None
     assert (
         router.adapter.request.metadata["mmm_output_token_ceiling"]
-        == planner_page_output_token_ceiling(parameters)
+        == structured_output_token_ceiling(parameters)
     )
     assert router.adapter.request.metadata["mmm_force_non_thinking"] is True
 
@@ -96,7 +96,7 @@ def test_generate_tool_decision_derives_planner_budget_from_schema() -> None:
 def test_generate_tool_decision_rejects_unbounded_planner_schema_without_budget() -> None:
     router = _Router()
 
-    with pytest.raises(Exception, match="PLANNER_TOOL_DECISION_BUDGET_REQUIRED"):
+    with pytest.raises(Exception, match="PLANNER_TOOL_DECISION_BUDGET_UNPROVABLE"):
         router.generate_tool_decision(
             "planner",
             [{"role": "user", "content": "fill one number"}],
@@ -107,6 +107,28 @@ def test_generate_tool_decision_rejects_unbounded_planner_schema_without_budget(
                 "required": ["value"],
                 "additionalProperties": False,
             },
+        )
+
+    assert router.adapter.request is None
+
+
+def test_generate_tool_decision_rejects_explicit_budget_below_schema_proof() -> None:
+    router = _Router()
+    parameters = {
+        "type": "object",
+        "properties": {"value": {"type": "string", "maxLength": 64}},
+        "required": ["value"],
+        "additionalProperties": False,
+    }
+    required = structured_output_token_ceiling(parameters)
+
+    with pytest.raises(Exception, match="PLANNER_TOOL_DECISION_BUDGET_TOO_SMALL"):
+        router.generate_tool_decision(
+            "planner",
+            [{"role": "user", "content": "fill one bounded field"}],
+            tool_name="bounded_probe",
+            parameters=parameters,
+            output_token_ceiling=required - 1,
         )
 
     assert router.adapter.request is None
