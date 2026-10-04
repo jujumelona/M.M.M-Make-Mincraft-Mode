@@ -9,6 +9,7 @@ from .fabric_official_template_provider import (
     FabricTemplateProviderError,
     bootstrap_fabric_project,
 )
+from .platform_backend_contract import effective_target_backend_capabilities
 from .platform_catalog import (
     adapter_for_lock_values,
     adapter_from_project,
@@ -24,11 +25,9 @@ def _uses_official_scaffold(adapter: Any) -> bool:
         provider = provider_for_loader(adapter.loader)
     except ValueError:
         return False
-    deterministic_kinds = tuple(
-        getattr(adapter, "deterministic_module_kinds", ()) or ()
-    )
+    effective_capabilities = effective_target_backend_capabilities(adapter)
     return bool(provider.host_authoritative) and (
-        adapter.source_api_family == "fabric_live_ai" or not deterministic_kinds
+        adapter.source_api_family == "fabric_live_ai" or not effective_capabilities
     )
 
 
