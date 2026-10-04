@@ -11,7 +11,7 @@ def _request(schema):
     return SimpleNamespace(response_format="json", response_schema=schema)
 
 
-def test_qwen35_never_receives_native_json_sampler_constraints():
+def test_qwen35_receives_native_structural_json_sampler_constraints():
     adapter = SimpleNamespace(
         config=SimpleNamespace(
             model_id="unsloth/Qwen3.5-9B-MTP-GGUF",
@@ -32,8 +32,8 @@ def test_qwen35_never_receives_native_json_sampler_constraints():
     assert _is_qwen35(adapter)
     _apply_llama_json_schema(payload, _request(schema), adapter=adapter)
 
-    assert "response_format" not in payload
-    assert "json_schema" not in payload
+    assert payload["response_format"] == {"type": "json_object"}
+    assert payload["json_schema"] == project_llama_transport_schema(schema)
     assert "grammar" not in payload
 
 

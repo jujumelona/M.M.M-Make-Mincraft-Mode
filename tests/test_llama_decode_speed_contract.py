@@ -204,8 +204,8 @@ def test_qwen35_structured_local_payload_keeps_json_validation_host_side_and_nat
     )
     payload = hardware_policy._server_payload(adapter, structured)
     assert structured.response_schema == schema
-    assert "response_format" not in payload
-    assert "json_schema" not in payload
+    assert payload["response_format"] == {"type": "json_object"}
+    assert payload["json_schema"] == schema
     assert "grammar" not in payload
 
     tool = {

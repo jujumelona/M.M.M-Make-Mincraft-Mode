@@ -51,38 +51,23 @@ def _bind_structured_generation_retry(llama_cpp_module: Any) -> None:
     adapter_type.generate = generate
 
 
-def _remove_native_json_constraints(payload: dict[str, Any]) -> None:
-    """Remove llama.cpp sampler grammar controls while leaving host validation intact."""
-
-    for key in ("response_format", "json_schema", "grammar"):
-        payload.pop(key, None)
-
-
 def _apply_llama_json_schema(
     payload: dict[str, Any],
     request: Any,
     *,
     adapter: Any | None = None,
 ) -> None:
-    """Apply only sampler-safe transport constraints.
-
-    Qwen3.5 is intentionally excluded from llama.cpp native JSON grammar. Its chat
-    template/reasoning prefill can conflict with grammar initialization before decoding.
-    The original, complete schema remains on the host request and is validated after the
-    model returns.
-    """
+    """Apply structural JSON constraints at the llama.cpp sampler boundary."""
 
     if getattr(request, "response_format", None) != "json":
         return
 
-    if adapter is not None and _is_qwen35(adapter):
-        _remove_native_json_constraints(payload)
-        return
-
     schema = getattr(request, "response_schema", None)
     projected = project_llama_transport_schema(schema)
+
     payload.pop("grammar", None)
     payload["response_format"] = {"type": "json_object"}
+
     if projected:
         payload["json_schema"] = projected
     else:
@@ -155,6 +140,5 @@ __all__ = [
     "_apply_llama_json_schema",
     "_bind_structured_generation_retry",
     "_is_qwen35",
-    "_remove_native_json_constraints",
     "bind_structured_decode_policy",
 ]

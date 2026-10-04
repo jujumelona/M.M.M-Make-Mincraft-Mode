@@ -41,8 +41,9 @@ def test_qwen35_json_requests_keep_validation_host_side_without_grammar():
         response_format="json",
     )
     payload = _server_payload(adapter, request)
-    for forbidden in ("response_format", "json_schema", "grammar"):
-        assert forbidden not in payload
+    assert payload["response_format"] == {"type": "json_object"}
+    assert "json_schema" not in payload
+    assert "grammar" not in payload
     assert payload["reasoning_effort"] == "none"
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
 

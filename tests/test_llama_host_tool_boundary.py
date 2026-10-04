@@ -75,12 +75,12 @@ def test_named_tool_choice_narrows_wire_to_exact_selected_schema() -> None:
     assert payload["tool_choice"] == "required"
     assert payload["parallel_tool_calls"] is True
     assert payload["temperature"] == 0.0
+    assert payload.get("repeat_penalty") == 1.05
     for key in (
         "top_p",
         "top_k",
         "min_p",
         "presence_penalty",
-        "repeat_penalty",
         "repetition_penalty",
     ):
         assert key not in payload

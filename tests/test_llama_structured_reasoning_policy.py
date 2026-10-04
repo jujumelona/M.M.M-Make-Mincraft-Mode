@@ -47,8 +47,8 @@ def test_qwen35_payload_keeps_structured_validation_host_side() -> None:
         _request(response_format="json", response_schema=schema),
     )
 
-    assert "response_format" not in payload
-    assert "json_schema" not in payload
+    assert payload["response_format"] == {"type": "json_object"}
+    assert payload["json_schema"] == schema
     assert "grammar" not in payload
 
 
@@ -61,7 +61,8 @@ def test_qwen35_schema_less_json_keeps_validation_host_side() -> None:
         _request(response_format="json", response_schema=None),
     )
 
-    assert "response_format" not in payload
+    assert payload["response_format"] == {"type": "json_object"}
+    assert "json_schema" not in payload
     assert payload["reasoning_effort"] == "none"
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
 
@@ -81,8 +82,8 @@ def test_qwen35_explicit_schema_stays_out_of_native_llama_payload() -> None:
         _request(response_format="json", response_schema=schema),
     )
 
-    assert "response_format" not in payload
-    assert "json_schema" not in payload
+    assert payload["response_format"] == {"type": "json_object"}
+    assert payload["json_schema"] == schema
     assert "grammar" not in payload
 
 

@@ -71,8 +71,8 @@ def test_qwen35_json_request_keeps_schema_host_side() -> None:
         request,
     )
     assert request.response_schema == schema
-    assert "response_format" not in payload
-    assert "json_schema" not in payload
+    assert payload["response_format"] == {"type": "json_object"}
+    assert payload["json_schema"] == schema
     assert "grammar" not in payload
     assert "reasoning_effort" not in payload
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}

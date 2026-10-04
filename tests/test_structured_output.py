@@ -70,8 +70,9 @@ def test_qwen35_llama_server_keeps_schema_validation_host_owned() -> None:
     )
     payload = _server_payload(adapter, _request())
 
-    for forbidden in ("response_format", "json_schema", "grammar"):
-        assert forbidden not in payload
+    assert payload["response_format"] == {"type": "json_object"}
+    assert payload["json_schema"] == _SCHEMA
+    assert "grammar" not in payload
     assert payload["reasoning_effort"] == "none"
 
 
