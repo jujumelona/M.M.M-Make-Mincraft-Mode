@@ -9,6 +9,7 @@ human review and provenance only; executable production consumes the records.
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -356,17 +357,33 @@ def _generate_concern_record_count(
         ) from exc
 
 
+@dataclass(frozen=True)
+class _PlannerPageRequest:
+    section: str
+    chunk_index: int
+    chunk_count: int
+    concerns: Sequence[str]
+    completed: Mapping[str, Mapping[str, Any]]
+    include_evidence: bool
+    media_paths: Sequence[str | Path]
+
+
+@dataclass(frozen=True)
+class _PlannerSectionRequest:
+    router: Any
+    prompt: str
+    section: str
+    completed: Mapping[str, Mapping[str, Any]]
+    media_paths: Sequence[str | Path]
+    chunks: Sequence[Sequence[str]]
+    slots: int
+
+
 def _generate_authored_chunk(
     router: Any,
     prompt: str,
     *,
-    section: str,
-    chunk_index: int,
-    chunk_count: int,
-    concerns: Sequence[str],
-    completed: Mapping[str, Mapping[str, Any]],
-    include_evidence: bool,
-    media_paths: Sequence[str | Path],
+    page: _PlannerPageRequest,
     state_symbols: Any = None,
     section_context: Mapping[str, Any] | None = None,
     record_counts: Mapping[str, int] | None = None,
@@ -376,15 +393,15 @@ def _generate_authored_chunk(
     from .fixed_template_generation import generate_fixed_template_value
     from .worksheet_atomic_chunker import worksheet_chunk_schema
 
-    if len(concerns) != 1:
+    if len(page.concerns) != 1:
         raise ValueError(
             "AUTHORED_STRUCTURED_DESIGN: planner page must contain exactly one concern"
         )
 
     schema = worksheet_chunk_schema(
-        section,
-        concerns,
-        include_evidence=include_evidence,
+        page.section,
+        page.concerns,
+        include_evidence=page.include_evidence,
         record_counts=record_counts,
         state_symbols=state_symbols,
     )
@@ -393,27 +410,213 @@ def _generate_authored_chunk(
         "planner",
         _authored_chunk_messages(
             prompt,
-            section=section,
-            chunk_index=chunk_index,
-            chunk_count=chunk_count,
-            concerns=concerns,
-            completed=completed,
-            include_evidence=include_evidence,
+            section=page.section,
+            chunk_index=page.chunk_index,
+            chunk_count=page.chunk_count,
+            concerns=page.concerns,
+            completed=page.completed,
+            include_evidence=page.include_evidence,
             state_symbols=state_symbols,
             section_context=section_context,
             record_counts=record_counts,
         ),
         response_schema=schema,
-        media_paths=media_paths,
+        media_paths=page.media_paths,
         enable_tools=False,
-        description=f"Author bounded canonical {section} field page.",
+        description=f"Author bounded canonical {page.section} field page.",
         output_token_ceiling=PLANNER_RECORD_PAGE_OUTPUT_TOKEN_CEILING,
     )
     if not isinstance(value, Mapping):
         raise ValueError(
-            f"AUTHORED_STRUCTURED_DESIGN: {section} page {chunk_index} must be an object"
+            f"AUTHORED_STRUCTURED_DESIGN: {page.section} page "
+            f"{page.chunk_index} must be an object"
         )
     return dict(value)
+
+
+def _index_concern_pages(
+    chunks: Sequence[Sequence[str]],
+) -> tuple[
+    list[tuple[int, Sequence[str]]],
+    dict[str, list[tuple[int, Sequence[str]]]],
+    list[str],
+]:
+    indexed = list(enumerate(chunks, start=1))
+    pages: dict[str, list[tuple[int, Sequence[str]]]] = {}
+    order: list[str] = []
+    for index, page in indexed:
+        if len(page) != 1:
+            raise ValueError(
+                "AUTHORED_STRUCTURED_DESIGN: host planner page contains multiple concerns"
+            )
+        concern = str(page[0])
+        if concern not in pages:
+            pages[concern] = []
+            order.append(concern)
+        pages[concern].append((index, page))
+    return indexed, pages, order
+
+
+def _merge_page_rows(
+    current: list[dict[str, Any]],
+    rows: Any,
+) -> list[dict[str, Any]]:
+    if not isinstance(rows, list):
+        return current
+    while len(current) < len(rows):
+        current.append({})
+    for row_index, row in enumerate(rows):
+        if isinstance(row, Mapping):
+            current[row_index].update(deepcopy(dict(row)))
+    return current
+
+
+def _generate_concern_pages(
+    request: _PlannerSectionRequest,
+    concern: str,
+    pages: Sequence[tuple[int, Sequence[str]]],
+    *,
+    state_symbols: Any = None,
+    base_context: Mapping[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], list[tuple[int, dict[str, Any]]]]:
+    fixed_count = _generate_concern_record_count(
+        request.router,
+        request.prompt,
+        section=request.section,
+        concern=concern,
+        completed=request.completed,
+        state_symbols=state_symbols,
+        section_context=base_context,
+    )
+    if fixed_count == 0:
+        return [], [(index, {concern: []}) for index, _page in pages]
+
+    authored_rows: list[dict[str, Any]] = []
+    results: list[tuple[int, dict[str, Any]]] = []
+    for index, concerns in pages:
+        context = deepcopy(dict(base_context or {}))
+        if authored_rows:
+            context[concern] = deepcopy(authored_rows)
+        page = _PlannerPageRequest(
+            section=request.section,
+            chunk_index=index,
+            chunk_count=len(request.chunks),
+            concerns=concerns,
+            completed=request.completed,
+            include_evidence=False,
+            media_paths=request.media_paths,
+        )
+        value = _generate_authored_chunk(
+            request.router,
+            request.prompt,
+            page=page,
+            state_symbols=state_symbols,
+            section_context=context or None,
+            record_counts={concern: fixed_count},
+        )
+        rows = value.get(concern, [])
+        if not isinstance(rows, list):
+            raise ValueError(
+                f"AUTHORED_STRUCTURED_DESIGN: {request.section}.{concern} page "
+                f"{index} must return a record array"
+            )
+        if len(rows) != fixed_count:
+            raise ValueError(
+                f"AUTHORED_STRUCTURED_DESIGN_CARDINALITY_DRIFT: "
+                f"{request.section}.{concern} expected {fixed_count} rows, "
+                f"got {len(rows)}"
+            )
+        authored_rows = _merge_page_rows(authored_rows, rows)
+        results.append((index, value))
+    return authored_rows, results
+
+
+def _state_section_page_results(
+    request: _PlannerSectionRequest,
+    indexed: Sequence[tuple[int, Sequence[str]]],
+    pages: Mapping[str, Sequence[tuple[int, Sequence[str]]]],
+    order: Sequence[str],
+) -> list[dict[str, Any]]:
+    from .structured_state_runtime import StateSymbolTable, validate_state_concern
+
+    ordered = list(order)
+    if "variables" in ordered:
+        ordered.remove("variables")
+        ordered.insert(0, "variables")
+
+    symbols: StateSymbolTable | None = None
+    accumulated: dict[str, Any] = {}
+    by_index: dict[int, dict[str, Any]] = {}
+    for concern in ordered:
+        rows, results = _generate_concern_pages(
+            request,
+            concern,
+            pages[concern],
+            state_symbols=symbols,
+            base_context=accumulated,
+        )
+        validate_state_concern(concern, rows, symbols=symbols)
+        if rows:
+            accumulated[concern] = deepcopy(rows)
+        if concern == "variables":
+            symbols = StateSymbolTable(rows)
+        by_index.update(dict(results))
+    return [by_index[index] for index, _page in indexed]
+
+
+def _regular_section_page_results(
+    request: _PlannerSectionRequest,
+    indexed: Sequence[tuple[int, Sequence[str]]],
+    pages: Mapping[str, Sequence[tuple[int, Sequence[str]]]],
+    order: Sequence[str],
+    *,
+    allow_parallel: bool,
+) -> list[dict[str, Any]]:
+    def run(concern: str) -> tuple[str, list[tuple[int, dict[str, Any]]]]:
+        _rows, results = _generate_concern_pages(
+            request,
+            concern,
+            pages[concern],
+        )
+        return concern, results
+
+    if allow_parallel and request.slots > 1 and len(order) > 1:
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(
+            max_workers=min(request.slots, len(order)),
+            thread_name_prefix=f"mmm-plan-{request.section}",
+        ) as executor:
+            groups = list(executor.map(run, order))
+    else:
+        groups = [run(concern) for concern in order]
+
+    by_index: dict[int, dict[str, Any]] = {}
+    for _concern, results in groups:
+        by_index.update(dict(results))
+    return [by_index[index] for index, _page in indexed]
+
+
+def _author_section(
+    request: _PlannerSectionRequest,
+    *,
+    allow_parallel: bool,
+) -> dict[str, Any]:
+    from .worksheet_atomic_chunker import merge_worksheet_section_chunks
+
+    indexed, pages, order = _index_concern_pages(request.chunks)
+    if request.section == "state_model":
+        results = _state_section_page_results(request, indexed, pages, order)
+    else:
+        results = _regular_section_page_results(
+            request,
+            indexed,
+            pages,
+            order,
+            allow_parallel=allow_parallel,
+        )
+    return merge_worksheet_section_chunks(request.section, results, set())
+
 
 def author_structured_sections(
     router: Any,
@@ -425,191 +628,12 @@ def author_structured_sections(
 
     from .model_concurrency import router_native_model_parallelism
     from .planning_section_dependencies import SECTION_DEPENDENCIES
-    from .worksheet_atomic_chunker import (
-        merge_worksheet_section_chunks,
-        pack_section_concerns,
-    )
+    from .worksheet_atomic_chunker import pack_section_concerns
 
     slots = max(1, router_native_model_parallelism(router, role="planner"))
-
-    def author_section(
-        section: str,
-        completed_snapshot: Mapping[str, Mapping[str, Any]],
-        *,
-        allow_chunk_parallel: bool,
-    ) -> dict[str, Any]:
-        chunks = pack_section_concerns(section)
-        indexed_chunks = list(enumerate(chunks, start=1))
-
-        concern_pages: dict[str, list[tuple[int, Sequence[str]]]] = {}
-        concern_order: list[str] = []
-        for index, page in indexed_chunks:
-            if len(page) != 1:
-                raise ValueError(
-                    "AUTHORED_STRUCTURED_DESIGN: host planner page contains multiple concerns"
-                )
-            concern = str(page[0])
-            if concern not in concern_pages:
-                concern_pages[concern] = []
-                concern_order.append(concern)
-            concern_pages[concern].append((index, page))
-
-        def merge_page_rows(
-            current: list[dict[str, Any]],
-            rows: Any,
-        ) -> list[dict[str, Any]]:
-            if not isinstance(rows, list):
-                return current
-            while len(current) < len(rows):
-                current.append({})
-            for row_index, row in enumerate(rows):
-                if not isinstance(row, Mapping):
-                    continue
-                current[row_index].update(deepcopy(dict(row)))
-            return current
-
-        def generate_concern_pages(
-            concern: str,
-            pages: Sequence[tuple[int, Sequence[str]]],
-            *,
-            state_symbols: Any = None,
-            base_context: Mapping[str, Any] | None = None,
-        ) -> tuple[list[dict[str, Any]], list[tuple[int, dict[str, Any]]]]:
-            authored_rows: list[dict[str, Any]] = []
-            fixed_count = _generate_concern_record_count(
-                router,
-                prompt,
-                section=section,
-                concern=concern,
-                completed=completed_snapshot,
-                state_symbols=state_symbols,
-                section_context=base_context,
-            )
-            results: list[tuple[int, dict[str, Any]]] = []
-
-            if fixed_count == 0:
-                return [], [
-                    (index, {concern: []})
-                    for index, _page in pages
-                ]
-
-            for index, page in pages:
-                context = deepcopy(dict(base_context or {}))
-                if authored_rows:
-                    context[concern] = deepcopy(authored_rows)
-
-                value = _generate_authored_chunk(
-                    router,
-                    prompt,
-                    section=section,
-                    chunk_index=index,
-                    chunk_count=len(chunks),
-                    concerns=page,
-                    completed=completed_snapshot,
-                    include_evidence=False,
-                    media_paths=media_paths,
-                    state_symbols=state_symbols,
-                    section_context=context or None,
-                    record_counts={concern: fixed_count},
-                )
-                rows = value.get(concern, [])
-                if not isinstance(rows, list):
-                    raise ValueError(
-                        f"AUTHORED_STRUCTURED_DESIGN: {section}.{concern} page "
-                        f"{index} must return a record array"
-                    )
-                if len(rows) != fixed_count:
-                    raise ValueError(
-                        f"AUTHORED_STRUCTURED_DESIGN_CARDINALITY_DRIFT: "
-                        f"{section}.{concern} expected {fixed_count} rows, got {len(rows)}"
-                    )
-                authored_rows = merge_page_rows(authored_rows, rows)
-                results.append((index, value))
-
-            return authored_rows, results
-
-        if section == "state_model":
-            from .structured_state_runtime import (
-                StateSymbolTable,
-                validate_state_concern,
-            )
-
-            state_symbols: StateSymbolTable | None = None
-            accumulated_state_records: dict[str, Any] = {}
-            page_results: dict[int, dict[str, Any]] = {}
-            ordered_concerns = list(concern_order)
-            if "variables" in ordered_concerns:
-                ordered_concerns.remove("variables")
-                ordered_concerns.insert(0, "variables")
-
-            for concern in ordered_concerns:
-                rows, results = generate_concern_pages(
-                    concern,
-                    concern_pages[concern],
-                    state_symbols=state_symbols,
-                    base_context=accumulated_state_records,
-                )
-                validate_state_concern(
-                    concern,
-                    rows,
-                    symbols=state_symbols,
-                )
-                if rows:
-                    accumulated_state_records[concern] = deepcopy(rows)
-                if concern == "variables":
-                    state_symbols = StateSymbolTable(rows)
-                page_results.update(dict(results))
-
-            chunk_results = [
-                page_results[index]
-                for index, _page in indexed_chunks
-            ]
-        else:
-            def run_concern(
-                concern: str,
-            ) -> tuple[str, list[tuple[int, dict[str, Any]]]]:
-                _rows, results = generate_concern_pages(
-                    concern,
-                    concern_pages[concern],
-                )
-                return concern, results
-
-            if (
-                allow_chunk_parallel
-                and slots > 1
-                and len(concern_order) > 1
-            ):
-                from concurrent.futures import ThreadPoolExecutor
-
-                with ThreadPoolExecutor(
-                    max_workers=min(slots, len(concern_order)),
-                    thread_name_prefix=f"mmm-plan-{section}",
-                ) as executor:
-                    generated_groups = list(
-                        executor.map(run_concern, concern_order)
-                    )
-            else:
-                generated_groups = [
-                    run_concern(concern)
-                    for concern in concern_order
-                ]
-
-            page_results = {}
-            for _concern, results in generated_groups:
-                page_results.update(dict(results))
-            chunk_results = [
-                page_results[index]
-                for index, _page in indexed_chunks
-            ]
-
-        return merge_worksheet_section_chunks(
-            section,
-            chunk_results,
-            set(),
-        )
-
     completed: dict[str, Any] = {}
     pending = set(WORKSHEET_SECTIONS)
+
     while pending:
         ready = [
             section
@@ -633,33 +657,32 @@ def author_structured_sections(
             )
 
         snapshot = deepcopy(completed)
+
+        def run(section: str) -> tuple[str, dict[str, Any]]:
+            request = _PlannerSectionRequest(
+                router=router,
+                prompt=prompt,
+                section=section,
+                completed=snapshot,
+                media_paths=media_paths,
+                chunks=pack_section_concerns(section),
+                slots=slots,
+            )
+            return section, _author_section(
+                request,
+                allow_parallel=len(ready) == 1,
+            )
+
         if slots > 1 and len(ready) > 1:
             from concurrent.futures import ThreadPoolExecutor
-
-            def run_section(section: str) -> tuple[str, dict[str, Any]]:
-                return section, author_section(
-                    section,
-                    snapshot,
-                    allow_chunk_parallel=False,
-                )
 
             with ThreadPoolExecutor(
                 max_workers=min(slots, len(ready)),
                 thread_name_prefix="mmm-plan-wave",
             ) as executor:
-                authored = list(executor.map(run_section, ready))
+                authored = list(executor.map(run, ready))
         else:
-            authored = [
-                (
-                    section,
-                    author_section(
-                        section,
-                        snapshot,
-                        allow_chunk_parallel=True,
-                    ),
-                )
-                for section in ready
-            ]
+            authored = [run(section) for section in ready]
 
         authored_by_section = dict(authored)
         for section in WORKSHEET_SECTIONS:
