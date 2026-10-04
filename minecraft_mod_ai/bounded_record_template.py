@@ -5,6 +5,9 @@ import json
 from copy import deepcopy
 from typing import Any
 
+from jsonschema import Draft202012Validator
+
+from .design_generation_schema import context_bound_record_schema
 from .execution_contract_policy import PLANNER_RECORD_COUNT_OUTPUT_TOKEN_CEILING
 from .fixed_template_generation import generate_fixed_template_value
 from .parallel_model_tasks import deterministic_model_map, serialized_callback
@@ -110,6 +113,12 @@ def run_bounded_record_template(
     template = load_record_template(identifier)
     normalized_context = task_context(template, context)
     admitted_refs = {str(ref) for ref in allowed_refs}
+    record_schema = context_bound_record_schema(
+        identifier,
+        template["record_schema"],
+        normalized_context,
+    )
+    record_validator = Draft202012Validator(record_schema)
     binding = "record-set-v2:" + task_binding(
         template,
         normalized_context,
@@ -118,13 +127,20 @@ def run_bounded_record_template(
     saved = (progress or {}).get(binding)
 
     if isinstance(saved, dict) and isinstance(saved.get("records"), list):
-        records = [deepcopy(item) for item in saved["records"] if isinstance(item, dict)]
+        raw_records = saved["records"]
+        if any(not isinstance(item, dict) for item in raw_records):
+            raise ValueError(
+                f"TEMPLATE_RECORD_SET_SAVED_SHAPE: {identifier} contains a non-object record"
+            )
+        records = [deepcopy(item) for item in raw_records]
         expected = saved.get("count")
         if type(expected) is int and expected != len(records):
             raise ValueError(
                 f"TEMPLATE_RECORD_SET_CARDINALITY_DRIFT: expected {expected}, "
                 f"saved {len(records)} records"
             )
+        for record in records:
+            record_validator.validate(record)
     else:
         if isinstance(saved, dict) and type(saved.get("count")) is int:
             count = int(saved["count"])
@@ -185,6 +201,8 @@ def run_bounded_record_template(
                 f"TEMPLATE_RECORD_SET_CARDINALITY_DRIFT: expected {count}, "
                 f"received {len(records)}"
             )
+        for record in records:
+            record_validator.validate(record)
         keys = [_record_key(record) for record in records]
         if len(keys) != len(set(keys)):
             raise ValueError(
