@@ -167,6 +167,11 @@ def install(java_lsp_module: Any) -> None:
                 if isinstance(thread, threading.Thread) and thread is not threading.current_thread():
                     thread.join(timeout=1.0)
 
+            workspace_data_dir = getattr(self, "workspace_data_dir", None)
+            if workspace_data_dir is not None:
+                java_lsp_module.shutil.rmtree(workspace_data_dir, ignore_errors=True)
+                self.workspace_data_dir = None
+
         close._mmm_jdt_process_safety = True  # type: ignore[attr-defined]
         cls.close = close
 
