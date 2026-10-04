@@ -348,31 +348,34 @@ def generate_fixed_template_value(
     description: str = "",
     output_token_ceiling: int | None = None,
 ) -> Any:
-    """Return structured data through the role's content or action transport."""
+    """Return host-validated structured data through exactly one role transport."""
 
     if not isinstance(response_schema, Mapping):
         raise TypeError("fixed-template generation requires a response_schema mapping")
-    assert_atomic_model_schema(response_schema, surface=f"fixed template for role {role!r}")
+    assert_atomic_model_schema(
+        response_schema,
+        surface=f"fixed template for role {role!r}",
+    )
 
-    # Planner templates are data-only. They never enter tool transport, semantic
-    # preludes, media/tool stages, or native-function recovery.
     if role == "planner":
+        # Planner output is data, never an action. No semantic prelude, tool stage,
+        # media/tool transport, native function call, or repair frontier is reachable.
         generate_text = _structured_text_generator(router)
         from .model_output_atomicity_contract import (
             _model_transport_schema as _bounded_model_transport_schema,
         )
 
         transport_schema = _bounded_model_transport_schema(response_schema)
-        schema_output_ceiling = structured_output_token_ceiling(transport_schema)
+        required_ceiling = structured_output_token_ceiling(transport_schema)
         if output_token_ceiling is not None:
-            requested_output_ceiling = max(1, int(output_token_ceiling))
-            if requested_output_ceiling < schema_output_ceiling:
+            requested_ceiling = max(1, int(output_token_ceiling))
+            if requested_ceiling < required_ceiling:
                 raise ValueError(
                     "FIXED_TEMPLATE_OUTPUT_BUDGET_TOO_SMALL: planner structured "
                     "output requires the schema-proven decode bound before inference: "
-                    f"requested={requested_output_ceiling} "
-                    f"required={schema_output_ceiling}"
+                    f"requested={requested_ceiling} required={required_ceiling}"
                 )
+
         raw = generate_text(
             role,
             messages,
@@ -380,7 +383,7 @@ def generate_fixed_template_value(
             response_format=_JSON_FIXTURE_FORMAT,
             response_schema=transport_schema,
             enable_tools=False,
-            output_token_ceiling=schema_output_ceiling,
+            output_token_ceiling=required_ceiling,
             force_non_thinking=True,
         )
         validated = validate_structured_output(
@@ -409,85 +412,6 @@ def generate_fixed_template_value(
         return json.loads(validated)
 
     semantic_output = ""
-            if _semantic_prelude_required(
-                router,
-                role,
-                media_paths=media_paths,
-                tool_stage=tool_stage,
-                enable_tools=enable_tools,
-            ):
-                semantic_output = router.generate_text(
-                    role,
-                    messages,
-                    media_paths=media_paths,
-                    response_format="text",
-                    response_schema=None,
-                    tool_stage=tool_stage,
-                    enable_tools=enable_tools,
-                )
-            transport_messages = _template_messages(
-                messages,
-                semantic_output=semantic_output,
-            )
-            from .model_output_atomicity_contract import (
-                _model_transport_schema as _bounded_model_transport_schema,
-            )
-
-            transport_schema = _bounded_model_transport_schema(response_schema)
-        else:
-            transport_schema = response_schema
-
-        fixture_kwargs: dict[str, Any] = {
-            "media_paths": () if role == "planner" else media_paths,
-            "response_format": _JSON_FIXTURE_FORMAT,
-            "response_schema": transport_schema,
-            "enable_tools": False if role == "planner" else enable_tools,
-        }
-        if role == "planner":
-            schema_output_ceiling = structured_output_token_ceiling(
-                transport_schema
-            )
-            if output_token_ceiling is not None:
-                requested_output_ceiling = max(1, int(output_token_ceiling))
-                if requested_output_ceiling < schema_output_ceiling:
-                    raise ValueError(
-                        "FIXED_TEMPLATE_OUTPUT_BUDGET_TOO_SMALL: planner structured "
-                        "output requires the schema-proven decode bound before inference: "
-                        f"requested={requested_output_ceiling} "
-                        f"required={schema_output_ceiling}"
-                    )
-            fixture_kwargs["output_token_ceiling"] = schema_output_ceiling
-            fixture_kwargs["force_non_thinking"] = True
-        # A missing stage means there is no tool-capability route to describe. Omitting the
-        # key keeps read-only fixed-template transports inert instead of publishing a
-        # misleading ``tool_stage=None`` pseudo-capability to adapters and test routers.
-        if tool_stage is not None and role != "planner":
-            fixture_kwargs["tool_stage"] = tool_stage
-        raw = generate_text(role, transport_messages, **fixture_kwargs)
-        extra_evidence_refs = None
-        try:
-            val = json.loads(raw)
-            if (
-                isinstance(val, Mapping)
-                and "evidence_refs" in val
-                and "evidence_refs" not in response_schema.get("properties", {})
-            ):
-                extra_evidence_refs = val["evidence_refs"]
-                val = {k: v for k, v in val.items() if k != "evidence_refs"}
-                raw = json.dumps(val, ensure_ascii=False)
-        except Exception:
-            pass
-        validated = validate_structured_output(
-            raw,
-            response_format=_JSON_FIXTURE_FORMAT,
-            response_schema=response_schema,
-        )
-        out = json.loads(validated)
-        if extra_evidence_refs is not None and isinstance(out, dict):
-            out["evidence_refs"] = extra_evidence_refs
-        return out
-
-    semantic_output = ""
     if _semantic_prelude_required(
         router,
         role,
@@ -506,35 +430,21 @@ def generate_fixed_template_value(
         )
 
     parameters, unwrap_value = _tool_parameters(response_schema)
-    base_messages = _template_messages(messages, semantic_output=semantic_output)
-    resolved_description = (
-        description.strip()
-        or "Fill the host-supplied fixed response template exactly once. Populate only declared fields."
-    )
     arguments = _generate_native_template_arguments(
         router,
         role,
-        base_messages,
+        _template_messages(messages, semantic_output=semantic_output),
         tool_name=str(tool_name or _DEFAULT_TOOL_NAME),
         parameters=parameters,
-        description=resolved_description,
+        description=(
+            description.strip()
+            or "Fill the host-supplied fixed response template exactly once. "
+            "Populate only declared fields."
+        ),
     )
-    value: Any
-    if unwrap_value:
-        if "value" not in arguments:
-            raise ValueError("fixed-template function call omitted wrapped value")
-        value = arguments["value"]
-    else:
-        value = arguments
-
-    extra_evidence_refs = None
-    if (
-        isinstance(value, Mapping)
-        and "evidence_refs" in value
-        and "evidence_refs" not in response_schema.get("properties", {})
-    ):
-        extra_evidence_refs = value["evidence_refs"]
-        value = {k: v for k, v in value.items() if k != "evidence_refs"}
+    value: Any = arguments.get("value") if unwrap_value else arguments
+    if unwrap_value and "value" not in arguments:
+        raise ValueError("fixed-template function call omitted wrapped value")
 
     encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
     validated = validate_structured_output(
@@ -542,11 +452,10 @@ def generate_fixed_template_value(
         response_format=_JSON_FIXTURE_FORMAT,
         response_schema=response_schema,
     )
-    out = json.loads(validated)
-    if extra_evidence_refs is not None and isinstance(out, dict):
-        out["evidence_refs"] = extra_evidence_refs
-    return out
+    return json.loads(validated)
 
+
+__all__ = ["generate_fixed_template_value"]
 
 def _architecture_impl__structured_text_transport_required(_ctx):
     (router, role) = _ctx
