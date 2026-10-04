@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from minecraft_mod_ai.single_record_template import run_single_record_template
@@ -27,45 +28,60 @@ _EXPECTED = {
     "commit": "Publish the upgrade only after the debit and state mutation both succeed.",
     "rollback": "Restore the original balance and spacecraft state if commit cannot complete.",
 }
+_FIELDS = tuple(_EXPECTED)
 
 
-def _assert_native_contract(messages, schema, tool_name: str) -> None:
-    assert tool_name == "submit_one_feature_algorithm_atomic_mutations"
-    assert len(messages) == 2
-    import json
+def _assert_field_contract(messages, schema, tool_name: str, index: int) -> str:
+    expected_field = _FIELDS[index]
+    assert tool_name == (
+        "submit_one_feature_algorithm_atomic_mutations"
+        f"_part_{index + 1}_of_{len(_FIELDS)}"
+    )
+    assert len(messages) == 2 + index
     context = json.loads(str(messages[1]["content"]))
     assert context["requirement_id"] == "req_004"
     assert all(
         "CURRENT_FIXED_OUTPUT_FIELDS" not in str(message.get("content", ""))
         for message in messages
     )
-    assert tuple(schema["properties"]) == ("mutations", "commit", "rollback")
-    assert schema["properties"]["mutations"]["description"].startswith(
-        "Describe only the state change"
-    )
+    assert tuple(schema["properties"]) == (expected_field,)
+    assert schema["required"] == [expected_field]
     assert schema["additionalProperties"] is False
+    if expected_field == "mutations":
+        assert schema["properties"][expected_field]["description"].startswith(
+            "Describe only the state change"
+        )
+    if index:
+        accepted = str(messages[-1]["content"])
+        for prior in _FIELDS[:index]:
+            assert prior in accepted
+    return expected_field
 
 
-def test_single_record_prompt_does_not_duplicate_native_tool_schema() -> None:
+def test_single_record_is_host_paged_by_required_field() -> None:
     calls: list[dict[str, Any]] = []
 
     def generator(router, role, messages, **kwargs):
         del router
+        index = len(calls)
+        field = _assert_field_contract(
+            messages,
+            kwargs["response_schema"],
+            kwargs["tool_name"],
+            index,
+        )
+        assert role == "planner"
+        assert int(kwargs["output_token_ceiling"]) > 0
         calls.append(
             {
                 "role": role,
                 "messages": tuple(messages),
                 "response_schema": kwargs["response_schema"],
                 "tool_name": kwargs["tool_name"],
+                "output_token_ceiling": kwargs["output_token_ceiling"],
             }
         )
-        assert role == "planner"
-        _assert_native_contract(
-            messages,
-            kwargs["response_schema"],
-            kwargs["tool_name"],
-        )
-        return dict(_EXPECTED)
+        return {field: _EXPECTED[field]}
 
     result = run_single_record_template(
         object(),
@@ -74,39 +90,41 @@ def test_single_record_prompt_does_not_duplicate_native_tool_schema() -> None:
         generator=generator,
     )
 
-    assert len(calls) == 1
+    assert len(calls) == len(_FIELDS)
     assert result == _EXPECTED
 
 
-class _NativeToolRouter:
+class _PlannerJsonRouter:
     def __init__(self) -> None:
-        self.tool_calls: list[dict[str, Any]] = []
-        self.text_calls = 0
+        self.tool_calls = 0
+        self.text_calls: list[dict[str, Any]] = []
 
-    def generate_text(self, *args, **kwargs):
-        import json
-
-        self.text_calls += 1
+    def generate_text(self, role, messages, **kwargs):
+        index = len(self.text_calls)
+        field = _FIELDS[index]
+        assert role == "planner"
         assert kwargs["response_format"] == "json"
         assert kwargs["enable_tools"] is False
-        return json.dumps(_EXPECTED)
-
-    def generate_tool_decision(self, role, messages, *, tool_name, parameters, description):
-        self.tool_calls.append(
+        assert kwargs["force_non_thinking"] is True
+        schema = kwargs["response_schema"]
+        assert tuple(schema["properties"]) == (field,)
+        assert int(kwargs["output_token_ceiling"]) > 0
+        self.text_calls.append(
             {
-                "role": role,
                 "messages": tuple(messages),
-                "tool_name": tool_name,
-                "parameters": parameters,
-                "description": description,
+                "schema": schema,
+                "output_token_ceiling": kwargs["output_token_ceiling"],
             }
         )
-        _assert_native_contract(messages, parameters, tool_name)
-        return dict(_EXPECTED)
+        return json.dumps({field: _EXPECTED[field]})
+
+    def generate_tool_decision(self, *_args, **_kwargs):
+        self.tool_calls += 1
+        raise AssertionError("planner single-record pages must never use native tools")
 
 
-def test_atomic_mutations_first_pass_uses_one_native_tool_decision() -> None:
-    router = _NativeToolRouter()
+def test_atomic_mutations_uses_bounded_planner_json_pages_not_tools() -> None:
+    router = _PlannerJsonRouter()
 
     result = run_single_record_template(
         router,
@@ -115,6 +133,5 @@ def test_atomic_mutations_first_pass_uses_one_native_tool_decision() -> None:
     )
 
     assert result == _EXPECTED
-    assert router.text_calls == 0
-    assert len(router.tool_calls) == 1
-    assert router.tool_calls[0]["tool_name"] == "submit_one_feature_algorithm_atomic_mutations"
+    assert len(router.text_calls) == len(_FIELDS)
+    assert router.tool_calls == 0
