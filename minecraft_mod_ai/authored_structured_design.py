@@ -372,6 +372,7 @@ class _PlannerSectionRequest:
     media_paths: Sequence[str | Path]
     chunks: Sequence[Sequence[str]]
     slots: int
+    budget: Any = None
 
 
 def _generate_authored_chunk(
@@ -506,6 +507,11 @@ def _generate_concern_pages(
     state_symbols: Any = None,
     base_context: Mapping[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], list[tuple[int, dict[str, Any]]]]:
+    if not pages:
+        return [], []
+
+    if request.budget is not None:
+        request.budget.consume(f"structured.{request.section}.cardinality")
     fixed_count = _generate_concern_record_count(
         request.router,
         request.prompt,
@@ -532,6 +538,8 @@ def _generate_concern_pages(
             completed=request.completed,
             media_paths=request.media_paths,
         )
+        if request.budget is not None:
+            request.budget.consume(f"structured.{request.section}.page")
         value = _generate_authored_chunk(
             request.router,
             request.prompt,
@@ -649,6 +657,7 @@ def author_structured_sections(
     prompt: str,
     *,
     media_paths: Sequence[str | Path] = (),
+    budget: Any = None,
 ) -> dict[str, Any]:
     """Author the canonical design as a finite host-owned dependency DAG."""
 
@@ -693,6 +702,7 @@ def author_structured_sections(
                 media_paths=media_paths,
                 chunks=pack_section_concerns(section),
                 slots=slots,
+                budget=budget,
             )
             return section, _author_section(
                 request,

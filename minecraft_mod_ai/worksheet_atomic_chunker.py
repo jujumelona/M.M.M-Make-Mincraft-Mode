@@ -420,6 +420,13 @@ def worksheet_chunk_prompt(
         if key == "state_model"
         else ""
     )
+    cardinality_text = (
+        "The host fixed record cardinality in a separate bounded decision. Return exactly "
+        + ", ".join(
+            f"{name}={count} row(s)" for name, count in record_counts.items()
+        )
+        + " in the same row order; do not add, remove, or reorder records."
+    )
     return "\n".join(
         item for item in (
             f"ENGINEERING WORKSHEET — concern chunk {chunk_index}/{chunk_count}:",
@@ -428,11 +435,7 @@ def worksheet_chunk_prompt(
             f"Active Record Fields: {field_text}",
             f"Purpose: {_section_description(key)}",
             "Fill exactly the shown field for the host-fixed record rows.",
-            "The host fixed record cardinality in a separate bounded decision. Return exactly "
-            + ", ".join(
-                f"{name}={count} row(s)" for name, count in record_counts.items()
-            )
-            + " in the same row order; do not add, remove, or reorder records.",
+            cardinality_text,
             "Fill every shown field for every returned row. Keep each value concise and concrete; do not restate the prompt.",
             "Do not invent external facts; the host normalizes harmless omissions only after all field pages are merged.",
             "Return exactly the active concern key and no sibling control metadata.",

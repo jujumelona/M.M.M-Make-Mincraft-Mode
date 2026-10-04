@@ -34,11 +34,15 @@ class CompleteGameDesignPlanner:
         from .typed_host_capabilities import typed_host_capability_contracts
         from .typed_plan_authoring import author_typed_plan_ir
 
+        from .planner_budget import PlannerBudget
+
+        budget = PlannerBudget()
         with planner_operation("author_structured_execution_contract"):
             structured_sections = author_structured_sections(
                 self.router,
                 prompt,
                 media_paths=media_paths,
+                budget=budget,
             )
 
         text = render_structured_sections(structured_sections)
@@ -49,6 +53,7 @@ class CompleteGameDesignPlanner:
                 text,
                 structured_sections,
                 typed_host_capability_contracts(),
+                budget=budget,
             )
         from .typed_plan_support import assert_typed_plan_host_support
 

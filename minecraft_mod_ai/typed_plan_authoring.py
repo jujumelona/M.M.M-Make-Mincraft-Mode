@@ -22,6 +22,54 @@ _TYPES = ["boolean", "int", "long", "double", "string", "object"]
 _HOST_UNRESOLVED = object()
 
 
+def _decode_int_literal(raw_value: Any, *, scope: str) -> int:
+    try:
+        text = str(raw_value).strip() if not isinstance(raw_value, int) else raw_value
+        value = int(text)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"TYPED_PLAN_LITERAL_INT_INVALID: {scope} got {raw_value!r}"
+        ) from exc
+    if not -(2**31) <= value <= 2**31 - 1:
+        raise ValueError(
+            f"TYPED_PLAN_LITERAL_INT_RANGE: {scope} value {value} out of range"
+        )
+    return value
+
+
+def _decode_long_literal(raw_value: Any, *, scope: str) -> int:
+    try:
+        text = str(raw_value).strip() if not isinstance(raw_value, int) else raw_value
+        value = int(text)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"TYPED_PLAN_LITERAL_LONG_INVALID: {scope} got {raw_value!r}"
+        ) from exc
+    if not -(2**63) <= value <= 2**63 - 1:
+        raise ValueError(
+            f"TYPED_PLAN_LITERAL_LONG_RANGE: {scope} value {value} out of range"
+        )
+    return value
+
+
+def _decode_double_literal(raw_value: Any, *, scope: str) -> float:
+    import math
+
+    try:
+        text = str(raw_value).strip() if not isinstance(raw_value, (int, float)) else raw_value
+        value = float(text)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"TYPED_PLAN_LITERAL_DOUBLE_INVALID: {scope} got {raw_value!r}"
+        ) from exc
+    if not math.isfinite(value):
+        raise ValueError(
+            f"TYPED_PLAN_LITERAL_DOUBLE_FINITE: {scope} value {value} not finite"
+        )
+    return value
+
+
+
 def _host_resolved_schema_value(schema: Mapping[str, Any]) -> Any:
     """Return a schema-forced value without spending a model decision."""
 
@@ -460,16 +508,19 @@ class TypedOperationAuthor:
             # a bounded decimal spelling and the host parses/range-checks it below.
             "int": {
                 "type": "string",
+                "pattern": r"^-?(?:0|[1-9][0-9]{0,9})$",
                 "maxLength": 11,
                 "description": "Base-10 signed 32-bit integer spelling.",
             },
             "long": {
                 "type": "string",
+                "pattern": r"^-?(?:0|[1-9][0-9]{0,18})$",
                 "maxLength": 20,
                 "description": "Base-10 signed 64-bit integer spelling.",
             },
             "double": {
                 "type": "string",
+                "pattern": r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$",
                 "maxLength": 32,
                 "description": "Finite decimal floating-point spelling.",
             },
@@ -599,24 +650,18 @@ class TypedOperationAuthor:
             literal_type = str(head["type"])
             raw_value = head["value"]
             if literal_type == "int":
-                value = int(str(raw_value))
-                if not -(2**31) <= value <= 2**31 - 1:
-                    raise ValueError("TYPED_PLAN_LITERAL_INT_RANGE")
+                value = _decode_int_literal(raw_value, scope=scope)
             elif literal_type == "long":
-                value = int(str(raw_value))
-                if not -(2**63) <= value <= 2**63 - 1:
-                    raise ValueError("TYPED_PLAN_LITERAL_LONG_RANGE")
+                value = _decode_long_literal(raw_value, scope=scope)
             elif literal_type == "double":
-                import math
-
-                value = float(str(raw_value))
-                if not math.isfinite(value):
-                    raise ValueError("TYPED_PLAN_LITERAL_DOUBLE_FINITE")
+                value = _decode_double_literal(raw_value, scope=scope)
             elif literal_type == "object":
                 try:
                     value = json.loads(str(raw_value))
                 except (TypeError, ValueError) as exc:
-                    raise ValueError("TYPED_PLAN_LITERAL_OBJECT_JSON") from exc
+                    raise ValueError(
+                        f"TYPED_PLAN_LITERAL_OBJECT_JSON: {scope}"
+                    ) from exc
             else:
                 value = raw_value
             return {
@@ -817,6 +862,7 @@ class TypedOperationAuthor:
                         "op": {"const": "while"},
                         "max_iterations": {
                             "type": "string",
+                            "pattern": r"^[1-9][0-9]{0,6}$",
                             "maxLength": 7,
                             "description": "Base-10 integer from 1 through 1000000.",
                         },
@@ -931,7 +977,12 @@ class TypedOperationAuthor:
                 ),
             }
         if op == "while":
-            max_iterations = int(str(head["max_iterations"]))
+            try:
+                max_iterations = int(str(head["max_iterations"]).strip())
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"TYPED_PLAN_WHILE_ITERATION_INVALID: {scope} got {head['max_iterations']!r}"
+                ) from exc
             if not 1 <= max_iterations <= 1_000_000:
                 raise ValueError("TYPED_PLAN_WHILE_ITERATION_RANGE")
             return {
@@ -1038,6 +1089,246 @@ class TypedOperationAuthor:
         )
 
 
+def _extract_state_variable_types(
+    structured_sections: Mapping[str, Any] | None,
+) -> dict[str, str]:
+    from .authored_structured_design import active_concern_records
+
+    records = active_concern_records(structured_sections, "state_model")
+    variables = records.get("variables", [])
+    type_map: dict[str, str] = {}
+    for var in variables:
+        if isinstance(var, Mapping):
+            name = str(var.get("name") or "").strip()
+            if not name:
+                continue
+            raw_type = str(var.get("type") or "int").strip().lower()
+            if raw_type in ("integer", "int", "long"):
+                type_map[name] = "int"
+            elif raw_type in ("double", "float", "number"):
+                type_map[name] = "double"
+            elif raw_type in ("boolean", "bool"):
+                type_map[name] = "boolean"
+            elif raw_type == "string":
+                type_map[name] = "string"
+            else:
+                type_map[name] = "int"
+    return type_map
+
+
+SEMANTIC_DISPATCH_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "rules": {
+            "type": "array",
+            "maxItems": 6,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "trigger_event": {
+                        "type": "string",
+                        "enum": [
+                            "player_join",
+                            "player_disconnect",
+                            "player_respawn",
+                            "server_started",
+                            "server_stopping",
+                            "server_tick",
+                            "command",
+                            "mod_initialize",
+                            "any",
+                        ],
+                    },
+                    "state_key": {"type": "string", "maxLength": 64},
+                    "action_kind": {
+                        "type": "string",
+                        "enum": [
+                            "increment_state",
+                            "set_state",
+                            "call_capability",
+                            "assert_condition",
+                            "none",
+                        ],
+                    },
+                    "int_value": {
+                        "type": "string",
+                        "pattern": r"^-?(?:0|[1-9][0-9]{0,9})$",
+                        "maxLength": 11,
+                    },
+                    "capability_id": {"type": "string", "maxLength": 64},
+                    "message": {"type": "string", "maxLength": 128},
+                },
+                "required": [
+                    "trigger_event",
+                    "state_key",
+                    "action_kind",
+                    "int_value",
+                    "capability_id",
+                    "message",
+                ],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["rules"],
+    "additionalProperties": False,
+}
+
+
+def lower_semantic_game_dispatch_to_ir(
+    raw_rules: Sequence[Mapping[str, Any]],
+    state_types: Mapping[str, str],
+    capabilities: Mapping[str, Any] | None,
+) -> list[dict[str, Any]]:
+    statements: list[dict[str, Any]] = []
+
+    for rule_idx, rule in enumerate(raw_rules):
+        if not isinstance(rule, Mapping):
+            continue
+        kind = str(rule.get("action_kind") or "none")
+        if kind == "none":
+            continue
+
+        action_statements: list[dict[str, Any]] = []
+        if kind == "increment_state":
+            key = str(rule.get("state_key") or "counter")
+            st_type = state_types.get(key, "int")
+            raw_int = rule.get("int_value") or "1"
+            delta = _decode_int_literal(raw_int, scope=f"rule[{rule_idx}].increment")
+            action_statements.append({
+                "op": "state_set",
+                "key": {"op": "literal", "type": "string", "value": key},
+                "value": {
+                    "op": "binary",
+                    "operator": "+",
+                    "left": {
+                        "op": "state_get",
+                        "key": {"op": "literal", "type": "string", "value": key},
+                        "type": st_type,
+                        "context": {"op": "map", "entries": []},
+                    },
+                    "right": {"op": "literal", "type": st_type, "value": delta},
+                },
+                "context": {"op": "map", "entries": []},
+            })
+        elif kind == "set_state":
+            key = str(rule.get("state_key") or "counter")
+            st_type = state_types.get(key, "int")
+            raw_int = rule.get("int_value") or "0"
+            val = _decode_int_literal(raw_int, scope=f"rule[{rule_idx}].set")
+            action_statements.append({
+                "op": "state_set",
+                "key": {"op": "literal", "type": "string", "value": key},
+                "value": {"op": "literal", "type": st_type, "value": val},
+                "context": {"op": "map", "entries": []},
+            })
+        elif kind == "call_capability":
+            cap_id = str(rule.get("capability_id") or "")
+            if capabilities and cap_id in capabilities:
+                contract = capabilities[cap_id]
+                params = contract.get("parameters", [])
+
+                def _default_cap_arg(ptype: str) -> dict[str, Any]:
+                    if ptype == "int":
+                        return {"op": "literal", "type": "int", "value": 0}
+                    if ptype == "long":
+                        return {"op": "literal", "type": "long", "value": 0}
+                    if ptype == "double":
+                        return {"op": "literal", "type": "double", "value": 0.0}
+                    if ptype == "boolean":
+                        return {"op": "literal", "type": "boolean", "value": False}
+                    if ptype == "string":
+                        return {"op": "literal", "type": "string", "value": ""}
+                    return {"op": "literal", "type": "object", "value": None}
+
+                action_statements.append({
+                    "op": "expr",
+                    "value": {
+                        "op": "capability",
+                        "id": cap_id,
+                        "args": [_default_cap_arg(p) for p in params],
+                    },
+                })
+        elif kind == "assert_condition":
+            msg = str(rule.get("message") or "assertion passed")
+            action_statements.append({
+                "op": "assert",
+                "condition": {"op": "literal", "type": "boolean", "value": True},
+                "message": msg,
+            })
+
+        if not action_statements:
+            continue
+
+        trigger = str(rule.get("trigger_event") or "any")
+        if trigger != "any":
+            statements.append({
+                "op": "if",
+                "condition": {
+                    "op": "binary",
+                    "operator": "==",
+                    "left": {"op": "ref", "name": "event"},
+                    "right": {"op": "literal", "type": "string", "value": trigger},
+                },
+                "then": action_statements,
+                "else": [],
+            })
+        else:
+            statements.extend(action_statements)
+
+    statements.append({
+        "op": "return",
+        "value": {"op": "literal", "type": "int", "value": 0},
+    })
+    return statements
+
+
+def author_semantic_game_dispatch(
+    router: Any,
+    source_text: str,
+    structured_sections: Mapping[str, Any] | None,
+    capabilities: Mapping[str, Any] | None,
+    *,
+    budget: Any = None,
+) -> list[dict[str, Any]]:
+    state_types = _extract_state_variable_types(structured_sections)
+    try:
+        if budget is not None:
+            budget.consume("typed.semantic_dispatch")
+        payload = {
+            "source_sha256": hashlib.sha256(source_text.encode("utf-8")).hexdigest(),
+            "available_states": list(state_types.keys()),
+            "available_capabilities": sorted(capabilities.keys()) if capabilities else [],
+            "instruction": "Author bounded game event rules and state actions for runtime logic dispatch.",
+        }
+        raw = generate_fixed_template_value(
+            router,
+            "planner",
+            (
+                {
+                    "role": "system",
+                    "content": (
+                        "Author game logic dispatch rules as bounded semantic operations. "
+                        "Do not author AST syntax, loops, or Java."
+                    ),
+                },
+                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+            ),
+            response_schema=SEMANTIC_DISPATCH_SCHEMA,
+            enable_tools=False,
+            description="Author bounded semantic game rules for runtime dispatch.",
+        )
+        if isinstance(raw, Mapping) and "rules" in raw and isinstance(raw["rules"], Sequence):
+            return lower_semantic_game_dispatch_to_ir(raw["rules"], state_types, capabilities)
+    except Exception:
+        pass
+
+    return [{
+        "op": "return",
+        "value": {"op": "literal", "type": "int", "value": 0},
+    }]
+
+
 def author_typed_plan_ir(
     router: Any,
     source_text: str,
@@ -1045,6 +1336,7 @@ def author_typed_plan_ir(
     capabilities: Mapping[str, Any] | None = None,
     *,
     max_calls: int | None = None,
+    budget: Any = None,
 ) -> dict[str, Any]:
     """Author a complete typed PlanIR using bounded native decisions only."""
 
@@ -1178,37 +1470,12 @@ def author_typed_plan_ir(
             "return_type": "int",
             "covers": list(logic_refs),
         }
-        dispatch_scope = "function[logic_dispatch].body"
-        body_author = TypedOperationAuthor(
+        logic_dispatch_body = author_semantic_game_dispatch(
             router,
             source_text,
             structured_sections,
             capabilities,
-            max_calls=128,
-        )
-        # Runtime wrappers are host-owned. The semantic dispatcher may use only
-        # typed operations, state and host capabilities; it cannot call wrappers
-        # or recursively build another function graph.
-        body_author.function_signatures = {}
-        body_author.function_covers = {}
-        body_author.set_scope_covers(dispatch_scope, logic_refs)
-        statement_limit = body_author._semantic_statement_budget(
-            dispatch_scope
-        )
-        body_author.max_calls = max(
-            16,
-            min(128, statement_limit * 8),
-        )
-        logic_dispatch_body = body_author.body(
-            dispatch_scope,
-            env={
-                "event": "string",
-                "primary": "object",
-                "secondary": "object",
-                "flag": "boolean",
-            },
-            return_type="int",
-            max_statements=statement_limit,
+            budget=budget,
         )
 
     def literal(kind: str, value: Any) -> dict[str, Any]:
