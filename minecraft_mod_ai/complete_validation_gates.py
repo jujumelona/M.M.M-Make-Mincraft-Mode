@@ -68,16 +68,71 @@ def jdt_release_evidence_passed(receipt: dict[str, Any] | None) -> bool:
     return error_count == 0 and files_opened > 0
 
 
+def _jdt_infrastructure_unavailable(receipt: dict[str, Any] | None) -> bool:
+    """Return True only for an explicit JDT infrastructure-only failure."""
+
+    if receipt is None:
+        return False
+    normalized, _path = unwrap_diagnostic_receipt(receipt)
+    if not normalized:
+        return False
+    if str(normalized.get("status") or "").strip().upper() != "UNAVAILABLE":
+        return False
+    errors = diagnostic_errors(receipt)
+    if not errors:
+        return False
+    return all(
+        str(item.get("code") or "").strip().upper() in _JDT_INFRASTRUCTURE_CODES
+        for item in errors
+    )
+
+
+def _compiler_release_evidence_passed(
+    *,
+    source_report: dict[str, Any] | None,
+    build_report: dict[str, Any] | None,
+    jar_validation: dict[str, Any] | None,
+) -> bool:
+    """Require independent compiler/artifact evidence before JDT can be advisory."""
+
+    return (
+        isinstance(source_report, dict)
+        and source_report.get("status") == "PASS"
+        and isinstance(build_report, dict)
+        and build_report.get("status") == "PASS"
+        and isinstance(jar_validation, dict)
+        and jar_validation.get("status") == "PASS"
+    )
+
+
 def requested_verification_failures(
     *,
     run_jdt: bool,
     jdt_receipt: dict[str, Any] | None,
+    source_report: dict[str, Any] | None = None,
+    build_report: dict[str, Any] | None = None,
+    jar_validation: dict[str, Any] | None = None,
 ) -> list[str]:
-    """Keep explicitly requested verifier work blocking when unavailable."""
+    """Block bad JDT evidence, but not JDT infrastructure after full build proof.
 
-    if run_jdt and not jdt_release_evidence_passed(jdt_receipt):
-        return ["execution-gate:jdt:missing-jdt"]
-    return []
+    Source-only production still requires requested JDT evidence because there is no
+    compiler/JAR proof to substitute for it. In a full run, infrastructure-only JDT
+    failure is advisory only after source, Gradle, and independent JAR validation pass.
+    Real JDT source diagnostics remain blocking through final_validation_failure.
+    """
+
+    if not run_jdt or jdt_release_evidence_passed(jdt_receipt):
+        return []
+    if (
+        _jdt_infrastructure_unavailable(jdt_receipt)
+        and _compiler_release_evidence_passed(
+            source_report=source_report,
+            build_report=build_report,
+            jar_validation=jar_validation,
+        )
+    ):
+        return []
+    return ["execution-gate:jdt:missing-jdt"]
 
 
 def final_validation_failure(
@@ -142,6 +197,8 @@ __all__ = [
     "blocking_jdt_errors",
     "final_validation_failure",
     "jdt_release_evidence_passed",
+    "_jdt_infrastructure_unavailable",
+    "_compiler_release_evidence_passed",
     "refresh_validation_after_build",
     "requested_verification_failures",
     "unchanged_postbuild_validation",
