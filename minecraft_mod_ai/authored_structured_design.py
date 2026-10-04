@@ -209,6 +209,10 @@ def _authored_chunk_messages(
             separators=(",", ":"),
         )
         user_parts.append(f"Canonical {section} records authored so far:\n{context_text}")
+        user_parts.append(
+            "When the same active concern already appears above, preserve its existing "
+            "record count and row order exactly while filling the newly projected fields."
+        )
     user_parts.append(
         worksheet_chunk_prompt(
             section,
@@ -258,7 +262,13 @@ def _generate_authored_chunk(
     from .fixed_template_generation import generate_fixed_template_value
     from .worksheet_atomic_chunker import WorksheetConcernChunk, worksheet_chunk_schema
 
-    def generate(selected: Sequence[str], *, evidence: bool) -> dict[str, Any]:
+    def generate(
+        selected: Sequence[str],
+        *,
+        evidence: bool,
+        context_override: Mapping[str, Any] | None = None,
+        validate_state_records: bool = True,
+    ) -> dict[str, Any]:
         schema = worksheet_chunk_schema(
             section,
             selected,
@@ -277,7 +287,11 @@ def _generate_authored_chunk(
                 completed=completed,
                 include_evidence=evidence,
                 state_symbols=state_symbols,
-                section_context=section_context,
+                section_context=(
+                    context_override
+                    if context_override is not None
+                    else section_context
+                ),
             ),
             response_schema=schema,
             media_paths=media_paths,
@@ -290,7 +304,7 @@ def _generate_authored_chunk(
                 f"AUTHORED_STRUCTURED_DESIGN: {section} chunk {chunk_index} must be an object"
             )
         result = dict(value)
-        if section == "state_model":
+        if section == "state_model" and validate_state_records:
             from .structured_state_runtime import validate_state_concern
 
             for concern in selected:
@@ -303,16 +317,96 @@ def _generate_authored_chunk(
                     )
         return result
 
+    explicit_projection = getattr(concerns, "field_projection", {})
+
     try:
         return generate(concerns, evidence=include_evidence)
-    except (ValueError, RuntimeError, TypeError):
+    except (ValueError, RuntimeError, TypeError) as initial_error:
         if len(concerns) == 1:
-            # One complete concern is already the minimum semantic work unit.
-            # Do not explode it into one model call per field: that recreates the
-            # latency/runaway failure mode and lets partial fields drift apart.
-            raise
+            from .llama_finish_reason_contract import (
+                OUTPUT_EXHAUSTED,
+                completion_boundary_kind,
+            )
 
-    explicit_projection = getattr(concerns, "field_projection", {})
+            # Generic semantic/schema failures stay terminal at one complete concern.
+            # Only a typed decode-budget exhaustion is allowed to narrow further.
+            if completion_boundary_kind(initial_error) != OUTPUT_EXHAUSTED:
+                raise
+
+            concern = str(concerns[0])
+            projected = (
+                explicit_projection.get(concern)
+                if isinstance(explicit_projection, Mapping)
+                else None
+            )
+            fields = tuple(
+                projected
+                if projected
+                else DETAIL_RECORDS[section][concern].split()
+            )
+            if len(fields) <= 1:
+                raise
+
+            merged_rows: list[dict[str, Any]] = []
+            merged_inapplicable: list[dict[str, Any]] = []
+            merged_refs: list[str] = []
+
+            # Output exhaustion is a transport failure, not permission to repeat the
+            # same oversized action. Narrow deterministically to one host-owned field
+            # projection per call and carry the partial rows forward as canonical
+            # context so row count/order remain anchored.
+            for field_index, field_name in enumerate(fields):
+                projected_concern = WorksheetConcernChunk(
+                    (concern,),
+                    {concern: (field_name,)},
+                )
+                page_context = deepcopy(dict(section_context or {}))
+                if merged_rows:
+                    page_context[concern] = deepcopy(merged_rows)
+                page = generate(
+                    projected_concern,
+                    evidence=bool(include_evidence and field_index == 0),
+                    context_override=page_context or None,
+                    validate_state_records=False,
+                )
+
+                rows = page.get(concern, [])
+                if isinstance(rows, list):
+                    while len(merged_rows) < len(rows):
+                        merged_rows.append({})
+                    for row_index, row in enumerate(rows):
+                        if not isinstance(row, Mapping):
+                            continue
+                        if field_name in row:
+                            merged_rows[row_index][field_name] = deepcopy(
+                                row[field_name]
+                            )
+
+                for item in page.get("inapplicable_concerns", []):
+                    if (
+                        isinstance(item, Mapping)
+                        and item not in merged_inapplicable
+                    ):
+                        merged_inapplicable.append(deepcopy(dict(item)))
+                for ref in page.get("constraint_evidence_refs", []):
+                    if isinstance(ref, str) and ref not in merged_refs:
+                        merged_refs.append(ref)
+
+            recovered: dict[str, Any] = {concern: merged_rows}
+            if merged_inapplicable:
+                recovered["inapplicable_concerns"] = merged_inapplicable
+            if include_evidence:
+                recovered["constraint_evidence_refs"] = merged_refs
+
+            if section == "state_model" and merged_rows:
+                from .structured_state_runtime import validate_state_concern
+
+                validate_state_concern(
+                    concern,
+                    merged_rows,
+                    symbols=state_symbols,
+                )
+            return recovered
 
     def generate_isolated(
         item: tuple[int, str],
