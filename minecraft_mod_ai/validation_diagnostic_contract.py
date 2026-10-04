@@ -534,6 +534,7 @@ def run_diagnostics(
         },
     )
 
+    service: Any | None = None
     try:
         service = diagnostics_factory()
         callback = service.diagnostics
@@ -583,6 +584,23 @@ def run_diagnostics(
             exc=exc,
         )
         raise
+    finally:
+        if service is not None:
+            close = getattr(service, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception as exc:
+                    # Cleanup must never replace the verifier result or the original
+                    # verifier exception. Record it separately and continue.
+                    emit_root_cause(
+                        "diagnostic_service_close_failure",
+                        stage="verify",
+                        operation="java_diagnostics",
+                        gate="diagnostic_service_lifecycle",
+                        result="INFO",
+                        reason=f"{type(exc).__name__}: {exc}",
+                    )
 
     if not isinstance(receipt, Mapping):
         unavailable = {
