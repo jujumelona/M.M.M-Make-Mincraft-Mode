@@ -554,16 +554,11 @@ def _evaluate_step(
     initial_output: dict[str, Any],
 ) -> tuple[dict[str, Any], bool, str, str]:
     evaluator = STAGE_EVALUATORS.get(identifier)
-    if evaluator is not None:
-        return evaluator(context, initial_output)
-
-    # Fallback generic evaluator
-    output = dict(initial_output)
-    for blocker_key in ("blocked_reason", "blocked_reasons", "failed_checks", "failures", "cycles", "conflicts"):
-        val = output.get(blocker_key) or context.get(blocker_key)
-        if val:
-            return output, False, f"Blocked by {blocker_key}: {val}", "BLOCKED"
-    return output, True, "", "PASS"
+    if evaluator is None:
+        raise ValueError(
+            f"STAGE_EVALUATOR_REQUIRED: no evaluator is registered for {identifier!r}"
+        )
+    return evaluator(context, initial_output)
 
 
 def execute_stage_step(
