@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from .authored_plan import AuthoredPlan
 from .conversation import merge_design_brief
-from .platform_backend_contract import effective_target_backend_capabilities
+from .platform_backend_contract import deterministic_backend_capabilities
 from .model_concurrency import planning_work_unit_timeout_seconds
 from .spec import Proposal, SpecValidationError
 
@@ -86,7 +86,7 @@ def _attach_target_constraints(
 
             adapter = adapter_for_target(minecraft_version, loader)
             owner._mmm_target_adapter = adapter
-            owner._mmm_deterministic_module_kinds = effective_target_backend_capabilities(adapter)
+            owner._mmm_deterministic_module_kinds = deterministic_backend_capabilities(adapter)
         except Exception:
             pass
 
@@ -366,7 +366,7 @@ class CompleteModAISession:
             self.router,
             adapter=target_adapter,
             deterministic_module_kinds=(
-                effective_target_backend_capabilities(target_adapter)
+                deterministic_backend_capabilities(target_adapter)
                 if target_adapter is not None
                 else None
             ),
