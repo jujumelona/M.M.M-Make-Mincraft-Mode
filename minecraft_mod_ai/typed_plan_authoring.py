@@ -2081,6 +2081,7 @@ def author_typed_plan_ir(
     capabilities: Mapping[str, Any] | None = None,
     *,
     deterministic_module_kinds: Iterable[str] | None = None,
+    allowed_platform_kinds: Iterable[str] | None = None,
     max_calls: int | None = None,
     budget: Any = None,
 ) -> dict[str, Any]:
@@ -2347,8 +2348,8 @@ def author_typed_plan_ir(
     if target_deterministic_kinds is not None:
         from .platform_backend_contract import production_backend_is_supported
 
-        allowed_platform_kinds = set(PLATFORM_HOST_KINDS)
-        allowed_platform_kinds.update(
+        effective_allowed_platform_kinds = set(PLATFORM_HOST_KINDS)
+        effective_allowed_platform_kinds.update(
             kind
             for kind in PLATFORM_KINDS
             if kind not in PLATFORM_HOST_KINDS
@@ -2358,14 +2359,24 @@ def author_typed_plan_ir(
             )
         )
     else:
-        allowed_platform_kinds = set(PLATFORM_KINDS)
+        effective_allowed_platform_kinds = set(PLATFORM_KINDS)
+
+    if allowed_platform_kinds is not None:
+        host_selected_kinds = {
+            str(kind).strip()
+            for kind in allowed_platform_kinds
+            if str(kind).strip()
+        }
+        effective_allowed_platform_kinds.intersection_update(
+            host_selected_kinds | set(PLATFORM_HOST_KINDS)
+        )
 
     has_command_binding = any(
         binding.get("event") == "command"
         for binding in event_bindings
     )
     if has_command_binding:
-        allowed_platform_kinds.discard("command")
+        effective_allowed_platform_kinds.discard("command")
 
     platform_index = 0
     while uncovered:
@@ -2373,7 +2384,7 @@ def author_typed_plan_ir(
         scope = f"platform[{platform_index}]"
         available_kinds = [
             kind
-            for kind in sorted(allowed_platform_kinds)
+            for kind in sorted(effective_allowed_platform_kinds)
             if platform_coverable_refs(kind, sorted(uncovered))
         ]
         if not available_kinds:
