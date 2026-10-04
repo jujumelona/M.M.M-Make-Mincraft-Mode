@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .java_lsp import JDTLanguageServerError
+from .owner_rpc import OwnerRPCError
 from .root_cause_trace import emit_root_cause, exception_chain
 
 _DIAGNOSTIC_SUCCESS_STATUSES = {
@@ -19,7 +20,12 @@ _DIAGNOSTIC_SUCCESS_STATUSES = {
     # It must not be converted into JDT_DIAGNOSTICS_UNAVAILABLE.
     "DEFERRED_TO_POST_BUILD",
 }
-_JDT_AVAILABILITY_ERRORS = (OSError, TimeoutError, JDTLanguageServerError)
+_JDT_AVAILABILITY_ERRORS = (
+    OSError,
+    TimeoutError,
+    JDTLanguageServerError,
+    OwnerRPCError,
+)
 _DIAGNOSTIC_ENVELOPE_KEYS = (
     "structured_content",
     "structuredContent",
