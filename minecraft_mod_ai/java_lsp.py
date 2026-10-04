@@ -288,19 +288,6 @@ def _jdtls_environment() -> dict[str, str]:
     return env
 
 
-_MANAGED_JAVA_PROJECT_MARKERS = (
-    "build.gradle",
-    "build.gradle.kts",
-    "settings.gradle",
-    "settings.gradle.kts",
-    "pom.xml",
-)
-
-
-def _managed_java_project(root: Path) -> bool:
-    return any((root / name).is_file() for name in _MANAGED_JAVA_PROJECT_MARKERS)
-
-
 def _isolated_jdt_command(
     command: list[str],
     root: Path,
@@ -647,11 +634,6 @@ def _initialize_rpc_session(
             quiet_seconds=quiet_seconds,
             deadline=deadline,
         )
-        _await_jdt_project_model_ready(
-            rpc,
-            root,
-            deadline=deadline,
-        )
     except BaseException:
         rpc.close()
         raise
@@ -833,15 +815,9 @@ class JavaLanguageService:
                         "text": source_text,
                     }})
                 try:
-                    _await_open_document_resolution(
+                    _request_open_document_validation(
                         rpc,
                         expected_uris=expected_uris,
-                        deadline=diagnostic_deadline,
-                    )
-                    _refresh_open_document_diagnostics(
-                        rpc,
-                        expected_uris=expected_uris,
-                        deadline=diagnostic_deadline,
                     )
                     page_diagnostics = _collect_diagnostics(
                         rpc,
@@ -1243,103 +1219,33 @@ def _raise_diagnostic_deadline(
 
 
 
-def _await_open_document_resolution(
+def _request_open_document_validation(
     rpc: _JsonRpcProcess,
     *,
     expected_uris: set[str],
-    deadline: float,
 ) -> None:
-    """Require JDT to resolve every opened URI to an ICompilationUnit.
+    """Ask JDT LS to validate opened documents without workspace/executeCommand.
 
-    refreshDiagnostics silently produces no publication when
-    JDTUtils.resolveCompilationUnit(uri) returns null. java.project.isTestFile
-    uses that same resolver and fails when the compilation unit is unavailable,
-    so it is a deterministic readiness fence for the exact documents we verify.
+    ``java/validateDocument`` is a JDT protocol notification. It schedules
+    ``DocumentLifeCycleHandler.validateDocument`` directly and therefore avoids
+    executeCommand/index waits that can consume the entire verification deadline.
     """
 
     from .root_cause_trace import emit_root_cause
 
     for uri in sorted(expected_uris):
-        last_error = ""
-        while True:
-            remaining = _remaining_jdt_deadline(
-                deadline,
-                operation="opened document resolution",
-            )
-            try:
-                result = rpc.request(
-                    "workspace/executeCommand",
-                    {
-                        "command": "java.project.isTestFile",
-                        "arguments": [uri],
-                    },
-                    timeout=min(3.0, remaining),
-                )
-                emit_root_cause(
-                    "jdt_compilation_unit_ready",
-                    stage="verify",
-                    operation="java_diagnostics",
-                    gate="jdt_compilation_unit",
-                    result="PASS",
-                    details={
-                        "uri": uri,
-                        "is_test_file": bool(result),
-                    },
-                )
-                break
-            except (JDTLanguageServerError, TimeoutError) as exc:
-                last_error = f"{type(exc).__name__}: {exc}"
-
-            remaining = float(deadline) - time.monotonic()
-            if remaining <= 0:
-                raise JDTWorkspaceBootstrapError(
-                    "JDT workspace bootstrap failure: opened Java document was never "
-                    f"resolved to a compilation unit: uri={uri}. Last error: {last_error}"
-                )
-            time.sleep(min(0.25, remaining))
-
-def _refresh_open_document_diagnostics(
-    rpc: _JsonRpcProcess,
-    *,
-    expected_uris: set[str],
-    deadline: float,
-) -> None:
-    """Force JDT LS to reconcile every opened file and publish its diagnostics.
-
-    JDT LS does not guarantee a spontaneous publishDiagnostics notification for an
-    already-clean document after didOpen. The pinned server exposes
-    java.project.refreshDiagnostics specifically to force a compilation-unit
-    reconcile. waitForLifecycleJob=True also fences the command behind didOpen
-    processing, so an empty diagnostics list becomes explicit evidence instead of
-    being inferred from silence.
-    """
-
-    from .root_cause_trace import emit_root_cause
-
-    for uri in sorted(expected_uris):
-        rpc.request(
-            "workspace/executeCommand",
-            {
-                "command": "java.project.refreshDiagnostics",
-                "arguments": [uri, "thisFile", False, True],
-            },
-            timeout=_remaining_jdt_deadline(
-                deadline,
-                operation="explicit diagnostics refresh",
-            ),
+        rpc.notify(
+            "java/validateDocument",
+            {"textDocument": {"uri": uri}},
         )
         emit_root_cause(
-            "jdt_explicit_diagnostics_refresh",
+            "jdt_validate_document_requested",
             stage="verify",
             operation="java_diagnostics",
             gate="diagnostic_transport",
             result="PASS",
-            details={
-                "uri": uri,
-                "queued_messages_after_refresh": rpc.messages.qsize(),
-            },
+            details={"uri": uri},
         )
-
 
 def _collect_diagnostics(
     rpc: _JsonRpcProcess,
