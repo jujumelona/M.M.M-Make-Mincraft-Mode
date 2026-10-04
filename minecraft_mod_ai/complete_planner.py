@@ -8,7 +8,6 @@ from .authored_plan import AuthoredPlan
 from .complete_spec import CompleteProposal
 from .model_router import ModelRouter
 from .planner_trace_artifacts import repository_revision
-from .spec import SpecValidationError
 from .root_cause_trace import emit_root_cause, trace_scope
 
 
@@ -27,11 +26,6 @@ class CompleteGameDesignPlanner:
     ) -> AuthoredPlan:
         """Write the design itself; no schema, critic, evidence or production gate."""
         from .planner_operation import planner_operation
-
-        if not callable(getattr(self.router, "generate_tool_decision", None)):
-            raise SpecValidationError(
-                "Typed PlanIR planning requires native structured decisions."
-            )
 
         from .authored_structured_design import (
             author_structured_sections,
