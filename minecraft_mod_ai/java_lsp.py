@@ -659,6 +659,11 @@ class JavaLanguageService:
                         "text": source_text,
                     }})
                 try:
+                    _refresh_open_document_diagnostics(
+                        rpc,
+                        expected_uris=expected_uris,
+                        deadline=diagnostic_deadline,
+                    )
                     page_diagnostics = _collect_diagnostics(
                         rpc,
                         expected_uris=expected_uris,
@@ -998,6 +1003,36 @@ def _raise_diagnostic_deadline(
         "JDT LS diagnostics did not become quiescent before the validation deadline "
         f"after all {len(expected_uris)} opened Java files were observed."
     )
+
+
+def _refresh_open_document_diagnostics(
+    rpc: _JsonRpcProcess,
+    *,
+    expected_uris: set[str],
+    deadline: float,
+) -> None:
+    """Force JDT LS to reconcile every opened file and publish its diagnostics.
+
+    JDT LS does not guarantee a spontaneous publishDiagnostics notification for an
+    already-clean document after didOpen. The pinned server exposes
+    java.project.refreshDiagnostics specifically to force a compilation-unit
+    reconcile. waitForLifecycleJob=True also fences the command behind didOpen
+    processing, so an empty diagnostics list becomes explicit evidence instead of
+    being inferred from silence.
+    """
+
+    for uri in sorted(expected_uris):
+        rpc.request(
+            "workspace/executeCommand",
+            {
+                "command": "java.project.refreshDiagnostics",
+                "arguments": [uri, "thisFile", False, True],
+            },
+            timeout=_remaining_jdt_deadline(
+                deadline,
+                operation="explicit diagnostics refresh",
+            ),
+        )
 
 
 def _collect_diagnostics(
