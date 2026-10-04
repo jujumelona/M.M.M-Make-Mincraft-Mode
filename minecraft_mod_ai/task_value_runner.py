@@ -5,6 +5,8 @@ from copy import deepcopy
 from jsonschema import Draft202012Validator
 
 from .fixed_template_generation import generate_fixed_template_value
+from .model_output_atomicity_contract import _model_transport_schema
+from .worksheet_atomic_chunker import planner_page_output_token_ceiling
 from .task_template_catalog import load_template
 from .task_template_input import task_binding, task_context
 
@@ -21,12 +23,17 @@ def run_value_template(router, identifier, *, context, progress=None, checkpoint
     elif template["execution"] == "host" and template.get("operation") == "identity":
         value = context
     elif template["execution"] == "value":
+        output_schema = template["output_schema"]
+        output_ceiling = planner_page_output_token_ceiling(
+            _model_transport_schema(output_schema)
+        )
         value = generate_fixed_template_value(
             router, "planner",
             [{"role": "system", "content": template["task"] + "\n" + "\n".join(template["rules"])},
              {"role": "user", "content": json.dumps(context, ensure_ascii=False)}],
-            response_schema=template["output_schema"], enable_tools=False,
+            response_schema=output_schema, enable_tools=False,
             tool_name="submit_" + identifier.replace("/", "_"),
+            output_token_ceiling=output_ceiling,
         )
     else:
         raise ValueError(f"TEMPLATE_EXECUTION: unsupported single-value task {identifier}")
