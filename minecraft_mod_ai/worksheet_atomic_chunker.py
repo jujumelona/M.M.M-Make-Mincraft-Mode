@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-"""Worksheet concern chunking with host-owned semantic merge.
+"""Worksheet planner paging with host-owned semantic merge.
 
-A concern is never split into independent field pages, so record index/count/order is
-not used as cross-call identity. The host merges complete concern records and validates
-the canonical worksheet section afterward.
+The small model never receives a wide concern record. The host deterministically pages
+each concern by a bounded field projection, anchors record cardinality on the first page,
+and enforces that same row count/order on continuation pages before merging the canonical
+worksheet section.
 """
 
 from collections.abc import Mapping, Sequence
@@ -12,6 +13,11 @@ from copy import deepcopy
 import json
 from typing import Any
 
+from .execution_contract_policy import (
+    DEFAULT_ATOMIC_SCHEMA_LIMITS,
+    PLANNER_RECORD_FIELD_MAX_CHARS,
+    PLANNER_RECORD_PAGE_MAX_FIELDS,
+)
 from .model_output_atomicity_contract import _assert_closed_object_schemas
 from .planning_detail_slots import DETAIL_RECORDS, record_field_schema
 from .structured_state_runtime import constrain_state_record_schema
@@ -94,60 +100,95 @@ def _chunk_projection(
     return projection
 
 
+def _schema_types(schema: Mapping[str, Any]) -> set[str]:
+    raw = schema.get("type")
+    if isinstance(raw, str):
+        return {raw}
+    if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
+        return {str(item) for item in raw}
+    return set()
+
+
+def _planner_page_field_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
+    """Clamp one model-facing planner field without changing canonical storage limits."""
+
+    result = deepcopy(dict(schema))
+    types = _schema_types(result)
+    if "string" in types:
+        try:
+            explicit = int(result.get("maxLength", PLANNER_RECORD_FIELD_MAX_CHARS))
+        except (TypeError, ValueError):
+            explicit = PLANNER_RECORD_FIELD_MAX_CHARS
+        result["maxLength"] = max(
+            1,
+            min(explicit, PLANNER_RECORD_FIELD_MAX_CHARS),
+        )
+    if "array" in types:
+        try:
+            explicit_items = int(
+                result.get("maxItems", DEFAULT_ATOMIC_SCHEMA_LIMITS.max_array_items)
+            )
+        except (TypeError, ValueError):
+            explicit_items = DEFAULT_ATOMIC_SCHEMA_LIMITS.max_array_items
+        result["maxItems"] = max(
+            0,
+            min(explicit_items, DEFAULT_ATOMIC_SCHEMA_LIMITS.max_array_items),
+        )
+        items = result.get("items")
+        if isinstance(items, Mapping):
+            result["items"] = _planner_page_field_schema(items)
+    properties = result.get("properties")
+    if isinstance(properties, Mapping):
+        result["properties"] = {
+            str(name): _planner_page_field_schema(child)
+            if isinstance(child, Mapping)
+            else deepcopy(child)
+            for name, child in properties.items()
+        }
+    return result
+
+
 def pack_section_concerns(
     section: str,
     *,
     max_chunk_size: int | None = None,
 ) -> list[tuple[str, ...]]:
-    """Pack complete concerns without splitting one record across model calls."""
+    """Page every concern deterministically before inference.
+
+    max_chunk_size is retained as a compatibility override for the number of
+    record fields exposed per model page. Production uses the central planner page
+    width from execution_contract_policy.
+    """
+
     key = _normalize_section_name(section)
     records = DETAIL_RECORDS[key]
     if max_chunk_size is not None and max_chunk_size < 1:
         raise ValueError("max_chunk_size must be positive when supplied")
-
-    # State records depend on the variable symbol table and stay serialized.
-    # Other sections are packed into bounded semantic work units so the small model
-    # does not pay one full inference round-trip per concern.  The field budget keeps
-    # each native structured response comfortably below the transport ceiling.
-    chunk_size = max_chunk_size or (1 if key == "state_model" else 4)
-    max_fields = 12
-    items = list(records.items())
-    groups: list[list[tuple[str, str]]] = []
-    current: list[tuple[str, str]] = []
-    current_fields = 0
-    for concern, columns in items:
-        field_count = max(1, len(columns.split()))
-        if current and (
-            len(current) >= chunk_size
-            or current_fields + field_count > max_fields
-        ):
-            groups.append(current)
-            current = []
-            current_fields = 0
-        current.append((concern, columns))
-        current_fields += field_count
-    if current:
-        groups.append(current)
+    page_width = max_chunk_size or PLANNER_RECORD_PAGE_MAX_FIELDS
 
     chunks: list[tuple[str, ...]] = []
-    for index, selected in enumerate(groups, start=1):
-        chunk = WorksheetConcernChunk(
-            [concern for concern, _ in selected],
-            {
-                concern: tuple(columns.split())
-                for concern, columns in selected
-            },
-        )
-        schema = worksheet_chunk_schema(
-            key,
-            chunk,
-            include_evidence=not chunks,
-        )
-        _assert_closed_object_schemas(
-            schema,
-            path=f"worksheet chunk {key}.{index}",
-        )
-        chunks.append(chunk)
+    for concern, columns in records.items():
+        fields = tuple(columns.split())
+        if not fields:
+            raise ValueError(
+                f"worksheet concern {key}.{concern} has no declared record fields"
+            )
+        for start in range(0, len(fields), page_width):
+            selected_fields = fields[start : start + page_width]
+            chunk = WorksheetConcernChunk(
+                (concern,),
+                {concern: selected_fields},
+            )
+            schema = worksheet_chunk_schema(
+                key,
+                chunk,
+                include_evidence=not chunks,
+            )
+            _assert_closed_object_schemas(
+                schema,
+                path=f"worksheet page {key}.{concern}.{start // page_width + 1}",
+            )
+            chunks.append(chunk)
     return chunks
 
 
@@ -172,16 +213,14 @@ def worksheet_chunk_schema(
     model_transport: bool = False,
     state_symbols: Any = None,
 ) -> dict[str, Any]:
-    """Return one complete-concern schema.
+    """Return one bounded planner field-page schema.
 
-    record_counts is accepted only for call-site compatibility and is intentionally
-    ignored: a previous model response never becomes a cardinality contract.
+    The first page of a concern chooses record cardinality. Continuation pages receive
+    that host-observed count through record_counts and cannot change it.
     """
     # Planning owns the canonical worksheet contract. Structured state IR is an
-    # authoring/production representation and must not leak back into planning,
-    # otherwise the chunk producer emits objects that the planning validator
-    # correctly rejects as non-string DSL fields.
-    del record_counts, state_symbols
+    # authoring/production representation and must not leak back into planning.
+    del state_symbols
     key = _normalize_section_name(section)
     active = tuple(concerns)
     if not active:
@@ -193,23 +232,43 @@ def worksheet_chunk_schema(
     for concern in active:
         fields = projection[concern]
         field_schemas = {
-            field: deepcopy(record_field_schema(key, concern, field))
+            field: _planner_page_field_schema(
+                record_field_schema(key, concern, field)
+            )
             for field in fields
         }
         item_schema: dict[str, Any] = {
             "type": "object",
             "properties": field_schemas,
-            "required": list(fields) if key == "state_model" else [],
-            "minProperties": 1,
+            "required": list(fields),
             "additionalProperties": False,
         }
         if key == "state_model":
             item_schema = constrain_state_record_schema(concern, item_schema)
-        properties[concern] = {
+        count = None
+        if isinstance(record_counts, Mapping) and concern in record_counts:
+            try:
+                count = int(record_counts[concern])
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Invalid host record count for {key}.{concern}"
+                ) from exc
+            if count < 0 or count > DEFAULT_ATOMIC_SCHEMA_LIMITS.max_array_items:
+                raise ValueError(
+                    f"Host record count for {key}.{concern} is outside planner bounds: {count}"
+                )
+        concern_array: dict[str, Any] = {
             "type": "array",
-            "maxItems": 4,
+            "maxItems": (
+                count
+                if count is not None
+                else DEFAULT_ATOMIC_SCHEMA_LIMITS.max_array_items
+            ),
             "items": item_schema,
         }
+        if count is not None:
+            concern_array["minItems"] = count
+        properties[concern] = concern_array
         authored_signal.append({"required": [concern]})
 
     properties["inapplicable_concerns"] = {
@@ -219,7 +278,11 @@ def worksheet_chunk_schema(
             "type": "object",
             "properties": {
                 "concern": {"type": "string", "enum": list(active)},
-                "reason": {"type": "string", "minLength": 1, "maxLength": 512},
+                "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": PLANNER_RECORD_FIELD_MAX_CHARS,
+                },
             },
             "required": ["concern", "reason"],
             "additionalProperties": False,
@@ -327,12 +390,12 @@ def worksheet_chunk_prompt(
 ) -> str:
     from .planning_contract_ssot import schema_skeleton_template
 
-    del record_counts
     key = _normalize_section_name(section)
     schema = worksheet_chunk_schema(
         key,
         concerns,
         include_evidence=include_evidence,
+        record_counts=record_counts,
     )
     skeleton = schema_skeleton_template(schema)
     projection = _chunk_projection(key, concerns)
@@ -359,8 +422,18 @@ def worksheet_chunk_prompt(
             f"Active Record Fields: {field_text}",
             f"Purpose: {_section_description(key)}",
             f"Fill the complete shown fields for these concern arrays.{evidence_instruction}",
-            "Each concern is generated as one semantic unit; do not depend on record indices from another call.",
-            "Prefer complete values for the shown fields, but do not invent external facts; the host normalizes harmless omissions.",
+            (
+                "This is the first field page for the concern. Choose 0-4 semantic records; "
+                "that row count becomes host-owned for all later pages."
+                if not record_counts
+                else "The host has fixed record cardinality from the first page. Return exactly "
+                + ", ".join(
+                    f"{name}={count} row(s)" for name, count in record_counts.items()
+                )
+                + " in the same row order; do not add, remove, or reorder records."
+            ),
+            "Fill every shown field for every returned row. Keep each value concise and concrete; do not restate the prompt.",
+            "Do not invent external facts; the host normalizes harmless omissions only after all field pages are merged.",
             "Return each active concern key. Use an empty array when no record applies; the host owns applicability reconciliation and does not require a model-authored reason.",
             "Never use N/A, none, TODO, TBD, unknown, same-as-above, or another placeholder as the authored content.",
             "DO NOT output JSON Schema keywords (never output 'type', 'properties', 'required', or 'additionalProperties').",
