@@ -16,15 +16,14 @@ from typing import Any
 from .java_lsp import (
     JDTLanguageServerError,
     JavaLanguageService,
-    _await_open_document_resolution,
     _diagnostic_counts,
     _diagnostic_pages,
     _diagnostic_result,
     _java_files,
     _raise_on_java_core_bootstrap_failure,
     _read_source_page,
-    _refresh_open_document_diagnostics,
     _remaining_jdt_deadline,
+    _request_open_document_validation,
     _respond_to_server_request,
     _sorted_diagnostics,
 )
@@ -174,15 +173,9 @@ class TracedJavaLanguageService(JavaLanguageService):
                         result="PASS",
                         details={"page_index": page_index, "opened_uris": opened_uris},
                     )
-                    _await_open_document_resolution(
+                    _request_open_document_validation(
                         rpc,
                         expected_uris=expected_uris,
-                        deadline=diagnostic_deadline,
-                    )
-                    _refresh_open_document_diagnostics(
-                        rpc,
-                        expected_uris=expected_uris,
-                        deadline=diagnostic_deadline,
                     )
                     page_diagnostics = _collect_diagnostics_traced(
                         rpc,
