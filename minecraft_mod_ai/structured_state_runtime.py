@@ -836,24 +836,37 @@ def compile_mutation_ir(
     return " ".join(rows)
 
 
+def _state_name_schema(symbols: list[str]) -> dict[str, Any]:
+    """Unified state-name schema shared by declarations and references.
+
+    When *symbols* are known the schema is a closed ``enum`` — no ``maxLength``
+    is needed because the enum already bounds every legal string.  When symbols
+    are not yet available (open-world authoring) the schema falls back to
+    ``maxLength=128`` which matches the declaration contract.
+    """
+    if symbols:
+        return {"type": "string", "enum": symbols}
+    return {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": r"^[A-Za-z_][A-Za-z0-9_]*$",
+    }
+
+
+def _resolve_state_symbols(allowed_state_symbols: Any) -> list[str]:
+    """Normalize symbol sources into a sorted list."""
+    if isinstance(allowed_state_symbols, StateSymbolTable):
+        return sorted(allowed_state_symbols.declared_names)
+    if isinstance(allowed_state_symbols, (set, list, tuple)) and allowed_state_symbols:
+        return sorted(set(allowed_state_symbols))
+    return []
+
+
 def mutations_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
-    symbols = (
-        sorted(allowed_state_symbols.declared_names)
-        if isinstance(allowed_state_symbols, StateSymbolTable)
-        else sorted(set(allowed_state_symbols))
-        if isinstance(allowed_state_symbols, (set, list, tuple)) and allowed_state_symbols
-        else []
-    )
-    target_schema = {
-        "type": "string",
-        "maxLength": 32,
-        **({"enum": symbols} if symbols else {"pattern": r"^[A-Za-z_][A-Za-z0-9_]*$", "minLength": 1}),
-    }
-    name_schema = {
-        "type": "string",
-        "maxLength": 32,
-        **({"enum": symbols} if symbols else {"pattern": r"^[A-Za-z_][A-Za-z0-9_]*$", "minLength": 1}),
-    }
+    symbols = _resolve_state_symbols(allowed_state_symbols)
+    target_schema = _state_name_schema(symbols)
+    name_schema = _state_name_schema(symbols)
     context_name_schema = {
         "type": "string",
         "maxLength": 24,
@@ -863,7 +876,6 @@ def mutations_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
     function_name_schema = {
         "type": "string",
         "enum": sorted(_SUPPORTED_STATE_FUNCTIONS),
-        "maxLength": max(len(name) for name in _SUPPORTED_STATE_FUNCTIONS),
     }
     literal_branch = {
         "type": "object",
@@ -968,18 +980,8 @@ def mutations_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
 
 
 def state_expr_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
-    symbols = (
-        sorted(allowed_state_symbols.declared_names)
-        if isinstance(allowed_state_symbols, StateSymbolTable)
-        else sorted(set(allowed_state_symbols))
-        if isinstance(allowed_state_symbols, (set, list, tuple)) and allowed_state_symbols
-        else []
-    )
-    name_schema = {
-        "type": "string",
-        "maxLength": 24,
-        **({"enum": symbols} if symbols else {"pattern": r"^[A-Za-z_][A-Za-z0-9_]*$", "minLength": 1}),
-    }
+    symbols = _resolve_state_symbols(allowed_state_symbols)
+    name_schema = _state_name_schema(symbols)
     context_name_schema = {
         "type": "string",
         "maxLength": 24,
@@ -989,7 +991,6 @@ def state_expr_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
     function_name_schema = {
         "type": "string",
         "enum": sorted(_SUPPORTED_STATE_FUNCTIONS),
-        "maxLength": max(len(name) for name in _SUPPORTED_STATE_FUNCTIONS),
     }
     literal_branch = {
         "type": "object",
@@ -1127,13 +1128,7 @@ def state_concern_schema(
     *,
     allowed_state_symbols: Any = None,
 ) -> dict[str, Any]:
-    symbols = (
-        sorted(allowed_state_symbols.declared_names)
-        if isinstance(allowed_state_symbols, StateSymbolTable)
-        else sorted(set(allowed_state_symbols))
-        if isinstance(allowed_state_symbols, (set, list, tuple)) and allowed_state_symbols
-        else []
-    )
+    symbols = _resolve_state_symbols(allowed_state_symbols)
     if concern == "variables":
         schema = {
             "type": "object",
