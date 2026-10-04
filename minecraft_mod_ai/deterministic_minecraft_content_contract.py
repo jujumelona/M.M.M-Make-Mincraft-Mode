@@ -335,8 +335,8 @@ def _install_runtime(runtime_module: Any, extended_module: Any) -> None:
                         set(extended_module._SUPPORTED)
                         & set(
                             supported_extended_content_kinds(
-                    effective_target_backend_capabilities(adapter)
-                )
+                                effective_target_backend_capabilities(adapter)
+                            )
                         )
                     )
                 )
