@@ -172,10 +172,8 @@ def test_json_request_sends_schema_constrained_response_format() -> None:
 
     payload = policy._server_payload(Adapter(), request)
 
-    assert payload["response_format"] == {
-        "type": "json_object",
-        "schema": schema,
-    }
+    assert payload["response_format"] == {"type": "json_object"}
+    assert payload["json_schema"] == schema
     assert "tools" not in payload
     assert payload["max_tokens"] == 1024
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
