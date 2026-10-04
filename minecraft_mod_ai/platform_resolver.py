@@ -451,6 +451,7 @@ def _require_supported_kinds(
         return
 
     from .platform_backend_contract import (
+        deterministic_backend_capabilities,
         effective_target_backend_capabilities,
         production_module_backend_capabilities,
     )
@@ -463,8 +464,8 @@ def _require_supported_kinds(
             routed_kinds.add(kind)
             required.update(capabilities)
 
-    effective_capabilities = effective_target_backend_capabilities(adapter)
-    missing = sorted(required - set(effective_capabilities))
+    deterministic_capabilities = deterministic_backend_capabilities(adapter)
+    missing = sorted(required - set(deterministic_capabilities))
     if missing:
         prefix = "명시한 target" if explicit else "선택된 target"
         raise SpecValidationError(
@@ -486,7 +487,7 @@ def _require_supported_kinds(
     if adapter.source_api_family == "fabric_live_ai":
         return
 
-    unsupported = sorted(residual - effective_capabilities)
+    unsupported = sorted(residual - deterministic_capabilities)
     if not unsupported:
         return
     prefix = "명시한 target" if explicit else "선택된 target"
