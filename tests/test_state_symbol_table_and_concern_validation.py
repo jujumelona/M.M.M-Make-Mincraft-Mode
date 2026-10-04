@@ -178,55 +178,111 @@ def test_author_structured_sections_passes_symbols_and_fails_undeclared_early():
     seen_prompts = []
     seen_schemas = []
 
+    variable_values = {
+        "name": "player_currency",
+        "owner": "player",
+        "type": "int",
+        "unit": "credits",
+        "default": "0",
+        "domain": "int >= 0",
+    }
+    transition_values = {
+        "from_state": "dock",
+        "trigger": "trade",
+        "guard": "player_currency >= 0",
+        "mutation": "current_phase = 1",
+        "to_state": "dock",
+    }
+
+    def schema_value(schema):
+        enum = schema.get("enum")
+        if isinstance(enum, list) and enum:
+            return enum[0]
+        raw_type = schema.get("type")
+        types = raw_type if isinstance(raw_type, list) else [raw_type]
+        if "string" in types:
+            return "x"
+        if "integer" in types:
+            return 1
+        if "number" in types:
+            return 1.0
+        if "boolean" in types:
+            return True
+        if "array" in types:
+            minimum = int(schema.get("minItems", 0) or 0)
+            return [schema_value(schema.get("items", {})) for _ in range(minimum)]
+        if "null" in types:
+            return None
+        raise AssertionError(f"unsupported fixture schema: {schema!r}")
+
     class MockRouter:
         def generate_text(self, role, messages, **kwargs):
+            assert role == "planner"
             content = messages[-1]["content"]
             seen_prompts.append(content)
             schema = kwargs.get("response_schema", {})
             seen_schemas.append(schema)
+            properties = schema.get("properties", {})
 
-            # Check if this is state_model
-            if "Section: state_model" in content:
-                props = schema.get("properties", {})
-                if "variables" in props:
-                    return '{"variables": [{"name": "player_currency", "owner": "player", "type": "int", "unit": "credits", "default": "0", "domain": "int >= 0"}]}'
-                if "transitions" in props:
-                    # Attempt to use undeclared variable current_phase
-                    return '{"transitions": [{"from_state": "dock", "trigger": "trade", "guard": {"kind": "literal", "value": true}, "mutations": [{"target": "current_phase", "operator": "=", "value": {"kind": "literal", "value": 1}}], "to_state": "dock"}]}'
-                return '{"inapplicable_concerns": []}'
+            if "record_count" in properties:
+                section = content.split("Section: ", 1)[1].splitlines()[0]
+                concern = content.split("Concern: ", 1)[1].splitlines()[0]
+                if section == "state_model":
+                    count = 1 if concern in {"variables", "transitions"} else 0
+                else:
+                    # The dependency section only needs valid bounded records so the
+                    # test can reach state-model symbol validation.
+                    count = 1
+                return json.dumps({"record_count": count})
 
-            # Non-state section response
-            from worksheet_fixtures import row
-            section_name = content.split("Section: ", 1)[1].splitlines()[0]
-            full = row(section_name)
-            payload = {}
-            for prop in schema.get("properties", {}):
-                if prop in full["specification"]:
-                    payload[prop] = full["specification"][prop]
-                elif prop in full:
-                    payload[prop] = full[prop]
-            return json.dumps(payload)
+            required = list(schema.get("required", ()))
+            assert len(required) == 1
+            concern = required[0]
+            concern_schema = properties[concern]
+            count = int(concern_schema.get("minItems", 0) or 0)
+            assert count == int(concern_schema.get("maxItems", count) or count)
+            item_schema = concern_schema["items"]
+            fields = list(item_schema.get("required", ()))
+            assert len(fields) == 1
+            field = fields[0]
+
+            if "Section: state_model" in content and concern == "variables":
+                value = variable_values[field]
+            elif "Section: state_model" in content and concern == "transitions":
+                value = transition_values[field]
+            else:
+                value = schema_value(item_schema["properties"][field])
+
+            return json.dumps({concern: [{field: value} for _ in range(count)]})
 
     router = MockRouter()
 
     with pytest.raises(
-        (ValueError, RuntimeError),
-        match=r"(STRUCTURED_STATE_MUTATION: undeclared state variable 'current_phase'|'current_phase' is not one of)",
+        ValueError,
+        match="STRUCTURED_STATE_MUTATION: undeclared state variable 'current_phase'",
     ):
         author_structured_sections(router, "create a mod with trading")
 
-    # Verify that transition schema received the enum constraint from StateSymbolTable!
-    transition_schemas = [
-        s for s in seen_schemas
-        if "transitions" in s.get("properties", {})
-    ]
-    assert len(transition_schemas) >= 1
-    t_schema = transition_schemas[0]["properties"]["transitions"]["items"]
-    target_enum = t_schema["properties"]["mutations"]["items"]["properties"]["target"]["enum"]
-    assert target_enum == ["player_currency"]
+    # Planner pages stay tiny: mutation is one bounded string field, not a nested
+    # model-authored IR. Symbol authority is enforced after the concern is merged.
+    mutation_schemas = []
+    for schema in seen_schemas:
+        transitions = schema.get("properties", {}).get("transitions")
+        if not isinstance(transitions, dict):
+            continue
+        item_properties = transitions.get("items", {}).get("properties", {})
+        if "mutation" in item_properties:
+            mutation_schemas.append(item_properties["mutation"])
+    assert mutation_schemas
+    assert all(schema["type"] == "string" for schema in mutation_schemas)
 
-    # Verify that transition prompt received the canonical state symbols from variables!
-    transition_prompts = [p for p in seen_prompts if "Active Concerns: transitions" in p]
-    assert len(transition_prompts) >= 1
-    assert "Canonical state symbols:" in transition_prompts[0]
-    assert "- player_currency" in transition_prompts[0]
+    # The canonical variable symbol table is still supplied to every later
+    # transition field page before host-side validation rejects current_phase.
+    transition_prompts = [
+        prompt for prompt in seen_prompts
+        if "Active Concerns: transitions" in prompt
+    ]
+    assert transition_prompts
+    assert all("Canonical state symbols:" in prompt for prompt in transition_prompts)
+    assert all("- player_currency" in prompt for prompt in transition_prompts)
+
