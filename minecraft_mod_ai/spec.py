@@ -599,6 +599,34 @@ class ModSpec:
                 )
             seen.update((self.boss.entity_id, spawn_egg_id))
 
+        from .platform_backend_contract import (
+            bootstrap_boss_capabilities,
+            bootstrap_content_capabilities,
+        )
+
+        required_backend_capabilities: set[str] = set()
+        for content in self.contents:
+            required_backend_capabilities.update(
+                bootstrap_content_capabilities(
+                    content.kind.value,
+                    recipe=content.recipe,
+                )
+            )
+        if self.boss is not None:
+            required_backend_capabilities.update(
+                bootstrap_boss_capabilities()
+            )
+        missing_backend_capabilities = sorted(
+            required_backend_capabilities
+            - set(self.platform.deterministic_module_kinds)
+        )
+        if missing_backend_capabilities:
+            raise SpecValidationError(
+                "Platform target does not declare deterministic bootstrap "
+                "capabilities required by ModSpec: "
+                f"{missing_backend_capabilities}."
+            )
+
 
 @dataclass(frozen=True)
 class EvidenceSource:
