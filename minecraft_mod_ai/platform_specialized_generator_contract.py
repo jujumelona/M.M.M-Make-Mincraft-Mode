@@ -6,6 +6,10 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
+from .platform_backend_contract import (
+    geckolib_entity_capabilities as _geckolib_capabilities,
+    system_pack_capabilities as _system_pack_capabilities,
+)
 from .platform_catalog import adapter_from_project
 
 _SYSTEM_INCREMENTAL_STATE: ContextVar[tuple[frozenset[str], bool] | None] = ContextVar(
@@ -27,36 +31,6 @@ def _require_deterministic_capability(
         f"{feature} deterministic templates are not declared by provider "
         f"{adapter.adapter_id} for {adapter.minecraft_version}/{adapter.loader}; "
         "route this work through target-aware custom_java/RAG generation."
-    )
-
-
-def _system_pack_capabilities(pack_id: str) -> frozenset[str]:
-    semantic_kinds = {
-        "quest-system": frozenset({"quest"}),
-        "class-skill-system": frozenset({"class", "skill"}),
-        "economy-shop": frozenset({"economy", "shop"}),
-        "gui-networking": frozenset({"gui", "networking"}),
-        "party-guild": frozenset({"party", "guild"}),
-    }.get(pack_id)
-    if semantic_kinds is None:
-        return frozenset()
-    # A semantic module capability does not prove that the larger built-in system
-    # template (persistence, commands, networking, resource layout, etc.) was reviewed.
-    return frozenset((*semantic_kinds, f"system-pack:{pack_id}"))
-
-
-def _geckolib_capabilities(version: str) -> frozenset[str]:
-    normalized = str(version or "").strip()
-    if not normalized:
-        return frozenset()
-    # Base entity support is insufficient evidence for GeckoLib.  The generated code
-    # also depends on GeckoLib's API and artifact coordinate for the requested version.
-    return frozenset(
-        {
-            "entity",
-            "geckolib:entity",
-            f"geckolib:version:{normalized}",
-        }
     )
 
 
