@@ -363,7 +363,7 @@ def compile_authored_design(
         raise TypeError("compile_authored_design requires AuthoredPlan")
     if not getattr(plan, "typed_plan_ir", {}):
         raise ValueError(
-            "TYPED_PLAN_REQUIRED: legacy authored production routes have been removed."
+            "TYPED_PLAN_REQUIRED: AuthoredPlan must contain Typed PlanIR."
         )
 
     structured = normalize_structured_sections(plan.structured_sections)
