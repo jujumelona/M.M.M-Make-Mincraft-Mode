@@ -68,8 +68,8 @@ def test_non_qwen_receives_only_structural_transport_schema():
     assert payload["json_schema"] == {
         "type": "object",
         "properties": {
-            "status": {"type": "string"},
-            "items": {"type": "array", "items": {"type": "integer"}},
+            "status": {"type": "string", "minLength": 3, "pattern": "^[a-z]+$"},
+            "items": {"type": "array", "items": {"type": "integer"}, "minItems": 2},
         },
         "required": ["status", "items"],
         "additionalProperties": False,
@@ -122,6 +122,7 @@ def test_host_only_validation_keywords_are_removed_recursively():
 
     assert project_llama_transport_schema(schema) == {
         "type": "array",
+        "minItems": 3,
         "items": {
             "type": "object",
             "properties": {"value": {"type": "number"}},

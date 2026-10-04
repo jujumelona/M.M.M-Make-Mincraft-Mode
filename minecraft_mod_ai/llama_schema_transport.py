@@ -96,8 +96,8 @@ def project_llama_transport_schema(schema: Any) -> dict[str, Any]:
                         if req:
                             res["required"] = req
                     additional = schema.get("additionalProperties")
-                    if additional is False:
-                        res["additionalProperties"] = False
+                    if isinstance(additional, bool):
+                        res["additionalProperties"] = additional
                     elif isinstance(additional, Mapping):
                         res["additionalProperties"] = project_llama_transport_schema(additional)
                 res[combinator] = branches
@@ -127,10 +127,15 @@ def project_llama_transport_schema(schema: Any) -> dict[str, Any]:
                     result["required"] = required
 
         additional = schema.get("additionalProperties")
-        if additional is False:
-            result["additionalProperties"] = False
+        if isinstance(additional, bool):
+            result["additionalProperties"] = additional
         elif isinstance(additional, Mapping):
             result["additionalProperties"] = project_llama_transport_schema(additional)
+
+        if "maxProperties" in schema and isinstance(schema["maxProperties"], int):
+            result["maxProperties"] = schema["maxProperties"]
+        if "minProperties" in schema and isinstance(schema["minProperties"], int):
+            result["minProperties"] = schema["minProperties"]
         return result
 
     if projected_type == "array" or has_items:
@@ -139,6 +144,10 @@ def project_llama_transport_schema(schema: Any) -> dict[str, Any]:
         result["items"] = (
             project_llama_transport_schema(items) if isinstance(items, Mapping) else {}
         )
+        if "maxItems" in schema and isinstance(schema["maxItems"], int):
+            result["maxItems"] = schema["maxItems"]
+        if "minItems" in schema and isinstance(schema["minItems"], int):
+            result["minItems"] = schema["minItems"]
         return result
 
     result = {}
@@ -149,6 +158,12 @@ def project_llama_transport_schema(schema: Any) -> dict[str, Any]:
         result["enum"] = enum
     if "const" in schema:
         result["const"] = copy.deepcopy(schema["const"])
+    if "pattern" in schema and isinstance(schema["pattern"], str):
+        result["pattern"] = schema["pattern"]
+    if "maxLength" in schema and isinstance(schema["maxLength"], int):
+        result["maxLength"] = schema["maxLength"]
+    if "minLength" in schema and isinstance(schema["minLength"], int):
+        result["minLength"] = schema["minLength"]
     if result:
         return result
 

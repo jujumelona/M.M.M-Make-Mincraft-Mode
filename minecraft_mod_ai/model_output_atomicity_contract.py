@@ -291,6 +291,33 @@ def _model_transport_schema(
     return value
 
 
+def effective_model_transport_schema(
+    value: Any,
+    *,
+    profile: str = DEFAULT_SCHEMA_PROFILE,
+    string_class: str = STRING_CLASS_GENERIC,
+) -> Any:
+    """Return the *effective* decoder schema: the single schema that both the
+    token ceiling verifier and the llama.cpp sampler must use.
+
+    This composes two transformations:
+
+    1. ``_model_transport_schema`` — adds finite bounds (``maxLength``,
+       ``maxItems``, ``pattern``, etc.) to unbounded logical schemas.
+    2. ``project_llama_transport_schema`` — projects the schema to the
+       structural subset that llama.cpp actually enforces.
+
+    The resulting schema is identical for ceiling verification and sampler
+    constraint generation, eliminating the dualization bug.
+    """
+    from .llama_schema_transport import project_llama_transport_schema
+
+    bounded = _model_transport_schema(value, profile=profile, string_class=string_class)
+    if isinstance(bounded, Mapping):
+        return project_llama_transport_schema(bounded)
+    return bounded
+
+
 _SCHEMA_ANNOTATION_KEYS = frozenset(
     {"title", "description", "$comment", "default", "examples", "$defs", "definitions"}
 )
@@ -733,6 +760,7 @@ __all__ = [
     "assert_atomic_model_schema",
     "assert_installed",
     "assert_strict_atomicity_bounds",
+    "effective_model_transport_schema",
     "is_atomic_model_schema",
     "structured_output_token_ceiling",
     "install",

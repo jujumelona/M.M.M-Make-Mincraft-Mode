@@ -362,11 +362,17 @@ def generate_fixed_template_value(
         # media/tool transport, native function call, or repair frontier is reachable.
         generate_text = _structured_text_generator(router)
         from .model_output_atomicity_contract import (
-            _model_transport_schema as _bounded_model_transport_schema,
+            effective_model_transport_schema,
         )
 
-        transport_schema = _bounded_model_transport_schema(response_schema)
-        required_ceiling = structured_output_token_ceiling(transport_schema)
+        effective_schema = effective_model_transport_schema(response_schema)
+        try:
+            required_ceiling = structured_output_token_ceiling(effective_schema)
+        except ValueError as exc:
+            raise ValueError(
+                "MODEL_TRANSPORT_NOT_FINITE: effective decoder schema lost "
+                f"required lexical bound: {exc}"
+            ) from exc
         if output_token_ceiling is not None:
             requested_ceiling = max(1, int(output_token_ceiling))
             if requested_ceiling < required_ceiling:
@@ -381,7 +387,7 @@ def generate_fixed_template_value(
             messages,
             media_paths=(),
             response_format=_JSON_FIXTURE_FORMAT,
-            response_schema=transport_schema,
+            response_schema=effective_schema,
             enable_tools=False,
             output_token_ceiling=required_ceiling,
             force_non_thinking=True,

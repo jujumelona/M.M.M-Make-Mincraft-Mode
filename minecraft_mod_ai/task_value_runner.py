@@ -6,7 +6,7 @@ from jsonschema import Draft202012Validator
 
 from .fixed_template_generation import generate_fixed_template_value
 from .model_output_atomicity_contract import (
-    _model_transport_schema,
+    effective_model_transport_schema,
     structured_output_token_ceiling,
 )
 from .task_template_catalog import load_template
@@ -27,7 +27,7 @@ def run_value_template(router, identifier, *, context, progress=None, checkpoint
     elif template["execution"] == "value":
         output_schema = template["output_schema"]
         output_ceiling = structured_output_token_ceiling(
-            _model_transport_schema(output_schema)
+            effective_model_transport_schema(output_schema)
         )
         value = generate_fixed_template_value(
             router, "planner",
