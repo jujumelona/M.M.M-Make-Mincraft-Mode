@@ -239,7 +239,13 @@ def planner_page_output_token_ceiling(schema: Mapping[str, Any]) -> int:
     # One tokenizer token cannot consume fewer than one serialized byte. Using the
     # escaped-JSON character bound as a token bound is therefore conservative.
     derived = max(64, max_json_chars + 32)
-    return min(PLANNER_RECORD_PAGE_OUTPUT_TOKEN_CEILING, derived)
+    if derived > PLANNER_RECORD_PAGE_OUTPUT_TOKEN_CEILING:
+        raise ValueError(
+            "planner page schema exceeds the global atomic output bound; "
+            "split the page further before inference: "
+            f"derived={derived} limit={PLANNER_RECORD_PAGE_OUTPUT_TOKEN_CEILING}"
+        )
+    return derived
 
 
 def pack_section_concerns(
