@@ -14,9 +14,10 @@ import json
 from typing import Any
 
 from .execution_contract_policy import (
-    DEFAULT_ATOMIC_SCHEMA_LIMITS,
+    PLANNER_CONCERN_MAX_RECORDS,
     PLANNER_RECORD_ARRAY_ITEM_MAX_CHARS,
     PLANNER_RECORD_FIELD_MAX_CHARS,
+    PLANNER_RECORD_NESTED_ARRAY_MAX_ITEMS,
     PLANNER_RECORD_PAGE_MAX_FIELDS,
     PLANNER_RECORD_PAGE_OUTPUT_TOKEN_CEILING,
 )
@@ -140,13 +141,13 @@ def _planner_page_field_schema(
     if "array" in types:
         try:
             explicit_items = int(
-                result.get("maxItems", DEFAULT_ATOMIC_SCHEMA_LIMITS.max_array_items)
+                result.get("maxItems", PLANNER_RECORD_NESTED_ARRAY_MAX_ITEMS)
             )
         except (TypeError, ValueError):
-            explicit_items = DEFAULT_ATOMIC_SCHEMA_LIMITS.max_array_items
+            explicit_items = PLANNER_RECORD_NESTED_ARRAY_MAX_ITEMS
         result["maxItems"] = max(
             0,
-            min(explicit_items, DEFAULT_ATOMIC_SCHEMA_LIMITS.max_array_items),
+            min(explicit_items, PLANNER_RECORD_NESTED_ARRAY_MAX_ITEMS),
         )
         items = result.get("items")
         if isinstance(items, Mapping):
@@ -328,7 +329,7 @@ def worksheet_concern_cardinality_schema(
         "properties": {
             "record_count": {
                 "type": "integer",
-                "enum": list(range(DEFAULT_ATOMIC_SCHEMA_LIMITS.max_array_items + 1)),
+                "enum": list(range(PLANNER_CONCERN_MAX_RECORDS + 1)),
             }
         },
         "required": ["record_count"],
@@ -352,7 +353,7 @@ def worksheet_concern_cardinality_prompt(
             f"Concern: {concern}",
             f"Purpose: {_section_description(key)}",
             "Choose how many distinct semantic records this concern needs for the user request.",
-            f"Return record_count as an integer from 0 through {DEFAULT_ATOMIC_SCHEMA_LIMITS.max_array_items}.",
+            f"Return record_count as an integer from 0 through {PLANNER_CONCERN_MAX_RECORDS}.",
             "Use 0 only when this concern is not needed. Do not author record content in this call.",
         )
     )
@@ -416,7 +417,7 @@ def worksheet_chunk_schema(
             raise ValueError(
                 f"Invalid host record count for {key}.{concern}"
             ) from exc
-        if count < 0 or count > DEFAULT_ATOMIC_SCHEMA_LIMITS.max_array_items:
+        if count < 0 or count > PLANNER_CONCERN_MAX_RECORDS:
             raise ValueError(
                 f"Host record count for {key}.{concern} is outside planner bounds: {count}"
             )
