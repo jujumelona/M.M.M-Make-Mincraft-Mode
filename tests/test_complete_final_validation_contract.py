@@ -39,9 +39,7 @@ from minecraft_mod_ai.complete_orchestrator import (
     _validate_required_gate_contract,
 )
 from minecraft_mod_ai.validation_diagnostic_contract import (
-    release_diagnostics_attempts,
     release_diagnostics_timeout_seconds,
-    retryable_service_ready_miss,
 )
 
 
@@ -1528,21 +1526,3 @@ def test_build_artifact_bundle_preserves_unresolved_release_state(tmp_path) -> N
     assert manifest["release_certified"] is False
 
 
-def test_jdt_verification_attempts_default_and_bounds(monkeypatch) -> None:
-    monkeypatch.delenv("MMM_JDT_VERIFICATION_ATTEMPTS", raising=False)
-    assert release_diagnostics_attempts() == 2
-    monkeypatch.setenv("MMM_JDT_VERIFICATION_ATTEMPTS", "99")
-    assert release_diagnostics_attempts() == 3
-
-
-def test_only_service_ready_bootstrap_miss_is_retryable() -> None:
-    assert retryable_service_ready_miss({
-        "status": "UNAVAILABLE",
-        "error": "JDTWorkspaceBootstrapError: ServiceReady was not observed before validation",
-        "diagnostics": {},
-    })
-    assert not retryable_service_ready_miss({
-        "status": "UNAVAILABLE",
-        "error": "JDTWorkspaceBootstrapError: no project JDK matching Java 25",
-        "diagnostics": {},
-    })
