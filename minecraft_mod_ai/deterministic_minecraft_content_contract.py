@@ -20,7 +20,7 @@ from .minecraft_generation_contract import (
     validate_generation_config,
 )
 from .platform_backend_contract import (
-    effective_target_backend_capabilities,
+    deterministic_backend_capabilities,
     supported_extended_content_kinds,
 )
 
@@ -274,7 +274,7 @@ def _execute(
             set(extended_module._SUPPORTED)
             & set(
                 supported_extended_content_kinds(
-                    effective_target_backend_capabilities(adapter)
+                    deterministic_backend_capabilities(adapter)
                 )
             )
         )
@@ -335,7 +335,7 @@ def _install_runtime(runtime_module: Any, extended_module: Any) -> None:
                         set(extended_module._SUPPORTED)
                         & set(
                             supported_extended_content_kinds(
-                                effective_target_backend_capabilities(adapter)
+                                deterministic_backend_capabilities(adapter)
                             )
                         )
                     )
