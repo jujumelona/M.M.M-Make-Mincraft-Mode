@@ -2080,6 +2080,7 @@ def author_typed_plan_ir(
     structured_sections: Mapping[str, Any] | None = None,
     capabilities: Mapping[str, Any] | None = None,
     *,
+    deterministic_module_kinds: Iterable[str] = (),
     max_calls: int | None = None,
     budget: Any = None,
 ) -> dict[str, Any]:
@@ -2330,13 +2331,36 @@ def author_typed_plan_ir(
             "resources_and_ui.",
         ))
     }
+    target_deterministic_kinds = frozenset(
+        str(kind).strip()
+        for kind in (deterministic_module_kinds or ())
+        if str(kind).strip()
+    )
+    if target_deterministic_kinds:
+        allowed_platform_kinds = (
+            set(PLATFORM_HOST_KINDS)
+            | (
+                set(PLATFORM_KINDS)
+                & set(target_deterministic_kinds)
+            )
+        )
+    else:
+        allowed_platform_kinds = set(PLATFORM_KINDS)
+
+    has_command_binding = any(
+        binding.get("event") == "command"
+        for binding in event_bindings
+    )
+    if has_command_binding:
+        allowed_platform_kinds.discard("command")
+
     platform_index = 0
     while uncovered:
         previous_uncovered = len(uncovered)
         scope = f"platform[{platform_index}]"
         available_kinds = [
             kind
-            for kind in sorted(PLATFORM_KINDS)
+            for kind in sorted(allowed_platform_kinds)
             if platform_coverable_refs(kind, sorted(uncovered))
         ]
         if not available_kinds:

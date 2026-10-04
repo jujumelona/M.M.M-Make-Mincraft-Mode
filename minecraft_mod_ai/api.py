@@ -79,6 +79,15 @@ def _attach_target_constraints(
         owner._mmm_requested_minecraft_version = minecraft_version
     if loader is not None:
         owner._mmm_requested_loader = loader
+    if minecraft_version is not None and loader is not None:
+        try:
+            from .platform_catalog import adapter_for_target
+
+            adapter = adapter_for_target(minecraft_version, loader)
+            owner._mmm_target_adapter = adapter
+            owner._mmm_deterministic_module_kinds = adapter.deterministic_module_kinds
+        except Exception:
+            pass
 
 
 def _attach_existing_target(owner: Any, existing_input: Path | None) -> None:
@@ -351,7 +360,16 @@ class CompleteModAISession:
                 "모델 컨텍스트와 출력 한도는 줄이지 않습니다.",
                 flush=True,
             )
-        self.planner = CompleteGameDesignPlanner(self.router)
+        target_adapter = getattr(self.router, "_mmm_target_adapter", None)
+        self.planner = CompleteGameDesignPlanner(
+            self.router,
+            adapter=target_adapter,
+            deterministic_module_kinds=(
+                target_adapter.deterministic_module_kinds
+                if target_adapter is not None
+                else None
+            ),
+        )
         self.orchestrator = CompleteProductionOrchestrator(
             workspace_root=self.workspace_root,
             profile=model_profile,

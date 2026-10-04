@@ -535,4 +535,117 @@ def test_author_typed_plan_ir_shop_platform_module_within_budget():
     ]
 
 
+def test_author_typed_plan_ir_filters_by_deterministic_module_kinds() -> None:
+    res_spec = {name: [] for name in DETAIL_RECORDS["resources_and_ui"]}
+    res_spec["registries"] = [
+        {
+            "purpose": "item",
+            "identifier": "ruby",
+            "binding_requirement": "ruby item",
+        }
+    ]
+    res_spec["inapplicable_concerns"] = []
+
+    int_spec = {name: [] for name in DETAIL_RECORDS["integration"]}
+    int_spec["entry_points"] = [
+        {
+            "boundary": "server",
+            "trigger": "/give_ruby",
+            "owner": "server",
+        }
+    ]
+    int_spec["inapplicable_concerns"] = []
+
+    structured = {
+        "resources_and_ui": {
+            "specification": res_spec,
+            "constraint_evidence_refs": [],
+        },
+        "integration": {
+            "specification": int_spec,
+            "constraint_evidence_refs": [],
+        },
+    }
+
+    class TestRouter:
+        def __init__(self) -> None:
+            self.calls: list[tuple[Any, Any]] = []
+
+        def generate_text(self, role: Any, messages: Any, *, response_schema: Any = None, **kwargs: Any) -> str:
+            import json
+
+            self.calls.append((messages, response_schema))
+            val_schema = response_schema.get("properties", {}).get("value", response_schema)
+            if "enum" in val_schema:
+                # Ensure command was excluded by allowed_platform_kinds
+                assert "command" not in val_schema["enum"]
+                assert "item" in val_schema["enum"]
+                return json.dumps({"value": "item"})
+            if val_schema.get("type") == "object":
+                res = {}
+                for k in val_schema.get("properties", {}):
+                    res[k] = "Ruby"
+                return json.dumps({"value": res})
+            return json.dumps({"value": "Ruby"})
+
+    router = TestRouter()
+    plan = author_typed_plan_ir(
+        router,
+        "ruby item with command",
+        structured,
+        {},
+        deterministic_module_kinds={"item", "block", "recipe", "loot", "tag"},
+        max_calls=16,
+    )
+    assert len(plan["platform_modules"]) == 1
+    assert plan["platform_modules"][0]["kind"] == "item"
+    assert any(b.get("event") == "command" for b in plan["event_bindings"])
+
+
+def test_complete_planner_threads_deterministic_module_kinds(monkeypatch: Any) -> None:
+    from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner
+    from minecraft_mod_ai.model_router import ModelRouter
+
+    received_kinds = None
+
+    def fake_author_typed_plan_ir(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        nonlocal received_kinds
+        received_kinds = kwargs.get("deterministic_module_kinds")
+        return {
+            "source_sha256": "fake",
+            "functions": [],
+            "initialize": [],
+            "platform_modules": [],
+            "event_bindings": [],
+        }
+
+    monkeypatch.setattr(
+        "minecraft_mod_ai.typed_plan_authoring.author_typed_plan_ir",
+        fake_author_typed_plan_ir,
+    )
+    monkeypatch.setattr(
+        "minecraft_mod_ai.authored_structured_design.author_structured_sections",
+        lambda *args, **kwargs: {},
+    )
+    monkeypatch.setattr(
+        "minecraft_mod_ai.authored_structured_design.render_structured_sections",
+        lambda *args: "mock text",
+    )
+    monkeypatch.setattr(
+        "minecraft_mod_ai.typed_plan_support.assert_typed_plan_host_support",
+        lambda *args, **kwargs: None,
+    )
+
+    class DummyAdapter:
+        deterministic_module_kinds = frozenset({"item", "block"})
+
+    router = ModelRouter(profile="fast_test")
+    planner = CompleteGameDesignPlanner(router, adapter=DummyAdapter())
+    planner.plan("test prompt")
+
+    assert received_kinds == ("block", "item")
+
+
+
+
 

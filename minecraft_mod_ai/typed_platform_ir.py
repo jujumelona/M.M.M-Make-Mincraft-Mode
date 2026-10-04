@@ -429,7 +429,7 @@ def _coverage_allowed(kind: str, cover: str) -> bool:
                 or kind in PLATFORM_ENTITY_KINDS
             )
         if concern == "interactions":
-            return kind in {"command", "machine", "gui", "networking"}
+            return kind in {"machine", "gui", "networking"}
         if concern == "displayed_state":
             return kind == "gui"
         if concern in {"missing_resources", "accessibility"}:

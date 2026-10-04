@@ -14,8 +14,20 @@ from .root_cause_trace import emit_root_cause, trace_scope
 class CompleteGameDesignPlanner:
     """Write a design freely; compile executable contracts only for production."""
 
-    def __init__(self, router: ModelRouter) -> None:
+    def __init__(
+        self,
+        router: ModelRouter,
+        *,
+        adapter: Any = None,
+        deterministic_module_kinds: Sequence[str] | frozenset[str] | None = None,
+    ) -> None:
         self.router = router
+        self.adapter = adapter
+        self.deterministic_module_kinds = (
+            frozenset(str(k).strip() for k in deterministic_module_kinds if str(k).strip())
+            if deterministic_module_kinds is not None
+            else None
+        )
 
     def plan(
         self,
@@ -23,6 +35,8 @@ class CompleteGameDesignPlanner:
         *,
         media_paths: Sequence[str | Path] = (),
         existing_input_sha256: str = "",
+        adapter: Any = None,
+        deterministic_module_kinds: Sequence[str] | frozenset[str] | None = None,
     ) -> AuthoredPlan:
         """Write the design itself; no schema, critic, evidence or production gate."""
         from .planner_operation import planner_operation
@@ -47,12 +61,38 @@ class CompleteGameDesignPlanner:
 
         text = render_structured_sections(structured_sections)
 
+        kinds = deterministic_module_kinds
+        if kinds is None and adapter is not None:
+            kinds = getattr(adapter, "deterministic_module_kinds", None)
+        if kinds is None:
+            kinds = self.deterministic_module_kinds
+        if kinds is None and self.adapter is not None:
+            kinds = getattr(self.adapter, "deterministic_module_kinds", None)
+        if kinds is None:
+            kinds = getattr(self.router, "_mmm_deterministic_module_kinds", None)
+        if kinds is None:
+            router_adapter = getattr(self.router, "_mmm_target_adapter", None)
+            if router_adapter is not None:
+                kinds = getattr(router_adapter, "deterministic_module_kinds", None)
+        if kinds is None:
+            version = getattr(self.router, "_mmm_requested_minecraft_version", None)
+            loader = getattr(self.router, "_mmm_requested_loader", None)
+            if version and loader:
+                try:
+                    from .platform_catalog import adapter_for_target
+                    resolved_adapter = adapter_for_target(str(version), str(loader))
+                    kinds = getattr(resolved_adapter, "deterministic_module_kinds", None)
+                except Exception:
+                    pass
+        effective_kinds = tuple(sorted(kinds)) if kinds else ()
+
         with planner_operation("author_typed_plan_ir"):
             typed_plan_ir = author_typed_plan_ir(
                 self.router,
                 text,
                 structured_sections,
                 typed_host_capability_contracts(),
+                deterministic_module_kinds=effective_kinds,
                 budget=budget,
             )
         from .typed_plan_support import assert_typed_plan_host_support

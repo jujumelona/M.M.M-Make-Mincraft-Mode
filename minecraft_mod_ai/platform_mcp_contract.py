@@ -79,10 +79,14 @@ def _plan_complete_game_impl(
         adapter = _required_adapter(module, minecraft_version, loader)
         router._mmm_requested_minecraft_version = adapter.minecraft_version
         router._mmm_requested_loader = adapter.loader
+        router._mmm_target_adapter = adapter
+        router._mmm_deterministic_module_kinds = adapter.deterministic_module_kinds
     if existing_minecraft_version:
         adapter = _required_adapter(module, existing_minecraft_version, existing_loader or loader)
         router._mmm_existing_minecraft_version = adapter.minecraft_version
         router._mmm_existing_loader = adapter.loader
+        router._mmm_target_adapter = adapter
+        router._mmm_deterministic_module_kinds = adapter.deterministic_module_kinds
     proposal = module.CompleteGameDesignPlanner(router).plan(
         prompt, media_paths=self._scoped_media_paths(media_paths),
         existing_input_sha256=existing_input_sha256,
