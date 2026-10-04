@@ -14,9 +14,7 @@ from functools import wraps
 from typing import Any
 
 from .execution_contract_policy import (
-    DEFAULT_ATOMIC_SCHEMA_LIMITS,
     DEFAULT_SCHEMA_PROFILE,
-    MODEL_MAX_COMPLETION_TOKENS,
     PLANNER_RECORD_PAGE_OUTPUT_TOKEN_CEILING,
     SCHEMA_CONTRACT_PROFILE_KEY,
     SCHEMA_STRING_CLASS_KEY,
@@ -32,14 +30,6 @@ _TEMPLATE_TOOL_NAME = "submit_fixed_template"
 _SAME_INSTANCE_CONSTRAINT_KEYWORDS = frozenset(
     {"allOf", "anyOf", "oneOf", "not", "if", "then", "else"}
 )
-
-# Compatibility aliases.  Hard limits are owned by execution_contract_policy.
-MAX_MODEL_FIELDS = DEFAULT_ATOMIC_SCHEMA_LIMITS.max_fields
-MAX_MODEL_STRING_CHARS = DEFAULT_ATOMIC_SCHEMA_LIMITS.max_string_chars
-MAX_MODEL_ARRAY_ITEMS = DEFAULT_ATOMIC_SCHEMA_LIMITS.max_array_items
-MAX_SCHEMA_DEPTH = DEFAULT_ATOMIC_SCHEMA_LIMITS.max_schema_depth
-MAX_COMPLETION_TOKENS = MODEL_MAX_COMPLETION_TOKENS
-
 
 def _schema_has_type(schema: Mapping[str, Any], expected: str) -> bool:
     raw = schema.get("type")
