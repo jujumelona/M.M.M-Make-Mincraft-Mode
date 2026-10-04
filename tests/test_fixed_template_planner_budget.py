@@ -341,3 +341,16 @@ def test_planner_page_budget_is_schema_derived_and_rejects_unbounded_numeric() -
                 "additionalProperties": False,
             }
         )
+
+
+    with pytest.raises(ValueError, match="exceeds the global atomic output bound"):
+        planner_page_output_token_ceiling(
+            {
+                "type": "object",
+                "properties": {
+                    "value": {"type": "string", "maxLength": 1024},
+                },
+                "required": ["value"],
+                "additionalProperties": False,
+            }
+        )
