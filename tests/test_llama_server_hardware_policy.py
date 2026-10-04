@@ -140,3 +140,42 @@ def test_hardware_launch_policy_preserves_explicit_operator_telemetry_flags(monk
 
     assert result.count("--metrics") == 1
     assert result.count("--slots") == 1
+
+
+def test_json_request_sends_schema_constrained_response_format() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "value": {"type": "string", "maxLength": 32},
+        },
+        "required": ["value"],
+        "additionalProperties": False,
+    }
+
+    class Adapter:
+        config = SimpleNamespace(
+            role="planner",
+            model_id="test-model",
+            max_new_tokens=2048,
+            extra={},
+        )
+
+    request = SimpleNamespace(
+        messages=({"role": "user", "content": "fill the schema"},),
+        response_format="json",
+        response_schema=schema,
+        tools=(),
+        tool_choice=None,
+        parallel_tool_calls=False,
+        metadata={"mmm_output_token_ceiling": 1024},
+    )
+
+    payload = policy._server_payload(Adapter(), request)
+
+    assert payload["response_format"] == {
+        "type": "json_object",
+        "schema": schema,
+    }
+    assert "tools" not in payload
+    assert payload["max_tokens"] == 1024
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
