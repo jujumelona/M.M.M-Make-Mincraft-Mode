@@ -16,12 +16,15 @@ from typing import Any
 from .java_lsp import (
     JDTLanguageServerError,
     JavaLanguageService,
+    _await_open_document_resolution,
     _diagnostic_counts,
     _diagnostic_pages,
     _diagnostic_result,
     _java_files,
     _raise_on_java_core_bootstrap_failure,
     _read_source_page,
+    _refresh_open_document_diagnostics,
+    _remaining_jdt_deadline,
     _respond_to_server_request,
     _sorted_diagnostics,
 )
@@ -122,6 +125,7 @@ class TracedJavaLanguageService(JavaLanguageService):
             # authority for project-JDK discovery, JDT configuration and semantic
             # readiness; ServiceReady alone can never satisfy this boundary.
             rpc = self._ensure_rpc_locked(root, timeout_seconds=timeout_seconds)
+            diagnostic_deadline = time.monotonic() + float(timeout_seconds)
             diagnostics: dict[str, list[dict[str, Any]]] = {}
             page_receipts: list[dict[str, Any]] = []
             total_source_bytes = 0
@@ -170,10 +174,23 @@ class TracedJavaLanguageService(JavaLanguageService):
                         result="PASS",
                         details={"page_index": page_index, "opened_uris": opened_uris},
                     )
+                    _await_open_document_resolution(
+                        rpc,
+                        expected_uris=expected_uris,
+                        deadline=diagnostic_deadline,
+                    )
+                    _refresh_open_document_diagnostics(
+                        rpc,
+                        expected_uris=expected_uris,
+                        deadline=diagnostic_deadline,
+                    )
                     page_diagnostics = _collect_diagnostics_traced(
                         rpc,
                         expected_uris=expected_uris,
-                        timeout_seconds=timeout_seconds,
+                        timeout_seconds=_remaining_jdt_deadline(
+                            diagnostic_deadline,
+                            operation="traced diagnostics",
+                        ),
                         quiet_seconds=self.diagnostic_quiet_seconds,
                         page_index=page_index,
                     )
