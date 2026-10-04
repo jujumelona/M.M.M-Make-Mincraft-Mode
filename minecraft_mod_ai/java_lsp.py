@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import queue
@@ -7,6 +8,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -286,6 +288,137 @@ def _jdtls_environment() -> dict[str, str]:
     return env
 
 
+_MANAGED_JAVA_PROJECT_MARKERS = (
+    "build.gradle",
+    "build.gradle.kts",
+    "settings.gradle",
+    "settings.gradle.kts",
+    "pom.xml",
+)
+
+
+def _managed_java_project(root: Path) -> bool:
+    return any((root / name).is_file() for name in _MANAGED_JAVA_PROJECT_MARKERS)
+
+
+def _isolated_jdt_command(
+    command: list[str],
+    root: Path,
+) -> tuple[list[str], Path | None]:
+    """Give each JDT process its own Eclipse -data workspace.
+
+    The upstream jdtls launcher derives its default workspace only from the cwd
+    basename. Generated projects reuse names such as mmm_debug_fixture, so unrelated
+    runs can otherwise share stale Eclipse metadata.
+    """
+
+    if any(
+        argument == "-data" or argument.startswith("-data=")
+        for argument in command
+    ):
+        return list(command), None
+
+    configured = os.environ.get("MMM_JDTLS_WORKSPACE_HOME", "").strip()
+    workspace_home = (
+        Path(configured).expanduser().resolve()
+        if configured
+        else (Path.home() / ".cache" / "mmm" / "jdtls" / "workspaces").resolve()
+    )
+    workspace_home.mkdir(parents=True, exist_ok=True)
+    root_digest = hashlib.sha256(str(root.resolve()).encode("utf-8")).hexdigest()[:16]
+    data_dir = Path(
+        tempfile.mkdtemp(
+            prefix=f"{root.name}-{root_digest}-",
+            dir=workspace_home,
+        )
+    ).resolve()
+    return [*command, "-data", str(data_dir)], data_dir
+
+
+def _project_uri_inside_root(uri: object, root: Path) -> bool:
+    if not isinstance(uri, str):
+        return False
+    identity = _file_uri_identity(uri)
+    if identity is None:
+        return False
+    try:
+        candidate = Path(identity).resolve()
+        root_resolved = root.resolve()
+        candidate.relative_to(root_resolved)
+        return True
+    except (OSError, ValueError):
+        return candidate == root.resolve()
+
+
+def _await_jdt_project_model_ready(
+    rpc: "_JsonRpcProcess",
+    root: Path,
+    *,
+    deadline: float,
+) -> None:
+    """Fence diagnostics behind JDT's actual imported Java project model."""
+
+    if not _managed_java_project(root):
+        return
+
+    from .root_cause_trace import emit_root_cause
+
+    observed_projects: list[str] = []
+    last_error = ""
+    while True:
+        remaining = _remaining_jdt_deadline(
+            deadline,
+            operation="project model readiness",
+        )
+        try:
+            result = rpc.request(
+                "workspace/executeCommand",
+                {
+                    "command": "java.project.getAll",
+                    "arguments": [],
+                },
+                timeout=min(5.0, remaining),
+            )
+            observed_projects = [
+                str(value)
+                for value in (result if isinstance(result, list) else [])
+            ]
+            if any(
+                _project_uri_inside_root(uri, root)
+                for uri in observed_projects
+            ):
+                emit_root_cause(
+                    "jdt_project_model_ready",
+                    stage="verify",
+                    operation="java_diagnostics",
+                    gate="jdt_project_model",
+                    result="PASS",
+                    details={
+                        "project_root": str(root),
+                        "observed_projects": observed_projects,
+                    },
+                )
+                return
+        except (JDTLanguageServerError, TimeoutError) as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+
+        remaining = float(deadline) - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(0.25, remaining))
+
+    detail = (
+        f" Last command error: {last_error}."
+        if last_error
+        else ""
+    )
+    raise JDTWorkspaceBootstrapError(
+        "JDT workspace bootstrap failure: ServiceReady was observed, but the "
+        f"managed Java project was never imported for {root}. "
+        f"Observed projects={observed_projects}.{detail}"
+    )
+
+
 class _JsonRpcProcess:
     def __init__(
         self,
@@ -294,7 +427,9 @@ class _JsonRpcProcess:
         *,
         configuration: dict[str, Any] | None = None,
         environment: dict[str, str] | None = None,
+        workspace_data_dir: Path | None = None,
     ) -> None:
+        self.workspace_data_dir = workspace_data_dir
         self.process = subprocess.Popen(
             command,
             cwd=str(cwd),
@@ -366,6 +501,10 @@ class _JsonRpcProcess:
                 self.process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 self.process.kill()
+                self.process.wait(timeout=5)
+        if self.workspace_data_dir is not None:
+            shutil.rmtree(self.workspace_data_dir, ignore_errors=True)
+            self.workspace_data_dir = None
 
     def _read_stdout(self) -> None:
         stream = self.process.stdout
@@ -505,6 +644,11 @@ def _initialize_rpc_session(
             quiet_seconds=quiet_seconds,
             deadline=deadline,
         )
+        _await_jdt_project_model_ready(
+            rpc,
+            root,
+            deadline=deadline,
+        )
     except BaseException:
         rpc.close()
         raise
@@ -576,12 +720,37 @@ class JavaLanguageService:
 
         project_java_home = _resolve_project_java_home()
         configuration = _jdt_configuration(project_java_home)
-        rpc = _JsonRpcProcess(
-            self.command,
-            root,
-            configuration=configuration,
-            environment=_jdtls_environment(),
+        command, workspace_data_dir = _isolated_jdt_command(self.command, root)
+        from .root_cause_trace import emit_root_cause
+
+        emit_root_cause(
+            "jdt_workspace_isolated",
+            stage="verify",
+            operation="java_diagnostics",
+            gate="jdt_workspace",
+            result="PASS",
+            details={
+                "project_root": str(root),
+                "workspace_data_dir": (
+                    str(workspace_data_dir)
+                    if workspace_data_dir is not None
+                    else None
+                ),
+                "explicit_data_argument": workspace_data_dir is None,
+            },
         )
+        try:
+            rpc = _JsonRpcProcess(
+                command,
+                root,
+                configuration=configuration,
+                environment=_jdtls_environment(),
+                workspace_data_dir=workspace_data_dir,
+            )
+        except BaseException:
+            if workspace_data_dir is not None:
+                shutil.rmtree(workspace_data_dir, ignore_errors=True)
+            raise
         _initialize_rpc_session(
             rpc,
             root,
@@ -1031,7 +1200,22 @@ def _published_diagnostics(
         raise JDTLanguageServerError(
             "JDT LS published a malformed diagnostics payload for an opened Java file."
         )
-    return uri, _sorted_diagnostics(values)
+    normalized_values = _sorted_diagnostics(values)
+    from .root_cause_trace import emit_root_cause
+
+    emit_root_cause(
+        "jdt_diagnostics_publication",
+        stage="verify",
+        operation="java_diagnostics",
+        gate="diagnostic_transport",
+        result="PASS",
+        details={
+            "uri": uri,
+            "published_uri": published_uri,
+            "diagnostic_count": len(normalized_values),
+        },
+    )
+    return uri, normalized_values
 
 
 def _raise_diagnostic_deadline(
