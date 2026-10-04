@@ -11,7 +11,7 @@ from typing import Any
 
 from .deadline_executor import iter_completed_with_deadlines
 from .execution_contract_policy import DEFAULT_ATOMIC_SCHEMA_LIMITS
-from .fixed_template_generation import generate_fixed_template_text
+from .fixed_template_generation import generate_fixed_template_value
 
 _MARKER = "_mmm_central_intelligence_amplifier_v1"
 _PARALLEL_CORE_MARKER = "_mmm_parallel_research_design_core_v1"
@@ -166,14 +166,13 @@ def _generate_atomic_research_object(
             "required": list(names),
             "additionalProperties": False,
         }
-        raw = generate_fixed_template_text(
+        value = generate_fixed_template_value(
             router,
             role,
             messages,
             response_schema=part_schema,
             enable_tools=False,
         )
-        value = json.loads(raw)
         if not isinstance(value, Mapping):
             raise ValueError(f"research batch for {wrapper!r} was not an object")
         merged.update({name: value[name] for name in names})
