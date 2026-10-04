@@ -13,6 +13,8 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
+from .platform_backend_contract import effective_target_backend_capabilities
+
 _MARKER = "_mmm_minecraft_domain_correctness_v3"
 
 
@@ -32,15 +34,8 @@ def _normalize_kind(value: Any) -> str:
     return "" if value is None else str(value).strip()
 
 
-def _raw_advertised_kinds(adapter: Any) -> frozenset[str]:
-    advertised = getattr(adapter, "deterministic_module_kinds", frozenset())
-    if not isinstance(advertised, (set, frozenset, tuple, list)):
-        return frozenset()
-    return frozenset(
-        normalized
-        for kind in advertised
-        if (normalized := _normalize_kind(kind))
-    )
+def _advertised_kinds(adapter: Any) -> frozenset[str]:
+    return effective_target_backend_capabilities(adapter)
 
 
 def _supported_kinds(extended_module: Any) -> frozenset[str]:
@@ -116,7 +111,7 @@ def _guard_generation_spec(spec: Any, *, error_type: type[Exception]) -> None:
     """Reject legacy scaffold/project generation before its first filesystem mutation."""
 
     adapter = _adapter_for_spec(spec)
-    allowed = _raw_advertised_kinds(adapter).intersection(_legacy_project_kinds())
+    allowed = _advertised_kinds(adapter).intersection(_legacy_project_kinds())
     requested = _requested_spec_kinds(spec)
     reason = _unsupported_reason(
         allowed=allowed,
@@ -145,7 +140,7 @@ def _guard_extended_content(
     if not requested:
         return
     adapter = _adapter_from_project(project_root)
-    allowed = supported.intersection(_raw_advertised_kinds(adapter))
+    allowed = supported.intersection(_advertised_kinds(adapter))
     reason = _unsupported_reason(
         allowed=allowed,
         requested=requested,
