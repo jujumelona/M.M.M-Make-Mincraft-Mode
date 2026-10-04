@@ -2,9 +2,9 @@ from __future__ import annotations
 
 """Host-owned fixed-template generation for every structured model response.
 
-Structured model responses use host-owned native function arguments whenever the
-router supports them. The deterministic ``mock`` profile and text-only fixtures keep
-their fixture transport.
+Planner design records use schema-constrained JSON with no model-visible function
+protocol. Action-producing roles retain host-owned native function arguments when the
+router supports them. The deterministic ``mock`` profile keeps its fixture transport.
 """
 
 import json
@@ -347,6 +347,7 @@ def generate_fixed_template_value(
     enable_tools: bool = True,
     tool_name: str = _DEFAULT_TOOL_NAME,
     description: str = "",
+    output_token_ceiling: int | None = None,
 ) -> Any:
     """Return structured data through the role's content or action transport."""
 
@@ -354,22 +355,62 @@ def generate_fixed_template_value(
         raise TypeError("fixed-template generation requires a response_schema mapping")
     assert_atomic_model_schema(response_schema, surface=f"fixed template for role {role!r}")
 
-    # Planning authors structured content without function-call repair. Other roles
-    # retain the native action boundary. Mock and text-only routers use text as well.
+    # Planner design records are data, not actions. Never force the small planner
+    # through a function-call protocol merely to serialize a host-owned template.
+    # A semantic/tool/media pass may run first when explicitly needed, but the final
+    # template fill is always tools=0 schema-constrained JSON.
     if _structured_text_transport_required(router, role):
         generate_text = _structured_text_generator(router)
+        transport_messages: Sequence[Mapping[str, Any]] = messages
+        if role == "planner":
+            semantic_output = ""
+            if _semantic_prelude_required(
+                router,
+                role,
+                media_paths=media_paths,
+                tool_stage=tool_stage,
+                enable_tools=enable_tools,
+            ):
+                semantic_output = router.generate_text(
+                    role,
+                    messages,
+                    media_paths=media_paths,
+                    response_format="text",
+                    response_schema=None,
+                    tool_stage=tool_stage,
+                    enable_tools=enable_tools,
+                )
+            transport_messages = _template_messages(
+                messages,
+                semantic_output=semantic_output,
+            )
+            from .model_output_atomicity_contract import (
+                _model_transport_schema as _bounded_model_transport_schema,
+            )
+
+            transport_schema = _bounded_model_transport_schema(response_schema)
+        else:
+            transport_schema = response_schema
+
         fixture_kwargs: dict[str, Any] = {
-            "media_paths": media_paths,
+            "media_paths": () if role == "planner" else media_paths,
             "response_format": _JSON_FIXTURE_FORMAT,
-            "response_schema": response_schema,
-            "enable_tools": enable_tools,
+            "response_schema": transport_schema,
+            "enable_tools": False if role == "planner" else enable_tools,
         }
+        if role == "planner":
+            fixture_kwargs["output_token_ceiling"] = (
+                max(1, int(output_token_ceiling))
+                if output_token_ceiling is not None
+                else ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING
+            )
+            fixture_kwargs["force_non_thinking"] = True
         # A missing stage means there is no tool-capability route to describe. Omitting the
         # key keeps read-only fixed-template transports inert instead of publishing a
         # misleading ``tool_stage=None`` pseudo-capability to adapters and test routers.
-        if tool_stage is not None:
+        if tool_stage is not None and role != "planner":
             fixture_kwargs["tool_stage"] = tool_stage
-        raw = generate_text(role, messages, **fixture_kwargs)
+        raw = generate_text(role, transport_messages, **fixture_kwargs)
         extra_evidence_refs = None
         try:
             val = json.loads(raw)
@@ -471,7 +512,8 @@ __all__ = ["generate_fixed_template_text", "generate_fixed_template_value"]
 def _architecture_impl__structured_text_transport_required(_ctx):
     (router, role) = _ctx
     return (
-        _adapter_name(router, role) == "mock"
+        role == "planner"
+        or _adapter_name(router, role) == "mock"
         or not callable(getattr(router, "generate_tool_decision", None))
     )
 
@@ -480,17 +522,15 @@ def _architecture_impl__generate_native_template_arguments(_ctx):
     (router, role, messages, tool_name, parameters, description) = _ctx
     """Generate host-valid tool arguments using bounded, schema-derived recovery."""
 
+    if role == "planner":
+        raise RuntimeError(
+            "FIXED_TEMPLATE_PLANNER_NATIVE_TOOL_FORBIDDEN: planner templates must use "
+            "schema-constrained JSON transport"
+        )
+
     initial_messages = tuple(dict(message) for message in messages)
     host_parameters = parameters
     transport_parameters = _model_transport_schema(host_parameters)
-    decision_kwargs = (
-        {
-            "output_token_ceiling": ATOMIC_CONCERN_OUTPUT_TOKEN_CEILING,
-            "force_non_thinking": True,
-        }
-        if role == "planner"
-        else {}
-    )
     try:
         arguments = router.generate_tool_decision(
             role,
@@ -498,29 +538,11 @@ def _architecture_impl__generate_native_template_arguments(_ctx):
             tool_name=tool_name,
             parameters=transport_parameters,
             description=description,
-            **decision_kwargs,
         )
         if not isinstance(arguments, Mapping):
             raise ValueError("fixed-template function call did not return an argument mapping")
         return _validate_native_arguments(arguments, host_parameters)
     except Exception as initial_error:
-        # Planner recovery is owned by the semantic work scheduler.  Re-projecting
-        # one failed concern/chunk into one model call per JSON field multiplies
-        # latency and can recreate the same invalid-attractor loop.  Fail this
-        # transport call immediately; the caller may narrow only at a complete
-        # concern boundary.
-        if role == "planner":
-            # Completion-boundary failures are transport/resource failures, not
-            # semantic rejection. Preserve the typed boundary so the owning
-            # scheduler can narrow work without corrupting the failure taxonomy.
-            from .llama_finish_reason_contract import completion_boundary_error
-
-            if completion_boundary_error(initial_error) is not None:
-                raise
-            raise RuntimeError(
-                "FIXED_TEMPLATE_PLANNER_SEMANTIC_UNIT_REJECTED"
-            ) from initial_error
-
         current: BaseException | None = initial_error
         while current is not None:
             if "Failed to initialize samplers: failed to parse grammar" in str(current):
