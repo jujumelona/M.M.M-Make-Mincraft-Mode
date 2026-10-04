@@ -288,6 +288,44 @@ def test_all_platform_authoring_schemas_satisfy_atomic_ceiling():
         validate_platform_modules,
     )
 
+    def _make_dummy_val(s):
+        import re
+
+        if not isinstance(s, dict):
+            return {}
+        if "oneOf" in s and s["oneOf"]:
+            return _make_dummy_val(s["oneOf"][0])
+        if "anyOf" in s and s["anyOf"]:
+            return _make_dummy_val(s["anyOf"][0])
+        if "const" in s:
+            return s["const"]
+        if "enum" in s and s["enum"]:
+            return s["enum"][0]
+        t = s.get("type")
+        if t == "string":
+            pat = s.get("pattern", "")
+            if "#" in pat:
+                return "#FF0000"
+            if pat.startswith("^-") or ("0-9" in pat and "a-z" not in pat):
+                return "1"
+            if ":[a-z" in pat or "minecraft:" in pat:
+                return "minecraft:stone"
+            if "a-z" in pat:
+                return "test"
+            return "mock_name"
+        if t == "integer":
+            return int(s.get("minimum", 1))
+        if t == "number":
+            return float(s.get("minimum", 1.0))
+        if t == "boolean":
+            return True
+        if t == "object" or "properties" in s:
+            res = {}
+            for req in s.get("required", ()):
+                res[req] = _make_dummy_val(s.get("properties", {}).get(req, {}))
+            return res
+        return {}
+
     class AtomicBudgetTrackingRouter:
         def __init__(self):
             self.queried_schemas = []
@@ -300,6 +338,8 @@ def test_all_platform_authoring_schemas_satisfy_atomic_ceiling():
             if response_schema:
                 self.queried_schemas.append(response_schema)
                 structured_output_token_ceiling(response_schema, absolute_ceiling=4096)
+                val_schema = response_schema.get("properties", {}).get("value", {})
+                return json.dumps({"value": _make_dummy_val(val_schema)})
             return json.dumps({"value": {}})
 
     for kind in sorted(PLATFORM_KINDS):
@@ -339,11 +379,94 @@ def test_all_platform_authoring_schemas_satisfy_atomic_ceiling():
 
         if kind in PLATFORM_HOST_KINDS or kind in {"recipe", "advancement", "loot"}:
             assert author.call_count == 0, f"{kind} must be resolved deterministically by host"
+        elif kind in {"networking", "gui", "tag"}:
+            assert author.call_count == 2, f"{kind} decomposes into 2 atomic model decisions"
         else:
             assert author.call_count == 1, f"{kind} should ask the model exactly once"
             for schema in router.queried_schemas:
                 ceiling = structured_output_token_ceiling(schema, absolute_ceiling=4096)
                 assert ceiling <= 4096, f"{kind} schema ceiling {ceiling} exceeds 4096"
+
+
+def test_assert_model_atomic_decision_schema_enforces_boundaries():
+    from minecraft_mod_ai.typed_plan_authoring import (
+        assert_model_atomic_decision_schema,
+        _SHOP_ENTRY_SCHEMA,
+        _ENTITY_TRAITS_AUTHOR_SCHEMA,
+        _QUEST_PARAMS_AUTHOR_SCHEMA,
+        _SKILL_PARAMS_AUTHOR_SCHEMA,
+    )
+    from minecraft_mod_ai.typed_platform_ir import platform_config_schema
+
+    # Valid leaf schemas must pass without error
+    assert_model_atomic_decision_schema(_SHOP_ENTRY_SCHEMA, field="shop_entry")
+    assert_model_atomic_decision_schema(_ENTITY_TRAITS_AUTHOR_SCHEMA, field="entity_traits")
+    assert_model_atomic_decision_schema(_QUEST_PARAMS_AUTHOR_SCHEMA, field="quest_params")
+    assert_model_atomic_decision_schema(_SKILL_PARAMS_AUTHOR_SCHEMA, field="skill_params")
+    assert_model_atomic_decision_schema({"type": "string", "enum": ["a", "b"]}, field="choice")
+
+    # Asking for "platform_config" directly is forbidden
+    with pytest.raises(ValueError, match="platform_config"):
+        assert_model_atomic_decision_schema({"type": "string"}, field="platform_config")
+
+    # Arrays are forbidden
+    with pytest.raises(ValueError, match="array"):
+        assert_model_atomic_decision_schema(
+            {"type": "array", "items": {"type": "string"}}, field="arr"
+        )
+
+    # Property containing an array is forbidden
+    with pytest.raises(ValueError, match="array"):
+        assert_model_atomic_decision_schema(
+            {
+                "type": "object",
+                "properties": {"items": {"type": "array", "items": {"type": "string"}}},
+                "additionalProperties": False,
+            },
+            field="obj_with_arr",
+        )
+
+    # Nested objects are forbidden
+    with pytest.raises(ValueError, match="nested object"):
+        assert_model_atomic_decision_schema(
+            {
+                "type": "object",
+                "properties": {
+                    "nested": {
+                        "type": "object",
+                        "properties": {"k": {"type": "string"}},
+                        "additionalProperties": False,
+                    }
+                },
+                "additionalProperties": False,
+            },
+            field="nested_obj",
+        )
+
+    # Canonical storage schemas are forbidden
+    with pytest.raises(ValueError, match="canonical storage schema"):
+        assert_model_atomic_decision_schema(platform_config_schema("item"), field="item")
+
+    with pytest.raises(ValueError, match="canonical storage schema|array"):
+        assert_model_atomic_decision_schema(platform_config_schema("quest"), field="quest")
+
+    # additionalProperties: False is required on objects
+    with pytest.raises(ValueError, match="additionalProperties: False"):
+        assert_model_atomic_decision_schema(
+            {"type": "object", "properties": {"a": {"type": "string"}}},
+            field="open_obj",
+        )
+
+    # Limit on number of properties
+    with pytest.raises(ValueError, match="limit of 12"):
+        assert_model_atomic_decision_schema(
+            {
+                "type": "object",
+                "properties": {f"k_{i}": {"type": "string"} for i in range(13)},
+                "additionalProperties": False,
+            },
+            field="too_many_props",
+        )
 
 
 def test_author_typed_plan_ir_shop_platform_module_within_budget():
@@ -385,14 +508,9 @@ def test_author_typed_plan_ir_shop_platform_module_within_budget():
                 return json.dumps({"value": "shop"})
             return json.dumps({
                 "value": {
-                    "entries": [
-                        {
-                            "id": "gem_blade",
-                            "item": "minecraft:diamond_sword",
-                            "count": 1,
-                            "price": 150.0,
-                        }
-                    ]
+                    "item": "minecraft:diamond_sword",
+                    "count": 1,
+                    "price": 150.0,
                 }
             })
 
@@ -409,7 +527,7 @@ def test_author_typed_plan_ir_shop_platform_module_within_budget():
     assert shop_module["kind"] == "shop"
     assert shop_module["config"]["entries"] == [
         {
-            "id": "gem_blade",
+            "id": "typed_shop_1_entry_1",
             "item": "minecraft:diamond_sword",
             "count": 1,
             "price": 150.0,

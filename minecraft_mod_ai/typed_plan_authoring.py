@@ -265,6 +265,92 @@ def _integration_entry_points(
     )
 
 
+def assert_model_atomic_decision_schema(
+    schema: Mapping[str, Any],
+    *,
+    field: str = "",
+) -> None:
+    """Validate that a schema queried from the model is an atomic decision schema.
+
+    Model decision schemas must represent single bounded semantic choices or leaf
+    records only. Passing non-atomic schemas (e.g. containing arrays, nested objects,
+    unbounded properties, or canonical storage schemas) is strictly prohibited.
+    Host logic owns cardinality, loops, repetition, IDs, and collection assembly.
+    """
+    if not isinstance(schema, Mapping):
+        raise TypeError(f"NON_ATOMIC_MODEL_SCHEMA: schema must be a mapping: {field}")
+
+    if field == "platform_config":
+        raise ValueError(
+            "NON_ATOMIC_MODEL_SCHEMA: 'platform_config' cannot be used as an authoring field name; "
+            "decompose into bounded leaf decisions."
+        )
+
+    from .typed_platform_ir import PLATFORM_KINDS, platform_config_schema
+
+    for k in PLATFORM_KINDS:
+        canonical = platform_config_schema(k)
+        if canonical.get("properties") and schema == canonical:
+            raise ValueError(
+                f"NON_ATOMIC_MODEL_SCHEMA: passing canonical storage schema for {k!r} to model is forbidden; "
+                "use small bounded semantic authoring schemas."
+            )
+
+    def _check_node(node: Any, path: str, depth: int) -> None:
+        if not isinstance(node, Mapping):
+            return
+
+        schema_type = node.get("type")
+        if schema_type == "array" or (isinstance(schema_type, Sequence) and "array" in schema_type):
+            raise ValueError(
+                f"NON_ATOMIC_MODEL_SCHEMA: array at {path!r} is forbidden in model decision schemas; "
+                "host must own loops, cardinality, and collection assembly."
+            )
+
+        for combinator in ("oneOf", "anyOf"):
+            if combinator in node:
+                branches = node[combinator]
+                if not isinstance(branches, Sequence) or isinstance(branches, (str, bytes, bytearray)):
+                    raise ValueError(f"NON_ATOMIC_MODEL_SCHEMA: {combinator} must be a sequence at {path!r}")
+                for b_idx, branch in enumerate(branches):
+                    if not isinstance(branch, Mapping):
+                        raise ValueError(f"NON_ATOMIC_MODEL_SCHEMA: branch {b_idx} at {path!r} must be an object")
+                    _check_node(branch, f"{path}.{combinator}[{b_idx}]", depth + 1)
+
+        if schema_type == "object" or "properties" in node:
+            props = node.get("properties")
+            if not isinstance(props, Mapping):
+                raise ValueError(
+                    f"NON_ATOMIC_MODEL_SCHEMA: object at {path!r} must declare explicit properties."
+                )
+            if len(props) > 12:
+                raise ValueError(
+                    f"NON_ATOMIC_MODEL_SCHEMA: object at {path!r} has {len(props)} properties, "
+                    "exceeding atomic limit of 12."
+                )
+            if node.get("additionalProperties", True) is not False:
+                raise ValueError(
+                    f"NON_ATOMIC_MODEL_SCHEMA: object at {path!r} must set additionalProperties: False."
+                )
+            for prop_name, prop_schema in props.items():
+                if not isinstance(prop_schema, Mapping):
+                    continue
+                prop_type = prop_schema.get("type")
+                if prop_type == "array" or (isinstance(prop_type, Sequence) and "array" in prop_type):
+                    raise ValueError(
+                        f"NON_ATOMIC_MODEL_SCHEMA: property {prop_name!r} at {path!r} is an array; "
+                        "host must own loops, cardinality, and collection assembly."
+                    )
+                if prop_type == "object" or "properties" in prop_schema:
+                    raise ValueError(
+                        f"NON_ATOMIC_MODEL_SCHEMA: property {prop_name!r} at {path!r} is a nested object; "
+                        "model decisions must be flat leaf records only."
+                    )
+                _check_node(prop_schema, f"{path}.{prop_name}", depth + 1)
+
+    _check_node(schema, "$", 0)
+
+
 class TypedOperationAuthor:
     def __init__(
         self,
@@ -411,6 +497,8 @@ class TypedOperationAuthor:
         host_value = _host_resolved_schema_value(schema)
         if host_value is not _HOST_UNRESOLVED:
             return host_value
+
+        assert_model_atomic_decision_schema(schema, field=field)
 
         if self.budget is not None:
             self.budget.consume(f"typed_plan.{scope}.{field}")
@@ -1348,15 +1436,6 @@ def _content_config_author_schema(kind: str) -> dict[str, Any]:
     common = {
         "display_name_en": {"type": "string", "minLength": 1, "maxLength": 64},
         "display_name_ko": {"type": "string", "minLength": 1, "maxLength": 64},
-        "ingredients": {
-            "type": "array",
-            "maxItems": 2,
-            "items": {
-                "type": "string",
-                "pattern": r"^[a-z0-9_.-]+:[a-z0-9_./-]+$",
-                "maxLength": 64,
-            },
-        },
     }
     if kind == "item":
         return _platform_schema(common)
@@ -1616,6 +1695,192 @@ def _normalize_economy_config(raw: Any) -> dict[str, Any]:
     return {"initial_balance": balance}
 
 
+_SHOP_ENTRY_SCHEMA = _platform_schema({
+    "item": {
+        "type": "string",
+        "pattern": r"^[a-z0-9_.-]+:[a-z0-9_./-]+$",
+        "maxLength": 128,
+    },
+    "count": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 64,
+    },
+    "price": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 100000,
+    },
+}, required=("item", "price"))
+
+_NET_ACTION_MESSAGE_SCHEMA = _platform_schema({
+    "message": {"type": "string", "minLength": 1, "maxLength": 128},
+}, required=("message",))
+
+_NET_ACTION_GRANT_ITEM_SCHEMA = _platform_schema({
+    "item": {
+        "type": "string",
+        "pattern": r"^[a-z0-9_.-]+:[a-z0-9_./-]+$",
+        "maxLength": 128,
+    },
+    "count": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 64,
+    },
+}, required=("item",))
+
+_NET_ACTION_STATUS_EFFECT_SCHEMA = _platform_schema({
+    "effect": {
+        "type": "string",
+        "pattern": r"^[a-z0-9_.-]+:[a-z0-9_./-]+$",
+        "maxLength": 128,
+    },
+    "duration_ticks": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 72000,
+    },
+    "amplifier": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 255,
+    },
+}, required=("effect",))
+
+_GUI_TITLE_SCHEMA = _platform_schema({
+    "title": {"type": "string", "minLength": 1, "maxLength": 64},
+}, required=("title",))
+
+_GUI_ENTRY_SCHEMA = _platform_schema({
+    "item": {
+        "type": "string",
+        "pattern": r"^[a-z0-9_.-]+:[a-z0-9_./-]+$",
+        "maxLength": 128,
+    },
+    "count": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 64,
+    },
+}, required=("item",))
+
+_TAG_VALUE_SCHEMA = _platform_schema({
+    "value": {
+        "type": "string",
+        "pattern": r"^[a-z0-9_.-]+:[a-z0-9_./-]+$",
+        "maxLength": 128,
+    },
+}, required=("value",))
+
+_COMMAND_PARAMS_AUTHOR_SCHEMA = _platform_schema({
+    "literal": {
+        "type": "string",
+        "pattern": r"^[a-z0-9_]+$",
+        "minLength": 1,
+        "maxLength": 32,
+    },
+    "message": {"type": "string", "maxLength": 128},
+    "permission_level": {"type": "integer", "minimum": 0, "maximum": 4},
+})
+
+_ENTITY_TRAITS_AUTHOR_SCHEMA = _platform_schema({
+    "archetype": {
+        "type": "string",
+        "enum": ["biped", "quadruped", "flying", "serpentine", "construct"],
+    },
+    "behavior": {
+        "type": "string",
+        "enum": ["hostile_melee", "neutral_melee", "passive", "npc"],
+    },
+    "spawn_group": {
+        "type": "string",
+        "enum": ["monster", "creature", "ambient", "water_creature", "misc"],
+    },
+    "main_color": {
+        "type": "string",
+        "pattern": r"^#[0-9A-Fa-f]{6}$",
+        "maxLength": 7,
+    },
+})
+
+_QUEST_PARAMS_AUTHOR_SCHEMA = _platform_schema({
+    "objective": {
+        "type": "string",
+        "enum": ["kill", "break", "manual"],
+    },
+    "target": {
+        "type": "string",
+        "pattern": r"^[a-z0-9_.-]+:[a-z0-9_./-]+$",
+        "maxLength": 128,
+    },
+    "required": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 100,
+    },
+    "reward_item": {
+        "type": "string",
+        "pattern": r"^[a-z0-9_.-]+:[a-z0-9_./-]+$",
+        "maxLength": 128,
+    },
+    "reward_count": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 64,
+    },
+    "reward_currency": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 10000,
+    },
+})
+
+_SKILL_PARAMS_AUTHOR_SCHEMA = _platform_schema({
+    "effect": {
+        "type": "string",
+        "pattern": r"^[a-z0-9_.-]+:[a-z0-9_./-]+$",
+        "maxLength": 128,
+    },
+    "duration_ticks": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 72000,
+    },
+    "amplifier": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 255,
+    },
+    "cooldown_ticks": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 72000,
+    },
+    "required_class": {
+        "type": "string",
+        "pattern": r"^[a-z][a-z0-9_]{1,63}$",
+        "maxLength": 64,
+    },
+})
+
+_DISPLAY_PARAMS_AUTHOR_SCHEMA = _platform_schema({
+    "display_name": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+    },
+})
+
+_ECONOMY_PARAMS_AUTHOR_SCHEMA = _platform_schema({
+    "initial_balance": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1000000,
+    },
+})
+
+
 def _author_platform_config(
     author: TypedOperationAuthor,
     kind: str,
@@ -1628,7 +1893,6 @@ def _author_platform_config(
     from .typed_platform_ir import (
         PLATFORM_CONTENT_KINDS,
         PLATFORM_ENTITY_KINDS,
-        platform_config_schema,
     )
 
     if kind == "state_store":
@@ -1646,306 +1910,124 @@ def _author_platform_config(
         return {"json": {"type": "minecraft:empty"}}
 
     if kind == "shop":
-        entry_schema = {
-            "type": "object",
-            "properties": {
-                "id": {
-                    "type": "string",
-                    "pattern": r"^[a-z][a-z0-9_]{1,63}$",
-                    "maxLength": 64,
-                },
-                "item": {
-                    "type": "string",
-                    "pattern": r"^[a-z0-9_.-]+:[a-z0-9_./-]+$",
-                    "maxLength": 128,
-                },
-                "count": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 64,
-                },
-                "price": {
-                    "type": "number",
-                    "minimum": 0,
-                    "maximum": 100000,
-                },
-            },
-            "required": ["id", "item", "price"],
-            "additionalProperties": False,
-        }
-        shop_schema = {
-            "type": "object",
-            "properties": {
-                "entries": {
-                    "type": "array",
-                    "minItems": 1,
-                    "maxItems": 2,
-                    "items": entry_schema,
-                },
-            },
-            "additionalProperties": False,
-        }
-        raw = author._ask("platform_config", shop_schema, scope=scope)
-        entries: list[dict[str, Any]] = []
-        seen_entry_ids: set[str] = set()
-        raw_list: list[Any] = []
+        raw = author._ask("shop_entry", _SHOP_ENTRY_SCHEMA, scope=f"{scope}.entries[0]")
+        item_val = "minecraft:iron_ingot"
+        count_val = 1
+        price_val = 10.0
         if isinstance(raw, Mapping):
-            if "entries" in raw and isinstance(raw["entries"], Sequence) and not isinstance(raw["entries"], (str, bytes, bytearray)):
-                raw_list = list(raw["entries"])
-            elif "id" in raw and "item" in raw:
-                raw_list = [raw]
-        for item in raw_list:
-            if not isinstance(item, Mapping):
-                continue
-            raw_id = str(item.get("id") or "").strip()
-            cleaned_id = re.sub(r"[^a-z0-9_]+", "", raw_id.lower())
-            if not cleaned_id or not cleaned_id[0].isalpha():
-                cleaned_id = f"entry_{len(entries) + 1}"
-            if cleaned_id in seen_entry_ids:
-                cleaned_id = f"{cleaned_id}_{len(entries) + 1}"
-            seen_entry_ids.add(cleaned_id)
-            raw_item = str(item.get("item") or "").strip()
-            if not re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", raw_item):
-                raw_item = "minecraft:iron_ingot"
-            count = max(1, int(item.get("count", 1)))
-            price = max(0.0, float(item.get("price", 10.0)))
-            entries.append({
-                "id": cleaned_id,
-                "item": raw_item,
-                "count": count,
-                "price": price,
-            })
-        if not entries:
-            entries = [{
-                "id": f"{module_id}_entry_1",
-                "item": "minecraft:iron_ingot",
-                "count": 1,
-                "price": 10.0,
-            }]
-        return {"entries": entries}
+            if "entries" in raw and isinstance(raw["entries"], Sequence) and raw["entries"]:
+                first = raw["entries"][0]
+                if isinstance(first, Mapping):
+                    raw_item = str(first.get("item") or "").strip()
+                    if re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", raw_item):
+                        item_val = raw_item
+                    count_val = max(1, int(first.get("count", 1)))
+                    price_val = max(0.0, float(first.get("price", 10.0)))
+            else:
+                raw_item = str(raw.get("item") or "").strip()
+                if re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", raw_item):
+                    item_val = raw_item
+                count_val = max(1, int(raw.get("count", 1)))
+                price_val = max(0.0, float(raw.get("price", 10.0)))
+        return {
+            "entries": [
+                {
+                    "id": f"{module_id}_entry_1",
+                    "item": item_val,
+                    "count": count_val,
+                    "price": price_val,
+                }
+            ]
+        }
 
     if kind == "networking":
-        action_schema = {
-            "oneOf": [
-                {
-                    "type": "object",
-                    "properties": {
-                        "id": {"type": "string", "pattern": r"^[a-z][a-z0-9_]{1,63}$", "maxLength": 64},
-                        "type": {"const": "message"},
-                        "message": {"type": "string", "minLength": 1, "maxLength": 128},
-                    },
-                    "required": ["id", "type", "message"],
-                    "additionalProperties": False,
-                },
-                {
-                    "type": "object",
-                    "properties": {
-                        "id": {"type": "string", "pattern": r"^[a-z][a-z0-9_]{1,63}$", "maxLength": 64},
-                        "type": {"const": "grant_item"},
-                        "item": {"type": "string", "pattern": r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", "maxLength": 128},
-                        "count": {"type": "integer", "minimum": 1, "maximum": 64},
-                    },
-                    "required": ["id", "type", "item"],
-                    "additionalProperties": False,
-                },
-                {
-                    "type": "object",
-                    "properties": {
-                        "id": {"type": "string", "pattern": r"^[a-z][a-z0-9_]{1,63}$", "maxLength": 64},
-                        "type": {"const": "status_effect"},
-                        "effect": {"type": "string", "pattern": r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", "maxLength": 128},
-                        "duration_ticks": {"type": "integer", "minimum": 1, "maximum": 72000},
-                        "amplifier": {"type": "integer", "minimum": 0, "maximum": 255},
-                    },
-                    "required": ["id", "type", "effect"],
-                    "additionalProperties": False,
-                },
-            ],
-        }
-        net_schema = {
-            "type": "object",
-            "properties": {
-                "actions": {
-                    "type": "array",
-                    "minItems": 1,
-                    "maxItems": 2,
-                    "items": action_schema,
-                },
-            },
-            "additionalProperties": False,
-        }
-        raw = author._ask("platform_config", net_schema, scope=scope)
-        actions: list[dict[str, Any]] = []
-        seen_action_ids: set[str] = set()
-        raw_list: list[Any] = []
-        if isinstance(raw, Mapping):
-            if "actions" in raw and isinstance(raw["actions"], Sequence) and not isinstance(raw["actions"], (str, bytes, bytearray)):
-                raw_list = list(raw["actions"])
-            elif "id" in raw and "type" in raw:
-                raw_list = [raw]
-        for item in raw_list:
-            if not isinstance(item, Mapping):
-                continue
-            raw_id = str(item.get("id") or "").strip()
-            cleaned_id = re.sub(r"[^a-z0-9_]+", "", raw_id.lower())
-            if not cleaned_id or not cleaned_id[0].isalpha():
-                cleaned_id = f"action_{len(actions) + 1}"
-            if cleaned_id in seen_action_ids:
-                cleaned_id = f"{cleaned_id}_{len(actions) + 1}"
-            seen_action_ids.add(cleaned_id)
-            action_type = str(item.get("type") or "message")
-            if action_type not in {"message", "grant_item", "status_effect"}:
-                action_type = "message"
-            if action_type == "message":
-                actions.append({
-                    "id": cleaned_id,
-                    "type": "message",
-                    "message": str(item.get("message") or "action").strip() or "action",
-                })
-            elif action_type == "grant_item":
-                item_res = str(item.get("item") or "minecraft:iron_ingot")
-                if not re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", item_res):
-                    item_res = "minecraft:iron_ingot"
-                actions.append({
-                    "id": cleaned_id,
-                    "type": "grant_item",
-                    "item": item_res,
-                    "count": max(1, int(item.get("count", 1))),
-                })
-            elif action_type == "status_effect":
-                effect_res = str(item.get("effect") or "minecraft:speed")
-                if not re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", effect_res):
-                    effect_res = "minecraft:speed"
-                actions.append({
-                    "id": cleaned_id,
-                    "type": "status_effect",
-                    "effect": effect_res,
-                    "duration_ticks": max(1, int(item.get("duration_ticks", 100))),
-                    "amplifier": max(0, min(255, int(item.get("amplifier", 0)))),
-                })
-        if not actions:
-            actions = [{
-                "id": f"{module_id}_action",
-                "type": "message",
-                "message": "action received",
-            }]
+        action_type = author._enum(
+            "action_type",
+            ["message", "grant_item", "status_effect"],
+            scope=f"{scope}.actions[0]",
+        )
+        action_id = f"{module_id}_action_1"
+        if action_type == "message":
+            raw = author._ask("message_action", _NET_ACTION_MESSAGE_SCHEMA, scope=f"{scope}.actions[0]")
+            msg = str(raw.get("message") or "action received").strip() if isinstance(raw, Mapping) else "action received"
+            action = {"id": action_id, "type": "message", "message": msg or "action received"}
+        elif action_type == "grant_item":
+            raw = author._ask("grant_item_action", _NET_ACTION_GRANT_ITEM_SCHEMA, scope=f"{scope}.actions[0]")
+            item_res = "minecraft:iron_ingot"
+            count_res = 1
+            if isinstance(raw, Mapping):
+                item_str = str(raw.get("item") or "").strip()
+                if re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", item_str):
+                    item_res = item_str
+                count_res = max(1, int(raw.get("count", 1)))
+            action = {"id": action_id, "type": "grant_item", "item": item_res, "count": count_res}
+        else:
+            raw = author._ask("status_effect_action", _NET_ACTION_STATUS_EFFECT_SCHEMA, scope=f"{scope}.actions[0]")
+            effect_res = "minecraft:speed"
+            duration_res = 100
+            amplifier_res = 0
+            if isinstance(raw, Mapping):
+                effect_str = str(raw.get("effect") or "").strip()
+                if re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", effect_str):
+                    effect_res = effect_str
+                duration_res = max(1, int(raw.get("duration_ticks", 100)))
+                amplifier_res = max(0, min(255, int(raw.get("amplifier", 0))))
+            action = {
+                "id": action_id,
+                "type": "status_effect",
+                "effect": effect_res,
+                "duration_ticks": duration_res,
+                "amplifier": amplifier_res,
+            }
         return {
             "template": "validated_action_channel",
-            "actions": actions,
+            "actions": [action],
         }
 
     if kind == "gui":
-        gui_schema = {
-            "type": "object",
-            "properties": {
-                "title": {"type": "string", "minLength": 1, "maxLength": 64},
-                "rows": {"type": "integer", "minimum": 1, "maximum": 6},
-                "entries": {
-                    "type": "array",
-                    "maxItems": 2,
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "slot": {"type": "integer", "minimum": 0, "maximum": 53},
-                            "item": {"type": "string", "pattern": r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", "maxLength": 128},
-                            "count": {"type": "integer", "minimum": 1, "maximum": 64},
-                        },
-                        "required": ["slot", "item"],
-                        "additionalProperties": False,
-                    },
-                },
-            },
-            "additionalProperties": False,
-        }
-        raw = author._ask("platform_config", gui_schema, scope=scope)
-        title = str(raw.get("title") or "Menu").strip() if isinstance(raw, Mapping) else "Menu"
-        rows = max(1, min(6, int(raw.get("rows", 3)))) if isinstance(raw, Mapping) else 3
-        entries: list[dict[str, Any]] = []
-        seen_slots: set[int] = set()
-        raw_list: list[Any] = []
-        if isinstance(raw, Mapping):
-            if "entries" in raw and isinstance(raw["entries"], Sequence) and not isinstance(raw["entries"], (str, bytes, bytearray)):
-                raw_list = list(raw["entries"])
-            elif "slot" in raw and "item" in raw:
-                raw_list = [raw]
-        for item in raw_list:
-            if not isinstance(item, Mapping):
-                continue
-            slot = int(item.get("slot", 0))
-            if not 0 <= slot < rows * 9 or slot in seen_slots:
-                continue
-            seen_slots.add(slot)
-            item_res = str(item.get("item") or "minecraft:iron_ingot")
-            if not re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", item_res):
-                item_res = "minecraft:iron_ingot"
-            entries.append({
-                "slot": slot,
-                "item": item_res,
-                "count": max(1, int(item.get("count", 1))),
-            })
+        raw_title = author._ask("gui_title", _GUI_TITLE_SCHEMA, scope=f"{scope}.title")
+        title = str(raw_title.get("title") or "Menu").strip() if isinstance(raw_title, Mapping) else "Menu"
+        raw_entry = author._ask("gui_entry", _GUI_ENTRY_SCHEMA, scope=f"{scope}.entries[0]")
+        item_res = "minecraft:compass"
+        count_res = 1
+        if isinstance(raw_entry, Mapping):
+            raw_item = str(raw_entry.get("item") or "").strip()
+            if re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", raw_item):
+                item_res = raw_item
+            count_res = max(1, int(raw_entry.get("count", 1)))
         return {
             "template": "read_only_menu",
             "title": title or "Menu",
-            "rows": rows,
-            "entries": entries,
+            "rows": 3,
+            "entries": [
+                {
+                    "slot": 0,
+                    "item": item_res,
+                    "count": count_res,
+                }
+            ],
         }
 
     if kind == "tag":
-        tag_schema = {
-            "type": "object",
-            "properties": {
-                "registry": {
-                    "type": "string",
-                    "enum": ["items", "blocks", "entity_types", "fluids", "functions"],
-                },
-                "values": {
-                    "type": "array",
-                    "minItems": 1,
-                    "maxItems": 2,
-                    "items": {"type": "string", "pattern": r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", "maxLength": 128},
-                },
-                "replace": {"type": "boolean"},
-            },
-            "additionalProperties": False,
-        }
-        raw = author._ask("platform_config", tag_schema, scope=scope)
-        registry = "items"
-        values = ["minecraft:iron_ingot"]
-        replace = False
-        if isinstance(raw, Mapping):
-            reg = str(raw.get("registry") or "")
-            if reg in {"items", "blocks", "entity_types", "fluids", "functions"}:
-                registry = reg
-            raw_vals = raw.get("values")
-            if isinstance(raw_vals, Sequence) and not isinstance(raw_vals, (str, bytes, bytearray)):
-                filtered = [
-                    str(v)
-                    for v in raw_vals
-                    if isinstance(v, str) and re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", v)
-                ]
-                if filtered:
-                    values = filtered
-            elif isinstance(raw_vals, str) and re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", raw_vals):
-                values = [raw_vals]
-            if "replace" in raw and isinstance(raw["replace"], bool):
-                replace = raw["replace"]
+        registry = author._enum(
+            "registry",
+            ["items", "blocks", "entity_types", "fluids", "functions"],
+            scope=f"{scope}.registry",
+        )
+        raw_val = author._ask("tag_value", _TAG_VALUE_SCHEMA, scope=f"{scope}.values[0]")
+        val_str = "minecraft:stone"
+        if isinstance(raw_val, Mapping):
+            raw_v = str(raw_val.get("value") or "").strip()
+            if re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", raw_v):
+                val_str = raw_v
         return {
             "registry": registry,
-            "values": values,
-            "replace": replace,
+            "values": [val_str],
+            "replace": False,
         }
 
     if kind == "command":
-        cmd_schema = {
-            "type": "object",
-            "properties": {
-                "literal": {"type": "string", "pattern": r"^[a-z0-9_]+$", "minLength": 1, "maxLength": 32},
-                "message": {"type": "string", "maxLength": 128},
-                "permission_level": {"type": "integer", "minimum": 0, "maximum": 4},
-            },
-            "additionalProperties": False,
-        }
-        raw = author._ask("platform_config", cmd_schema, scope=scope)
+        raw = author._ask("command_params", _COMMAND_PARAMS_AUTHOR_SCHEMA, scope=scope)
         literal = module_id
         message = f"Executed {module_id}"
         perm = 0
@@ -1966,32 +2048,27 @@ def _author_platform_config(
 
     if kind in PLATFORM_CONTENT_KINDS:
         content_schema = _content_config_author_schema(kind)
-        raw = author._ask("platform_config", content_schema, scope=scope)
+        raw = author._ask("content_traits", content_schema, scope=scope)
         return _normalize_content_config(kind, raw, module_id)
 
     if kind in PLATFORM_ENTITY_KINDS:
-        entity_schema = {**platform_config_schema(kind), "required": []}
-        raw = author._ask("platform_config", entity_schema, scope=scope)
+        raw = author._ask("entity_traits", _ENTITY_TRAITS_AUTHOR_SCHEMA, scope=scope)
         return _normalize_entity_config(raw, module_id)
 
     if kind == "quest":
-        quest_schema = {**platform_config_schema(kind), "required": []}
-        raw = author._ask("platform_config", quest_schema, scope=scope)
+        raw = author._ask("quest_params", _QUEST_PARAMS_AUTHOR_SCHEMA, scope=scope)
         return _normalize_quest_config(raw, module_id)
 
     if kind == "skill":
-        skill_schema = {**platform_config_schema(kind), "required": []}
-        raw = author._ask("platform_config", skill_schema, scope=scope)
+        raw = author._ask("skill_params", _SKILL_PARAMS_AUTHOR_SCHEMA, scope=scope)
         return _normalize_skill_config(raw, module_id)
 
     if kind in {"class", "party", "guild"}:
-        disp_schema = {**platform_config_schema(kind), "required": []}
-        raw = author._ask("platform_config", disp_schema, scope=scope)
+        raw = author._ask("display_name", _DISPLAY_PARAMS_AUTHOR_SCHEMA, scope=scope)
         return _normalize_display_config(raw, module_id)
 
     if kind == "economy":
-        econ_schema = {**platform_config_schema(kind), "required": []}
-        raw = author._ask("platform_config", econ_schema, scope=scope)
+        raw = author._ask("initial_balance", _ECONOMY_PARAMS_AUTHOR_SCHEMA, scope=scope)
         return _normalize_economy_config(raw)
 
     raise ValueError(f"TYPED_PLATFORM_KIND_UNSUPPORTED: {kind!r}")
