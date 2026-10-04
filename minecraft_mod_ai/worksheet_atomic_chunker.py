@@ -15,6 +15,7 @@ from typing import Any
 
 from .execution_contract_policy import (
     DEFAULT_ATOMIC_SCHEMA_LIMITS,
+    PLANNER_RECORD_ARRAY_ITEM_MAX_CHARS,
     PLANNER_RECORD_FIELD_MAX_CHARS,
     PLANNER_RECORD_PAGE_MAX_FIELDS,
 )
@@ -109,20 +110,21 @@ def _schema_types(schema: Mapping[str, Any]) -> set[str]:
     return set()
 
 
-def _planner_page_field_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
+def _planner_page_field_schema(
+    schema: Mapping[str, Any],
+    *,
+    string_cap: int = PLANNER_RECORD_FIELD_MAX_CHARS,
+) -> dict[str, Any]:
     """Clamp one model-facing planner field without changing canonical storage limits."""
 
     result = deepcopy(dict(schema))
     types = _schema_types(result)
     if "string" in types:
         try:
-            explicit = int(result.get("maxLength", PLANNER_RECORD_FIELD_MAX_CHARS))
+            explicit = int(result.get("maxLength", string_cap))
         except (TypeError, ValueError):
-            explicit = PLANNER_RECORD_FIELD_MAX_CHARS
-        result["maxLength"] = max(
-            1,
-            min(explicit, PLANNER_RECORD_FIELD_MAX_CHARS),
-        )
+            explicit = string_cap
+        result["maxLength"] = max(1, min(explicit, string_cap))
     if "array" in types:
         try:
             explicit_items = int(
@@ -136,11 +138,17 @@ def _planner_page_field_schema(schema: Mapping[str, Any]) -> dict[str, Any]:
         )
         items = result.get("items")
         if isinstance(items, Mapping):
-            result["items"] = _planner_page_field_schema(items)
+            result["items"] = _planner_page_field_schema(
+                items,
+                string_cap=min(string_cap, PLANNER_RECORD_ARRAY_ITEM_MAX_CHARS),
+            )
     properties = result.get("properties")
     if isinstance(properties, Mapping):
         result["properties"] = {
-            str(name): _planner_page_field_schema(child)
+            str(name): _planner_page_field_schema(
+                child,
+                string_cap=string_cap,
+            )
             if isinstance(child, Mapping)
             else deepcopy(child)
             for name, child in properties.items()
@@ -207,6 +215,52 @@ def _model_transport_schema(schema: Any, *, is_properties_map: bool = False) -> 
     if isinstance(schema, list):
         return [_model_transport_schema(value) for value in schema]
     return schema
+
+
+
+def worksheet_concern_cardinality_schema(
+    section: str,
+    concern: str,
+) -> dict[str, Any]:
+    """Return the tiny semantic decision schema that precedes all field pages."""
+
+    key = _normalize_section_name(section)
+    records = DETAIL_RECORDS[key]
+    if concern not in records:
+        raise ValueError(f"Unknown concern {concern!r} for section {key!r}")
+    return {
+        "type": "object",
+        "properties": {
+            "record_count": {
+                "type": "integer",
+                "enum": list(range(DEFAULT_ATOMIC_SCHEMA_LIMITS.max_array_items + 1)),
+            }
+        },
+        "required": ["record_count"],
+        "additionalProperties": False,
+    }
+
+
+def worksheet_concern_cardinality_prompt(
+    section: str,
+    concern: str,
+) -> str:
+    """Ask only for semantic record cardinality; the host owns all iteration."""
+
+    key = _normalize_section_name(section)
+    if concern not in DETAIL_RECORDS[key]:
+        raise ValueError(f"Unknown concern {concern!r} for section {key!r}")
+    return "\n".join(
+        (
+            "ENGINEERING WORKSHEET — bounded concern cardinality decision:",
+            f"Section: {key}",
+            f"Concern: {concern}",
+            f"Purpose: {_section_description(key)}",
+            "Choose how many distinct semantic records this concern needs for the user request.",
+            f"Return record_count as an integer from 0 through {DEFAULT_ATOMIC_SCHEMA_LIMITS.max_array_items}.",
+            "Use 0 only when this concern is not needed. Do not author record content in this call.",
+        )
+    )
 
 
 def worksheet_chunk_schema(
@@ -636,4 +690,6 @@ __all__ = [
     "worksheet_chunk_model_schema",
     "worksheet_chunk_prompt",
     "worksheet_chunk_schema",
+    "worksheet_concern_cardinality_prompt",
+    "worksheet_concern_cardinality_schema",
 ]
