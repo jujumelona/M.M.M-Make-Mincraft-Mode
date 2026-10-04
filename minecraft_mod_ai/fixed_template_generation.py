@@ -22,7 +22,6 @@ from .structured_output import validate_structured_output
 
 _JSON_FIXTURE_FORMAT = "json"
 _ROLE_TOOL_STAGE = {
-    "planner": "planning",
     "researcher": "research",
     "coder": "generation",
     "coder_safe": "quality",
@@ -355,15 +354,61 @@ def generate_fixed_template_value(
         raise TypeError("fixed-template generation requires a response_schema mapping")
     assert_atomic_model_schema(response_schema, surface=f"fixed template for role {role!r}")
 
-    # Planner design records are data, not actions. Never force the small planner
-    # through a function-call protocol merely to serialize a host-owned template.
-    # A semantic/tool/media pass may run first when explicitly needed, but the final
-    # template fill is always tools=0 schema-constrained JSON.
+    # Planner templates are data-only. They never enter tool transport, semantic
+    # preludes, media/tool stages, or native-function recovery.
+    if role == "planner":
+        generate_text = _structured_text_generator(router)
+        from .model_output_atomicity_contract import (
+            _model_transport_schema as _bounded_model_transport_schema,
+        )
+
+        transport_schema = _bounded_model_transport_schema(response_schema)
+        schema_output_ceiling = structured_output_token_ceiling(transport_schema)
+        if output_token_ceiling is not None:
+            requested_output_ceiling = max(1, int(output_token_ceiling))
+            if requested_output_ceiling < schema_output_ceiling:
+                raise ValueError(
+                    "FIXED_TEMPLATE_OUTPUT_BUDGET_TOO_SMALL: planner structured "
+                    "output requires the schema-proven decode bound before inference: "
+                    f"requested={requested_output_ceiling} "
+                    f"required={schema_output_ceiling}"
+                )
+        raw = generate_text(
+            role,
+            messages,
+            media_paths=(),
+            response_format=_JSON_FIXTURE_FORMAT,
+            response_schema=transport_schema,
+            enable_tools=False,
+            output_token_ceiling=schema_output_ceiling,
+            force_non_thinking=True,
+        )
+        validated = validate_structured_output(
+            raw,
+            response_format=_JSON_FIXTURE_FORMAT,
+            response_schema=response_schema,
+        )
+        return json.loads(validated)
+
     if _structured_text_transport_required(router, role):
         generate_text = _structured_text_generator(router)
-        transport_messages: Sequence[Mapping[str, Any]] = messages
-        if role == "planner":
-            semantic_output = ""
+        raw = generate_text(
+            role,
+            messages,
+            media_paths=media_paths,
+            response_format=_JSON_FIXTURE_FORMAT,
+            response_schema=response_schema,
+            enable_tools=enable_tools,
+            **({"tool_stage": tool_stage} if tool_stage is not None else {}),
+        )
+        validated = validate_structured_output(
+            raw,
+            response_format=_JSON_FIXTURE_FORMAT,
+            response_schema=response_schema,
+        )
+        return json.loads(validated)
+
+    semantic_output = ""
             if _semantic_prelude_required(
                 router,
                 role,
@@ -503,25 +548,10 @@ def generate_fixed_template_value(
     return out
 
 
-def generate_fixed_template_text(
-    router: Any,
-    role: str,
-    messages: Sequence[Mapping[str, Any]],
-    **kwargs: Any,
-) -> str:
-    """Compatibility surface returning host-serialized JSON after fixed-template fill."""
-
-    value = generate_fixed_template_value(router, role, messages, **kwargs)
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-
-
-__all__ = ["generate_fixed_template_text", "generate_fixed_template_value"]
-
 def _architecture_impl__structured_text_transport_required(_ctx):
     (router, role) = _ctx
     return (
-        role == "planner"
-        or _adapter_name(router, role) == "mock"
+        _adapter_name(router, role) == "mock"
         or not callable(getattr(router, "generate_tool_decision", None))
     )
 
@@ -529,12 +559,6 @@ def _architecture_impl__structured_text_transport_required(_ctx):
 def _architecture_impl__generate_native_template_arguments(_ctx):
     (router, role, messages, tool_name, parameters, description) = _ctx
     """Generate host-valid tool arguments using bounded, schema-derived recovery."""
-
-    if role == "planner":
-        raise RuntimeError(
-            "FIXED_TEMPLATE_PLANNER_NATIVE_TOOL_FORBIDDEN: planner templates must use "
-            "schema-constrained JSON transport"
-        )
 
     initial_messages = tuple(dict(message) for message in messages)
     host_parameters = parameters
