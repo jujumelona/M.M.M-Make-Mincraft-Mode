@@ -39,7 +39,6 @@ def record_cardinality_response_schema(
         "additionalProperties": False,
     }
 
-record_batch_response_schema = record_cardinality_response_schema
 
 
 def _host_evidence_refs(context: dict[str, Any], allowed_refs: set[str]) -> list[str]:
@@ -224,11 +223,8 @@ def run_bounded_record_template(
         "evidence_refs": _host_evidence_refs(normalized_context, admitted_refs),
     }
 
-run_record_template = run_bounded_record_template
 
 __all__ = [
-    "record_batch_response_schema",
     "record_cardinality_response_schema",
     "run_bounded_record_template",
-    "run_record_template",
 ]
