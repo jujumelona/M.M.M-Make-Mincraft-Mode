@@ -344,10 +344,13 @@ def _project_uri_inside_root(uri: object, root: Path) -> bool:
     try:
         candidate = Path(identity).resolve()
         root_resolved = root.resolve()
+    except OSError:
+        return False
+    try:
         candidate.relative_to(root_resolved)
         return True
-    except (OSError, ValueError):
-        return candidate == root.resolve()
+    except ValueError:
+        return candidate == root_resolved
 
 
 def _await_jdt_project_model_ready(
