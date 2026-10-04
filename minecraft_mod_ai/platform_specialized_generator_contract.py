@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .platform_backend_contract import (
-    effective_target_backend_capabilities,
+    deterministic_backend_capabilities,
     geckolib_entity_capabilities as _geckolib_capabilities,
     system_pack_capabilities as _system_pack_capabilities,
 )
@@ -26,7 +26,7 @@ def _require_deterministic_capability(
     feature: str,
 ) -> None:
     adapter = adapter_from_project(project_root)
-    effective_capabilities = effective_target_backend_capabilities(adapter)
+    effective_capabilities = deterministic_backend_capabilities(adapter)
     if required_kinds and required_kinds.issubset(effective_capabilities):
         return
     raise ValueError(
