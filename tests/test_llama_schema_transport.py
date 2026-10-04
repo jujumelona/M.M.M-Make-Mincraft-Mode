@@ -204,8 +204,9 @@ def test_pattern_plus_maxlength_synthesizes_bounded_pattern():
 
     projected = project_llama_transport_schema(schema)
 
-    # Both pattern (now bounded) and maxLength are preserved.
-    assert projected["pattern"] == "^[a-z0-9_.-]{1,128}:[a-z0-9_./-]{1,128}$"
+    # Budget distributed: fixed=1(:), min_var=2(two +), budget=125, per_extra=62
+    # Max total: 63 + 1 + 63 = 127 ≤ 128
+    assert projected["pattern"] == "^[a-z0-9_.-]{1,63}:[a-z0-9_./-]{1,63}$"
     assert projected["maxLength"] == 128
     assert projected["minLength"] == 1
 
@@ -262,6 +263,6 @@ def test_identifier_pattern_is_bounded_by_maxlength():
 
     projected = project_llama_transport_schema(schema)
 
-    assert projected["pattern"] == "^[A-Za-z_$][A-Za-z0-9_$.]{0,24}$"
+    assert projected["pattern"] == "^[A-Za-z_$][A-Za-z0-9_$.]{0,23}$"
     assert projected["maxLength"] == 24
 

@@ -21,42 +21,143 @@ def _bound_pattern_quantifiers(pattern: str, max_length: int) -> str:
     """Fold *maxLength* into a regex by bounding ``*`` and ``+`` quantifiers.
 
     llama.cpp processes ``pattern`` before ``maxLength``, so the length limit
-    must live inside the regex itself.  Each ``*`` outside a character class
-    becomes ``{0,N}`` and each ``+`` becomes ``{1,N}`` where *N* = *max_length*.
-    Already-bounded quantifiers (``?``, ``{n,m}``) are left unchanged.
+    must live inside the regex itself.
+
+    Unlike a naive approach that gives every quantifier the full *max_length*
+    budget (which allows ``N * max_length`` total characters for *N* groups),
+    this function first computes the maximum cost of all fixed-length elements,
+    then distributes the remaining budget **evenly** across unbounded groups,
+    guaranteeing total match length ≤ *max_length*.
     """
-    parts: list[str] = []
-    i = 0
-    in_char_class = False
     n = len(pattern)
+
+    def _quantifier_at(pos: int) -> tuple[int, bool, int, int]:
+        """Inspect the quantifier (if any) following an atom at *pos*.
+
+        Returns ``(new_pos, is_variable, min_contrib, fixed_max_contrib)``.
+        """
+        if pos >= n or pattern[pos] not in "*+?{":
+            return pos, False, 0, 1          # no quantifier → fixed 1
+        c = pattern[pos]
+        if c == "*":
+            return pos + 1, True, 0, 0       # unbounded, min 0
+        if c == "+":
+            return pos + 1, True, 1, 0       # unbounded, min 1
+        if c == "?":
+            return pos + 1, False, 0, 1      # optional atom, max 1
+        # c == "{"
+        j = pos + 1
+        while j < n and pattern[j] != "}":
+            j += 1
+        qs = pattern[pos + 1 : j]
+        if "," in qs:
+            hi = qs.split(",")[1].strip()
+            mx = int(hi) if hi else max_length
+        else:
+            mx = int(qs)
+        return j + 1, False, 0, mx           # already bounded
+
+    # ── Phase 1: analyse ──
+    num_var = 0      # unbounded quantifier count
+    min_var = 0      # sum of minimum contributions from variable groups
+    fixed_max = 0    # max chars from non-variable elements (conservative)
+    i = 0
+    in_cc = False
+
     while i < n:
         ch = pattern[i]
-        # Skip escaped characters (e.g. \\. \\* \\+)
+        # escaped char
         if ch == "\\" and i + 1 < n:
-            parts.append(pattern[i : i + 2])
+            if in_cc:
+                i += 2
+                continue
             i += 2
+            i, is_v, mn, fx = _quantifier_at(i)
+            if is_v:
+                num_var += 1; min_var += mn
+            else:
+                fixed_max += fx
             continue
-        if ch == "[" and not in_char_class:
-            in_char_class = True
-            parts.append(ch)
+        # char-class boundaries
+        if ch == "[" and not in_cc:
+            in_cc = True; i += 1; continue
+        if ch == "]" and in_cc:
+            in_cc = False; i += 1
+            i, is_v, mn, fx = _quantifier_at(i)
+            if is_v:
+                num_var += 1; min_var += mn
+            else:
+                fixed_max += fx
+            continue
+        if in_cc:
+            i += 1; continue
+        # anchors / alternation
+        if ch in "^$|":
+            i += 1; continue
+        # group open
+        if ch == "(":
             i += 1
+            if i < n and pattern[i] == "?":
+                i += 1
+                if i < n and pattern[i] in "!=":
+                    # lookahead — skip, consumes no chars
+                    depth = 1; i += 1
+                    while i < n and depth > 0:
+                        if pattern[i] == "\\" and i + 1 < n:
+                            i += 2; continue
+                        if pattern[i] == "(":
+                            depth += 1
+                        elif pattern[i] == ")":
+                            depth -= 1
+                        i += 1
+                    continue
+                if i < n and pattern[i] == ":":
+                    i += 1
             continue
-        if ch == "]" and in_char_class:
-            in_char_class = False
-            parts.append(ch)
+        # group close — check for group-level quantifier
+        if ch == ")":
             i += 1
+            if i < n and pattern[i] == "?":
+                i += 1                        # optional group
+            elif i < n and pattern[i] == "*":
+                num_var += 1; i += 1
+            elif i < n and pattern[i] == "+":
+                num_var += 1; min_var += 1; i += 1
             continue
-        if not in_char_class:
-            if ch == "*":
-                parts.append("{0," + str(max_length) + "}")
-                i += 1
-                continue
-            if ch == "+":
-                parts.append("{1," + str(max_length) + "}")
-                i += 1
-                continue
-        parts.append(ch)
+        # literal or dot — atom of width 1
         i += 1
+        i, is_v, mn, fx = _quantifier_at(i)
+        if is_v:
+            num_var += 1; min_var += mn
+        else:
+            fixed_max += fx
+
+    if num_var == 0:
+        return pattern
+
+    # ── Phase 2: compute per-group budget ──
+    budget = max(0, max_length - fixed_max - min_var)
+    per_extra = budget // num_var
+
+    # ── Phase 3: replace * and + ──
+    parts: list[str] = []
+    i = 0
+    in_cc = False
+    while i < n:
+        ch = pattern[i]
+        if ch == "\\" and i + 1 < n:
+            parts.append(pattern[i : i + 2]); i += 2; continue
+        if ch == "[" and not in_cc:
+            in_cc = True; parts.append(ch); i += 1; continue
+        if ch == "]" and in_cc:
+            in_cc = False; parts.append(ch); i += 1; continue
+        if in_cc:
+            parts.append(ch); i += 1; continue
+        if ch == "*":
+            parts.append("{0," + str(per_extra) + "}"); i += 1; continue
+        if ch == "+":
+            parts.append("{1," + str(1 + per_extra) + "}"); i += 1; continue
+        parts.append(ch); i += 1
     return "".join(parts)
 
 
