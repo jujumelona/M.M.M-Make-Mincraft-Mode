@@ -185,6 +185,32 @@ class _WorksheetRouter:
         return json.dumps(result)
 
 
+def test_field_page_cannot_run_without_host_fixed_cardinality() -> None:
+    router = _WorksheetRouter()
+    section = "behavior_contract"
+    page = pack_section_concerns(section)[0]
+
+    with pytest.raises(
+        ValueError,
+        match="requires a host-fixed record count",
+    ):
+        _generate_authored_chunk(
+            router,
+            "make the requested gameplay feature",
+            page=_PlannerPageRequest(
+                section=section,
+                chunk_index=1,
+                chunk_count=1,
+                concerns=page,
+                completed={},
+                include_evidence=False,
+                media_paths=(),
+            ),
+        )
+
+    assert router.calls == []
+
+
 def test_authored_planner_uses_tiny_count_then_fixed_single_field_page() -> None:
     router = _WorksheetRouter()
     section = "behavior_contract"
