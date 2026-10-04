@@ -11,7 +11,11 @@ from jsonschema import Draft202012Validator
 
 from .design_generation_schema import context_bound_record_schema
 from .fixed_template_generation import generate_fixed_template_value
-from .model_output_atomicity_contract import assert_atomic_model_schema
+from .model_output_atomicity_contract import (
+    _model_transport_schema,
+    assert_atomic_model_schema,
+)
+from .worksheet_atomic_chunker import planner_page_output_token_ceiling
 from .task_template_catalog import load_record_template
 from .task_template_input import task_binding, task_context
 
@@ -77,7 +81,8 @@ def _atomic_record_schema_slices(
     *,
     identifier: str,
 ) -> tuple[dict[str, Any], ...]:
-    """Keep one logical record intact instead of paging its fields by an arbitrary width."""
+    """Project one logical record into host-owned one-field model pages."""
+
     if schema.get("type") != "object":
         raise SingleRecordTemplateError(
             f"SINGLE_TEMPLATE_SCHEMA: {identifier} record_schema must be an object"
@@ -94,14 +99,47 @@ def _atomic_record_schema_slices(
             f"SINGLE_TEMPLATE_SCHEMA: {identifier} has undeclared required fields "
             f"{sorted(undeclared_required)!r}"
         )
-    try:
-        assert_atomic_model_schema(schema, surface=f"logical record for {identifier!r}")
-    except Exception as exc:
-        raise SingleRecordTemplateError(
-            f"SINGLE_TEMPLATE_SCHEMA: invalid model-facing schema for {identifier}: {exc}"
-        ) from exc
-    return (deepcopy(schema),)
 
+    shared: dict[str, Any] = {}
+    for key in ("$schema", "$defs", "definitions"):
+        if key in schema:
+            shared[key] = deepcopy(schema[key])
+
+    slices: list[dict[str, Any]] = []
+    for raw_name in required:
+        name = str(raw_name)
+        child = properties.get(name)
+        if not isinstance(child, Mapping):
+            raise SingleRecordTemplateError(
+                f"SINGLE_TEMPLATE_SCHEMA: {identifier}.{name} must declare a field schema"
+            )
+        part_schema: dict[str, Any] = {
+            **deepcopy(shared),
+            "type": "object",
+            "properties": {name: deepcopy(dict(child))},
+            "required": [name],
+            "additionalProperties": False,
+        }
+        try:
+            assert_atomic_model_schema(
+                part_schema,
+                surface=f"single record field {identifier}.{name}",
+            )
+            # Prove that one field page has a finite decode bound before any model call.
+            planner_page_output_token_ceiling(
+                _model_transport_schema(part_schema)
+            )
+        except Exception as exc:
+            raise SingleRecordTemplateError(
+                f"SINGLE_TEMPLATE_SCHEMA: unbounded field page for {identifier}.{name}: {exc}"
+            ) from exc
+        slices.append(part_schema)
+
+    if not slices:
+        raise SingleRecordTemplateError(
+            f"SINGLE_TEMPLATE_SCHEMA: {identifier} has no required model fields"
+        )
+    return tuple(slices)
 
 def _merge_record_slice(
     merged: dict[str, Any],
@@ -188,6 +226,9 @@ def run_single_record_template(
             tool_name = "submit_one_" + identifier.replace("/", "_")
             if len(slices) > 1:
                 tool_name += f"_part_{part_index}_of_{len(slices)}"
+            output_ceiling = planner_page_output_token_ceiling(
+                _model_transport_schema(part_schema)
+            )
             part = generate(
                 router,
                 "planner",
@@ -195,6 +236,7 @@ def run_single_record_template(
                 response_schema=part_schema,
                 enable_tools=False,
                 tool_name=tool_name,
+                output_token_ceiling=output_ceiling,
             )
             Draft202012Validator(part_schema).validate(part)
             _merge_record_slice(value, part, identifier=identifier)
