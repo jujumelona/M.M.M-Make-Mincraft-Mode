@@ -93,8 +93,9 @@ class TargetEvidence:
 
     @property
     def mandatory_coverage(self) -> int:
-        # Every residual capability is implemented as custom source. The target is only
-        # admitted if its provider receipt can execute that source-generation path.
+        # Executable production module kinds are admitted separately against the
+        # immutable target backend receipt. Generic research queries may remain
+        # uncovered, but they are not permission to invent a removed custom backend.
         return 1
 
     @property
@@ -1113,7 +1114,7 @@ def _build_target_evidence(
             mode = "direct"
             covered.append(query)
         else:
-            mode = "custom"
+            mode = "uncovered"
         modes.append((query, mode))
         _emit_platform_trace(
             "capability_composition",
@@ -1124,7 +1125,7 @@ def _build_target_evidence(
             details={"query": query, "mode": mode},
         )
 
-    residual = sum(mode == "custom" for _query, mode in modes)
+    residual = sum(mode == "uncovered" for _query, mode in modes)
     research_quality = _research_quality(research_payload)
     evidence_quality = len(verified_by_query) / len(queries) if queries else 1.0
     return TargetEvidence(
