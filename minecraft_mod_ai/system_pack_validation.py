@@ -97,8 +97,8 @@ def _validate_cross_module_semantics(
             raise ValueError(
                 "Built-in economy-shop provides one server-authoritative currency "
                 "manager with any number of accounts, shops, and catalog entries. "
-                "Route multiple independent currencies to custom_java so every "
-                "currency has an explicit instance namespace."
+                "Multiple independent currencies have no built-in deterministic backend; "
+                "split the design into supported semantics or reject it before generation."
             )
         entries: set[str] = set()
         for module_id, kind, config in modules:
@@ -131,9 +131,9 @@ def _validate_cross_module_semantics(
             if len(matching) > 1:
                 raise ValueError(
                     f"Built-in {kind} provides one manager that can create any "
-                    f"number of runtime {kind} groups. Route multiple independent "
-                    f"{kind} managers to custom_java so each manager has an "
-                    "explicit instance namespace."
+                    f"number of runtime {kind} groups. Multiple independent {kind} managers "
+                    "have no built-in deterministic backend and must be rejected "
+                    "before generation."
                 )
 
 
@@ -150,7 +150,7 @@ def _validate_quest(module_id: str, config: dict[str, Any]) -> None:
     objective = str(config.get("objective", "manual"))
     if objective not in _QUEST_OBJECTIVES:
         raise ValueError(
-            f"Quest {module_id} objective {objective!r} is not built in; use custom_java."
+            f"Quest {module_id} objective {objective!r} has no built-in deterministic backend."
         )
     target = str(config.get("target", module_id))
     if objective in {"kill", "break"} and not _RESOURCE_ID.fullmatch(target):
@@ -290,7 +290,8 @@ def _validate_gui(module_id: str, config: dict[str, Any]) -> None:
     )
     if config.get("template") != "read_only_menu":
         raise ValueError(
-            f"GUI {module_id} must use template=read_only_menu or custom_java."
+            f"GUI {module_id} template has no built-in deterministic backend; "
+            "template=read_only_menu is required."
         )
     title = str(config.get("title", "M.M.M")).strip()
     if not title or len(title) > 128:
@@ -333,7 +334,8 @@ def _validate_networking(module_id: str, config: dict[str, Any]) -> None:
     _reject_unknown(module_id, config, {"template", "actions"})
     if config.get("template") != "validated_action_channel":
         raise ValueError(
-            f"Networking {module_id} must use template=validated_action_channel or custom_java."
+            f"Networking {module_id} template has no built-in deterministic backend; "
+            "template=validated_action_channel is required."
         )
     actions = config.get("actions")
     if not isinstance(actions, list) or not actions:
@@ -355,7 +357,7 @@ def _validate_networking(module_id: str, config: dict[str, Any]) -> None:
         action_type = str(action["type"])
         if action_type not in _ACTION_TYPES:
             raise ValueError(
-                f"Networking {module_id}/{action_id} type {action_type!r} is not built in; use custom_java."
+                f"Networking {module_id}/{action_id} type {action_type!r} has no built-in deterministic backend."
             )
         if action_type == "message":
             _require_exact_fields(action, {"id", "type", "message"}, module_id, action_id)
@@ -448,7 +450,7 @@ def _reject_unknown(
     unknown = set(config) - allowed
     if unknown:
         raise ValueError(
-            f"Built-in module {module_id} has unsupported fields {sorted(unknown)}; use custom_java."
+            f"Built-in module {module_id} has unsupported fields {sorted(unknown)} and no deterministic fallback."
         )
 
 
