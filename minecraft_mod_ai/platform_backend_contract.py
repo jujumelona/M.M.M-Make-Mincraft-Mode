@@ -131,6 +131,33 @@ def production_backend_is_supported(
     )
 
 
+def bootstrap_content_capabilities(
+    kind: str,
+    *,
+    recipe: bool,
+) -> frozenset[str]:
+    """Capabilities consumed by the legacy bootstrap ContentSpec compiler."""
+
+    normalized = str(kind or "").strip()
+    if normalized == "item":
+        required = {"item"}
+        if recipe:
+            required.add("recipe")
+        return frozenset(required)
+    if normalized == "block":
+        required = {"block", "loot", "tag"}
+        if recipe:
+            required.add("recipe")
+        return frozenset(required)
+    return frozenset()
+
+
+def bootstrap_boss_capabilities() -> frozenset[str]:
+    """Capabilities consumed by FabricProjectGenerator._write_boss()."""
+
+    return frozenset({"boss", "item", "loot"})
+
+
 def supported_extended_content_kinds(
     available: Iterable[str] | None,
 ) -> frozenset[str]:
@@ -144,6 +171,8 @@ def supported_extended_content_kinds(
 
 __all__ = [
     "DEFAULT_GECKOLIB_VERSION",
+    "bootstrap_boss_capabilities",
+    "bootstrap_content_capabilities",
     "ENTITY_PIPELINE_KINDS",
     "EXTENDED_CONTENT_KINDS",
     "SYSTEM_KIND_TO_PACK",
