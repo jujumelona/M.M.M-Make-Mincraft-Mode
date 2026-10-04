@@ -8,29 +8,18 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
 
+from .platform_backend_contract import (
+    ENTITY_PIPELINE_KINDS as PLATFORM_ENTITY_KINDS,
+    EXTENDED_CONTENT_KINDS as PLATFORM_CONTENT_KINDS,
+    SYSTEM_KIND_TO_PACK as PLATFORM_SYSTEM_KIND_TO_PACK,
+)
 from .system_pack_validation import validate_system_modules
 
-PLATFORM_CONTENT_KINDS = frozenset({
-    "item", "block", "tool", "weapon", "armor", "food", "crop", "machine",
-    "effect", "enchantment", "command", "recipe", "advancement", "loot", "tag",
-})
-PLATFORM_SYSTEM_KIND_TO_PACK = {
-    "quest": "quest-system",
-    "class": "class-skill-system",
-    "skill": "class-skill-system",
-    "economy": "economy-shop",
-    "shop": "economy-shop",
-    "gui": "gui-networking",
-    "networking": "gui-networking",
-    "party": "party-guild",
-    "guild": "party-guild",
-}
 PLATFORM_HOST_KINDS = frozenset({
     "state_store",
     "network_sync",
     "resource_policy",
 })
-PLATFORM_ENTITY_KINDS = frozenset({"entity", "boss", "npc"})
 PLATFORM_KINDS = frozenset(
     set(PLATFORM_CONTENT_KINDS)
     | set(PLATFORM_SYSTEM_KIND_TO_PACK)
