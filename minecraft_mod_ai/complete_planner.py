@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 from .authored_plan import AuthoredPlan
 from .complete_spec import CompleteProposal
@@ -84,7 +85,7 @@ class CompleteGameDesignPlanner:
                     kinds = getattr(resolved_adapter, "deterministic_module_kinds", None)
                 except Exception:
                     pass
-        effective_kinds = tuple(sorted(kinds)) if kinds else ()
+        effective_kinds = tuple(sorted(kinds)) if kinds is not None else None
 
         with planner_operation("author_typed_plan_ir"):
             typed_plan_ir = author_typed_plan_ir(
