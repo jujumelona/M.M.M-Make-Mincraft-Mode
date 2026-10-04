@@ -34,6 +34,16 @@ def _page_for_field(section: str, concern: str, field: str):
     raise AssertionError(f"missing planner page for {section}.{concern}.{field}")
 
 
+def _schema_for_page(section: str, page, *, count: int = 1, **kwargs):
+    concern = str(page[0])
+    return worksheet_chunk_schema(
+        section,
+        page,
+        record_counts={concern: count},
+        **kwargs,
+    )
+
+
 def _fixed_count(chunk, count: int = 1) -> dict[str, int]:
     return {str(chunk[0]): count}
 
