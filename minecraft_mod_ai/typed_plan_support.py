@@ -88,9 +88,10 @@ def typed_plan_support_issues(
                 + str(function.get("id") or "<missing>")
             )
 
-    phantom = sorted(covered - active_refs)
+    host_bound_coverage = covered | function_covered
+    phantom = sorted(host_bound_coverage - active_refs)
     issues.extend(
-        f"platform.coverage_without_active_concern:{ref}"
+        f"host.coverage_without_active_concern:{ref}"
         for ref in phantom
     )
 
@@ -98,7 +99,7 @@ def typed_plan_support_issues(
         active = active_concern_records(normalized, section)
         for concern, rows in active.items():
             ref = f"{section}.{concern}"
-            if rows and ref not in covered:
+            if rows and ref not in host_bound_coverage:
                 issues.append(ref)
 
     for section in (
