@@ -8,6 +8,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .complete_spec import ProductionModule
+from .platform_backend_contract import EXTENDED_CONTENT_KINDS
 from .extended_record_cache import read_cached_directory_records
 from .project_edit import (
     ensure_main_initializer_call,
@@ -22,25 +23,7 @@ class ExtendedContentError(RuntimeError):
     pass
 
 
-_SUPPORTED = frozenset(
-    {
-        "item",
-        "block",
-        "tool",
-        "weapon",
-        "armor",
-        "food",
-        "crop",
-        "machine",
-        "effect",
-        "enchantment",
-        "command",
-        "recipe",
-        "advancement",
-        "loot",
-        "tag",
-    }
-)
+_SUPPORTED = EXTENDED_CONTENT_KINDS
 _JAVA_KINDS = _SUPPORTED - {"recipe", "advancement", "loot"}
 _CATALOG_SCHEMA = "mmm/extended-module-catalog-v1"
 _DIRECTORY_CATALOG_SCHEMA = "mmm/extended-module-directory-v1"
