@@ -24,11 +24,23 @@ from .model_output_atomicity_contract import _assert_closed_object_schemas
 from .planning_detail_slots import DETAIL_RECORDS, record_field_schema
 from .structured_state_runtime import constrain_state_record_schema
 from .planning_detail_template import (
-    _PLACEHOLDERS,
     _normalize_section_name,
     _section_description,
     validate_worksheet_section,
 )
+
+_PLACEHOLDERS = frozenset({
+    "n/a",
+    "na",
+    "none",
+    "not applicable",
+    "not-applicable",
+    "todo",
+    "tbd",
+    "unknown",
+    "same as above",
+    "same-as-above",
+})
 
 _CANONICAL_FIELD_DEFAULTS: dict[str, str] = {
     "authority": "server",
@@ -616,9 +628,7 @@ __all__ = [
     "WorksheetConcernChunk",
     "merge_worksheet_section_chunks",
     "pack_section_concerns",
-    "planner_page_output_token_ceiling",
     "validate_worksheet_chunk_signal",
-    "worksheet_chunk_model_schema",
     "worksheet_chunk_prompt",
     "worksheet_chunk_schema",
     "worksheet_concern_cardinality_prompt",
