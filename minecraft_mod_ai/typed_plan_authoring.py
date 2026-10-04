@@ -2165,11 +2165,17 @@ def author_typed_plan_ir(
                 literal_name = cmd_slug[:32] if cmd_slug else f"cmd_{entry_point_index + 1}"
                 config = {"literal": literal_name, "permission_level": 0}
 
+        entry_point_covers = ["integration.entry_points"]
+        if (
+            event == "command"
+            and "resources_and_ui.interactions" in coverage_refs
+        ):
+            entry_point_covers.append("resources_and_ui.interactions")
         specs.append({
             "id": function_id,
             "parameters": parameters,
             "return_type": return_type,
-            "covers": ["integration.entry_points"],
+            "covers": entry_point_covers,
         })
         event_bindings.append({
             "event": event,
@@ -2323,6 +2329,12 @@ def author_typed_plan_ir(
 
     platform_modules: list[dict[str, Any]] = []
     seen_platform_ids: set[str] = set()
+    host_covered_refs = {
+        str(cover)
+        for function in functions
+        for cover in function.get("covers", ())
+        if isinstance(cover, str)
+    }
     uncovered = {
         ref
         for ref in coverage_refs
@@ -2331,6 +2343,7 @@ def author_typed_plan_ir(
             "persistence.",
             "resources_and_ui.",
         ))
+        and ref not in host_covered_refs
     }
     # None means the target is not bound yet (AUTO planning may still choose a
     # compatible target later). An empty iterable is different: the bound target
