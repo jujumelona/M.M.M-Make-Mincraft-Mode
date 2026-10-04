@@ -236,7 +236,7 @@ def test_debug_fixture_runs_real_build_and_packaging_without_live_model(
     )
 
 
-def test_debug_fixture_keeps_build_bundle_when_jdt_is_unavailable(
+def test_debug_fixture_releases_when_only_jdt_infrastructure_is_unavailable(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -287,19 +287,22 @@ def test_debug_fixture_keeps_build_bundle_when_jdt_is_unavailable(
         ),
     )
 
-    assert result.status == "BUILT_WITH_UNRESOLVED_GATES"
-    assert result.release_ready is False
-    assert result.release_zip is None
+    assert result.status == "VERIFIED"
+    assert result.release_ready is True
+    assert result.release_zip is not None
+    assert Path(result.release_zip).is_file()
     assert result.jar_path is not None
     assert Path(result.jar_path).is_file()
     assert result.build_bundle_zip is not None
     assert Path(result.build_bundle_zip).is_file()
-    assert "execution-gate:jdt:missing-jdt" in result.unresolved_gates
+    assert "execution-gate:jdt:missing-jdt" not in result.unresolved_gates
 
     with __import__("zipfile").ZipFile(result.build_bundle_zip, "r") as archive:
         manifest = json.loads(archive.read("build-manifest.json"))
         names = set(archive.namelist())
-    assert manifest["release_certified"] is False
-    assert manifest["release_ready"] is False
-    assert "execution-gate:jdt:missing-jdt" in manifest["unresolved_gates"]
+        jdt_receipt = json.loads(archive.read("receipts/jdt-receipt.json"))
+    assert manifest["release_certified"] is True
+    assert manifest["release_ready"] is True
+    assert "execution-gate:jdt:missing-jdt" not in manifest["unresolved_gates"]
+    assert jdt_receipt["status"] == "UNAVAILABLE"
     assert any(name.startswith("artifact/") and name.endswith(".jar") for name in names)
