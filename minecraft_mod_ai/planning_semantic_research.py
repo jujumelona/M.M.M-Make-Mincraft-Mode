@@ -64,9 +64,6 @@ _VERIFICATION_SCHEMA = {
     "properties": {"verdict": {"type": "string", "enum": list(_VERDICTS)}},
     "required": ["verdict"],
 }
-# Backward import compatibility for tests/helpers that referenced the old module constant.
-_SCHEMA = _ASSESSMENT_SCHEMA
-
 # Input segmentation only. This never limits how much of the current source window may
 # support a proof; the model may select any valid consecutive unit range in that window.
 _EVIDENCE_UNIT_BYTES = 512
