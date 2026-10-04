@@ -7,6 +7,11 @@ from pathlib import Path
 from typing import Any
 
 from .complete_spec import CompleteProposal, ProductionModule
+from .platform_backend_contract import (
+    ENTITY_PIPELINE_KINDS,
+    EXTENDED_CONTENT_KINDS,
+    SYSTEM_KIND_TO_PACK,
+)
 
 
 def file_sha256(path: Path) -> str:
@@ -106,16 +111,19 @@ def _normalize_modules(modules: tuple[ProductionModule, ...], spec) -> tuple[lis
     return (_topological_modules(kept), receipts)
 
 def _system_groups(modules: list[ProductionModule]) -> dict[str, list[ProductionModule]]:
-    mapping = {'quest': 'quest-system', 'class': 'class-skill-system', 'skill': 'class-skill-system', 'economy': 'economy-shop', 'shop': 'economy-shop', 'gui': 'gui-networking', 'networking': 'gui-networking', 'party': 'party-guild', 'guild': 'party-guild'}
     result: dict[str, list[ProductionModule]] = {}
     for module in modules:
-        pack = mapping.get(module.kind)
+        pack = SYSTEM_KIND_TO_PACK.get(module.kind)
         if pack:
             result.setdefault(pack, []).append(module)
     return result
 
 def _handled_module_ids(modules: list[ProductionModule]) -> set[str]:
-    built_in = {'item', 'block', 'tool', 'weapon', 'armor', 'food', 'crop', 'machine', 'effect', 'enchantment', 'command', 'recipe', 'advancement', 'loot', 'quest', 'class', 'skill', 'economy', 'shop', 'gui', 'networking', 'party', 'guild', 'entity', 'boss', 'npc', 'structure'}
+    built_in = (
+        set(EXTENDED_CONTENT_KINDS)
+        | set(SYSTEM_KIND_TO_PACK)
+        | set(ENTITY_PIPELINE_KINDS)
+    )
     return {module.module_id for module in modules if module.kind in built_in}
 
 def _module_dict(module: ProductionModule) -> dict[str, Any]:
