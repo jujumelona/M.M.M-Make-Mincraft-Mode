@@ -35,77 +35,24 @@ def _published(uri: str, diagnostics: object) -> dict[str, object]:
     }
 
 
-def test_open_documents_must_resolve_to_compilation_units_before_refresh() -> None:
-    class ResolvingRpc(_FakeRpc):
-        def request(self, method: str, params: dict[str, object], timeout: float):
-            self.requests.append((method, params, timeout))
-            assert method == "workspace/executeCommand"
-            assert params["command"] == "java.project.isTestFile"
-            return str(params["arguments"][0]).endswith("Test.java")
-
-    rpc = ResolvingRpc([])
-    java_lsp._await_open_document_resolution(
-        rpc,
-        expected_uris={"file:///Main.java", "file:///FeatureTest.java"},
-        deadline=java_lsp.time.monotonic() + 1.0,
-    )
-
-    assert [params["arguments"][0] for _method, params, _timeout in rpc.requests] == [
-        "file:///FeatureTest.java",
-        "file:///Main.java",
-    ]
-
-
-def test_open_document_resolution_retries_transient_unresolved_file() -> None:
-    class EventuallyResolvingRpc(_FakeRpc):
-        def __init__(self) -> None:
-            super().__init__([])
-            self.calls = 0
-
-        def request(self, method: str, params: dict[str, object], timeout: float):
-            self.requests.append((method, params, timeout))
-            self.calls += 1
-            if self.calls == 1:
-                raise java_lsp.JDTLanguageServerError(
-                    "Given URI does not belong to an existing Java source file."
-                )
-            return False
-
-    rpc = EventuallyResolvingRpc()
-    java_lsp._await_open_document_resolution(
-        rpc,
-        expected_uris={"file:///Main.java"},
-        deadline=java_lsp.time.monotonic() + 1.0,
-    )
-
-    assert rpc.calls == 2
-
-
-def test_explicit_refresh_requests_each_open_document_with_lifecycle_fence() -> None:
+def test_direct_validation_notifies_each_open_document_without_execute_command() -> None:
     rpc = _FakeRpc([])
-    deadline = java_lsp.time.monotonic() + 1.0
+    rpc.notifications = []
 
-    java_lsp._refresh_open_document_diagnostics(
+    def notify(method: str, params: dict[str, object]) -> None:
+        rpc.notifications.append((method, params))
+
+    rpc.notify = notify
+    java_lsp._request_open_document_validation(
         rpc,
         expected_uris={"file:///B.java", "file:///A.java"},
-        deadline=deadline,
     )
 
-    assert [method for method, _params, _timeout in rpc.requests] == [
-        "workspace/executeCommand",
-        "workspace/executeCommand",
+    assert rpc.notifications == [
+        ("java/validateDocument", {"textDocument": {"uri": "file:///A.java"}}),
+        ("java/validateDocument", {"textDocument": {"uri": "file:///B.java"}}),
     ]
-    assert [params for _method, params, _timeout in rpc.requests] == [
-        {
-            "command": "java.project.refreshDiagnostics",
-            "arguments": ["file:///A.java", "thisFile", False, True],
-        },
-        {
-            "command": "java.project.refreshDiagnostics",
-            "arguments": ["file:///B.java", "thisFile", False, True],
-        },
-    ]
-    assert all(timeout > 0 for _method, _params, timeout in rpc.requests)
+    assert rpc.requests == []
 
 
 def test_clean_file_diagnostics_are_forced_instead_of_inferred_from_silence(
@@ -124,15 +71,11 @@ def test_clean_file_diagnostics_are_forced_instead_of_inferred_from_silence(
 
         def notify(self, method: str, params: dict[str, object]) -> None:
             self.notifications.append((method, params))
-
-        def request(self, method: str, params: dict[str, object], timeout: float):
-            self.requests.append((method, params, timeout))
-            assert method == "workspace/executeCommand"
-            arguments = params["arguments"]
-            assert isinstance(arguments, list)
-            uri = str(arguments[0])
-            self.messages.put(_published(uri, []))
-            return None
+            if method == "java/validateDocument":
+                text_document = params["textDocument"]
+                assert isinstance(text_document, dict)
+                uri = str(text_document["uri"])
+                self.messages.put(_published(uri, []))
 
     service = java_lsp.JavaLanguageService(diagnostic_quiet_seconds=0.0)
     rpc = RefreshingRpc()
@@ -150,10 +93,8 @@ def test_clean_file_diagnostics_are_forced_instead_of_inferred_from_silence(
     assert result["files_opened"] == 1
     assert result["error_count"] == 0
     assert result["warning_count"] == 0
-    assert rpc.requests[0][1] == {
-        "command": "java.project.refreshDiagnostics",
-        "arguments": [uri, "thisFile", False, True],
-    }
+    assert ("java/validateDocument", {"textDocument": {"uri": uri}}) in rpc.notifications
+    assert rpc.requests == []
 
 
 def test_equivalent_file_uri_spellings_match_diagnostics() -> None:
