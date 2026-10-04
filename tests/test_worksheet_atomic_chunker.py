@@ -342,8 +342,12 @@ def test_chunk_schema_rejects_undeclared_fields_before_merge():
         record_counts=_fixed_count(concern_group),
     )
     concern = str(concern_group[0])
+    fields = concern_group.field_projection[concern]
+    canonical_item = row("behavior_contract")["specification"][concern][0]
     output = json.dumps({
-        concern: [],
+        concern: [
+            {field: canonical_item[field] for field in fields}
+        ],
         "extra_hallucinated_field": "bad",
     })
 
