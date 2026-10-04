@@ -17,6 +17,7 @@ from .execution_contract_policy import (
     DEFAULT_ATOMIC_SCHEMA_LIMITS,
     DEFAULT_SCHEMA_PROFILE,
     MODEL_MAX_COMPLETION_TOKENS,
+    PLANNER_RECORD_PAGE_OUTPUT_TOKEN_CEILING,
     SCHEMA_CONTRACT_PROFILE_KEY,
     SCHEMA_STRING_CLASS_KEY,
     STRING_CLASS_GENERIC,
@@ -244,6 +245,16 @@ def _model_transport_schema(
         if _schema_has_type(value, "array") and "maxItems" not in result:
             result["maxItems"] = limits.max_array_items
         if (
+            _schema_has_type(value, "integer")
+            and "enum" not in result
+            and type(value.get("minimum")) is int
+            and type(value.get("maximum")) is int
+        ):
+            minimum = int(value["minimum"])
+            maximum = int(value["maximum"])
+            if minimum <= maximum and maximum - minimum <= 256:
+                result["enum"] = list(range(minimum, maximum + 1))
+        if (
             (_schema_has_type(value, "object") or "properties" in value)
             and value.get("additionalProperties") is not False
             and "maxProperties" not in result
@@ -260,6 +271,196 @@ def _model_transport_schema(
             for child in value
         ]
     return value
+
+
+_SCHEMA_ANNOTATION_KEYS = frozenset(
+    {"title", "description", "$comment", "default", "examples", "$defs", "definitions"}
+)
+
+
+def _resolve_local_schema_ref(
+    root: Mapping[str, Any],
+    ref: str,
+) -> Mapping[str, Any]:
+    if not ref.startswith("#/"):
+        raise ValueError(f"structured schema ref must be local: {ref!r}")
+    current: Any = root
+    for raw_part in ref[2:].split("/"):
+        part = raw_part.replace("~1", "/").replace("~0", "~")
+        if not isinstance(current, Mapping) or part not in current:
+            raise ValueError(f"structured schema ref is unresolved: {ref!r}")
+        current = current[part]
+    if not isinstance(current, Mapping):
+        raise ValueError(f"structured schema ref is not an object schema: {ref!r}")
+    return current
+
+
+def _schema_max_json_chars(
+    schema: Mapping[str, Any],
+    *,
+    root: Mapping[str, Any],
+    ref_stack: tuple[str, ...] = (),
+) -> int:
+    """Conservative serialized-JSON upper bound for one structured model page."""
+
+    if "const" in schema:
+        return len(
+            json.dumps(
+                schema["const"],
+                ensure_ascii=True,
+                separators=(",", ":"),
+            )
+        )
+    enum = schema.get("enum")
+    if isinstance(enum, list) and enum:
+        return max(
+            len(json.dumps(value, ensure_ascii=True, separators=(",", ":")))
+            for value in enum
+        )
+
+    candidates: list[int] = []
+
+    raw_ref = schema.get("$ref")
+    if isinstance(raw_ref, str):
+        if raw_ref in ref_stack:
+            raise ValueError(f"recursive structured schema ref is not finitely bounded: {raw_ref!r}")
+        target = _resolve_local_schema_ref(root, raw_ref)
+        ref_bound = _schema_max_json_chars(
+            target,
+            root=root,
+            ref_stack=(*ref_stack, raw_ref),
+        )
+        sibling_shape = {
+            key: value
+            for key, value in schema.items()
+            if key != "$ref" and key not in _SCHEMA_ANNOTATION_KEYS
+        }
+        if sibling_shape:
+            candidates.append(
+                ref_bound
+                + _schema_max_json_chars(
+                    sibling_shape,
+                    root=root,
+                    ref_stack=ref_stack,
+                )
+            )
+        else:
+            candidates.append(ref_bound)
+
+    for keyword in ("oneOf", "anyOf"):
+        branches = schema.get(keyword)
+        if isinstance(branches, Sequence) and not isinstance(
+            branches, (str, bytes, bytearray)
+        ) and branches:
+            bounds = [
+                _schema_max_json_chars(branch, root=root, ref_stack=ref_stack)
+                for branch in branches
+                if isinstance(branch, Mapping)
+            ]
+            if len(bounds) != len(branches):
+                raise ValueError(f"{keyword} contains a non-object schema branch")
+            candidates.append(max(bounds))
+
+    branches = schema.get("allOf")
+    if isinstance(branches, Sequence) and not isinstance(
+        branches, (str, bytes, bytearray)
+    ) and branches:
+        bounds = [
+            _schema_max_json_chars(branch, root=root, ref_stack=ref_stack)
+            for branch in branches
+            if isinstance(branch, Mapping)
+        ]
+        if len(bounds) != len(branches):
+            raise ValueError("allOf contains a non-object schema branch")
+        # The same JSON instance satisfies every branch. Summation deliberately
+        # overestimates combined fragments so it remains a safe upper bound.
+        candidates.append(sum(bounds))
+
+    types = {
+        str(item)
+        for item in (
+            [schema.get("type")]
+            if isinstance(schema.get("type"), str)
+            else schema.get("type", ())
+            if isinstance(schema.get("type"), Sequence)
+            and not isinstance(schema.get("type"), (str, bytes, bytearray))
+            else ()
+        )
+        if item
+    }
+
+    properties = schema.get("properties")
+    if "object" in types or isinstance(properties, Mapping):
+        if not isinstance(properties, Mapping):
+            raise ValueError("structured object schema must declare properties")
+        parts = 2
+        for index, (name, child) in enumerate(properties.items()):
+            if not isinstance(child, Mapping):
+                raise ValueError("structured object property schema must be an object")
+            if index:
+                parts += 1
+            parts += len(json.dumps(str(name), ensure_ascii=True)) + 1
+            parts += _schema_max_json_chars(
+                child,
+                root=root,
+                ref_stack=ref_stack,
+            )
+        candidates.append(parts)
+
+    if "array" in types:
+        try:
+            max_items = int(schema["maxItems"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("structured array schema must declare finite maxItems") from exc
+        items = schema.get("items")
+        if not isinstance(items, Mapping):
+            raise ValueError("structured array schema must declare item schema")
+        item_chars = _schema_max_json_chars(
+            items,
+            root=root,
+            ref_stack=ref_stack,
+        )
+        candidates.append(2 + max_items * item_chars + max(0, max_items - 1))
+
+    if "string" in types:
+        try:
+            max_length = int(schema["maxLength"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("structured string schema must declare finite maxLength") from exc
+        candidates.append(2 + 6 * max(0, max_length))
+
+    if types & {"integer", "number"}:
+        raise ValueError("structured numeric schema has unbounded lexical output")
+
+    if "boolean" in types:
+        candidates.append(5)
+    if "null" in types:
+        candidates.append(4)
+
+    if not candidates:
+        raise ValueError(f"structured schema has no bounded serializable type: {schema!r}")
+    return max(candidates)
+
+
+def structured_output_token_ceiling(
+    schema: Mapping[str, Any],
+    *,
+    absolute_ceiling: int = PLANNER_RECORD_PAGE_OUTPUT_TOKEN_CEILING,
+) -> int:
+    """Prove and return a finite decode ceiling for one structured model page."""
+
+    if not isinstance(schema, Mapping):
+        raise TypeError("structured output budget requires a schema mapping")
+    max_json_chars = _schema_max_json_chars(schema, root=schema)
+    derived = max(64, max_json_chars + 32)
+    limit = max(1, int(absolute_ceiling))
+    if derived > limit:
+        raise ValueError(
+            "structured schema exceeds the global atomic output bound; "
+            "split the page further before inference: "
+            f"derived={derived} limit={limit}"
+        )
+    return derived
 
 
 def _tool_template_schema(
@@ -515,5 +716,6 @@ __all__ = [
     "assert_installed",
     "assert_strict_atomicity_bounds",
     "is_atomic_model_schema",
+    "structured_output_token_ceiling",
     "install",
 ]
