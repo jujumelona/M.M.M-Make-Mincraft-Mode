@@ -20,6 +20,8 @@ from minecraft_mod_ai.worksheet_atomic_chunker import (
     pack_section_concerns,
     worksheet_chunk_prompt,
     worksheet_chunk_schema,
+    worksheet_concern_cardinality_prompt,
+    worksheet_concern_cardinality_schema,
 )
 from worksheet_fixtures import row
 
@@ -124,6 +126,29 @@ def test_planner_pages_are_prebounded_and_continuations_fix_cardinality():
     assert "actors=3 row(s)" in prompt
 
 
+def test_cardinality_decision_is_tiny_and_content_free():
+    schema = worksheet_concern_cardinality_schema(
+        "behavior_contract",
+        "actors",
+    )
+    assert schema == {
+        "type": "object",
+        "properties": {
+            "record_count": {
+                "type": "integer",
+                "enum": [0, 1, 2, 3, 4],
+            }
+        },
+        "required": ["record_count"],
+        "additionalProperties": False,
+    }
+    prompt = worksheet_concern_cardinality_prompt(
+        "behavior_contract",
+        "actors",
+    )
+    assert "Do not author record content" in prompt
+    assert "0 through 4" in prompt
+
 def test_state_model_symbols_do_not_change_planning_chunk_field_types():
     chunks = pack_section_concerns("state_model")
     target = _page_for_field("state_model", "transitions", "guard")
@@ -214,7 +239,7 @@ def test_persistence_missing_default_accepts_and_preserves_empty_list():
     validate_structured_output(
         json.dumps({
             "missing_defaults": [
-                {"field": "unlockable_blueprint_ids", "default": []}
+                {"default": []}
             ]
         }),
         response_format="json",
@@ -263,7 +288,12 @@ def test_chunk_schema_rejects_undeclared_fields_before_merge():
         concern_group,
         include_evidence=True,
     )
-    output = json.dumps({"extra_hallucinated_field": "bad"})
+    concern = str(concern_group[0])
+    output = json.dumps({
+        concern: [],
+        "constraint_evidence_refs": [],
+        "extra_hallucinated_field": "bad",
+    })
 
     with pytest.raises(
         StructuredOutputValidationError,
