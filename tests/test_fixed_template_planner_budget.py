@@ -20,7 +20,10 @@ from minecraft_mod_ai.fixed_template_generation import (
     generate_fixed_template_value,
 )
 from minecraft_mod_ai.model_router import ModelRouter
-from minecraft_mod_ai.worksheet_atomic_chunker import pack_section_concerns
+from minecraft_mod_ai.worksheet_atomic_chunker import (
+    pack_section_concerns,
+    planner_page_output_token_ceiling,
+)
 
 
 _SCHEMA = {
@@ -293,11 +296,48 @@ def test_authored_planner_uses_tiny_count_then_fixed_single_field_page() -> None
     page_call = router.calls[-1]
     assert page_call["enable_tools"] is False
     assert page_call["force_non_thinking"] is True
-    assert (
-        page_call["output_token_ceiling"]
-        == PLANNER_RECORD_PAGE_OUTPUT_TOKEN_CEILING
-    )
     concern_schema = page_call["response_schema"]["properties"][concern]
+    expected_ceiling = planner_page_output_token_ceiling(
+        page_call["response_schema"]
+    )
+    assert page_call["output_token_ceiling"] == expected_ceiling
+    assert expected_ceiling < PLANNER_RECORD_PAGE_OUTPUT_TOKEN_CEILING
     assert concern_schema["minItems"] == 2
     assert concern_schema["maxItems"] == 2
     assert len(concern_schema["items"]["properties"]) == 1
+
+
+def test_planner_page_budget_is_schema_derived_and_rejects_unbounded_numeric() -> None:
+    bounded = {
+        "type": "object",
+        "properties": {
+            "rows": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 2,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "value": {"type": "string", "maxLength": 16},
+                    },
+                    "required": ["value"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["rows"],
+        "additionalProperties": False,
+    }
+
+    ceiling = planner_page_output_token_ceiling(bounded)
+    assert 64 <= ceiling < PLANNER_RECORD_PAGE_OUTPUT_TOKEN_CEILING
+
+    with pytest.raises(ValueError, match="unbounded lexical output"):
+        planner_page_output_token_ceiling(
+            {
+                "type": "object",
+                "properties": {"value": {"type": "number"}},
+                "required": ["value"],
+                "additionalProperties": False,
+            }
+        )
