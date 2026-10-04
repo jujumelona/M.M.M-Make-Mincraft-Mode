@@ -242,6 +242,7 @@ def _compile_new_authored_modules(
                 "covers": list(item["covers"]),
             }
             for item in raw_platform_modules
+            if str(item["kind"]) not in {"state_store", "network_sync", "resource_policy"}
         ],
         "entrypoint": {
             "owner": "host_scaffold",
