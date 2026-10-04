@@ -444,14 +444,28 @@ def _generate_authored_page_value(
 
         concern = str(page.concerns[0])
         concern_schema = schema["properties"][concern]
-        fields = concern_schema["items"]["required"]
-        if len(fields) == 1 and fields[0] in STATE_EXECUTABLE_FIELDS:
-            count = concern_schema.get("minItems", 0)
-            if count == concern_schema.get("maxItems", count) and count > 0:
-                return author_state_field_page(
-                    router, messages, concern=concern, field=fields[0],
-                    count=count, symbols=state_symbols,
+        fields = tuple(concern_schema["items"]["required"])
+
+        executable = [
+            field for field in fields
+            if field in STATE_EXECUTABLE_FIELDS
+        ]
+
+        if executable:
+            if len(fields) != 1 or len(executable) != 1:
+                raise ValueError(
+                    "STATE_EXECUTABLE_PAGE_MUST_BE_SINGLETON: "
+                    f"{concern}: {fields!r}"
                 )
+
+            return author_state_field_page(
+                router,
+                messages,
+                concern=concern,
+                field=executable[0],
+                count=concern_schema["minItems"],
+                symbols=state_symbols,
+            )
     return generate_fixed_template_value(
         router,
         "planner",
@@ -515,6 +529,27 @@ def _generate_concern_pages(
     authored_rows: list[dict[str, Any]] = []
     results: list[tuple[int, dict[str, Any]]] = []
     fixed_count: int | None = None
+
+    if request.section == "state_model" and pages:
+        from .planner_state_authoring import STATE_EXECUTABLE_FIELDS
+        from .worksheet_atomic_chunker import _chunk_projection
+
+        projection = _chunk_projection(request.section, pages[0][1])
+        first_fields = projection.get(concern, ())
+        if any(field in STATE_EXECUTABLE_FIELDS for field in first_fields):
+            fixed_count = _generate_concern_record_count(
+                request.router,
+                request.prompt,
+                section=request.section,
+                concern=concern,
+                completed=request.completed,
+                state_symbols=state_symbols,
+                section_context=base_context,
+            )
+            if request.budget is not None:
+                request.budget.consume(f"structured.{request.section}.cardinality")
+            if fixed_count == 0:
+                return [], [(idx, {concern: []}) for idx, _page in pages]
 
     for i, (index, concerns) in enumerate(pages):
         context = deepcopy(dict(base_context or {}))

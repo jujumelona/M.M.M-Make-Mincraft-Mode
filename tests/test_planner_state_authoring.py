@@ -187,3 +187,33 @@ def test_complete_structured_authoring_finishes_after_state_assembly():
     assert set(sections) == set(WORKSHEET_SECTIONS)
     assert sections["state_model"]["specification"]["transitions"][0]["mutation"] == "stateValue = 100"
     assert "mutation=stateValue = 100" in render_structured_sections(sections)
+    # invariants.condition was also host-authored via StateAuthor, not free string fallback
+    assert sections["state_model"]["specification"]["invariants"][0]["condition"] == "100"
+
+
+def test_state_executable_page_fails_closed_if_not_singleton() -> None:
+    from minecraft_mod_ai.authored_structured_design import _generate_authored_page_value
+
+    page = _PlannerPageRequest("state_model", 1, 1, ("invariants",), {}, ())
+    schema = {
+        "properties": {
+            "invariants": {
+                "items": {
+                    "required": ["condition", "enforcement"],
+                    "properties": {
+                        "condition": {"type": "string"},
+                        "enforcement": {"type": "string"},
+                    },
+                },
+                "minItems": 1,
+            },
+        },
+    }
+
+    class DummyRouter:
+        def generate_text(self, *args, **kwargs):
+            raise AssertionError("must fail before calling model")
+
+    with pytest.raises(ValueError, match="STATE_EXECUTABLE_PAGE_MUST_BE_SINGLETON"):
+        _generate_authored_page_value(DummyRouter(), (), page, schema, None)
+
