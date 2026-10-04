@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from .authored_plan import AuthoredPlan
 from .conversation import merge_design_brief
+from .platform_backend_contract import effective_target_backend_capabilities
 from .model_concurrency import planning_work_unit_timeout_seconds
 from .spec import Proposal, SpecValidationError
 
@@ -25,8 +26,7 @@ SUPPORTED_MINECRAFT_VERSIONS: tuple[str, ...] = ()
 
 
 def supported_minecraft_versions(*, loader: str | None = None) -> tuple[str, ...]:
-    from .platform_backend_contract import effective_target_backend_capabilities
-from .platform_catalog import supported_minecraft_versions as discover
+    from .platform_catalog import supported_minecraft_versions as discover
 
     return discover(loader=loader)
 
