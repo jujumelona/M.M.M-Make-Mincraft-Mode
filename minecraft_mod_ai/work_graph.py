@@ -13,6 +13,12 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from .complete_spec import CompleteProposal, ProductionModule
+from .platform_backend_contract import (
+    ENTITY_PIPELINE_KINDS,
+    EXTENDED_CONTENT_KINDS,
+    SYSTEM_KIND_TO_PACK,
+    missing_production_backend_capabilities,
+)
 from .research_ledger import is_research_shard
 from .scale_policy import ScalePolicy
 from .spec import canonical_json
@@ -939,17 +945,7 @@ def _exclusive_anchor_keys(module: ProductionModule) -> tuple[str, ...]:
             keys.append(locator)
     return tuple(dict.fromkeys(keys))
 
-_SYSTEM_PIPELINE_PACKS = {
-    "quest": "quest-system",
-    "class": "class-skill-system",
-    "skill": "class-skill-system",
-    "economy": "economy-shop",
-    "shop": "economy-shop",
-    "gui": "gui-networking",
-    "networking": "gui-networking",
-    "party": "party-guild",
-    "guild": "party-guild",
-}
+_SYSTEM_PIPELINE_PACKS = SYSTEM_KIND_TO_PACK
 
 
 def _module_batch_key(module: ProductionModule, stage: str) -> str:
@@ -983,17 +979,45 @@ def _module_stage(
         raise WorkGraphError(
             f"DETERMINISTIC_BACKEND_REQUIRED: unsupported integration module {module.module_id}"
         )
-    if module.kind in {'entity', 'boss', 'npc'}:
+    if module.kind in ENTITY_PIPELINE_KINDS:
+        if deterministic_module_kinds is not None:
+            missing = missing_production_backend_capabilities(
+                deterministic_module_kinds,
+                module.kind,
+                module.config,
+            )
+            if missing:
+                raise WorkGraphError(
+                    "DETERMINISTIC_BACKEND_REQUIRED: "
+                    f"{module.kind} requires missing backend capabilities {sorted(missing)}"
+                )
         return 'entity'
-    if module.kind in {'quest', 'class', 'skill', 'economy', 'shop', 'gui', 'networking', 'party', 'guild'}:
+    if module.kind in SYSTEM_KIND_TO_PACK:
+        if deterministic_module_kinds is not None:
+            missing = missing_production_backend_capabilities(
+                deterministic_module_kinds,
+                module.kind,
+                module.config,
+            )
+            if missing:
+                raise WorkGraphError(
+                    "DETERMINISTIC_BACKEND_REQUIRED: "
+                    f"{module.kind} requires missing backend capabilities {sorted(missing)}"
+                )
         return 'system'
-    extended_kinds = {'item', 'block', 'effect', 'enchantment', 'command', 'recipe', 'tag', 'advancement', 'loot', 'tool', 'weapon', 'armor', 'food', 'crop', 'machine'}
-    if module.kind in extended_kinds:
-        if deterministic_module_kinds is None or module.kind in deterministic_module_kinds:
-            return 'content'
-        raise WorkGraphError(
-            f"DETERMINISTIC_BACKEND_REQUIRED: no deterministic backend for {module.kind}"
-        )
+    if module.kind in EXTENDED_CONTENT_KINDS:
+        if deterministic_module_kinds is not None:
+            missing = missing_production_backend_capabilities(
+                deterministic_module_kinds,
+                module.kind,
+                module.config,
+            )
+            if missing:
+                raise WorkGraphError(
+                    "DETERMINISTIC_BACKEND_REQUIRED: "
+                    f"{module.kind} requires missing backend capabilities {sorted(missing)}"
+                )
+        return 'content'
     raise WorkGraphError(
         f"DETERMINISTIC_BACKEND_REQUIRED: unsupported module kind {module.kind!r}"
     )
