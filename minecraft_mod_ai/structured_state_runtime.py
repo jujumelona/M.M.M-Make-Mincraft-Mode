@@ -1616,7 +1616,7 @@ def _default_value(record: Mapping[str, str]) -> str:
         r"[-+]?\d+", value
     ):
         return f"Long.valueOf({_java_string(value)})"
-    if type_name in {"float", "double"} and re.fullmatch(
+    if type_name in {"float", "double", "number", "numeric", "decimal"} and re.fullmatch(
         r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?", value
     ):
         return f"Double.valueOf({_java_string(value)})"
