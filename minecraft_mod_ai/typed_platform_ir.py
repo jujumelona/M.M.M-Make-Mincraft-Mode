@@ -385,6 +385,14 @@ _PERSISTENT_SYSTEM_KINDS = frozenset({
     "quest", "class", "skill", "economy", "shop", "party", "guild",
 })
 
+# Cross-cutting authority/network records describe one host-owned transport policy
+# domain.  Do not split those records between the deterministic network policy
+# backend and the optional gameplay "networking" system pack: that makes ordinary
+# authority/security worksheet context accidentally require a second feature backend.
+_HOST_SECTION_OWNERS = {
+    "authority_and_network": "network_sync",
+}
+
 
 def _coverage_allowed(kind: str, cover: str) -> bool:
     if cover.startswith("resources_and_ui."):
@@ -425,21 +433,9 @@ def _coverage_allowed(kind: str, cover: str) -> bool:
             return kind == "resource_policy"
         return False
 
-    if cover.startswith("authority_and_network."):
-        concern = cover.split(".", 1)[1]
-        if concern in {
-            "client_boundaries",
-            "payloads",
-            "synchronization",
-            "reconnection",
-        }:
-            return kind == "network_sync"
-        return kind == "networking" and concern in {
-            "decisions",
-            "packets",
-            "security_checks",
-            "invalid_packets",
-        }
+    section, dot, _concern = cover.partition(".")
+    if dot and section in _HOST_SECTION_OWNERS:
+        return kind == _HOST_SECTION_OWNERS[section]
 
     if cover.startswith("persistence."):
         concern = cover.split(".", 1)[1]
