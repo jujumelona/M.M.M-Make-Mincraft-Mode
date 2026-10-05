@@ -1749,11 +1749,13 @@ def validate_structured_state_section(section: Mapping[str, Any]) -> None:
             validate_state_concern(concern, records, symbols=symbols)
 
 
-def _obligations(task: Mapping[str, Any]) -> dict[str, list[dict[str, str]]]:
+def _obligations(task: Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    """Decode host obligations without collapsing typed values into prose."""
+
     raw = task.get("implementation_obligations")
     if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes, bytearray)):
         return {}
-    result: dict[str, list[dict[str, str]]] = {}
+    result: dict[str, list[dict[str, Any]]] = {}
     for item in raw:
         try:
             outer = json.loads(str(item))
@@ -1767,7 +1769,7 @@ def _obligations(task: Mapping[str, Any]) -> dict[str, list[dict[str, str]]]:
         if not name or not isinstance(records, list):
             continue
         result[name] = [
-            {str(key): str(value) for key, value in record.items()}
+            {str(key): deepcopy(value) for key, value in record.items()}
             for record in records
             if isinstance(record, Mapping)
         ]
