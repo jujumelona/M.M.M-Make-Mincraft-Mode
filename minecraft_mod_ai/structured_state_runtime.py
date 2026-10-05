@@ -15,6 +15,7 @@ from typing import Any
 
 
 _STATE_IDENTIFIER_PATTERN = r"^[A-Za-z_][A-Za-z0-9_]*$"
+_STATE_SCALAR_TYPES = ("boolean", "int", "long", "double", "string")
 STATE_EXPRESSION_PATTERN = r"^.*$"
 STATE_MUTATION_PATTERN = r"^.*$"
 
@@ -37,6 +38,8 @@ def state_variable_default_schema(
     """
 
     family = str(value_family or "").strip().casefold()
+    if family in {"int", "long", "double"}:
+        family = "number"
     schema: dict[str, Any] = {
         "type": "string",
         "minLength": 0,
@@ -85,10 +88,15 @@ def constrain_state_record_schema(
                 ),
             })
         if isinstance(properties.get("type"), dict):
-            properties["type"]["description"] = (
-                "State value family. Planner-authored variables use scalar number, boolean, "
-                "or string families; legacy aggregate storage remains production-compatible."
-            )
+            properties["type"].clear()
+            properties["type"].update({
+                "type": "string",
+                "enum": list(_STATE_SCALAR_TYPES),
+                "description": (
+                    "Canonical scalar state type. No aliases or aggregate compatibility "
+                    "types are accepted."
+                ),
+            })
         if isinstance(properties.get("default"), dict):
             description = properties["default"].get("description")
             properties["default"].clear()
@@ -655,21 +663,12 @@ def _state_variable_value_kind(record: Mapping[str, Any] | None) -> str:
 
     if not isinstance(record, Mapping):
         return "unknown"
-    type_name = str(record.get("type") or "").strip().casefold()
-    compact = re.sub(r"[^a-z0-9]+", " ", type_name)
-    tokens = set(compact.split())
-    if tokens & {"bool", "boolean"}:
+    type_name = str(record.get("type") or "").strip()
+    if type_name == "boolean":
         return "boolean"
-    if tokens & {
-        "byte", "short", "int", "integer", "long", "float", "double",
-        "number", "numeric", "decimal",
-    }:
+    if type_name in {"int", "long", "double"}:
         return "number"
-    if tokens & {"map", "dict", "dictionary", "object"}:
-        return "map"
-    if tokens & {"list", "array", "collection", "set", "enumset"}:
-        return "list"
-    if tokens & {"string", "text", "enum", "status", "mode"}:
+    if type_name == "string":
         return "string"
     return "unknown"
 
@@ -1143,7 +1142,7 @@ def state_concern_schema(
                     "description": "Stable ASCII internal state identifier consumed by the host state compiler.",
                 },
                 "owner": {"type": "string", "minLength": 1, "maxLength": 256},
-                "type": {"type": "string", "minLength": 1, "maxLength": 128},
+                "type": {"type": "string", "enum": list(_STATE_SCALAR_TYPES)},
                 "unit": {"type": "string", "minLength": 1, "maxLength": 128},
                 "default": state_variable_default_schema(),
                 "domain": {"type": "string", "minLength": 1, "maxLength": 256},
@@ -1439,28 +1438,29 @@ def has_complete_structured_state(
 
 
 def _default_value(record: Mapping[str, str]) -> str:
-    type_name = str(record.get("type") or "").strip().casefold()
+    type_name = str(record.get("type") or "").strip()
     value = str(record.get("default") or "").strip()
     lowered = value.casefold()
-    if type_name in {"bool", "boolean"} and lowered in {"true", "false"}:
+    if type_name == "boolean":
+        if lowered not in {"true", "false"}:
+            raise ValueError("STRUCTURED_STATE_DEFAULT_BOOLEAN_INVALID")
         return "Boolean.TRUE" if lowered == "true" else "Boolean.FALSE"
-    if type_name in {"byte", "short", "int", "integer", "long"} and re.fullmatch(
-        r"[-+]?\d+", value
-    ):
+    if type_name in {"int", "long"}:
+        if re.fullmatch(r"[-+]?\d+", value) is None:
+            raise ValueError("STRUCTURED_STATE_DEFAULT_INTEGER_INVALID")
         return f"Long.valueOf({_java_string(value)})"
-    if type_name in {"float", "double", "number", "numeric", "decimal"} and re.fullmatch(
-        r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?", value
-    ):
+    if type_name == "double":
+        if re.fullmatch(
+            r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?",
+            value,
+        ) is None:
+            raise ValueError("STRUCTURED_STATE_DEFAULT_DOUBLE_INVALID")
         return f"Double.valueOf({_java_string(value)})"
-    if lowered in {"[]", "empty_list"} or type_name in {"list", "collection"}:
-        return "new java.util.ArrayList<>()"
-    if lowered in {"{}", "empty_map"} or type_name == "map":
-        return "new java.util.LinkedHashMap<>()"
-    if lowered == "empty_set" or type_name in {"set", "enumset"}:
-        return "new java.util.LinkedHashSet<>()"
-    if lowered == "null":
-        return "null"
-    return _java_string(value)
+    if type_name == "string":
+        return _java_string(value)
+    raise ValueError(
+        f"STRUCTURED_STATE_DEFAULT_TYPE_UNSUPPORTED: {type_name!r}"
+    )
 
 
 _COMMON = r"""
