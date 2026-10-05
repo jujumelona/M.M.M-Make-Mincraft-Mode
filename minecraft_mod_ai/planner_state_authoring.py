@@ -284,8 +284,11 @@ def author_state_semantic_page(
     item_schema: Mapping[str, Any],
     existing_rows: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
-    """Author one ordinary state field at a time; the host owns row/array structure."""
+    """Author one host-fixed state row projection per model call.
 
+    The host owns cardinality, row identity, field names, schema and merging. The
+    model chooses only the semantic values for the fields in the current projection.
+    """
     if count <= 0:
         return {concern: []}
 
@@ -304,56 +307,61 @@ def author_state_semantic_page(
             if index < len(prior) and isinstance(prior[index], Mapping)
             else {}
         )
-        row: dict[str, Any] = {}
+        projected_properties: dict[str, Any] = {}
         for field in requested:
             raw_schema = properties.get(field)
             if not isinstance(raw_schema, Mapping):
                 raise ValueError(
                     f"STATE_SEMANTIC_PAGE: missing schema for {concern}.{field}"
                 )
-            current = {**fixed, **row}
-            field_schema = _state_scalar_schema(concern, field, raw_schema, current)
-            enum_values = field_schema.get("enum")
-            constraints = ""
-            if isinstance(enum_values, Sequence) and not isinstance(
-                enum_values, (str, bytes, bytearray)
-            ):
-                constraints = " Allowed values: " + ", ".join(str(v) for v in enum_values) + "."
-            row_schema = {
-                "type": "object",
-                "properties": {field: field_schema},
-                "required": [field],
-                "additionalProperties": False,
-            }
-            messages = _state_atomic_messages(
-                prompt,
-                concern=concern,
-                index=index,
-                fields=(field,),
-                current_row=current,
-                peer_rows=rows,
-                extra_instruction=(
-                    "Return exactly one JSON object containing only the requested field. "
-                    "Do not emit any sibling field or wrapper." + constraints
-                ),
+            projected_properties[field] = _state_scalar_schema(
+                concern, field, raw_schema, fixed
             )
-            raw = generate_fixed_template_value(
-                router,
-                "planner",
-                messages,
-                response_schema=row_schema,
-                enable_tools=False,
-                description=(
-                    f"Author scalar state field {concern}[{index}].{field}."
-                ),
-                output_token_ceiling=structured_output_token_ceiling(row_schema),
+
+        row_schema = {
+            "type": "object",
+            "properties": projected_properties,
+            "required": list(requested),
+            "additionalProperties": False,
+        }
+        messages = _state_atomic_messages(
+            prompt,
+            concern=concern,
+            index=index,
+            fields=requested,
+            current_row=fixed,
+            peer_rows=rows,
+            extra_instruction=(
+                "Return exactly one JSON object containing only the requested fields for "
+                "this row. Do not emit any sibling field, concern array, or wrapper."
+            ),
+        )
+        raw = generate_fixed_template_value(
+            router,
+            "planner",
+            messages,
+            response_schema=row_schema,
+            enable_tools=False,
+            description=(
+                f"Author state row projection {concern}[{index}]: "
+                + ", ".join(requested)
+            ),
+            output_token_ceiling=structured_output_token_ceiling(row_schema),
+        )
+        if not isinstance(raw, Mapping):
+            raise ValueError(
+                f"STATE_SEMANTIC_PAGE: {concern}[{index}] must be an object"
             )
-            if not isinstance(raw, Mapping) or field not in raw:
+
+        row: dict[str, Any] = {}
+        for field in requested:
+            if field not in raw:
                 raise ValueError(
                     f"STATE_SEMANTIC_FIELD_INVALID: {concern}[{index}].{field} "
                     "did not return the required host field"
                 )
             value = raw[field]
+            field_schema = projected_properties[field]
             errors = tuple(Draft202012Validator(field_schema).iter_errors(value))
             if errors:
                 detail = "; ".join(error.message for error in errors[:3])
