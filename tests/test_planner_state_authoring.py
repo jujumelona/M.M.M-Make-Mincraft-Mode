@@ -58,7 +58,7 @@ def test_mutation_page_preserves_canonical_typed_ir():
                     "value_context": "context",
                     "value_text": "",
                     "value_number": "100",
-                    "value_boolean": false,
+                    "value_boolean": False,
                 }
             ]
         }
@@ -97,14 +97,14 @@ def test_expression_page_preserves_canonical_typed_ir():
                     "left_kind": "state",
                     "left_state": "hull",
                     "left_context": "context",
-                    "left_boolean": false,
+                    "left_boolean": False,
                     "operator": ">",
                     "right_kind": "number",
                     "right_state": "hull",
                     "right_context": "context",
                     "right_text": "",
                     "right_number": "0",
-                    "right_boolean": false,
+                    "right_boolean": False,
                 }
             ],
         }
@@ -156,7 +156,7 @@ def test_mutation_transport_constrains_targets_to_declared_symbols():
                     "value_context": "context",
                     "value_text": "",
                     "value_number": "0",
-                    "value_boolean": false,
+                    "value_boolean": False,
                 }
             ]
         }
@@ -267,27 +267,27 @@ def test_boolean_conjunction_is_host_lowered_from_flat_terms():
                     "left_kind": "state",
                     "left_state": "interstellar_trade_hub",
                     "left_context": "context",
-                    "left_boolean": false,
+                    "left_boolean": False,
                     "operator": "truthy",
                     "right_kind": "null",
                     "right_state": "interstellar_trade_hub",
                     "right_context": "context",
                     "right_text": "",
                     "right_number": "0",
-                    "right_boolean": false,
+                    "right_boolean": False,
                 },
                 {
                     "left_kind": "state",
                     "left_state": "spacecraft_unlocked",
                     "left_context": "context",
-                    "left_boolean": false,
+                    "left_boolean": False,
                     "operator": "truthy",
                     "right_kind": "null",
                     "right_state": "spacecraft_unlocked",
                     "right_context": "context",
                     "right_text": "",
                     "right_number": "0",
-                    "right_boolean": false,
+                    "right_boolean": False,
                 },
             ],
         }
