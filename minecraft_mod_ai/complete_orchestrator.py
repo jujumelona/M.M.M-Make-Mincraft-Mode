@@ -187,17 +187,11 @@ def _debug_fixture_source_contract(
 def _receipt_owned_module_ids(receipt: dict[str, Any]) -> tuple[str, ...]:
     """Return only module ownership explicitly declared by a generation receipt."""
     owned: set[str] = set()
-    for key in ("module_ids", "modules"):
-        values = receipt.get(key)
-        if not isinstance(values, (list, tuple)):
-            continue
+    values = receipt.get("module_ids")
+    if isinstance(values, (list, tuple)):
         for value in values:
             if isinstance(value, str) and value.strip():
                 owned.add(value.strip())
-            elif isinstance(value, dict):
-                module_id = value.get("module_id")
-                if isinstance(module_id, str) and module_id.strip():
-                    owned.add(module_id.strip())
     for key in ("module_id", "entity_id"):
         value = receipt.get(key)
         if isinstance(value, str) and value.strip():
