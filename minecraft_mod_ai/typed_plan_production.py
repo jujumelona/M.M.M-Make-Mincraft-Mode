@@ -49,21 +49,42 @@ def _assert_host_owned_or_absent(
 
 
 
-def _state_variable_names(section: Mapping[str, Any]) -> tuple[str, ...]:
+def _state_variable_contracts(
+    section: Mapping[str, Any],
+) -> tuple[tuple[str, str], ...]:
+    """Return canonical network-visible state keys and their declared value types.
+
+    Network policy worksheet rows describe semantic synchronization policy. They are
+    not an identifier namespace. Concrete payload keys come only from the canonical
+    state_model.variables authority.
+    """
+
     normalized = normalize_structured_state_section(section)
     rows = normalized["specification"].get("variables")
     if not isinstance(rows, Sequence) or isinstance(
         rows, (str, bytes, bytearray)
     ):
         return ()
-    names: list[str] = []
+    contracts: list[tuple[str, str]] = []
+    seen: set[str] = set()
     for row in rows:
         if not isinstance(row, Mapping):
             continue
         name = str(row.get("name") or "").strip()
-        if name and name not in names:
-            names.append(name)
-    return tuple(names)
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        contracts.append(
+            (
+                name,
+                str(row.get("type") or "object").strip() or "object",
+            )
+        )
+    return tuple(contracts)
+
+
+def _state_variable_names(section: Mapping[str, Any]) -> tuple[str, ...]:
+    return tuple(name for name, _type_name in _state_variable_contracts(section))
 
 
 def _java_object_literal(value: Any) -> str:
@@ -337,28 +358,6 @@ def _structured_rows(
     return tuple(row for row in rows if isinstance(row, Mapping))
 
 
-def _identifier_signature(value: Any) -> str:
-    return "".join(
-        char
-        for char in str(value or "").casefold()
-        if char.isalnum()
-    )
-
-
-def _matched_state_name(
-    value: Any,
-    state_names: tuple[str, ...],
-) -> str:
-    signature = _identifier_signature(value)
-    for name in state_names:
-        if _identifier_signature(name) == signature:
-            return name
-    raise ValueError(
-        "TYPED_NETWORK_STATE_REQUIRED: no canonical state variable matches "
-        + repr(str(value or ""))
-    )
-
-
 def _network_payload_guard(field: str, type_name: str) -> str:
     literal = json.dumps(field, ensure_ascii=True)
     lowered = str(type_name or "").casefold()
@@ -417,36 +416,21 @@ public final class AuthoredNetworkSync {{
             f"src/main/java/{package_path}/AuthoredNetworkSync.java": source,
         }
 
-    state_names = _state_variable_names(state_section)
-    payload_rows = _structured_rows(
-        structured,
-        "authority_and_network",
-        "payloads",
-    )
-    sync_rows = _structured_rows(
-        structured,
-        "authority_and_network",
-        "synchronization",
-    )
-
-    fields: list[str] = []
-    field_types: dict[str, str] = {}
-    for row in sync_rows:
-        name = _matched_state_name(row.get("state"), state_names)
-        if name not in fields:
-            fields.append(name)
-    for row in payload_rows:
-        name = _matched_state_name(row.get("field"), state_names)
-        if name not in fields:
-            fields.append(name)
-        field_types[name] = str(row.get("type") or "object")
-    if not fields:
-        fields = list(state_names)
-    if not fields:
+    state_contracts = _state_variable_contracts(state_section)
+    if not state_contracts:
         raise ValueError(
             "TYPED_NETWORK_STATE_REQUIRED: network synchronization requires "
             "at least one canonical state variable."
         )
+
+    # Concrete transport fields are host-owned canonical state identifiers. The
+    # authority_and_network worksheet describes policy and intent only; its prose
+    # fields must never be reinterpreted as executable state keys.
+    fields = [name for name, _type_name in state_contracts]
+    field_types = {
+        name: type_name
+        for name, type_name in state_contracts
+    }
 
     interval = int(config.get("sync_interval_ticks", 20))
     max_bytes = int(config.get("max_payload_bytes", 32767))
