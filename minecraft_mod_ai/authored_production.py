@@ -219,6 +219,15 @@ def _compile_new_authored_modules(
         },
         required_gates=("target_compile",),
     )
+    from .typed_plan_production import (
+        validate_typed_plan_generation_contract,
+    )
+
+    typed_host_contract = validate_typed_plan_generation_contract(
+        module,
+        package_name=package_name,
+        mod_id=mod_id,
+    )
     manifest = {
         "schema_version": _AUTHORED_EXECUTION_SCHEMA,
         "policy": "host_typed_plan_ir",
@@ -235,6 +244,7 @@ def _compile_new_authored_modules(
         "typed_program": {
             "path": program_path,
             "symbol": program_symbol,
+            "dry_compile": dict(typed_host_contract),
             "state_required": state_required,
             "state_store": state_store_config is not None,
             "network_sync": network_sync_config is not None,
