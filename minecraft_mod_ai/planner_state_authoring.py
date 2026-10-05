@@ -78,6 +78,47 @@ def _state_atomic_messages(
         },
     )
 
+_STATE_VARIABLE_META_NAMES = frozenset({
+    "state",
+    "state_model",
+    "variable",
+    "variables",
+    "value",
+})
+
+
+def _used_state_variable_names(
+    prior: Sequence[Mapping[str, Any]],
+    rows: Sequence[Mapping[str, Any]],
+    fixed: Mapping[str, Any],
+) -> set[str]:
+    used = {
+        str(candidate.get("name") or "").strip()
+        for candidate in (*prior, *rows)
+        if isinstance(candidate, Mapping)
+        and str(candidate.get("name") or "").strip()
+    }
+    used.discard(str(fixed.get("name") or "").strip())
+    return used
+
+
+def _deduplicate_state_variable_name(name: str, used: set[str]) -> str:
+    """Make a model-authored identifier unique without another model call."""
+
+    if name not in used:
+        return name
+
+    for ordinal in range(2, 10_000):
+        suffix = f"_{ordinal}"
+        base = name[: max(1, 128 - len(suffix))]
+        candidate = base + suffix
+        if candidate not in used:
+            return candidate
+    raise ValueError(
+        "STATE_VARIABLE_IDENTIFIER_EXHAUSTED: unable to allocate a unique identifier"
+    )
+
+
 def _state_scalar_schema(
     concern: str,
     field: str,
@@ -143,6 +184,24 @@ def author_state_semantic_page(
             "required": list(requested),
             "additionalProperties": False,
         }
+        used_names = (
+            _used_state_variable_names(prior, rows, fixed)
+            if concern == "variables" and "name" in requested
+            else set()
+        )
+        name_instruction = ""
+        if concern == "variables" and "name" in requested:
+            name_instruction = (
+                "For variables.name, choose a concrete identifier for the distinct mutable "
+                "concept described by the already-fixed fields for this row. Do not use "
+                "container/meta labels such as state_model, variables, state, variable, or value."
+            )
+            if used_names:
+                name_instruction += (
+                    " Already-used variable names that must not be repeated: "
+                    + ", ".join(sorted(used_names))
+                    + "."
+                )
         messages = _state_atomic_messages(
             prompt,
             concern=concern,
@@ -153,6 +212,7 @@ def author_state_semantic_page(
             extra_instruction=(
                 "Return exactly one JSON object containing only the requested fields for "
                 "this row. Do not emit any sibling field, concern array, or wrapper."
+                + (" " + name_instruction if name_instruction else "")
             ),
         )
         raw = generate_fixed_template_value(
@@ -189,17 +249,7 @@ def author_state_semantic_page(
                 )
             if concern == "variables" and field == "name":
                 name = str(value).strip()
-                used = {
-                    str(row.get("name") or "").strip()
-                    for row in (*prior, *rows)
-                    if isinstance(row, Mapping)
-                }
-                used.discard(str(fixed.get("name") or "").strip())
-                if name in used:
-                    raise ValueError(
-                        "STATE_VARIABLE_IDENTIFIER_DUPLICATE: "
-                        f"{concern}[{index}].name={name!r}"
-                    )
+                value = _deduplicate_state_variable_name(name, used_names)
             row[field] = deepcopy(value)
         rows.append(row)
 
