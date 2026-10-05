@@ -20,6 +20,7 @@ from .platform_backend_contract import (
     SYSTEM_KIND_TO_PACK,
     deterministic_backend_capabilities,
     missing_production_backend_capabilities,
+    native_production_route_available,
 )
 from .research_ledger import is_research_shard
 from .scale_policy import ScalePolicy
@@ -107,11 +108,13 @@ def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolic
             module.module_id
             for module in ordered
             if module.module_id not in artifact_owners
+            and not native_production_route_available(module.kind, module.config)
         ]
         if uncovered:
             raise WorkGraphError(
                 "SMALL_MODEL_CANONICAL_COVERAGE: free-form Java is disabled but "
-                f"module(s) have no canonical artifact owner: {uncovered[:20]}"
+                "module(s) have neither canonical artifact ownership nor a "
+                f"deterministic host route: {uncovered[:20]}"
             )
 
     from .platform_catalog import adapter_for_lock_values
