@@ -235,51 +235,11 @@ def _diagnostic_file_path(value: Any) -> str:
 
 
 def _collect_paths(value: Any, *, limit: int = 4096) -> list[str]:
-    result: list[str] = []
-    seen: set[str] = set()
+    """Use the generation receipt path authority for semantic observations."""
 
-    def add(raw: Any) -> None:
-        if len(result) >= limit or not isinstance(raw, (str, Path)):
-            return
-        path = _norm_path(raw)
-        if not path or path in seen:
-            return
-        seen.add(path)
-        result.append(path)
+    from .generation_receipt_paths import receipt_mutation_paths
 
-    def walk(node: Any, depth: int = 0) -> None:
-        if depth > 12 or len(result) >= limit:
-            return
-        if isinstance(node, Mapping):
-            for key, child in node.items():
-                normalized = str(key).casefold()
-                if normalized in {
-                    "path",
-                    "uri",
-                    "file",
-                    "target",
-                    "target_path",
-                    "artifact_path",
-                }:
-                    add(child)
-                elif normalized in {
-                    "files",
-                    "generated_files",
-                    "written_files",
-                    "touched_paths",
-                } and isinstance(child, Sequence) and not isinstance(
-                    child, (str, bytes, bytearray)
-                ):
-                    for item in child:
-                        add(item)
-                if isinstance(child, (Mapping, list, tuple)):
-                    walk(child, depth + 1)
-        elif isinstance(node, (list, tuple)):
-            for child in node:
-                walk(child, depth + 1)
-
-    walk(value)
-    return result
+    return list(receipt_mutation_paths(value)[:limit])
 
 
 def _receipt_owner_ids(module: Any, receipt: Mapping[str, Any]) -> list[str]:
