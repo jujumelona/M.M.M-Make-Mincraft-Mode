@@ -12,6 +12,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .complete_spec import AssetRequest, CompleteProposal, CompleteProposalStatus, ProductionModule
+from .resource_asset_plan import ResourceAssetPlanError, require_asset_plan
 from .spec import SpecValidationError
 
 
@@ -631,9 +632,15 @@ def _validate_manifest(rows: Sequence[Mapping[str, Any]]) -> None:
 
 def _validated_plan(router: Any, proposal: CompleteProposal) -> Mapping[str, Any]:
     from .resource_prompt_compiler import image_profile_fingerprint
-    plan = proposal.game_design.get("_asset_generation_plan")
-    if not isinstance(plan, Mapping) or plan.get("schema_version") != "mmm/resource-asset-generation-plan-v3":
-        raise AssetProductionError("Approved proposal has no canonical resource asset plan.")
+    try:
+        plan, _selected_rows = require_asset_plan(
+            proposal.game_design,
+            proposal.assets,
+        )
+    except ResourceAssetPlanError as exc:
+        raise AssetProductionError(
+            f"Approved proposal has no valid canonical resource asset plan: {exc}"
+        ) from exc
     config = router.registry.role(router.profile, "image_generator")
     if plan.get("image_profile_sha256") != image_profile_fingerprint(config):
         raise AssetProductionError("Approved resource asset plan is bound to a different image profile.")
@@ -876,42 +883,20 @@ def _asset_execution_projection(proposal: CompleteProposal) -> CompleteProposal:
         raise AssetProductionError(
             "Asset execution projection requires a non-empty unique asset subset."
         )
-    raw_plan = proposal.game_design.get("_asset_generation_plan")
-    if not isinstance(raw_plan, Mapping):
-        raise AssetProductionError(
-            "Asset execution projection requires the canonical approved asset plan."
+    try:
+        raw_plan, selected_rows = require_asset_plan(
+            proposal.game_design,
+            proposal.assets,
         )
-    raw_rows = raw_plan.get("assets")
-    if not isinstance(raw_rows, Sequence) or isinstance(
-        raw_rows, (str, bytes, bytearray)
-    ):
+    except ResourceAssetPlanError as exc:
         raise AssetProductionError(
-            "Canonical asset plan has no ordered asset rows for execution projection."
-        )
-
-    rows_by_id: dict[str, Mapping[str, Any]] = {}
-    for row in raw_rows:
-        if not isinstance(row, Mapping):
-            raise AssetProductionError(
-                "Canonical asset plan contains a non-object row."
-            )
-        asset_id = str(row.get("asset_id") or "")
-        if not asset_id or asset_id in rows_by_id:
-            raise AssetProductionError(
-                "Canonical asset plan contains a missing or duplicate asset ID."
-            )
-        rows_by_id[asset_id] = row
-
-    missing = [asset_id for asset_id in selected_ids if asset_id not in rows_by_id]
-    if missing:
-        raise AssetProductionError(
-            "Asset execution projection is not a subset of the canonical asset plan: "
-            f"{missing[:8]}"
-        )
+            "Asset execution projection requires the canonical approved asset plan: "
+            f"{exc}"
+        ) from exc
 
     filtered_plan = {
-        **dict(raw_plan),
-        "assets": [dict(rows_by_id[asset_id]) for asset_id in selected_ids],
+        **raw_plan,
+        "assets": selected_rows,
     }
     projected = replace(
         proposal,
