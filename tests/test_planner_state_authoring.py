@@ -47,7 +47,20 @@ def test_mutation_page_preserves_canonical_typed_ir():
             "value": {"kind": "number", "value": "100"},
         }
     ]
-    router = StateChoices([{"mutation": mutation}])
+    router = StateChoices([
+        {
+            "assignments": [
+                {
+                    "target": "hull",
+                    "operator": "=",
+                    "value_kind": "number",
+                    "value_state": "hull",
+                    "value_context": "",
+                    "value_text": "100",
+                }
+            ]
+        }
+    ])
 
     result = author_state_field_page(
         router,
@@ -112,7 +125,7 @@ def test_expression_page_preserves_canonical_typed_ir():
 
 
 def test_empty_mutation_is_explicit_empty_list():
-    router = StateChoices([{"action": []}])
+    router = StateChoices([{"assignments": []}])
 
     result = author_state_field_page(
         router,
@@ -127,28 +140,35 @@ def test_empty_mutation_is_explicit_empty_list():
     assert result == {"cleanup": [{"action": []}]}
 
 
-def test_undeclared_mutation_target_fails_closed():
+def test_mutation_transport_constrains_targets_to_declared_symbols():
     router = StateChoices([
         {
-            "mutation": [
+            "assignments": [
                 {
-                    "target": "ghost",
+                    "target": "hull",
                     "operator": "=",
-                    "value": {"kind": "number", "value": "1"},
+                    "value_kind": "state",
+                    "value_state": "hull",
+                    "value_context": "",
+                    "value_text": "",
                 }
             ]
         }
     ])
 
-    with pytest.raises(Exception):
-        author_state_field_page(
-            router,
-            "Update hull.",
-            concern="updates",
-            field="mutation",
-            count=1,
-            symbols=_symbols(),
-        )
+    author_state_field_page(
+        router,
+        "Update hull.",
+        concern="updates",
+        field="mutation",
+        count=1,
+        symbols=_symbols(),
+    )
+
+    schema = router.calls[0]["response_schema"]
+    assignment = schema["properties"]["assignments"]["items"]
+    assert assignment["properties"]["target"]["enum"] == ["hull"]
+    assert "oneOf" not in json.dumps(schema)
 
 
 def test_variable_default_schema_is_narrowed_from_fixed_type():
