@@ -414,6 +414,12 @@ jobs:
       fail-fast: false
       matrix:
         test:
+          - tests/test_planner_state_authoring.py
+          - tests/test_planning_handoff_contract.py
+          - tests/test_state_provenance_contract.py
+          - tests/test_research_grounded_rag_contract.py
+          - tests/test_playtest_acceptance_binding.py
+          - tests/test_typed_plan_ir.py
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
