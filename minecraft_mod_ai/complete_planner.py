@@ -75,13 +75,14 @@ class CompleteGameDesignPlanner:
         from .authored_structured_design import (
             author_structured_sections,
             render_structured_sections,
+            structured_authoring_call_upper_bound,
         )
         from .typed_host_capabilities import typed_host_capability_contracts
         from .typed_plan_authoring import author_typed_plan_ir
 
         from .planner_budget import PlannerBudget
 
-        budget = PlannerBudget()
+        budget = PlannerBudget(max_calls=structured_authoring_call_upper_bound())
         with planner_operation("author_structured_execution_contract"):
             structured_sections = author_structured_sections(
                 self.router,
