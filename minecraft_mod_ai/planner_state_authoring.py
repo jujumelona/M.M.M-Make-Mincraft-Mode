@@ -16,7 +16,6 @@ from .structured_state_runtime import (
     _SUPPORTED_STATE_FUNCTIONS,
     StateSymbolTable,
     mutations_schema,
-    state_expr_schema,
     state_variable_default_schema,
     validate_mutation_ir,
     validate_state_expr_ir,
@@ -291,6 +290,239 @@ def author_state_semantic_page(
 
     return {concern: rows}
 
+def _state_condition_transport_schema(
+    symbols: StateSymbolTable,
+) -> dict[str, Any]:
+    """Flat, non-recursive model transport for guard/condition authoring."""
+
+    declared = sorted(symbols.declared_names)
+    state_name_schema: dict[str, Any]
+    if declared:
+        state_name_schema = {
+            "type": "string",
+            "enum": declared,
+            "maxLength": 128,
+        }
+        left_kinds = ["state", "context"]
+        right_kinds = [
+            "none",
+            "state",
+            "context",
+            "number",
+            "string",
+            "boolean",
+            "null",
+        ]
+    else:
+        state_name_schema = {
+            "type": "string",
+            "const": "",
+            "maxLength": 1,
+        }
+        left_kinds = ["context"]
+        right_kinds = [
+            "none",
+            "context",
+            "number",
+            "string",
+            "boolean",
+            "null",
+        ]
+
+    context_schema = {
+        "type": "string",
+        "maxLength": 24,
+        "pattern": r"^(?:|[A-Za-z_$][A-Za-z0-9_$.]{0,23})$",
+    }
+    term_schema = {
+        "type": "object",
+        "properties": {
+            "left_kind": {"type": "string", "enum": left_kinds},
+            "left_state": state_name_schema,
+            "left_context": context_schema,
+            "operator": {
+                "type": "string",
+                "enum": ["truthy", "falsey", "==", "!=", ">=", "<=", ">", "<"],
+            },
+            "right_kind": {"type": "string", "enum": right_kinds},
+            "right_state": state_name_schema,
+            "right_context": context_schema,
+            "right_value": {
+                "type": "string",
+                "maxLength": 24,
+                "pattern": r"^[^{}\[\]]{0,24}$",
+            },
+        },
+        "required": [
+            "left_kind",
+            "left_state",
+            "left_context",
+            "operator",
+            "right_kind",
+            "right_state",
+            "right_context",
+            "right_value",
+        ],
+        "additionalProperties": False,
+    }
+    return {
+        "type": "object",
+        "properties": {
+            "join": {"type": "string", "enum": ["and", "or"]},
+            "terms": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 2,
+                "items": term_schema,
+            },
+        },
+        "required": ["join", "terms"],
+        "additionalProperties": False,
+    }
+
+
+def _condition_operand_from_transport(
+    term: Mapping[str, Any],
+    *,
+    side: str,
+) -> dict[str, Any]:
+    if side == "left":
+        kind = str(term.get("left_kind") or "")
+        if kind == "state":
+            return {"kind": "state_ref", "name": str(term["left_state"])}
+        if kind == "context":
+            name = str(term.get("left_context") or "").strip()
+            if not name:
+                raise ValueError("STATE_CONDITION_TRANSPORT: left context name is required")
+            return {"kind": "context_ref", "name": name}
+        raise ValueError(f"STATE_CONDITION_TRANSPORT: invalid left kind {kind!r}")
+
+    kind = str(term.get("right_kind") or "")
+    if kind == "state":
+        return {"kind": "state_ref", "name": str(term["right_state"])}
+    if kind == "context":
+        name = str(term.get("right_context") or "").strip()
+        if not name:
+            raise ValueError("STATE_CONDITION_TRANSPORT: right context name is required")
+        return {"kind": "context_ref", "name": name}
+    if kind == "number":
+        value = str(term.get("right_value") or "").strip()
+        if re.fullmatch(r"-?[0-9]+(?:\.[0-9]+)?", value) is None:
+            raise ValueError(
+                f"STATE_CONDITION_TRANSPORT: invalid numeric literal {value!r}"
+            )
+        return {"kind": "number", "value": value}
+    if kind == "string":
+        return {"kind": "literal", "value": str(term.get("right_value") or "")}
+    if kind == "boolean":
+        value = str(term.get("right_value") or "").strip().casefold()
+        if value not in {"true", "false"}:
+            raise ValueError(
+                "STATE_CONDITION_TRANSPORT: boolean right_value must be true or false"
+            )
+        return {"kind": "literal", "value": value == "true"}
+    if kind == "null":
+        return {"kind": "literal", "value": None}
+    raise ValueError(
+        f"STATE_CONDITION_TRANSPORT: right operand required for comparison, got {kind!r}"
+    )
+
+
+def _condition_ir_from_transport(
+    raw: Mapping[str, Any],
+    *,
+    symbols: StateSymbolTable,
+) -> dict[str, Any]:
+    terms = raw.get("terms")
+    if not isinstance(terms, Sequence) or isinstance(
+        terms, (str, bytes, bytearray)
+    ):
+        raise ValueError("STATE_CONDITION_TRANSPORT: terms must be an array")
+
+    compiled: list[dict[str, Any]] = []
+    for index, item in enumerate(terms):
+        if not isinstance(item, Mapping):
+            raise ValueError(
+                f"STATE_CONDITION_TRANSPORT: terms[{index}] must be an object"
+            )
+        left = _condition_operand_from_transport(item, side="left")
+        operator = str(item.get("operator") or "")
+        if operator == "truthy":
+            condition = left
+        elif operator == "falsey":
+            condition = {"kind": "not", "term": left}
+        elif operator in {"==", "!=", ">=", "<=", ">", "<"}:
+            right = _condition_operand_from_transport(item, side="right")
+            condition = {
+                "kind": "compare",
+                "op": operator,
+                "left": left,
+                "right": right,
+            }
+        else:
+            raise ValueError(
+                f"STATE_CONDITION_TRANSPORT: unsupported operator {operator!r}"
+            )
+        validate_state_expr_ir(condition, symbols=symbols)
+        compiled.append(condition)
+
+    if not compiled:
+        raise ValueError("STATE_CONDITION_TRANSPORT: at least one term is required")
+    if len(compiled) == 1:
+        return compiled[0]
+
+    join = str(raw.get("join") or "")
+    if join not in {"and", "or"}:
+        raise ValueError(f"STATE_CONDITION_TRANSPORT: invalid join {join!r}")
+    result = {"kind": join, "terms": compiled}
+    validate_state_expr_ir(result, symbols=symbols)
+    return result
+
+
+def _author_state_condition(
+    router: Any,
+    prompt: str,
+    *,
+    concern: str,
+    field: str,
+    index: int,
+    count: int,
+    symbols: StateSymbolTable,
+    current: Mapping[str, Any],
+) -> dict[str, Any]:
+    schema = _state_condition_transport_schema(symbols)
+    instruction = (
+        f"Author the boolean condition for state_model.{concern}[{index}].{field}. "
+        "Use one or two flat terms only. operator=truthy/falsey needs no right operand; "
+        "for those set right_kind=none and leave right_state/right_context/right_value "
+        "empty. For comparisons choose an explicit right_kind and value. "
+        "Never emit expression AST keys such as kind, type, left, right, term, or nested "
+        "terms; the host builds the canonical typed expression IR."
+    )
+    raw = generate_fixed_template_value(
+        router,
+        "planner",
+        _state_atomic_messages(
+            prompt,
+            concern=concern,
+            index=index,
+            fields=(field,),
+            current_row=current,
+            symbols_text=symbols.prompt_text(),
+            extra_instruction=instruction,
+        ),
+        response_schema=schema,
+        enable_tools=False,
+        description=(
+            f"Choose flat state condition terms for row {index + 1} of {count} in {concern}."
+        ),
+        output_token_ceiling=structured_output_token_ceiling(schema),
+    )
+    if not isinstance(raw, Mapping):
+        raise ValueError("STATE_CONDITION_TRANSPORT: model result must be an object")
+    return _condition_ir_from_transport(raw, symbols=symbols)
+
+
 def author_state_field_page(
     router: Any,
     prompt: str,
@@ -322,38 +554,16 @@ def author_state_field_page(
         )
         path = f"state_model.{concern}[{index}].{field}"
         if field in STATE_EXPRESSION_FIELDS:
-            inner_schema = state_expr_schema(symbols_table)
-            row_schema = {
-                "type": "object",
-                "properties": {field: inner_schema},
-                "required": [field],
-                "additionalProperties": False,
-            }
-            instruction = (
-                f"Author state expression for {path}. "
-                f"Return complete semantic IR object. "
-                f"Declared state variables: {', '.join(declared_names) or 'none'}."
-            )
-            raw = generate_fixed_template_value(
+            value = _author_state_condition(
                 router,
-                "planner",
-                _state_atomic_messages(
-                    prompt,
-                    concern=concern,
-                    index=index,
-                    fields=(field,),
-                    current_row=current,
-                    symbols_text=symbols_table.prompt_text(),
-                    extra_instruction=instruction,
-                ),
-                response_schema=row_schema,
-                enable_tools=False,
-                description=f"Author state {field} for row {index + 1} of {count} in {concern}.",
-                output_token_ceiling=structured_output_token_ceiling(row_schema),
+                prompt,
+                concern=concern,
+                field=field,
+                index=index,
+                count=count,
+                symbols=symbols_table,
+                current=current,
             )
-            raw_value = raw.get(field, raw) if isinstance(raw, Mapping) else raw
-            validate_state_expr_ir(raw_value, symbols=symbols_table)
-            value = deepcopy(raw_value)
         else:
             inner_schema = mutations_schema(symbols_table)
             row_schema = {
