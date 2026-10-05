@@ -216,17 +216,13 @@ def test_semantic_game_dispatch_lowers_deterministically():
             "trigger_event": "player_join",
             "state_key": "credits",
             "action_kind": "increment_state",
-            "int_value": "7",
-            "capability_id": "",
-            "message": "",
+            "value": 7,
         },
         {
             "trigger_event": "any",
             "state_key": "credits",
             "action_kind": "set_state",
-            "int_value": "10",
-            "capability_id": "",
-            "message": "",
+            "value": 10,
         },
     ]
     statements = lower_semantic_game_dispatch_to_ir(rules, {"credits": "int"}, {})
