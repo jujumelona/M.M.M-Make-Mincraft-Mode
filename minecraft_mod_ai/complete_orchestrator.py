@@ -466,7 +466,9 @@ class CompleteProductionOrchestrator:
         self._succeed_work_node(ledger, 'validate-source', {'schema_version': 'mmm/work-node-receipt-v1', 'status': 'PASS', 'checks_run': source_report.get('checks_run', 0), 'project_manifest': generated_manifest_hash})
         self._persist_work_evidence(project_root, ledger, work_plan)
         if jdt_receipt is not None:
-            module_receipts.append({'schema_version': 'mmm/jdt-gate-v1', **jdt_receipt})
+            module_receipts.append(
+                {**jdt_receipt, "gate": "jdt", "phase": "prebuild"}
+            )
             print('[JDT RECEIPT] ' + json.dumps(jdt_receipt, ensure_ascii=False, sort_keys=True, default=str), flush=True)
             # Infrastructure-unavailable JDT remains auxiliary, but real source diagnostics
             # cannot be packaged in source-only mode and must be repaired before a full build exits.
@@ -677,7 +679,7 @@ class CompleteProductionOrchestrator:
             jdt_receipt = final_jdt_receipt
             if jdt_receipt is not None:
                 module_receipts.append(
-                    {'schema_version': 'mmm/jdt-gate-v1', 'phase': 'final', **jdt_receipt}
+                    {**jdt_receipt, "gate": "jdt", "phase": "final"}
                 )
         final_validation_failure = _final_validation_failure(
             source_report=source_report,
