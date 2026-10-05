@@ -97,22 +97,53 @@ def _model_transport_schema(schema, *, is_properties_map: bool = False):
     return schema
 
 
-def specification_schema(section, *, model_transport: bool = False):
+def specification_schema(
+    section,
+    *,
+    model_transport: bool = False,
+    state_symbols=None,
+):
     records = DETAIL_RECORDS[section]
     properties = {}
     for concern, columns in records.items():
         fields = columns.split()
-        item_schema = {
-            "type": "object",
-            "properties": {
-                field: record_field_schema(section, concern, field)
-                for field in fields
-            },
-            "required": fields,
-            "additionalProperties": False,
-        }
         if section == "state_model":
-            item_schema = constrain_state_record_schema(concern, item_schema)
+            canonical = state_concern_schema(
+                concern,
+                allowed_state_symbols=state_symbols,
+            )
+            canonical_properties = canonical.get("properties")
+            if not isinstance(canonical_properties, dict):
+                raise ValueError(
+                    f"Invalid canonical state concern schema: {concern}"
+                )
+            missing = [
+                field for field in fields
+                if field not in canonical_properties
+            ]
+            if missing:
+                raise ValueError(
+                    f"Canonical state schema missing fields for {concern}: {missing}"
+                )
+            item_schema = {
+                "type": "object",
+                "properties": {
+                    field: deepcopy(canonical_properties[field])
+                    for field in fields
+                },
+                "required": fields,
+                "additionalProperties": False,
+            }
+        else:
+            item_schema = {
+                "type": "object",
+                "properties": {
+                    field: record_field_schema(section, concern, field)
+                    for field in fields
+                },
+                "required": fields,
+                "additionalProperties": False,
+            }
         properties[concern] = {
             "type": "array",
             "maxItems": 4,
