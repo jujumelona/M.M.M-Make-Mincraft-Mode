@@ -7,6 +7,8 @@ from copy import deepcopy
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from jsonschema import Draft202012Validator
+
 from .fixed_template_generation import generate_fixed_template_value
 from .model_output_atomicity_contract import structured_output_token_ceiling
 from .planning_detail_slots import record_field_schema
@@ -217,6 +219,40 @@ def _state_atomic_messages(
         },
     )
 
+def _decode_state_scalar_output(raw: str) -> str:
+    """Decode one model scalar without giving the model ownership of JSON structure."""
+
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    try:
+        decoded = json.loads(text)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        decoded = None
+    if isinstance(decoded, str):
+        return decoded.strip()
+    return " ".join(text.split())
+
+
+def _state_scalar_schema(
+    concern: str,
+    field: str,
+    schema: Mapping[str, Any],
+    current_row: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Narrow scalar state fields from already-fixed host context when possible."""
+
+    result = deepcopy(dict(schema))
+    if concern == "variables" and field == "default":
+        family = str(current_row.get("type") or "").strip().casefold()
+        if family == "number":
+            result["pattern"] = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
+        elif family == "boolean":
+            result.pop("pattern", None)
+            result["enum"] = ["true", "false"]
+    return result
+
+
 def author_state_semantic_page(
     router: Any,
     prompt: str,
@@ -227,70 +263,69 @@ def author_state_semantic_page(
     item_schema: Mapping[str, Any],
     existing_rows: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
-    """Author non-executable state fields one row at a time.
+    """Author ordinary state fields as scalar text; the host owns all JSON structure."""
 
-    State continuation pages must never ask a small model to rewrite the full concern
-    array. The host fixes cardinality, preserves row identity, and merges only the
-    requested field projection.
-    """
     if count <= 0:
         return {concern: []}
 
     requested = tuple(str(field) for field in fields)
     if not requested:
         raise ValueError("STATE_SEMANTIC_PAGE: at least one field is required")
+    properties = item_schema.get("properties")
+    if not isinstance(properties, Mapping):
+        raise ValueError("STATE_SEMANTIC_PAGE: item schema has no properties")
 
-    row_schema = deepcopy(dict(item_schema))
     rows: list[dict[str, Any]] = []
     prior = tuple(existing_rows or ())
     for index in range(count):
-        current = (
+        fixed = (
             dict(prior[index])
             if index < len(prior) and isinstance(prior[index], Mapping)
             else {}
         )
-        instruction_parts = [
-            "Author only state_model." + concern + "[" + str(index) + "] fields: " + ", ".join(requested) + ".",
-            "Return exactly the requested fields for this one row. Do not repeat, rename, ",
-            "or regenerate sibling fields. The host owns row order and merging.",
-        ]
-        if current:
-            instruction_parts.append(
-                "Existing immutable row context: "
-                + json.dumps(current, ensure_ascii=True, sort_keys=True, default=str)
-            )
-        if rows:
-            instruction_parts.append(
-                "Rows already authored for this projection: "
-                + json.dumps(rows, ensure_ascii=True, sort_keys=True, default=str)
-            )
-        raw = generate_fixed_template_value(
-            router,
-            "planner",
-            _state_atomic_messages(
+        row: dict[str, Any] = {}
+        for field in requested:
+            raw_schema = properties.get(field)
+            if not isinstance(raw_schema, Mapping):
+                raise ValueError(
+                    f"STATE_SEMANTIC_PAGE: missing schema for {concern}.{field}"
+                )
+            current = {**fixed, **row}
+            field_schema = _state_scalar_schema(concern, field, raw_schema, current)
+            enum_values = field_schema.get("enum")
+            constraints = ""
+            if isinstance(enum_values, Sequence) and not isinstance(
+                enum_values, (str, bytes, bytearray)
+            ):
+                constraints = " Allowed values: " + ", ".join(str(v) for v in enum_values) + "."
+            messages = _state_atomic_messages(
                 prompt,
                 concern=concern,
                 index=index,
-                fields=requested,
+                fields=(field,),
                 current_row=current,
-                extra_instruction=" ".join(instruction_parts),
-            ),
-            response_schema=row_schema,
-            enable_tools=False,
-            description=f"Author state row {index + 1} of {count} for {concern}.",
-            output_token_ceiling=structured_output_token_ceiling(row_schema),
-        )
-        if not isinstance(raw, Mapping):
-            raise ValueError(
-                f"STATE_SEMANTIC_PAGE: {concern}[{index}] must be an object"
+                extra_instruction=(
+                    "Return only the raw scalar value for this field, with no JSON key, "
+                    "object, array, quotes, Markdown, or explanation." + constraints
+                ),
             )
-        row = {}
-        for field in requested:
-            if field not in raw:
+            raw = router.generate_text(
+                "planner",
+                messages,
+                response_format="text",
+                response_schema=None,
+                enable_tools=False,
+                output_token_ceiling=128,
+                force_non_thinking=True,
+            )
+            value = _decode_state_scalar_output(raw)
+            errors = tuple(Draft202012Validator(field_schema).iter_errors(value))
+            if errors:
+                detail = "; ".join(error.message for error in errors[:3])
                 raise ValueError(
-                    f"STATE_SEMANTIC_PAGE: {concern}[{index}] omitted required field {field!r}"
+                    f"STATE_SEMANTIC_FIELD_INVALID: {concern}[{index}].{field}: {detail}"
                 )
-            row[field] = deepcopy(raw[field])
+            row[field] = value
         rows.append(row)
 
     return {concern: rows}
