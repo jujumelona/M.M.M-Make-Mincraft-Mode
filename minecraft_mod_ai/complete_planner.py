@@ -135,12 +135,13 @@ class CompleteGameDesignPlanner:
             version = getattr(self.router, "_mmm_requested_minecraft_version", None)
             loader = getattr(self.router, "_mmm_requested_loader", None)
             if version and loader:
-                try:
-                    from .platform_catalog import adapter_for_target
-                    resolved_adapter = adapter_for_target(str(version), str(loader))
-                    kinds = deterministic_backend_capabilities(resolved_adapter)
-                except Exception:
-                    pass
+                from .platform_catalog import adapter_for_target
+
+                resolved_adapter = adapter_for_target(
+                    str(version),
+                    str(loader),
+                )
+                kinds = deterministic_backend_capabilities(resolved_adapter)
         if kinds is None:
             existing_version = getattr(
                 self.router,
@@ -153,15 +154,13 @@ class CompleteGameDesignPlanner:
                 None,
             )
             if existing_version and existing_loader:
-                try:
-                    from .platform_catalog import adapter_for_target
-                    existing_adapter = adapter_for_target(
-                        str(existing_version),
-                        str(existing_loader),
-                    )
-                    kinds = deterministic_backend_capabilities(existing_adapter)
-                except Exception:
-                    pass
+                from .platform_catalog import adapter_for_target
+
+                existing_adapter = adapter_for_target(
+                    str(existing_version),
+                    str(existing_loader),
+                )
+                kinds = deterministic_backend_capabilities(existing_adapter)
         if kinds is None:
             # AUTO planning filters semantic kinds by *per-target* executability.
             # Never union primitive capabilities from different targets: doing so can
