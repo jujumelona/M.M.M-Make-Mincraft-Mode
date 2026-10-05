@@ -61,26 +61,35 @@ def _state_variable_contracts(
     """
 
     normalized = normalize_structured_state_section(section)
-    rows = normalized["specification"].get("variables")
+    rows = normalized["specification"]["variables"]
     if not isinstance(rows, Sequence) or isinstance(
         rows, (str, bytes, bytearray)
     ):
-        return ()
+        raise ValueError("TYPED_STATE_VARIABLES_ARRAY_REQUIRED")
+
     contracts: list[tuple[str, str]] = []
     seen: set[str] = set()
-    for row in rows:
+    for index, row in enumerate(rows):
         if not isinstance(row, Mapping):
-            continue
-        name = str(row.get("name") or "").strip()
-        if not name or name in seen:
-            continue
-        seen.add(name)
-        contracts.append(
-            (
-                name,
-                str(row.get("type") or "object").strip() or "object",
+            raise ValueError(
+                f"TYPED_STATE_VARIABLE_ROW_INVALID: variables[{index}]"
             )
-        )
+        name = str(row["name"]).strip()
+        type_name = str(row["type"]).strip()
+        if not name:
+            raise ValueError(
+                f"TYPED_STATE_VARIABLE_NAME_REQUIRED: variables[{index}]"
+            )
+        if name in seen:
+            raise ValueError(
+                f"TYPED_STATE_VARIABLE_DUPLICATE: {name!r}"
+            )
+        if type_name not in {"boolean", "int", "long", "double", "string"}:
+            raise ValueError(
+                f"TYPED_STATE_VARIABLE_TYPE_INVALID: {name!r} -> {type_name!r}"
+            )
+        seen.add(name)
+        contracts.append((name, type_name))
     return tuple(contracts)
 
 
