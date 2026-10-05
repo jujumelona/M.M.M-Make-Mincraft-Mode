@@ -1234,7 +1234,10 @@ def _extract_state_variable_types(
             elif raw_type == "string":
                 type_map[name] = "string"
             else:
-                type_map[name] = "int"
+                raise ValueError(
+                    "TYPED_PLAN_STATE_TYPE_UNSUPPORTED: "
+                    f"{name!r} declares {raw_type!r}"
+                )
     return type_map
 
 
