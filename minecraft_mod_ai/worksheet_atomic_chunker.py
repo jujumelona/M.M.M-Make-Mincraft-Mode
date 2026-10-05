@@ -227,9 +227,27 @@ def pack_section_concerns(section: str) -> list[tuple[str, ...]]:
                 if field in STATE_EXECUTABLE_FIELDS
             ]
 
-            # Normal semantic fields are paged first to establish row cardinality.
-            for start in range(0, len(normal), page_width):
-                add_page(concern, normal[start : start + page_width])
+            if concern == "variables":
+                # Establish cardinality from atomic identity + value family, not from
+                # prose ownership metadata. Keeping this first page to two fields also
+                # preserves the full concern record bound so compound state can be
+                # decomposed into multiple scalar variables instead of JSON-in-string.
+                first = tuple(
+                    field for field in ("name", "type")
+                    if field in normal
+                )
+                if first:
+                    add_page(concern, first)
+                remaining = [
+                    field for field in normal
+                    if field not in first
+                ]
+                for start in range(0, len(remaining), page_width):
+                    add_page(concern, remaining[start : start + page_width])
+            else:
+                # Normal semantic fields are paged first to establish row cardinality.
+                for start in range(0, len(normal), page_width):
+                    add_page(concern, normal[start : start + page_width])
 
             # DSL/IR executable fields are each an independent semantic page.
             for field in executable:
@@ -336,6 +354,22 @@ def worksheet_chunk_schema(
             )
             for field in fields
         }
+        if key == "state_model" and concern == "variables":
+            if "name" in field_schemas:
+                field_schemas["name"]["description"] = (
+                    "One independently mutable state value. Split compound objects into "
+                    "separate variables instead of encoding maps/JSON in one variable."
+                )
+            if "type" in field_schemas:
+                field_schemas["type"] = {
+                    "type": "string",
+                    "enum": ["number", "boolean", "string"],
+                    "description": (
+                        "Canonical scalar value family. Compound maps/lists are not authored "
+                        "as one planner variable; split their mutable fields into separate "
+                        "scalar state records."
+                    ),
+                }
         item_schema: dict[str, Any] = {
             "type": "object",
             "properties": field_schemas,
