@@ -740,6 +740,10 @@ class Proposal:
             raise SpecValidationError(
                 "imported_source_snapshot_hash must be empty or a lowercase sha256 digest."
             )
+        if self.status is ProposalStatus.APPROVED and not self.approval_hash:
+            raise SpecValidationError(
+                "Proposal approved state requires its approval_hash integrity receipt."
+            )
         if self.approval_hash:
             if not SHA256_PATTERN.fullmatch(self.approval_hash):
                 raise SpecValidationError(
@@ -813,7 +817,13 @@ class Proposal:
                 "Approval hash mismatch. The displayed proposal changed or "
                 "the wrong hash was used."
             )
-        return Proposal(**{**self.__dict__, "status": ProposalStatus.APPROVED})
+        return Proposal(
+            **{
+                **self.__dict__,
+                "status": ProposalStatus.APPROVED,
+                "approval_hash": expected,
+            }
+        )
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -829,6 +839,16 @@ class Proposal:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Proposal:
         unknown = set(data) - cls._TOP_LEVEL_KEYS
+        missing_provenance = [
+            field
+            for field in ("evidence_snapshot_hash", "capability_manifest_hash")
+            if field not in data
+        ]
+        if missing_provenance:
+            raise SpecValidationError(
+                "Proposal is missing authoritative provenance receipts: "
+                + ", ".join(missing_provenance)
+            )
         missing = cls._TOP_LEVEL_KEYS - cls._BACKWARD_COMPATIBLE_KEYS - set(data)
         if unknown:
             raise SpecValidationError(
@@ -868,9 +888,6 @@ class Proposal:
         evidence_sources = tuple(
             EvidenceSource(**item) for item in data["evidence_sources"]
         )
-        from .capabilities import capability_manifest_hash
-        from .knowledge import evidence_snapshot_hash
-
         proposal = cls(
             schema_version=data["schema_version"],
             proposal_version=data["proposal_version"],
@@ -885,14 +902,8 @@ class Proposal:
             ),
             acceptance_tests=tuple(data["acceptance_tests"]),
             evidence_sources=evidence_sources,
-            evidence_snapshot_hash=data.get(
-                "evidence_snapshot_hash",
-                evidence_snapshot_hash(evidence_sources),
-            ),
-            capability_manifest_hash=data.get(
-                "capability_manifest_hash",
-                capability_manifest_hash(),
-            ),
+            evidence_snapshot_hash=data["evidence_snapshot_hash"],
+            capability_manifest_hash=data["capability_manifest_hash"],
             imported_source_snapshot_hash=data.get(
                 "imported_source_snapshot_hash", ""
             ),
