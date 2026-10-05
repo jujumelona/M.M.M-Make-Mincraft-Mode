@@ -15,7 +15,6 @@ from .planning_detail_slots import record_field_schema
 from .structured_state_runtime import (
     _SUPPORTED_STATE_FUNCTIONS,
     StateSymbolTable,
-    mutations_schema,
     state_variable_default_schema,
     validate_mutation_ir,
     validate_state_expr_ir,
@@ -536,6 +535,188 @@ def _author_state_condition(
     return _condition_ir_from_transport(raw, symbols=symbols)
 
 
+def _state_mutation_transport_schema(
+    symbols: StateSymbolTable,
+) -> dict[str, Any]:
+    """Flat model transport for state assignments; host owns typed IR assembly."""
+
+    declared = sorted(symbols.declared_names)
+    state_name_schema: dict[str, Any]
+    value_kinds = [
+        "context",
+        "number",
+        "string",
+        "boolean",
+        "null",
+        "empty_map",
+        "empty_list",
+    ]
+    if declared:
+        state_name_schema = {
+            "type": "string",
+            "enum": declared,
+            "maxLength": 128,
+        }
+        value_kinds.insert(0, "state")
+    else:
+        state_name_schema = {
+            "type": "string",
+            "const": "",
+            "maxLength": 1,
+        }
+
+    context_schema = {
+        "type": "string",
+        "maxLength": 24,
+        "pattern": r"^(?:|[A-Za-z_$][A-Za-z0-9_$.]{0,23})$",
+    }
+    assignment = {
+        "type": "object",
+        "properties": {
+            "target": state_name_schema,
+            "operator": {
+                "type": "string",
+                "enum": ["=", "+=", "-=", "*=", "/="],
+                "maxLength": 2,
+            },
+            "value_kind": {"type": "string", "enum": value_kinds},
+            "value_state": state_name_schema,
+            "value_context": context_schema,
+            "value_text": {
+                "type": "string",
+                "maxLength": 24,
+                "pattern": r"^[^{}\[\]]{0,24}$",
+            },
+        },
+        "required": [
+            "target",
+            "operator",
+            "value_kind",
+            "value_state",
+            "value_context",
+            "value_text",
+        ],
+        "additionalProperties": False,
+    }
+    return {
+        "type": "object",
+        "properties": {
+            "assignments": {
+                "type": "array",
+                "minItems": 0,
+                "maxItems": 2,
+                "items": assignment,
+            }
+        },
+        "required": ["assignments"],
+        "additionalProperties": False,
+    }
+
+
+def _mutation_value_from_transport(item: Mapping[str, Any]) -> dict[str, Any]:
+    kind = str(item.get("value_kind") or "")
+    if kind == "state":
+        return {"kind": "state_ref", "name": str(item["value_state"])}
+    if kind == "context":
+        name = str(item.get("value_context") or "").strip()
+        if not name:
+            raise ValueError("STATE_MUTATION_TRANSPORT: context name is required")
+        return {"kind": "context_ref", "name": name}
+    if kind == "number":
+        value = str(item.get("value_text") or "").strip()
+        if re.fullmatch(r"-?[0-9]+(?:\.[0-9]+)?", value) is None:
+            raise ValueError(
+                f"STATE_MUTATION_TRANSPORT: invalid numeric literal {value!r}"
+            )
+        return {"kind": "number", "value": value}
+    if kind == "string":
+        return {"kind": "literal", "value": str(item.get("value_text") or "")}
+    if kind == "boolean":
+        value = str(item.get("value_text") or "").strip().casefold()
+        if value not in {"true", "false"}:
+            raise ValueError(
+                "STATE_MUTATION_TRANSPORT: boolean value_text must be true or false"
+            )
+        return {"kind": "literal", "value": value == "true"}
+    if kind == "null":
+        return {"kind": "literal", "value": None}
+    if kind == "empty_map":
+        return {"kind": "empty_map"}
+    if kind == "empty_list":
+        return {"kind": "empty_list"}
+    raise ValueError(f"STATE_MUTATION_TRANSPORT: invalid value kind {kind!r}")
+
+
+def _mutation_ir_from_transport(
+    raw: Mapping[str, Any],
+    *,
+    symbols: StateSymbolTable,
+) -> list[dict[str, Any]]:
+    assignments = raw.get("assignments")
+    if not isinstance(assignments, Sequence) or isinstance(
+        assignments, (str, bytes, bytearray)
+    ):
+        raise ValueError("STATE_MUTATION_TRANSPORT: assignments must be an array")
+
+    result: list[dict[str, Any]] = []
+    for index, item in enumerate(assignments):
+        if not isinstance(item, Mapping):
+            raise ValueError(
+                f"STATE_MUTATION_TRANSPORT: assignments[{index}] must be an object"
+            )
+        result.append(
+            {
+                "target": str(item.get("target") or ""),
+                "operator": str(item.get("operator") or ""),
+                "value": _mutation_value_from_transport(item),
+            }
+        )
+    validate_mutation_ir(result, symbols=symbols)
+    return result
+
+
+def _author_state_mutation(
+    router: Any,
+    prompt: str,
+    *,
+    concern: str,
+    field: str,
+    index: int,
+    count: int,
+    symbols: StateSymbolTable,
+    current: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    schema = _state_mutation_transport_schema(symbols)
+    raw = generate_fixed_template_value(
+        router,
+        "planner",
+        _state_atomic_messages(
+            prompt,
+            concern=concern,
+            index=index,
+            fields=(field,),
+            current_row=current,
+            symbols_text=symbols.prompt_text(),
+            extra_instruction=(
+                f"Author state assignments for state_model.{concern}[{index}].{field}. "
+                "Return only the flat assignments transport. Use an empty assignments "
+                "array when this row needs no state mutation. Do not emit nested expression "
+                "IR keys such as kind, type, value objects, left, right, terms, or args; "
+                "the host constructs and validates canonical typed mutation IR."
+            ),
+        ),
+        response_schema=schema,
+        enable_tools=False,
+        description=(
+            f"Choose flat state assignments for row {index + 1} of {count} in {concern}."
+        ),
+        output_token_ceiling=structured_output_token_ceiling(schema),
+    )
+    if not isinstance(raw, Mapping):
+        raise ValueError("STATE_MUTATION_TRANSPORT: model result must be an object")
+    return _mutation_ir_from_transport(raw, symbols=symbols)
+
+
 def author_state_field_page(
     router: Any,
     prompt: str,
@@ -578,43 +759,16 @@ def author_state_field_page(
                 current=current,
             )
         else:
-            inner_schema = mutations_schema(symbols_table)
-            row_schema = {
-                "type": "object",
-                "properties": {field: inner_schema},
-                "required": [field],
-                "additionalProperties": False,
-            }
-            typed_symbols = symbols_table.prompt_text()
-            instruction = (
-                f"Author state mutation for {path}. "
-                f"Return list of state assignments or empty list for no state mutation. "
-                "Each assignment value must use the host IR branch compatible with its "
-                "declared target type. Never serialize a JSON object/array into a string "
-                "literal; compound state must use an explicitly supported container IR. "
-                f"Declared state variables: {', '.join(declared_names) or 'none'}."
-                + (f"\n{typed_symbols}" if typed_symbols else "")
-            )
-            raw = generate_fixed_template_value(
+            value = _author_state_mutation(
                 router,
-                "planner",
-                _state_atomic_messages(
-                    prompt,
-                    concern=concern,
-                    index=index,
-                    fields=(field,),
-                    current_row=current,
-                    symbols_text=typed_symbols,
-                    extra_instruction=instruction,
-                ),
-                response_schema=row_schema,
-                enable_tools=False,
-                description=f"Author state {field} for row {index + 1} of {count} in {concern}.",
-                output_token_ceiling=structured_output_token_ceiling(row_schema),
+                prompt,
+                concern=concern,
+                field=field,
+                index=index,
+                count=count,
+                symbols=symbols_table,
+                current=current,
             )
-            raw_value = raw.get(field, raw) if isinstance(raw, Mapping) else raw
-            validate_mutation_ir(raw_value, symbols=symbols_table)
-            value = deepcopy(raw_value)
 
         rows.append({field: value})
 
