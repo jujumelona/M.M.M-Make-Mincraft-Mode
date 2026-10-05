@@ -377,18 +377,13 @@ class CompleteProposal:
             raise SpecValidationError(
                 "game_design._artifact_jobs must be an array when supplied."
             )
-        from .artifact_job import ArtifactJob, validate_artifact_job_graph
+        from .artifact_job import (
+            parse_artifact_jobs,
+            validate_artifact_job_graph,
+        )
 
-        parsed_artifact_jobs = []
         try:
-            for index, raw_job in enumerate(raw_artifact_jobs):
-                if not isinstance(raw_job, Mapping):
-                    raise ValueError(
-                        f"Artifact job {index} must be an object."
-                    )
-                parsed_artifact_jobs.append(
-                    ArtifactJob.from_dict(dict(raw_job))
-                )
+            parsed_artifact_jobs = parse_artifact_jobs(raw_artifact_jobs)
             validate_artifact_job_graph(
                 parsed_artifact_jobs,
                 module_ids=module_ids,
