@@ -12,7 +12,11 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .complete_spec import AssetRequest, CompleteProposal, CompleteProposalStatus, ProductionModule
-from .resource_asset_plan import ResourceAssetPlanError, require_asset_plan
+from .resource_asset_plan import (
+    ResourceAssetPlanError,
+    asset_plan_sha256,
+    require_asset_plan,
+)
 from .spec import SpecValidationError
 
 
@@ -651,6 +655,29 @@ def _validated_plan(router: Any, proposal: CompleteProposal) -> Mapping[str, Any
         raise AssetProductionError("Approved resource contract/manifest differs from current HOST/visual inputs.")
     _validate_manifest(rows)
     return plan
+
+
+def validate_asset_generation_plan(
+    router: Any,
+    proposal: CompleteProposal,
+) -> dict[str, Any]:
+    """Validate approved asset authority/profile/host contracts before dispatch."""
+
+    _preflight(proposal)
+    if not proposal.assets:
+        return {
+            "schema_version": "mmm/resource-asset-plan-preflight-v1",
+            "status": "PASS",
+            "asset_count": 0,
+            "asset_plan_sha256": "",
+        }
+    plan = _validated_plan(router, proposal)
+    return {
+        "schema_version": "mmm/resource-asset-plan-preflight-v1",
+        "status": "PASS",
+        "asset_count": len(proposal.assets),
+        "asset_plan_sha256": asset_plan_sha256(plan),
+    }
 
 
 def _container_root(project_root: Path, run_root: Path, container: str) -> Path:
