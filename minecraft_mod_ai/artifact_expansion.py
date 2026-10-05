@@ -20,26 +20,30 @@ class ArtifactExpansionError(ValueError):
     pass
 
 
-def _executor_type_from_string(exec_type_str: str) -> ExecutorType:
-    """Convert string executor_type to ExecutorType enum.
-    
-    P0-2: Centralized conversion to ensure only valid ExecutorType enums reach ArtifactJob.
-    """
-    exec_type_map = {
-        "deterministic_renderer": ExecutorType.DETERMINISTIC,
+def _runtime_executor_type(
+    *,
+    implementation_id: str,
+    template_id: str = "",
+    declared_executor_type: str = "",
+) -> ExecutorType:
+    """Resolve runtime dispatch from the concrete registered implementation identity."""
+
+    if template_id:
+        return ExecutorType.TEMPLATE
+    if implementation_id.startswith("python_generator:"):
+        return ExecutorType.PYTHON_GENERATOR
+    direct = {
         "deterministic": ExecutorType.DETERMINISTIC,
         "python_generator": ExecutorType.PYTHON_GENERATOR,
         "template": ExecutorType.TEMPLATE,
         "model": ExecutorType.MODEL,
-    }
-    
-    result = exec_type_map.get(exec_type_str)
-    if result is None:
-        raise ArtifactExpansionError(
-            f"EXECUTOR_TYPE_UNKNOWN: {exec_type_str!r} not in {list(exec_type_map.keys())}"
-        )
-    return result
-
+    }.get(str(declared_executor_type or "").strip())
+    if direct is not None:
+        return direct
+    raise ArtifactExpansionError(
+        "EXECUTOR_TYPE_UNKNOWN: "
+        f"implementation={implementation_id!r}, declared={declared_executor_type!r}"
+    )
 
 _REGISTRY_PATH = re.compile(r"^[a-z0-9_.-]+$")
 
@@ -296,8 +300,12 @@ def expand_facts_to_jobs(
             if version_context is None:
                 raise ArtifactExpansionError("EXACT_HOST_IMPLEMENTATION_REQUIRED")
             binding = require_registered_leaf_binding(version_context, leaf_id)
-            if binding["implementation"]["executor_type"] != "python_generator":
-                raise ArtifactExpansionError(f"ARTIFACT_NO_TEMPLATE_NO_GENERATOR: {leaf_id}")
+            implementation = binding["implementation"]
+            implementation_id = str(implementation.get("implementation_id") or "")
+            if not implementation_id.startswith("python_generator:"):
+                raise ArtifactExpansionError(
+                    f"ARTIFACT_NO_TEMPLATE_NO_GENERATOR: {leaf_id}"
+                )
             leaf_template_pairs.append((leaf_id, ""))
 
         resource_values = {}
@@ -348,7 +356,10 @@ def expand_facts_to_jobs(
                 }
                 
                 # Convert executor_type string to enum
-                exec_type_enum = _executor_type_from_string(exec_type)
+                exec_type_enum = _runtime_executor_type(
+                    implementation_id=impl_id,
+                    declared_executor_type=exec_type,
+                )
                 
                 candidate = ArtifactJob(
                     job_id=job_id,
@@ -459,7 +470,11 @@ def expand_facts_to_jobs(
                 impl_id = f"template:{template_id}"
             
             # Convert executor_type string to enum
-            exec_type_enum = _executor_type_from_string(exec_type)
+            exec_type_enum = _runtime_executor_type(
+                implementation_id=impl_id,
+                template_id=template_id,
+                declared_executor_type=exec_type,
+            )
 
             candidate = ArtifactJob(
                 job_id=job_id,
