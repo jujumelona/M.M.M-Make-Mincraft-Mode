@@ -2082,6 +2082,7 @@ def author_typed_plan_ir(
     *,
     deterministic_module_kinds: Iterable[str] | None = None,
     allowed_platform_kinds: Iterable[str] | None = None,
+    externally_covered_refs: Iterable[str] = (),
     max_calls: int | None = None,
     budget: Any = None,
 ) -> dict[str, Any]:
@@ -2335,6 +2336,17 @@ def author_typed_plan_ir(
         for cover in function.get("covers", ())
         if isinstance(cover, str)
     }
+    external_coverage = {
+        str(ref).strip()
+        for ref in externally_covered_refs
+        if str(ref).strip()
+    }
+    unknown_external = external_coverage - set(coverage_refs)
+    if unknown_external:
+        raise ValueError(
+            "TYPED_PLAN_EXTERNAL_COVERAGE_UNKNOWN: "
+            + ", ".join(sorted(unknown_external))
+        )
     uncovered = {
         ref
         for ref in coverage_refs
@@ -2344,6 +2356,7 @@ def author_typed_plan_ir(
             "resources_and_ui.",
         ))
         and ref not in host_covered_refs
+        and ref not in external_coverage
     }
     # None means the target is not bound yet (AUTO planning may still choose a
     # compatible target later). An empty iterable is different: the bound target
