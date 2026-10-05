@@ -2148,7 +2148,12 @@ def _author_platform_config(
             structured_sections,
             transfer_required=("persistence.transfers" in uncovered),
         )
-    if kind in {"network_sync", "resource_policy"}:
+    if kind == "network_sync":
+        return {
+            "sync_interval_ticks": 20,
+            "max_payload_bytes": 32767,
+        }
+    if kind == "resource_policy":
         return {}
     if kind == "recipe":
         return {"json": {"type": "minecraft:crafting_shapeless"}}
