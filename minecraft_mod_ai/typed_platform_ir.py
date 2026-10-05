@@ -391,6 +391,7 @@ _PERSISTENT_SYSTEM_KINDS = frozenset({
 # authority/security worksheet context accidentally require a second feature backend.
 _HOST_SECTION_OWNERS = {
     "authority_and_network": "network_sync",
+    "persistence": "state_store",
 }
 
 
@@ -438,11 +439,12 @@ def _coverage_allowed(kind: str, cover: str) -> bool:
         return kind == _HOST_SECTION_OWNERS[section]
 
     if cover.startswith("persistence."):
+        # Legacy persistent gameplay packs may still advertise persistence
+        # coverage for the currently-known worksheet concerns.  The canonical
+        # host state_store path above owns the section itself and therefore does
+        # not depend on a duplicated concern-name allowlist.
         concern = cover.split(".", 1)[1]
-        return (
-            kind == "state_store"
-            or kind in _PERSISTENT_SYSTEM_KINDS
-        ) and concern in {
+        return kind in _PERSISTENT_SYSTEM_KINDS and concern in {
             "stored_state",
             "serialization",
             "missing_defaults",
