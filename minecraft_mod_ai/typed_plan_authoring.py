@@ -388,14 +388,16 @@ class TypedOperationAuthor:
         structured_sections: Mapping[str, Any] | None,
         capabilities: Mapping[str, Any] | None,
         *,
-        max_calls: int = 256,
+        max_calls: int | None = None,
         budget: Any = None,
     ) -> None:
         self.router = router
         self.source_text = str(source_text)
         self.structured_sections = dict(structured_sections or {})
         self.capabilities = dict(capabilities or {})
-        self.max_calls = max(1, int(max_calls))
+        self.max_calls = (
+            None if max_calls is None else max(1, int(max_calls))
+        )
         self.call_count = 0
         self.budget = budget
         self.function_signatures: dict[str, tuple[str, ...]] = {}
@@ -531,7 +533,10 @@ class TypedOperationAuthor:
 
         if self.budget is not None:
             self.budget.consume(f"typed_plan.{scope}.{field}")
-        if self.call_count >= self.max_calls:
+        if (
+            self.max_calls is not None
+            and self.call_count >= self.max_calls
+        ):
             raise ValueError(
                 f"TYPED_PLAN_AUTHORING_LIMIT: exceeded {self.max_calls} bounded decisions"
             )
@@ -1272,18 +1277,22 @@ _SEMANTIC_TRIGGER_EVENTS = (
 def _semantic_state_value_schema(type_name: str) -> dict[str, Any]:
     if type_name == "int":
         return {
-            "type": "integer",
-            "minimum": -(2**31),
-            "maximum": 2**31 - 1,
+            "type": "string",
+            "pattern": r"^-?(?:0|[1-9][0-9]{0,9})$",
+            "maxLength": 11,
         }
     if type_name == "long":
         return {
-            "type": "integer",
-            "minimum": -(2**63),
-            "maximum": 2**63 - 1,
+            "type": "string",
+            "pattern": r"^-?(?:0|[1-9][0-9]{0,18})$",
+            "maxLength": 20,
         }
     if type_name == "double":
-        return {"type": "number"}
+        return {
+            "type": "string",
+            "pattern": r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$",
+            "maxLength": 32,
+        }
     if type_name == "boolean":
         return {"type": "boolean"}
     if type_name == "string":
@@ -1370,14 +1379,9 @@ def semantic_dispatch_schema(
     return {
         "type": "object",
         "properties": {
-            "rules": {
-                "type": "array",
-                "minItems": 1,
-                "maxItems": 8,
-                "items": {"oneOf": branches},
-            },
+            "rule": {"oneOf": branches},
         },
-        "required": ["rules"],
+        "required": ["rule"],
         "additionalProperties": False,
     }
 
@@ -1553,62 +1557,117 @@ def lower_semantic_game_dispatch_to_ir(
     return statements
 
 
+def _semantic_context_for_refs(
+    structured_sections: Mapping[str, Any] | None,
+    refs: Sequence[str],
+) -> dict[str, Any]:
+    """Select only the worksheet records that own the requested semantic refs."""
+
+    from .authored_structured_design import active_concern_records
+
+    by_section: dict[str, set[str]] = {}
+    for ref in refs:
+        section, dot, concern = str(ref).partition(".")
+        if dot and section and concern:
+            by_section.setdefault(section, set()).add(concern)
+
+    selected: dict[str, Any] = {}
+    for section, concerns in sorted(by_section.items()):
+        active = active_concern_records(structured_sections, section)
+        rows = {
+            concern: active[concern]
+            for concern in sorted(concerns)
+            if concern in active
+        }
+        if rows:
+            selected[section] = rows
+
+    state = active_concern_records(structured_sections, "state_model")
+    if state:
+        selected.setdefault("state_model", state)
+    return selected
+
+
 def author_semantic_game_dispatch(
     router: Any,
     source_text: str,
     structured_sections: Mapping[str, Any] | None,
     capabilities: Mapping[str, Any] | None,
     *,
+    coverage_refs: Sequence[str],
     budget: Any = None,
 ) -> list[dict[str, Any]]:
-    """Author executable semantic actions and fail closed on any contract error."""
+    """Author exactly one bounded semantic action per host-owned coverage unit."""
 
     state_types = _extract_state_variable_types(structured_sections)
-    if budget is not None:
-        budget.consume("typed.semantic_dispatch")
+    refs = tuple(dict.fromkeys(str(ref) for ref in coverage_refs if str(ref)))
+    if not refs:
+        raise ValueError(
+            "TYPED_PLAN_SEMANTIC_COVERAGE_REQUIRED: dispatch has no host-owned coverage units"
+        )
 
-    payload = {
-        "source_sha256": hashlib.sha256(source_text.encode("utf-8")).hexdigest(),
-        "available_states": {
-            name: state_types[name]
-            for name in sorted(state_types)
-        },
-        "available_capabilities": sorted(capabilities.keys()) if capabilities else [],
-        "instruction": (
-            "Choose one or more host-bound runtime actions. Every state_key and "
-            "capability_id is closed by the supplied schema; do not invent identifiers."
-        ),
-    }
     schema = semantic_dispatch_schema(state_types, capabilities)
-    raw = generate_fixed_template_value(
-        router,
-        "planner",
-        (
-            {
-                "role": "system",
-                "content": (
-                    "Author bounded game logic as semantic host actions. "
-                    "Do not author AST syntax, loops, Java, or no-op coverage."
-                ),
+    token_ceiling = structured_output_token_ceiling(schema)
+    rules: list[Mapping[str, Any]] = []
+
+    for coverage_ref in refs:
+        if budget is not None:
+            budget.consume("typed.semantic_dispatch")
+
+        payload = {
+            "source_sha256": hashlib.sha256(source_text.encode("utf-8")).hexdigest(),
+            "coverage_ref": coverage_ref,
+            "semantic_context": _semantic_context_for_refs(
+                structured_sections,
+                (coverage_ref,),
+            ),
+            "available_states": {
+                name: state_types[name]
+                for name in sorted(state_types)
             },
-            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-        ),
-        response_schema=schema,
-        enable_tools=False,
-        description="Author bounded semantic game rules for runtime dispatch.",
-        output_token_ceiling=structured_output_token_ceiling(schema),
-    )
-    if not isinstance(raw, Mapping):
-        raise ValueError(
-            "TYPED_PLAN_SEMANTIC_RESPONSE_INVALID: expected an object"
+            "available_capabilities": (
+                sorted(capabilities.keys()) if capabilities else []
+            ),
+            "instruction": (
+                "Choose exactly one host-bound runtime action implementing the supplied "
+                "coverage_ref. Every state_key and capability_id is closed by the schema; "
+                "do not invent identifiers, arrays, loops, Java, or extra actions."
+            ),
+        }
+        raw = generate_fixed_template_value(
+            router,
+            "planner",
+            (
+                {
+                    "role": "system",
+                    "content": (
+                        "Author one bounded game-logic action for the exact canonical "
+                        "coverage unit supplied by the host."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(payload, ensure_ascii=False),
+                },
+            ),
+            response_schema=schema,
+            enable_tools=False,
+            description=(
+                "Author one atomic semantic game rule for a host-owned coverage unit."
+            ),
+            output_token_ceiling=token_ceiling,
         )
-    rules = raw.get("rules")
-    if not isinstance(rules, Sequence) or isinstance(
-        rules, (str, bytes, bytearray)
-    ):
-        raise ValueError(
-            "TYPED_PLAN_SEMANTIC_RESPONSE_INVALID: rules must be an array"
-        )
+        if not isinstance(raw, Mapping) or set(raw) != {"rule"}:
+            raise ValueError(
+                "TYPED_PLAN_SEMANTIC_RESPONSE_INVALID: expected exactly one rule"
+            )
+        rule = raw.get("rule")
+        if not isinstance(rule, Mapping):
+            raise ValueError(
+                "TYPED_PLAN_SEMANTIC_RESPONSE_INVALID: rule must be an object"
+            )
+        rules.append(rule)
+
     return lower_semantic_game_dispatch_to_ir(
         rules,
         state_types,
@@ -2247,18 +2306,12 @@ def author_typed_plan_ir(
 
     coverage_refs = _active_concern_refs(structured_sections)
     entry_points = _integration_entry_points(structured_sections)
-    semantic_units = len(coverage_refs) + len(entry_points)
-    effective_max_calls = (
-        max(1, int(max_calls))
-        if max_calls is not None
-        else max(16, min(128, 8 + semantic_units * 4))
-    )
     author = TypedOperationAuthor(
         router,
         source_text,
         structured_sections,
         capabilities,
-        max_calls=effective_max_calls,
+        max_calls=max_calls,
         budget=budget,
     )
 
@@ -2362,6 +2415,7 @@ def author_typed_plan_ir(
             source_text,
             structured_sections,
             capabilities,
+            coverage_refs=logic_refs,
             budget=budget,
         )
 
