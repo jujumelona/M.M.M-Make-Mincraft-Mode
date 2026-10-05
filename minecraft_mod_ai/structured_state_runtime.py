@@ -19,11 +19,11 @@ STATE_EXPRESSION_PATTERN = r"^.*$"
 STATE_MUTATION_PATTERN = r"^.*$"
 
 _STATE_EXECUTABLE_FIELDS = {
-    "transitions": ("guard", "mutation", "mutations"),
+    "transitions": ("guard", "mutation"),
     "invariants": ("condition",),
-    "initialization": ("initial_state", "mutations"),
-    "updates": ("mutation", "mutations"),
-    "cleanup": ("action", "mutations"),
+    "initialization": ("initial_state",),
+    "updates": ("mutation",),
+    "cleanup": ("action",),
 }
 
 
@@ -1159,7 +1159,6 @@ def state_concern_schema(
                 "from_state": {"type": "string", "minLength": 1, "maxLength": 128},
                 "trigger": {"type": "string", "minLength": 1, "maxLength": 128},
                 "guard": expression_field(),
-                "mutations": mutation_field(),
                 "mutation": mutation_field(),
                 "to_state": {"type": "string", "minLength": 1, "maxLength": 128},
             },
@@ -1185,7 +1184,6 @@ def state_concern_schema(
                 "owner": {"type": "string", "minLength": 1, "maxLength": 256},
                 "trigger": {"type": "string", "minLength": 1, "maxLength": 128},
                 "initial_state": mutation_field(),
-                "mutations": mutations_schema(symbol_source),
             },
             "required": ["owner", "trigger", "initial_state"],
             "additionalProperties": False,
@@ -1197,7 +1195,6 @@ def state_concern_schema(
             "properties": {
                 "trigger": {"type": "string", "minLength": 1, "maxLength": 128},
                 "mutation": mutations_schema(symbol_source),
-                "mutations": mutations_schema(symbol_source),
                 "owner": {"type": "string", "minLength": 1, "maxLength": 256},
             },
             "required": ["trigger", "mutation", "owner"],
@@ -1210,7 +1207,6 @@ def state_concern_schema(
             "properties": {
                 "event": {"type": "string", "minLength": 1, "maxLength": 128},
                 "action": mutation_field(),
-                "mutations": mutations_schema(symbol_source),
                 "retained_state": {"type": "string", "minLength": 1, "maxLength": 256},
             },
             "required": ["event", "action", "retained_state"],
@@ -1358,7 +1354,7 @@ def validate_state_concern(
             guard_val = record.get("guard")
             if guard_val is not None:
                 validate_state_expr_ir(guard_val, symbols=declared)
-            mut_val = record.get("mutations") if "mutations" in record else record.get("mutation")
+            mut_val = record.get("mutation")
             if mut_val is not None:
                 validate_mutation_ir(mut_val, symbols=symbols)
         return
@@ -1381,7 +1377,7 @@ def validate_state_concern(
         for record in rows:
             if not isinstance(record, Mapping):
                 continue
-            mut_val = record.get("mutations") if "mutations" in record else record.get(field)
+            mut_val = record.get(field)
             if mut_val is not None:
                 validate_mutation_ir(mut_val, symbols=symbols)
         return
@@ -1812,8 +1808,7 @@ def render_state_model_concern(
                 record.get(field),
                 declared=declared,
             )
-        mut_val = record.get("mutations") if "mutations" in record else record.get(field)
-        return compile_mutation_ir(mut_val, declared=declared)
+        return compile_mutation_ir(record.get(field), declared=declared)
 
     if concern == "variables":
         lines = ["static {"]
@@ -1834,7 +1829,7 @@ def render_state_model_concern(
         lines = ["static {"]
         for index, record in enumerate(records):
             guard = executable(index, record, "guard")
-            mutation = executable(index, record, "mutations" if "mutations" in record else "mutation")
+            mutation = executable(index, record, "mutation")
             lines.append(
                 "    $mmmTransitions.add(new $mmmTransition("
                 + ", ".join((
