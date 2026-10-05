@@ -1746,25 +1746,26 @@ def _content_config_author_schema(kind: str) -> dict[str, Any]:
         "display_name_en": {"type": "string", "minLength": 1, "maxLength": 64},
         "display_name_ko": {"type": "string", "minLength": 1, "maxLength": 64},
     }
+    required_common = ("display_name_en", "display_name_ko")
     if kind == "item":
-        return _platform_schema(common)
+        return _platform_schema(common, required=required_common)
     if kind == "block":
         return _platform_schema({
             **common,
             "hardness": {"type": "number", "minimum": 0, "maximum": 100},
-        })
+        }, required=(*required_common, "hardness"))
     if kind == "food":
         return _platform_schema({
             **common,
             "hunger": {"type": "integer", "minimum": 0, "maximum": 20},
             "saturation": {"type": "number", "minimum": 0, "maximum": 20},
-        })
+        }, required=(*required_common, "hunger", "saturation"))
     if kind in {"weapon", "tool"}:
         return _platform_schema({
             **common,
             "attack_damage": {"type": "integer", "minimum": 0, "maximum": 100},
             "attack_speed": {"type": "number", "minimum": 0, "maximum": 10},
-        })
+        }, required=(*required_common, "attack_damage", "attack_speed"))
     if kind == "armor":
         return _platform_schema({
             **common,
@@ -1772,7 +1773,7 @@ def _content_config_author_schema(kind: str) -> dict[str, Any]:
                 "type": "string",
                 "enum": ["helmet", "chestplate", "leggings", "boots"],
             },
-        })
+        }, required=(*required_common, "slot"))
     if kind == "machine":
         return _platform_schema({
             **common,
@@ -1788,9 +1789,15 @@ def _content_config_author_schema(kind: str) -> dict[str, Any]:
             },
             "output_count": {"type": "integer", "minimum": 1, "maximum": 64},
             "processing_ticks": {"type": "integer", "minimum": 1, "maximum": 72000},
-        })
+        }, required=(
+            *required_common,
+            "input_item",
+            "output_item",
+            "output_count",
+            "processing_ticks",
+        ))
     if kind == "crop":
-        return _platform_schema(common)
+        return _platform_schema(common, required=required_common)
     if kind == "effect":
         return _platform_schema({
             **common,
@@ -1799,12 +1806,12 @@ def _content_config_author_schema(kind: str) -> dict[str, Any]:
                 "pattern": r"^#[0-9A-Fa-f]{6}$",
                 "maxLength": 7,
             },
-        })
+        }, required=(*required_common, "color"))
     if kind == "enchantment":
         return _platform_schema({
             **common,
             "max_level": {"type": "integer", "minimum": 1, "maximum": 10},
-        })
+        }, required=(*required_common, "max_level"))
     raise ValueError(f"TYPED_PLATFORM_CONTENT_KIND_UNSUPPORTED: {kind!r}")
 
 
@@ -2050,7 +2057,7 @@ _ENTITY_TRAITS_AUTHOR_SCHEMA = _platform_schema({
         "pattern": r"^#[0-9A-Fa-f]{6}$",
         "maxLength": 7,
     },
-})
+}, required=("archetype", "behavior", "spawn_group", "main_color"))
 
 _QUEST_PARAMS_AUTHOR_SCHEMA = _platform_schema({
     "objective": {
@@ -2082,7 +2089,14 @@ _QUEST_PARAMS_AUTHOR_SCHEMA = _platform_schema({
         "minimum": 0,
         "maximum": 10000,
     },
-})
+}, required=(
+    "objective",
+    "target",
+    "required",
+    "reward_item",
+    "reward_count",
+    "reward_currency",
+))
 
 _SKILL_PARAMS_AUTHOR_SCHEMA = _platform_schema({
     "effect": {
@@ -2110,7 +2124,7 @@ _SKILL_PARAMS_AUTHOR_SCHEMA = _platform_schema({
         "pattern": r"^[a-z][a-z0-9_]{1,63}$",
         "maxLength": 64,
     },
-})
+}, required=("effect", "duration_ticks", "amplifier", "cooldown_ticks"))
 
 _DISPLAY_PARAMS_AUTHOR_SCHEMA = _platform_schema({
     "display_name": {
@@ -2118,7 +2132,7 @@ _DISPLAY_PARAMS_AUTHOR_SCHEMA = _platform_schema({
         "minLength": 1,
         "maxLength": 64,
     },
-})
+}, required=("display_name",))
 
 _ECONOMY_PARAMS_AUTHOR_SCHEMA = _platform_schema({
     "initial_balance": {
@@ -2126,7 +2140,7 @@ _ECONOMY_PARAMS_AUTHOR_SCHEMA = _platform_schema({
         "minimum": 0,
         "maximum": 1000000,
     },
-})
+}, required=("initial_balance",))
 
 
 def _author_platform_config(
