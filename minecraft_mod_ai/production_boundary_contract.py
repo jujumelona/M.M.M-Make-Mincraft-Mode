@@ -21,13 +21,6 @@ from .acceptance_contracts import (
     project_requirement_public_acceptance,
     validate_runtime_public_acceptance,
 )
-from contextlib import nullcontext
-verified_legacy_acceptance_context = lambda *args, **kwargs: nullcontext()
-
-# Compatibility name for callers/tests that historically imported the strict predicate
-# from this adapter. It is an identity alias, not a second policy implementation.
-_strict_public_acceptance = _canonical_is_public_acceptance
-
 _INSTALLED = False
 
 
@@ -88,7 +81,7 @@ def _filter_evidence_input_acceptance(
 def _approved_requirements(
     evidence_plan: Mapping[str, Any] | None,
 ) -> dict[str, Mapping[str, Any]]:
-    """Compatibility adapter to the canonical requirement authority extractor."""
+    """Return the canonical requirement authority mapping."""
 
     return _canonical_approved_requirements(evidence_plan)
 
@@ -334,21 +327,15 @@ def install_production_boundary_contract() -> None:
                 acceptance_tests,
                 effective_plan,
             )
-            # A plan reaches this compatibility context only after its canonical hash and
-            # structure validate. The central contract owns the temporary relaxation;
-            # this adapter only enters that centrally defined state.
-            with verified_legacy_acceptance_context(
-                isinstance(effective_plan, Mapping)
-            ):
-                compilation = original(
-                    requested_prompt,
-                    game_design,
-                    research_brief,
-                    modules,
-                    assets,
-                    effective_acceptance,
-                    effective_plan,
-                )
+            compilation = original(
+                requested_prompt,
+                game_design,
+                research_brief,
+                modules,
+                assets,
+                effective_acceptance,
+                effective_plan,
+            )
             return _rewrite_compilation(
                 compilation,
                 modules=modules,
