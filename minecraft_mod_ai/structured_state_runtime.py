@@ -1881,7 +1881,7 @@ def render_state_model_concern(
                 "    $mmmTransitions.add(new $mmmTransition("
                 + ", ".join((
                     _java_string(record["from_state"]),
-                    _java_string(record["trigger"]),
+                    _java_string(record['trigger']),
                     f"context -> ({guard})",
                     f"context -> {{ {mutation} }}",
                     _java_string(record["to_state"]),
@@ -1897,7 +1897,7 @@ def render_state_model_concern(
             lines.append(
                 "    $mmmInvariants.add(new $mmmInvariant("
                 f"context -> ({condition}), "
-                f"{_java_string(record["enforcement"])}));"
+                f"{_java_string(record['enforcement'])}));"
             )
         lines.append("}")
         parts.append("\n".join(lines))
@@ -1907,9 +1907,9 @@ def render_state_model_concern(
             action = executable(index, record, "initial_state")
             lines.append(
                 "    $mmmInitializers.add(new $mmmTriggeredAction("
-                f"{_java_string(record["trigger"])}, "
+                f"{_java_string(record['trigger'])}, "
                 f"context -> {{ {action} }}, "
-                f"{_java_string(record["owner"])}));"
+                f"{_java_string(record['owner'])}));"
             )
         lines.append("}")
         parts.append("\n".join(lines))
@@ -1919,9 +1919,9 @@ def render_state_model_concern(
             action = executable(index, record, "mutation")
             lines.append(
                 "    $mmmUpdates.add(new $mmmTriggeredAction("
-                f"{_java_string(record["trigger"])}, "
+                f"{_java_string(record['trigger'])}, "
                 f"context -> {{ {action} }}, "
-                f"{_java_string(record["owner"])}));"
+                f"{_java_string(record['owner'])}));"
             )
         lines.append("}")
         parts.append("\n".join(lines))
@@ -1931,9 +1931,9 @@ def render_state_model_concern(
             action = executable(index, record, "action")
             lines.append(
                 "    $mmmCleanup.add(new $mmmCleanupAction("
-                f"{_java_string(record["event"])}, "
+                f"{_java_string(record['event'])}, "
                 f"context -> {{ {action} }}, "
-                f"{_java_string(record["retained_state"])}));"
+                f"{_java_string(record['retained_state'])}));"
             )
         lines.append("}")
         parts.append("\n".join(lines))
