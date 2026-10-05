@@ -109,7 +109,14 @@ def execute_checkpointed_job(job, *, context, router, registry, base_dir, execut
     definition = job.to_dict()
     for name in ("status", "validation_receipts", "rendered_output"):
         definition.pop(name, None)
-    dependencies = {name: digest(registry.get(name).to_dict()) for name in job.requires}
+    dependencies = {}
+    for name in job.requires:
+        port = registry.get(name)
+        if port is None:
+            raise ValueError(
+                f"ARTIFACT_REQUIRED_PORT_MISSING: {job.job_id!r} requires {name!r}"
+            )
+        dependencies[name] = digest(port.to_dict())
     binding = digest(
         {
             "job": definition,
