@@ -1081,6 +1081,15 @@ def _resolve_state_symbols(allowed_state_symbols: Any) -> list[str]:
     return []
 
 
+def _state_symbols_are_authoritative(allowed_state_symbols: Any) -> bool:
+    """Whether the caller explicitly fixed the complete state-symbol universe."""
+
+    return isinstance(allowed_state_symbols, StateSymbolTable) or isinstance(
+        allowed_state_symbols,
+        (set, list, tuple),
+    )
+
+
 def _state_variable_value_kind(record: Mapping[str, Any] | None) -> str:
     """Map authored type prose onto the finite host state-value families."""
 
@@ -1224,11 +1233,21 @@ def _mutation_value_branches(
         ]
 
     if compatible_names:
+        state_ref_name_schema = {
+            "type": "string",
+            "enum": compatible_names,
+        }
+    elif not _state_symbols_are_authoritative(allowed_state_symbols):
+        state_ref_name_schema = _state_name_schema([])
+    else:
+        state_ref_name_schema = None
+
+    if state_ref_name_schema is not None:
         leaf_by_kind.append({
             "type": "object",
             "properties": {
                 "kind": {"type": "string", "const": "state_ref"},
-                "name": {"type": "string", "enum": compatible_names},
+                "name": state_ref_name_schema,
             },
             "required": ["kind", "name"],
             "additionalProperties": False,
@@ -1301,8 +1320,8 @@ def _mutation_value_branches(
 
 def mutations_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
     symbols = _resolve_state_symbols(allowed_state_symbols)
-    authoritative_symbols = isinstance(allowed_state_symbols, StateSymbolTable) or isinstance(
-        allowed_state_symbols, (set, list, tuple)
+    authoritative_symbols = _state_symbols_are_authoritative(
+        allowed_state_symbols
     )
     if authoritative_symbols and not symbols:
         return {
