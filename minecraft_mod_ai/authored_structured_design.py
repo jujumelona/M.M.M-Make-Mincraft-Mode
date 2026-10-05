@@ -600,7 +600,19 @@ def _generate_concern_pages(
             media_paths=request.media_paths,
         )
         if request.budget is not None:
-            request.budget.consume(f"structured.{request.section}.page")
+            call_count = 1
+            if request.section == "state_model" and fixed_count is not None:
+                projection = getattr(concerns, "field_projection", {})
+                fields = (
+                    tuple(projection.get(concern, ()))
+                    if isinstance(projection, Mapping)
+                    else ()
+                )
+                call_count = max(1, int(fixed_count) * max(1, len(fields)))
+            request.budget.consume(
+                f"structured.{request.section}.page",
+                count=call_count,
+            )
         value = _generate_authored_chunk(
             request.router,
             request.prompt,
