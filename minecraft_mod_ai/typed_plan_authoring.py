@@ -1247,20 +1247,6 @@ def _extract_state_variable_types(
     return type_map
 
 
-SEMANTIC_DISPATCH_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "rules": {
-            "type": "array",
-            "maxItems": 8,
-            "items": {"type": "object"},
-        },
-    },
-    "required": ["rules"],
-    "additionalProperties": False,
-}
-
-
 _SEMANTIC_TRIGGER_EVENTS = (
     "player_join",
     "player_disconnect",
