@@ -48,20 +48,11 @@ def test_mutation_page_preserves_canonical_typed_ir():
         }
     ]
     router = StateChoices([
-        {
-            "assignments": [
-                {
-                    "target": "hull",
-                    "operator": "=",
-                    "value_kind": "number",
-                    "value_state": "hull",
-                    "value_context": "context",
-                    "value_text": "",
-                    "value_number": "100",
-                    "value_boolean": False,
-                }
-            ]
-        }
+        {"count": "one"},
+        {"target": "hull"},
+        {"operator": "="},
+        {"source": "number"},
+        {"value": "100"},
     ])
 
     result = author_state_field_page(
@@ -79,7 +70,7 @@ def test_mutation_page_preserves_canonical_typed_ir():
         mutation,
         declared={"hull"},
     )
-    assert len(router.calls) == 1
+    assert len(router.calls) == 5
 
 
 def test_expression_page_preserves_canonical_typed_ir():
@@ -90,24 +81,15 @@ def test_expression_page_preserves_canonical_typed_ir():
         "right": {"kind": "number", "value": "0"},
     }
     router = StateChoices([
+        {"layout": "single"},
         {
-            "join": "and",
-            "terms": [
-                {
-                    "left_kind": "state",
-                    "left_state": "hull",
-                    "left_context": "context",
-                    "left_boolean": False,
-                    "operator": ">",
-                    "right_kind": "number",
-                    "right_state": "hull",
-                    "right_context": "context",
-                    "right_text": "",
-                    "right_number": "0",
-                    "right_boolean": False,
-                }
-            ],
-        }
+            "source": "state",
+            "state": "hull",
+            "context": "context",
+            "operator": ">",
+        },
+        {"source": "number"},
+        {"value": "0"},
     ])
 
     result = author_state_field_page(
@@ -124,12 +106,15 @@ def test_expression_page_preserves_canonical_typed_ir():
     compiled = compile_state_expr_ir(guard, declared={"hull"})
     assert '$mmmRead("hull", context)' in compiled
     assert "$mmmCompare" in compiled
-    assert len(router.calls) == 1
-    assert "oneOf" not in json.dumps(router.calls[0]["response_schema"])
+    assert len(router.calls) == 4
+    assert all(
+        "oneOf" not in json.dumps(call["response_schema"])
+        for call in router.calls
+    )
 
 
 def test_empty_mutation_is_explicit_empty_list():
-    router = StateChoices([{"assignments": []}])
+    router = StateChoices([{"count": "zero"}])
 
     result = author_state_field_page(
         router,
@@ -146,20 +131,11 @@ def test_empty_mutation_is_explicit_empty_list():
 
 def test_mutation_transport_constrains_targets_to_declared_symbols():
     router = StateChoices([
-        {
-            "assignments": [
-                {
-                    "target": "hull",
-                    "operator": "=",
-                    "value_kind": "state",
-                    "value_state": "hull",
-                    "value_context": "context",
-                    "value_text": "",
-                    "value_number": "0",
-                    "value_boolean": False,
-                }
-            ]
-        }
+        {"count": "one"},
+        {"target": "hull"},
+        {"operator": "="},
+        {"source": "state"},
+        {"value": "hull"},
     ])
 
     author_state_field_page(
@@ -171,10 +147,12 @@ def test_mutation_transport_constrains_targets_to_declared_symbols():
         symbols=_symbols(),
     )
 
-    schema = router.calls[0]["response_schema"]
-    assignment = schema["properties"]["assignments"]["items"]
-    assert assignment["properties"]["target"]["enum"] == ["hull"]
-    assert "oneOf" not in json.dumps(schema)
+    target_schema = router.calls[1]["response_schema"]
+    assert target_schema["properties"]["target"]["enum"] == ["hull"]
+    assert all(
+        "oneOf" not in json.dumps(call["response_schema"])
+        for call in router.calls
+    )
 
 
 def test_variable_default_schema_is_narrowed_from_fixed_type():
@@ -240,7 +218,7 @@ def test_duplicate_variable_names_are_host_deduplicated_without_retry():
     }
     assert len(router.calls) == 3
 
-def test_boolean_conjunction_is_host_lowered_from_flat_terms():
+def test_boolean_conjunction_is_host_lowered_from_atomic_decisions():
     symbols = StateSymbolTable([
         {
             "name": "interstellar_trade_hub",
@@ -260,37 +238,19 @@ def test_boolean_conjunction_is_host_lowered_from_flat_terms():
         },
     ])
     router = StateChoices([
+        {"layout": "and"},
         {
-            "join": "and",
-            "terms": [
-                {
-                    "left_kind": "state",
-                    "left_state": "interstellar_trade_hub",
-                    "left_context": "context",
-                    "left_boolean": False,
-                    "operator": "truthy",
-                    "right_kind": "null",
-                    "right_state": "interstellar_trade_hub",
-                    "right_context": "context",
-                    "right_text": "",
-                    "right_number": "0",
-                    "right_boolean": False,
-                },
-                {
-                    "left_kind": "state",
-                    "left_state": "spacecraft_unlocked",
-                    "left_context": "context",
-                    "left_boolean": False,
-                    "operator": "truthy",
-                    "right_kind": "null",
-                    "right_state": "spacecraft_unlocked",
-                    "right_context": "context",
-                    "right_text": "",
-                    "right_number": "0",
-                    "right_boolean": False,
-                },
-            ],
-        }
+            "source": "state",
+            "state": "interstellar_trade_hub",
+            "context": "context",
+            "operator": "truthy",
+        },
+        {
+            "source": "state",
+            "state": "spacecraft_unlocked",
+            "context": "context",
+            "operator": "truthy",
+        },
     ])
 
     result = author_state_field_page(
@@ -316,28 +276,21 @@ def test_boolean_conjunction_is_host_lowered_from_flat_terms():
             }
         ]
     }
-    assert "oneOf" not in json.dumps(router.calls[0]["response_schema"])
+    assert len(router.calls) == 3
+    assert all(
+        "terms" not in call["response_schema"].get("properties", {})
+        for call in router.calls
+    )
 
-def test_boolean_condition_payload_is_schema_typed_not_empty_string():
+def test_boolean_condition_is_host_lowered_from_atomic_choice():
     router = StateChoices([
+        {"layout": "single"},
         {
-            "join": "and",
-            "terms": [
-                {
-                    "left_kind": "boolean",
-                    "left_state": "hull",
-                    "left_context": "context",
-                    "left_boolean": False,
-                    "operator": "truthy",
-                    "right_kind": "null",
-                    "right_state": "hull",
-                    "right_context": "context",
-                    "right_text": "",
-                    "right_number": "0",
-                    "right_boolean": False,
-                }
-            ],
-        }
+            "source": "false",
+            "state": "hull",
+            "context": "context",
+            "operator": "truthy",
+        },
     ])
 
     result = author_state_field_page(
@@ -353,9 +306,39 @@ def test_boolean_condition_payload_is_schema_typed_not_empty_string():
     assert result == {
         "invariants": [{"condition": {"kind": "literal", "value": False}}]
     }
-    schema = router.calls[0]["response_schema"]
-    term = schema["properties"]["terms"]["items"]
-    assert term["properties"]["left_boolean"]["type"] == "boolean"
-    assert "left_value" not in term["properties"]
-    assert "none" not in term["properties"]["right_kind"]["enum"]
+    assert len(router.calls) == 2
+    left_schema = router.calls[1]["response_schema"]
+    assert left_schema["properties"]["source"]["enum"] == [
+        "state",
+        "context",
+        "true",
+        "false",
+    ]
+    assert "terms" not in left_schema["properties"]
+
+def test_condition_model_schemas_never_request_guard_or_ast_wrappers():
+    router = StateChoices([
+        {"layout": "single"},
+        {
+            "source": "state",
+            "state": "hull",
+            "context": "context",
+            "operator": "truthy",
+        },
+    ])
+
+    author_state_field_page(
+        router,
+        "Guard on hull state.",
+        concern="transitions",
+        field="guard",
+        count=1,
+        symbols=_symbols(),
+        existing_rows=[{"from_state": "a", "trigger": "tick", "to_state": "b"}],
+    )
+
+    forbidden = {"guard", "condition", "kind", "left", "right", "terms"}
+    for call in router.calls:
+        properties = set(call["response_schema"].get("properties", {}))
+        assert not (properties & forbidden)
 
