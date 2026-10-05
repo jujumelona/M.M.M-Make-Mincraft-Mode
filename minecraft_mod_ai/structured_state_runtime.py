@@ -108,14 +108,12 @@ def constrain_state_record_schema(
         if field in {"mutation", "mutations", "initial_state", "action"}:
             target["description"] = (
                 "Canonical typed state-mutation IR. Targets must be declared state "
-                "variables; external subsystem actions do not belong in this field. "
-                "Legacy DSL strings are accepted only when reading older saved plans."
+                "variables; external subsystem actions do not belong in this field."
             )
         else:
             target["description"] = (
                 "Canonical typed state-expression IR. State and context references "
-                "remain distinct namespaces through production. Legacy DSL strings are "
-                "accepted only when reading older saved plans."
+                "remain distinct namespaces through production."
             )
     return result
 
@@ -1136,7 +1134,6 @@ def state_concern_schema(
     concern: str,
     *,
     allowed_state_symbols: Any = None,
-    allow_legacy_dsl: bool = True,
 ) -> dict[str, Any]:
     symbols = _resolve_state_symbols(allowed_state_symbols)
     # None means the storage/worksheet schema does not yet have an authoritative
@@ -1146,41 +1143,10 @@ def state_concern_schema(
     symbol_source = allowed_state_symbols
 
     def expression_field() -> dict[str, Any]:
-        typed = state_expr_schema(symbol_source)
-        if not allow_legacy_dsl:
-            return typed
-        return {
-            "oneOf": [
-                typed,
-                {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 512,
-                    "description": (
-                        "Legacy persisted state DSL accepted for backward-compatible "
-                        "read/compile only; new authoring uses typed IR."
-                    ),
-                },
-            ]
-        }
+        return state_expr_schema(symbol_source)
 
     def mutation_field() -> dict[str, Any]:
-        typed = mutations_schema(symbol_source)
-        if not allow_legacy_dsl:
-            return typed
-        return {
-            "oneOf": [
-                typed,
-                {
-                    "type": "string",
-                    "maxLength": 512,
-                    "description": (
-                        "Legacy persisted mutation DSL accepted for backward-compatible "
-                        "read/compile only; new authoring uses typed IR."
-                    ),
-                },
-            ]
-        }
+        return mutations_schema(symbol_source)
     if concern == "variables":
         schema = {
             "type": "object",
