@@ -226,7 +226,7 @@ def validate_state_expr_ir(
 
     if kind == "compare":
         op = expr.get("op", "==")
-        if op not in {"==", "!=", ">=", "<=", ">", "<", "="}:
+        if op not in {"==", "!=", ">=", "<=", ">", "<"}:
             raise ValueError(f"STRUCTURED_STATE_EXPRESSION: unsupported comparison op {op!r}")
         left = expr.get("left")
         right = expr.get("right")
@@ -241,11 +241,6 @@ def validate_state_expr_ir(
         if term is None:
             raise ValueError("STRUCTURED_STATE_EXPRESSION: not requires a term")
         validate_state_expr_ir(term, symbols=declared)
-        return
-
-    if kind == "implies":
-        validate_state_expr_ir(expr.get("left"), symbols=declared)
-        validate_state_expr_ir(expr.get("right"), symbols=declared)
         return
 
     if kind == "state_ref":
@@ -408,18 +403,8 @@ def compile_state_expr_ir(
         compiled = compile_state_expr_ir(term, declared=declared, context=context)
         return f"(!$mmmTruthy({compiled}))"
 
-    if kind == "implies":
-        left = compile_state_condition_ir(
-            expr.get("left"), declared=declared, context=context
-        )
-        right = compile_state_condition_ir(
-            expr.get("right"), declared=declared, context=context
-        )
-        return f"((!({left})) || ({right}))"
-
     if kind == "compare":
         op = expr.get("op", "==")
-        op = "==" if op == "=" else op
         left = compile_state_expr_ir(expr.get("left"), declared=declared, context=context)
         right = compile_state_expr_ir(expr.get("right"), declared=declared, context=context)
         if op == "==":
@@ -541,9 +526,9 @@ def validate_mutation_ir(
                 f"STRUCTURED_STATE_MUTATION: undeclared state variable {target!r}"
             )
         op = item.get("operator", "=")
-        if op not in {"=", "+=", "-=", "*=", "/=", ":"}:
+        if op not in {"=", "+=", "-=", "*=", "/="}:
             raise ValueError(f"STRUCTURED_STATE_MUTATION: invalid operator {op!r}")
-        normalized_op = "=" if op == ":" else op
+        normalized_op = op
         target_kind = (
             _state_variable_value_kind(symbol_table.variables.get(target))
             if symbol_table is not None
@@ -615,7 +600,6 @@ def compile_mutation_ir(
                 f"STRUCTURED_STATE_MUTATION: undeclared state variable {target!r}"
             )
         operator = item.get("operator", "=")
-        operator = "=" if operator == ":" else operator
         val = item.get("value")
         right = compile_state_expr_ir(val, declared=declared, context=context)
         if operator == "=":
@@ -1085,7 +1069,7 @@ def state_expr_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
         "type": "object",
         "properties": {
             "kind": {"type": "string", "const": "compare"},
-            "op": {"type": "string", "enum": ["==", "!=", ">=", "<=", ">", "<", "="], "maxLength": 2},
+            "op": {"type": "string", "enum": ["==", "!=", ">=", "<=", ">", "<"], "maxLength": 2},
             "left": operand_schema,
             "right": operand_schema,
         },
