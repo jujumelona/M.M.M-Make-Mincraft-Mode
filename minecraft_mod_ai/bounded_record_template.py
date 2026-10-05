@@ -71,15 +71,24 @@ def _record_count_messages(
     identifier: str,
     template: dict[str, Any],
     context: dict[str, Any],
+    *,
+    minimum_count: int = 0,
 ) -> list[dict[str, str]]:
     rules = "\n".join(str(rule) for rule in template.get("rules", ()))
+    minimum_rule = (
+        f"Return a count of at least {minimum_count}; the host has already proven "
+        "that this many records are required. "
+        if minimum_count > 0
+        else "Return count 0 when no records apply. "
+    )
     return [
         {
             "role": "system",
             "content": (
                 "Choose only the number of distinct authored/applicable records required "
-                "by the authoritative context. Return count 0 when no records apply. "
-                "Do not author record content and do not emit completion, continuation, "
+                "by the authoritative context. "
+                + minimum_rule
+                + "Do not author record content and do not emit completion, continuation, "
                 "retry, ordinal, blocked, or other loop-control metadata.\n"
                 + str(template.get("task") or "Determine required record cardinality.")
                 + ("\n" + rules if rules else "")
@@ -137,6 +146,11 @@ def run_bounded_record_template(
                 f"TEMPLATE_RECORD_SET_SAVED_SHAPE: {identifier} contains a non-object record"
             )
         records = [deepcopy(item) for item in raw_records]
+        if len(records) < minimum:
+            raise ValueError(
+                f"TEMPLATE_RECORD_SET_CARDINALITY_DRIFT: {identifier} requires at least "
+                f"{minimum} records, saved {len(records)}"
+            )
         expected = saved.get("count")
         if type(expected) is int and expected != len(records):
             raise ValueError(
@@ -156,6 +170,7 @@ def run_bounded_record_template(
                     identifier,
                     template,
                     normalized_context,
+                    minimum_count=minimum,
                 ),
                 response_schema=record_cardinality_response_schema(
                     template,
