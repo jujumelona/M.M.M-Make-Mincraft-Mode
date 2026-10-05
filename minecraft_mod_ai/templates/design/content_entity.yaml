@@ -26,6 +26,8 @@ rules:
   - kind is host-bound at generation time to the authoritative concrete content-kind vocabulary; use only a schema-allowed kind.
   - Emit a concrete Minecraft content capability such as an item, block, entity, GUI, dimension, recipe, tag, or supported behavior; never emit an umbrella system such as economy, progression, exploration, combat, trading, or resource management as one content entity.
   - System-level mechanics belong in design decisions and relations between concrete content entities.
+  - Code registries, definition catalogs, lookup tables, manager classes, and other implementation-only structures are not Minecraft content entities; emit no content entity for those requirements.
+  - Use block_entity only for runtime state physically attached to a placed block. Never use block_entity as a synonym for a code registry, data catalog, or general module registry.
   - Describe the authored semantic role of this concrete content entity, not an implementation module or file.
   - Reuse a host-supplied existing entity_id only when its meaning and role are identical; otherwise create one deterministic lowercase identifier from the explicit requirement.
   - Emit one entity per record. The host controls repetition and must stop or block before invoking this template when meaning is unresolved.
