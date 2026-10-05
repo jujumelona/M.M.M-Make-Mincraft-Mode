@@ -2416,7 +2416,11 @@ def author_typed_plan_ir(
         if not available_kinds:
             raise ValueError(
                 "TYPED_PLAN_PLATFORM_KIND_UNAVAILABLE: active concerns have "
-                "no deterministic platform backend."
+                "no deterministic platform backend; "
+                f"uncovered={sorted(uncovered)!r}; "
+                f"allowed_platform_kinds={sorted(effective_allowed_platform_kinds)!r}; "
+                "target_deterministic_kinds="
+                f"{sorted(target_deterministic_kinds) if target_deterministic_kinds is not None else None!r}"
             )
 
         # Dedicated host backends are correctness policy, not a design choice.
