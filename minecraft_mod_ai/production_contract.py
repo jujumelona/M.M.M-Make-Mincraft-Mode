@@ -72,35 +72,20 @@ def compile_production_contract(requested_prompt: str, game_design: Mapping[str,
         raise ProductionContractError('game_design must be an object')
     design_snapshot = _json_copy(bound_game_design(game_design), 'game_design')
     research_snapshot = None if research_brief is None else _json_copy(research_brief, 'research_brief')
-    raw_modules = [_normalize_module(value) for value in modules]
+    normalized_modules = [_normalize_module(value) for value in modules]
+    _require_unique(
+        [item['module_id'] for item in normalized_modules],
+        'module input ID',
+    )
     explicit_assets = [_normalize_asset(value) for value in assets]
-    raw_assets = [*explicit_assets, *_derived_assets(raw_modules, explicit_assets)]
-    normalized_modules: list[dict[str, Any]] = []
-    seen_mids: set[str] = set()
-    for module in raw_modules:
-        module_id = module['module_id']
-        if module_id in seen_mids:
-            counter = 2
-            while f'{module_id}_{counter}' in seen_mids:
-                counter += 1
-            module_id = f'{module_id}_{counter}'
-            module = dict(module)
-            module['module_id'] = module_id
-        seen_mids.add(module_id)
-        normalized_modules.append(module)
-    normalized_assets: list[dict[str, Any]] = []
-    seen_aids: set[str] = set()
-    for asset in raw_assets:
-        asset_id = asset['asset_id']
-        if asset_id in seen_aids:
-            counter = 2
-            while f'{asset_id}_{counter}' in seen_aids:
-                counter += 1
-            asset_id = f'{asset_id}_{counter}'
-            asset = dict(asset)
-            asset['asset_id'] = asset_id
-        seen_aids.add(asset_id)
-        normalized_assets.append(asset)
+    normalized_assets = [
+        *explicit_assets,
+        *_derived_assets(normalized_modules, explicit_assets),
+    ]
+    _require_unique(
+        [item['asset_id'] for item in normalized_assets],
+        'asset input ID',
+    )
     input_acceptance = _normalize_acceptance_tests(acceptance_tests)
     normalized_evidence_plan = _validated_evidence_plan(evidence_plan)
     requirements = (
