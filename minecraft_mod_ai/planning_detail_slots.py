@@ -3,7 +3,10 @@
 # Each concern is a required array of records with exactly these string fields.
 # Empty arrays are allowed only with a concrete reason in inapplicable_concerns.
 from .task_template_catalog import detail_records
-from .structured_state_runtime import constrain_state_record_schema
+from .structured_state_runtime import (
+    constrain_state_record_schema,
+    state_variable_default_schema,
+)
 
 DETAIL_RECORDS = detail_records()
 
@@ -68,6 +71,12 @@ def record_field_schema(section: str, concern: str, field: str) -> dict:
                 ],
                 "maxLength": 512,
             }
+    if (
+        section == "state_model"
+        and concern == "variables"
+        and field == "default"
+    ):
+        return state_variable_default_schema()
     if (
         section == "state_model"
         and field in {"guard", "mutation", "condition", "initial_state", "action"}
