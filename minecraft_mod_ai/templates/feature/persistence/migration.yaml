@@ -12,9 +12,6 @@ record_schema:
     source_version:
       type: string
       minLength: 1
-    destination_version:
-      type: string
-      minLength: 1
     operation:
       type: string
       enum:
@@ -41,7 +38,6 @@ record_schema:
       - "null"
   required:
   - source_version
-  - destination_version
   - operation
   - source_key
   - destination_key
@@ -50,6 +46,7 @@ record_schema:
 rules:
 - Preserve supplied evidence identifiers. Never invent external APIs, paths or facts.
 - Use only the typed migration operations in the schema; never encode executable behavior in prose.
+- The host owns the current schema identity and migration destination. Author only the legacy source version and operation semantics.
 - rename_key requires source_key and destination_key.
 - delete_key requires source_key.
 - set_default requires destination_key and a typed value.
