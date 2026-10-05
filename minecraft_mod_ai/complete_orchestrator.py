@@ -82,6 +82,10 @@ from .final_artifact import (
     write_build_artifact_bundle,
     write_downloadable_bundle,
 )
+from .geckolib_generation_contract import (
+    GeckoLibGenerationContractError,
+    geckolib_entity_inputs_from_module_config,
+)
 from .geckolib_generator import generate_geckolib_entity_assets
 from .importer import ExistingProjectImportError, inspect_existing_project_archive
 from .java_core import JavaCoreService
@@ -1589,47 +1593,23 @@ class CompleteProductionOrchestrator:
                     receipts.append(generate_system_pack(project_root=project_root, pack_id=pack_id, mod_id=spec.mod_id, package_name=spec.package_name, config={'modules': [_module_dict(item) for item in pack_modules]}, policy=self.policy))
             elif stage == 'entity':
                 for module in members:
-                    config = dict(module.config)
-                    required_entity_config = (
-                        "max_health",
-                        "attack_damage",
-                        "movement_speed",
-                        "follow_range",
-                        "archetype",
-                        "behavior",
-                        "entity_width",
-                        "entity_height",
-                        "spawn_group",
-                        "main_color",
-                    )
-                    missing_entity_config = [
-                        key for key in required_entity_config if config.get(key) in (None, "")
-                    ]
-                    if missing_entity_config:
-                        raise CompleteProductionError(
-                            f"ENTITY_DESIGN_UNRESOLVED: {module.module_id} missing {missing_entity_config}"
+                    try:
+                        entity_inputs = geckolib_entity_inputs_from_module_config(
+                            module.kind,
+                            module.config,
+                            policy=self.policy,
                         )
+                    except GeckoLibGenerationContractError as exc:
+                        raise CompleteProductionError(
+                            f"Entity module {module.module_id} cannot enter GeckoLib generation: {exc}"
+                        ) from exc
                     receipts.append(
                         generate_geckolib_entity_assets(
                             project_root=project_root,
                             mod_id=spec.mod_id,
                             package_name=spec.package_name,
                             entity_id=module.module_id,
-                            texture_width=int(config.get("texture_width", 64)),
-                            texture_height=int(config.get("texture_height", 64)),
-                            max_health=float(config["max_health"]),
-                            attack_damage=float(config["attack_damage"]),
-                            movement_speed=float(config["movement_speed"]),
-                            follow_range=float(config["follow_range"]),
-                            archetype=str(config["archetype"]),
-                            behavior=str(config["behavior"]),
-                            entity_width=float(config["entity_width"]),
-                            entity_height=float(config["entity_height"]),
-                            spawn_group=str(config["spawn_group"]),
-                            texture_color=str(config["main_color"]),
-                            custom_bones=config.get("custom_bones")
-                            if isinstance(config.get("custom_bones"), list)
-                            else None,
+                            **entity_inputs.generator_kwargs(),
                             policy=self.policy,
                         )
                     )
