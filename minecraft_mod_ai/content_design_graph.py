@@ -106,6 +106,7 @@ def compile_content_graph(
     research=None,
     progress=None,
     checkpoint=None,
+    mod_id: str | None = None,
 ):
     from .design_requirement_contract import _active_requirement_ledger
 
@@ -311,7 +312,7 @@ def compile_content_graph(
         capabilities[eid] = fact_type
 
     facts, modules, assets = [], [], []
-    mod_id = _sanitize_stem(prompt) + "_mod"
+    effective_mod_id = str(mod_id or "").strip() or (_sanitize_stem(prompt) + "_mod")
     properties_by_id = {}
     for eid, node in entities.items():
         context = entity_contexts[eid]
@@ -982,7 +983,7 @@ def compile_content_graph(
             parent_requirement=node["requirement_refs"][0],
             source_clause=node["source_clauses"][0],
         )
-        resource_inputs(fact, mod_id)
+        resource_inputs(fact, effective_mod_id)
         facts.append(fact)
         modules.append(
             ProductionModule(
@@ -1021,4 +1022,5 @@ def compile_content_graph(
         "_content_entities": list(entities.values()),
         "_content_relations": relations,
         "_research_facts": research_facts,
+        "_mod_id": effective_mod_id,
     }
