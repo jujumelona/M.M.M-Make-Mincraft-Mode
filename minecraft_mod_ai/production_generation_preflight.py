@@ -11,6 +11,10 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from .extended_content_generator import (
+    ExtendedContentError,
+    validate_extended_module_contract,
+)
 from .geckolib_generation_contract import (
     GeckoLibGenerationContractError,
     geckolib_entity_inputs_from_module_config,
@@ -19,6 +23,7 @@ from .geckolib_generation_contract import (
 )
 from .platform_backend_contract import (
     ENTITY_PIPELINE_KINDS as _ENTITY_KINDS,
+    EXTENDED_CONTENT_KINDS as _EXTENDED_CONTENT_KINDS,
     SYSTEM_KIND_TO_PACK as _SYSTEM_PACK_BY_KIND,
     deterministic_backend_capabilities,
     missing_production_backend_capabilities,
@@ -93,8 +98,19 @@ def validate_production_generation_modules(
 
     for module in direct_routed:
         if _is_custom(module):
-            continue
+            raise ProductionGenerationPreflightError(
+                "CUSTOM_JAVA_BACKEND_REMOVED: custom generation cannot enter "
+                f"production preflight: {getattr(module, 'module_id', '<unknown>')}"
+            )
         kind = str(module.kind)
+        if kind in _EXTENDED_CONTENT_KINDS:
+            try:
+                validate_extended_module_contract(module, policy=policy)
+            except ExtendedContentError as exc:
+                raise ProductionGenerationPreflightError(
+                    f"Extended content module {module.module_id} cannot enter "
+                    f"generation: {exc}"
+                ) from exc
         if kind in _ENTITY_KINDS:
             try:
                 geckolib_entity_inputs_from_module_config(
@@ -155,7 +171,10 @@ def validate_production_generation_project(
         ) from exc
     for module in direct_routed:
         if _is_custom(module):
-            continue
+            raise ProductionGenerationPreflightError(
+                "CUSTOM_JAVA_BACKEND_REMOVED: custom generation cannot enter "
+                f"project preflight: {getattr(module, 'module_id', '<unknown>')}"
+            )
         missing_backend = missing_production_backend_capabilities(
             deterministic_backend_capabilities(adapter),
             str(module.kind),
