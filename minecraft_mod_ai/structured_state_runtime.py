@@ -1409,29 +1409,77 @@ def validate_structured_state_section(specification: Mapping[str, Any]) -> None:
 
 
 def _obligations(task: Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:
-    """Decode host obligations without collapsing typed values into prose."""
+    """Decode canonical state obligations and reject any malformed entry."""
 
     raw = task.get("implementation_obligations")
-    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes, bytearray)):
+    if raw is None:
         return {}
+    if not isinstance(raw, Sequence) or isinstance(
+        raw,
+        (str, bytes, bytearray),
+    ):
+        raise ValueError("STRUCTURED_STATE_OBLIGATIONS_ARRAY_REQUIRED")
+
     result: dict[str, list[dict[str, Any]]] = {}
-    for item in raw:
+    for index, item in enumerate(raw):
+        if not isinstance(item, str):
+            raise ValueError(
+                f"STRUCTURED_STATE_OBLIGATION_STRING_REQUIRED: {index}"
+            )
         try:
-            outer = json.loads(str(item))
-            instruction = json.loads(str(outer.get("instruction") or "{}"))
-        except (TypeError, ValueError, json.JSONDecodeError):
-            continue
-        if "structured_records" not in outer:
-            continue
+            outer = json.loads(item)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"STRUCTURED_STATE_OBLIGATION_JSON_INVALID: {index}"
+            ) from exc
+        if not isinstance(outer, Mapping):
+            raise ValueError(
+                f"STRUCTURED_STATE_OBLIGATION_OBJECT_REQUIRED: {index}"
+            )
+
+        instruction_raw = outer.get("instruction")
+        if not isinstance(instruction_raw, str):
+            raise ValueError(
+                f"STRUCTURED_STATE_OBLIGATION_INSTRUCTION_REQUIRED: {index}"
+            )
+        try:
+            instruction = json.loads(instruction_raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"STRUCTURED_STATE_OBLIGATION_INSTRUCTION_INVALID: {index}"
+            ) from exc
+        if not isinstance(instruction, Mapping):
+            raise ValueError(
+                f"STRUCTURED_STATE_OBLIGATION_INSTRUCTION_OBJECT_REQUIRED: {index}"
+            )
+
         name = str(instruction.get("concern") or "").strip()
+        if not name:
+            raise ValueError(
+                f"STRUCTURED_STATE_OBLIGATION_CONCERN_REQUIRED: {index}"
+            )
+        if name in result:
+            raise ValueError(
+                f"STRUCTURED_STATE_OBLIGATION_DUPLICATE: {name!r}"
+            )
+
         records = outer.get("structured_records")
-        if not name or not isinstance(records, list):
-            continue
-        result[name] = [
-            {str(key): deepcopy(value) for key, value in record.items()}
-            for record in records
-            if isinstance(record, Mapping)
-        ]
+        if not isinstance(records, list):
+            raise ValueError(
+                f"STRUCTURED_STATE_OBLIGATION_RECORDS_REQUIRED: {index}"
+            )
+        copied: list[dict[str, Any]] = []
+        for row_index, record in enumerate(records):
+            if not isinstance(record, Mapping):
+                raise ValueError(
+                    "STRUCTURED_STATE_OBLIGATION_RECORD_INVALID: "
+                    f"{name}[{row_index}]"
+                )
+            copied.append({
+                str(key): deepcopy(value)
+                for key, value in record.items()
+            })
+        result[name] = copied
     return result
 
 
