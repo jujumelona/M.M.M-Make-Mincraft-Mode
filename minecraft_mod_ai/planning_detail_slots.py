@@ -1,14 +1,13 @@
 """Fixed record layouts for every engineering concern (no model-selected keys)."""
 
-# Each concern is a required array with host-fixed field names. Most fields are
-# bounded text; executable state fields retain canonical typed IR end-to-end.
-# Empty arrays are allowed only with a concrete reason in inapplicable_concerns.
+# Each concern is a required array with host-fixed field names. State-model field
+# types come from structured_state_runtime; this module does not redefine them.
+from copy import deepcopy
+
 from .task_template_catalog import detail_records
 from .structured_state_runtime import (
     constrain_state_record_schema,
-    mutations_schema,
-    state_expr_schema,
-    state_variable_default_schema,
+    state_concern_schema,
 )
 
 DETAIL_RECORDS = detail_records()
@@ -16,6 +15,15 @@ DETAIL_RECORDS = detail_records()
 
 def record_field_schema(section: str, concern: str, field: str) -> dict:
     """Canonical authored-field type contract shared by storage and model paging."""
+
+    if section == "state_model":
+        canonical = state_concern_schema(concern)
+        properties = canonical.get("properties")
+        if not isinstance(properties, dict) or field not in properties:
+            raise ValueError(
+                f"Unknown canonical state field: {concern}.{field}"
+            )
+        return deepcopy(properties[field])
 
     if (
         section == "integration"
@@ -74,16 +82,6 @@ def record_field_schema(section: str, concern: str, field: str) -> dict:
                 ],
                 "maxLength": 512,
             }
-    if (
-        section == "state_model"
-        and concern == "variables"
-        and field == "default"
-    ):
-        return state_variable_default_schema()
-    if section == "state_model" and field in {"guard", "condition"}:
-        return state_expr_schema()
-    if section == "state_model" and field in {"mutation", "initial_state", "action"}:
-        return mutations_schema()
     return {"type": "string", "minLength": 1, "maxLength": 512}
 
 
