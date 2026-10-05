@@ -178,18 +178,10 @@ def tune_gradle_resources(project_root: str | Path, *args: Any, **kwargs: Any):
     return receipt
 
 
-def install(orchestrator_module: Any) -> None:
-    """Compatibility verifier for callers that still invoke the former installer."""
-    execute = orchestrator_module.CompleteProductionOrchestrator.execute
-    if not getattr(execute, "_mmm_project_index_execution_scope", False):
-        raise RuntimeError("ProjectIndex execution reuse must be owned by the orchestrator.")
-
-
 __all__ = [
     "_cached_indexes_for_root",
     "_receipt_paths",
     "execution_scoped",
-    "install",
     "mark_post_generation",
     "project_index",
     "tune_gradle_resources",
