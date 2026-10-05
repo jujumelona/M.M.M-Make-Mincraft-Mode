@@ -124,7 +124,6 @@ def generate_candidate(
     directory: Path,
     output: Path,
     resolution: tuple[int, int],
-    fallback: tuple[int, int] | None,
     seed: int,
 ) -> dict[str, Any]:
     from PIL import Image
