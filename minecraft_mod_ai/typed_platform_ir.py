@@ -283,7 +283,13 @@ def platform_config_schema(kind: str) -> dict[str, Any]:
                 "enum": ["backup_and_reset"],
             },
             "transfer_on_respawn": {"type": "boolean"},
-        })
+        }, required=(
+            "namespace",
+            "schema_version",
+            "migrations",
+            "malformed_policy",
+            "transfer_on_respawn",
+        ))
     if kind == "network_sync":
         return _schema({
             "sync_interval_ticks": {
@@ -296,7 +302,10 @@ def platform_config_schema(kind: str) -> dict[str, Any]:
                 "minimum": 256,
                 "maximum": 32767,
             },
-        })
+        }, required=(
+            "sync_interval_ticks",
+            "max_payload_bytes",
+        ))
     if kind == "resource_policy":
         return _schema({})
     if kind == "quest":
