@@ -14,152 +14,337 @@ from typing import Any
 _JSON_TYPES = frozenset(
     {"object", "array", "string", "number", "integer", "boolean", "null"}
 )
-_BRANCH_KEYS = ("allOf",)
+
+_PINNED_GBNF_ESCAPES = frozenset({"t", "r", "n", "\\", '"', "[", "]"})
+_REGEX_META_ESCAPES = frozenset("^$.[\\]()|{}*+?")
+_HEX_ESCAPE_WIDTH = {"x": 2, "u": 4, "U": 8}
+_SHORTHAND_OUTSIDE_CLASS = {
+    "d": "[0-9]",
+    "D": "[^0-9]",
+    "w": "[A-Za-z0-9_]",
+    "W": "[^A-Za-z0-9_]",
+    "s": r"[ \t\r\n\x0B\x0C]",
+    "S": r"[^ \t\r\n\x0B\x0C]",
+}
+_SHORTHAND_INSIDE_CLASS = {
+    "d": "0-9",
+    "w": "A-Za-z0-9_",
+    "s": r" \t\r\n\x0B\x0C",
+}
+
+
+def _normalize_llama_pattern_escapes(pattern: str) -> str | None:
+    """Translate regex escapes the pinned llama.cpp GBNF parser cannot read.
+
+    llama.cpp 1d2869c copies unknown regex escapes into generated GBNF. Its
+    grammar parser accepts a much smaller escape set, so digit/word/space
+    shorthands can reach sampler initialization as invalid grammar.
+
+    Preserve common JSON-Schema shorthand semantics. If an escape cannot be
+    represented safely, return None so the decoder uses the finite length
+    constraint while the host keeps the original pattern for validation.
+    """
+
+    parts: list[str] = []
+    i = 0
+    in_class = False
+    length = len(pattern)
+
+    while i < length:
+        char = pattern[i]
+
+        if in_class:
+            if char == "]":
+                in_class = False
+                parts.append(char)
+                i += 1
+                continue
+            if char != "\\":
+                parts.append(char)
+                i += 1
+                continue
+            if i + 1 >= length:
+                return None
+
+            escape = pattern[i + 1]
+            width = _HEX_ESCAPE_WIDTH.get(escape)
+            if width is not None:
+                end = i + 2 + width
+                if end > length or any(
+                    digit not in "0123456789abcdefABCDEF"
+                    for digit in pattern[i + 2 : end]
+                ):
+                    return None
+                parts.append(pattern[i:end])
+                i = end
+                continue
+
+            shorthand = _SHORTHAND_INSIDE_CLASS.get(escape)
+            if shorthand is not None:
+                parts.append(shorthand)
+                i += 2
+                continue
+            if escape in {"D", "W", "S"}:
+                return None
+            if escape == "b":
+                parts.append(r"\x08")
+                i += 2
+                continue
+            if escape in {"f", "v"}:
+                parts.append(r"\x0C" if escape == "f" else r"\x0B")
+                i += 2
+                continue
+            if escape in _PINNED_GBNF_ESCAPES:
+                parts.append(pattern[i : i + 2])
+                i += 2
+                continue
+            if escape == "-":
+                parts.append(r"\x2D")
+                i += 2
+                continue
+            if escape.isalnum():
+                return None
+
+            codepoint = ord(escape)
+            if codepoint <= 0x7F:
+                parts.append(f"\\x{codepoint:02X}")
+                i += 2
+                continue
+            return None
+
+        if char == "[":
+            in_class = True
+            parts.append(char)
+            i += 1
+            continue
+        if char != "\\":
+            parts.append(char)
+            i += 1
+            continue
+        if i + 1 >= length:
+            return None
+
+        escape = pattern[i + 1]
+        width = _HEX_ESCAPE_WIDTH.get(escape)
+        if width is not None:
+            end = i + 2 + width
+            if end > length or any(
+                digit not in "0123456789abcdefABCDEF"
+                for digit in pattern[i + 2 : end]
+            ):
+                return None
+            parts.append(pattern[i:end])
+            i = end
+            continue
+
+        shorthand = _SHORTHAND_OUTSIDE_CLASS.get(escape)
+        if shorthand is not None:
+            parts.append(shorthand)
+            i += 2
+            continue
+        if escape in {"f", "v"}:
+            parts.append(r"\x0C" if escape == "f" else r"\x0B")
+            i += 2
+            continue
+        if escape in _PINNED_GBNF_ESCAPES or escape in _REGEX_META_ESCAPES:
+            parts.append(pattern[i : i + 2])
+            i += 2
+            continue
+        if escape.isalnum():
+            return None
+
+        parts.append(escape)
+        i += 2
+
+    return None if in_class else "".join(parts)
 
 
 def _bound_pattern_quantifiers(pattern: str, max_length: int) -> str:
-    """Fold *maxLength* into a regex by bounding ``*`` and ``+`` quantifiers.
+    """Fold maxLength into unbounded atom quantifiers.
 
-    llama.cpp processes ``pattern`` before ``maxLength``, so the length limit
-    must live inside the regex itself.
-
-    Unlike a naive approach that gives every quantifier the full *max_length*
-    budget (which allows ``N * max_length`` total characters for *N* groups),
-    this function first computes the maximum cost of all fixed-length elements,
-    then distributes the remaining budget **evenly** across unbounded groups,
-    guaranteeing total match length ≤ *max_length*.
+    The pinned llama.cpp checks pattern before maxLength. Bounding every
+    unbounded atom keeps sampler output finite without dropping the lexical
+    constraint. Unsupported or malformed shapes raise ValueError and fall back
+    to the finite length-only transport.
     """
+
     n = len(pattern)
 
+    def _escape_end(pos: int) -> int:
+        if pos >= n or pattern[pos] != "\\" or pos + 1 >= n:
+            raise ValueError("invalid regex escape")
+        width = _HEX_ESCAPE_WIDTH.get(pattern[pos + 1])
+        if width is None:
+            return pos + 2
+        end = pos + 2 + width
+        if end > n:
+            raise ValueError("truncated hex escape")
+        return end
+
     def _quantifier_at(pos: int) -> tuple[int, bool, int, int]:
-        """Inspect the quantifier (if any) following an atom at *pos*.
-
-        Returns ``(new_pos, is_variable, min_contrib, fixed_max_contrib)``.
-        """
         if pos >= n or pattern[pos] not in "*+?{":
-            return pos, False, 0, 1          # no quantifier → fixed 1
-        c = pattern[pos]
-        if c == "*":
-            return pos + 1, True, 0, 0       # unbounded, min 0
-        if c == "+":
-            return pos + 1, True, 1, 0       # unbounded, min 1
-        if c == "?":
-            return pos + 1, False, 0, 1      # optional atom, max 1
-        # c == "{"
-        j = pos + 1
-        while j < n and pattern[j] != "}":
-            j += 1
-        qs = pattern[pos + 1 : j]
-        if "," in qs:
-            hi = qs.split(",")[1].strip()
-            mx = int(hi) if hi else max_length
-        else:
-            mx = int(qs)
-        return j + 1, False, 0, mx           # already bounded
+            return pos, False, 0, 1
+        char = pattern[pos]
+        if char == "*":
+            return pos + 1, True, 0, 0
+        if char == "+":
+            return pos + 1, True, 1, 0
+        if char == "?":
+            return pos + 1, False, 0, 1
 
-    # ── Phase 1: analyse ──
-    num_var = 0      # unbounded quantifier count
-    min_var = 0      # sum of minimum contributions from variable groups
-    fixed_max = 0    # max chars from non-variable elements (conservative)
+        close = pattern.find("}", pos + 1)
+        if close < 0:
+            raise ValueError("unterminated quantifier")
+        body = pattern[pos + 1 : close]
+        if "," in body:
+            lower, upper = body.split(",", 1)
+            if not lower.isdigit() or not upper.isdigit():
+                raise ValueError("open or malformed bounded quantifier")
+            maximum = int(upper)
+        elif body.isdigit():
+            maximum = int(body)
+        else:
+            raise ValueError("malformed bounded quantifier")
+        return close + 1, False, 0, maximum
+
+    variable_count = 0
+    variable_minimum = 0
+    fixed_maximum = 0
     i = 0
-    in_cc = False
+    in_class = False
+    group_depth = 0
 
     while i < n:
-        ch = pattern[i]
-        # escaped char
-        if ch == "\\" and i + 1 < n:
-            if in_cc:
-                i += 2
+        char = pattern[i]
+
+        if in_class:
+            if char == "\\":
+                i = _escape_end(i)
                 continue
-            i += 2
-            i, is_v, mn, fx = _quantifier_at(i)
-            if is_v:
-                num_var += 1; min_var += mn
-            else:
-                fixed_max += fx
-            continue
-        # char-class boundaries
-        if ch == "[" and not in_cc:
-            in_cc = True; i += 1; continue
-        if ch == "]" and in_cc:
-            in_cc = False; i += 1
-            i, is_v, mn, fx = _quantifier_at(i)
-            if is_v:
-                num_var += 1; min_var += mn
-            else:
-                fixed_max += fx
-            continue
-        if in_cc:
-            i += 1; continue
-        # anchors / alternation
-        if ch in "^$|":
-            i += 1; continue
-        # group open
-        if ch == "(":
+            if char == "]":
+                in_class = False
+                i += 1
+                i, variable, minimum, fixed = _quantifier_at(i)
+                if variable:
+                    variable_count += 1
+                    variable_minimum += minimum
+                else:
+                    fixed_maximum += fixed
+                continue
             i += 1
+            continue
+
+        if char == "\\":
+            i = _escape_end(i)
+            i, variable, minimum, fixed = _quantifier_at(i)
+            if variable:
+                variable_count += 1
+                variable_minimum += minimum
+            else:
+                fixed_maximum += fixed
+            continue
+        if char == "[":
+            in_class = True
+            i += 1
+            continue
+        if char in "^$|":
+            i += 1
+            continue
+        if char == "(":
+            if pattern.startswith("(?:", i):
+                i += 3
+            elif pattern.startswith("(?", i):
+                raise ValueError("unsupported regex group")
+            else:
+                i += 1
+            group_depth += 1
+            continue
+        if char == ")":
+            if group_depth <= 0:
+                raise ValueError("unbalanced regex group")
+            group_depth -= 1
+            i += 1
+            if i < n and pattern[i] in "*+":
+                raise ValueError("unbounded group repetition")
             if i < n and pattern[i] == "?":
                 i += 1
-                if i < n and pattern[i] in "!=":
-                    # lookahead — skip, consumes no chars
-                    depth = 1; i += 1
-                    while i < n and depth > 0:
-                        if pattern[i] == "\\" and i + 1 < n:
-                            i += 2; continue
-                        if pattern[i] == "(":
-                            depth += 1
-                        elif pattern[i] == ")":
-                            depth -= 1
-                        i += 1
-                    continue
-                if i < n and pattern[i] == ":":
-                    i += 1
             continue
-        # group close — check for group-level quantifier
-        if ch == ")":
-            i += 1
-            if i < n and pattern[i] == "?":
-                i += 1                        # optional group
-            elif i < n and pattern[i] == "*":
-                num_var += 1; i += 1
-            elif i < n and pattern[i] == "+":
-                num_var += 1; min_var += 1; i += 1
-            continue
-        # literal or dot — atom of width 1
-        i += 1
-        i, is_v, mn, fx = _quantifier_at(i)
-        if is_v:
-            num_var += 1; min_var += mn
-        else:
-            fixed_max += fx
+        if char in "*+?{":
+            raise ValueError("quantifier without a preceding atom")
 
-    if num_var == 0:
+        i += 1
+        i, variable, minimum, fixed = _quantifier_at(i)
+        if variable:
+            variable_count += 1
+            variable_minimum += minimum
+        else:
+            fixed_maximum += fixed
+
+    if in_class:
+        raise ValueError("unterminated character class")
+    if group_depth:
+        raise ValueError("unbalanced regex group")
+    if variable_count == 0:
         return pattern
 
-    # ── Phase 2: compute per-group budget ──
-    budget = max(0, max_length - fixed_max - min_var)
-    per_extra = budget // num_var
+    remaining = max(0, max_length - fixed_maximum - variable_minimum)
+    per_variable_extra = remaining // variable_count
 
-    # ── Phase 3: replace * and + ──
     parts: list[str] = []
     i = 0
-    in_cc = False
+    in_class = False
     while i < n:
-        ch = pattern[i]
-        if ch == "\\" and i + 1 < n:
-            parts.append(pattern[i : i + 2]); i += 2; continue
-        if ch == "[" and not in_cc:
-            in_cc = True; parts.append(ch); i += 1; continue
-        if ch == "]" and in_cc:
-            in_cc = False; parts.append(ch); i += 1; continue
-        if in_cc:
-            parts.append(ch); i += 1; continue
-        if ch == "*":
-            parts.append("{0," + str(per_extra) + "}"); i += 1; continue
-        if ch == "+":
-            parts.append("{1," + str(1 + per_extra) + "}"); i += 1; continue
-        parts.append(ch); i += 1
+        char = pattern[i]
+
+        if in_class:
+            if char == "\\":
+                end = _escape_end(i)
+                parts.append(pattern[i:end])
+                i = end
+                continue
+            parts.append(char)
+            if char == "]":
+                in_class = False
+            i += 1
+            continue
+
+        if char == "\\":
+            end = _escape_end(i)
+            parts.append(pattern[i:end])
+            i = end
+            continue
+        if char == "[":
+            in_class = True
+            parts.append(char)
+            i += 1
+            continue
+        if char == "*":
+            parts.append(f"{{0,{per_variable_extra}}}")
+            i += 1
+            continue
+        if char == "+":
+            parts.append(f"{{1,{1 + per_variable_extra}}}")
+            i += 1
+            continue
+        parts.append(char)
+        i += 1
     return "".join(parts)
 
+
+def _llama_safe_pattern(pattern: str, max_length: int | None) -> str | None:
+    """Return a pattern safe for the pinned llama.cpp grammar compiler."""
+
+    if len(pattern) < 2 or not pattern.startswith("^") or not pattern.endswith("$"):
+        return None
+    normalized = _normalize_llama_pattern_escapes(pattern)
+    if normalized is None:
+        return None
+    if max_length is None:
+        return normalized
+    try:
+        return _bound_pattern_quantifiers(normalized, max_length)
+    except (TypeError, ValueError):
+        return None
 
 def _project_type(value: Any) -> str | list[str] | None:
     if isinstance(value, str):
@@ -314,13 +499,16 @@ def project_llama_transport_schema(schema: Any) -> dict[str, Any]:
     # in the schema for the host-side token ceiling calculator.
     has_pattern = "pattern" in schema and isinstance(schema["pattern"], str)
     has_max_length = "maxLength" in schema and isinstance(schema["maxLength"], int)
-    if has_pattern:
-        if has_max_length:
-            result["pattern"] = _bound_pattern_quantifiers(
-                schema["pattern"], schema["maxLength"]
-            )
-        else:
-            result["pattern"] = schema["pattern"]
+    safe_pattern = (
+        _llama_safe_pattern(
+            schema["pattern"],
+            schema["maxLength"] if has_max_length else None,
+        )
+        if has_pattern
+        else None
+    )
+    if safe_pattern is not None:
+        result["pattern"] = safe_pattern
     if has_max_length:
         result["maxLength"] = schema["maxLength"]
     if "minLength" in schema and isinstance(schema["minLength"], int):
