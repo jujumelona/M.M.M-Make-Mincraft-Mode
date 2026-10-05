@@ -6,42 +6,36 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-
-def _job_value(job: Any, name: str, default: Any):
-    if hasattr(job, name):
-        return getattr(job, name)
-    if isinstance(job, dict):
-        return job.get(name, default)
-    return default
+from .artifact_job import ArtifactJob
 
 
-def _bind_job_dependencies(job: Any, values: dict[str, Any], port_registry: Any) -> None:
-    dependencies = tuple(_job_value(job, "requires", ()) or ())
+def _bind_job_dependencies(
+    job: ArtifactJob,
+    values: dict[str, Any],
+    port_registry: Any,
+) -> None:
+    dependencies = job.requires
     if not dependencies:
         return
     if port_registry is None:
         raise ValueError(
             "TEMPLATE_PORT_REGISTRY_REQUIRED: job declares dependencies but no port registry was supplied"
         )
-    required_types = {p["name"]: p for p in _job_value(job, "required_ports", ())}
-    aliases = [str(d).rsplit(".", 1)[-1] for d in dependencies if isinstance(d, str)]
-    for dependency in dependencies:
-        if isinstance(dependency, Mapping) or hasattr(dependency, "port_kind"):
-            name = getattr(dependency, "name", None) or dependency.get("name")
-            kind = getattr(dependency, "port_kind", None) or dependency.get("kind")
-            ttype = getattr(dependency, "target_type", None) or dependency.get("target_type")
-            port = port_registry.resolve(name, kind, ttype)
-            dep_name = name
-        else:
-            dep_name = str(dependency)
-            port = port_registry.get(dep_name)
-            if port is None:
-                raise ValueError(
-                    f"TEMPLATE_JOB_DEPENDENCY_MISSING: required scoped port {dep_name!r} is unavailable"
-                )
+    required_types = {port["name"]: port for port in job.required_ports}
+    aliases = [dependency.rsplit(".", 1)[-1] for dependency in dependencies]
+    for dep_name in dependencies:
+        port = port_registry.get(dep_name)
+        if port is None:
+            raise ValueError(
+                f"TEMPLATE_JOB_DEPENDENCY_MISSING: required scoped port {dep_name!r} is unavailable"
+            )
         expected = required_types.get(dep_name)
         if expected is not None:
-            port_registry.resolve(dep_name, expected["kind"], expected["target_type"])
+            port_registry.resolve(
+                dep_name,
+                expected["kind"],
+                expected["target_type"],
+            )
         alias = dep_name.rsplit(".", 1)[-1]
         values.setdefault("dependency_ports", {})[dep_name] = port.value
         if aliases.count(alias) > 1:
@@ -125,7 +119,7 @@ def _logical_port(
 
 
 def execute_artifact_template(
-    job: Any,
+    job: ArtifactJob,
     context: dict[str, Any] | None = None,
     *,
     router: Any = None,
@@ -142,8 +136,8 @@ def execute_artifact_template(
 
     from .implementation_identity import ExecutorType
 
-    executor = _job_value(job, "executor_type", "")
-    if executor == ExecutorType.PYTHON_GENERATOR or executor == "python_generator":
+    executor = job.executor_type
+    if executor is ExecutorType.PYTHON_GENERATOR:
         from .integrity_dispatcher import execute_generator_job
 
         return execute_generator_job(
@@ -154,7 +148,7 @@ def execute_artifact_template(
             base_dir=base_dir,
         )
 
-    template_id = str(_job_value(job, "template_id", ""))
+    template_id = job.template_id
     if not template_id:
         raise ValueError("TEMPLATE_JOB_ID: artifact job has no template_id")
     template = load_template(template_id)
@@ -171,29 +165,24 @@ def execute_artifact_template(
     )
 
     resolved = execution_context(context_map, job)
-    if resolved is not None:
-        from .integrity_dispatcher import verify_job_binding
+    from .integrity_dispatcher import verify_job_binding
 
-        resolved.admit_template(template)
-    if resolved is not None and port_registry is not None:
+    resolved.admit_template(template)
+    if port_registry is not None:
         port_registry.bind_context(resolved.context_id)
-    det_inputs = dict(_job_value(job, "deterministic_inputs", {}) or {})
-    if resolved is not None:
-        validate_resolved_template_overrides(resolved, context_map, det_inputs)
-        values: dict[str, Any] = resolved_template_values(
-            {
-                **context_map,
-                **det_inputs,
-                "resolved_version_context": resolved,
-            }
-        )
-    else:
-        values = {**context_map, **det_inputs}
-    if resolved is not None:
-        authority = verify_job_binding(job, resolved, context_map)
-        from .integrity_dispatcher import canonical_contract
+    det_inputs = dict(job.deterministic_inputs)
+    validate_resolved_template_overrides(resolved, context_map, det_inputs)
+    values: dict[str, Any] = resolved_template_values(
+        {
+            **context_map,
+            **det_inputs,
+            "resolved_version_context": resolved,
+        }
+    )
+    authority = verify_job_binding(job, resolved, context_map)
+    from .integrity_dispatcher import canonical_contract
 
-        canonical_contract(job, resolved, context_map, authority)
+    canonical_contract(job, resolved, context_map, authority)
 
     from .artifact_target_contract import validate_artifact_target
 
@@ -222,12 +211,11 @@ def execute_artifact_template(
             )
 
     rendered_output = render_template(template, values)
-    if hasattr(job, "rendered_output"):
-        job.rendered_output = rendered_output
+    job.rendered_output = rendered_output
 
     target_spec = template.get("target") or {}
-    target_file = str(_job_value(job, "target_path", "") or "")
-    anchor = str(_job_value(job, "anchor", "") or "")
+    target_file = job.target_path
+    anchor = job.anchor
     if isinstance(target_spec, dict):
         if target_spec.get("file"):
             target_file = render_template({"render": target_spec["file"]}, values)
@@ -235,21 +223,22 @@ def execute_artifact_template(
             anchor = render_template({"render": target_spec["anchor"]}, values)
 
     validation_receipts = []
-    if resolved is not None:
-        from .integrity_dispatcher import validate_canonical_output
+    from .integrity_dispatcher import validate_canonical_output
 
-        validation_receipts.extend(
-            validate_canonical_output(
-                job,
-                rendered_output,
-                resolved=resolved,
-                context=context_map,
-                authority=authority,
-                target_path=target_file,
-                anchor=anchor,
-            )
+    validation_receipts.extend(
+        validate_canonical_output(
+            job,
+            rendered_output,
+            resolved=resolved,
+            context=context_map,
+            authority=authority,
+            target_path=target_file,
+            anchor=anchor,
         )
-        validation_receipts.append(resolved.validate_artifact(template, rendered_output))
+    )
+    validation_receipts.append(
+        resolved.validate_artifact(template, rendered_output)
+    )
     supported_validators = {
         "java_parse",
         "registry_identifier_unique",
@@ -290,7 +279,7 @@ def execute_artifact_template(
             from .integrity_validators import validate_json_schema
 
             schema = template.get("output_schema") or values.get("output_schema")
-            if schema is None and resolved is not None:
+            if schema is None:
                 schema = resolved.require_fact("schemas", template_id)
             if schema is None:
                 raise ValueError("JSON_SCHEMA_REQUIRED")
@@ -304,12 +293,8 @@ def execute_artifact_template(
                 validate_semantic_contract(
                     rendered_output,
                     contract=values["semantic_contract"],
-                    context_id=(
-                        resolved.context_id
-                        if resolved
-                        else values["context_id"]
-                    ),
-                    leaf_id=_job_value(job, "canonical_leaf", ""),
+                    context_id=resolved.context_id,
+                    leaf_id=job.canonical_leaf,
                 )
             )
         elif validator_name == "client_side_only":
@@ -318,7 +303,7 @@ def execute_artifact_template(
             validation_receipts.append(
                 validate_side(
                     rendered_output,
-                    leaf_id=_job_value(job, "canonical_leaf", ""),
+                    leaf_id=job.canonical_leaf,
                     side=values["side"],
                     classpath=values["java_classpath"],
                     java_version=str(values["java_version"]),
@@ -336,9 +321,9 @@ def execute_artifact_template(
                 )
             )
 
-    canonical_leaf = str(_job_value(job, "canonical_leaf", "") or "")
-    impl_id = str(_job_value(job, "implementation_id", "") or "")
-    exec_type = str(_job_value(job, "executor_type", "") or "")
+    canonical_leaf = job.canonical_leaf
+    impl_id = job.implementation_id
+    exec_type = job.executor_type.value
     if canonical_leaf or impl_id or exec_type:
         for receipt in validation_receipts:
             if isinstance(receipt, dict):
@@ -349,14 +334,13 @@ def execute_artifact_template(
                 if exec_type and "executor_type" not in receipt:
                     receipt["executor_type"] = exec_type
 
-    if hasattr(job, "validation_receipts"):
-        job.validation_receipts = validation_receipts
+    job.validation_receipts = validation_receipts
 
     logical_outputs = tuple(template.get("produces", ()) or ())
-    scoped_outputs = tuple(_job_value(job, "produces", ()) or ())
+    scoped_outputs = job.produces
     if scoped_outputs and len(scoped_outputs) != len(logical_outputs):
         raise ValueError(
-            f"TEMPLATE_PORT_ARITY: job {str(_job_value(job, 'job_id', ''))!r} declares "
+            f"TEMPLATE_PORT_ARITY: job {job.job_id!r} declares "
             f"{len(scoped_outputs)} scoped outputs for {len(logical_outputs)} template outputs"
         )
     published_names = scoped_outputs or tuple(
@@ -371,10 +355,9 @@ def execute_artifact_template(
         strict=True,
     ):
         port_obj = _logical_port(logical_name, published_name, values, template_id)
-        if resolved is not None:
-            from dataclasses import replace
+        from dataclasses import replace
 
-            port_obj = replace(port_obj, context_id=resolved.context_id)
+        port_obj = replace(port_obj, context_id=resolved.context_id)
         if published_name in ports_published:
             raise ValueError(f"TEMPLATE_PORT_DUPLICATE: {published_name}")
         if port_registry is not None:
@@ -391,26 +374,19 @@ def execute_artifact_template(
     materialization_data = None
     if effective_base_dir:
         from dataclasses import replace
-
-        from .artifact_job import ArtifactJob
         from .artifact_materializer import materialize_job_output
 
-        materialize_job = (
-            replace(
-                job,
-                target_path=target_file,
-                anchor=anchor,
-                operation=target_spec.get(
-                    "operation",
-                    _job_value(job, "operation", ""),
-                ),
-            )
-            if isinstance(job, ArtifactJob)
-            else job
+        materialize_job = replace(
+            job,
+            target_path=target_file,
+            anchor=anchor,
+            operation=target_spec.get(
+                "operation",
+                job.operation,
+            ),
         )
         if (
-            isinstance(job, ArtifactJob)
-            and job.operation
+            job.operation
             and (job.target_path != target_file or job.anchor != anchor)
         ):
             raise ValueError(
@@ -443,10 +419,10 @@ def execute_artifact_template(
 
     receipt = {
         "status": "PASS",
-        "job_id": str(_job_value(job, "job_id", "")),
+        "job_id": job.job_id,
         "template_id": template_id,
         "target_file": target_file,
-        "context_id": resolved.context_id if resolved is not None else "",
+        "context_id": resolved.context_id,
         "anchor": anchor,
         "rendered_output": rendered_output,
         "validations": validation_receipts,
@@ -455,15 +431,13 @@ def execute_artifact_template(
             name: port.to_dict() for name, port in ports_published.items()
         },
     }
-    if hasattr(job, "status"):
-        job.status = "SUCCESS"
+    job.status = "SUCCESS"
     return receipt
 
 
 __all__ = [
     "_STANDARD_PORT_DEFINITIONS",
     "_bind_job_dependencies",
-    "_job_value",
     "_logical_port",
     "execute_artifact_template",
 ]
