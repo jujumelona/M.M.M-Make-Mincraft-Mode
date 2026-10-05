@@ -863,25 +863,87 @@ def _resolve_state_symbols(allowed_state_symbols: Any) -> list[str]:
     return []
 
 
-def mutations_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
+def _state_variable_value_kind(record: Mapping[str, Any] | None) -> str:
+    """Map authored type prose onto the finite host state-value families."""
+
+    if not isinstance(record, Mapping):
+        return "unknown"
+    type_name = str(record.get("type") or "").strip().casefold()
+    compact = re.sub(r"[^a-z0-9]+", " ", type_name)
+    tokens = set(compact.split())
+    if tokens & {"bool", "boolean"}:
+        return "boolean"
+    if tokens & {
+        "byte", "short", "int", "integer", "long", "float", "double",
+        "number", "numeric", "decimal",
+    }:
+        return "number"
+    if tokens & {"map", "dict", "dictionary", "object"}:
+        return "map"
+    if tokens & {"list", "array", "collection", "set", "enumset"}:
+        return "list"
+    if tokens & {"string", "text", "enum", "status", "mode"}:
+        return "string"
+    return "unknown"
+
+
+def _mutation_value_branches(
+    allowed_state_symbols: Any,
+    *,
+    target_kind: str,
+) -> list[dict[str, Any]]:
+    """Return finite IR alternatives compatible with one declared target family."""
+
     symbols = _resolve_state_symbols(allowed_state_symbols)
-    target_schema = _state_name_schema(symbols)
-    name_schema = _state_name_schema(symbols)
-    context_name_schema = {
-        "type": "string",
-        "maxLength": 24,
-        "pattern": r"^[A-Za-z_$][A-Za-z0-9_$.]*$",
-        "minLength": 1,
+    variables = getattr(allowed_state_symbols, "variables", {})
+    compatible_names = [
+        name
+        for name in symbols
+        if target_kind == "unknown"
+        or _state_variable_value_kind(
+            variables.get(name) if isinstance(variables, Mapping) else None
+        ) in {target_kind, "unknown"}
+    ]
+    state_ref_branch = {
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string", "const": "state_ref"},
+            "name": (
+                {"type": "string", "enum": compatible_names}
+                if compatible_names
+                else {"type": "string", "pattern": r"^(?!)$", "maxLength": 1}
+            ),
+        },
+        "required": ["kind", "name"],
+        "additionalProperties": False,
     }
-    function_name_schema = {
-        "type": "string",
-        "enum": sorted(_SUPPORTED_STATE_FUNCTIONS),
+    context_ref_branch = {
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string", "const": "context_ref"},
+            "name": {
+                "type": "string",
+                "maxLength": 24,
+                "pattern": r"^[A-Za-z_$][A-Za-z0-9_$.]*$",
+                "minLength": 1,
+            },
+        },
+        "required": ["kind", "name"],
+        "additionalProperties": False,
     }
-    literal_branch = {
+    string_literal_branch = {
         "type": "object",
         "properties": {
             "kind": {"type": "string", "const": "literal"},
-            "value": {"type": ["string", "null"], "maxLength": 24},
+            "value": {
+                "type": "string",
+                "maxLength": 24,
+                "pattern": r"^[^{}\[\]]*$",
+                "description": (
+                    "One scalar text value only. Never serialize JSON, maps, arrays, "
+                    "or another structured object into this string."
+                ),
+            },
         },
         "required": ["kind", "value"],
         "additionalProperties": False,
@@ -899,85 +961,141 @@ def mutations_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
         "required": ["kind", "value"],
         "additionalProperties": False,
     }
-    state_ref_branch = {
+    boolean_literal_branch = {
         "type": "object",
         "properties": {
-            "kind": {"type": "string", "const": "state_ref"},
-            "name": name_schema,
+            "kind": {"type": "string", "const": "literal"},
+            "value": {"type": "boolean"},
         },
-        "required": ["kind", "name"],
+        "required": ["kind", "value"],
         "additionalProperties": False,
     }
-    context_ref_branch = {
+    null_literal_branch = {
         "type": "object",
         "properties": {
-            "kind": {"type": "string", "const": "context_ref"},
-            "name": context_name_schema,
+            "kind": {"type": "string", "const": "literal"},
+            "value": {"type": "null"},
         },
-        "required": ["kind", "name"],
+        "required": ["kind", "value"],
         "additionalProperties": False,
     }
-    leaf_operand_branches = [
-        state_ref_branch,
-        context_ref_branch,
-        literal_branch,
-        number_branch,
-    ]
-    leaf_operand = {
-        "oneOf": leaf_operand_branches,
-    }
-    arithmetic_branch = {
+    empty_map_branch = {
         "type": "object",
         "properties": {
-            "kind": {"type": "string", "const": "arithmetic"},
-            "op": {"type": "string", "enum": ["+", "-", "*", "/", "%"], "maxLength": 2},
-            "left": leaf_operand,
-            "right": leaf_operand,
+            "kind": {"type": "string", "const": "empty_map"},
         },
-        "required": ["kind", "op", "left", "right"],
+        "required": ["kind"],
         "additionalProperties": False,
     }
-    call_branch = {
+    empty_list_branch = {
         "type": "object",
         "properties": {
-            "kind": {"type": "string", "const": "call"},
-            "name": function_name_schema,
-            "args": {
-                "type": "array",
-                "maxItems": 2,
-                "items": leaf_operand,
+            "kind": {"type": "string", "const": "empty_list"},
+        },
+        "required": ["kind"],
+        "additionalProperties": False,
+    }
+
+    if target_kind == "number":
+        branches = [number_branch, state_ref_branch, context_ref_branch, null_literal_branch]
+    elif target_kind == "boolean":
+        branches = [boolean_literal_branch, state_ref_branch, context_ref_branch, null_literal_branch]
+    elif target_kind == "map":
+        branches = [empty_map_branch, state_ref_branch, context_ref_branch, null_literal_branch]
+    elif target_kind == "list":
+        branches = [empty_list_branch, state_ref_branch, context_ref_branch, null_literal_branch]
+    elif target_kind == "string":
+        branches = [string_literal_branch, state_ref_branch, context_ref_branch, null_literal_branch]
+    else:
+        branches = [
+            string_literal_branch,
+            number_branch,
+            boolean_literal_branch,
+            null_literal_branch,
+            empty_map_branch,
+            empty_list_branch,
+            state_ref_branch,
+            context_ref_branch,
+        ]
+    return branches
+
+
+def mutations_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
+    symbols = _resolve_state_symbols(allowed_state_symbols)
+    authoritative_symbols = isinstance(allowed_state_symbols, StateSymbolTable) or isinstance(
+        allowed_state_symbols, (set, list, tuple)
+    )
+    if authoritative_symbols and not symbols:
+        return {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 0,
+            "items": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
             },
-        },
-        "required": ["kind", "name", "args"],
-        "additionalProperties": False,
-    }
-    operand_branches = [
-        *leaf_operand_branches,
-        arithmetic_branch,
-        call_branch,
-    ]
-    value_schema = {
-        "oneOf": operand_branches,
-    }
-    return {
-        "type": "array",
-        "maxItems": 2,
-        "items": {
+        }
+
+    variables = getattr(allowed_state_symbols, "variables", {})
+    if symbols:
+        item_branches: list[dict[str, Any]] = []
+        for target in symbols:
+            record = variables.get(target) if isinstance(variables, Mapping) else None
+            target_kind = _state_variable_value_kind(record)
+            operators = (
+                ["=", "+=", "-=", "*=", "/="]
+                if target_kind == "number"
+                else ["=", "+="]
+                if target_kind == "string"
+                else ["="]
+            )
+            item_branches.append({
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "const": target},
+                    "operator": {
+                        "type": "string",
+                        "enum": operators,
+                        "maxLength": 2,
+                    },
+                    "value": {
+                        "oneOf": _mutation_value_branches(
+                            allowed_state_symbols,
+                            target_kind=target_kind,
+                        )
+                    },
+                },
+                "required": ["target", "operator", "value"],
+                "additionalProperties": False,
+            })
+        item_schema: dict[str, Any] = {"oneOf": item_branches}
+    else:
+        item_schema = {
             "type": "object",
             "properties": {
-                "target": target_schema,
+                "target": _state_name_schema(symbols),
                 "operator": {
                     "type": "string",
                     "enum": ["=", "+=", "-=", "*=", "/="],
                     "maxLength": 2,
                 },
-                "value": value_schema,
+                "value": {
+                    "oneOf": _mutation_value_branches(
+                        allowed_state_symbols,
+                        target_kind="unknown",
+                    )
+                },
             },
             "required": ["target", "operator", "value"],
             "additionalProperties": False,
-        },
-    }
+        }
 
+    return {
+        "type": "array",
+        "maxItems": 2,
+        "items": item_schema,
+    }
 
 def state_expr_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
     symbols = _resolve_state_symbols(allowed_state_symbols)
