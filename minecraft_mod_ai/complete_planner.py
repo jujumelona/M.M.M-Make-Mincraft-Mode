@@ -267,8 +267,13 @@ class CompleteGameDesignPlanner:
                 "production_preparation_start", stage="production", result="START",
                 details={**repository_revision(), "input": "saved_authored_design"},
             )
-            return compile_authored_design(
+            proposal = compile_authored_design(
                 self.router, plan, existing_input_sha256=existing_input_sha256,
             )
+            if proposal.assets:
+                from .resource_asset_production import attach_generation_plan
+
+                proposal = attach_generation_plan(self.router, proposal)
+            return proposal
 
 __all__ = ["CompleteGameDesignPlanner"]
