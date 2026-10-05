@@ -1593,7 +1593,7 @@ def lower_semantic_game_dispatch_to_ir(
             )
 
         semantic_action_count += len(action_statements)
-        trigger = str(rule.get("trigger_event") or "any")
+        trigger = str(rule["trigger_event"])
         if trigger != "any":
             statements.append({
                 "op": "if",
