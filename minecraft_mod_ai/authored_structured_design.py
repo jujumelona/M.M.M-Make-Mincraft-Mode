@@ -420,6 +420,7 @@ def _generate_authored_chunk(
     )
     value = _generate_authored_page_value(
         router,
+        prompt,
         messages,
         page,
         schema,
@@ -436,6 +437,7 @@ def _generate_authored_chunk(
 
 def _generate_authored_page_value(
     router: Any,
+    prompt: str,
     messages: Sequence[Mapping[str, Any]],
     page: _PlannerPageRequest,
     schema: Mapping[str, Any],
@@ -468,13 +470,23 @@ def _generate_authored_page_value(
                     f"{concern}: {fields!r}"
                 )
 
+            existing_rows: Sequence[Mapping[str, Any]] = ()
+            if isinstance(section_context, Mapping):
+                candidate_rows = section_context.get(concern)
+                if isinstance(candidate_rows, Sequence) and not isinstance(
+                    candidate_rows, (str, bytes, bytearray)
+                ):
+                    existing_rows = tuple(
+                        row for row in candidate_rows if isinstance(row, Mapping)
+                    )
             return author_state_field_page(
                 router,
-                messages,
+                prompt,
                 concern=concern,
                 field=executable[0],
                 count=concern_schema["minItems"],
                 symbols=state_symbols,
+                existing_rows=existing_rows,
             )
 
         if concern_schema.get("minItems") == concern_schema.get("maxItems"):
@@ -489,7 +501,7 @@ def _generate_authored_page_value(
                     )
             return author_state_semantic_page(
                 router,
-                messages,
+                prompt,
                 concern=concern,
                 fields=fields,
                 count=int(concern_schema["minItems"]),
