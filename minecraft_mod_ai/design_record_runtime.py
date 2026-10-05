@@ -219,12 +219,9 @@ def _run_entities(router, identifier, context, progress, checkpoint):
         context=normalized,
         progress=progress,
         checkpoint=checkpoint,
-        minimum_count=1,
+        minimum_count=0,
     )
-    records = list(result["records"])
-    if not records:
-        raise TemplateBlocked("TEMPLATE_ENTITY_REQUIRED: no concrete content entity was produced")
-    return records, normalized
+    return list(result["records"]), normalized
 
 
 def _relation_vocabulary() -> tuple[str, ...]:
