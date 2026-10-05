@@ -370,6 +370,12 @@ def worksheet_chunk_schema(
                         "scalar state records."
                     ),
                 }
+            if "default" in field_schemas:
+                field_schemas["default"]["pattern"] = r"^[^{}\[\]]*$"
+                field_schemas["default"]["description"] = (
+                    "Scalar default matching the previously authored value family. "
+                    "Never serialize JSON, maps, or arrays into this string."
+                )
         item_schema: dict[str, Any] = {
             "type": "object",
             "properties": field_schemas,
