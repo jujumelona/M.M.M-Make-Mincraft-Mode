@@ -249,3 +249,65 @@ def test_runtime_does_not_install_blind_grammar_retry() -> None:
     from minecraft_mod_ai.model_adapters import llama_cpp_adapter
 
     assert not getattr(llama_cpp_adapter._post_completion, "_mmm_grammar_retry_v1", False)
+
+def test_bounded_numeric_transport_decodes_inside_oneof_branch() -> None:
+    schema = {
+        "oneOf": [
+            {
+                "type": "object",
+                "properties": {
+                    "action": {"const": "permission"},
+                    "level": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 4,
+                    },
+                },
+                "required": ["action", "level"],
+                "additionalProperties": False,
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "action": {"const": "message"},
+                    "text": {"type": "string", "maxLength": 32},
+                },
+                "required": ["action", "text"],
+                "additionalProperties": False,
+            },
+        ]
+    }
+    request = _request(schema=schema)
+
+    decoded = json.loads(
+        _validate('{"action":"permission","level":"4"}', request)
+    )
+
+    assert decoded == {"action": "permission", "level": 4}
+
+
+def test_bounded_numeric_transport_rejects_out_of_range_oneof_value() -> None:
+    schema = {
+        "oneOf": [
+            {
+                "type": "object",
+                "properties": {
+                    "action": {"const": "permission"},
+                    "level": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 4,
+                    },
+                },
+                "required": ["action", "level"],
+                "additionalProperties": False,
+            }
+        ]
+    }
+
+    with pytest.raises(StructuredOutputValidationError):
+        _validate(
+            '{"action":"permission","level":"3208975804"}',
+            _request(schema=schema),
+        )
+
