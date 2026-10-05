@@ -1459,6 +1459,34 @@ class CompleteProductionOrchestrator:
                     if router is None:
                         router = self.router_factory()
             return router
+        if approved.assets:
+            from .resource_asset_production import (
+                AssetProductionError,
+                validate_asset_generation_plan,
+            )
+            try:
+                asset_plan_preflight = validate_asset_generation_plan(
+                    get_router(),
+                    approved,
+                )
+            except AssetProductionError as exc:
+                raise CompleteProductionError(
+                    "Asset generation contract failed before dispatch: "
+                    f"{exc}"
+                ) from exc
+            expected_asset_plan_sha256 = {
+                str(node.payload.get('asset_plan_sha256') or '')
+                for node in generation_nodes
+                if str(node.payload.get('kind') or '') == 'asset-shard'
+            }
+            if expected_asset_plan_sha256 != {
+                str(asset_plan_preflight.get('asset_plan_sha256') or '')
+            }:
+                raise CompleteProductionError(
+                    "Asset work graph is not bound to the validated canonical "
+                    "asset plan."
+                )
+
         shared_project_index = execution_project_index(ProjectIndex, project_root, policy=self.policy)
         def module_node_action(
             node: WorkNode,
