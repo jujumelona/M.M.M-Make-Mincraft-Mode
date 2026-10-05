@@ -289,211 +289,297 @@ def author_state_semantic_page(
 
     return {concern: rows}
 
-def _state_condition_transport_schema(
-    symbols: StateSymbolTable,
-) -> dict[str, Any]:
-    """Flat, non-recursive model transport for guard/condition authoring."""
-
-    declared = sorted(symbols.declared_names)
-    state_name_schema: dict[str, Any]
-    if declared:
-        state_name_schema = {
-            "type": "string",
-            "enum": declared,
-            "maxLength": 128,
-        }
-        left_kinds = ["state", "context", "boolean"]
-        right_kinds = [
-            "state",
-            "context",
-            "number",
-            "string",
-            "boolean",
-            "null",
-        ]
-    else:
-        state_name_schema = {
-            "type": "string",
-            "const": "",
-            "maxLength": 1,
-        }
-        left_kinds = ["context", "boolean"]
-        right_kinds = [
-            "none",
-            "context",
-            "number",
-            "string",
-            "boolean",
-            "null",
-        ]
-
-    context_schema = {
-        "type": "string",
-        "minLength": 1,
-        "maxLength": 24,
-        "pattern": r"^[A-Za-z_$][A-Za-z0-9_$.]{0,23}$",
-    }
-    term_schema = {
-        "type": "object",
-        "properties": {
-            "left_kind": {"type": "string", "enum": left_kinds},
-            "left_state": state_name_schema,
-            "left_context": context_schema,
-            "left_boolean": {"type": "boolean"},
-            "operator": {
-                "type": "string",
-                "enum": ["truthy", "falsey", "==", "!=", ">=", "<=", ">", "<"],
-            },
-            "right_kind": {"type": "string", "enum": right_kinds},
-            "right_state": state_name_schema,
-            "right_context": context_schema,
-            "right_text": {
-                "type": "string",
-                "maxLength": 24,
-                "pattern": r"^[^{}\[\]]{0,24}$",
-            },
-            "right_number": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 24,
-                "pattern": r"^-?[0-9]+(?:\.[0-9]+)?$",
-            },
-            "right_boolean": {"type": "boolean"},
-        },
-        "required": [
-            "left_kind",
-            "left_state",
-            "left_context",
-            "left_boolean",
-            "operator",
-            "right_kind",
-            "right_state",
-            "right_context",
-            "right_text",
-            "right_number",
-            "right_boolean",
-        ],
-        "additionalProperties": False,
-    }
-    return {
-        "type": "object",
-        "properties": {
-            "join": {"type": "string", "enum": ["and", "or"]},
-            "terms": {
-                "type": "array",
-                "minItems": 1,
-                "maxItems": 2,
-                "items": term_schema,
-            },
-        },
-        "required": ["join", "terms"],
-        "additionalProperties": False,
-    }
-
-
-def _condition_operand_from_transport(
-    term: Mapping[str, Any],
+def _condition_decision_messages(
+    prompt: str,
     *,
-    side: str,
-) -> dict[str, Any]:
-    if side == "left":
-        kind = str(term.get("left_kind") or "")
-        if kind == "state":
-            return {"kind": "state_ref", "name": str(term["left_state"])}
-        if kind == "context":
-            name = str(term.get("left_context") or "").strip()
-            if not name:
-                raise ValueError("STATE_CONDITION_TRANSPORT: left context name is required")
-            return {"kind": "context_ref", "name": name}
-        if kind == "boolean":
-            value = term.get("left_boolean")
-            if type(value) is not bool:
-                raise ValueError(
-                    "STATE_CONDITION_TRANSPORT: left_boolean must be boolean"
-                )
-            return {"kind": "literal", "value": value}
-        raise ValueError(f"STATE_CONDITION_TRANSPORT: invalid left kind {kind!r}")
-
-    kind = str(term.get("right_kind") or "")
-    if kind == "state":
-        return {"kind": "state_ref", "name": str(term["right_state"])}
-    if kind == "context":
-        name = str(term.get("right_context") or "").strip()
-        if not name:
-            raise ValueError("STATE_CONDITION_TRANSPORT: right context name is required")
-        return {"kind": "context_ref", "name": name}
-    if kind == "number":
-        value = str(term.get("right_number") or "").strip()
-        if re.fullmatch(r"-?[0-9]+(?:\.[0-9]+)?", value) is None:
-            raise ValueError(
-                f"STATE_CONDITION_TRANSPORT: invalid numeric literal {value!r}"
+    concern: str,
+    field: str,
+    index: int,
+    current: Mapping[str, Any],
+    symbols: StateSymbolTable,
+    instruction: str,
+) -> tuple[dict[str, str], ...]:
+    parts = [
+        "Original user request:\n" + str(prompt or "").strip(),
+        f"Target condition: state_model.{concern}[{index}].{field}",
+    ]
+    if current:
+        parts.append(
+            "Already-fixed fields for this row (read-only):\n"
+            + json.dumps(
+                dict(current),
+                ensure_ascii=True,
+                sort_keys=True,
+                default=str,
             )
-        return {"kind": "number", "value": value}
-    if kind == "string":
-        return {"kind": "literal", "value": str(term.get("right_text") or "")}
-    if kind == "boolean":
-        value = term.get("right_boolean")
-        if type(value) is not bool:
-            raise ValueError(
-                "STATE_CONDITION_TRANSPORT: right_boolean must be boolean"
-            )
-        return {"kind": "literal", "value": value}
-    if kind == "null":
-        return {"kind": "literal", "value": None}
-    raise ValueError(
-        f"STATE_CONDITION_TRANSPORT: right operand required for comparison, got {kind!r}"
+        )
+    symbols_text = symbols.prompt_text()
+    if symbols_text:
+        parts.append(symbols_text)
+    parts.append(instruction)
+    return (
+        {
+            "role": "system",
+            "content": (
+                "Make exactly the small condition decision requested by the host. "
+                "Return one JSON object matching the supplied schema exactly. "
+                "Do not emit guard, condition, kind, left, right, terms, state_model, "
+                "or any expression-AST wrapper unless that exact key exists in the schema."
+            ),
+        },
+        {
+            "role": "user",
+            "content": "\n\n".join(parts),
+        },
     )
 
 
-def _condition_ir_from_transport(
-    raw: Mapping[str, Any],
+def _author_condition_object(
+    router: Any,
+    prompt: str,
     *,
+    concern: str,
+    field: str,
+    index: int,
+    current: Mapping[str, Any],
     symbols: StateSymbolTable,
+    schema: Mapping[str, Any],
+    instruction: str,
+    description: str,
 ) -> dict[str, Any]:
-    terms = raw.get("terms")
-    if not isinstance(terms, Sequence) or isinstance(
-        terms, (str, bytes, bytearray)
-    ):
-        raise ValueError("STATE_CONDITION_TRANSPORT: terms must be an array")
+    raw = generate_fixed_template_value(
+        router,
+        "planner",
+        _condition_decision_messages(
+            prompt,
+            concern=concern,
+            field=field,
+            index=index,
+            current=current,
+            symbols=symbols,
+            instruction=instruction,
+        ),
+        response_schema=dict(schema),
+        enable_tools=False,
+        description=description,
+        output_token_ceiling=structured_output_token_ceiling(schema),
+    )
+    if not isinstance(raw, Mapping):
+        raise ValueError(
+            "STATE_CONDITION_DECISION: model result must be an object"
+        )
+    return dict(raw)
 
-    compiled: list[dict[str, Any]] = []
-    for index, item in enumerate(terms):
-        if not isinstance(item, Mapping):
-            raise ValueError(
-                f"STATE_CONDITION_TRANSPORT: terms[{index}] must be an object"
-            )
-        left = _condition_operand_from_transport(item, side="left")
-        operator = str(item.get("operator") or "")
-        if operator == "truthy":
-            condition = left
-        elif operator == "falsey":
-            condition = {"kind": "not", "term": left}
-        elif operator in {"==", "!=", ">=", "<=", ">", "<"}:
-            right = _condition_operand_from_transport(item, side="right")
-            condition = {
-                "kind": "compare",
-                "op": operator,
-                "left": left,
-                "right": right,
-            }
-        else:
-            raise ValueError(
-                f"STATE_CONDITION_TRANSPORT: unsupported operator {operator!r}"
-            )
-        validate_state_expr_ir(condition, symbols=symbols)
-        compiled.append(condition)
 
-    if not compiled:
-        raise ValueError("STATE_CONDITION_TRANSPORT: at least one term is required")
-    if len(compiled) == 1:
-        return compiled[0]
+def _condition_state_schema(symbols: StateSymbolTable) -> dict[str, Any]:
+    declared = sorted(symbols.declared_names)
+    if not declared:
+        return {"type": "string", "const": "", "maxLength": 1}
+    return {
+        "type": "string",
+        "enum": declared,
+        "maxLength": 128,
+    }
 
-    join = str(raw.get("join") or "")
-    if join not in {"and", "or"}:
-        raise ValueError(f"STATE_CONDITION_TRANSPORT: invalid join {join!r}")
-    result = {"kind": join, "terms": compiled}
-    validate_state_expr_ir(result, symbols=symbols)
-    return result
+
+def _author_condition_left(
+    router: Any,
+    prompt: str,
+    *,
+    concern: str,
+    field: str,
+    index: int,
+    current: Mapping[str, Any],
+    symbols: StateSymbolTable,
+    term_index: int,
+) -> tuple[dict[str, Any], str]:
+    declared = sorted(symbols.declared_names)
+    sources = ["context", "true", "false"]
+    if declared:
+        sources.insert(0, "state")
+    schema = {
+        "type": "object",
+        "properties": {
+            "source": {"type": "string", "enum": sources},
+            "state": _condition_state_schema(symbols),
+            "context": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 24,
+                "pattern": r"^[A-Za-z_$][A-Za-z0-9_$.]{0,23}$",
+            },
+            "operator": {
+                "type": "string",
+                "enum": [
+                    "truthy",
+                    "falsey",
+                    "==",
+                    "!=",
+                    ">=",
+                    "<=",
+                    ">",
+                    "<",
+                ],
+            },
+        },
+        "required": ["source", "state", "context", "operator"],
+        "additionalProperties": False,
+    }
+    raw = _author_condition_object(
+        router,
+        prompt,
+        concern=concern,
+        field=field,
+        index=index,
+        current=current,
+        symbols=symbols,
+        schema=schema,
+        instruction=(
+            f"Choose the left operand and operator for condition term {term_index + 1}. "
+            "source=state uses state; source=context uses context; source=true/false "
+            "is a host boolean literal. The state/context fields are harmless placeholders "
+            "when their source is not selected."
+        ),
+        description=f"Choose condition term {term_index + 1} left operand and operator.",
+    )
+    source = str(raw["source"])
+    operator = str(raw["operator"])
+    if source == "state":
+        left = {"kind": "state_ref", "name": str(raw["state"])}
+    elif source == "context":
+        left = {"kind": "context_ref", "name": str(raw["context"])}
+    elif source == "true":
+        left = {"kind": "literal", "value": True}
+    elif source == "false":
+        left = {"kind": "literal", "value": False}
+    else:
+        raise ValueError(
+            f"STATE_CONDITION_DECISION: invalid left source {source!r}"
+        )
+    return left, operator
+
+
+def _author_condition_right(
+    router: Any,
+    prompt: str,
+    *,
+    concern: str,
+    field: str,
+    index: int,
+    current: Mapping[str, Any],
+    symbols: StateSymbolTable,
+    term_index: int,
+) -> dict[str, Any]:
+    declared = sorted(symbols.declared_names)
+    sources = ["context", "number", "string", "true", "false", "null"]
+    if declared:
+        sources.insert(0, "state")
+    kind_schema = {
+        "type": "object",
+        "properties": {
+            "source": {"type": "string", "enum": sources},
+        },
+        "required": ["source"],
+        "additionalProperties": False,
+    }
+    selected = _author_condition_object(
+        router,
+        prompt,
+        concern=concern,
+        field=field,
+        index=index,
+        current=current,
+        symbols=symbols,
+        schema=kind_schema,
+        instruction=(
+            f"Choose only the right operand kind for comparison term {term_index + 1}."
+        ),
+        description=f"Choose condition term {term_index + 1} right operand kind.",
+    )
+    source = str(selected["source"])
+
+    if source == "true":
+        return {"kind": "literal", "value": True}
+    if source == "false":
+        return {"kind": "literal", "value": False}
+    if source == "null":
+        return {"kind": "literal", "value": None}
+
+    if source == "state":
+        value_schema = {
+            "type": "object",
+            "properties": {"value": _condition_state_schema(symbols)},
+            "required": ["value"],
+            "additionalProperties": False,
+        }
+    elif source == "context":
+        value_schema = {
+            "type": "object",
+            "properties": {
+                "value": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 24,
+                    "pattern": r"^[A-Za-z_$][A-Za-z0-9_$.]{0,23}$",
+                }
+            },
+            "required": ["value"],
+            "additionalProperties": False,
+        }
+    elif source == "number":
+        value_schema = {
+            "type": "object",
+            "properties": {
+                "value": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 24,
+                    "pattern": r"^-?[0-9]+(?:\.[0-9]+)?$",
+                }
+            },
+            "required": ["value"],
+            "additionalProperties": False,
+        }
+    elif source == "string":
+        value_schema = {
+            "type": "object",
+            "properties": {
+                "value": {
+                    "type": "string",
+                    "maxLength": 24,
+                    "pattern": r"^[^{}\[\]]{0,24}$",
+                }
+            },
+            "required": ["value"],
+            "additionalProperties": False,
+        }
+    else:
+        raise ValueError(
+            f"STATE_CONDITION_DECISION: invalid right source {source!r}"
+        )
+
+    raw_value = _author_condition_object(
+        router,
+        prompt,
+        concern=concern,
+        field=field,
+        index=index,
+        current=current,
+        symbols=symbols,
+        schema=value_schema,
+        instruction=(
+            f"Choose only the {source} value for comparison term {term_index + 1}."
+        ),
+        description=f"Choose condition term {term_index + 1} right operand value.",
+    )
+    value = raw_value["value"]
+    if source == "state":
+        return {"kind": "state_ref", "name": str(value)}
+    if source == "context":
+        return {"kind": "context_ref", "name": str(value)}
+    if source == "number":
+        return {"kind": "number", "value": str(value)}
+    return {"kind": "literal", "value": str(value)}
 
 
 def _author_state_condition(
@@ -507,38 +593,77 @@ def _author_state_condition(
     symbols: StateSymbolTable,
     current: Mapping[str, Any],
 ) -> dict[str, Any]:
-    schema = _state_condition_transport_schema(symbols)
-    instruction = (
-        f"Author the boolean condition for state_model.{concern}[{index}].{field}. "
-        "Use one or two flat terms only. left_kind=boolean uses left_boolean and "
-        "represents an unconditional boolean. operator=truthy/falsey ignores all right_* "
-        "payload fields. For comparisons choose an explicit right_kind; use right_number, "
-        "right_text, or right_boolean for those scalar kinds. "
-        "Never emit expression AST keys such as kind, type, left, right, term, or nested "
-        "terms; the host builds the canonical typed expression IR."
-    )
-    raw = generate_fixed_template_value(
+    del count
+    layout_schema = {
+        "type": "object",
+        "properties": {
+            "layout": {
+                "type": "string",
+                "enum": ["single", "and", "or"],
+            }
+        },
+        "required": ["layout"],
+        "additionalProperties": False,
+    }
+    layout_raw = _author_condition_object(
         router,
-        "planner",
-        _state_atomic_messages(
+        prompt,
+        concern=concern,
+        field=field,
+        index=index,
+        current=current,
+        symbols=symbols,
+        schema=layout_schema,
+        instruction=(
+            "Choose condition layout only: single for one predicate, and/or for two predicates."
+        ),
+        description="Choose condition predicate layout.",
+    )
+    layout = str(layout_raw["layout"])
+    term_count = 1 if layout == "single" else 2
+
+    terms: list[dict[str, Any]] = []
+    for term_index in range(term_count):
+        left, operator = _author_condition_left(
+            router,
             prompt,
             concern=concern,
+            field=field,
             index=index,
-            fields=(field,),
-            current_row=current,
-            symbols_text=symbols.prompt_text(),
-            extra_instruction=instruction,
-        ),
-        response_schema=schema,
-        enable_tools=False,
-        description=(
-            f"Choose flat state condition terms for row {index + 1} of {count} in {concern}."
-        ),
-        output_token_ceiling=structured_output_token_ceiling(schema),
-    )
-    if not isinstance(raw, Mapping):
-        raise ValueError("STATE_CONDITION_TRANSPORT: model result must be an object")
-    return _condition_ir_from_transport(raw, symbols=symbols)
+            current=current,
+            symbols=symbols,
+            term_index=term_index,
+        )
+        if operator == "truthy":
+            term = left
+        elif operator == "falsey":
+            term = {"kind": "not", "term": left}
+        else:
+            right = _author_condition_right(
+                router,
+                prompt,
+                concern=concern,
+                field=field,
+                index=index,
+                current=current,
+                symbols=symbols,
+                term_index=term_index,
+            )
+            term = {
+                "kind": "compare",
+                "op": operator,
+                "left": left,
+                "right": right,
+            }
+        validate_state_expr_ir(term, symbols=symbols)
+        terms.append(term)
+
+    result = terms[0] if layout == "single" else {
+        "kind": layout,
+        "terms": terms,
+    }
+    validate_state_expr_ir(result, symbols=symbols)
+    return result
 
 
 def _state_mutation_transport_schema(
