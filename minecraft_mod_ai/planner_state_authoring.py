@@ -303,7 +303,7 @@ def _state_condition_transport_schema(
             "enum": declared,
             "maxLength": 128,
         }
-        left_kinds = ["state", "context"]
+        left_kinds = ["state", "context", "boolean"]
         right_kinds = [
             "none",
             "state",
@@ -319,7 +319,7 @@ def _state_condition_transport_schema(
             "const": "",
             "maxLength": 1,
         }
-        left_kinds = ["context"]
+        left_kinds = ["context", "boolean"]
         right_kinds = [
             "none",
             "context",
@@ -340,6 +340,10 @@ def _state_condition_transport_schema(
             "left_kind": {"type": "string", "enum": left_kinds},
             "left_state": state_name_schema,
             "left_context": context_schema,
+            "left_value": {
+                "type": "string",
+                "enum": ["", "true", "false"],
+            },
             "operator": {
                 "type": "string",
                 "enum": ["truthy", "falsey", "==", "!=", ">=", "<=", ">", "<"],
@@ -357,6 +361,7 @@ def _state_condition_transport_schema(
             "left_kind",
             "left_state",
             "left_context",
+            "left_value",
             "operator",
             "right_kind",
             "right_state",
@@ -395,6 +400,13 @@ def _condition_operand_from_transport(
             if not name:
                 raise ValueError("STATE_CONDITION_TRANSPORT: left context name is required")
             return {"kind": "context_ref", "name": name}
+        if kind == "boolean":
+            value = str(term.get("left_value") or "").strip().casefold()
+            if value not in {"true", "false"}:
+                raise ValueError(
+                    "STATE_CONDITION_TRANSPORT: boolean left_value must be true or false"
+                )
+            return {"kind": "literal", "value": value == "true"}
         raise ValueError(f"STATE_CONDITION_TRANSPORT: invalid left kind {kind!r}")
 
     kind = str(term.get("right_kind") or "")
@@ -493,7 +505,8 @@ def _author_state_condition(
     schema = _state_condition_transport_schema(symbols)
     instruction = (
         f"Author the boolean condition for state_model.{concern}[{index}].{field}. "
-        "Use one or two flat terms only. operator=truthy/falsey needs no right operand; "
+        "Use one or two flat terms only. left_kind=boolean with left_value=true/false "
+        "represents an unconditional boolean. operator=truthy/falsey needs no right operand; "
         "for those set right_kind=none and leave right_state/right_context/right_value "
         "empty. For comparisons choose an explicit right_kind and value. "
         "Never emit expression AST keys such as kind, type, left, right, term, or nested "
