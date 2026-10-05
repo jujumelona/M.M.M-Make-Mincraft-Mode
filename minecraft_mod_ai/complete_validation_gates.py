@@ -81,13 +81,7 @@ def jdt_release_evidence_passed(receipt: dict[str, Any] | None) -> bool:
             for key in ("model_id", "model_revision", "session_id")
         )
 
-    # Keep accepting the legacy LSP receipt shape for callers that still use the
-    # standalone adapter outside complete-production release verification.
-    try:
-        files_opened = int(normalized.get("files_opened", 0))
-    except (TypeError, ValueError, OverflowError):
-        return False
-    return files_opened > 0
+    return False
 
 
 def _jdt_infrastructure_unavailable(receipt: dict[str, Any] | None) -> bool:
