@@ -107,6 +107,18 @@ def platform_config_schema(kind: str) -> dict[str, Any]:
             {**common, "hardness": _FINITE_NUMBER},
             required=("display_name_en", "display_name_ko", "hardness"),
         )
+    if kind == "block_entity":
+        return _schema(
+            {
+                **common,
+                "container_size": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 54,
+                },
+            },
+            required=("display_name_en", "display_name_ko", "container_size"),
+        )
     if kind == "food":
         return _schema({
             **common,
@@ -477,11 +489,11 @@ def _coverage_allowed(kind: str, cover: str) -> bool:
     if cover.startswith("resources_and_ui."):
         concern = cover.split(".", 1)[1]
         registry_kinds = {
-            "item", "block", "tool", "weapon", "armor", "food", "crop",
+            "item", "block", "block_entity", "tool", "weapon", "armor", "food", "crop",
             "machine", "effect", "enchantment",
         }
         asset_kinds = {
-            "item", "block", "tool", "weapon", "armor", "food", "crop",
+            "item", "block", "block_entity", "tool", "weapon", "armor", "food", "crop",
             "machine",
         }
         if concern == "registries":
@@ -505,7 +517,7 @@ def _coverage_allowed(kind: str, cover: str) -> bool:
                 or kind in PLATFORM_ENTITY_KINDS
             )
         if concern == "interactions":
-            return kind in {"machine", "gui", "networking"}
+            return kind in {"machine", "block_entity", "gui", "networking"}
         if concern == "displayed_state":
             return kind == "gui"
         return False
@@ -540,6 +552,7 @@ def _validate_content_config(kind: str, config: Mapping[str, Any], module_id: st
     allowed_by_kind = {
         "item": common,
         "block": common | {"hardness"},
+        "block_entity": common | {"container_size"},
         "food": common | {"hunger", "saturation"},
         "weapon": common | {"attack_damage", "attack_speed"},
         "tool": common | {"attack_damage", "attack_speed"},
@@ -576,9 +589,22 @@ def _validate_content_config(kind: str, config: Mapping[str, Any], module_id: st
             or not math.isfinite(float(config[field]))
         ):
             raise ValueError(f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.{field}")
-    for field in ("hunger", "attack_damage", "output_count", "processing_ticks", "max_level", "permission_level"):
+    for field in (
+        "hunger",
+        "attack_damage",
+        "output_count",
+        "processing_ticks",
+        "container_size",
+        "max_level",
+        "permission_level",
+    ):
         if field in config and type(config[field]) is not int:
             raise ValueError(f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.{field}")
+    if kind == "block_entity" and "container_size" in config:
+        if not 1 <= int(config["container_size"]) <= 54:
+            raise ValueError(
+                f"TYPED_PLATFORM_CONFIG_INVALID: {module_id}.container_size"
+            )
     if kind == "armor" and config.get("slot", "chestplate") not in {
         "helmet", "chestplate", "leggings", "boots"
     }:
