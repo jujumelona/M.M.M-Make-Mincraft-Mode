@@ -386,7 +386,7 @@ def author_state_field_page(
     symbols: Any,
     existing_rows: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
-    """Return canonical string rows after finite, validated semantic decisions."""
+    """Return canonical typed-IR rows after finite, validated semantic decisions."""
     if count <= 0:
         return {concern: []}
 
@@ -396,8 +396,7 @@ def author_state_field_page(
         else StateSymbolTable(symbols or ())
     )
     declared_names = sorted(symbols_table.declared_names)
-    max_length = record_field_schema("state_model", concern, field)["maxLength"]
-    rows: list[dict[str, str]] = []
+    rows: list[dict[str, Any]] = []
     prior = tuple(existing_rows or ())
 
     for index in range(count):
@@ -439,8 +438,7 @@ def author_state_field_page(
             )
             raw_value = raw.get(field, raw) if isinstance(raw, Mapping) else raw
             validate_state_expr_ir(raw_value, symbols=symbols_table)
-            value = lower_state_expr_to_dsl(raw_value)
-            validate_state_expression(value)
+            value = deepcopy(raw_value)
         else:
             inner_schema = mutations_schema(symbols_table)
             row_schema = {
@@ -478,14 +476,8 @@ def author_state_field_page(
             )
             raw_value = raw.get(field, raw) if isinstance(raw, Mapping) else raw
             validate_mutation_ir(raw_value, symbols=symbols_table)
-            value = lower_mutations_to_dsl(raw_value)
-            if value:
-                validate_mutation_ir(value, symbols=symbols_table)
+            value = deepcopy(raw_value)
 
-        if len(value) > max_length:
-            raise ValueError(
-                f"PLANNER_STATE_FIELD_BOUND: {path} exceeds canonical {max_length} characters"
-            )
         rows.append({field: value})
 
     return {concern: rows}
