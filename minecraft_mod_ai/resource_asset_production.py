@@ -636,6 +636,7 @@ def _validated_plan(router: Any, proposal: CompleteProposal) -> Mapping[str, Any
         plan, _selected_rows = require_asset_plan(
             proposal.game_design,
             proposal.assets,
+            exact=True,
         )
     except ResourceAssetPlanError as exc:
         raise AssetProductionError(
@@ -644,12 +645,7 @@ def _validated_plan(router: Any, proposal: CompleteProposal) -> Mapping[str, Any
     config = router.registry.role(router.profile, "image_generator")
     if plan.get("image_profile_sha256") != image_profile_fingerprint(config):
         raise AssetProductionError("Approved resource asset plan is bound to a different image profile.")
-    rows = plan.get("assets")
-    if not isinstance(rows, Sequence) or isinstance(rows, (str, bytes)):
-        raise AssetProductionError("Resource asset plan has no asset rows.")
-    ids = [str(row.get("asset_id")) for row in rows if isinstance(row, Mapping)]
-    if ids != [request.asset_id for request in proposal.assets]:
-        raise AssetProductionError("Resource asset plan no longer matches semantic assets.")
+    rows = plan["assets"]
     expected = [_plan_row(router, proposal, request) for request in proposal.assets]
     if json.dumps(rows, sort_keys=True) != json.dumps(expected, sort_keys=True):
         raise AssetProductionError("Approved resource contract/manifest differs from current HOST/visual inputs.")
