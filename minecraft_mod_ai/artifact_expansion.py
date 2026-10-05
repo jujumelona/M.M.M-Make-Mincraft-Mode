@@ -258,14 +258,20 @@ def expand_facts_to_jobs(
     minecraft_version: str = "",
     version_context=None,
 ) -> list[ArtifactJob]:
-    """Lower only explicitly supported facts; never invent a fallback implementation."""
+    """Lower facts only through a resolved HOST version authority."""
     validate_expansion_catalog()
-    if version_context is not None:
-        from .resolved_version_context import VersionContextError
+    if version_context is None:
+        raise ArtifactExpansionError("RESOLVED_VERSION_CONTEXT_REQUIRED")
 
-        if minecraft_version and minecraft_version != version_context.minecraft:
-            raise VersionContextError("VERSION_CONTEXT_MISMATCH", expected=version_context.minecraft, actual=minecraft_version)
-        minecraft_version = version_context.minecraft
+    from .resolved_version_context import VersionContextError
+
+    if minecraft_version and minecraft_version != version_context.minecraft:
+        raise VersionContextError(
+            "VERSION_CONTEXT_MISMATCH",
+            expected=version_context.minecraft,
+            actual=minecraft_version,
+        )
+    minecraft_version = version_context.minecraft
     mod_id = str(mod_id or "").strip()
     if not _REGISTRY_PATH.fullmatch(mod_id):
         raise ArtifactExpansionError(
@@ -287,9 +293,8 @@ def expand_facts_to_jobs(
                 f"ARTIFACT_FACT_UNSUPPORTED: {fact.fact_type.value} not in FACT_TO_CANONICAL_LEAVES"
             )
         
-        if version_context is not None:
-            for leaf_id in canonical_leaf_ids:
-                require_registered_leaf_binding(version_context, leaf_id)
+        for leaf_id in canonical_leaf_ids:
+            require_registered_leaf_binding(version_context, leaf_id)
 
         leaf_template_pairs: list[tuple[str, str]] = []
         for leaf_id in canonical_leaf_ids:
@@ -297,8 +302,6 @@ def expand_facts_to_jobs(
             if templates:
                 leaf_template_pairs.extend((leaf_id, tid) for tid in templates)
                 continue
-            if version_context is None:
-                raise ArtifactExpansionError("EXACT_HOST_IMPLEMENTATION_REQUIRED")
             binding = require_registered_leaf_binding(version_context, leaf_id)
             implementation = binding["implementation"]
             implementation_id = str(implementation.get("implementation_id") or "")
@@ -317,7 +320,7 @@ def expand_facts_to_jobs(
             from .resource_fact_inputs import resource_inputs
 
             identifier, resource_values = resource_inputs(fact, mod_id)
-            if version_context is not None and identifier not in {tid for _, tid in leaf_template_pairs}:
+            if identifier not in {tid for _, tid in leaf_template_pairs}:
                 raise ArtifactExpansionError("HOST_RESOURCE_TEMPLATE_NOT_BOUND")
             leaf_template_pairs = [(canonical_leaf_ids[0], identifier)]
         subject = _require_subject(fact)
@@ -327,11 +330,6 @@ def expand_facts_to_jobs(
             # P0-2: Handle PYTHON_GENERATOR (empty template_id)
             if not template_id:
                 # PYTHON_GENERATOR: Get implementation from registry
-                if version_context is None:
-                    raise ArtifactExpansionError(
-                        f"ARTIFACT_PYTHON_GENERATOR_REQUIRES_CONTEXT: {canonical_leaf} needs version_context"
-                    )
-                
                 binding = require_registered_leaf_binding(version_context, canonical_leaf)
                 impl_dict = binding.get("implementation", {})
                 impl_id = impl_dict.get("implementation_id", "")
@@ -419,8 +417,7 @@ def expand_facts_to_jobs(
                 deterministic_inputs["drop_item"] = fact.object
 
             template = load_template(template_id)
-            if version_context is not None:
-                version_context.admit_template(template)
+            version_context.admit_template(template)
             from .artifact_target_contract import validate_artifact_target
 
             validate_artifact_target(template, minecraft_version)
@@ -459,15 +456,17 @@ def expand_facts_to_jobs(
                 render_binding(port["binding"]) for port in template["produces"]
             ]
 
-            impl_id = ""
-            exec_type = "deterministic_renderer"
-            if version_context is not None:
-                binding = require_registered_leaf_binding(version_context, canonical_leaf)
-                impl_dict = binding.get("implementation", {})
-                impl_id = impl_dict.get("implementation_id", f"template:{template_id}")
-                exec_type = impl_dict.get("executor_type", "deterministic_renderer")
-            else:
-                impl_id = f"template:{template_id}"
+            binding = require_registered_leaf_binding(
+                version_context,
+                canonical_leaf,
+            )
+            impl_dict = binding.get("implementation", {})
+            impl_id = str(impl_dict.get("implementation_id") or "")
+            exec_type = str(impl_dict.get("executor_type") or "")
+            if not impl_id or not exec_type:
+                raise ArtifactExpansionError(
+                    f"ARTIFACT_IMPLEMENTATION_BINDING_INCOMPLETE: {canonical_leaf}"
+                )
             
             # Convert executor_type string to enum
             exec_type_enum = _runtime_executor_type(
@@ -489,7 +488,7 @@ def expand_facts_to_jobs(
                 ),
                 produces=tuple(produces),
                 deterministic_inputs=deterministic_inputs,
-                context_id=version_context.context_id if version_context is not None else "",
+                context_id=version_context.context_id,
                 canonical_leaf=canonical_leaf,
                 implementation_id=impl_id,
                 executor_type=exec_type_enum,
