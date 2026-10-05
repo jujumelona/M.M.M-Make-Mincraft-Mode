@@ -334,13 +334,14 @@ def _generate_concern_record_count(
             section_context=section_context,
         )
     )
-    messages.append({
-        "role": "system",
+    messages[0] = {
+        **dict(messages[0]),
         "content": (
-            "Return only one decimal integer for record_count. "
+            str(messages[0].get("content") or "")
+            + " Return only one decimal integer for record_count. "
             "No JSON, key name, punctuation, Markdown, or explanation."
         ),
-    })
+    }
     raw = router.generate_text(
         "planner",
         tuple(messages),
