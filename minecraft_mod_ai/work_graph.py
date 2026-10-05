@@ -160,6 +160,7 @@ def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolic
             canonical_asset_plan, _ = require_asset_plan(
                 proposal.game_design,
                 proposal.assets,
+                exact=True,
             )
         except ResourceAssetPlanError as exc:
             raise WorkGraphError(
