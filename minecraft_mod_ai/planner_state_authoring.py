@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from copy import deepcopy
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -102,18 +103,46 @@ def _used_state_variable_names(
     return used
 
 
-def _deduplicate_state_variable_name(name: str, used: set[str]) -> str:
-    """Make a model-authored identifier unique without another model call."""
+def _semantic_identifier_fragment(value: Any) -> str:
+    text = str(value or "").strip().casefold()
+    if not text:
+        return ""
+    candidate = re.sub(r"[^a-z0-9]+", "_", text).strip("_")
+    if not candidate or not any(char.isalpha() for char in candidate):
+        return ""
+    if candidate[0].isdigit():
+        candidate = "state_" + candidate
+    return candidate[:128]
 
-    if name not in used:
-        return name
+
+def _canonical_state_variable_name(
+    name: str,
+    *,
+    fixed: Mapping[str, Any],
+    used: set[str],
+    index: int,
+) -> str:
+    """Resolve generic/repeated model names to one host-owned stable identifier."""
+
+    candidate = name
+    if candidate in _STATE_VARIABLE_META_NAMES or candidate in used:
+        for field in ("domain", "unit", "owner"):
+            semantic = _semantic_identifier_fragment(fixed.get(field))
+            if semantic and semantic not in _STATE_VARIABLE_META_NAMES:
+                candidate = semantic
+                break
+        else:
+            candidate = f"state_value_{index + 1}"
+
+    if candidate not in used:
+        return candidate
 
     for ordinal in range(2, 10_000):
         suffix = f"_{ordinal}"
-        base = name[: max(1, 128 - len(suffix))]
-        candidate = base + suffix
-        if candidate not in used:
-            return candidate
+        base = candidate[: max(1, 128 - len(suffix))]
+        unique = base + suffix
+        if unique not in used:
+            return unique
     raise ValueError(
         "STATE_VARIABLE_IDENTIFIER_EXHAUSTED: unable to allocate a unique identifier"
     )
@@ -251,7 +280,12 @@ def author_state_semantic_page(
                 )
             if concern == "variables" and field == "name":
                 name = str(value).strip()
-                value = _deduplicate_state_variable_name(name, used_names)
+                value = _canonical_state_variable_name(
+                    name,
+                    fixed=fixed,
+                    used=used_names,
+                    index=index,
+                )
             row[field] = deepcopy(value)
         rows.append(row)
 
