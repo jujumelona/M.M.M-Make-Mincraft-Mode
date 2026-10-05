@@ -164,3 +164,35 @@ def test_invalid_numeric_default_is_rejected_before_merge():
             item_schema=item_schema,
             existing_rows=[{"name": "hull", "type": "double"}],
         )
+
+def test_duplicate_variable_names_are_host_deduplicated_without_retry():
+    item_schema = state_concern_schema("variables")
+    router = StateChoices([
+        {"name": "state_model"},
+        {"name": "state_model"},
+        {"name": "state_model"},
+    ])
+
+    result = author_state_semantic_page(
+        router,
+        "Track three independent mutable values.",
+        concern="variables",
+        fields=("name",),
+        count=3,
+        item_schema=item_schema,
+        existing_rows=[
+            {"type": "double", "owner": "ship", "unit": "points", "domain": "hull integrity"},
+            {"type": "double", "owner": "ship", "unit": "points", "domain": "shield strength"},
+            {"type": "double", "owner": "ship", "unit": "units", "domain": "fuel reserve"},
+        ],
+    )
+
+    assert result == {
+        "variables": [
+            {"name": "state_model"},
+            {"name": "state_model_2"},
+            {"name": "state_model_3"},
+        ]
+    }
+    assert len(router.calls) == 3
+
