@@ -419,6 +419,8 @@ def _extract_schema_valid_embedded_value(
             value, _end = decoder.raw_decode(output[index:])
         except json.JSONDecodeError:
             continue
+        value, _unicode_changed = _normalize_unicode_scalars(value)
+        value, _projection_changed = _project_closed_schema(value, response_schema)
         if _schema_errors(value, response_schema):
             continue
         key = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
