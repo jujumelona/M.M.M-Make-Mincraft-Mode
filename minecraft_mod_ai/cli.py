@@ -188,10 +188,6 @@ def _load_execution_proposal(
     else:
         proposal = CompleteProposal.from_dict(data)
 
-    if proposal.assets:
-        from .resource_asset_production import attach_generation_plan
-
-        proposal = attach_generation_plan(router, proposal)
     return proposal
 
 
