@@ -518,9 +518,97 @@ def _compile_content_artifact_graph(
     facts = tuple(parsed_facts)
     if modules and not facts:
         raise ValueError("CONTENT_ARTIFACT_FACTS_REQUIRED")
+
+    from .artifact_expansion import FACT_TO_CANONICAL_LEAVES
+    from .platform_backend_contract import native_production_route_available
+    from .prompt_fact_types import FactType
+    from .registered_leaf_binding import require_registered_leaf_binding
+
+    # Older saved plans conflated every BLOCK_ENTITY_EXISTS fact with the
+    # processing-machine backend. Canonicalize only when the machine-specific
+    # contract is absent; real processing machines keep their original kind.
+    block_entity_subjects = {
+        fact.subject
+        for fact in facts
+        if fact.fact_type == FactType.BLOCK_ENTITY_EXISTS
+    }
+    normalized_modules: list[ProductionModule] = []
+    machine_fields = {"input_item", "output_item", "output_count", "processing_ticks"}
+    for module in modules:
+        if (
+            module.kind == "machine"
+            and module.module_id in block_entity_subjects
+            and not machine_fields.issubset(module.config)
+        ):
+            module = ProductionModule(
+                module_id=module.module_id,
+                kind="block_entity",
+                config=deepcopy(module.config),
+                depends_on=module.depends_on,
+                required_gates=module.required_gates,
+            )
+            module.validate()
+        normalized_modules.append(module)
+    modules = tuple(normalized_modules)
+
+    evidence_free_executors = {
+        "deterministic_renderer",
+        "deterministic",
+        "template",
+    }
+
+    def fact_artifact_route_ready(fact: ImplementationFact) -> bool:
+        leaves = FACT_TO_CANONICAL_LEAVES.get(fact.fact_type)
+        if not leaves:
+            return False
+        for leaf in leaves:
+            binding = require_registered_leaf_binding(adapter.version_context, leaf)
+            if binding.get("state") == "admitted":
+                continue
+            implementation = binding.get("implementation")
+            executor_type = (
+                str(implementation.get("executor_type") or "")
+                if isinstance(implementation, Mapping)
+                else ""
+            )
+            if executor_type not in evidence_free_executors:
+                return False
+        return True
+
+    facts_by_subject: dict[str, list[ImplementationFact]] = {}
+    for fact in facts:
+        facts_by_subject.setdefault(fact.subject, []).append(fact)
+
+    native_owner_ids: set[str] = set()
+    for module in modules:
+        owned_facts = facts_by_subject.get(module.module_id, ())
+        blocked = [
+            fact
+            for fact in owned_facts
+            if not fact_artifact_route_ready(fact)
+        ]
+        if not blocked:
+            continue
+        if native_production_route_available(module.kind, module.config):
+            native_owner_ids.add(module.module_id)
+            continue
+        blocked_leaves = sorted({
+            leaf
+            for fact in blocked
+            for leaf in FACT_TO_CANONICAL_LEAVES.get(fact.fact_type, ())
+        })
+        raise ValueError(
+            "CONTENT_NO_EXECUTABLE_BACKEND: "
+            f"{module.module_id} has no admitted artifact route and no reviewed "
+            f"native backend; blocked_leaves={blocked_leaves}"
+        )
+
+    artifact_facts = tuple(
+        fact for fact in facts if fact.subject not in native_owner_ids
+    )
     jobs = tuple(
         expand_facts_to_jobs(
-            facts,
+            artifact_facts,
             mod_id=mod_id,
             package_name=package_name,
             main_class=_main_class_name(mod_id),
@@ -541,10 +629,17 @@ def _compile_content_artifact_graph(
         raise ValueError(
             "CONTENT_ARTIFACT_FOREIGN_OWNER: " + ", ".join(foreign)
         )
-    unowned = sorted(module_ids - owner_ids)
+    artifact_owned_module_ids = module_ids - native_owner_ids
+    unowned = sorted(artifact_owned_module_ids - owner_ids)
     if unowned:
         raise ValueError(
             "CONTENT_ARTIFACT_OWNER_MISSING: " + ", ".join(unowned)
+        )
+    unexpected_native_jobs = sorted(native_owner_ids & owner_ids)
+    if unexpected_native_jobs:
+        raise ValueError(
+            "CONTENT_GENERATION_OWNERSHIP_CONFLICT: "
+            + ", ".join(unexpected_native_jobs)
         )
     return modules, assets, jobs
 
