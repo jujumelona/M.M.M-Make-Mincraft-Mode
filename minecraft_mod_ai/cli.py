@@ -175,16 +175,24 @@ def _load_execution_proposal(
     orchestrator: CompleteProductionOrchestrator,
     existing_zip: Path | None,
 ) -> CompleteProposal:
+    router = orchestrator.router_factory()
     schema_version = str(data.get("schema_version") or "")
-    if schema_version not in {"mmm/authored-plan-v1", "mmm/authored-plan-v2"}:
-        return CompleteProposal.from_dict(data)
-    design = AuthoredPlan.from_dict(data)
-    planner = CompleteGameDesignPlanner(orchestrator.router_factory())
-    return planner.compile_for_production(
-        design,
-        media_paths=design.media_paths,
-        existing_input_sha256=_sha256_file(existing_zip) if existing_zip else "",
-    )
+    if schema_version in {"mmm/authored-plan-v1", "mmm/authored-plan-v2"}:
+        design = AuthoredPlan.from_dict(data)
+        planner = CompleteGameDesignPlanner(router)
+        proposal = planner.compile_for_production(
+            design,
+            media_paths=design.media_paths,
+            existing_input_sha256=_sha256_file(existing_zip) if existing_zip else "",
+        )
+    else:
+        proposal = CompleteProposal.from_dict(data)
+
+    if proposal.assets:
+        from .resource_asset_production import attach_generation_plan
+
+        proposal = attach_generation_plan(router, proposal)
+    return proposal
 
 
 def main(argv: list[str] | None = None) -> int:
