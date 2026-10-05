@@ -124,7 +124,7 @@ def _state_persistence_java(
     config: Mapping[str, Any],
 ) -> str:
     namespace_literal = json.dumps(namespace, ensure_ascii=True)
-    schema_version = str(config.get("schema_version") or "1")
+    schema_version = str(config["schema_version"])
     schema_literal = json.dumps(schema_version, ensure_ascii=True)
 
     restore_lines: list[str] = []
@@ -148,9 +148,11 @@ def _state_persistence_java(
 
     grouped: dict[tuple[str, str], list[Mapping[str, Any]]] = {}
     destinations_by_source: dict[str, str] = {}
-    for raw in config.get("migrations", []):
+    for index, raw in enumerate(config["migrations"]):
         if not isinstance(raw, Mapping):
-            continue
+            raise ValueError(
+                f"TYPED_STATE_STORE_MIGRATION_ROW_INVALID: {index}"
+            )
         source = str(raw.get("from_version") or "")
         destination = str(raw.get("to_version") or "")
         prior = destinations_by_source.get(source)
@@ -332,7 +334,7 @@ def _persistence_files(
             "TYPED_STATE_STORE_VARIABLES_REQUIRED: persistent state requires "
             "canonical state_model.variables."
         )
-    namespace = str(config.get("namespace") or "authored_state").strip()
+    namespace = str(config["namespace"]).strip()
     package_path = package_name.replace(".", "/")
     from .system_templates_common import _persistent_store_java
 
@@ -430,8 +432,8 @@ public final class AuthoredNetworkSync {{
         for name, type_name in state_contracts
     }
 
-    interval = int(config.get("sync_interval_ticks", 20))
-    max_bytes = int(config.get("max_payload_bytes", 32767))
+    interval = int(config["sync_interval_ticks"])
+    max_bytes = int(config["max_payload_bytes"])
     channel_path = "typed_state_sync"
 
     write_lines: list[str] = []
