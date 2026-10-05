@@ -1390,11 +1390,11 @@ def lower_semantic_game_dispatch_to_ir(
                     f"TYPED_PLAN_SEMANTIC_STATE_UNKNOWN: rule[{rule_idx}] {key!r}"
                 )
             st_type = state_types[key]
-            raw_value = (
-                rule["value"]
-                if "value" in rule
-                else rule.get("int_value")
-            )
+            if "value" not in rule:
+                raise ValueError(
+                    f"TYPED_PLAN_SEMANTIC_VALUE_REQUIRED: rule[{rule_idx}]"
+                )
+            raw_value = rule["value"]
             if kind == "increment_state":
                 if st_type not in {"int", "long", "double"}:
                     raise ValueError(
