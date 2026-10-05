@@ -3,9 +3,24 @@ from __future__ import annotations
 """Concrete ArtifactJob representation for leaf-level generation units."""
 
 from dataclasses import dataclass, field
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 from .implementation_identity import ExecutorType
+
+
+def artifact_owner_module_ids(jobs: Iterable[Any]) -> frozenset[str]:
+    """Return module IDs whose production is owned by the canonical artifact graph."""
+
+    owners: set[str] = set()
+    for job in jobs or ():
+        if isinstance(job, Mapping):
+            owner = str(job.get("owner_module") or "").strip()
+        else:
+            owner = str(getattr(job, "owner_module", "") or "").strip()
+        if owner:
+            owners.add(owner)
+    return frozenset(owners)
 
 
 @dataclass
