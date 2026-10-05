@@ -1613,6 +1613,36 @@ def validate_state_concern(
                     f"STRUCTURED_STATE_VARIABLE_DUPLICATE: {name!r}"
                 )
             seen.add(name)
+
+            family = _state_variable_value_kind(record)
+            default = str(record.get("default") or "").strip()
+            if any(0xD800 <= ord(char) <= 0xDFFF for char in default):
+                raise ValueError(
+                    f"STRUCTURED_STATE_VARIABLE_DEFAULT: {name!r} contains an unpaired surrogate"
+                )
+            if family == "number" and re.fullmatch(
+                r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?",
+                default,
+            ) is None:
+                raise ValueError(
+                    f"STRUCTURED_STATE_VARIABLE_DEFAULT: {name!r} requires a numeric default"
+                )
+            if family == "boolean" and default.casefold() not in {"true", "false"}:
+                raise ValueError(
+                    f"STRUCTURED_STATE_VARIABLE_DEFAULT: {name!r} requires true or false"
+                )
+            if family == "map" and default.casefold() not in {"{}", "empty_map"}:
+                raise ValueError(
+                    f"STRUCTURED_STATE_VARIABLE_DEFAULT: {name!r} supports only an empty map default"
+                )
+            if family == "list" and default.casefold() not in {"[]", "empty_list", "empty_set"}:
+                raise ValueError(
+                    f"STRUCTURED_STATE_VARIABLE_DEFAULT: {name!r} supports only an empty collection default"
+                )
+            if family == "string" and any(char in default for char in "{}[]"):
+                raise ValueError(
+                    f"STRUCTURED_STATE_VARIABLE_DEFAULT: {name!r} may not contain serialized structured data"
+                )
         return
 
     if concern == "transitions":
