@@ -32,6 +32,42 @@ _STATE_EXECUTABLE_FIELDS = {
 }
 
 
+def state_variable_default_schema(
+    value_family: str | None = None,
+) -> dict[str, Any]:
+    """Return the canonical planner/storage contract for one state default.
+
+    Empty text is a valid string default. Families with a finite textual encoding
+    narrow that base contract rather than relying on a blanket non-empty rule.
+    """
+
+    family = str(value_family or "").strip().casefold()
+    schema: dict[str, Any] = {
+        "type": "string",
+        "minLength": 0,
+        "maxLength": 128,
+        "pattern": r"^[^{}\[\]]*$",
+    }
+    if family == "number":
+        schema["minLength"] = 1
+        schema["pattern"] = (
+            r"^[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?$"
+        )
+    elif family == "boolean":
+        schema["minLength"] = 1
+        schema.pop("pattern", None)
+        schema["enum"] = ["true", "false"]
+    elif family == "map":
+        schema["minLength"] = 2
+        schema.pop("pattern", None)
+        schema["enum"] = ["{}", "empty_map"]
+    elif family == "list":
+        schema["minLength"] = 2
+        schema.pop("pattern", None)
+        schema["enum"] = ["[]", "empty_list", "empty_set"]
+    return schema
+
+
 def constrain_state_record_schema(
     concern: str,
     schema: Mapping[str, Any],
@@ -59,9 +95,16 @@ def constrain_state_record_schema(
                 "or string families; legacy aggregate storage remains production-compatible."
             )
         if isinstance(properties.get("default"), dict):
+            description = properties["default"].get("description")
+            properties["default"].clear()
+            properties["default"].update(state_variable_default_schema())
             properties["default"]["description"] = (
-                "Scalar default matching this variable's declared type; never encode a JSON "
-                "object or array inside this string field."
+                str(description)
+                if description
+                else (
+                    "Scalar default matching this variable's declared type; never encode a JSON "
+                    "object or array inside this string field."
+                )
             )
     for field in _STATE_EXECUTABLE_FIELDS.get(concern, ()):
         target = properties.get(field)
@@ -1447,7 +1490,7 @@ def state_concern_schema(
                 "owner": {"type": "string", "minLength": 1, "maxLength": 256},
                 "type": {"type": "string", "minLength": 1, "maxLength": 128},
                 "unit": {"type": "string", "minLength": 1, "maxLength": 128},
-                "default": {"type": "string", "minLength": 1, "maxLength": 128},
+                "default": state_variable_default_schema(),
                 "domain": {"type": "string", "minLength": 1, "maxLength": 256},
             },
             "required": ["name", "owner", "type", "unit", "default", "domain"],
