@@ -964,12 +964,36 @@ def build_authored_design_coverage_receipt(
                 f"authored platform module {module_id} has invalid coverage bindings"
             )
 
-    manifest_module_ids = typed_module_ids + platform_module_ids
-    if len(manifest_module_ids) != len(set(manifest_module_ids)):
-        findings.append("authored execution manifest contains duplicate module bindings")
-    if manifest_module_ids != expected_module_ids:
+    content_module_ids: list[str] = []
+    raw_content_design = plan.get("content_design")
+    if raw_content_design is not None:
+        if not isinstance(raw_content_design, Mapping):
+            findings.append("authored plan content_design must be an object")
+        else:
+            raw_content_modules = raw_content_design.get("modules", [])
+            if not isinstance(raw_content_modules, list):
+                findings.append("authored plan content_design.modules must be a list")
+            else:
+                for ordinal, raw_module in enumerate(raw_content_modules, start=1):
+                    if not isinstance(raw_module, Mapping):
+                        findings.append(
+                            f"authored content module {ordinal} is not an object"
+                        )
+                        continue
+                    module_id = raw_module.get("module_id")
+                    if not isinstance(module_id, str) or not module_id.strip():
+                        findings.append(
+                            f"authored content module {ordinal} has no module_id"
+                        )
+                        continue
+                    content_module_ids.append(module_id.strip())
+
+    bound_module_ids = content_module_ids + typed_module_ids + platform_module_ids
+    if len(bound_module_ids) != len(set(bound_module_ids)):
+        findings.append("authored design contains duplicate module bindings")
+    if bound_module_ids != expected_module_ids:
         findings.append(
-            "authored execution manifest modules do not match the approved proposal modules"
+            "authored design module authorities do not match the approved proposal modules"
         )
 
     requirement_rows: list[dict[str, str]] = []
@@ -1055,6 +1079,7 @@ def build_authored_design_coverage_receipt(
             "source_text_sha256": source_text_sha256,
             "manifest_sha256": supplied_manifest_sha256,
             "unit_count": len(units),
+            "content_module_count": len(content_module_ids),
             "platform_module_count": len(platform_modules),
             "source_bytes": len(text_bytes),
         },
