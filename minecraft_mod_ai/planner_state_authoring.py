@@ -93,7 +93,13 @@ def lower_state_expr_to_dsl(expr: Any) -> str:
             float(val_str)
             return val_str
         except ValueError:
-            return json.dumps(val_str, ensure_ascii=False)
+            return json.dumps(val_str, ensure_ascii=True)
+
+    if kind == "empty_map":
+        return "{}"
+
+    if kind == "empty_list":
+        return "[]"
 
     if kind in {"state_ref", "context_ref"}:
         return str(expr.get("name") or "").strip()
@@ -228,10 +234,15 @@ def author_state_field_page(
                 "required": [field],
                 "additionalProperties": False,
             }
+            typed_symbols = symbols_table.prompt_text()
             instruction = (
                 f"Author state mutation for {path}. "
                 f"Return list of state assignments or empty list for no state mutation. "
+                "Each assignment value must use the host IR branch compatible with its "
+                "declared target type. Never serialize a JSON object/array into a string "
+                "literal; compound state must use an explicitly supported container IR. "
                 f"Declared state variables: {', '.join(declared_names) or 'none'}."
+                + (f"\n{typed_symbols}" if typed_symbols else "")
             )
             raw = generate_fixed_template_value(
                 router,
