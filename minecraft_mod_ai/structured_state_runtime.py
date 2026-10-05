@@ -1426,6 +1426,7 @@ def state_concern_schema(
     allowed_state_symbols: Any = None,
 ) -> dict[str, Any]:
     symbols = _resolve_state_symbols(allowed_state_symbols)
+    symbol_source = allowed_state_symbols if allowed_state_symbols is not None else symbols
     if concern == "variables":
         schema = {
             "type": "object",
@@ -1452,9 +1453,9 @@ def state_concern_schema(
             "properties": {
                 "from_state": {"type": "string", "minLength": 1, "maxLength": 128},
                 "trigger": {"type": "string", "minLength": 1, "maxLength": 128},
-                "guard": state_expr_schema(symbols),
-                "mutations": mutations_schema(symbols),
-                "mutation": mutations_schema(symbols),
+                "guard": state_expr_schema(symbol_source),
+                "mutations": mutations_schema(symbol_source),
+                "mutation": mutations_schema(symbol_source),
                 "to_state": {"type": "string", "minLength": 1, "maxLength": 128},
             },
             "required": ["from_state", "trigger", "guard", "to_state"],
@@ -1465,7 +1466,7 @@ def state_concern_schema(
         schema = {
             "type": "object",
             "properties": {
-                "condition": state_expr_schema(symbols),
+                "condition": state_expr_schema(symbol_source),
                 "enforcement": {"type": "string", "minLength": 1, "maxLength": 512},
             },
             "required": ["condition", "enforcement"],
@@ -1478,8 +1479,8 @@ def state_concern_schema(
             "properties": {
                 "owner": {"type": "string", "minLength": 1, "maxLength": 256},
                 "trigger": {"type": "string", "minLength": 1, "maxLength": 128},
-                "initial_state": mutations_schema(symbols),
-                "mutations": mutations_schema(symbols),
+                "initial_state": mutations_schema(symbol_source),
+                "mutations": mutations_schema(symbol_source),
             },
             "required": ["owner", "trigger", "initial_state"],
             "additionalProperties": False,
@@ -1490,8 +1491,8 @@ def state_concern_schema(
             "type": "object",
             "properties": {
                 "trigger": {"type": "string", "minLength": 1, "maxLength": 128},
-                "mutation": mutations_schema(symbols),
-                "mutations": mutations_schema(symbols),
+                "mutation": mutations_schema(symbol_source),
+                "mutations": mutations_schema(symbol_source),
                 "owner": {"type": "string", "minLength": 1, "maxLength": 256},
             },
             "required": ["trigger", "mutation", "owner"],
@@ -1503,8 +1504,8 @@ def state_concern_schema(
             "type": "object",
             "properties": {
                 "event": {"type": "string", "minLength": 1, "maxLength": 128},
-                "action": mutations_schema(symbols),
-                "mutations": mutations_schema(symbols),
+                "action": mutations_schema(symbol_source),
+                "mutations": mutations_schema(symbol_source),
                 "retained_state": {"type": "string", "minLength": 1, "maxLength": 256},
             },
             "required": ["event", "action", "retained_state"],
