@@ -556,10 +556,27 @@ def compile_authored_design(
         production_state_section=production_state_section,
         deterministic_module_kinds=deterministic_backend_capabilities(adapter),
     )
+    content_modules, content_assets, artifact_jobs = _compile_content_artifact_graph(
+        plan,
+        adapter=adapter,
+        mod_id=base.spec.mod_id,
+        package_name=base.spec.package_name,
+    )
+    typed_ids = {module.module_id for module in modules}
+    duplicate_content_ids = sorted(
+        typed_ids & {module.module_id for module in content_modules}
+    )
+    if duplicate_content_ids:
+        raise ValueError(
+            "CONTENT_TYPED_MODULE_COLLISION: "
+            + ", ".join(duplicate_content_ids)
+        )
+    modules = (*content_modules, *modules)
     design = {
         **design,
         "_authored_execution_manifest": manifest,
         "_production_state_section": deepcopy(production_state_section),
+        "_artifact_jobs": [job.to_dict() for job in artifact_jobs],
     }
 
     from .root_cause_trace import emit_root_cause
@@ -583,6 +600,18 @@ def compile_authored_design(
         base_proposal=base,
         game_design=design,
         modules=modules,
-        acceptance_tests=acceptance,
+        assets=content_assets,
+        acceptance_tests=tuple(
+            dict.fromkeys(
+                (
+                    *acceptance,
+                    *(
+                        str(value)
+                        for value in content_design.get("acceptance_tests", ())
+                        if str(value).strip()
+                    ),
+                )
+            )
+        ),
         existing_input_sha256=effective_existing,
     )
