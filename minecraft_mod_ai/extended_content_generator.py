@@ -140,9 +140,9 @@ def generate_extended_content(
         module_id = item["module_id"]
         kind = item["kind"]
         config = item["config"]
-        display_en = str(config.get("display_name_en", module_id.replace("_", " ").title()))
-        display_ko = str(config.get("display_name_ko", display_en))
         if kind in {"block", "crop", "machine"}:
+            display_en = str(config["display_name_en"])
+            display_ko = str(config["display_name_ko"])
             lang_en[f"block.{mod_id}.{module_id}"] = display_en
             lang_ko[f"block.{mod_id}.{module_id}"] = display_ko
             files.update(_block_resources(mod_id, module_id, kind, config))
@@ -150,14 +150,18 @@ def generate_extended_content(
                 lang_en[f"item.{mod_id}.{module_id}_seeds"] = display_en + " Seeds"
                 lang_ko[f"item.{mod_id}.{module_id}_seeds"] = display_ko + " 씨앗"
         elif kind in {"effect", "enchantment"}:
+            display_en = str(config["display_name_en"])
+            display_ko = str(config["display_name_ko"])
             prefix = "effect" if kind == "effect" else "enchantment"
             lang_en[f"{prefix}.{mod_id}.{module_id}"] = display_en
             lang_ko[f"{prefix}.{mod_id}.{module_id}"] = display_ko
         elif kind in {"recipe", "advancement", "loot", "tag"}:
             files.update(_data_only_resource(mod_id, module_id, kind, config))
         elif kind == "command":
-            pass
+            continue
         else:
+            display_en = str(config["display_name_en"])
+            display_ko = str(config["display_name_ko"])
             lang_en[f"item.{mod_id}.{module_id}"] = display_en
             lang_ko[f"item.{mod_id}.{module_id}"] = display_ko
             files.update(_item_resources(mod_id, module_id, kind, config))
@@ -749,31 +753,31 @@ def _shard_java(
             )
             creative.append(f"            entries.add({constant});")
         elif kind == "food":
-            hunger = max(0, int(config.get("hunger", 4)))
-            saturation = float(config.get("saturation", 0.4))
+            hunger = int(config["hunger"])
+            saturation = float(config["saturation"])
             fields.append(f"    public static Item {constant};")
             registrations.append(
                 f'        {constant} = item("{module_id}", new Item(new FabricItemSettings().food(new FoodComponent.Builder().hunger({hunger}).saturationModifier({saturation:.3f}f).build())));'
             )
             creative.append(f"            entries.add({constant});")
         elif kind == "weapon":
-            damage = int(config.get("attack_damage", 4))
-            speed = float(config.get("attack_speed", -2.4))
+            damage = int(config["attack_damage"])
+            speed = float(config["attack_speed"])
             fields.append(f"    public static Item {constant};")
             registrations.append(
                 f'        {constant} = item("{module_id}", new SwordItem(ToolMaterials.IRON, {damage}, {speed:.3f}f, new FabricItemSettings()));'
             )
             creative.append(f"            entries.add({constant});")
         elif kind == "tool":
-            damage = int(config.get("attack_damage", 1))
-            speed = float(config.get("attack_speed", -2.8))
+            damage = int(config["attack_damage"])
+            speed = float(config["attack_speed"])
             fields.append(f"    public static Item {constant};")
             registrations.append(
                 f'        {constant} = item("{module_id}", new PickaxeItem(ToolMaterials.IRON, {damage}, {speed:.3f}f, new FabricItemSettings()));'
             )
             creative.append(f"            entries.add({constant});")
         elif kind == "armor":
-            armor_type = str(config.get("slot", "chestplate")).upper()
+            armor_type = str(config["slot"]).upper()
             if armor_type not in {"HELMET", "CHESTPLATE", "LEGGINGS", "BOOTS"}:
                 raise ExtendedContentError(f"Invalid armor slot for {module_id}: {armor_type}")
             fields.append(f"    public static Item {constant};")
@@ -784,14 +788,14 @@ def _shard_java(
         elif kind == "block":
             fields.append(f"    public static Block {constant};")
             registrations.append(
-                f'        {constant} = block("{module_id}", new Block(FabricBlockSettings.copyOf(Blocks.STONE).strength({float(config.get("hardness", 3.0)):.2f}f)));'
+                f'        {constant} = block("{module_id}", new Block(FabricBlockSettings.copyOf(Blocks.STONE).strength({float(config["hardness"]):.2f}f)));'
             )
             creative.append(f"            entries.add({constant});")
         elif kind == "machine":
-            input_id = _identifier(config.get("input_item", "minecraft:iron_ingot"), module_id)
-            output_id = _identifier(config.get("output_item", "minecraft:gold_ingot"), module_id)
-            output_count = max(1, int(config.get("output_count", 1)))
-            ticks = max(1, int(config.get("processing_ticks", 100)))
+            input_id = _identifier(config["input_item"], module_id)
+            output_id = _identifier(config["output_item"], module_id)
+            output_count = int(config["output_count"])
+            ticks = int(config["processing_ticks"])
             fields.append(f"    public static Block {constant};")
             registrations.append(
                 f'''        {constant} = block("{module_id}", new GeneratedExtendedContent.GeneratedMachineBlock(
@@ -816,21 +820,21 @@ def _shard_java(
             )
             creative.append(f"            entries.add({constant}_SEEDS);")
         elif kind == "effect":
-            color = int(str(config.get("color", "#74c7ec")).lstrip("#"), 16)
+            color = int(str(config["color"]).lstrip("#"), 16)
             fields.append(f"    public static StatusEffect {constant};")
             registrations.append(
                 f'        {constant} = Registry.register(Registries.STATUS_EFFECT, id("{module_id}"), new GeneratedEffect(0x{color:06X}));'
             )
         elif kind == "enchantment":
-            max_level = max(1, int(config.get("max_level", 3)))
+            max_level = int(config["max_level"])
             fields.append(f"    public static Enchantment {constant};")
             registrations.append(
                 f'        {constant} = Registry.register(Registries.ENCHANTMENT, id("{module_id}"), new GeneratedEnchantment({max_level}));'
             )
         elif kind == "command":
-            literal = re.sub(r"[^a-z0-9_]", "", str(config.get("literal", module_id))) or module_id
-            message = _java_string(str(config.get("message", module_id.replace("_", " "))))
-            permission = max(0, int(config.get("permission_level", 0)))
+            literal = str(config["literal"])
+            message = _java_string(str(config["message"]))
+            permission = int(config["permission_level"])
             commands.append(
                 f'        dispatcher.register(CommandManager.literal("{literal}").requires(source -> source.hasPermissionLevel({permission})).executes(context -> {{ context.getSource().sendFeedback(() -> Text.literal("{message}"), false); return 1; }}));'
             )
@@ -1031,20 +1035,20 @@ def _item_resources(mod_id: str, module_id: str, kind: str, config: dict[str, An
 def _data_only_resource(mod_id: str, module_id: str, kind: str, config: dict[str, Any]) -> dict[str, str]:
     if kind == "recipe":
         path = f"src/main/resources/data/{mod_id}/recipes/{module_id}.json"
-        payload = config.get("json", config)
+        payload = config["json"]
     elif kind == "advancement":
         path = f"src/main/resources/data/{mod_id}/advancements/{module_id}.json"
-        payload = config.get("json", config)
+        payload = config["json"]
     elif kind == "loot":
         path = f"src/main/resources/data/{mod_id}/loot_tables/{module_id}.json"
-        payload = config.get("json", config)
+        payload = config["json"]
     elif kind == "tag":
-        registry = str(config.get("registry") or "")
+        registry = str(config["registry"])
         if registry not in {"items", "blocks", "entity_types", "fluids", "functions"}:
             raise ExtendedContentError(
                 f"Unsupported tag registry for {module_id}: {registry!r}"
             )
-        values = config.get("values")
+        values = config["values"]
         if not isinstance(values, list) or not values:
             raise ExtendedContentError(
                 f"Tag {module_id} requires non-empty values."
@@ -1059,7 +1063,7 @@ def _data_only_resource(mod_id: str, module_id: str, kind: str, config: dict[str
             f"{registry}/{module_id}.json"
         )
         payload = {
-            "replace": bool(config.get("replace", False)),
+            "replace": bool(config["replace"]),
             "values": [str(value) for value in values],
         }
     else:
