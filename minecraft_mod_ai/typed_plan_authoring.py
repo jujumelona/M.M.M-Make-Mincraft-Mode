@@ -291,11 +291,14 @@ def _integration_entry_points(
 
     active = active_concern_records(structured_sections, "integration")
     rows = active.get("entry_points", ())
-    return tuple(
-        dict(row)
-        for row in rows
-        if isinstance(row, Mapping)
-    )
+    result: list[dict[str, Any]] = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, Mapping):
+            raise ValueError(
+                f"TYPED_PLAN_INTEGRATION_ENTRY_INVALID: {index}"
+            )
+        result.append(dict(row))
+    return tuple(result)
 
 
 def assert_model_atomic_decision_schema(
