@@ -337,9 +337,9 @@ def expand_facts_to_jobs(
                 impl_id = impl_dict.get("implementation_id", "")
                 exec_type = impl_dict.get("executor_type", "")
                 
-                if exec_type != "python_generator":
+                if not str(impl_id).startswith("python_generator:"):
                     raise ArtifactExpansionError(
-                        f"ARTIFACT_NO_TEMPLATE_NO_GENERATOR: {canonical_leaf} has no template and executor is {exec_type}"
+                        f"ARTIFACT_NO_TEMPLATE_NO_GENERATOR: {canonical_leaf} has no registered Python generator implementation"
                     )
                 
                 # Create minimal ArtifactJob for PYTHON_GENERATOR
