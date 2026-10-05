@@ -418,7 +418,14 @@ def _generate_authored_chunk(
         section_context=section_context,
         record_counts=record_counts,
     )
-    value = _generate_authored_page_value(\n        router, messages, page, schema, state_symbols, section_context=section_context\n    )
+    value = _generate_authored_page_value(
+        router,
+        messages,
+        page,
+        schema,
+        state_symbols,
+        section_context=section_context,
+    )
     if not isinstance(value, Mapping):
         raise ValueError(
             f"AUTHORED_STRUCTURED_DESIGN: {page.section} page "
