@@ -978,6 +978,7 @@ def _shutdown_managed_server() -> None:
     global _MANAGED_KEY, _MANAGED_PROCESS, _MANAGED_URL
     with _AUTOTUNE_LOCK:
         managed_key = _MANAGED_KEY
+        managed_url = str(_MANAGED_URL or "").strip().rstrip("/")
         from .runtime_memory_watchdog import stop_managed_process_watchdog
 
         stop_managed_process_watchdog()
@@ -987,6 +988,11 @@ def _shutdown_managed_server() -> None:
         _MANAGED_KEY = None
         if managed_key:
             _ATTEMPTED_KEYS.discard(managed_key)
+        if (
+            managed_url
+            and os.environ.get("LLAMA_SERVER_URL", "").strip().rstrip("/") == managed_url
+        ):
+            os.environ.pop("LLAMA_SERVER_URL", None)
 
 
 atexit.register(_shutdown_managed_server)

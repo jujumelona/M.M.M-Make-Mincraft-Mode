@@ -176,13 +176,13 @@ def _clear_cached_pipeline() -> None:
 def finish_image_shard() -> None:
     global _IMAGE_PIPELINE_ON_GPU
     with _IMAGE_LOCK:
-        pipeline = _IMAGE_PIPELINE
         if not _env_bool("MMM_IMAGE_CACHE_ACROSS_SHARDS", False):
             _clear_cached_pipeline()
-        elif pipeline is not None and _IMAGE_PIPELINE_ON_GPU:
-            pipeline.to("cpu")
+        elif _IMAGE_PIPELINE is not None and _IMAGE_PIPELINE_ON_GPU:
+            _IMAGE_PIPELINE.to("cpu")
             _IMAGE_PIPELINE_ON_GPU = False
-    _release_cuda()
+        # Drop the last owning reference before collecting and emptying CUDA's cache.
+        _release_cuda()
 
 
 class ImageDiffusionAdapter:
@@ -199,7 +199,6 @@ class ImageDiffusionAdapter:
                 raise ModelConfigurationError("Image prompt is empty.")
             if width % 16 or height % 16 or not (256 <= width <= 1024 and 256 <= height <= 1024):
                 raise ModelConfigurationError("Image dimensions must be 256-1024 and divisible by 16.")
-            preflight_cuda(self.config)
             import torch
             key = _profile_key(self.profile)
             cache_enabled = _env_bool("MMM_IMAGE_PIPELINE_CACHE", True)
@@ -208,6 +207,9 @@ class ImageDiffusionAdapter:
                 if pipeline is None:
                     _clear_cached_pipeline()
                     _release_cuda()
+                    # This budget admits a new model load. A warm pipeline already
+                    # owns that memory and must not reserve the model budget twice.
+                    preflight_cuda(self.config)
                     pipeline = _load_pipeline(self.config, self.profile)
                     _IMAGE_PIPELINE_ON_GPU = not bool(self.config.cpu_offload)
                     if cache_enabled:
@@ -225,6 +227,7 @@ class ImageDiffusionAdapter:
                 images[0].convert("RGBA").save(output, format="PNG", optimize=False)
                 if not cache_enabled:
                     _clear_cached_pipeline()
+                    del pipeline, result, images, generator
                     _release_cuda()
                 return output
         except ModelBackendError:

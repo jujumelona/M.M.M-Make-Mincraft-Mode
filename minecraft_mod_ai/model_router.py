@@ -113,6 +113,7 @@ class ModelRouter:
         self._generation_lock = threading.RLock()
         self._active_generation_role: str | None = None
         self._active_generation_adapter: Any | None = None
+        self._active_image_generation_config: Any | None = None
         self._agent_tool_runtime_factory = agent_tool_runtime_factory
         self._agent_tool_runtime: Any | None = None
         self._agent_workspace_root: Path | None = None
@@ -735,7 +736,7 @@ class ModelRouter:
 
     @contextmanager
     def image_generation_session(self, role: str = "image_generator"):
-        """Hold one exclusive local-image GPU lease through final pipeline parking."""
+        """Own the text-to-image GPU handoff through final image pipeline release."""
 
         config = self.registry.role(self.profile, role)
         local_diffusion = (
@@ -744,16 +745,33 @@ class ModelRouter:
             and bool(config.exclusive_gpu)
         )
         if not local_diffusion:
-            yield self
+            with self._gpu_scope(config.exclusive_gpu):
+                yield self
             return
 
+        from .llama_server_autotune import _shutdown_managed_server
         from .model_adapters import image_diffusion as image_module
 
         with self._gpu_scope(True):
+            if self._active_image_generation_config is not None:
+                if self._active_image_generation_config != config:
+                    raise ModelConfigurationError(
+                        "An image generation session cannot switch its model configuration."
+                    )
+                yield self
+                return
+
+            # The lock drains text requests, but their managed native server stays
+            # resident between calls. Stop it before the image adapter checks VRAM.
+            _shutdown_managed_server()
+            self._active_image_generation_config = config
             try:
                 yield self
             finally:
-                image_module.finish_image_shard()
+                try:
+                    image_module.finish_image_shard()
+                finally:
+                    self._active_image_generation_config = None
 
     def generate_image(
         self,
@@ -774,7 +792,7 @@ class ModelRouter:
             raise ModelConfigurationError(
                 f"Role {role!r} cannot generate images with adapter {config.adapter!r}."
             )
-        with self._gpu_scope(config.exclusive_gpu):
+        with self.image_generation_session(role):
             return adapter.generate_image(
                 prompt=prompt,
                 output_path=Path(output_path),

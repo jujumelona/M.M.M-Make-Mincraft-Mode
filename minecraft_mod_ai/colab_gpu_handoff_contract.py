@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from functools import wraps
 from typing import Any
 
@@ -8,14 +7,7 @@ from typing import Any
 def _release_native_llama_server() -> None:
     """Release the managed native text server before another exclusive GPU runtime."""
     from . import llama_server_autotune
-    process = getattr(llama_server_autotune, '_MANAGED_PROCESS', None)
-    if process is None or process.poll() is not None:
-        return
-    managed_url = getattr(llama_server_autotune, '_MANAGED_URL', None)
     llama_server_autotune._shutdown_managed_server()
-    if managed_url and os.environ.get('LLAMA_SERVER_URL') == managed_url:
-        os.environ.pop('LLAMA_SERVER_URL', None)
-    llama_server_autotune._ATTEMPTED_KEYS.clear()
 
 def _install_asset_handoff(*, services_module: Any, model_router_module: Any) -> None:
     current = services_module.generate_assets
