@@ -132,10 +132,7 @@ def _canonical_state_record_schema(
     from .structured_state_runtime import state_concern_schema
 
     concern = parts[2]
-    canonical = state_concern_schema(
-        concern,
-        allow_legacy_dsl=False,
-    )
+    canonical = state_concern_schema(concern)
     canonical_properties = canonical.get("properties")
     declared_required = declared_schema.get("required")
     if (
