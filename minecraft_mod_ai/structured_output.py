@@ -107,7 +107,10 @@ def decode_bounded_numeric_transport(data: Any, schema: Mapping[str, Any] | None
 
 
 def _sha256_text(value: str) -> str:
-    return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
+    # Raw model text can legally contain JSON escape sequences that decode into an
+    # unpaired surrogate. Diagnostics must never fail before reporting that response.
+    payload = value.encode("utf-8", errors="backslashreplace")
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
 _DESIGN_SECTION_FIELDS = frozenset(
@@ -262,7 +265,7 @@ def _emit_validation_failure(
     }
     print(
         "MODEL STRUCTURED OUTPUT FAILURE: "
-        + json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str),
+        + json.dumps(payload, ensure_ascii=True, sort_keys=True, default=str),
         flush=True,
     )
 
@@ -284,7 +287,7 @@ def _emit_parser_owned_recovery(
                 "recovered_value": dict(value),
                 "authority": authority,
             },
-            ensure_ascii=False,
+            ensure_ascii=True,
             sort_keys=True,
             default=str,
         ),
@@ -401,6 +404,7 @@ def validate_structured_output(
             if embedded is not None:
                 if parser_owned_research:
                     canonical = _canonical_research_envelope(embedded)
+                    canonical, _unicode_changed = _normalize_unicode_scalars(canonical)
                     errors = _schema_errors(canonical, response_schema)
                     if errors:
                         _emit_validation_failure(
@@ -416,11 +420,17 @@ def validate_structured_output(
                     authority = "research_host_parser"
                 else:
                     canonical = dict(embedded)
+                    canonical, _unicode_changed = _normalize_unicode_scalars(canonical)
                     authority = "game_design_section_owner"
                 _emit_parser_owned_recovery(output, canonical, authority=authority)
                 return json.dumps(canonical, ensure_ascii=False, separators=(",", ":"))
         if response_schema is not None:
             recovered = _extract_schema_valid_embedded_value(output, response_schema)
+            if recovered is not None:
+                recovered, _unicode_changed = _normalize_unicode_scalars(recovered)
+                errors = _schema_errors(recovered, response_schema)
+                if errors:
+                    recovered = None
             if recovered is not None:
                 _emit_parser_owned_recovery(
                     output,
