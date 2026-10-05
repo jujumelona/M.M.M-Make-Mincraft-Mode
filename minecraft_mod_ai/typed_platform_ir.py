@@ -868,11 +868,16 @@ def platform_module_authoring_schema() -> dict[str, Any]:
 
 
 __all__ = [
+    "NETWORK_SYNC_STATEFUL_REFS",
     "PLATFORM_CONTENT_KINDS",
     "PLATFORM_ENTITY_KINDS",
     "PLATFORM_HOST_KINDS",
+    "PLATFORM_HOST_MODULE_IDS",
+    "PLATFORM_HOST_SECTION_OWNER",
     "PLATFORM_KINDS",
     "PLATFORM_SYSTEM_KIND_TO_PACK",
+    "host_platform_kind_for_ref",
+    "network_sync_requires_state",
     "platform_config_schema",
     "platform_coverable_refs",
     "platform_module_authoring_schema",
