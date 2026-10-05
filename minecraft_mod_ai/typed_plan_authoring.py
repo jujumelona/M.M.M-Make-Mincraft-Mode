@@ -17,6 +17,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from .fixed_template_generation import generate_fixed_template_value
+from .model_output_atomicity_contract import structured_output_token_ceiling
 
 
 _TYPES = ["boolean", "int", "long", "double", "string", "object"]
