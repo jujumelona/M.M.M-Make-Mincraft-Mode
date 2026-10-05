@@ -201,7 +201,8 @@ def test_state_model_symbols_do_not_change_planning_chunk_field_types():
 
     assert with_symbols == baseline
     guard = with_symbols["properties"]["transitions"]["items"]["properties"]["guard"]
-    assert guard["type"] == "string"
+    assert "oneOf" in guard
+    assert guard.get("type") != "string"
 
 
 def test_root_integration_prerequisite_accepts_null_and_canonicalizes():
