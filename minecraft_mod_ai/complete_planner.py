@@ -23,6 +23,7 @@ _CONTENT_GRAPH_CONCERNS = (
     "assets",
     "interactions",
     "displayed_state",
+    "paths",
 )
 
 
@@ -113,14 +114,11 @@ def _content_owned_refs(
         structured_sections,
         "resources_and_ui",
     )
-    owned = {
+    return frozenset(
         f"resources_and_ui.{concern}"
         for concern in _CONTENT_GRAPH_CONCERNS
         if records.get(concern)
-    }
-    if records.get("paths"):
-        owned.add("resources_and_ui.paths")
-    return frozenset(owned)
+    )
 
 
 class CompleteGameDesignPlanner:
