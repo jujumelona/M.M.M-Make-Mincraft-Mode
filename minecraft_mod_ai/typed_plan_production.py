@@ -370,21 +370,16 @@ def _structured_rows(
 
 def _network_payload_guard(field: str, type_name: str) -> str:
     literal = json.dumps(field, ensure_ascii=True)
-    lowered = str(type_name or "").casefold()
-    if any(
-        token in lowered
-        for token in ("int", "long", "float", "double", "number", "numeric")
-    ):
+    if type_name in {"int", "long", "double"}:
         condition = "value instanceof Number"
-    elif any(token in lowered for token in ("bool", "boolean")):
+    elif type_name == "boolean":
         condition = "value instanceof Boolean"
-    elif any(
-        token in lowered
-        for token in ("string", "text", "id", "uuid", "name")
-    ):
+    elif type_name == "string":
         condition = "value instanceof String"
     else:
-        condition = "value != null"
+        raise ValueError(
+            f"TYPED_NETWORK_STATE_TYPE_INVALID: {field!r} -> {type_name!r}"
+        )
     return f"            case {literal} -> {condition};"
 
 
@@ -450,7 +445,7 @@ public final class AuthoredNetworkSync {{
             "        }",
         ])
         guard_lines.append(
-            _network_payload_guard(name, field_types.get(name, "object"))
+            _network_payload_guard(name, field_types[name])
         )
 
     server_source = f"""package {package_name};
