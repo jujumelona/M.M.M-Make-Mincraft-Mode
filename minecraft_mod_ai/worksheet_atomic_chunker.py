@@ -268,17 +268,25 @@ def pack_section_concerns(section: str) -> list[tuple[str, ...]]:
                     if field in normal
                 )
                 if first:
-                    add_page(concern, first)
+                    add_page(concern, first, per_record_transport=True)
                 remaining = [
                     field for field in normal
                     if field not in first
                 ]
                 for start in range(0, len(remaining), page_width):
-                    add_page(concern, remaining[start : start + page_width])
+                    add_page(
+                        concern,
+                        remaining[start : start + page_width],
+                        per_record_transport=True,
+                    )
             else:
                 # Normal semantic fields are paged first to establish row cardinality.
                 for start in range(0, len(normal), page_width):
-                    add_page(concern, normal[start : start + page_width])
+                    add_page(
+                        concern,
+                        normal[start : start + page_width],
+                        per_record_transport=True,
+                    )
 
             # DSL/IR executable fields are each an independent semantic page.
             for field in executable:
