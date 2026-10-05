@@ -348,8 +348,8 @@ def validate_worksheet_section(
             validate_structured_state_section(specification)
         except ValueError as exc:
             raise ValueError(
-                "DETAILED_PLAN_WORKSHEET: state_model is outside the host-compiled "
-                f"state IR/DSL contract: {exc}"
+                "DETAILED_PLAN_WORKSHEET: state_model is outside the canonical "
+                f"typed state IR contract: {exc}"
             ) from exc
     # Applicability explanations and wording are authored design. Do not grade
     # them or require the author to justify every omitted concern.
