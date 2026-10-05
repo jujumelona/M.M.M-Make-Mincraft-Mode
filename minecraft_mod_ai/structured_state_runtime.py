@@ -1314,7 +1314,7 @@ def validate_state_concern(
     if concern == "variables":
         seen: set[str] = set()
         for record in rows:
-            name = str(record.get("name") or "").strip()
+            name = str(record["name"]).strip()
             if re.fullmatch(_STATE_IDENTIFIER_PATTERN, name) is None:
                 raise ValueError(
                     f"STRUCTURED_STATE_VARIABLE_NAME: {name!r} is not a stable identifier"
@@ -1495,8 +1495,8 @@ def has_complete_structured_state(
 
 
 def _default_value(record: Mapping[str, str]) -> str:
-    type_name = str(record.get("type") or "").strip()
-    value = str(record.get("default") or "").strip()
+    type_name = str(record["type"]).strip()
+    value = str(record["default"]).strip()
     lowered = value.casefold()
     if type_name == "boolean":
         if lowered not in {"true", "false"}:
@@ -1852,9 +1852,8 @@ def render_state_model_concern(
     records = records_by_concern[concern]
     variables = records_by_concern.get("variables", [])
     declared = {
-        str(record.get("name") or "").strip()
+        str(record["name"]).strip()
         for record in variables
-        if str(record.get("name") or "").strip()
     }
     parts: list[str] = [_COMMON] if include_runtime else []
 
@@ -1862,10 +1861,10 @@ def render_state_model_concern(
         del index
         if field in {"guard", "condition"}:
             return compile_state_condition_ir(
-                record.get(field),
+                record[field],
                 declared=declared,
             )
-        return compile_mutation_ir(record.get(field), declared=declared)
+        return compile_mutation_ir(record[field], declared=declared)
 
     if concern == "variables":
         lines = ["static {"]
@@ -1890,11 +1889,11 @@ def render_state_model_concern(
             lines.append(
                 "    $mmmTransitions.add(new $mmmTransition("
                 + ", ".join((
-                    _java_string(record.get("from_state", "")),
-                    _java_string(record.get("trigger", "")),
+                    _java_string(record["from_state"]),
+                    _java_string(record["trigger"]),
                     f"context -> ({guard})",
                     f"context -> {{ {mutation} }}",
-                    _java_string(record.get("to_state", "")),
+                    _java_string(record["to_state"]),
                 ))
                 + "));"
             )
@@ -1907,7 +1906,7 @@ def render_state_model_concern(
             lines.append(
                 "    $mmmInvariants.add(new $mmmInvariant("
                 f"context -> ({condition}), "
-                f"{_java_string(record.get('enforcement', ''))}));"
+                f"{_java_string(record["enforcement"])}));"
             )
         lines.append("}")
         parts.append("\n".join(lines))
@@ -1917,9 +1916,9 @@ def render_state_model_concern(
             action = executable(index, record, "initial_state")
             lines.append(
                 "    $mmmInitializers.add(new $mmmTriggeredAction("
-                f"{_java_string(record.get('trigger', ''))}, "
+                f"{_java_string(record["trigger"])}, "
                 f"context -> {{ {action} }}, "
-                f"{_java_string(record.get('owner', ''))}));"
+                f"{_java_string(record["owner"])}));"
             )
         lines.append("}")
         parts.append("\n".join(lines))
@@ -1929,9 +1928,9 @@ def render_state_model_concern(
             action = executable(index, record, "mutation")
             lines.append(
                 "    $mmmUpdates.add(new $mmmTriggeredAction("
-                f"{_java_string(record.get('trigger', ''))}, "
+                f"{_java_string(record["trigger"])}, "
                 f"context -> {{ {action} }}, "
-                f"{_java_string(record.get('owner', ''))}));"
+                f"{_java_string(record["owner"])}));"
             )
         lines.append("}")
         parts.append("\n".join(lines))
@@ -1941,9 +1940,9 @@ def render_state_model_concern(
             action = executable(index, record, "action")
             lines.append(
                 "    $mmmCleanup.add(new $mmmCleanupAction("
-                f"{_java_string(record.get('event', ''))}, "
+                f"{_java_string(record["event"])}, "
                 f"context -> {{ {action} }}, "
-                f"{_java_string(record.get('retained_state', ''))}));"
+                f"{_java_string(record["retained_state"])}));"
             )
         lines.append("}")
         parts.append("\n".join(lines))
@@ -1951,7 +1950,7 @@ def render_state_model_concern(
         lines = ["static {"]
         for record in records:
             values = ", ".join(
-                _java_string(record.get(field, ""))
+                _java_string(record[field])
                 for field in ("entry_path", "ownership", "reentrancy_rule")
             )
             lines.append(
