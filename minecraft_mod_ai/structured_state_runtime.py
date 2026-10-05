@@ -1654,7 +1654,7 @@ def validate_state_concern(
                 validate_state_expr_ir(guard_val, symbols=declared)
             mut_val = record.get("mutations") if "mutations" in record else record.get("mutation")
             if mut_val is not None:
-                validate_mutation_ir(mut_val, symbols=declared)
+                validate_mutation_ir(mut_val, symbols=symbols)
         return
 
     if concern == "invariants":
@@ -1677,7 +1677,7 @@ def validate_state_concern(
                 continue
             mut_val = record.get("mutations") if "mutations" in record else record.get(field)
             if mut_val is not None:
-                validate_mutation_ir(mut_val, symbols=declared)
+                validate_mutation_ir(mut_val, symbols=symbols)
         return
 
 
