@@ -1824,56 +1824,33 @@ def _require_authored_mapping(raw: Any, scope: str) -> Mapping[str, Any]:
 
 
 def _normalize_content_config(kind: str, raw: Any, module_id: str) -> dict[str, Any]:
-    """Apply only deterministic defaults for omitted, already-validated fields."""
+    """Copy schema-validated authored content values without semantic repair."""
 
     values = _require_authored_mapping(raw, f"{module_id}.{kind}")
-    config: dict[str, Any] = {}
-
-    default_name = module_id.replace("_", " ").title()
-    config["display_name_en"] = str(
-        values.get("display_name_en", default_name)
-    ).strip()
-    config["display_name_ko"] = str(
-        values.get("display_name_ko", config["display_name_en"])
-    ).strip()
-
-    if "ingredients" in values:
-        ingredients = values["ingredients"]
-        if not isinstance(ingredients, Sequence) or isinstance(
-            ingredients, (str, bytes, bytearray)
-        ):
-            raise ValueError(
-                f"TYPED_PLATFORM_AUTHORING_RESPONSE_INVALID: {module_id}.ingredients"
-            )
-        config["ingredients"] = list(ingredients)
+    config: dict[str, Any] = {
+        "display_name_en": str(values["display_name_en"]).strip(),
+        "display_name_ko": str(values["display_name_ko"]).strip(),
+    }
 
     if kind == "block":
-        config["hardness"] = float(values.get("hardness", 1.5))
+        config["hardness"] = float(values["hardness"])
     elif kind == "food":
-        config["hunger"] = int(values.get("hunger", 4))
-        config["saturation"] = float(values.get("saturation", 2.0))
+        config["hunger"] = int(values["hunger"])
+        config["saturation"] = float(values["saturation"])
     elif kind in {"weapon", "tool"}:
-        config["attack_damage"] = int(
-            values.get("attack_damage", 6 if kind == "weapon" else 3)
-        )
-        config["attack_speed"] = float(
-            values.get("attack_speed", 1.6 if kind == "weapon" else 1.2)
-        )
+        config["attack_damage"] = int(values["attack_damage"])
+        config["attack_speed"] = float(values["attack_speed"])
     elif kind == "armor":
-        config["slot"] = str(values.get("slot", "chestplate"))
+        config["slot"] = str(values["slot"])
     elif kind == "machine":
-        config["input_item"] = str(
-            values.get("input_item", "minecraft:iron_ingot")
-        )
-        config["output_item"] = str(
-            values.get("output_item", "minecraft:gold_ingot")
-        )
-        config["output_count"] = int(values.get("output_count", 1))
-        config["processing_ticks"] = int(values.get("processing_ticks", 100))
+        config["input_item"] = str(values["input_item"])
+        config["output_item"] = str(values["output_item"])
+        config["output_count"] = int(values["output_count"])
+        config["processing_ticks"] = int(values["processing_ticks"])
     elif kind == "effect":
-        config["color"] = str(values.get("color", "#336699"))
+        config["color"] = str(values["color"])
     elif kind == "enchantment":
-        config["max_level"] = int(values.get("max_level", 1))
+        config["max_level"] = int(values["max_level"])
 
     return config
 
@@ -1882,7 +1859,7 @@ def _normalize_entity_config(raw: Any, module_id: str) -> dict[str, Any]:
     """Fill host-owned physical defaults without repairing authored enum/color fields."""
 
     values = _require_authored_mapping(raw, f"{module_id}.entity")
-    behavior = str(values.get("behavior", "hostile_melee"))
+    behavior = str(values["behavior"])
     attack_damage = 2.0
     if behavior in {"passive", "npc"}:
         attack_damage = 0.0
@@ -1892,42 +1869,34 @@ def _normalize_entity_config(raw: Any, module_id: str) -> dict[str, Any]:
         "attack_damage": attack_damage,
         "movement_speed": 0.25,
         "follow_range": 16.0,
-        "archetype": str(values.get("archetype", "biped")),
+        "archetype": str(values["archetype"]),
         "behavior": behavior,
         "entity_width": 0.6,
         "entity_height": 1.8,
-        "spawn_group": str(values.get("spawn_group", "monster")),
-        "main_color": str(values.get("main_color", "#FF0000")),
+        "spawn_group": str(values["spawn_group"]),
+        "main_color": str(values["main_color"]),
     }
 
 
 def _normalize_quest_config(raw: Any, module_id: str) -> dict[str, Any]:
     values = _require_authored_mapping(raw, f"{module_id}.quest")
-    objective = str(values.get("objective", "manual"))
-    default_target = (
-        "minecraft:zombie"
-        if objective == "kill"
-        else "minecraft:stone"
-        if objective == "break"
-        else module_id
-    )
     return {
-        "objective": objective,
-        "target": str(values.get("target", default_target)),
-        "required": int(values.get("required", 1)),
-        "reward_item": str(values.get("reward_item", "minecraft:air")),
-        "reward_count": int(values.get("reward_count", 1)),
-        "reward_currency": float(values.get("reward_currency", 0.0)),
+        "objective": str(values["objective"]),
+        "target": str(values["target"]),
+        "required": int(values["required"]),
+        "reward_item": str(values["reward_item"]),
+        "reward_count": int(values["reward_count"]),
+        "reward_currency": float(values["reward_currency"]),
     }
 
 
 def _normalize_skill_config(raw: Any, module_id: str) -> dict[str, Any]:
     values = _require_authored_mapping(raw, f"{module_id}.skill")
     cfg: dict[str, Any] = {
-        "effect": str(values.get("effect", "minecraft:speed")),
-        "duration_ticks": int(values.get("duration_ticks", 100)),
-        "amplifier": int(values.get("amplifier", 0)),
-        "cooldown_ticks": int(values.get("cooldown_ticks", 100)),
+        "effect": str(values["effect"]),
+        "duration_ticks": int(values["duration_ticks"]),
+        "amplifier": int(values["amplifier"]),
+        "cooldown_ticks": int(values["cooldown_ticks"]),
     }
     if "required_class" in values:
         cfg["required_class"] = str(values["required_class"])
@@ -1937,16 +1906,14 @@ def _normalize_skill_config(raw: Any, module_id: str) -> dict[str, Any]:
 def _normalize_display_config(raw: Any, module_id: str) -> dict[str, Any]:
     values = _require_authored_mapping(raw, f"{module_id}.display")
     return {
-        "display_name": str(
-            values.get("display_name", module_id.replace("_", " ").title())
-        ).strip()
+        "display_name": str(values["display_name"]).strip()
     }
 
 
 def _normalize_economy_config(raw: Any) -> dict[str, Any]:
     values = _require_authored_mapping(raw, "economy")
     return {
-        "initial_balance": float(values.get("initial_balance", 0.0))
+        "initial_balance": float(values["initial_balance"])
     }
 
 
