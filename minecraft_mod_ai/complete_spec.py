@@ -172,6 +172,21 @@ class ProductionModule(Mapping[str, Any]):
                 raise SpecValidationError(
                     f"Invalid reviewed local AI sidecar module {self.module_id}: {exc}"
                 ) from exc
+        if self.kind == "integration" and self.config.get("integration_type") == "mmm_research_shard":
+            from .research_ledger import (
+                ResearchLedgerError,
+                validate_research_shard_config,
+            )
+
+            try:
+                validate_research_shard_config(
+                    self.config,
+                    module_id=self.module_id,
+                )
+            except ResearchLedgerError as exc:
+                raise SpecValidationError(
+                    f"Invalid reviewed research shard module {self.module_id}: {exc}"
+                ) from exc
         implementation = self.config.get("implementation")
         if implementation is not None and implementation != "custom":
             raise SpecValidationError(
