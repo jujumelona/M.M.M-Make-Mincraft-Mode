@@ -266,3 +266,61 @@ def test_identifier_pattern_is_bounded_by_maxlength():
     assert projected["pattern"] == "^[A-Za-z_$][A-Za-z0-9_$.]{0,23}$"
     assert projected["maxLength"] == 24
 
+
+
+
+def test_llama_pattern_shorthand_is_normalized_before_transport():
+    schema = {
+        "type": "string",
+        "pattern": r"^\d+\.\w+\s*$",
+        "maxLength": 32,
+    }
+
+    projected = project_llama_transport_schema(schema)
+    pattern = projected["pattern"]
+
+    assert r"\d" not in pattern
+    assert r"\w" not in pattern
+    assert r"\s" not in pattern
+    assert "[0-9]" in pattern
+    assert "[A-Za-z0-9_]" in pattern
+    assert r"\x0B" in pattern
+    assert "*" not in pattern
+    assert "+" not in pattern
+
+
+def test_unsafe_regex_escape_drops_pattern_but_keeps_finite_bound():
+    schema = {
+        "type": "string",
+        "pattern": r"^\bword\b$",
+        "maxLength": 16,
+        "minLength": 1,
+    }
+
+    projected = project_llama_transport_schema(schema)
+
+    assert "pattern" not in projected
+    assert projected["maxLength"] == 16
+    assert projected["minLength"] == 1
+
+
+def test_state_numeric_default_transport_has_no_digit_shorthand():
+    from minecraft_mod_ai.model_output_atomicity_contract import (
+        effective_model_transport_schema,
+    )
+    from minecraft_mod_ai.structured_state_runtime import state_variable_default_schema
+
+    schema = {
+        "type": "object",
+        "properties": {"default": state_variable_default_schema("number")},
+        "required": ["default"],
+        "additionalProperties": False,
+    }
+
+    projected = effective_model_transport_schema(schema)
+    pattern = projected["properties"]["default"]["pattern"]
+
+    assert r"\d" not in pattern
+    assert "[0-9]" in pattern
+    assert "*" not in pattern
+    assert "+" not in pattern
