@@ -735,22 +735,6 @@ def _author_section(
     return merge_worksheet_section_chunks(request.section, results, set())
 
 
-def structured_authoring_call_upper_bound() -> int:
-    """Return the finite model-call ceiling implied by the host work graph."""
-
-    from .worksheet_atomic_chunker import pack_section_concerns
-
-    total = 0
-    for section in WORKSHEET_SECTIONS:
-        chunks = pack_section_concerns(section)
-        if section == "state_model":
-            concerns = {str(chunk[0]) for chunk in chunks if chunk}
-            total += len(concerns)  # one bounded cardinality decision per concern
-            total += len(chunks) * PLANNER_CONCERN_MAX_RECORDS
-        else:
-            total += len(chunks)
-    return total
-
 def author_structured_sections(
     router: Any,
     prompt: str,
