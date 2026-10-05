@@ -358,16 +358,32 @@ def _structured_rows(
     concern: str,
 ) -> tuple[Mapping[str, Any], ...]:
     raw_section = structured.get(section)
-    if not isinstance(raw_section, Mapping):
+    if raw_section is None:
         return ()
-    raw_spec = raw_section.get("specification")
-    specification = raw_spec if isinstance(raw_spec, Mapping) else raw_section
-    rows = specification.get(concern)
+    if not isinstance(raw_section, Mapping):
+        raise ValueError(
+            f"TYPED_STRUCTURED_SECTION_INVALID: {section}"
+        )
+    specification = raw_section.get("specification")
+    if not isinstance(specification, Mapping):
+        raise ValueError(
+            f"TYPED_STRUCTURED_SPECIFICATION_REQUIRED: {section}"
+        )
+    rows = specification.get(concern, ())
     if not isinstance(rows, Sequence) or isinstance(
         rows, (str, bytes, bytearray)
     ):
-        return ()
-    return tuple(row for row in rows if isinstance(row, Mapping))
+        raise ValueError(
+            f"TYPED_STRUCTURED_CONCERN_INVALID: {section}.{concern}"
+        )
+    result: list[Mapping[str, Any]] = []
+    for index, row in enumerate(rows):
+        if not isinstance(row, Mapping):
+            raise ValueError(
+                f"TYPED_STRUCTURED_ROW_INVALID: {section}.{concern}[{index}]"
+            )
+        result.append(row)
+    return tuple(result)
 
 
 def _network_payload_guard(field: str, type_name: str) -> str:
