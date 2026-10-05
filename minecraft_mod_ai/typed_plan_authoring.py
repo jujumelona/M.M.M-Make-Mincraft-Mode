@@ -159,11 +159,45 @@ def _active_concern_refs(
     return tuple(dict.fromkeys(refs))
 
 
+def _state_store_schema_version(
+    structured_sections: Mapping[str, Any] | None,
+) -> str:
+    """Derive the current persisted-state schema identity from host-canonical state."""
+
+    from .authored_structured_design import active_concern_records
+
+    state = active_concern_records(
+        structured_sections,
+        "state_model",
+    )
+    variables = tuple(
+        dict(row)
+        for row in state.get("variables", ())
+        if isinstance(row, Mapping)
+    )
+    payload = json.dumps(
+        variables,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return "state-" + hashlib.sha256(payload).hexdigest()[:16]
+
+
 def _state_store_config_from_structured(
     structured_sections: Mapping[str, Any] | None,
     *,
     transfer_required: bool,
 ) -> dict[str, Any]:
+    """Compile persistence policy with host-owned migration topology.
+
+    Worksheet migration records may describe legacy sources and migration
+    operations, but they do not own the destination graph. Every accepted
+    migration converges on the canonical current state-schema identity so cycles,
+    branching targets, and ambiguous sinks cannot be introduced by model output.
+    """
+
     from .authored_structured_design import active_concern_records
 
     persistence = active_concern_records(
@@ -172,9 +206,8 @@ def _state_store_config_from_structured(
     )
     rows = tuple(persistence.get("migration", ()))
     migrations: list[dict[str, Any]] = []
-    edges: dict[str, str] = {}
-    destinations: set[str] = set()
-    sources: set[str] = set()
+    schema_version = _state_store_schema_version(structured_sections)
+    seen_operations: set[tuple[str, str, str, str, str]] = set()
 
     for index, row in enumerate(rows):
         if not isinstance(row, Mapping):
@@ -182,9 +215,8 @@ def _state_store_config_from_structured(
                 f"TYPED_PLAN_MIGRATION_RECORD_INVALID: {index}"
             )
         source = str(row.get("source_version") or "").strip()
-        destination = str(row.get("destination_version") or "").strip()
         operation = str(row.get("operation") or "").strip()
-        if not source or not destination:
+        if not source:
             raise ValueError(
                 f"TYPED_PLAN_MIGRATION_VERSION_REQUIRED: {index}"
             )
@@ -197,15 +229,11 @@ def _state_store_config_from_structured(
             raise ValueError(
                 f"TYPED_PLAN_MIGRATION_OPERATION_INVALID: {operation!r}"
             )
-        previous = edges.get(source)
-        if previous is not None and previous != destination:
-            raise ValueError(
-                "TYPED_PLAN_MIGRATION_BRANCHING_FORBIDDEN: "
-                f"{source!r}"
-            )
-        edges[source] = destination
-        sources.add(source)
-        destinations.add(destination)
+
+        # A row whose source already is the current canonical schema cannot be a
+        # migration edge. Ignore it rather than constructing a self-loop.
+        if source == schema_version:
+            continue
 
         source_key = row.get("source_key")
         destination_key = row.get("destination_key")
@@ -222,25 +250,25 @@ def _state_store_config_from_structured(
             raise ValueError(
                 f"TYPED_PLAN_MIGRATION_DESTINATION_KEY_REQUIRED: {index}"
             )
+
+        operation_key = (
+            source,
+            operation,
+            str(source_key or ""),
+            str(destination_key or ""),
+            json.dumps(value, ensure_ascii=False, sort_keys=True, default=str),
+        )
+        if operation_key in seen_operations:
+            continue
+        seen_operations.add(operation_key)
         migrations.append({
             "from_version": source,
-            "to_version": destination,
+            "to_version": schema_version,
             "operation": operation,
             "source_key": source_key,
             "destination_key": destination_key,
             "value": value,
         })
-
-    if rows:
-        sinks = sorted(destinations - sources)
-        if len(sinks) != 1:
-            raise ValueError(
-                "TYPED_PLAN_MIGRATION_TARGET_AMBIGUOUS: "
-                f"{sinks!r}"
-            )
-        schema_version = sinks[0]
-    else:
-        schema_version = "1"
 
     return {
         "namespace": "authored_state",
