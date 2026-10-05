@@ -30,6 +30,7 @@ from .platform_backend_contract import (
 )
 from .scale_policy import ScalePolicy
 from .system_pack_validation import validate_system_modules
+from .typed_plan_production import validate_typed_plan_generation_contract
 
 
 class ProductionGenerationPreflightError(ValueError):
@@ -175,6 +176,17 @@ def validate_production_generation_project(
                 "CUSTOM_JAVA_BACKEND_REMOVED: custom generation cannot enter "
                 f"project preflight: {getattr(module, 'module_id', '<unknown>')}"
             )
+        if str(module.kind) == "typed_host":
+            try:
+                validate_typed_plan_generation_contract(
+                    module,
+                    package_name=package_name,
+                    mod_id=mod_id,
+                )
+            except (TypeError, ValueError) as exc:
+                raise ProductionGenerationPreflightError(
+                    f"Typed host module {module.module_id} cannot enter generation: {exc}"
+                ) from exc
         missing_backend = missing_production_backend_capabilities(
             deterministic_backend_capabilities(adapter),
             str(module.kind),
