@@ -7,16 +7,14 @@ from minecraft_mod_ai.content_design_contract import (
     CONTENT_KIND_TO_FACT_TYPE,
     CONTENT_KINDS,
 )
-from minecraft_mod_ai.single_record_template import (
-    _context_bound_record_schema,
-    run_single_record_template,
-)
+from minecraft_mod_ai.design_generation_schema import context_bound_record_schema
+from minecraft_mod_ai.single_record_template import run_single_record_template
 from minecraft_mod_ai.task_template_catalog import load_record_template
 
 
 def test_content_entity_kind_is_generation_time_closed_vocabulary():
     template = load_record_template("design/content_entity")
-    schema = _context_bound_record_schema(
+    schema = context_bound_record_schema(
         "design/content_entity",
         template["record_schema"],
         {},
@@ -55,7 +53,7 @@ def test_content_capability_template_has_no_host_invalid_sentinel():
 
 def test_broad_system_kind_is_rejected_by_same_schema_sent_to_model():
     template = load_record_template("design/content_entity")
-    schema = _context_bound_record_schema(
+    schema = context_bound_record_schema(
         "design/content_entity",
         template["record_schema"],
         {},
@@ -72,7 +70,7 @@ def test_broad_system_kind_is_rejected_by_same_schema_sent_to_model():
 
 def test_host_closed_sets_become_actual_model_schema_enums():
     decision = load_record_template("design/decision")
-    schema = _context_bound_record_schema(
+    schema = context_bound_record_schema(
         "design/decision",
         decision["record_schema"],
         {"allowed_slots": ["economy_source", "economy_sink"]},
@@ -83,7 +81,7 @@ def test_host_closed_sets_become_actual_model_schema_enums():
     ]
 
     prop = load_record_template("design/content_property")
-    prop_schema = _context_bound_record_schema(
+    prop_schema = context_bound_record_schema(
         "design/content_property",
         prop["record_schema"],
         {
