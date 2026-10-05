@@ -406,7 +406,13 @@ def compile_authored_design(
         existing_input_sha256 or plan.existing_input_sha256 or ""
     ).strip()
 
-    mod_id = "authored_" + plan.calculate_hash()[:12]
+    content_design = (
+        plan.content_design
+        if isinstance(getattr(plan, "content_design", None), Mapping)
+        else {}
+    )
+    content_mod_id = str(content_design.get("_mod_id") or "").strip()
+    mod_id = content_mod_id or ("authored_" + plan.calculate_hash()[:12])
     acceptance = (
         "Implement the behaviors in the saved authored design and exercise them in Minecraft.",
         "Build the project and verify that the mod loads and runs without errors.",
