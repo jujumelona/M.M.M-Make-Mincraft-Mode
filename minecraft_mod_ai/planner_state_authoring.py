@@ -304,7 +304,6 @@ def _state_condition_transport_schema(
         }
         left_kinds = ["state", "context", "boolean"]
         right_kinds = [
-            "none",
             "state",
             "context",
             "number",
@@ -330,8 +329,9 @@ def _state_condition_transport_schema(
 
     context_schema = {
         "type": "string",
+        "minLength": 1,
         "maxLength": 24,
-        "pattern": r"^(?:|[A-Za-z_$][A-Za-z0-9_$.]{0,23})$",
+        "pattern": r"^[A-Za-z_$][A-Za-z0-9_$.]{0,23}$",
     }
     term_schema = {
         "type": "object",
@@ -339,10 +339,7 @@ def _state_condition_transport_schema(
             "left_kind": {"type": "string", "enum": left_kinds},
             "left_state": state_name_schema,
             "left_context": context_schema,
-            "left_value": {
-                "type": "string",
-                "enum": ["", "true", "false"],
-            },
+            "left_boolean": {"type": "boolean"},
             "operator": {
                 "type": "string",
                 "enum": ["truthy", "falsey", "==", "!=", ">=", "<=", ">", "<"],
@@ -350,22 +347,31 @@ def _state_condition_transport_schema(
             "right_kind": {"type": "string", "enum": right_kinds},
             "right_state": state_name_schema,
             "right_context": context_schema,
-            "right_value": {
+            "right_text": {
                 "type": "string",
                 "maxLength": 24,
                 "pattern": r"^[^{}\[\]]{0,24}$",
             },
+            "right_number": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 24,
+                "pattern": r"^-?[0-9]+(?:\.[0-9]+)?$",
+            },
+            "right_boolean": {"type": "boolean"},
         },
         "required": [
             "left_kind",
             "left_state",
             "left_context",
-            "left_value",
+            "left_boolean",
             "operator",
             "right_kind",
             "right_state",
             "right_context",
-            "right_value",
+            "right_text",
+            "right_number",
+            "right_boolean",
         ],
         "additionalProperties": False,
     }
@@ -400,12 +406,12 @@ def _condition_operand_from_transport(
                 raise ValueError("STATE_CONDITION_TRANSPORT: left context name is required")
             return {"kind": "context_ref", "name": name}
         if kind == "boolean":
-            value = str(term.get("left_value") or "").strip().casefold()
-            if value not in {"true", "false"}:
+            value = term.get("left_boolean")
+            if type(value) is not bool:
                 raise ValueError(
-                    "STATE_CONDITION_TRANSPORT: boolean left_value must be true or false"
+                    "STATE_CONDITION_TRANSPORT: left_boolean must be boolean"
                 )
-            return {"kind": "literal", "value": value == "true"}
+            return {"kind": "literal", "value": value}
         raise ValueError(f"STATE_CONDITION_TRANSPORT: invalid left kind {kind!r}")
 
     kind = str(term.get("right_kind") or "")
@@ -417,21 +423,21 @@ def _condition_operand_from_transport(
             raise ValueError("STATE_CONDITION_TRANSPORT: right context name is required")
         return {"kind": "context_ref", "name": name}
     if kind == "number":
-        value = str(term.get("right_value") or "").strip()
+        value = str(term.get("right_number") or "").strip()
         if re.fullmatch(r"-?[0-9]+(?:\.[0-9]+)?", value) is None:
             raise ValueError(
                 f"STATE_CONDITION_TRANSPORT: invalid numeric literal {value!r}"
             )
         return {"kind": "number", "value": value}
     if kind == "string":
-        return {"kind": "literal", "value": str(term.get("right_value") or "")}
+        return {"kind": "literal", "value": str(term.get("right_text") or "")}
     if kind == "boolean":
-        value = str(term.get("right_value") or "").strip().casefold()
-        if value not in {"true", "false"}:
+        value = term.get("right_boolean")
+        if type(value) is not bool:
             raise ValueError(
-                "STATE_CONDITION_TRANSPORT: boolean right_value must be true or false"
+                "STATE_CONDITION_TRANSPORT: right_boolean must be boolean"
             )
-        return {"kind": "literal", "value": value == "true"}
+        return {"kind": "literal", "value": value}
     if kind == "null":
         return {"kind": "literal", "value": None}
     raise ValueError(
@@ -504,10 +510,10 @@ def _author_state_condition(
     schema = _state_condition_transport_schema(symbols)
     instruction = (
         f"Author the boolean condition for state_model.{concern}[{index}].{field}. "
-        "Use one or two flat terms only. left_kind=boolean with left_value=true/false "
-        "represents an unconditional boolean. operator=truthy/falsey needs no right operand; "
-        "for those set right_kind=none and leave right_state/right_context/right_value "
-        "empty. For comparisons choose an explicit right_kind and value. "
+        "Use one or two flat terms only. left_kind=boolean uses left_boolean and "
+        "represents an unconditional boolean. operator=truthy/falsey ignores all right_* "
+        "payload fields. For comparisons choose an explicit right_kind; use right_number, "
+        "right_text, or right_boolean for those scalar kinds. "
         "Never emit expression AST keys such as kind, type, left, right, term, or nested "
         "terms; the host builds the canonical typed expression IR."
     )
@@ -568,7 +574,7 @@ def _state_mutation_transport_schema(
     context_schema = {
         "type": "string",
         "maxLength": 24,
-        "pattern": r"^(?:|[A-Za-z_$][A-Za-z0-9_$.]{0,23})$",
+        "pattern": r"^[A-Za-z_$][A-Za-z0-9_$.]{0,23}$",
     }
     assignment = {
         "type": "object",
@@ -587,6 +593,13 @@ def _state_mutation_transport_schema(
                 "maxLength": 24,
                 "pattern": r"^[^{}\[\]]{0,24}$",
             },
+            "value_number": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 24,
+                "pattern": r"^-?[0-9]+(?:\.[0-9]+)?$",
+            },
+            "value_boolean": {"type": "boolean"},
         },
         "required": [
             "target",
@@ -595,6 +608,8 @@ def _state_mutation_transport_schema(
             "value_state",
             "value_context",
             "value_text",
+            "value_number",
+            "value_boolean",
         ],
         "additionalProperties": False,
     }
@@ -623,7 +638,7 @@ def _mutation_value_from_transport(item: Mapping[str, Any]) -> dict[str, Any]:
             raise ValueError("STATE_MUTATION_TRANSPORT: context name is required")
         return {"kind": "context_ref", "name": name}
     if kind == "number":
-        value = str(item.get("value_text") or "").strip()
+        value = str(item.get("value_number") or "").strip()
         if re.fullmatch(r"-?[0-9]+(?:\.[0-9]+)?", value) is None:
             raise ValueError(
                 f"STATE_MUTATION_TRANSPORT: invalid numeric literal {value!r}"
@@ -632,12 +647,12 @@ def _mutation_value_from_transport(item: Mapping[str, Any]) -> dict[str, Any]:
     if kind == "string":
         return {"kind": "literal", "value": str(item.get("value_text") or "")}
     if kind == "boolean":
-        value = str(item.get("value_text") or "").strip().casefold()
-        if value not in {"true", "false"}:
+        value = item.get("value_boolean")
+        if type(value) is not bool:
             raise ValueError(
-                "STATE_MUTATION_TRANSPORT: boolean value_text must be true or false"
+                "STATE_MUTATION_TRANSPORT: value_boolean must be boolean"
             )
-        return {"kind": "literal", "value": value == "true"}
+        return {"kind": "literal", "value": value}
     if kind == "null":
         return {"kind": "literal", "value": None}
     if kind == "empty_map":
