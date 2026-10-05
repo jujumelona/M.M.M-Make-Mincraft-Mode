@@ -149,6 +149,25 @@ def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolic
         if not str(getattr(asset, 'owner_module_id', '') or '')
         or str(getattr(asset, 'owner_module_id', '') or '') in selected_ids
     )
+    asset_plan_digest = ""
+    if proposal.assets:
+        from .resource_asset_plan import (
+            ResourceAssetPlanError,
+            asset_plan_sha256,
+            require_asset_plan,
+        )
+        try:
+            canonical_asset_plan, _ = require_asset_plan(
+                proposal.game_design,
+                proposal.assets,
+            )
+        except ResourceAssetPlanError as exc:
+            raise WorkGraphError(
+                "ASSET_PLAN_AUTHORITY_REQUIRED: production work graph cannot "
+                f"schedule assets without the canonical approved plan: {exc}"
+            ) from exc
+        asset_plan_digest = asset_plan_sha256(canonical_asset_plan)
+
     for index, assets in enumerate(_chunks(selected_assets, max(1, policy.java_shard_size))):
         node_id = f'generate-assets-{index:08d}'
         dependencies = {'prepare-project'}
@@ -160,8 +179,16 @@ def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolic
                         f'Asset {asset.asset_id} references module {owner!r} without a generation node.'
                     )
                 dependencies.add(module_node[owner])
-        nodes.append(_node(node_id, 'generate:assets', tuple(sorted(dependencies)),
-                           {'kind': 'asset-shard', 'members': [asdict(asset) for asset in assets]}))
+        nodes.append(_node(
+            node_id,
+            'generate:assets',
+            tuple(sorted(dependencies)),
+            {
+                'kind': 'asset-shard',
+                'asset_plan_sha256': asset_plan_digest,
+                'members': [asdict(asset) for asset in assets],
+            },
+        ))
         generated_nodes.append(node_id)
 
     validation_dependencies = tuple(generated_nodes or ['prepare-project'])
