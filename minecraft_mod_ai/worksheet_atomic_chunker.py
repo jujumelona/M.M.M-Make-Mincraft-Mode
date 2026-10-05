@@ -259,20 +259,31 @@ def pack_section_concerns(section: str) -> list[tuple[str, ...]]:
             ]
 
             if concern == "variables":
-                # Establish cardinality from atomic identity + value family, not from
-                # prose ownership metadata. Keeping this first page to two fields also
-                # preserves the full concern record bound so compound state can be
-                # decomposed into multiple scalar variables instead of JSON-in-string.
-                first = tuple(
-                    field for field in ("name", "type")
+                # Cardinality is already host-owned, so author the row's semantic
+                # context before asking the small model to name it. This prevents
+                # generic repeated identifiers such as "state_model" that arise when
+                # name is requested before owner/unit/domain are known.
+                semantic_fields = [
+                    field
+                    for field in ("type", "owner", "unit", "domain")
                     if field in normal
-                )
-                if first:
-                    add_page(concern, first, per_record_transport=True)
-                remaining = [
-                    field for field in normal
-                    if field not in first
                 ]
+                for start in range(0, len(semantic_fields), page_width):
+                    add_page(
+                        concern,
+                        semantic_fields[start : start + page_width],
+                        per_record_transport=True,
+                    )
+
+                if "name" in normal:
+                    add_page(concern, ("name",), per_record_transport=True)
+                if "default" in normal:
+                    # Default is deliberately last so its schema can be narrowed from
+                    # the already-fixed variable type.
+                    add_page(concern, ("default",), per_record_transport=True)
+
+                handled = set(semantic_fields) | {"name", "default"}
+                remaining = [field for field in normal if field not in handled]
                 for start in range(0, len(remaining), page_width):
                     add_page(
                         concern,
