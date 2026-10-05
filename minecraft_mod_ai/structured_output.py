@@ -292,6 +292,40 @@ def _emit_parser_owned_recovery(
     )
 
 
+def _normalize_unicode_scalars(value: Any) -> tuple[Any, bool]:
+    """Replace only unpaired UTF-16 surrogate code points in decoded model data.
+
+    Valid surrogate pairs are already combined by json.loads. A remaining surrogate
+    therefore cannot represent a Unicode scalar value and will break later UTF-8,
+    parser, hashing, or source-generation boundaries.
+    """
+
+    if isinstance(value, str):
+        normalized = "".join(
+            "\uFFFD" if 0xD800 <= ord(char) <= 0xDFFF else char
+            for char in value
+        )
+        return normalized, normalized != value
+    if isinstance(value, list):
+        changed = False
+        items = []
+        for item in value:
+            normalized, item_changed = _normalize_unicode_scalars(item)
+            items.append(normalized)
+            changed = changed or item_changed
+        return items, changed
+    if isinstance(value, Mapping):
+        changed = False
+        result: dict[Any, Any] = {}
+        for key, item in value.items():
+            normalized_key, key_changed = _normalize_unicode_scalars(key)
+            normalized_item, item_changed = _normalize_unicode_scalars(item)
+            result[normalized_key] = normalized_item
+            changed = changed or key_changed or item_changed
+        return result, changed
+    return value, False
+
+
 def _schema_errors(
     value: Any,
     response_schema: Mapping[str, Any],
@@ -408,8 +442,14 @@ def validate_structured_output(
             errors=errors,
         ) from exc
 
+    value, unicode_changed = _normalize_unicode_scalars(value)
+
     if response_schema is None:
-        return output
+        return (
+            json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+            if unicode_changed
+            else output
+        )
 
     if parser_owned_research and isinstance(value, Mapping):
         canonical = _canonical_research_envelope(value)
@@ -442,10 +482,11 @@ def validate_structured_output(
         # transport-layer semantic validator.
         return json.dumps(dict(value), ensure_ascii=False, separators=(",", ":"))
 
-    changed = False
+    changed = unicode_changed
     if response_schema is not None and isinstance(response_schema, Mapping):
         try:
-            value, changed = decode_bounded_numeric_transport(value, response_schema)
+            value, numeric_changed = decode_bounded_numeric_transport(value, response_schema)
+            changed = changed or numeric_changed
         except ValueError as exc:
             errors = (f"$: numeric transport decode error: {exc}",)
             _emit_validation_failure(
