@@ -10,6 +10,7 @@ from typing import Any
 
 from .authored_plan import AuthoredPlan
 from .complete_spec import (
+    AssetRequest,
     CompleteProposal,
     ProductionModule,
     complete_proposal_from_parts,
@@ -378,6 +379,89 @@ def _bound_target(design: Mapping[str, Any]) -> dict[str, str]:
     coordinates = target_coordinates_from_mapping(target)
     return {key: getattr(coordinates, key) for key in _TARGET_KEYS}
 
+
+def _compile_content_artifact_graph(
+    plan: AuthoredPlan,
+    *,
+    adapter: Any,
+    mod_id: str,
+    package_name: str,
+) -> tuple[tuple[ProductionModule, ...], tuple[AssetRequest, ...], tuple[Any, ...]]:
+    """Restore canonical content facts and lower them through the artifact graph."""
+
+    raw = getattr(plan, "content_design", {})
+    if not isinstance(raw, Mapping) or not raw:
+        return (), (), ()
+    planned_mod_id = str(raw.get("_mod_id") or "").strip()
+    if planned_mod_id and planned_mod_id != mod_id:
+        raise ValueError(
+            f"CONTENT_MOD_ID_MISMATCH: planned={planned_mod_id!r} production={mod_id!r}"
+        )
+
+    raw_modules = raw.get("modules", ())
+    raw_assets = raw.get("assets", ())
+    raw_facts = raw.get("_implementation_facts", ())
+    for label, values in (
+        ("modules", raw_modules),
+        ("assets", raw_assets),
+        ("_implementation_facts", raw_facts),
+    ):
+        if not isinstance(values, list):
+            raise ValueError(f"CONTENT_DESIGN_INVALID: {label} must be an array")
+
+    modules = tuple(
+        ProductionModule(
+            module_id=str(item["module_id"]),
+            kind=str(item["kind"]),
+            config=deepcopy(dict(item.get("config") or {})),
+            depends_on=tuple(str(value) for value in item.get("depends_on", ())),
+            required_gates=tuple(str(value) for value in item.get("required_gates", ())),
+        )
+        for item in raw_modules
+        if isinstance(item, Mapping)
+    )
+    assets = tuple(
+        AssetRequest(**deepcopy(dict(item)))
+        for item in raw_assets
+        if isinstance(item, Mapping)
+    )
+
+    from .implementation_fact import ImplementationFact
+    from .artifact_expansion import expand_facts_to_jobs
+
+    facts = tuple(
+        ImplementationFact.from_dict(dict(item))
+        for item in raw_facts
+        if isinstance(item, Mapping)
+    )
+    if modules and not facts:
+        raise ValueError("CONTENT_ARTIFACT_FACTS_REQUIRED")
+    jobs = tuple(
+        expand_facts_to_jobs(
+            facts,
+            mod_id=mod_id,
+            package_name=package_name,
+            main_class=_main_class_name(mod_id),
+            minecraft_version=adapter.minecraft_version,
+            version_context=adapter.version_context,
+        )
+    )
+
+    module_ids = {module.module_id for module in modules}
+    if len(module_ids) != len(modules):
+        raise ValueError("CONTENT_ARTIFACT_DUPLICATE_MODULE_ID")
+    owner_ids = {str(job.owner_module).strip() for job in jobs if str(job.owner_module).strip()}
+    foreign = sorted(owner_ids - module_ids)
+    if foreign:
+        raise ValueError(
+            "CONTENT_ARTIFACT_FOREIGN_OWNER: " + ", ".join(foreign)
+        )
+    unowned = sorted(module_ids - owner_ids)
+    if unowned:
+        raise ValueError(
+            "CONTENT_ARTIFACT_OWNER_MISSING: " + ", ".join(unowned)
+        )
+    return modules, assets, jobs
 
 def compile_authored_design(
     router: Any, plan: AuthoredPlan, *, existing_input_sha256: str = ""
