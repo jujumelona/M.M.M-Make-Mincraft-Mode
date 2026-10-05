@@ -231,10 +231,11 @@ def _state_store_config_from_structured(
                 f"TYPED_PLAN_MIGRATION_OPERATION_INVALID: {operation!r}"
             )
 
-        # A row whose source already is the current canonical schema cannot be a
-        # migration edge. Ignore it rather than constructing a self-loop.
         if source == schema_version:
-            continue
+            raise ValueError(
+                f"TYPED_PLAN_MIGRATION_SELF_LOOP: {index} uses current schema "
+                f"{schema_version!r} as its source"
+            )
 
         source_key = row.get("source_key")
         destination_key = row.get("destination_key")
@@ -260,7 +261,10 @@ def _state_store_config_from_structured(
             json.dumps(value, ensure_ascii=False, sort_keys=True, default=str),
         )
         if operation_key in seen_operations:
-            continue
+            raise ValueError(
+                f"TYPED_PLAN_MIGRATION_DUPLICATE: {index} duplicates an earlier "
+                "canonical migration operation"
+            )
         seen_operations.add(operation_key)
         migrations.append({
             "from_version": source,
