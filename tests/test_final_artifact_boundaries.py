@@ -66,30 +66,44 @@ def _debug_coverage_inputs() -> dict[str, object]:
 def _authored_coverage_inputs() -> dict[str, object]:
     text = "# Economy\nCredits, trading, ship upgrades, and colonies.\n"
     raw = text.encode("utf-8")
-    unit_sha256 = "sha256:" + hashlib.sha256(raw).hexdigest()
+    source_sha256 = "sha256:" + hashlib.sha256(raw).hexdigest()
+    unit_path = "src/main/java/example/AuthoredProgram.java"
     manifest = {
         "schema_version": "mmm/authored-execution-manifest-v2",
-        "source_text_sha256": unit_sha256,
+        "source_text_sha256": source_sha256,
         "source_bytes": len(raw),
         "unit_count": 1,
-        "policy": "host_exact_task_queue_no_coder_file_planning",
+        "policy": "host_typed_plan_ir",
         "units": [
             {
-                "module_id": "authored_feature_001",
-                "path": "src/main/java/example/AuthoredFeature001.java",
-                "symbol": "AuthoredFeature001",
-                "start_byte": 0,
-                "end_byte": len(raw),
-                "text_sha256": unit_sha256,
-                "provides": "authored_feature_001_ready",
-                "section": "Economy",
+                "module_id": "authored_typed_plan",
+                "path": unit_path,
+                "symbol": "AuthoredProgram",
+                "source_sha256": source_sha256,
             }
         ],
+        "graph_status": "not_required",
+        "typed_program": {
+            "path": unit_path,
+            "symbol": "AuthoredProgram",
+            "dry_compile": {
+                "source_count": 1,
+                "paths": [unit_path],
+                "state_required": False,
+                "network_sync_needs_state": False,
+            },
+            "state_required": False,
+            "state_store": False,
+            "network_sync": False,
+            "resource_policy": False,
+            "capabilities": [],
+        },
+        "platform_modules": [],
         "entrypoint": {
             "owner": "host_scaffold",
             "path": "src/main/java/example/ExampleMod.java",
             "symbol": "ExampleMod",
-            "feature_symbols": ["AuthoredFeature001"],
+            "feature_symbols": ["AuthoredProgram"],
         },
     }
     manifest["manifest_sha256"] = "sha256:" + hashlib.sha256(
@@ -105,14 +119,17 @@ def _authored_coverage_inputs() -> dict[str, object]:
         "proposal_hash": "sha256:" + "1" * 64,
         "requested_prompt": prompt,
         "authored_plan": {
-            "schema_version": "mmm/authored-plan-v1",
+            "schema_version": "mmm/authored-plan-v2",
             "requested_prompt": prompt,
             "text": text,
             "existing_input_sha256": "",
             "media_paths": [],
+            "structured_sections": {},
+            "content_design": {},
+            "typed_plan_ir": {},
         },
         "authored_manifest": manifest,
-        "module_ids": ("authored_feature_001",),
+        "module_ids": ("authored_typed_plan",),
         "artifact_sha256": "sha256:" + "2" * 64,
         "source_validation": {
             "status": "PASS",
@@ -167,7 +184,7 @@ def test_saved_authored_coverage_fails_closed_when_manifest_module_is_not_approv
 def test_saved_authored_coverage_fails_closed_when_manifest_text_is_tampered() -> None:
     inputs = _authored_coverage_inputs()
     tampered = json.loads(json.dumps(inputs["authored_manifest"]))
-    tampered["units"][0]["text_sha256"] = "sha256:" + "f" * 64
+    tampered["units"][0]["source_sha256"] = "sha256:" + "f" * 64
 
     receipt = build_authored_design_coverage_receipt(
         **{**inputs, "authored_manifest": tampered}
@@ -175,7 +192,7 @@ def test_saved_authored_coverage_fails_closed_when_manifest_text_is_tampered() -
 
     assert receipt["status"] == "BLOCKED"
     assert receipt["verification"]["authored_design_binding"] is False
-    assert any("text hash does not match" in finding for finding in receipt["findings"])
+    assert any("not bound to the approved authored text" in finding for finding in receipt["findings"])
     assert all(row["status"] == "BLOCKED" for row in receipt["requirements"])
 
 def test_debug_fixture_coverage_requires_all_real_verification_gates() -> None:
