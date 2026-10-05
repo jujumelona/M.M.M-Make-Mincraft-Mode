@@ -103,6 +103,8 @@ def test_generic_nested_files_field_is_not_a_path_contract() -> None:
     receipt = {
         "schema_version": "mmm/custom-evidence-v1",
         "files": ["space_mode_alien_crystals_loot"],
+        "touched_paths": ["also-not-authoritative"],
+        "generated_files": ["still-not-authoritative"],
         "evidence": {
             "files": ["logical-owner-id"],
             "path": "not-a-project-path",
