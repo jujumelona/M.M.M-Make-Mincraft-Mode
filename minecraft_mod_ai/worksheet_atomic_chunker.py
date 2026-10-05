@@ -19,7 +19,10 @@ from .execution_contract_policy import (
     PLANNER_RECORD_NESTED_ARRAY_MAX_ITEMS,
     PLANNER_RECORD_PAGE_MAX_FIELDS,
 )
-from .model_output_atomicity_contract import _assert_closed_object_schemas
+from .model_output_atomicity_contract import (
+    _assert_closed_object_schemas,
+    structured_output_token_ceiling,
+)
 from .planning_detail_slots import DETAIL_RECORDS, record_field_schema
 from .planning_detail_template import (
     _normalize_section_name,
@@ -188,24 +191,52 @@ def pack_section_concerns(section: str) -> list[tuple[str, ...]]:
 
     chunks: list[tuple[str, ...]] = []
 
-    def add_page(concern_name: str, selected_fields: Sequence[str]) -> None:
-        if not selected_fields:
+    def add_page(
+        concern_name: str,
+        selected_fields: Sequence[str],
+        *,
+        per_record_transport: bool = False,
+    ) -> None:
+        fields = tuple(selected_fields)
+        if not fields:
             return
         chunk = WorksheetConcernChunk(
             (concern_name,),
-            {concern_name: tuple(selected_fields)},
+            {concern_name: fields},
         )
+
+        # Generic concern pages are emitted as one array containing every authored
+        # record. Their packing therefore has to be proven against the *largest*
+        # cardinality the first page may establish, not against one synthetic row.
+        #
+        # Executable state fields are different: author_state_field_page emits one
+        # independently bounded IR call per record, so their outer worksheet array is
+        # never sent to the model and must not be used for this page-size proof.
+        proof_count = 1 if per_record_transport else PLANNER_CONCERN_MAX_RECORDS
         schema = worksheet_chunk_schema(
             key,
             chunk,
-            # Static packing validation must exercise the same count-fixed
-            # field-page contract as production.
-            record_counts={concern_name: 1},
+            record_counts={concern_name: proof_count},
         )
         _assert_closed_object_schemas(
             schema,
             path=f"worksheet page {key}.{concern_name}.{len(chunks) + 1}",
         )
+        if not per_record_transport:
+            try:
+                structured_output_token_ceiling(schema)
+            except ValueError as exc:
+                if len(fields) <= 1:
+                    raise ValueError(
+                        "WORKSHEET_ATOMIC_PAGE_UNSPLITTABLE: "
+                        f"{key}.{concern_name}.{fields[0]} cannot fit the planner "
+                        "atomic output ceiling even as a single-field page"
+                    ) from exc
+                midpoint = (len(fields) + 1) // 2
+                add_page(concern_name, fields[:midpoint])
+                add_page(concern_name, fields[midpoint:])
+                return
+
         chunks.append(chunk)
 
     for concern, columns in records.items():
@@ -251,7 +282,7 @@ def pack_section_concerns(section: str) -> list[tuple[str, ...]]:
 
             # DSL/IR executable fields are each an independent semantic page.
             for field in executable:
-                add_page(concern, (field,))
+                add_page(concern, (field,), per_record_transport=True)
         else:
             for start in range(0, len(fields), page_width):
                 add_page(concern, fields[start : start + page_width])
