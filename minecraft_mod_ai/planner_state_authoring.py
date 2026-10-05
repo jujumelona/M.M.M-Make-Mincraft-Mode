@@ -78,31 +78,6 @@ def _state_atomic_messages(
         },
     )
 
-def _unique_state_identifier(
-    value: str,
-    *,
-    prior_rows: Sequence[Mapping[str, Any]],
-    row_index: int,
-) -> str:
-    """Make an already-valid internal state identifier unique deterministically."""
-
-    base = str(value or "").strip()
-    used = {
-        str(row.get("name") or "").strip()
-        for row in prior_rows
-        if isinstance(row, Mapping)
-    }
-    if base not in used:
-        return base
-
-    suffix = max(2, int(row_index) + 1)
-    while True:
-        suffix_text = f"_{suffix}"
-        candidate = base[: max(1, 128 - len(suffix_text))] + suffix_text
-        if candidate not in used:
-            return candidate
-        suffix += 1
-
 def _state_scalar_schema(
     concern: str,
     field: str,
@@ -213,11 +188,18 @@ def author_state_semantic_page(
                     f"STATE_SEMANTIC_FIELD_INVALID: {concern}[{index}].{field}: {detail}"
                 )
             if concern == "variables" and field == "name":
-                value = _unique_state_identifier(
-                    str(value),
-                    prior_rows=rows,
-                    row_index=index,
-                )
+                name = str(value).strip()
+                used = {
+                    str(row.get("name") or "").strip()
+                    for row in (*prior, *rows)
+                    if isinstance(row, Mapping)
+                }
+                used.discard(str(fixed.get("name") or "").strip())
+                if name in used:
+                    raise ValueError(
+                        "STATE_VARIABLE_IDENTIFIER_DUPLICATE: "
+                        f"{concern}[{index}].name={name!r}"
+                    )
             row[field] = deepcopy(value)
         rows.append(row)
 
