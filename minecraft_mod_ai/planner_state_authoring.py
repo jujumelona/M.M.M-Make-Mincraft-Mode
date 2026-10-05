@@ -17,6 +17,7 @@ from .structured_state_runtime import (
     StateSymbolTable,
     mutations_schema,
     state_expr_schema,
+    state_variable_default_schema,
     validate_mutation_ir,
     validate_state_expr_ir,
     validate_state_expression,
@@ -266,11 +267,7 @@ def _state_scalar_schema(
     result = deepcopy(dict(schema))
     if concern == "variables" and field == "default":
         family = str(current_row.get("type") or "").strip().casefold()
-        if family == "number":
-            result["pattern"] = r"^[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?$"
-        elif family == "boolean":
-            result.pop("pattern", None)
-            result["enum"] = ["true", "false"]
+        return state_variable_default_schema(family)
     return result
 
 
