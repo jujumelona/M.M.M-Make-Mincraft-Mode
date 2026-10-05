@@ -368,8 +368,9 @@ def worksheet_chunk_schema(
     Initial concern pages admit 0..PLANNER_CONCERN_MAX_RECORDS rows; subsequent pages
     lock to the exact cardinality established by the initial page.
     """
-    # Planning owns the canonical worksheet contract. Structured state IR is an
-    # authoring/production representation and must not leak back into planning.
+    # Planning owns row/cardinality structure. Executable state fields are
+    # authored through the dedicated typed-IR path; this generic page builder only
+    # carries their canonical storage schema.
     del state_symbols
     key = _normalize_section_name(section)
     active = tuple(concerns)
