@@ -2734,11 +2734,11 @@ class CompleteProductionOrchestrator:
     ) -> dict[str, Any]:
         """Bind one generation receipt to the bytes it claims to have written."""
 
-        from .scheduler_parallel_safety_contract import _receipt_touched_paths
+        from .generation_receipt_paths import receipt_output_paths
 
         root = project_root.resolve()
         hashes: dict[str, str] = {}
-        for raw in _receipt_touched_paths(receipt):
+        for raw in receipt_output_paths(receipt):
             path = Path(raw)
             candidate = path.resolve() if path.is_absolute() else (root / path).resolve()
             try:
@@ -2758,63 +2758,44 @@ class CompleteProductionOrchestrator:
 
     @staticmethod
     def _receipt_outputs_exist(receipt: dict[str, Any], *, project_root: Path) -> bool:
-        if receipt.get('status') == 'SKIPPED':
+        if receipt.get("status") == "SKIPPED":
             return True
+
+        from .generation_receipt_paths import receipt_output_paths
+
         bound_hashes = receipt.get("_mmm_output_hashes")
         if not isinstance(bound_hashes, dict):
             return False
-        root = project_root.resolve()
-        for raw, expected in bound_hashes.items():
-            if not isinstance(raw, str) or not isinstance(expected, str):
-                return False
-            candidate = (root / raw).resolve()
-            try:
-                candidate.relative_to(root)
-            except ValueError:
-                return False
-            if (
-                not candidate.is_file()
-                or candidate.is_symlink()
-                or file_sha256(candidate) != expected
-            ):
-                return False
-        raw_paths: list[str] = []
-        research_outputs: list[dict[str, Any]] = []
 
-        def collect(value: Any) -> None:
-            if isinstance(value, dict):
-                if value.get('schema_version') == 'mmm/research-ledger-write-receipt-v1':
-                    research_outputs.append(value)
-                for key, nested in value.items():
-                    if key in {'files', 'generated_files', 'touched_paths', 'written_files'} and isinstance(nested, (list, tuple)):
-                        raw_paths.extend(str(item) for item in nested if isinstance(item, str))
-                    elif isinstance(nested, (dict, list)):
-                        collect(nested)
-            elif isinstance(value, list):
-                for nested in value:
-                    collect(nested)
-        collect(receipt)
-        for research in research_outputs:
-            raw = research.get('target_path')
-            expected = research.get('sha256')
-            if not isinstance(raw, str) or not isinstance(expected, str):
-                return False
-            path = (project_root / raw).resolve()
+        root = project_root.resolve()
+        current_hashes: dict[str, str] = {}
+        for raw in receipt_output_paths(receipt):
+            path = Path(raw)
+            candidate = (
+                path.resolve()
+                if path.is_absolute()
+                else (root / path).resolve()
+            )
             try:
-                path.relative_to(project_root.resolve())
+                relative = candidate.relative_to(root).as_posix()
             except ValueError:
                 return False
-            if not path.is_file() or path.is_symlink():
+            if not candidate.is_file() or candidate.is_symlink():
                 return False
-            if file_sha256(path) != expected:
-                return False
-        if not raw_paths:
+            current_hashes[relative] = file_sha256(candidate)
+
+        if set(bound_hashes) != set(current_hashes):
+            return False
+        if any(
+            not isinstance(relative, str)
+            or not isinstance(expected, str)
+            or current_hashes.get(relative) != expected
+            for relative, expected in bound_hashes.items()
+        ):
+            return False
+
+        if not current_hashes:
             return CompleteProductionOrchestrator._valid_project_root(project_root)
-        for raw in raw_paths:
-            path = Path(raw)
-            path = path.resolve() if path.is_absolute() else (project_root / path).resolve()
-            if not path.is_file() or path.is_symlink():
-                return False
         return True
 
     def _project_manifest_hash(self, project_root: Path) -> str:
