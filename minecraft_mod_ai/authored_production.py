@@ -424,31 +424,98 @@ def _compile_content_artifact_graph(
         if not isinstance(values, list):
             raise ValueError(f"CONTENT_DESIGN_INVALID: {label} must be an array")
 
-    modules = tuple(
-        ProductionModule(
-            module_id=str(item["module_id"]),
-            kind=str(item["kind"]),
-            config=deepcopy(dict(item.get("config") or {})),
-            depends_on=tuple(str(value) for value in item.get("depends_on", ())),
-            required_gates=tuple(str(value) for value in item.get("required_gates", ())),
+    module_fields = {
+        "module_id",
+        "kind",
+        "config",
+        "depends_on",
+        "required_gates",
+    }
+    parsed_modules: list[ProductionModule] = []
+    for index, item in enumerate(raw_modules):
+        if not isinstance(item, Mapping):
+            raise ValueError(
+                f"CONTENT_DESIGN_INVALID: modules[{index}] must be an object"
+            )
+        if set(item) != module_fields:
+            raise ValueError(
+                f"CONTENT_MODULE_FIELDS_INVALID: modules[{index}] "
+                f"missing={sorted(module_fields - set(item))}, "
+                f"unknown={sorted(set(item) - module_fields)}"
+            )
+        if not isinstance(item["module_id"], str) or not isinstance(item["kind"], str):
+            raise TypeError(
+                f"CONTENT_MODULE_IDENTITY_INVALID: modules[{index}]"
+            )
+        if not isinstance(item["config"], Mapping):
+            raise TypeError(
+                f"CONTENT_MODULE_CONFIG_INVALID: modules[{index}]"
+            )
+        for field_name in ("depends_on", "required_gates"):
+            values = item[field_name]
+            if not isinstance(values, list) or any(
+                not isinstance(value, str) for value in values
+            ):
+                raise TypeError(
+                    f"CONTENT_MODULE_ARRAY_INVALID: modules[{index}].{field_name}"
+                )
+        module = ProductionModule(
+            module_id=item["module_id"],
+            kind=item["kind"],
+            config=deepcopy(dict(item["config"])),
+            depends_on=tuple(item["depends_on"]),
+            required_gates=tuple(item["required_gates"]),
         )
-        for item in raw_modules
-        if isinstance(item, Mapping)
-    )
-    assets = tuple(
-        AssetRequest(**deepcopy(dict(item)))
-        for item in raw_assets
-        if isinstance(item, Mapping)
-    )
+        module.validate()
+        parsed_modules.append(module)
+    modules = tuple(parsed_modules)
+
+    asset_fields = {
+        "asset_id",
+        "kind",
+        "visual_description",
+        "render_kind",
+        "subject_id",
+        "owner_module_id",
+        "container",
+        "requested_width",
+        "requested_height",
+        "variant_count",
+        "visual_spec",
+    }
+    parsed_assets: list[AssetRequest] = []
+    for index, item in enumerate(raw_assets):
+        if not isinstance(item, Mapping):
+            raise ValueError(
+                f"CONTENT_DESIGN_INVALID: assets[{index}] must be an object"
+            )
+        if set(item) != asset_fields:
+            raise ValueError(
+                f"CONTENT_ASSET_FIELDS_INVALID: assets[{index}] "
+                f"missing={sorted(asset_fields - set(item))}, "
+                f"unknown={sorted(set(item) - asset_fields)}"
+            )
+        try:
+            asset = AssetRequest(**deepcopy(dict(item)))
+        except TypeError as exc:
+            raise TypeError(
+                f"CONTENT_ASSET_SHAPE_INVALID: assets[{index}]"
+            ) from exc
+        asset.validate()
+        parsed_assets.append(asset)
+    assets = tuple(parsed_assets)
 
     from .implementation_fact import ImplementationFact
     from .artifact_expansion import expand_facts_to_jobs
 
-    facts = tuple(
-        ImplementationFact.from_dict(dict(item))
-        for item in raw_facts
-        if isinstance(item, Mapping)
-    )
+    parsed_facts: list[ImplementationFact] = []
+    for index, item in enumerate(raw_facts):
+        if not isinstance(item, Mapping):
+            raise ValueError(
+                f"CONTENT_DESIGN_INVALID: _implementation_facts[{index}] must be an object"
+            )
+        parsed_facts.append(ImplementationFact.from_dict(dict(item)))
+    facts = tuple(parsed_facts)
     if modules and not facts:
         raise ValueError("CONTENT_ARTIFACT_FACTS_REQUIRED")
     jobs = tuple(
@@ -463,6 +530,9 @@ def _compile_content_artifact_graph(
     )
 
     module_ids = {module.module_id for module in modules}
+    from .artifact_job import validate_artifact_job_graph
+
+    validate_artifact_job_graph(jobs, module_ids=module_ids)
     if len(module_ids) != len(modules):
         raise ValueError("CONTENT_ARTIFACT_DUPLICATE_MODULE_ID")
     owner_ids = {str(job.owner_module).strip() for job in jobs if str(job.owner_module).strip()}
