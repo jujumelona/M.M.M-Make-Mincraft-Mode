@@ -838,13 +838,30 @@ def compile_state_expr_ir(
         right = compile_state_expr_ir(expr.get("right"), declared=declared, context=context)
         return f"$mmmArithmetic({_java_string(op)}, {left}, {right})"
 
+    if kind == "number":
+        value = str(expr.get("value") or "").strip()
+        if not re.fullmatch(r"^-?[0-9]+(?:\.[0-9]+)?$", value):
+            raise ValueError(
+                f"STRUCTURED_STATE_EXPRESSION: invalid number literal {value!r}"
+            )
+        return f"Double.valueOf({_java_string(value)})"
+
     if kind == "call":
         name = str(expr.get("name") or "").casefold()
+        if name not in _SUPPORTED_STATE_FUNCTIONS:
+            raise ValueError(
+                f"STRUCTURED_STATE_EXPRESSION: unsupported function {name!r}"
+            )
         args = expr.get("args") or ()
-        args_compiled = ", ".join(compile_state_expr_ir(a, declared=declared, context=context) for a in args)
+        args_compiled = ", ".join(
+            compile_state_expr_ir(a, declared=declared, context=context)
+            for a in args
+        )
         return f"$mmmFunction({_java_string(name)}, java.util.Arrays.asList({args_compiled}), {context})"
 
-    return "true"
+    raise ValueError(
+        f"STRUCTURED_STATE_EXPRESSION: unknown expression kind {kind!r}"
+    )
 
 
 def _state_expr_value_family(
@@ -1001,15 +1018,22 @@ def compile_mutation_ir(
     elif isinstance(mutation, Sequence) and not isinstance(mutation, (str, bytes, bytearray)):
         mutations = list(mutation)
     else:
-        return ""
+        raise ValueError(
+            "STRUCTURED_STATE_MUTATION: expected list, object, string, or null; "
+            f"got {type(mutation).__name__}"
+        )
 
     rows: list[str] = []
     for item in mutations:
         if not isinstance(item, Mapping):
-            continue
+            raise ValueError(
+                "STRUCTURED_STATE_MUTATION: mutation item must be an object"
+            )
         target = str(item.get("target") or "").strip()
         if not target:
-            continue
+            raise ValueError(
+                "STRUCTURED_STATE_MUTATION: mutation target is required"
+            )
         if declared is not None and target not in declared:
             raise ValueError(
                 f"STRUCTURED_STATE_MUTATION: undeclared state variable {target!r}"
