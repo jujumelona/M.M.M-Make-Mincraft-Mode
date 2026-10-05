@@ -1288,6 +1288,18 @@ def _semantic_state_value_schema(type_name: str) -> dict[str, Any]:
     )
 
 
+def _semantic_capability_arg_schema(type_name: str) -> dict[str, Any]:
+    if type_name in {"int", "long", "double"}:
+        return _semantic_state_value_schema(type_name)
+    if type_name == "boolean":
+        return {"type": "boolean"}
+    if type_name == "string":
+        return {"type": "string", "maxLength": 128}
+    raise ValueError(
+        f"TYPED_PLAN_SEMANTIC_CAPABILITY_ARG_TYPE_UNSUPPORTED: {type_name!r}"
+    )
+
+
 def semantic_dispatch_schema(
     state_types: Mapping[str, str],
     capabilities: Mapping[str, Any] | None,
@@ -1338,21 +1350,49 @@ def semantic_dispatch_schema(
             })
 
     for capability_id in sorted((capabilities or {}).keys()):
+        contract = (capabilities or {}).get(capability_id)
+        if not isinstance(contract, Mapping):
+            raise ValueError(
+                f"TYPED_PLAN_SEMANTIC_CAPABILITY_CONTRACT_INVALID: {capability_id!r}"
+            )
+        params = contract.get("parameters")
+        if not isinstance(params, Sequence) or isinstance(
+            params, (str, bytes, bytearray)
+        ):
+            raise ValueError(
+                f"TYPED_PLAN_SEMANTIC_CAPABILITY_PARAMETERS_INVALID: {capability_id!r}"
+            )
+
+        properties: dict[str, Any] = {
+            "trigger_event": {
+                "type": "string",
+                "enum": list(_SEMANTIC_TRIGGER_EVENTS),
+            },
+            "action_kind": {"const": "call_capability"},
+            "capability_id": {"const": capability_id},
+        }
+        required = [
+            "trigger_event",
+            "action_kind",
+            "capability_id",
+        ]
+        for index, raw_type in enumerate(params):
+            ptype = str(raw_type)
+            if ptype == "object":
+                if index != 0:
+                    raise ValueError(
+                        "TYPED_PLAN_SEMANTIC_CAPABILITY_OBJECT_BINDING_UNSUPPORTED: "
+                        f"{capability_id!r} parameter {index}"
+                    )
+                continue
+            field = f"arg_{index}"
+            properties[field] = _semantic_capability_arg_schema(ptype)
+            required.append(field)
+
         branches.append({
             "type": "object",
-            "properties": {
-                "trigger_event": {
-                    "type": "string",
-                    "enum": list(_SEMANTIC_TRIGGER_EVENTS),
-                },
-                "action_kind": {"const": "call_capability"},
-                "capability_id": {"const": capability_id},
-            },
-            "required": [
-                "trigger_event",
-                "action_kind",
-                "capability_id",
-            ],
+            "properties": properties,
+            "required": required,
             "additionalProperties": False,
         })
 
@@ -1473,32 +1513,78 @@ def lower_semantic_game_dispatch_to_ir(
                 raise ValueError(
                     f"TYPED_PLAN_SEMANTIC_CAPABILITY_UNKNOWN: {cap_id!r}"
                 )
-            params = contract.get("parameters", [])
+            params = contract.get("parameters")
+            if not isinstance(params, Sequence) or isinstance(
+                params, (str, bytes, bytearray)
+            ):
+                raise ValueError(
+                    f"TYPED_PLAN_SEMANTIC_CAPABILITY_PARAMETERS_INVALID: {cap_id!r}"
+                )
 
-            def _default_cap_arg(ptype: str, index: int) -> dict[str, Any]:
-                if ptype == "object" and index == 0:
-                    return {"op": "ref", "name": "primary"}
+            args: list[dict[str, Any]] = []
+            for index, raw_type in enumerate(params):
+                ptype = str(raw_type)
+                if ptype == "object":
+                    if index != 0:
+                        raise ValueError(
+                            "TYPED_PLAN_SEMANTIC_CAPABILITY_OBJECT_BINDING_UNSUPPORTED: "
+                            f"{cap_id!r} parameter {index}"
+                        )
+                    args.append({"op": "ref", "name": "primary"})
+                    continue
+
+                field = f"arg_{index}"
+                if field not in rule:
+                    raise ValueError(
+                        "TYPED_PLAN_SEMANTIC_CAPABILITY_ARG_REQUIRED: "
+                        f"{cap_id!r} {field}"
+                    )
+                raw_arg = rule[field]
                 if ptype == "int":
-                    return {"op": "literal", "type": "int", "value": 0}
-                if ptype == "long":
-                    return {"op": "literal", "type": "long", "value": 0}
-                if ptype == "double":
-                    return {"op": "literal", "type": "double", "value": 0.0}
-                if ptype == "boolean":
-                    return {"op": "literal", "type": "boolean", "value": False}
-                if ptype == "string":
-                    return {"op": "literal", "type": "string", "value": ""}
-                return {"op": "literal", "type": "object", "value": None}
+                    value = _decode_int_literal(
+                        raw_arg,
+                        scope=f"rule[{rule_idx}].{field}",
+                    )
+                elif ptype == "long":
+                    value = _decode_long_literal(
+                        raw_arg,
+                        scope=f"rule[{rule_idx}].{field}",
+                    )
+                elif ptype == "double":
+                    value = _decode_double_literal(
+                        raw_arg,
+                        scope=f"rule[{rule_idx}].{field}",
+                    )
+                elif ptype == "boolean":
+                    if type(raw_arg) is not bool:
+                        raise ValueError(
+                            f"TYPED_PLAN_SEMANTIC_CAPABILITY_BOOLEAN_INVALID: "
+                            f"{cap_id!r} {field}"
+                        )
+                    value = raw_arg
+                elif ptype == "string":
+                    if not isinstance(raw_arg, str):
+                        raise ValueError(
+                            f"TYPED_PLAN_SEMANTIC_CAPABILITY_STRING_INVALID: "
+                            f"{cap_id!r} {field}"
+                        )
+                    value = raw_arg
+                else:
+                    raise ValueError(
+                        f"TYPED_PLAN_SEMANTIC_CAPABILITY_ARG_TYPE_UNSUPPORTED: {ptype!r}"
+                    )
+                args.append({
+                    "op": "literal",
+                    "type": ptype,
+                    "value": value,
+                })
 
             action_statements.append({
                 "op": "expr",
                 "value": {
                     "op": "capability",
                     "id": cap_id,
-                    "args": [
-                        _default_cap_arg(str(ptype), index)
-                        for index, ptype in enumerate(params)
-                    ],
+                    "args": args,
                 },
             })
         else:
