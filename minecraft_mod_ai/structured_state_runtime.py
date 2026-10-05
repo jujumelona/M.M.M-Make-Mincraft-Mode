@@ -574,7 +574,7 @@ def validate_state_expr_ir(
         if not name or not isinstance(name, str):
             raise ValueError("STRUCTURED_STATE_EXPRESSION: state_ref requires string 'name'")
         name = name.strip()
-        if declared is not None and len(declared) > 0 and name not in declared:
+        if declared is not None and name not in declared:
             raise ValueError(f"STRUCTURED_STATE_EXPRESSION: undeclared state variable {name!r}")
         return
 
@@ -591,6 +591,20 @@ def validate_state_expr_ir(
         return
 
     if kind == "literal":
+        value = expr.get("value")
+        if isinstance(value, str):
+            if any(char in value for char in "{}[]"):
+                raise ValueError(
+                    "STRUCTURED_STATE_EXPRESSION: structured containers may not be "
+                    "serialized into a scalar string literal"
+                )
+            if any(0xD800 <= ord(char) <= 0xDFFF for char in value):
+                raise ValueError(
+                    "STRUCTURED_STATE_EXPRESSION: string literal contains an unpaired surrogate"
+                )
+        return
+
+    if kind in {"empty_map", "empty_list"}:
         return
 
     if kind == "arithmetic":
@@ -660,13 +674,19 @@ def compile_state_expr_ir(
 
     if kind == "state_ref":
         name = str(expr.get("name") or "").strip()
-        if declared is not None and len(declared) > 0 and name not in declared:
+        if declared is not None and name not in declared:
             raise ValueError(f"STRUCTURED_STATE_EXPRESSION: undeclared state variable {name!r}")
         return f"$mmmRead({_java_string(name)}, {context})"
 
     if kind == "context_ref":
         name = str(expr.get("name") or "").strip()
         return f"$mmmRead({_java_string(name)}, {context})"
+
+    if kind == "empty_map":
+        return "new java.util.LinkedHashMap<>()"
+
+    if kind == "empty_list":
+        return "new java.util.ArrayList<>()"
 
     if kind == "and":
         terms = expr.get("terms") or []
@@ -755,7 +775,7 @@ def validate_mutation_ir(
                 raise ValueError(
                     f"STRUCTURED_STATE_MUTATION: expected assignment, got {stmt!r}"
                 ) from exc
-            if declared is not None and len(declared) > 0 and name not in declared:
+            if declared is not None and name not in declared:
                 raise ValueError(
                     f"STRUCTURED_STATE_MUTATION: undeclared state variable {name!r}"
                 )
@@ -778,7 +798,7 @@ def validate_mutation_ir(
         target = str(item.get("target") or "").strip()
         if not target:
             raise ValueError("STRUCTURED_STATE_MUTATION: mutation requires non-empty string 'target'")
-        if declared is not None and len(declared) > 0 and target not in declared:
+        if declared is not None and target not in declared:
             raise ValueError(
                 f"STRUCTURED_STATE_MUTATION: undeclared state variable {target!r}"
             )
