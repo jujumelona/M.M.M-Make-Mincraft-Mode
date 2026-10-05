@@ -20,6 +20,7 @@ from .project_edit import (
 )
 from .typed_host_capabilities import render_typed_host_capabilities_java
 from .typed_plan_ir import typed_plan_capability_ids, typed_plan_uses_state
+from .typed_platform_ir import network_sync_requires_state
 from .typed_plan_java import render_typed_plan_java
 
 
@@ -830,13 +831,8 @@ def generate_typed_plan_module(
     if raw_network_sync is not None:
         if not isinstance(raw_network_sync, Mapping):
             raise ValueError("TYPED_NETWORK_SYNC_CONFIG_INVALID")
-        network_sync_needs_state = bool(
-            set(raw_network_sync.get("__covers", ()))
-            & {
-                "authority_and_network.payloads",
-                "authority_and_network.synchronization",
-                "authority_and_network.reconnection",
-            }
+        network_sync_needs_state = network_sync_requires_state(
+            tuple(raw_network_sync.get("__covers", ()))
         )
         if network_sync_needs_state and not state_authority_present:
             raise ValueError("TYPED_NETWORK_STATE_AUTHORITY_REQUIRED")
