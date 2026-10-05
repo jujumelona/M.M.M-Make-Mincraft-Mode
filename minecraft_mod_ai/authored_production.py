@@ -86,9 +86,15 @@ def _compile_new_authored_modules(
         capability_id: deepcopy(capability_contracts[capability_id])
         for capability_id in capability_ids
     }
+    from .authored_content_contract import content_owned_refs
+
     assert_typed_plan_host_support(
         plan.structured_sections,
         validated_plan,
+        externally_covered_refs=content_owned_refs(
+            plan.structured_sections,
+            getattr(plan, "content_design", {}),
+        ),
     )
 
     raw_platform_modules = validated_plan.get("platform_modules", [])
