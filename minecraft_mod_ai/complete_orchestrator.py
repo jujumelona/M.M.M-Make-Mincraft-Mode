@@ -2117,6 +2117,11 @@ class CompleteProductionOrchestrator:
                 raise CompleteProductionError(
                     f'Work node {node.node_id} returned a non-object receipt.'
                 )
+            if shared_index is not None and node.stage.startswith('generate:'):
+                receipt = CompleteProductionOrchestrator._bind_receipt_output_hashes(
+                    receipt,
+                    project_root=shared_index.root,
+                )
             ledger.raise_if_cancelled()
             if claim_fenced:
                 _commit_success(
@@ -2718,9 +2723,57 @@ class CompleteProductionOrchestrator:
         return prepared_project_cache_valid(path)
 
     @staticmethod
+    def _bind_receipt_output_hashes(
+        receipt: dict[str, Any],
+        *,
+        project_root: Path,
+    ) -> dict[str, Any]:
+        """Bind one generation receipt to the bytes it claims to have written."""
+
+        from .scheduler_parallel_safety_contract import _receipt_touched_paths
+
+        root = project_root.resolve()
+        hashes: dict[str, str] = {}
+        for raw in _receipt_touched_paths(receipt):
+            path = Path(raw)
+            candidate = path.resolve() if path.is_absolute() else (root / path).resolve()
+            try:
+                relative = candidate.relative_to(root).as_posix()
+            except ValueError as exc:
+                raise CompleteProductionError(
+                    f"Generation receipt output escaped project root: {raw}"
+                ) from exc
+            if not candidate.is_file() or candidate.is_symlink():
+                raise CompleteProductionError(
+                    f"Generation receipt output is missing or unsafe: {candidate}"
+                )
+            hashes[relative] = file_sha256(candidate)
+        bound = dict(receipt)
+        bound["_mmm_output_hashes"] = dict(sorted(hashes.items()))
+        return bound
+
+    @staticmethod
     def _receipt_outputs_exist(receipt: dict[str, Any], *, project_root: Path) -> bool:
         if receipt.get('status') == 'SKIPPED':
             return True
+        bound_hashes = receipt.get("_mmm_output_hashes")
+        if not isinstance(bound_hashes, dict):
+            return False
+        root = project_root.resolve()
+        for raw, expected in bound_hashes.items():
+            if not isinstance(raw, str) or not isinstance(expected, str):
+                return False
+            candidate = (root / raw).resolve()
+            try:
+                candidate.relative_to(root)
+            except ValueError:
+                return False
+            if (
+                not candidate.is_file()
+                or candidate.is_symlink()
+                or file_sha256(candidate) != expected
+            ):
+                return False
         raw_paths: list[str] = []
         research_outputs: list[dict[str, Any]] = []
 
