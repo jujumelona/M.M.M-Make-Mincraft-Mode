@@ -71,26 +71,67 @@ class ArtifactJob:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ArtifactJob:
+        if not isinstance(data, dict):
+            raise ValueError("ARTIFACT_JOB_OBJECT_REQUIRED")
+        expected_fields = {
+            "job_id",
+            "template_id",
+            "owner_module",
+            "executor_type",
+            "target_path",
+            "anchor",
+            "operation",
+            "expected_sha256",
+            "requires",
+            "produces",
+            "required_ports",
+            "ai_slots",
+            "deterministic_inputs",
+            "status",
+            "validation_receipts",
+            "rendered_output",
+            "context_id",
+            "canonical_leaf",
+            "implementation_id",
+        }
+        if set(data) != expected_fields:
+            raise ValueError(
+                "ARTIFACT_JOB_FIELDS_INVALID: "
+                f"missing={sorted(expected_fields - set(data))}, "
+                f"unknown={sorted(set(data) - expected_fields)}"
+            )
+        if not isinstance(data["requires"], list):
+            raise ValueError("ARTIFACT_JOB_REQUIRES_ARRAY_REQUIRED")
+        if not isinstance(data["produces"], list):
+            raise ValueError("ARTIFACT_JOB_PRODUCES_ARRAY_REQUIRED")
+        if not isinstance(data["required_ports"], list):
+            raise ValueError("ARTIFACT_JOB_REQUIRED_PORTS_ARRAY_REQUIRED")
+        if not isinstance(data["ai_slots"], list):
+            raise ValueError("ARTIFACT_JOB_AI_SLOTS_ARRAY_REQUIRED")
+        if not isinstance(data["deterministic_inputs"], dict):
+            raise ValueError("ARTIFACT_JOB_INPUTS_OBJECT_REQUIRED")
+        if not isinstance(data["validation_receipts"], list):
+            raise ValueError("ARTIFACT_JOB_RECEIPTS_ARRAY_REQUIRED")
         return cls(
             job_id=str(data["job_id"]),
             template_id=str(data["template_id"]),
             owner_module=str(data["owner_module"]),
-            executor_type=ExecutorType(data.get("executor_type", "template")),
-            target_path=str(data.get("target_path", "")),
-            anchor=str(data.get("anchor", "")),
-            operation=str(data.get("operation", "")),
-            expected_sha256=data.get("expected_sha256"),
-            requires=tuple(str(k) for k in data.get("requires", ())),
-            produces=tuple(str(k) for k in data.get("produces", ())),
-            required_ports=tuple(dict(k) for k in data.get("required_ports", ())),
-            ai_slots=tuple(dict(s) for s in data.get("ai_slots", ())),
-            deterministic_inputs=dict(data.get("deterministic_inputs", {})),
-            status=str(data.get("status", "PENDING")),
-            validation_receipts=list(data.get("validation_receipts", [])),
-            rendered_output=str(data.get("rendered_output", "")),
-            context_id=str(data.get("context_id", "")),
-            canonical_leaf=str(data.get("canonical_leaf", "")),
-            implementation_id=str(data.get("implementation_id", "")),
+            executor_type=ExecutorType(data["executor_type"]),
+            target_path=str(data["target_path"]),
+            anchor=str(data["anchor"]),
+            operation=str(data["operation"]),
+            expected_sha256=data["expected_sha256"],
+            requires=tuple(str(k) for k in data["requires"]),
+            produces=tuple(str(k) for k in data["produces"]),
+            required_ports=tuple(dict(k) for k in data["required_ports"]),
+            ai_slots=tuple(dict(s) for s in data["ai_slots"]),
+            deterministic_inputs=dict(data["deterministic_inputs"]),
+            status=str(data["status"]),
+            validation_receipts=list(data["validation_receipts"]),
+            rendered_output=str(data["rendered_output"]),
+            context_id=str(data["context_id"]),
+            canonical_leaf=str(data["canonical_leaf"]),
+            implementation_id=str(data["implementation_id"]),
         )
 
 
@@ -117,6 +158,26 @@ def validate_artifact_job_graph(
             raise ValueError("ARTIFACT_JOB_ID_REQUIRED")
         if not owner:
             raise ValueError(f"ARTIFACT_JOB_OWNER_REQUIRED: {job_id!r}")
+        if not job.context_id.strip():
+            raise ValueError(f"ARTIFACT_JOB_CONTEXT_REQUIRED: {job_id!r}")
+        if not job.canonical_leaf.strip():
+            raise ValueError(f"ARTIFACT_JOB_CANONICAL_LEAF_REQUIRED: {job_id!r}")
+        if not job.implementation_id.strip():
+            raise ValueError(f"ARTIFACT_JOB_IMPLEMENTATION_REQUIRED: {job_id!r}")
+        if job.executor_type is ExecutorType.TEMPLATE:
+            if not job.template_id.strip():
+                raise ValueError(f"ARTIFACT_JOB_TEMPLATE_REQUIRED: {job_id!r}")
+            if not job.target_path.strip() or not job.operation.strip():
+                raise ValueError(f"ARTIFACT_JOB_TARGET_REQUIRED: {job_id!r}")
+        elif job.executor_type is ExecutorType.PYTHON_GENERATOR:
+            if job.template_id.strip():
+                raise ValueError(
+                    f"ARTIFACT_GENERATOR_TEMPLATE_FORBIDDEN: {job_id!r}"
+                )
+            if not job.implementation_id.startswith("python_generator:"):
+                raise ValueError(
+                    f"ARTIFACT_GENERATOR_IMPLEMENTATION_INVALID: {job_id!r}"
+                )
         if allowed_owners and owner not in allowed_owners:
             raise ValueError(
                 f"ARTIFACT_JOB_FOREIGN_OWNER: {job_id!r} -> {owner!r}"
