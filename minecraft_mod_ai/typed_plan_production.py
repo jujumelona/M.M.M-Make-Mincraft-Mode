@@ -386,14 +386,8 @@ def _network_policy_files(
     state_section: Mapping[str, Any],
     config: Mapping[str, Any],
 ) -> dict[str, str]:
-    covers = set(config.get("__covers", ()))
-    stateful = bool(
-        covers
-        & {
-            "authority_and_network.payloads",
-            "authority_and_network.synchronization",
-            "authority_and_network.reconnection",
-        }
+    stateful = network_sync_requires_state(
+        tuple(config.get("__covers", ()))
     )
     if not stateful:
         package_path = package_name.replace(".", "/")
