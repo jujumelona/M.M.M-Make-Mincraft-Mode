@@ -55,8 +55,10 @@ def test_mutation_page_preserves_canonical_typed_ir():
                     "operator": "=",
                     "value_kind": "number",
                     "value_state": "hull",
-                    "value_context": "",
-                    "value_text": "100",
+                    "value_context": "context",
+                    "value_text": "",
+                    "value_number": "100",
+                    "value_boolean": false,
                 }
             ]
         }
@@ -94,13 +96,15 @@ def test_expression_page_preserves_canonical_typed_ir():
                 {
                     "left_kind": "state",
                     "left_state": "hull",
-                    "left_context": "",
-                    "left_value": "",
+                    "left_context": "context",
+                    "left_boolean": false,
                     "operator": ">",
                     "right_kind": "number",
                     "right_state": "hull",
-                    "right_context": "",
-                    "right_value": "0",
+                    "right_context": "context",
+                    "right_text": "",
+                    "right_number": "0",
+                    "right_boolean": false,
                 }
             ],
         }
@@ -149,8 +153,10 @@ def test_mutation_transport_constrains_targets_to_declared_symbols():
                     "operator": "=",
                     "value_kind": "state",
                     "value_state": "hull",
-                    "value_context": "",
+                    "value_context": "context",
                     "value_text": "",
+                    "value_number": "0",
+                    "value_boolean": false,
                 }
             ]
         }
@@ -260,24 +266,28 @@ def test_boolean_conjunction_is_host_lowered_from_flat_terms():
                 {
                     "left_kind": "state",
                     "left_state": "interstellar_trade_hub",
-                    "left_context": "",
-                    "left_value": "",
+                    "left_context": "context",
+                    "left_boolean": false,
                     "operator": "truthy",
-                    "right_kind": "none",
+                    "right_kind": "null",
                     "right_state": "interstellar_trade_hub",
-                    "right_context": "",
-                    "right_value": "",
+                    "right_context": "context",
+                    "right_text": "",
+                    "right_number": "0",
+                    "right_boolean": false,
                 },
                 {
                     "left_kind": "state",
                     "left_state": "spacecraft_unlocked",
-                    "left_context": "",
-                    "left_value": "",
+                    "left_context": "context",
+                    "left_boolean": false,
                     "operator": "truthy",
-                    "right_kind": "none",
+                    "right_kind": "null",
                     "right_state": "spacecraft_unlocked",
-                    "right_context": "",
-                    "right_value": "",
+                    "right_context": "context",
+                    "right_text": "",
+                    "right_number": "0",
+                    "right_boolean": false,
                 },
             ],
         }
@@ -307,4 +317,45 @@ def test_boolean_conjunction_is_host_lowered_from_flat_terms():
         ]
     }
     assert "oneOf" not in json.dumps(router.calls[0]["response_schema"])
+
+def test_boolean_condition_payload_is_schema_typed_not_empty_string():
+    router = StateChoices([
+        {
+            "join": "and",
+            "terms": [
+                {
+                    "left_kind": "boolean",
+                    "left_state": "hull",
+                    "left_context": "context",
+                    "left_boolean": False,
+                    "operator": "truthy",
+                    "right_kind": "null",
+                    "right_state": "hull",
+                    "right_context": "context",
+                    "right_text": "",
+                    "right_number": "0",
+                    "right_boolean": False,
+                }
+            ],
+        }
+    ])
+
+    result = author_state_field_page(
+        router,
+        "This condition is explicitly false.",
+        concern="invariants",
+        field="condition",
+        count=1,
+        symbols=_symbols(),
+        existing_rows=[{"enforcement": "disabled"}],
+    )
+
+    assert result == {
+        "invariants": [{"condition": {"kind": "literal", "value": False}}]
+    }
+    schema = router.calls[0]["response_schema"]
+    term = schema["properties"]["terms"]["items"]
+    assert term["properties"]["left_boolean"]["type"] == "boolean"
+    assert "left_value" not in term["properties"]
+    assert "none" not in term["properties"]["right_kind"]["enum"]
 
