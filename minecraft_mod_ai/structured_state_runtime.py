@@ -1297,13 +1297,23 @@ def validate_state_concern(
     else:
         declared = set()
 
-    rows = records if isinstance(records, Sequence) and not isinstance(records, (str, bytes, bytearray)) else ()
+    if not isinstance(records, Sequence) or isinstance(
+        records,
+        (str, bytes, bytearray),
+    ):
+        raise ValueError(
+            f"STRUCTURED_STATE_CONCERN_ARRAY_REQUIRED: {concern}"
+        )
+    rows = tuple(records)
+    for index, record in enumerate(rows):
+        if not isinstance(record, Mapping):
+            raise ValueError(
+                f"STRUCTURED_STATE_RECORD_INVALID: {concern}[{index}]"
+            )
 
     if concern == "variables":
         seen: set[str] = set()
         for record in rows:
-            if not isinstance(record, Mapping):
-                continue
             name = str(record.get("name") or "").strip()
             if re.fullmatch(_STATE_IDENTIFIER_PATTERN, name) is None:
                 raise ValueError(
@@ -1348,8 +1358,6 @@ def validate_state_concern(
 
     if concern == "transitions":
         for record in rows:
-            if not isinstance(record, Mapping):
-                continue
             guard_val = record.get("guard")
             if guard_val is not None:
                 validate_state_expr_ir(guard_val, symbols=declared)
@@ -1360,8 +1368,6 @@ def validate_state_concern(
 
     if concern == "invariants":
         for record in rows:
-            if not isinstance(record, Mapping):
-                continue
             cond_val = record.get("condition")
             if cond_val is not None:
                 validate_state_expr_ir(cond_val, symbols=declared)
@@ -1374,29 +1380,32 @@ def validate_state_concern(
             "cleanup": "action",
         }[concern]
         for record in rows:
-            if not isinstance(record, Mapping):
-                continue
             mut_val = record.get(field)
             if mut_val is not None:
                 validate_mutation_ir(mut_val, symbols=symbols)
         return
 
 
-def validate_structured_state_section(section: Mapping[str, Any]) -> None:
-    """Fail closed on canonical state semantics before any production code is generated."""
+def validate_structured_state_section(specification: Mapping[str, Any]) -> None:
+    """Validate one canonical state specification mapping and no alternate shape."""
 
-    raw_specification = section.get("specification")
-    specification = (
-        raw_specification if isinstance(raw_specification, Mapping) else section
-    )
-    variables = specification.get("variables", [])
+    if not isinstance(specification, Mapping):
+        raise ValueError("STRUCTURED_STATE_SPECIFICATION_OBJECT_REQUIRED")
+
+    variables = specification.get("variables", ())
     validate_state_concern("variables", variables)
     symbols = StateSymbolTable(variables)
 
-    for concern in ("transitions", "invariants", "initialization", "updates", "cleanup", "concurrency"):
-        records = specification.get(concern, [])
-        if records:
-            validate_state_concern(concern, records, symbols=symbols)
+    for concern in (
+        "transitions",
+        "invariants",
+        "initialization",
+        "updates",
+        "cleanup",
+        "concurrency",
+    ):
+        records = specification.get(concern, ())
+        validate_state_concern(concern, records, symbols=symbols)
 
 
 def _obligations(task: Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:
