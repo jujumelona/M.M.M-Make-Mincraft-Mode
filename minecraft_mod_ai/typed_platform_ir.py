@@ -98,21 +98,37 @@ def platform_config_schema(kind: str) -> dict[str, Any]:
         },
     }
     if kind == "item":
-        return _schema(common)
+        return _schema(
+            common,
+            required=("display_name_en", "display_name_ko"),
+        )
     if kind == "block":
-        return _schema({**common, "hardness": _FINITE_NUMBER})
+        return _schema(
+            {**common, "hardness": _FINITE_NUMBER},
+            required=("display_name_en", "display_name_ko", "hardness"),
+        )
     if kind == "food":
         return _schema({
             **common,
             "hunger": _NONNEG_INT,
             "saturation": _FINITE_NUMBER,
-        })
+        }, required=(
+            "display_name_en",
+            "display_name_ko",
+            "hunger",
+            "saturation",
+        ))
     if kind in {"weapon", "tool"}:
         return _schema({
             **common,
             "attack_damage": {"type": "integer"},
             "attack_speed": _FINITE_NUMBER,
-        })
+        }, required=(
+            "display_name_en",
+            "display_name_ko",
+            "attack_damage",
+            "attack_speed",
+        ))
     if kind == "armor":
         return _schema({
             **common,
@@ -120,7 +136,7 @@ def platform_config_schema(kind: str) -> dict[str, Any]:
                 "type": "string",
                 "enum": ["helmet", "chestplate", "leggings", "boots"],
             },
-        })
+        }, required=("display_name_en", "display_name_ko", "slot"))
     if kind == "machine":
         return _schema({
             **common,
@@ -128,9 +144,19 @@ def platform_config_schema(kind: str) -> dict[str, Any]:
             "output_item": _RESOURCE_ID,
             "output_count": _POSITIVE_INT,
             "processing_ticks": _POSITIVE_INT,
-        })
+        }, required=(
+            "display_name_en",
+            "display_name_ko",
+            "input_item",
+            "output_item",
+            "output_count",
+            "processing_ticks",
+        ))
     if kind == "crop":
-        return _schema(common)
+        return _schema(
+            common,
+            required=("display_name_en", "display_name_ko"),
+        )
     if kind == "effect":
         return _schema({
             **common,
@@ -138,9 +164,12 @@ def platform_config_schema(kind: str) -> dict[str, Any]:
                 "type": "string",
                 "pattern": r"^#[0-9A-Fa-f]{6}$",
             },
-        })
+        }, required=("display_name_en", "display_name_ko", "color"))
     if kind == "enchantment":
-        return _schema({**common, "max_level": _POSITIVE_INT})
+        return _schema(
+            {**common, "max_level": _POSITIVE_INT},
+            required=("display_name_en", "display_name_ko", "max_level"),
+        )
     if kind == "command":
         return _schema({
             "literal": {
@@ -155,7 +184,7 @@ def platform_config_schema(kind: str) -> dict[str, Any]:
                 "minimum": 0,
                 "maximum": 4,
             },
-        })
+        }, required=("literal", "message", "permission_level"))
     if kind in {"recipe", "advancement", "loot"}:
         return _schema({
             "json": {
@@ -316,9 +345,16 @@ def platform_config_schema(kind: str) -> dict[str, Any]:
             "reward_item": _RESOURCE_ID,
             "reward_count": _POSITIVE_INT,
             "reward_currency": {"type": "number", "minimum": 0},
-        })
+        }, required=(
+            "objective",
+            "target",
+            "required",
+            "reward_item",
+            "reward_count",
+            "reward_currency",
+        ))
     if kind == "class":
-        return _schema({"display_name": _DISPLAY})
+        return _schema({"display_name": _DISPLAY}, required=("display_name",))
     if kind == "skill":
         return _schema({
             "required_class": {
@@ -329,9 +365,17 @@ def platform_config_schema(kind: str) -> dict[str, Any]:
             "duration_ticks": _POSITIVE_INT,
             "amplifier": {"type": "integer", "minimum": 0, "maximum": 255},
             "cooldown_ticks": _POSITIVE_INT,
-        })
+        }, required=(
+            "effect",
+            "duration_ticks",
+            "amplifier",
+            "cooldown_ticks",
+        ))
     if kind == "economy":
-        return _schema({"initial_balance": {"type": "number", "minimum": 0}})
+        return _schema(
+            {"initial_balance": {"type": "number", "minimum": 0}},
+            required=("initial_balance",),
+        )
     if kind == "shop":
         return _schema({
             "entries": {
@@ -346,7 +390,7 @@ def platform_config_schema(kind: str) -> dict[str, Any]:
                     "item": _RESOURCE_ID,
                     "count": _POSITIVE_INT,
                     "price": {"type": "number", "minimum": 0},
-                }, required=("id", "item", "price")),
+                }, required=("id", "item", "count", "price")),
             },
         }, required=("entries",))
     if kind == "gui":
@@ -361,9 +405,9 @@ def platform_config_schema(kind: str) -> dict[str, Any]:
                     "slot": {"type": "integer", "minimum": 0, "maximum": 53},
                     "item": _RESOURCE_ID,
                     "count": _POSITIVE_INT,
-                }, required=("slot", "item")),
+                }, required=("slot", "item", "count")),
             },
-        }, required=("template",))
+        }, required=("template", "title", "rows", "entries"))
     if kind == "networking":
         action = {
             "oneOf": [
@@ -377,14 +421,14 @@ def platform_config_schema(kind: str) -> dict[str, Any]:
                     "type": {"const": "grant_item"},
                     "item": _RESOURCE_ID,
                     "count": _POSITIVE_INT,
-                }, required=("id", "type", "item")),
+                }, required=("id", "type", "item", "count")),
                 _schema({
                     "id": {"type": "string", "pattern": r"^[a-z][a-z0-9_]{1,63}$"},
                     "type": {"const": "status_effect"},
                     "effect": _RESOURCE_ID,
                     "duration_ticks": _POSITIVE_INT,
                     "amplifier": {"type": "integer", "minimum": 0, "maximum": 255},
-                }, required=("id", "type", "effect")),
+                }, required=("id", "type", "effect", "duration_ticks", "amplifier")),
             ],
         }
         return _schema({
@@ -397,7 +441,7 @@ def platform_config_schema(kind: str) -> dict[str, Any]:
             },
         }, required=("template", "actions"))
     if kind in {"party", "guild"}:
-        return _schema({"display_name": _DISPLAY})
+        return _schema({"display_name": _DISPLAY}, required=("display_name",))
     raise ValueError(f"TYPED_PLATFORM_KIND_UNSUPPORTED: {kind!r}")
 
 
