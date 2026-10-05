@@ -1691,200 +1691,139 @@ def _content_config_author_schema(kind: str) -> dict[str, Any]:
     raise ValueError(f"TYPED_PLATFORM_CONTENT_KIND_UNSUPPORTED: {kind!r}")
 
 
-def _normalize_content_config(kind: str, raw: Any, module_id: str) -> dict[str, Any]:
-    config: dict[str, Any] = {}
+def _require_authored_mapping(raw: Any, scope: str) -> Mapping[str, Any]:
     if not isinstance(raw, Mapping):
-        raw = {}
+        raise ValueError(
+            f"TYPED_PLATFORM_AUTHORING_RESPONSE_INVALID: {scope} must be an object"
+        )
+    return raw
+
+
+def _normalize_content_config(kind: str, raw: Any, module_id: str) -> dict[str, Any]:
+    """Apply only deterministic defaults for omitted, already-validated fields."""
+
+    values = _require_authored_mapping(raw, f"{module_id}.{kind}")
+    config: dict[str, Any] = {}
 
     default_name = module_id.replace("_", " ").title()
-    name_en = str(raw.get("display_name_en") or default_name).strip()[:128]
-    config["display_name_en"] = name_en or default_name
-    name_ko = str(raw.get("display_name_ko") or config["display_name_en"]).strip()[:128]
-    config["display_name_ko"] = name_ko or config["display_name_en"]
+    config["display_name_en"] = str(
+        values.get("display_name_en", default_name)
+    ).strip()
+    config["display_name_ko"] = str(
+        values.get("display_name_ko", config["display_name_en"])
+    ).strip()
 
-    if "ingredients" in raw and isinstance(raw["ingredients"], Sequence) and not isinstance(raw["ingredients"], (str, bytes, bytearray)):
-        valid_ings = [
-            str(ing) for ing in raw["ingredients"]
-            if isinstance(ing, str) and re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", ing)
-        ]
-        if valid_ings:
-            config["ingredients"] = valid_ings[:64]
+    if "ingredients" in values:
+        ingredients = values["ingredients"]
+        if not isinstance(ingredients, Sequence) or isinstance(
+            ingredients, (str, bytes, bytearray)
+        ):
+            raise ValueError(
+                f"TYPED_PLATFORM_AUTHORING_RESPONSE_INVALID: {module_id}.ingredients"
+            )
+        config["ingredients"] = list(ingredients)
 
     if kind == "block":
-        hardness = 1.5
-        if "hardness" in raw:
-            try:
-                val = float(raw["hardness"])
-                if math.isfinite(val) and val >= 0:
-                    hardness = val
-            except (TypeError, ValueError):
-                pass
-        config["hardness"] = hardness
+        config["hardness"] = float(values.get("hardness", 1.5))
     elif kind == "food":
-        hunger = 4
-        if "hunger" in raw and type(raw["hunger"]) is int and raw["hunger"] >= 0:
-            hunger = raw["hunger"]
-        saturation = 2.0
-        if "saturation" in raw:
-            try:
-                val = float(raw["saturation"])
-                if math.isfinite(val) and val >= 0:
-                    saturation = val
-            except (TypeError, ValueError):
-                pass
-        config["hunger"] = hunger
-        config["saturation"] = saturation
+        config["hunger"] = int(values.get("hunger", 4))
+        config["saturation"] = float(values.get("saturation", 2.0))
     elif kind in {"weapon", "tool"}:
-        damage = 6 if kind == "weapon" else 3
-        if "attack_damage" in raw and type(raw["attack_damage"]) is int:
-            damage = raw["attack_damage"]
-        speed = 1.6 if kind == "weapon" else 1.2
-        if "attack_speed" in raw:
-            try:
-                val = float(raw["attack_speed"])
-                if math.isfinite(val):
-                    speed = val
-            except (TypeError, ValueError):
-                pass
-        config["attack_damage"] = damage
-        config["attack_speed"] = speed
+        config["attack_damage"] = int(
+            values.get("attack_damage", 6 if kind == "weapon" else 3)
+        )
+        config["attack_speed"] = float(
+            values.get("attack_speed", 1.6 if kind == "weapon" else 1.2)
+        )
     elif kind == "armor":
-        slot = raw.get("slot")
-        if slot in {"helmet", "chestplate", "leggings", "boots"}:
-            config["slot"] = slot
-        else:
-            config["slot"] = "chestplate"
+        config["slot"] = str(values.get("slot", "chestplate"))
     elif kind == "machine":
-        for field, default in (("input_item", "minecraft:iron_ingot"), ("output_item", "minecraft:gold_ingot")):
-            val = str(raw.get(field) or default)
-            config[field] = val if re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", val) else default
-        count = 1
-        if "output_count" in raw and type(raw["output_count"]) is int and raw["output_count"] >= 1:
-            count = raw["output_count"]
-        ticks = 100
-        if "processing_ticks" in raw and type(raw["processing_ticks"]) is int and raw["processing_ticks"] >= 1:
-            ticks = raw["processing_ticks"]
-        config["output_count"] = count
-        config["processing_ticks"] = ticks
+        config["input_item"] = str(
+            values.get("input_item", "minecraft:iron_ingot")
+        )
+        config["output_item"] = str(
+            values.get("output_item", "minecraft:gold_ingot")
+        )
+        config["output_count"] = int(values.get("output_count", 1))
+        config["processing_ticks"] = int(values.get("processing_ticks", 100))
     elif kind == "effect":
-        color = str(raw.get("color") or "#336699")
-        config["color"] = color if re.fullmatch(r"^#[0-9A-Fa-f]{6}$", color) else "#336699"
+        config["color"] = str(values.get("color", "#336699"))
     elif kind == "enchantment":
-        max_lvl = 1
-        if "max_level" in raw and type(raw["max_level"]) is int and raw["max_level"] >= 1:
-            max_lvl = raw["max_level"]
-        config["max_level"] = max_lvl
+        config["max_level"] = int(values.get("max_level", 1))
 
     return config
 
 
 def _normalize_entity_config(raw: Any, module_id: str) -> dict[str, Any]:
-    if not isinstance(raw, Mapping):
-        raw = {}
+    """Fill host-owned physical defaults without repairing authored enum/color fields."""
 
-    def _float_val(key: str, default: float, positive: bool = True) -> float:
-        try:
-            val = float(raw[key])
-            if math.isfinite(val) and ((val > 0) if positive else (val >= 0)):
-                return val
-        except (KeyError, TypeError, ValueError):
-            pass
-        return default
-
-    archetype = str(raw.get("archetype") or "biped")
-    if archetype not in {"biped", "quadruped", "flying", "serpentine", "construct"}:
-        archetype = "biped"
-
-    behavior = str(raw.get("behavior") or "hostile_melee")
-    if behavior not in {"hostile_melee", "neutral_melee", "passive", "npc"}:
-        behavior = "hostile_melee"
-
-    spawn_group = str(raw.get("spawn_group") or "monster")
-    if spawn_group not in {"monster", "creature", "ambient", "water_creature", "misc"}:
-        spawn_group = "monster"
-
-    color = str(raw.get("main_color") or "#FF0000")
-    if not re.fullmatch(r"^#[0-9A-Fa-f]{6}$", color):
-        color = "#FF0000"
-
-    attack_damage = _float_val("attack_damage", 2.0, positive=False)
-    if behavior in {"hostile_melee", "neutral_melee"} and attack_damage <= 0:
-        attack_damage = 2.0
+    values = _require_authored_mapping(raw, f"{module_id}.entity")
+    behavior = str(values.get("behavior", "hostile_melee"))
+    attack_damage = 2.0
+    if behavior in {"passive", "npc"}:
+        attack_damage = 0.0
 
     return {
-        "max_health": _float_val("max_health", 20.0),
+        "max_health": 20.0,
         "attack_damage": attack_damage,
-        "movement_speed": _float_val("movement_speed", 0.25),
-        "follow_range": _float_val("follow_range", 16.0),
-        "archetype": archetype,
+        "movement_speed": 0.25,
+        "follow_range": 16.0,
+        "archetype": str(values.get("archetype", "biped")),
         "behavior": behavior,
-        "entity_width": _float_val("entity_width", 0.6),
-        "entity_height": _float_val("entity_height", 1.8),
-        "spawn_group": spawn_group,
-        "main_color": color,
+        "entity_width": 0.6,
+        "entity_height": 1.8,
+        "spawn_group": str(values.get("spawn_group", "monster")),
+        "main_color": str(values.get("main_color", "#FF0000")),
     }
 
 
 def _normalize_quest_config(raw: Any, module_id: str) -> dict[str, Any]:
-    if not isinstance(raw, Mapping):
-        raw = {}
-    obj = str(raw.get("objective") or "manual")
-    if obj not in {"kill", "break", "manual"}:
-        obj = "manual"
-    target = str(raw.get("target") or module_id)
-    if obj in {"kill", "break"} and not re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", target):
-        target = "minecraft:zombie" if obj == "kill" else "minecraft:stone"
-    elif obj == "manual":
-        target = module_id
-
-    reward_item = str(raw.get("reward_item") or "")
-    if reward_item and not re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", reward_item):
-        reward_item = ""
-
+    values = _require_authored_mapping(raw, f"{module_id}.quest")
+    objective = str(values.get("objective", "manual"))
+    default_target = (
+        "minecraft:zombie"
+        if objective == "kill"
+        else "minecraft:stone"
+        if objective == "break"
+        else module_id
+    )
     return {
-        "objective": obj,
-        "target": target,
-        "required": max(1, int(raw.get("required", 1))),
-        "reward_item": reward_item,
-        "reward_count": max(1, int(raw.get("reward_count", 1))),
-        "reward_currency": max(0.0, float(raw.get("reward_currency", 0.0))),
+        "objective": objective,
+        "target": str(values.get("target", default_target)),
+        "required": int(values.get("required", 1)),
+        "reward_item": str(values.get("reward_item", "minecraft:air")),
+        "reward_count": int(values.get("reward_count", 1)),
+        "reward_currency": float(values.get("reward_currency", 0.0)),
     }
 
 
 def _normalize_skill_config(raw: Any, module_id: str) -> dict[str, Any]:
-    if not isinstance(raw, Mapping):
-        raw = {}
-    effect = str(raw.get("effect") or "minecraft:speed")
-    if not re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", effect):
-        effect = "minecraft:speed"
+    values = _require_authored_mapping(raw, f"{module_id}.skill")
     cfg: dict[str, Any] = {
-        "effect": effect,
-        "duration_ticks": max(1, int(raw.get("duration_ticks", 100))),
-        "amplifier": max(0, min(255, int(raw.get("amplifier", 0)))),
-        "cooldown_ticks": max(1, int(raw.get("cooldown_ticks", 100))),
+        "effect": str(values.get("effect", "minecraft:speed")),
+        "duration_ticks": int(values.get("duration_ticks", 100)),
+        "amplifier": int(values.get("amplifier", 0)),
+        "cooldown_ticks": int(values.get("cooldown_ticks", 100)),
     }
-    req_class = str(raw.get("required_class") or "")
-    if req_class and re.fullmatch(r"^[a-z][a-z0-9_]{1,63}$", req_class):
-        cfg["required_class"] = req_class
+    if "required_class" in values:
+        cfg["required_class"] = str(values["required_class"])
     return cfg
 
 
 def _normalize_display_config(raw: Any, module_id: str) -> dict[str, Any]:
-    if isinstance(raw, Mapping) and "display_name" in raw and isinstance(raw["display_name"], str) and raw["display_name"].strip():
-        return {"display_name": raw["display_name"].strip()[:128]}
-    return {"display_name": module_id.title()}
+    values = _require_authored_mapping(raw, f"{module_id}.display")
+    return {
+        "display_name": str(
+            values.get("display_name", module_id.replace("_", " ").title())
+        ).strip()
+    }
 
 
 def _normalize_economy_config(raw: Any) -> dict[str, Any]:
-    balance = 0.0
-    if isinstance(raw, Mapping) and "initial_balance" in raw:
-        try:
-            val = float(raw["initial_balance"])
-            if math.isfinite(val) and val >= 0:
-                balance = val
-        except (TypeError, ValueError):
-            pass
-    return {"initial_balance": balance}
+    values = _require_authored_mapping(raw, "economy")
+    return {
+        "initial_balance": float(values.get("initial_balance", 0.0))
+    }
 
 
 _SHOP_ENTRY_SCHEMA = _platform_schema({
