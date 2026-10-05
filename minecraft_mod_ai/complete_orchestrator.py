@@ -1666,9 +1666,12 @@ class CompleteProductionOrchestrator:
                 receipt = self._run_work_node(
                     ledger,
                     node,
-                    action=lambda node=node, members=members: module_node_action(
-                        node,
-                        members,
+                    action=lambda node=node, members=members: self._bind_receipt_output_hashes(
+                        module_node_action(
+                            node,
+                            members,
+                        ),
+                        project_root=project_root,
                     ),
                     validate_cached=lambda value: self._receipt_outputs_exist(
                         value,
@@ -1762,7 +1765,21 @@ class CompleteProductionOrchestrator:
                     assets=shard_assets,
                     approval_hash='',
                 )
-                asset_shards.append(self._run_work_node(ledger, node, action=lambda proposal=shard_proposal: self._generate_assets(get_router(), proposal, project_root, run_root), validate_cached=self._cached_asset_shard, shared_index=shared_project_index))
+                asset_shards.append(self._run_work_node(
+                    ledger,
+                    node,
+                    action=lambda proposal=shard_proposal: self._bind_receipt_output_hashes(
+                        self._generate_assets(
+                            get_router(),
+                            proposal,
+                            project_root,
+                            run_root,
+                        ),
+                        project_root=project_root,
+                    ),
+                    validate_cached=self._cached_asset_shard,
+                    shared_index=shared_project_index,
+                ))
             else:
                 raise CompleteProductionError(f'Unsupported work node payload kind: {kind}')
         capacities = scheduler_safety._capacities()
@@ -2102,11 +2119,6 @@ class CompleteProductionOrchestrator:
             if not isinstance(receipt, dict):
                 raise CompleteProductionError(
                     f'Work node {node.node_id} returned a non-object receipt.'
-                )
-            if shared_index is not None and node.stage.startswith('generate:'):
-                receipt = CompleteProductionOrchestrator._bind_receipt_output_hashes(
-                    receipt,
-                    project_root=shared_index.root,
                 )
             ledger.raise_if_cancelled()
             if claim_fenced:
