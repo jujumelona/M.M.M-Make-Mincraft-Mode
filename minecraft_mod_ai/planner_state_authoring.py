@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+from copy import deepcopy
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -172,6 +173,80 @@ def lower_mutations_to_dsl(mutations: Any) -> str:
         statements.append(f"{target} {op} {val_dsl}")
     return "; ".join(statements)
 
+
+def author_state_semantic_page(
+    router: Any,
+    messages: Sequence[Mapping[str, Any]],
+    *,
+    concern: str,
+    fields: Sequence[str],
+    count: int,
+    item_schema: Mapping[str, Any],
+    existing_rows: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """Author non-executable state fields one row at a time.
+
+    State continuation pages must never ask a small model to rewrite the full concern
+    array. The host fixes cardinality, preserves row identity, and merges only the
+    requested field projection.
+    """
+    if count <= 0:
+        return {concern: []}
+
+    requested = tuple(str(field) for field in fields)
+    if not requested:
+        raise ValueError("STATE_SEMANTIC_PAGE: at least one field is required")
+
+    row_schema = deepcopy(dict(item_schema))
+    rows: list[dict[str, Any]] = []
+    prior = tuple(existing_rows or ())
+    for index in range(count):
+        current = (
+            dict(prior[index])
+            if index < len(prior) and isinstance(prior[index], Mapping)
+            else {}
+        )
+        instruction_parts = [
+            f"Author only state_model.{concern}[{index}] fields: {\", \".join(requested)}.",
+            "Return exactly the requested fields for this one row. Do not repeat, rename, ",
+            "or regenerate sibling fields. The host owns row order and merging.",
+        ]
+        if current:
+            instruction_parts.append(
+                "Existing immutable row context: "
+                + json.dumps(current, ensure_ascii=True, sort_keys=True, default=str)
+            )
+        if rows:
+            instruction_parts.append(
+                "Rows already authored for this projection: "
+                + json.dumps(rows, ensure_ascii=True, sort_keys=True, default=str)
+            )
+        raw = generate_fixed_template_value(
+            router,
+            "planner",
+            (*messages, {
+                "role": "system",
+                "content": " ".join(instruction_parts),
+            }),
+            response_schema=row_schema,
+            enable_tools=False,
+            description=f"Author state row {index + 1} of {count} for {concern}.",
+            output_token_ceiling=structured_output_token_ceiling(row_schema),
+        )
+        if not isinstance(raw, Mapping):
+            raise ValueError(
+                f"STATE_SEMANTIC_PAGE: {concern}[{index}] must be an object"
+            )
+        row = {}
+        for field in requested:
+            if field not in raw:
+                raise ValueError(
+                    f"STATE_SEMANTIC_PAGE: {concern}[{index}] omitted required field {field!r}"
+                )
+            row[field] = deepcopy(raw[field])
+        rows.append(row)
+
+    return {concern: rows}
 
 def author_state_field_page(
     router: Any,
