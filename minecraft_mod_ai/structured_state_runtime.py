@@ -1515,9 +1515,47 @@ def state_concern_schema(
     concern: str,
     *,
     allowed_state_symbols: Any = None,
+    allow_legacy_dsl: bool = True,
 ) -> dict[str, Any]:
     symbols = _resolve_state_symbols(allowed_state_symbols)
     symbol_source = allowed_state_symbols if allowed_state_symbols is not None else symbols
+
+    def expression_field() -> dict[str, Any]:
+        typed = state_expr_schema(symbol_source)
+        if not allow_legacy_dsl:
+            return typed
+        return {
+            "oneOf": [
+                typed,
+                {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512,
+                    "description": (
+                        "Legacy persisted state DSL accepted for backward-compatible "
+                        "read/compile only; new authoring uses typed IR."
+                    ),
+                },
+            ]
+        }
+
+    def mutation_field() -> dict[str, Any]:
+        typed = mutations_schema(symbol_source)
+        if not allow_legacy_dsl:
+            return typed
+        return {
+            "oneOf": [
+                typed,
+                {
+                    "type": "string",
+                    "maxLength": 512,
+                    "description": (
+                        "Legacy persisted mutation DSL accepted for backward-compatible "
+                        "read/compile only; new authoring uses typed IR."
+                    ),
+                },
+            ]
+        }
     if concern == "variables":
         schema = {
             "type": "object",
@@ -1545,9 +1583,9 @@ def state_concern_schema(
             "properties": {
                 "from_state": {"type": "string", "minLength": 1, "maxLength": 128},
                 "trigger": {"type": "string", "minLength": 1, "maxLength": 128},
-                "guard": state_expr_schema(symbol_source),
-                "mutations": mutations_schema(symbol_source),
-                "mutation": mutations_schema(symbol_source),
+                "guard": expression_field(),
+                "mutations": mutation_field(),
+                "mutation": mutation_field(),
                 "to_state": {"type": "string", "minLength": 1, "maxLength": 128},
             },
             "required": ["from_state", "trigger", "guard", "to_state"],
@@ -1558,7 +1596,7 @@ def state_concern_schema(
         schema = {
             "type": "object",
             "properties": {
-                "condition": state_expr_schema(symbol_source),
+                "condition": expression_field(),
                 "enforcement": {"type": "string", "minLength": 1, "maxLength": 512},
             },
             "required": ["condition", "enforcement"],
@@ -1571,7 +1609,7 @@ def state_concern_schema(
             "properties": {
                 "owner": {"type": "string", "minLength": 1, "maxLength": 256},
                 "trigger": {"type": "string", "minLength": 1, "maxLength": 128},
-                "initial_state": mutations_schema(symbol_source),
+                "initial_state": mutation_field(),
                 "mutations": mutations_schema(symbol_source),
             },
             "required": ["owner", "trigger", "initial_state"],
@@ -1596,7 +1634,7 @@ def state_concern_schema(
             "type": "object",
             "properties": {
                 "event": {"type": "string", "minLength": 1, "maxLength": 128},
-                "action": mutations_schema(symbol_source),
+                "action": mutation_field(),
                 "mutations": mutations_schema(symbol_source),
                 "retained_state": {"type": "string", "minLength": 1, "maxLength": 256},
             },
