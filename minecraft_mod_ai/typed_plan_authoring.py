@@ -2129,6 +2129,7 @@ def author_typed_plan_ir(
     )
     from .typed_platform_ir import (
         PLATFORM_HOST_KINDS,
+        PLATFORM_HOST_MODULE_IDS,
         PLATFORM_KINDS,
         platform_config_schema,
         platform_coverable_refs,
@@ -2481,11 +2482,7 @@ def author_typed_plan_ir(
         )
         author.set_scope_covers(scope, candidate_covers)
         if kind in PLATFORM_HOST_KINDS:
-            module_id = {
-                "state_store": "typed_state_store",
-                "network_sync": "typed_network_sync",
-                "resource_policy": "typed_resource_policy",
-            }[kind]
+            module_id = PLATFORM_HOST_MODULE_IDS[kind]
         else:
             module_id = f"typed_{kind}_{platform_index + 1}"
         if module_id in seen_platform_ids:
