@@ -112,14 +112,15 @@ def constrain_state_record_schema(
             continue
         if field in {"mutation", "mutations", "initial_state", "action"}:
             target["description"] = (
-                "Host state-mutation DSL. Empty string means no state mutation. "
-                "Non-empty values must contain only assignments to declared state "
-                "variables; external subsystem actions do not belong in this field."
+                "Canonical typed state-mutation IR. Targets must be declared state "
+                "variables; external subsystem actions do not belong in this field. "
+                "Legacy DSL strings are accepted only when reading older saved plans."
             )
         else:
             target["description"] = (
-                "Host state-compiler DSL. Use identifiers/literals/operators only; "
-                "never natural-language pseudocode or Java method/member syntax."
+                "Canonical typed state-expression IR. State and context references "
+                "remain distinct namespaces through production. Legacy DSL strings are "
+                "accepted only when reading older saved plans."
             )
     return result
 
@@ -173,8 +174,8 @@ def constrain_state_chunk_schema(
         field_schema = item_properties.get(field)
         if isinstance(field_schema, dict):
             field_schema["description"] = (
-                "Host mutation DSL. Assignment targets are restricted to already-authored "
-                "state variables: " + ", ".join(names) + "."
+                "Canonical typed mutation IR. Assignment targets are restricted to "
+                "already-authored state variables: " + ", ".join(names) + "."
             )
     return result
 
