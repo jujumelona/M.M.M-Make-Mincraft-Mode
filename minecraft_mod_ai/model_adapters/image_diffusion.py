@@ -29,17 +29,14 @@ class ImageGenerationConfig:
     guidance_scale: float
     candidate_count: int
     preferred_generation_resolution: tuple[int, int]
-    fallback_generation_resolution: tuple[int, int] | None
     lora_allowed_layouts: tuple[str, ...]
     prompt_requirements: tuple[str, ...]
 
     @classmethod
     def from_adapter_config(cls, config: Any) -> "ImageGenerationConfig":
         extra: Mapping[str, Any] = config.extra if isinstance(config.extra, Mapping) else {}
-        def resolution(name: str, optional: bool = False) -> tuple[int, int] | None:
+        def resolution(name: str) -> tuple[int, int]:
             value = extra.get(name)
-            if optional and value is None:
-                return None
             if not isinstance(value, Mapping) or set(value) != {"width", "height"}:
                 raise ModelConfigurationError(f"Registry {name} requires width and height.")
             axes = value["width"], value["height"]
@@ -66,7 +63,6 @@ class ImageGenerationConfig:
             guidance_scale=float(extra.get("guidance_scale", 1.0)),
             candidate_count=int(extra.get("candidate_count", 4)),
             preferred_generation_resolution=resolution("preferred_generation_resolution"),
-            fallback_generation_resolution=resolution("fallback_generation_resolution", optional=True),
             lora_allowed_layouts=strings("lora_allowed_layouts"),
             prompt_requirements=strings("prompt_requirements"),
         )
@@ -101,21 +97,6 @@ def _full_gpu_threshold_mb(config: Any) -> int:
         if value > 0:
             return value
     return max(14_000, int(config.min_free_vram_mb) + 1_000)
-
-
-def _is_cuda_memory_pressure(exc: BaseException) -> bool:
-    message = str(exc).lower()
-    return any(
-        token in message
-        for token in (
-            "out of memory",
-            "cuda oom",
-            "cudnn_status_alloc_failed",
-            "cublas_status_alloc_failed",
-            "allocation failed",
-            "not enough memory",
-        )
-    )
 
 
 def _accelerate_memory_budget(torch_module: Any) -> dict[Any, str]:
