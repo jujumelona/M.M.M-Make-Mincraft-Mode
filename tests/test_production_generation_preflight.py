@@ -84,8 +84,16 @@ def _write_geckolib_manifest(root: Path, entities: list[dict[str, object]]) -> P
 
 def test_entity_module_set_is_rejected_before_any_dispatch() -> None:
     modules = (
-        _module("valid_entity", "entity", {"max_health": 20}),
-        _module("invalid_entity", "entity", {"movement_speed": "not-a-number"}),
+        _module(
+            "valid_entity",
+            "entity",
+            {"max_health": 20, "main_color": "#5BA6D8"},
+        ),
+        _module(
+            "invalid_entity",
+            "entity",
+            {"movement_speed": "not-a-number", "main_color": "#5BA6D8"},
+        ),
     )
 
     with pytest.raises(
@@ -107,6 +115,7 @@ def test_entity_preflight_preserves_orchestrator_coercion_semantics() -> None:
             "follow_range": 24,
             "entity_width": "0.7",
             "entity_height": 1.9,
+            "main_color": "#5BA6D8",
         },
     )
 
@@ -115,6 +124,7 @@ def test_entity_preflight_preserves_orchestrator_coercion_semantics() -> None:
     assert inputs.max_health == 40.0
     assert inputs.behavior == "npc"
     assert inputs.spawn_group == "creature"
+    assert inputs.texture_color == "#5BA6D8"
 
     with pytest.raises(
         GeckoLibGenerationContractError,
@@ -122,7 +132,7 @@ def test_entity_preflight_preserves_orchestrator_coercion_semantics() -> None:
     ):
         geckolib_entity_inputs_from_module_config(
             "entity",
-            {"follow_range": "nan"},
+            {"follow_range": "nan", "main_color": "#5BA6D8"},
         )
 
 
