@@ -173,6 +173,24 @@ class CompleteGameDesignPlanner:
 
         text = render_structured_sections(structured_sections)
 
+        content_request_catalog = _content_request_catalog(structured_sections)
+        content_design: dict[str, Any] = {}
+        if content_request_catalog["requirements"]:
+            from .content_design_graph import compile_content_graph
+
+            with planner_operation("author_content_design_graph"):
+                content_design = _serialize_content_design(
+                    compile_content_graph(
+                        prompt,
+                        self.router,
+                        request_catalog=content_request_catalog,
+                    )
+                )
+        content_owned_refs = _content_owned_refs(
+            structured_sections,
+            content_design,
+        )
+
         kinds = deterministic_module_kinds
         auto_allowed_platform_kinds: frozenset[str] | None = None
         if kinds is None and adapter is not None:
@@ -288,6 +306,7 @@ class CompleteGameDesignPlanner:
                 typed_host_capability_contracts(),
                 deterministic_module_kinds=effective_kinds,
                 allowed_platform_kinds=auto_allowed_platform_kinds,
+                externally_covered_refs=content_owned_refs,
                 budget=budget,
             )
         from .typed_plan_support import assert_typed_plan_host_support
@@ -302,6 +321,7 @@ class CompleteGameDesignPlanner:
             existing_input_sha256=existing_input_sha256,
             media_paths=tuple(str(path) for path in media_paths),
             structured_sections=structured_sections,
+            content_design=content_design,
             typed_plan_ir=typed_plan_ir,
         )
 
