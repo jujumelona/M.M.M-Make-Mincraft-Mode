@@ -461,28 +461,14 @@ class VersionResolver:
 
 
 def execution_context(context, job):
-    """Reject missing or mixed snapshots before generation, reuse, or materialization."""
+    """Require one immutable HOST snapshot for every executable artifact job."""
     raw = (context or {}).get("resolved_version_context")
     identifier = getattr(job, "context_id", "")
     if raw is None:
-        implementation_id = str(getattr(job, "implementation_id", "") or "")
-        allow_unbound_template_graph = bool(
-            (context or {}).get("_mmm_allow_unbound_template_graph")
+        raise VersionContextError(
+            "VERSION_CONTEXT_REQUIRED",
+            artifact=job.job_id,
         )
-        # The artifact graph is the explicit compatibility boundary for deterministic
-        # template jobs expanded without a HOST snapshot. Direct template execution
-        # remains fail-closed, and any HOST-bound/generator job still requires its
-        # immutable resolved context.
-        if (
-            allow_unbound_template_graph
-            and not identifier
-            and implementation_id.startswith("template:")
-            and getattr(job, "template_id", "")
-        ):
-            return None
-        if identifier or getattr(job, "canonical_leaf", "") or implementation_id:
-            raise VersionContextError("VERSION_CONTEXT_REQUIRED", artifact=job.job_id)
-        return None
     if isinstance(raw, ResolvedVersionContext):
         resolved = raw
     else:
