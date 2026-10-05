@@ -1542,7 +1542,11 @@ def state_concern_schema(
     allow_legacy_dsl: bool = True,
 ) -> dict[str, Any]:
     symbols = _resolve_state_symbols(allowed_state_symbols)
-    symbol_source = allowed_state_symbols if allowed_state_symbols is not None else symbols
+    # None means the storage/worksheet schema does not yet have an authoritative
+    # symbol table. Preserve that open-world state. An explicit empty
+    # StateSymbolTable/list/set means something different: zero state variables
+    # are authoritatively declared, so mutation arrays must then be empty.
+    symbol_source = allowed_state_symbols
 
     def expression_field() -> dict[str, Any]:
         typed = state_expr_schema(symbol_source)
