@@ -165,62 +165,56 @@ class CompleteGameDesignPlanner:
             # AUTO planning filters semantic kinds by *per-target* executability.
             # Never union primitive capabilities from different targets: doing so can
             # synthesize support that no single immutable target receipt actually has.
-            try:
-                from .platform_backend_contract import production_backend_is_supported
-                from .platform_catalog import (
-                    adapter_for_target,
-                    discover_target_keys,
-                )
-                from .typed_platform_ir import PLATFORM_HOST_KINDS, PLATFORM_KINDS
+            from .platform_backend_contract import production_backend_is_supported
+            from .platform_catalog import (
+                adapter_for_target,
+                discover_target_keys,
+            )
+            from .typed_platform_ir import PLATFORM_HOST_KINDS, PLATFORM_KINDS
 
-                loader_hint = getattr(
-                    self.router,
-                    "_mmm_requested_loader",
-                    None,
+            loader_hint = getattr(
+                self.router,
+                "_mmm_requested_loader",
+                None,
+            )
+            version_hint = getattr(
+                self.router,
+                "_mmm_requested_minecraft_version",
+                None,
+            )
+            target_keys = discover_target_keys(
+                loader=str(loader_hint) if loader_hint else None,
+                limit_per_loader=32,
+            )
+            if version_hint:
+                target_keys = tuple(
+                    (target_loader, target_version)
+                    for target_loader, target_version in target_keys
+                    if str(target_version) == str(version_hint)
                 )
-                version_hint = getattr(
-                    self.router,
-                    "_mmm_requested_minecraft_version",
-                    None,
-                )
-                target_keys = discover_target_keys(
-                    loader=str(loader_hint) if loader_hint else None,
-                    limit_per_loader=32,
-                )
-                if version_hint:
-                    target_keys = tuple(
-                        (target_loader, target_version)
-                        for target_loader, target_version in target_keys
-                        if str(target_version) == str(version_hint)
-                    )
 
-                target_capability_sets: list[frozenset[str]] = []
-                for target_loader, target_version in target_keys:
-                    try:
-                        target_capability_sets.append(
-                            deterministic_backend_capabilities(
-                                adapter_for_target(
-                                    str(target_version),
-                                    str(target_loader),
-                                )
-                            )
+            target_capability_sets: list[frozenset[str]] = []
+            for target_loader, target_version in target_keys:
+                target_capability_sets.append(
+                    deterministic_backend_capabilities(
+                        adapter_for_target(
+                            str(target_version),
+                            str(target_loader),
                         )
-                    except Exception:
-                        continue
-
-                executable_kinds = set(PLATFORM_HOST_KINDS)
-                executable_kinds.update(
-                    kind
-                    for kind in PLATFORM_KINDS
-                    if kind not in PLATFORM_HOST_KINDS
-                    and any(
-                        production_backend_is_supported(capabilities, kind)
-                        for capabilities in target_capability_sets
                     )
                 )
-                auto_allowed_platform_kinds = frozenset(executable_kinds)
-            except Exception:
-                auto_allowed_platform_kinds = frozenset()
+
+            executable_kinds = set(PLATFORM_HOST_KINDS)
+            executable_kinds.update(
+                kind
+                for kind in PLATFORM_KINDS
+                if kind not in PLATFORM_HOST_KINDS
+                and any(
+                    production_backend_is_supported(capabilities, kind)
+                    for capabilities in target_capability_sets
+                )
+            )
+            auto_allowed_platform_kinds = frozenset(executable_kinds)
         effective_kinds = tuple(sorted(kinds)) if kinds is not None else None
 
         with planner_operation("author_typed_plan_ir"):
