@@ -289,18 +289,27 @@ def _production_proposal(
     session: "CompleteModAISession",
     proposal: CompleteProposal | AuthoredPlan,
 ) -> CompleteProposal:
-    if not isinstance(proposal, AuthoredPlan):
-        return proposal
-    existing_hash = ""
-    if session.existing_input is not None:
-        existing_hash = _verified_existing_input_sha256(
-            session.router, session.existing_input, await_inventory=True,
+    if isinstance(proposal, AuthoredPlan):
+        existing_hash = ""
+        if session.existing_input is not None:
+            existing_hash = _verified_existing_input_sha256(
+                session.router, session.existing_input, await_inventory=True,
+            )
+        compiled = session.planner.compile_for_production(
+            proposal,
+            media_paths=proposal.media_paths,
+            existing_input_sha256=existing_hash,
         )
-    return session.planner.compile_for_production(
-        proposal,
-        media_paths=proposal.media_paths,
-        existing_input_sha256=existing_hash,
-    )
+    else:
+        compiled = proposal
+
+    # Asset execution contracts are approval authority, not generation-time
+    # implementation detail. Bind them before build() calculates the approval hash.
+    if compiled.assets:
+        from .resource_asset_production import attach_generation_plan
+
+        compiled = attach_generation_plan(session.router, compiled)
+    return compiled
 
 
 @dataclass(frozen=True)
