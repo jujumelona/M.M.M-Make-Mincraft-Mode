@@ -5,7 +5,7 @@ import json
 import os
 import re
 import tempfile
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +34,41 @@ def is_research_shard(module: ProductionModule) -> bool:
     )
 
 
+def validate_research_shard_config(
+    config: Mapping[str, Any],
+    *,
+    module_id: str,
+) -> None:
+    """Validate the complete research-shard execution contract without I/O."""
+
+    if str(config.get("integration_type") or "").strip() != INTEGRATION_TYPE:
+        raise ResearchLedgerError("Research shard integration_type is invalid.")
+    if config.get("schema_version") != _SCHEMA_VERSION:
+        raise ResearchLedgerError("Research shard schema_version is invalid.")
+
+    artifact = config.get("artifact")
+    if not isinstance(artifact, Mapping):
+        raise ResearchLedgerError("Research shard artifact contract is missing.")
+    if artifact.get("write_mode") != "exact_json_resource_only":
+        raise ResearchLedgerError("Research shard write_mode is invalid.")
+    if artifact.get("generate_java_or_gameplay_feature") is not False:
+        raise ResearchLedgerError(
+            "Research shards may not authorize Java or gameplay generation."
+        )
+    _safe_target_path(artifact.get("target_path"))
+
+    body = {
+        "schema_version": _SCHEMA_VERSION,
+        "module_id": str(module_id),
+        "shard_index": config.get("shard_index"),
+        "shard_count": config.get("shard_count"),
+        "receipt": config.get("receipt"),
+        "facts": config.get("facts"),
+        "policy": config.get("policy"),
+    }
+    _validate_body(body)
+
+
 def write_research_shard(
     project_root: str | Path,
     *,
@@ -50,17 +85,11 @@ def write_research_shard(
     if not is_research_shard(module):
         raise ResearchLedgerError("Module is not an MMM research shard.")
     config = module.config
-    if config.get("schema_version") != _SCHEMA_VERSION:
-        raise ResearchLedgerError("Research shard schema_version is invalid.")
-    artifact = config.get("artifact")
-    if not isinstance(artifact, dict):
-        raise ResearchLedgerError("Research shard artifact contract is missing.")
-    if artifact.get("write_mode") != "exact_json_resource_only":
-        raise ResearchLedgerError("Research shard write_mode is invalid.")
-    if artifact.get("generate_java_or_gameplay_feature") is not False:
-        raise ResearchLedgerError(
-            "Research shards may not authorize Java or gameplay generation."
-        )
+    validate_research_shard_config(
+        config,
+        module_id=module.module_id,
+    )
+    artifact = config["artifact"]
 
     root = Path(project_root).expanduser().resolve()
     if not root.is_dir() or root.is_symlink():
