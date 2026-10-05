@@ -62,6 +62,7 @@ def _compile_new_authored_modules(
         typed_plan_uses_state,
         validate_typed_plan_ir,
     )
+    from .typed_platform_ir import PLATFORM_HOST_KINDS
     from .typed_plan_support import assert_typed_plan_host_support
 
     source_sha = "sha256:" + hashlib.sha256(plan.text.encode("utf-8")).hexdigest()
