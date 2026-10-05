@@ -75,15 +75,37 @@ class AuthoredPlan:
             "content_design",
             "typed_plan_ir",
         }
+        schema_version = data.get("schema_version")
+        if schema_version == "mmm/authored-plan-v1":
+            unknown = set(data) - expected
+            required_legacy = {"schema_version", "requested_prompt", "text"}
+            missing_legacy = required_legacy - set(data)
+            if unknown or missing_legacy:
+                raise ValueError(
+                    "AUTHORED_PLAN_FIELDS_INVALID: "
+                    f"missing={sorted(missing_legacy)}, "
+                    f"unknown={sorted(unknown)}"
+                )
+            data = {
+                "schema_version": "mmm/authored-plan-v2",
+                "requested_prompt": data["requested_prompt"],
+                "text": data["text"],
+                "existing_input_sha256": data.get("existing_input_sha256", ""),
+                "media_paths": data.get("media_paths", []),
+                "structured_sections": data.get("structured_sections", {}),
+                "content_design": data.get("content_design", {}),
+                "typed_plan_ir": data.get("typed_plan_ir", {}),
+            }
+        elif schema_version != "mmm/authored-plan-v2":
+            raise ValueError(
+                f"AUTHORED_PLAN_SCHEMA_UNSUPPORTED: {schema_version!r}"
+            )
+
         if set(data) != expected:
             raise ValueError(
                 "AUTHORED_PLAN_FIELDS_INVALID: "
                 f"missing={sorted(expected - set(data))}, "
                 f"unknown={sorted(set(data) - expected)}"
-            )
-        if data["schema_version"] != "mmm/authored-plan-v2":
-            raise ValueError(
-                f"AUTHORED_PLAN_SCHEMA_UNSUPPORTED: {data['schema_version']!r}"
             )
         if not isinstance(data["media_paths"], list) or any(
             not isinstance(value, str) for value in data["media_paths"]
