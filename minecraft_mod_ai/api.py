@@ -303,12 +303,6 @@ def _production_proposal(
     else:
         compiled = proposal
 
-    # Asset execution contracts are approval authority, not generation-time
-    # implementation detail. Bind them before build() calculates the approval hash.
-    if compiled.assets:
-        from .resource_asset_production import attach_generation_plan
-
-        compiled = attach_generation_plan(session.router, compiled)
     return compiled
 
 
