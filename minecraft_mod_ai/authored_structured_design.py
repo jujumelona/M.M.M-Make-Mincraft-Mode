@@ -112,29 +112,52 @@ def active_concern_records(
 
 
 def _projection_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (Mapping, list, tuple)):
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
     return " ".join(
-        str(value or "").replace("\r", " ").replace("\n", " ").split()
+        str(value).replace("\r", " ").replace("\n", " ").split()
     )
 
 
-def _projection_record(record: Mapping[str, Any]) -> dict[str, Any]:
-    """Flatten canonical nested records only for the human Markdown projection."""
+def _projection_record(
+    record: Mapping[str, Any],
+    *,
+    fields: Sequence[str],
+) -> dict[str, Any]:
+    """Project declared worksheet fields without flattening their values.
+
+    Executable fields such as guard, condition and mutation contain nested typed
+    IR where keys such as kind legitimately repeat. The human Markdown projection
+    therefore treats each declared worksheet field as one opaque canonical value.
+    Legacy wrapper mappings are traversed only to locate a declared field.
+    """
+
+    wanted = {str(field) for field in fields}
     result: dict[str, Any] = {}
 
     def visit(value: Mapping[str, Any]) -> None:
-        for key, item in value.items():
+        for raw_key, item in value.items():
+            key = str(raw_key)
+            if key in wanted:
+                if key in result:
+                    raise ValueError(
+                        "AUTHORED_STRUCTURED_DESIGN: duplicate projected field "
+                        f"{key!r}"
+                    )
+                result[key] = deepcopy(item)
+                continue
             if isinstance(item, Mapping):
                 visit(item)
-                continue
-            if key in result:
-                raise ValueError(
-                    f"AUTHORED_STRUCTURED_DESIGN: duplicate leaf field {key!r}"
-                )
-            result[str(key)] = item
 
     visit(record)
     return result
-
 
 def render_structured_sections(sections: Mapping[str, Any]) -> str:
     normalized = normalize_structured_sections(sections)
@@ -151,7 +174,7 @@ def render_structured_sections(sections: Mapping[str, Any]) -> str:
             fields = tuple(columns.split())
             lines.append(f"- {concern}: {' '.join(fields)}")
             for index, record in enumerate(records, start=1):
-                projected = _projection_record(record)
+                projected = _projection_record(record, fields=fields)
                 parts = [
                     f"{field}={_projection_text(projected.get(field, ''))}"
                     for field in fields
