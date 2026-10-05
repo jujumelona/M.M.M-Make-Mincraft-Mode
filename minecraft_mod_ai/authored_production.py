@@ -603,6 +603,22 @@ def _compile_content_artifact_graph(
             f"native backend; blocked_leaves={blocked_leaves}"
         )
 
+    if native_owner_ids:
+        from .extended_content_generator import validate_extended_module_contract
+        from .platform_backend_contract import EXTENDED_CONTENT_KINDS
+
+        for module in modules:
+            if module.module_id not in native_owner_ids:
+                continue
+            if module.kind in EXTENDED_CONTENT_KINDS:
+                try:
+                    validate_extended_module_contract(module)
+                except Exception as exc:
+                    raise ValueError(
+                        "CONTENT_NATIVE_BACKEND_CONTRACT_INVALID: "
+                        f"{module.module_id}/{module.kind}: {exc}"
+                    ) from exc
+
     artifact_facts = tuple(
         fact for fact in facts if fact.subject not in native_owner_ids
     )
