@@ -740,20 +740,16 @@ def compile_state_expr_ir(
         return _compile_condition(raw, context=context)
 
     if not isinstance(expr, Mapping):
-        return "true"
+        raise ValueError(
+            "STRUCTURED_STATE_EXPRESSION: expected mapping/string/scalar; "
+            f"got {type(expr).__name__}"
+        )
 
-    kind = expr.get("kind")
+    kind = str(expr.get("kind") or "").strip()
     if not kind:
-        if "terms" in expr:
-            kind = "and"
-        elif "op" in expr and "left" in expr and "right" in expr:
-            kind = "compare" if expr["op"] in {"==", "!=", ">=", "<=", ">", "<", "="} else "arithmetic"
-        elif "name" in expr:
-            kind = "state_ref"
-        elif "value" in expr:
-            kind = "literal"
-        else:
-            kind = "literal"
+        raise ValueError(
+            f"STRUCTURED_STATE_EXPRESSION: missing 'kind' in expression object {expr!r}"
+        )
 
     if kind == "literal":
         val = expr.get("value")
@@ -1397,8 +1393,8 @@ def mutations_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
 
 def state_expr_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
     symbols = _resolve_state_symbols(allowed_state_symbols)
-    authoritative_symbols = isinstance(allowed_state_symbols, StateSymbolTable) or isinstance(
-        allowed_state_symbols, (set, list, tuple)
+    authoritative_symbols = _state_symbols_are_authoritative(
+        allowed_state_symbols
     )
     name_schema = _state_name_schema(symbols)
     context_name_schema = {
