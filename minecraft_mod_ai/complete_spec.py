@@ -31,6 +31,7 @@ MODULE_KINDS = frozenset(
         "crop",
         "fluid",
         "machine",
+        "block_entity",
         "recipe",
         "tag",
         "effect",
