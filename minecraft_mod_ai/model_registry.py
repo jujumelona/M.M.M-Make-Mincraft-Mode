@@ -12,9 +12,6 @@ from .config_paths import config_path
 from .model_adapters import AdapterConfig, ModelConfigurationError
 from .strict_yaml import safe_load_unique_keys
 
-LEGACY_REQUIRED_ROLES = frozenset(
-    {"planner", "researcher", "coder", "visual_critic", "image_generator"}
-)
 REQUIRED_ROLES = frozenset(
     {
         "planner",
@@ -45,7 +42,7 @@ ALLOWED_ADAPTERS = frozenset(
 _LOCAL_GPU_TEXT_ADAPTERS = frozenset({
     "llama_cpp", "vllm", "transformers_text", "transformers_multimodal"
 })
-SUPPORTED_SCHEMAS = frozenset({"mmm/model-registry-v1", "mmm/model-registry-v2"})
+SUPPORTED_SCHEMAS = frozenset({"mmm/model-registry-v2"})
 _REGISTRY_CACHE_LOCK = threading.RLock()
 _REGISTRY_SOURCE_CACHE: dict[tuple[str, str], tuple[str, dict[str, Any]]] = {}
 
@@ -168,12 +165,7 @@ class ModelRegistry:
         raw_roles = raw_profile.get("roles")
         if not isinstance(raw_roles, dict):
             raise ModelConfigurationError(f"Profile {name!r} has no roles mapping.")
-        required_roles = (
-            LEGACY_REQUIRED_ROLES
-            if self.schema_version == "mmm/model-registry-v1"
-            else REQUIRED_ROLES
-        )
-        missing = required_roles - set(raw_roles)
+        missing = REQUIRED_ROLES - set(raw_roles)
         if missing:
             raise ModelConfigurationError(
                 f"Profile {name!r} is missing roles: {sorted(missing)}"
