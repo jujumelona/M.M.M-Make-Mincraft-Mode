@@ -329,6 +329,54 @@ def _normalize_unicode_scalars(value: Any) -> tuple[Any, bool]:
     return value, False
 
 
+def _project_closed_schema(
+    value: Any,
+    schema: Mapping[str, Any] | None,
+) -> tuple[Any, bool]:
+    """Project model data onto host-declared closed object keys.
+
+    Decoder grammars are an optimization, not the authority boundary. When a schema
+    explicitly sets additionalProperties=false, undeclared keys carry no requested
+    semantics and are deterministically discarded. Required fields and declared field
+    types are never invented or repaired here; normal schema validation still rejects
+    those failures after projection.
+    """
+
+    if not isinstance(schema, Mapping):
+        return value, False
+
+    if isinstance(value, Mapping):
+        properties = schema.get("properties")
+        if isinstance(properties, Mapping) and schema.get("additionalProperties") is False:
+            result: dict[str, Any] = {}
+            changed = False
+            for raw_key, raw_value in value.items():
+                key = str(raw_key)
+                child_schema = properties.get(key)
+                if not isinstance(child_schema, Mapping):
+                    changed = True
+                    continue
+                projected, child_changed = _project_closed_schema(
+                    raw_value,
+                    child_schema,
+                )
+                result[key] = projected
+                changed = changed or child_changed
+            return result, changed
+
+    if isinstance(value, list):
+        items = schema.get("items")
+        if isinstance(items, Mapping):
+            result = []
+            changed = False
+            for item in value:
+                projected, item_changed = _project_closed_schema(item, items)
+                result.append(projected)
+                changed = changed or item_changed
+            return result, changed
+
+    return value, False
+
 def _schema_errors(
     value: Any,
     response_schema: Mapping[str, Any],
@@ -506,6 +554,9 @@ def validate_structured_output(
                 response_schema=response_schema,
             )
             raise StructuredOutputValidationError(output=output, errors=errors) from exc
+
+        value, projection_changed = _project_closed_schema(value, response_schema)
+        changed = changed or projection_changed
 
     errors = _schema_errors(value, response_schema)
     if errors:
