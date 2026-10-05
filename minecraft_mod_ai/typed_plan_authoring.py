@@ -1933,7 +1933,7 @@ _SHOP_ENTRY_SCHEMA = _platform_schema({
         "minimum": 0,
         "maximum": 100000,
     },
-}, required=("item", "price"))
+}, required=("item", "count", "price"))
 
 _NET_ACTION_MESSAGE_SCHEMA = _platform_schema({
     "message": {"type": "string", "minLength": 1, "maxLength": 128},
@@ -1950,7 +1950,7 @@ _NET_ACTION_GRANT_ITEM_SCHEMA = _platform_schema({
         "minimum": 1,
         "maximum": 64,
     },
-}, required=("item",))
+}, required=("item", "count"))
 
 _NET_ACTION_STATUS_EFFECT_SCHEMA = _platform_schema({
     "effect": {
@@ -1968,7 +1968,7 @@ _NET_ACTION_STATUS_EFFECT_SCHEMA = _platform_schema({
         "minimum": 0,
         "maximum": 255,
     },
-}, required=("effect",))
+}, required=("effect", "duration_ticks", "amplifier"))
 
 _GUI_TITLE_SCHEMA = _platform_schema({
     "title": {"type": "string", "minLength": 1, "maxLength": 64},
@@ -1985,7 +1985,7 @@ _GUI_ENTRY_SCHEMA = _platform_schema({
         "minimum": 1,
         "maximum": 64,
     },
-}, required=("item",))
+}, required=("item", "count"))
 
 _TAG_VALUE_SCHEMA = _platform_schema({
     "value": {
@@ -2004,7 +2004,7 @@ _COMMAND_PARAMS_AUTHOR_SCHEMA = _platform_schema({
     },
     "message": {"type": "string", "maxLength": 128},
     "permission_level": {"type": "integer", "minimum": 0, "maximum": 4},
-})
+}, required=("literal", "message", "permission_level"))
 
 _ENTITY_TRAITS_AUTHOR_SCHEMA = _platform_schema({
     "archetype": {
@@ -2157,7 +2157,7 @@ def _author_platform_config(
                 {
                     "id": f"{module_id}_entry_1",
                     "item": str(raw["item"]),
-                    "count": int(raw.get("count", 1)),
+                    "count": int(raw["count"]),
                     "price": float(raw["price"]),
                 }
             ]
@@ -2212,8 +2212,8 @@ def _author_platform_config(
                 "id": action_id,
                 "type": "status_effect",
                 "effect": str(raw["effect"]),
-                "duration_ticks": int(raw.get("duration_ticks", 100)),
-                "amplifier": int(raw.get("amplifier", 0)),
+                "duration_ticks": int(raw["duration_ticks"]),
+                "amplifier": int(raw["amplifier"]),
             }
         return {
             "template": "validated_action_channel",
@@ -2245,7 +2245,7 @@ def _author_platform_config(
                 {
                     "slot": 0,
                     "item": str(raw_entry["item"]),
-                    "count": int(raw_entry.get("count", 1)),
+                    "count": int(raw_entry["count"]),
                 }
             ],
         }
@@ -2280,9 +2280,9 @@ def _author_platform_config(
             scope,
         )
         return {
-            "literal": str(raw.get("literal", module_id)),
-            "message": str(raw.get("message", f"Executed {module_id}")),
-            "permission_level": int(raw.get("permission_level", 0)),
+            "literal": str(raw["literal"]),
+            "message": str(raw["message"]),
+            "permission_level": int(raw["permission_level"]),
         }
 
     if kind in PLATFORM_CONTENT_KINDS:
