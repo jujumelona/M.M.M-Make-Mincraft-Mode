@@ -2041,32 +2041,21 @@ def _author_platform_config(
         return {"json": {"type": "minecraft:empty"}}
 
     if kind == "shop":
-        raw = author._ask("shop_entry", _SHOP_ENTRY_SCHEMA, scope=f"{scope}.entries[0]")
-        item_val = "minecraft:iron_ingot"
-        count_val = 1
-        price_val = 10.0
-        if isinstance(raw, Mapping):
-            if "entries" in raw and isinstance(raw["entries"], Sequence) and raw["entries"]:
-                first = raw["entries"][0]
-                if isinstance(first, Mapping):
-                    raw_item = str(first.get("item") or "").strip()
-                    if re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", raw_item):
-                        item_val = raw_item
-                    count_val = max(1, int(first.get("count", 1)))
-                    price_val = max(0.0, float(first.get("price", 10.0)))
-            else:
-                raw_item = str(raw.get("item") or "").strip()
-                if re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", raw_item):
-                    item_val = raw_item
-                count_val = max(1, int(raw.get("count", 1)))
-                price_val = max(0.0, float(raw.get("price", 10.0)))
+        raw = _require_authored_mapping(
+            author._ask(
+                "shop_entry",
+                _SHOP_ENTRY_SCHEMA,
+                scope=f"{scope}.entries[0]",
+            ),
+            f"{scope}.entries[0]",
+        )
         return {
             "entries": [
                 {
                     "id": f"{module_id}_entry_1",
-                    "item": item_val,
-                    "count": count_val,
-                    "price": price_val,
+                    "item": str(raw["item"]),
+                    "count": int(raw.get("count", 1)),
+                    "price": float(raw["price"]),
                 }
             ]
         }
@@ -2079,36 +2068,49 @@ def _author_platform_config(
         )
         action_id = f"{module_id}_action_1"
         if action_type == "message":
-            raw = author._ask("message_action", _NET_ACTION_MESSAGE_SCHEMA, scope=f"{scope}.actions[0]")
-            msg = str(raw.get("message") or "action received").strip() if isinstance(raw, Mapping) else "action received"
-            action = {"id": action_id, "type": "message", "message": msg or "action received"}
+            raw = _require_authored_mapping(
+                author._ask(
+                    "message_action",
+                    _NET_ACTION_MESSAGE_SCHEMA,
+                    scope=f"{scope}.actions[0]",
+                ),
+                f"{scope}.actions[0]",
+            )
+            action = {
+                "id": action_id,
+                "type": "message",
+                "message": str(raw["message"]),
+            }
         elif action_type == "grant_item":
-            raw = author._ask("grant_item_action", _NET_ACTION_GRANT_ITEM_SCHEMA, scope=f"{scope}.actions[0]")
-            item_res = "minecraft:iron_ingot"
-            count_res = 1
-            if isinstance(raw, Mapping):
-                item_str = str(raw.get("item") or "").strip()
-                if re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", item_str):
-                    item_res = item_str
-                count_res = max(1, int(raw.get("count", 1)))
-            action = {"id": action_id, "type": "grant_item", "item": item_res, "count": count_res}
+            raw = _require_authored_mapping(
+                author._ask(
+                    "grant_item_action",
+                    _NET_ACTION_GRANT_ITEM_SCHEMA,
+                    scope=f"{scope}.actions[0]",
+                ),
+                f"{scope}.actions[0]",
+            )
+            action = {
+                "id": action_id,
+                "type": "grant_item",
+                "item": str(raw["item"]),
+                "count": int(raw.get("count", 1)),
+            }
         else:
-            raw = author._ask("status_effect_action", _NET_ACTION_STATUS_EFFECT_SCHEMA, scope=f"{scope}.actions[0]")
-            effect_res = "minecraft:speed"
-            duration_res = 100
-            amplifier_res = 0
-            if isinstance(raw, Mapping):
-                effect_str = str(raw.get("effect") or "").strip()
-                if re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", effect_str):
-                    effect_res = effect_str
-                duration_res = max(1, int(raw.get("duration_ticks", 100)))
-                amplifier_res = max(0, min(255, int(raw.get("amplifier", 0))))
+            raw = _require_authored_mapping(
+                author._ask(
+                    "status_effect_action",
+                    _NET_ACTION_STATUS_EFFECT_SCHEMA,
+                    scope=f"{scope}.actions[0]",
+                ),
+                f"{scope}.actions[0]",
+            )
             action = {
                 "id": action_id,
                 "type": "status_effect",
-                "effect": effect_res,
-                "duration_ticks": duration_res,
-                "amplifier": amplifier_res,
+                "effect": str(raw["effect"]),
+                "duration_ticks": int(raw.get("duration_ticks", 100)),
+                "amplifier": int(raw.get("amplifier", 0)),
             }
         return {
             "template": "validated_action_channel",
@@ -2116,25 +2118,31 @@ def _author_platform_config(
         }
 
     if kind == "gui":
-        raw_title = author._ask("gui_title", _GUI_TITLE_SCHEMA, scope=f"{scope}.title")
-        title = str(raw_title.get("title") or "Menu").strip() if isinstance(raw_title, Mapping) else "Menu"
-        raw_entry = author._ask("gui_entry", _GUI_ENTRY_SCHEMA, scope=f"{scope}.entries[0]")
-        item_res = "minecraft:compass"
-        count_res = 1
-        if isinstance(raw_entry, Mapping):
-            raw_item = str(raw_entry.get("item") or "").strip()
-            if re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", raw_item):
-                item_res = raw_item
-            count_res = max(1, int(raw_entry.get("count", 1)))
+        raw_title = _require_authored_mapping(
+            author._ask(
+                "gui_title",
+                _GUI_TITLE_SCHEMA,
+                scope=f"{scope}.title",
+            ),
+            f"{scope}.title",
+        )
+        raw_entry = _require_authored_mapping(
+            author._ask(
+                "gui_entry",
+                _GUI_ENTRY_SCHEMA,
+                scope=f"{scope}.entries[0]",
+            ),
+            f"{scope}.entries[0]",
+        )
         return {
             "template": "read_only_menu",
-            "title": title or "Menu",
+            "title": str(raw_title["title"]),
             "rows": 3,
             "entries": [
                 {
                     "slot": 0,
-                    "item": item_res,
-                    "count": count_res,
+                    "item": str(raw_entry["item"]),
+                    "count": int(raw_entry.get("count", 1)),
                 }
             ],
         }
@@ -2145,36 +2153,33 @@ def _author_platform_config(
             ["items", "blocks", "entity_types", "fluids", "functions"],
             scope=f"{scope}.registry",
         )
-        raw_val = author._ask("tag_value", _TAG_VALUE_SCHEMA, scope=f"{scope}.values[0]")
-        val_str = "minecraft:stone"
-        if isinstance(raw_val, Mapping):
-            raw_v = str(raw_val.get("value") or "").strip()
-            if re.fullmatch(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$", raw_v):
-                val_str = raw_v
+        raw_val = _require_authored_mapping(
+            author._ask(
+                "tag_value",
+                _TAG_VALUE_SCHEMA,
+                scope=f"{scope}.values[0]",
+            ),
+            f"{scope}.values[0]",
+        )
         return {
             "registry": registry,
-            "values": [val_str],
+            "values": [str(raw_val["value"])],
             "replace": False,
         }
 
     if kind == "command":
-        raw = author._ask("command_params", _COMMAND_PARAMS_AUTHOR_SCHEMA, scope=scope)
-        literal = module_id
-        message = f"Executed {module_id}"
-        perm = 0
-        if isinstance(raw, Mapping):
-            raw_lit = str(raw.get("literal") or "")
-            cleaned = re.sub(r"[^a-z0-9_]+", "", raw_lit.lower())
-            if cleaned:
-                literal = cleaned[:32]
-            if "message" in raw and isinstance(raw["message"], str):
-                message = raw["message"][:128]
-            if "permission_level" in raw and type(raw["permission_level"]) is int:
-                perm = max(0, min(4, raw["permission_level"]))
+        raw = _require_authored_mapping(
+            author._ask(
+                "command_params",
+                _COMMAND_PARAMS_AUTHOR_SCHEMA,
+                scope=scope,
+            ),
+            scope,
+        )
         return {
-            "literal": literal,
-            "message": message,
-            "permission_level": perm,
+            "literal": str(raw.get("literal", module_id)),
+            "message": str(raw.get("message", f"Executed {module_id}")),
+            "permission_level": int(raw.get("permission_level", 0)),
         }
 
     if kind in PLATFORM_CONTENT_KINDS:
