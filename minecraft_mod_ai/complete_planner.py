@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import uuid
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
@@ -10,69 +9,12 @@ from .platform_backend_contract import deterministic_backend_capabilities
 from pathlib import Path
 from typing import Any
 
+from .authored_content_contract import content_owned_refs, content_request_catalog
 from .authored_plan import AuthoredPlan
 from .complete_spec import CompleteProposal
 from .model_router import ModelRouter
 from .planner_trace_artifacts import repository_revision
 from .root_cause_trace import emit_root_cause, trace_scope
-
-
-_CONTENT_GRAPH_CONCERNS = (
-    "registries",
-    "data_resources",
-    "assets",
-    "interactions",
-    "displayed_state",
-    "paths",
-)
-
-
-def _content_request_catalog(
-    structured_sections: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Project only concrete resource/UI records into content-design requirements."""
-
-    from .authored_structured_design import active_concern_records
-
-    records = active_concern_records(
-        structured_sections,
-        "resources_and_ui",
-    )
-    requirements: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for concern in _CONTENT_GRAPH_CONCERNS:
-        for index, record in enumerate(records.get(concern, ())):
-            payload = {
-                "concern": concern,
-                "record": dict(record),
-            }
-            encoded = json.dumps(
-                payload,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-            digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
-            requirement_id = f"content_{concern}_{digest}"
-            if requirement_id in seen:
-                continue
-            seen.add(requirement_id)
-            statement = (
-                f"resources_and_ui.{concern}: "
-                + "; ".join(
-                    f"{key}={value}"
-                    for key, value in record.items()
-                    if str(value).strip()
-                )
-            )
-            requirements.append(
-                {
-                    "requirement_id": requirement_id,
-                    "statement": statement,
-                    "source_span": {"text": statement},
-                }
-            )
-    return {"requirements": requirements}
 
 
 def _serialize_content_design(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -98,27 +40,6 @@ def _serialize_content_design(value: Mapping[str, Any]) -> dict[str, Any]:
         else:
             result[key] = deepcopy(item)
     return result
-
-
-def _content_owned_refs(
-    structured_sections: Mapping[str, Any],
-    content_design: Mapping[str, Any],
-) -> frozenset[str]:
-    """Return resource/UI concerns whose executable owner is the content artifact graph."""
-
-    if not content_design.get("_implementation_facts"):
-        return frozenset()
-    from .authored_structured_design import active_concern_records
-
-    records = active_concern_records(
-        structured_sections,
-        "resources_and_ui",
-    )
-    return frozenset(
-        f"resources_and_ui.{concern}"
-        for concern in _CONTENT_GRAPH_CONCERNS
-        if records.get(concern)
-    )
 
 
 class CompleteGameDesignPlanner:
@@ -171,7 +92,7 @@ class CompleteGameDesignPlanner:
 
         text = render_structured_sections(structured_sections)
 
-        content_request_catalog = _content_request_catalog(structured_sections)
+        content_request_catalog = content_request_catalog(structured_sections)
         content_design: dict[str, Any] = {}
         if content_request_catalog["requirements"]:
             from .content_design_graph import compile_content_graph
@@ -188,7 +109,7 @@ class CompleteGameDesignPlanner:
                         mod_id=content_mod_id,
                     )
                 )
-        content_owned_refs = _content_owned_refs(
+        content_owned_refs = content_owned_refs(
             structured_sections,
             content_design,
         )
@@ -316,6 +237,7 @@ class CompleteGameDesignPlanner:
         assert_typed_plan_host_support(
             structured_sections,
             typed_plan_ir,
+            externally_covered_refs=content_owned_refs,
         )
         return AuthoredPlan(
             requested_prompt=prompt,
