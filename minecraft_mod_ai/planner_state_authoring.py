@@ -736,7 +736,6 @@ def author_state_field_page(
         if isinstance(symbols, StateSymbolTable)
         else StateSymbolTable(symbols or ())
     )
-    declared_names = sorted(symbols_table.declared_names)
     rows: list[dict[str, Any]] = []
     prior = tuple(existing_rows or ())
 
@@ -746,7 +745,6 @@ def author_state_field_page(
             if index < len(prior) and isinstance(prior[index], Mapping)
             else {}
         )
-        path = f"state_model.{concern}[{index}].{field}"
         if field in STATE_EXPRESSION_FIELDS:
             value = _author_state_condition(
                 router,
