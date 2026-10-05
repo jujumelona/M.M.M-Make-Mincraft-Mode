@@ -1263,6 +1263,9 @@ def mutations_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
 
 def state_expr_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
     symbols = _resolve_state_symbols(allowed_state_symbols)
+    authoritative_symbols = isinstance(allowed_state_symbols, StateSymbolTable) or isinstance(
+        allowed_state_symbols, (set, list, tuple)
+    )
     name_schema = _state_name_schema(symbols)
     context_name_schema = {
         "type": "string",
@@ -1278,7 +1281,15 @@ def state_expr_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
         "type": "object",
         "properties": {
             "kind": {"type": "string", "const": "literal"},
-            "value": {"type": ["string", "null"], "maxLength": 24},
+            "value": {
+                "type": ["string", "null"],
+                "maxLength": 24,
+                "pattern": r"^[^{}\[\]]*$",
+                "description": (
+                    "One scalar text/null literal only. Never serialize JSON, maps, "
+                    "arrays, or another structured object into this string."
+                ),
+            },
         },
         "required": ["kind", "value"],
         "additionalProperties": False,
@@ -1315,7 +1326,11 @@ def state_expr_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
         "additionalProperties": False,
     }
     leaf_operand_branches = [
-        state_ref_branch,
+        *(
+            [state_ref_branch]
+            if symbols or not authoritative_symbols
+            else []
+        ),
         context_ref_branch,
         literal_branch,
         number_branch,
