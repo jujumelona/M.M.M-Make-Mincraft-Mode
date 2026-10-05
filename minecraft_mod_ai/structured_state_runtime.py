@@ -904,19 +904,7 @@ def _mutation_value_branches(
             variables.get(name) if isinstance(variables, Mapping) else None
         ) in {target_kind, "unknown"}
     ]
-    state_ref_branch = {
-        "type": "object",
-        "properties": {
-            "kind": {"type": "string", "const": "state_ref"},
-            "name": (
-                {"type": "string", "enum": compatible_names}
-                if compatible_names
-                else {"type": "string", "pattern": r"^(?!)$", "maxLength": 1}
-            ),
-        },
-        "required": ["kind", "name"],
-        "additionalProperties": False,
-    }
+
     context_ref_branch = {
         "type": "object",
         "properties": {
@@ -996,29 +984,102 @@ def _mutation_value_branches(
         "additionalProperties": False,
     }
 
+    leaf_by_kind: list[dict[str, Any]]
     if target_kind == "number":
-        branches = [number_branch, state_ref_branch, context_ref_branch, null_literal_branch]
+        leaf_by_kind = [number_branch, context_ref_branch]
     elif target_kind == "boolean":
-        branches = [boolean_literal_branch, state_ref_branch, context_ref_branch, null_literal_branch]
+        leaf_by_kind = [boolean_literal_branch, context_ref_branch]
     elif target_kind == "map":
-        branches = [empty_map_branch, state_ref_branch, context_ref_branch, null_literal_branch]
+        leaf_by_kind = [empty_map_branch, context_ref_branch]
     elif target_kind == "list":
-        branches = [empty_list_branch, state_ref_branch, context_ref_branch, null_literal_branch]
+        leaf_by_kind = [empty_list_branch, context_ref_branch]
     elif target_kind == "string":
-        branches = [string_literal_branch, state_ref_branch, context_ref_branch, null_literal_branch]
+        leaf_by_kind = [string_literal_branch, context_ref_branch]
     else:
-        branches = [
+        leaf_by_kind = [
             string_literal_branch,
             number_branch,
             boolean_literal_branch,
-            null_literal_branch,
             empty_map_branch,
             empty_list_branch,
-            state_ref_branch,
             context_ref_branch,
         ]
-    return branches
 
+    if compatible_names:
+        leaf_by_kind.append({
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string", "const": "state_ref"},
+                "name": {"type": "string", "enum": compatible_names},
+            },
+            "required": ["kind", "name"],
+            "additionalProperties": False,
+        })
+
+    branches = [*leaf_by_kind, null_literal_branch]
+    if target_kind in {"number", "unknown"}:
+        numeric_operands = [
+            branch
+            for branch in leaf_by_kind
+            if branch.get("properties", {}).get("kind", {}).get("const")
+            in {"number", "state_ref", "context_ref"}
+        ]
+        if numeric_operands:
+            operand = {"oneOf": numeric_operands}
+            branches.append({
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "const": "arithmetic"},
+                    "op": {
+                        "type": "string",
+                        "enum": ["+", "-", "*", "/", "%"],
+                        "maxLength": 2,
+                    },
+                    "left": operand,
+                    "right": operand,
+                },
+                "required": ["kind", "op", "left", "right"],
+                "additionalProperties": False,
+            })
+            branches.append({
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "const": "call"},
+                    "name": {
+                        "type": "string",
+                        "enum": sorted(_SUPPORTED_STATE_FUNCTIONS),
+                    },
+                    "args": {
+                        "type": "array",
+                        "maxItems": 2,
+                        "items": operand,
+                    },
+                },
+                "required": ["kind", "name", "args"],
+                "additionalProperties": False,
+            })
+    elif target_kind == "string":
+        string_operands = [
+            branch
+            for branch in leaf_by_kind
+            if branch.get("properties", {}).get("kind", {}).get("const")
+            in {"literal", "state_ref", "context_ref"}
+        ]
+        if string_operands:
+            operand = {"oneOf": string_operands}
+            branches.append({
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "const": "arithmetic"},
+                    "op": {"type": "string", "const": "+"},
+                    "left": operand,
+                    "right": operand,
+                },
+                "required": ["kind", "op", "left", "right"],
+                "additionalProperties": False,
+            })
+
+    return branches
 
 def mutations_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
     symbols = _resolve_state_symbols(allowed_state_symbols)
