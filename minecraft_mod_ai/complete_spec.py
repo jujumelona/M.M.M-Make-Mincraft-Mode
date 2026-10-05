@@ -345,6 +345,22 @@ class CompleteProposal:
                 "A complete proposal must contain at least one production module."
             )
 
+        bootstrap_module_ids = {
+            content.content_id for content in self.base_proposal.spec.contents
+        }
+        if self.base_proposal.spec.boss is not None:
+            boss_id = self.base_proposal.spec.boss.entity_id
+            bootstrap_module_ids.update({boss_id, f"{boss_id}_spawn_egg"})
+        module_bootstrap_collisions = sorted(
+            bootstrap_module_ids
+            & {module.module_id for module in self.modules}
+        )
+        if module_bootstrap_collisions:
+            raise SpecValidationError(
+                "Production modules may not duplicate bootstrap-owned content IDs: "
+                + ", ".join(module_bootstrap_collisions[:20])
+            )
+
         module_ids: set[str] = set()
         for module in self.modules:
             module.validate(policy=policy)
