@@ -75,22 +75,35 @@ def _topological_modules(modules: tuple[ProductionModule, ...] | list[Production
 def _is_custom(module: ProductionModule) -> bool:
     return module.kind == 'custom_java' or module.config.get('implementation') == 'custom'
 
-def _normalize_modules(modules: tuple[ProductionModule, ...], spec) -> tuple[list[ProductionModule], list[dict[str, Any]]]:
-    """Deduplicate bootstrap content while rejecting the retired custom-coder route.
+def _normalize_modules(
+    modules: tuple[ProductionModule, ...],
+    spec,
+) -> tuple[list[ProductionModule], list[dict[str, Any]]]:
+    """Return the approved production graph unchanged after defensive validation.
 
-    Model-authored Java modules are no longer a production backend. Typed authored
-    behavior must arrive as ``typed_host``; deterministic native modules keep their
-    declared kind. Failing here prevents a stale ``implementation=custom`` plan from
-    being rewritten into the removed ``custom_java`` kind and failing later in the
-    work graph with a misleading backend error.
+    Bootstrap/content ownership collisions are invalid at the CompleteProposal boundary.
+    Execution must never rename, deduplicate, or remove dependencies from an approved
+    module graph.
     """
-    base = {content.content_id: content.kind.value for content in spec.contents}
+
+    bootstrap = {content.content_id for content in spec.contents}
     if spec.boss is not None:
-        base[spec.boss.entity_id] = 'boss'
-        base[f'{spec.boss.entity_id}_spawn_egg'] = 'item'
-    reused: set[str] = set()
-    staged: list[ProductionModule] = []
-    receipts: list[dict[str, Any]] = []
+        bootstrap.update(
+            {
+                spec.boss.entity_id,
+                f"{spec.boss.entity_id}_spawn_egg",
+            }
+        )
+
+    collisions = sorted(
+        bootstrap & {module.module_id for module in modules}
+    )
+    if collisions:
+        raise CompleteProductionError(
+            "PRODUCTION_BOOTSTRAP_OWNERSHIP_COLLISION: "
+            + ", ".join(collisions[:20])
+        )
+
     for module in modules:
         if _is_custom(module):
             raise CompleteProductionError(
@@ -99,16 +112,10 @@ def _normalize_modules(modules: tuple[ProductionModule, ...], spec) -> tuple[lis
                 "deterministic production module; model-backed custom Java generation "
                 "is not a production route."
             )
-        existing = base.get(module.module_id)
-        if existing is None:
-            staged.append(module)
-        elif existing == module.kind or {existing, module.kind} <= {'entity', 'boss'}:
-            reused.add(module.module_id)
-            receipts.append({'schema_version': 'mmm/bootstrap-dedup-v1', 'status': 'REUSED', 'module_id': module.module_id, 'kind': module.kind})
-        else:
-            raise CompleteProductionError(f'Module {module.module_id}/{module.kind} collides with bootstrap {existing}.')
-    kept = [ProductionModule(module_id=module.module_id, kind=module.kind, config=module.config, depends_on=tuple(dep for dep in module.depends_on if dep not in reused), required_gates=module.required_gates) for module in staged]
-    return (_topological_modules(kept), receipts)
+
+    return (_topological_modules(list(modules)), [])
+
+
 
 def _system_groups(modules: list[ProductionModule]) -> dict[str, list[ProductionModule]]:
     result: dict[str, list[ProductionModule]] = {}
