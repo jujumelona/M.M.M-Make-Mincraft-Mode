@@ -31,9 +31,6 @@ _ID = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 _PACKAGE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 _DIRECTORY_SCHEMA = "mmm/system-pack-directory-v1"
 _RECORD_SCHEMA = "mmm/system-module-record-v1"
-_LEGACY_INDEX_SCHEMA = "mmm/system-pack-index-v1"
-_LEGACY_SHARD_SCHEMA = "mmm/system-module-shard-v1"
-_LEGACY_NODE_SCHEMA = "mmm/system-module-index-node-v1"
 _PACKS = frozenset(
     {
         "quest-system",
@@ -228,7 +225,7 @@ def iter_system_module_records(
     mod_id: str,
     pack_id: str,
 ) -> tuple[dict[str, Any], ...]:
-    """Read both the stable record directory and legacy sharded catalogs."""
+    """Read the single canonical stable record directory."""
 
     root = Path(project_root).resolve()
     resources = root / "src/main/resources"
@@ -246,23 +243,18 @@ def iter_system_module_records(
     if catalog.get("pack_id") not in {None, pack_id}:
         raise ValueError("System pack contract pack_id does not match its path.")
 
-    inline = catalog.get("modules")
-    if isinstance(inline, list):
-        modules = inline
-    else:
-        storage = catalog.get("storage_schema_version")
-        if storage == _DIRECTORY_SCHEMA:
-            modules = _read_directory_records(
-                resources,
-                catalog,
-            )
-        elif storage == _LEGACY_INDEX_SCHEMA:
-            modules = _read_legacy_catalog(
-                resources,
-                catalog,
-            )
-        else:
-            raise ValueError("Unsupported system pack storage schema.")
+    if "modules" in catalog:
+        raise ValueError(
+            "Inline system-pack module storage is not supported; "
+            "use the canonical record directory."
+        )
+    storage = catalog.get("storage_schema_version")
+    if storage != _DIRECTORY_SCHEMA:
+        raise ValueError("Unsupported system pack storage schema.")
+    modules = _read_directory_records(
+        resources,
+        catalog,
+    )
 
     expected = catalog.get("module_count", len(modules))
     if type(expected) is not int or expected != len(modules):
@@ -316,46 +308,6 @@ def _read_directory_records(
                 f"System module record filename does not match its id: {path.name}"
             )
         modules.append(module)
-    return modules
-
-
-def _read_legacy_catalog(
-    resources: Path,
-    catalog: dict[str, Any],
-) -> list[dict[str, Any]]:
-    root_resource = catalog.get("root")
-    pending = [root_resource]
-    visited: set[str] = set()
-    modules: list[dict[str, Any]] = []
-    while pending:
-        resource = pending.pop()
-        if not isinstance(resource, str) or resource in visited:
-            raise ValueError("Legacy system pack catalog contains a cycle.")
-        visited.add(resource)
-        path = _resource_target(resources, resource)
-        try:
-            node = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise ValueError(
-                f"Legacy system catalog node is invalid: {resource}"
-            ) from exc
-        if not isinstance(node, dict):
-            raise ValueError("Legacy system catalog node must be an object.")
-        schema = node.get("schema_version")
-        if schema == _LEGACY_SHARD_SCHEMA:
-            shard = node.get("modules")
-            if not isinstance(shard, list):
-                raise ValueError("Legacy system module shard is invalid.")
-            modules.extend(shard)
-            continue
-        if schema != _LEGACY_NODE_SCHEMA:
-            raise ValueError("Unsupported legacy system catalog node.")
-        children = node.get("children")
-        if not isinstance(children, list) or not children:
-            raise ValueError("Legacy system catalog index is empty.")
-        if not all(isinstance(item, str) for item in children):
-            raise ValueError("Legacy system catalog child path is invalid.")
-        pending.extend(reversed(children))
     return modules
 
 
