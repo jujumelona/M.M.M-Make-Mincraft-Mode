@@ -32,6 +32,19 @@ CONTENT_GRAPH_CONTEXT_CONCERNS = (
 
 CONTENT_GRAPH_HOST_CONSTRAINT_CONCERNS = frozenset({"paths"})
 
+# Cross-stage ownership for resources_and_ui.  These sets are the authority used by
+# planning coverage, Typed PlatformIR and production lowering.  Do not duplicate
+# concern-name lists in downstream stages.
+RESOURCE_POLICY_CONCERNS = frozenset({
+    "missing_resources",
+    "accessibility",
+})
+
+RESOURCES_AND_UI_OWNED_CONCERNS = frozenset({
+    *CONTENT_GRAPH_CONTEXT_CONCERNS,
+    *RESOURCE_POLICY_CONCERNS,
+})
+
 
 def content_request_catalog(
     structured_sections: Mapping[str, Any],
@@ -116,6 +129,8 @@ __all__ = [
     "CONTENT_GRAPH_CONTEXT_CONCERNS",
     "CONTENT_GRAPH_DRIVER_CONCERNS",
     "CONTENT_GRAPH_HOST_CONSTRAINT_CONCERNS",
+    "RESOURCE_POLICY_CONCERNS",
+    "RESOURCES_AND_UI_OWNED_CONCERNS",
     "content_owned_refs",
     "content_request_catalog",
 ]
