@@ -1376,14 +1376,7 @@ def semantic_dispatch_schema(
             "no canonical state or host capability target"
         )
 
-    return {
-        "type": "object",
-        "properties": {
-            "rule": {"oneOf": branches},
-        },
-        "required": ["rule"],
-        "additionalProperties": False,
-    }
+    return {"oneOf": branches}
 
 
 def lower_semantic_game_dispatch_to_ir(
@@ -1607,6 +1600,10 @@ def author_semantic_game_dispatch(
         )
 
     schema = semantic_dispatch_schema(state_types, capabilities)
+    assert_model_atomic_decision_schema(
+        schema,
+        field="semantic_dispatch_rule",
+    )
     token_ceiling = structured_output_token_ceiling(schema)
     rules: list[Mapping[str, Any]] = []
 
@@ -1657,16 +1654,11 @@ def author_semantic_game_dispatch(
             ),
             output_token_ceiling=token_ceiling,
         )
-        if not isinstance(raw, Mapping) or set(raw) != {"rule"}:
-            raise ValueError(
-                "TYPED_PLAN_SEMANTIC_RESPONSE_INVALID: expected exactly one rule"
-            )
-        rule = raw.get("rule")
-        if not isinstance(rule, Mapping):
+        if not isinstance(raw, Mapping):
             raise ValueError(
                 "TYPED_PLAN_SEMANTIC_RESPONSE_INVALID: rule must be an object"
             )
-        rules.append(rule)
+        rules.append(raw)
 
     return lower_semantic_game_dispatch_to_ir(
         rules,
