@@ -1,10 +1,13 @@
 """Fixed record layouts for every engineering concern (no model-selected keys)."""
 
-# Each concern is a required array of records with exactly these string fields.
+# Each concern is a required array with host-fixed field names. Most fields are
+# bounded text; executable state fields retain canonical typed IR end-to-end.
 # Empty arrays are allowed only with a concrete reason in inapplicable_concerns.
 from .task_template_catalog import detail_records
 from .structured_state_runtime import (
     constrain_state_record_schema,
+    mutations_schema,
+    state_expr_schema,
     state_variable_default_schema,
 )
 
@@ -77,11 +80,10 @@ def record_field_schema(section: str, concern: str, field: str) -> dict:
         and field == "default"
     ):
         return state_variable_default_schema()
-    if (
-        section == "state_model"
-        and field in {"guard", "mutation", "condition", "initial_state", "action"}
-    ):
-        return {"type": "string", "maxLength": 512}
+    if section == "state_model" and field in {"guard", "condition"}:
+        return state_expr_schema()
+    if section == "state_model" and field in {"mutation", "initial_state", "action"}:
+        return mutations_schema()
     return {"type": "string", "minLength": 1, "maxLength": 512}
 
 
