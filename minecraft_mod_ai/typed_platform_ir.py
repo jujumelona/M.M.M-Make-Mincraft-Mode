@@ -205,7 +205,7 @@ def platform_config_schema(kind: str) -> dict[str, Any]:
                 "items": _RESOURCE_ID,
             },
             "replace": {"type": "boolean"},
-        }, required=("registry", "values"))
+        }, required=("registry", "values", "replace"))
     if kind in PLATFORM_ENTITY_KINDS:
         return _schema({
             "max_health": {"type": "number", "exclusiveMinimum": 0},
