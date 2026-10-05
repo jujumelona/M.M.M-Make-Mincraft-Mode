@@ -74,7 +74,24 @@ def test_expression_page_preserves_canonical_typed_ir():
         "left": {"kind": "state_ref", "name": "hull"},
         "right": {"kind": "number", "value": "0"},
     }
-    router = StateChoices([{"guard": guard}])
+    router = StateChoices([
+        {
+            "join": "and",
+            "terms": [
+                {
+                    "left_kind": "state",
+                    "left_state": "hull",
+                    "left_context": "",
+                    "left_value": "",
+                    "operator": ">",
+                    "right_kind": "number",
+                    "right_state": "hull",
+                    "right_context": "",
+                    "right_value": "0",
+                }
+            ],
+        }
+    ])
 
     result = author_state_field_page(
         router,
@@ -91,6 +108,7 @@ def test_expression_page_preserves_canonical_typed_ir():
     assert '$mmmRead("hull", context)' in compiled
     assert "$mmmCompare" in compiled
     assert len(router.calls) == 1
+    assert "oneOf" not in json.dumps(router.calls[0]["response_schema"])
 
 
 def test_empty_mutation_is_explicit_empty_list():
@@ -195,4 +213,78 @@ def test_duplicate_variable_names_are_host_deduplicated_without_retry():
         ]
     }
     assert len(router.calls) == 3
+
+def test_boolean_conjunction_is_host_lowered_from_flat_terms():
+    symbols = StateSymbolTable([
+        {
+            "name": "interstellar_trade_hub",
+            "owner": "server",
+            "type": "boolean",
+            "unit": "flag",
+            "default": "false",
+            "domain": "trade hub availability",
+        },
+        {
+            "name": "spacecraft_unlocked",
+            "owner": "server",
+            "type": "boolean",
+            "unit": "flag",
+            "default": "false",
+            "domain": "spacecraft progression unlock",
+        },
+    ])
+    router = StateChoices([
+        {
+            "join": "and",
+            "terms": [
+                {
+                    "left_kind": "state",
+                    "left_state": "interstellar_trade_hub",
+                    "left_context": "",
+                    "left_value": "",
+                    "operator": "truthy",
+                    "right_kind": "none",
+                    "right_state": "interstellar_trade_hub",
+                    "right_context": "",
+                    "right_value": "",
+                },
+                {
+                    "left_kind": "state",
+                    "left_state": "spacecraft_unlocked",
+                    "left_context": "",
+                    "left_value": "",
+                    "operator": "truthy",
+                    "right_kind": "none",
+                    "right_state": "spacecraft_unlocked",
+                    "right_context": "",
+                    "right_value": "",
+                },
+            ],
+        }
+    ])
+
+    result = author_state_field_page(
+        router,
+        "Trading requires the hub and spacecraft unlock.",
+        concern="invariants",
+        field="condition",
+        count=1,
+        symbols=symbols,
+        existing_rows=[{"enforcement": "deny trading until both flags are active"}],
+    )
+
+    assert result == {
+        "invariants": [
+            {
+                "condition": {
+                    "kind": "and",
+                    "terms": [
+                        {"kind": "state_ref", "name": "interstellar_trade_hub"},
+                        {"kind": "state_ref", "name": "spacecraft_unlocked"},
+                    ],
+                }
+            }
+        ]
+    }
+    assert "oneOf" not in json.dumps(router.calls[0]["response_schema"])
 
