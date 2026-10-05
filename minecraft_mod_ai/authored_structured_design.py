@@ -324,7 +324,13 @@ def _generate_concern_record_count(
     state_symbols: Any = None,
     section_context: Mapping[str, Any] | None = None,
 ) -> int:
-    messages = list(
+    from .fixed_template_generation import generate_fixed_template_value
+    from .worksheet_atomic_chunker import worksheet_concern_cardinality_schema
+
+    schema = worksheet_concern_cardinality_schema(section, concern)
+    value = generate_fixed_template_value(
+        router,
+        "planner",
         _authored_cardinality_messages(
             prompt,
             section=section,
@@ -332,41 +338,29 @@ def _generate_concern_record_count(
             completed=completed,
             state_symbols=state_symbols,
             section_context=section_context,
-        )
-    )
-    messages[0] = {
-        **dict(messages[0]),
-        "content": (
-            str(messages[0].get("content") or "")
-            + " Return only one decimal integer for record_count. "
-            "No JSON, key name, punctuation, Markdown, or explanation."
         ),
-    }
-    raw = router.generate_text(
-        "planner",
-        tuple(messages),
-        response_format="text",
-        response_schema=None,
+        response_schema=schema,
         media_paths=(),
         enable_tools=False,
-        output_token_ceiling=PLANNER_RECORD_COUNT_OUTPUT_TOKEN_CEILING,
-        force_non_thinking=True,
+        description=f"Choose bounded record cardinality for {section}.{concern}.",
+        output_token_ceiling=structured_output_token_ceiling(schema),
     )
-    text = str(raw or "").strip()
-    try:
-        value = int(text)
-    except ValueError as exc:
+    if not isinstance(value, Mapping):
         raise ValueError(
-            f"AUTHORED_STRUCTURED_DESIGN: invalid scalar cardinality for "
-            f"{section}.{concern}: {text!r}"
+            f"AUTHORED_STRUCTURED_DESIGN: cardinality for {section}.{concern} must be an object"
+        )
+    try:
+        result = int(value["record_count"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(
+            f"AUTHORED_STRUCTURED_DESIGN: invalid cardinality for {section}.{concern}"
         ) from exc
-    if value < 0 or value > PLANNER_CONCERN_MAX_RECORDS:
+    if result < 0 or result > PLANNER_CONCERN_MAX_RECORDS:
         raise ValueError(
             f"AUTHORED_STRUCTURED_DESIGN: cardinality for {section}.{concern} "
-            f"is outside 0..{PLANNER_CONCERN_MAX_RECORDS}: {value}"
+            f"is outside 0..{PLANNER_CONCERN_MAX_RECORDS}: {result}"
         )
-    return value
-
+    return result
 
 @dataclass(frozen=True)
 class _PlannerPageRequest:
