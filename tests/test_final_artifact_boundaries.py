@@ -169,6 +169,33 @@ def test_saved_authored_coverage_binds_exact_design_and_verification() -> None:
     assert all(row["status"] == "PASS" for row in receipt["requirements"])
 
 
+def test_saved_authored_coverage_binds_content_modules_outside_typed_manifest() -> None:
+    inputs = _authored_coverage_inputs()
+    plan = json.loads(json.dumps(inputs["authored_plan"]))
+    plan["content_design"] = {
+        "modules": [
+            {
+                "module_id": "alien_crystal",
+                "kind": "item",
+                "config": {},
+                "depends_on": [],
+                "required_gates": [],
+            }
+        ]
+    }
+
+    receipt = build_authored_design_coverage_receipt(
+        **{
+            **inputs,
+            "authored_plan": plan,
+            "module_ids": ("alien_crystal", "authored_typed_plan"),
+        }
+    )
+
+    assert receipt["status"] == "PASS"
+    assert receipt["authored_design_binding"]["content_module_count"] == 1
+
+
 def test_saved_authored_coverage_fails_closed_when_manifest_module_is_not_approved() -> None:
     inputs = _authored_coverage_inputs()
 
