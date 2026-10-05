@@ -10,6 +10,21 @@ from .artifact_ports import PortKind
 from .implementation_identity import ExecutorType
 
 
+def parse_artifact_jobs(
+    raw_jobs: Iterable[Mapping[str, Any]],
+) -> tuple["ArtifactJob", ...]:
+    """Parse the one canonical serialized ArtifactJob representation."""
+
+    parsed: list[ArtifactJob] = []
+    for index, raw in enumerate(raw_jobs):
+        if not isinstance(raw, Mapping):
+            raise ValueError(
+                f"ARTIFACT_JOB_OBJECT_REQUIRED: index={index}"
+            )
+        parsed.append(ArtifactJob.from_dict(dict(raw)))
+    return tuple(parsed)
+
+
 def artifact_owner_module_ids(jobs: Iterable[Any]) -> frozenset[str]:
     """Return module IDs whose production is owned by the canonical artifact graph."""
 
