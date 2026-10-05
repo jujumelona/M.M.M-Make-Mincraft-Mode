@@ -21,18 +21,21 @@ _MAX_RECORD_SET_ITEMS = 16
 
 def record_cardinality_response_schema(
     template: dict[str, Any] | None = None,
+    *,
+    minimum_count: int = 0,
 ) -> dict[str, Any]:
     """Tiny semantic cardinality decision; the host owns all record iteration."""
 
     del template
+    minimum = max(0, min(int(minimum_count), _MAX_RECORD_SET_ITEMS))
     return {
         "type": "object",
         "properties": {
             "count": {
                 "type": "integer",
-                "minimum": 0,
+                "minimum": minimum,
                 "maximum": _MAX_RECORD_SET_ITEMS,
-                "enum": list(range(_MAX_RECORD_SET_ITEMS + 1)),
+                "enum": list(range(minimum, _MAX_RECORD_SET_ITEMS + 1)),
             },
         },
         "required": ["count"],
@@ -106,6 +109,7 @@ def run_bounded_record_template(
     allowed_refs=(),
     progress=None,
     checkpoint=None,
+    minimum_count: int = 0,
 ):
     """Generate a finite record set as tiny count + host-owned ordinal record jobs."""
 
@@ -118,7 +122,8 @@ def run_bounded_record_template(
         normalized_context,
     )
     record_validator = Draft202012Validator(record_schema)
-    binding = "record-set-v2:" + task_binding(
+    minimum = max(0, min(int(minimum_count), _MAX_RECORD_SET_ITEMS))
+    binding = f"record-set-v3:min={minimum}:" + task_binding(
         template,
         normalized_context,
         admitted_refs,
@@ -152,7 +157,10 @@ def run_bounded_record_template(
                     template,
                     normalized_context,
                 ),
-                response_schema=record_cardinality_response_schema(template),
+                response_schema=record_cardinality_response_schema(
+                    template,
+                    minimum_count=minimum,
+                ),
                 enable_tools=False,
                 tool_name="submit_record_count_" + identifier.replace("/", "_"),
                 output_token_ceiling=PLANNER_RECORD_COUNT_OUTPUT_TOKEN_CEILING,
@@ -161,10 +169,10 @@ def run_bounded_record_template(
             if checkpoint is not None:
                 checkpoint(binding, {"count": count})
 
-        if count < 0 or count > _MAX_RECORD_SET_ITEMS:
+        if count < minimum or count > _MAX_RECORD_SET_ITEMS:
             raise ValueError(
                 f"TEMPLATE_RECORD_SET_COUNT: {identifier} count {count} is outside "
-                f"0..{_MAX_RECORD_SET_ITEMS}"
+                f"{minimum}..{_MAX_RECORD_SET_ITEMS}"
             )
 
         safe_checkpoint = serialized_callback(checkpoint)
