@@ -27,23 +27,17 @@ _STATE_CONCERNS = tuple(DETAIL_RECORDS["state_model"])
 def normalize_structured_state_section(
     section: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Return a structural copy of canonical state authority, or fail closed.
-
-    This function deliberately performs no semantic normalization. Both new typed
-    state IR and legacy canonical DSL strings are accepted by the shared state
-    validator/compiler, but production is never allowed to translate one semantic
-    identifier into another or discard an unrecognized operation.
-    """
+    """Return a structural copy of canonical typed state authority, or fail closed."""
 
     if not isinstance(section, Mapping):
         raise ValueError("PRODUCTION_STATE_STRUCTURED_AUTHORITY_REQUIRED")
 
-    raw_specification = section.get("specification")
-    specification = (
-        raw_specification
-        if isinstance(raw_specification, Mapping)
-        else section
-    )
+    specification = section.get("specification")
+    if not isinstance(specification, Mapping):
+        raise ValueError(
+            "PRODUCTION_STATE_SPECIFICATION_REQUIRED: canonical state authority "
+            "must contain a specification object"
+        )
 
     result_specification: dict[str, Any] = {}
     for concern in _STATE_CONCERNS:
@@ -107,7 +101,7 @@ def normalize_structured_state_section(
             if str(value).strip()
         ],
     }
-    validate_structured_state_section(normalized_section)
+    validate_structured_state_section(result_specification)
     return normalized_section
 
 
