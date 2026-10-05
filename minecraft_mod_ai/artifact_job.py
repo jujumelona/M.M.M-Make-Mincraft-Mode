@@ -10,6 +10,20 @@ from .artifact_ports import PortKind
 from .implementation_identity import ExecutorType
 
 
+def _string(value: Any, field: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"ARTIFACT_JOB_STRING_REQUIRED: {field}")
+    return value
+
+
+def _string_list(value: Any, field: str) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise ValueError(f"ARTIFACT_JOB_ARRAY_REQUIRED: {field}")
+    if any(not isinstance(item, str) for item in value):
+        raise ValueError(f"ARTIFACT_JOB_STRING_ARRAY_REQUIRED: {field}")
+    return tuple(value)
+
+
 def parse_artifact_jobs(
     raw_jobs: Iterable[Mapping[str, Any]],
 ) -> tuple["ArtifactJob", ...]:
@@ -127,27 +141,47 @@ class ArtifactJob:
             raise ValueError("ARTIFACT_JOB_INPUTS_OBJECT_REQUIRED")
         if not isinstance(data["validation_receipts"], list):
             raise ValueError("ARTIFACT_JOB_RECEIPTS_ARRAY_REQUIRED")
+        if data["expected_sha256"] is not None and not isinstance(
+            data["expected_sha256"], str
+        ):
+            raise ValueError("ARTIFACT_JOB_EXPECTED_SHA_STRING_REQUIRED")
+        for index, port in enumerate(data["required_ports"]):
+            if not isinstance(port, dict):
+                raise ValueError(
+                    f"ARTIFACT_JOB_REQUIRED_PORT_OBJECT_REQUIRED: index={index}"
+                )
+        for index, slot in enumerate(data["ai_slots"]):
+            if not isinstance(slot, dict):
+                raise ValueError(
+                    f"ARTIFACT_JOB_AI_SLOT_OBJECT_REQUIRED: index={index}"
+                )
+        for index, receipt in enumerate(data["validation_receipts"]):
+            if not isinstance(receipt, dict):
+                raise ValueError(
+                    f"ARTIFACT_JOB_RECEIPT_OBJECT_REQUIRED: index={index}"
+                )
         return cls(
-            job_id=str(data["job_id"]),
-            template_id=str(data["template_id"]),
-            owner_module=str(data["owner_module"]),
+            job_id=_string(data["job_id"], "job_id"),
+            template_id=_string(data["template_id"], "template_id"),
+            owner_module=_string(data["owner_module"], "owner_module"),
             executor_type=ExecutorType(data["executor_type"]),
-            target_path=str(data["target_path"]),
-            anchor=str(data["anchor"]),
-            operation=str(data["operation"]),
+            target_path=_string(data["target_path"], "target_path"),
+            anchor=_string(data["anchor"], "anchor"),
+            operation=_string(data["operation"], "operation"),
             expected_sha256=data["expected_sha256"],
-            requires=tuple(str(k) for k in data["requires"]),
-            produces=tuple(str(k) for k in data["produces"]),
+            requires=_string_list(data["requires"], "requires"),
+            produces=_string_list(data["produces"], "produces"),
             required_ports=tuple(dict(k) for k in data["required_ports"]),
             ai_slots=tuple(dict(s) for s in data["ai_slots"]),
             deterministic_inputs=dict(data["deterministic_inputs"]),
-            status=str(data["status"]),
-            validation_receipts=list(data["validation_receipts"]),
-            rendered_output=str(data["rendered_output"]),
-            context_id=str(data["context_id"]),
-            canonical_leaf=str(data["canonical_leaf"]),
-            implementation_id=str(data["implementation_id"]),
+            status=_string(data["status"], "status"),
+            validation_receipts=[dict(item) for item in data["validation_receipts"]],
+            rendered_output=_string(data["rendered_output"], "rendered_output"),
+            context_id=_string(data["context_id"], "context_id"),
+            canonical_leaf=_string(data["canonical_leaf"], "canonical_leaf"),
+            implementation_id=_string(data["implementation_id"], "implementation_id"),
         )
+
 
 
 def validate_artifact_job_graph(
