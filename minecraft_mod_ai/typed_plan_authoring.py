@@ -325,15 +325,25 @@ def assert_model_atomic_decision_schema(
             "decompose into bounded leaf decisions."
         )
 
-    from .typed_platform_ir import PLATFORM_KINDS, platform_config_schema
+    # This guard checks model-call atomicity; it must not double as a platform
+    # vocabulary completeness assertion. Platform schema completeness is owned by
+    # typed_platform_ir validation. Otherwise adding a new production kind can break
+    # unrelated scalar decisions (for example event_type) before the model is called.
+    if schema.get("type") == "object" and isinstance(schema.get("properties"), Mapping):
+        from .typed_platform_ir import PLATFORM_KINDS, platform_config_schema
 
-    for k in PLATFORM_KINDS:
-        canonical = platform_config_schema(k)
-        if canonical.get("properties") and schema == canonical:
-            raise ValueError(
-                f"NON_ATOMIC_MODEL_SCHEMA: passing canonical storage schema for {k!r} to model is forbidden; "
-                "use small bounded semantic authoring schemas."
-            )
+        for k in PLATFORM_KINDS:
+            try:
+                canonical = platform_config_schema(k)
+            except ValueError as exc:
+                if str(exc).startswith("TYPED_PLATFORM_KIND_UNSUPPORTED:"):
+                    continue
+                raise
+            if canonical.get("properties") and schema == canonical:
+                raise ValueError(
+                    f"NON_ATOMIC_MODEL_SCHEMA: passing canonical storage schema for {k!r} to model is forbidden; "
+                    "use small bounded semantic authoring schemas."
+                )
 
     def _check_node(node: Any, path: str, depth: int) -> None:
         if not isinstance(node, Mapping):
