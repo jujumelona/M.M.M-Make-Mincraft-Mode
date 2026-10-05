@@ -6,10 +6,12 @@ from copy import deepcopy
 from typing import Any
 
 from .bounded_record_template import run_bounded_record_template
+from .fixed_template_generation import generate_fixed_template_value
+from .model_output_atomicity_contract import structured_output_token_ceiling
 from .parallel_model_tasks import deterministic_model_map, serialized_callback
 from .single_record_template import run_single_record_template
 from .task_template_catalog import load_record_template
-from .task_template_input import task_context
+from .task_template_input import task_binding, task_context
 from .template_errors import TemplateBlocked
 
 _EXACT_SINGLE = frozenset({"design/content_capability"})
@@ -33,6 +35,123 @@ def _evidence_refs(context: dict[str, Any], allowed_refs) -> list[str]:
 
 def _record_key(record: dict[str, Any]) -> str:
     return json.dumps(record, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+
+
+_MAX_DECISION_SLOTS = 16
+
+
+def _decision_slot_selection_schema(allowed_slots: list[str]) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "slots": {
+                "type": "array",
+                "minItems": 0,
+                "maxItems": min(len(allowed_slots), _MAX_DECISION_SLOTS),
+                "uniqueItems": True,
+                "items": {
+                    "type": "string",
+                    "enum": list(allowed_slots),
+                },
+            },
+        },
+        "required": ["slots"],
+        "additionalProperties": False,
+    }
+
+
+def _run_decisions(router, identifier, context, progress, checkpoint):
+    """Select semantic decision slots once, then let the host own slot identity."""
+
+    template = load_record_template(identifier)
+    normalized = task_context(template, context)
+    raw_allowed = normalized.get("allowed_slots")
+    if not isinstance(raw_allowed, list):
+        raise TemplateBlocked("TEMPLATE_DECISION_ALLOWED_SLOTS_REQUIRED")
+    allowed_slots = list(
+        dict.fromkeys(
+            value
+            for value in raw_allowed
+            if isinstance(value, str) and value.strip()
+        )
+    )
+    if not allowed_slots:
+        return [], normalized
+
+    selector_schema = _decision_slot_selection_schema(allowed_slots)
+    binding = "decision-slots-v1:" + task_binding(template, normalized, ())
+    saved = (progress or {}).get(binding)
+    if isinstance(saved, dict) and isinstance(saved.get("slots"), list):
+        selected_slots = list(saved["slots"])
+    else:
+        selected = generate_fixed_template_value(
+            router,
+            "planner",
+            (
+                {
+                    "role": "system",
+                    "content": (
+                        "Select the distinct design slots that require an authored decision "
+                        "for this requirement. Choose only from allowed_slots. Return an empty "
+                        "list when no listed slot requires a decision. Do not author values, "
+                        "ordinals, counts, retries, or continuation metadata."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(normalized, ensure_ascii=False),
+                },
+            ),
+            response_schema=selector_schema,
+            enable_tools=False,
+            description="Select applicable design decision slots.",
+            output_token_ceiling=structured_output_token_ceiling(selector_schema),
+        )
+        selected_slots = list(selected["slots"])
+        if checkpoint is not None:
+            checkpoint(binding, {"slots": list(selected_slots)})
+
+    if (
+        len(selected_slots) != len(set(selected_slots))
+        or len(selected_slots) > _MAX_DECISION_SLOTS
+        or any(slot not in allowed_slots for slot in selected_slots)
+    ):
+        raise TemplateBlocked("TEMPLATE_DECISION_SLOT_SELECTION_INVALID")
+
+    safe_checkpoint = serialized_callback(checkpoint)
+    jobs = tuple(enumerate(selected_slots))
+
+    def run_slot(job):
+        index, slot_id = job
+        record = run_single_record_template(
+            router,
+            identifier,
+            context={
+                **normalized,
+                "allowed_slots": [slot_id],
+                "record_index": index,
+                "record_ordinal": index + 1,
+                "record_count": len(selected_slots),
+                "accepted_records": [],
+            },
+            progress=progress,
+            checkpoint=safe_checkpoint,
+        )
+        if record.get("slot_id") != slot_id:
+            raise TemplateBlocked(
+                f"TEMPLATE_DECISION_SLOT_MISMATCH: expected {slot_id}, "
+                f"received {record.get('slot_id')}"
+            )
+        return record
+
+    records = deterministic_model_map(
+        router,
+        jobs,
+        run_slot,
+        role="planner",
+        thread_name_prefix="design-decision-slot",
+    )
+    return records, normalized
 
 
 def _run_properties(router, identifier, context, progress, checkpoint):
@@ -233,7 +352,11 @@ def run_record_template(
             "evidence_refs": _evidence_refs(normalized, allowed_refs),
         }
 
-    if identifier == "design/content_property":
+    if identifier == "design/decision":
+        records, normalized = _run_decisions(
+            router, identifier, normalized, progress, checkpoint
+        )
+    elif identifier == "design/content_property":
         records, normalized = _run_properties(
             router, identifier, normalized, progress, checkpoint
         )
