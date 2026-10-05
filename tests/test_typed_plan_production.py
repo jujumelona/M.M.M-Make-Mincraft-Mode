@@ -55,7 +55,7 @@ def _plan(text: str = "typed behavior") -> dict:
                         "value": {"op": "literal", "type": "int", "value": 42},
                     }
                 ],
-                "covers": ["design:compute"],
+                "covers": [],
             }
         ],
         "initialize": [
@@ -144,7 +144,7 @@ def test_typed_state_backend_generates_state_owner_without_router(
                         },
                     }
                 ],
-                "covers": ["state:coins"],
+                "covers": [],
             }
         ],
         "initialize": [],
@@ -155,7 +155,7 @@ def test_typed_state_backend_generates_state_owner_without_router(
                 {
                     "name": "coins",
                     "owner": "player",
-                    "type": "integer",
+                    "type": "long",
                     "unit": "credits",
                     "default": "0",
                     "domain": "integer >= 0",
@@ -251,7 +251,7 @@ def test_typed_state_operations_fail_closed_without_canonical_state_authority() 
                         },
                     }
                 ],
-                "covers": ["state:coins"],
+                "covers": [],
             }
         ],
         "initialize": [
@@ -417,7 +417,7 @@ def test_typed_state_store_generates_state_owner_and_persistence_bridge(
                 {
                     "name": "coins",
                     "owner": "player",
-                    "type": "integer",
+                    "type": "long",
                     "unit": "credits",
                     "default": "0",
                     "domain": "integer >= 0",
@@ -574,7 +574,7 @@ def test_typed_state_store_materializes_persistence_without_router(
             {
                 "name": "coins",
                 "owner": "player",
-                "type": "integer",
+                "type": "long",
                 "unit": "credits",
                 "default": "0",
                 "domain": "integer >= 0",
