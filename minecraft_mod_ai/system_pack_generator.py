@@ -6,6 +6,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .platform_backend_contract import (
+    SYSTEM_PACK_KINDS,
     deterministic_backend_capabilities,
     system_pack_capabilities,
 )
@@ -31,15 +32,7 @@ _ID = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 _PACKAGE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
 _DIRECTORY_SCHEMA = "mmm/system-pack-directory-v1"
 _RECORD_SCHEMA = "mmm/system-module-record-v1"
-_PACKS = frozenset(
-    {
-        "quest-system",
-        "class-skill-system",
-        "economy-shop",
-        "gui-networking",
-        "party-guild",
-    }
-)
+_PACKS = frozenset(SYSTEM_PACK_KINDS)
 
 
 def supported_system_packs() -> tuple[str, ...]:
@@ -379,4 +372,8 @@ def _system_java(
             class_name,
             absolute_resource,
         )
-    return _party_java(package_name, class_name, absolute_resource)
+    if pack_id == "party-guild":
+        return _party_java(package_name, class_name, absolute_resource)
+    raise ValueError(
+        f"System pack {pack_id!r} is registered but has no concrete Java backend."
+    )
