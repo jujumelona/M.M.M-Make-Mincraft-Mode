@@ -302,8 +302,10 @@ class CompleteProposal:
                     raise VersionContextError("ARTIFACT_CONTEXT_BINDING_MISSING")
                 for identifier in bindings.values():
                     resolved.assert_context(identifier)
-            for job in self.game_design.get("_artifact_jobs", ()):
-                resolved.assert_context(job.get("context_id"))
+            for raw_job in self.game_design.get("_artifact_jobs", ()):
+                if not isinstance(raw_job, Mapping):
+                    raise VersionContextError("ARTIFACT_CONTEXT_BINDING_MISSING")
+                resolved.assert_context(raw_job.get("context_id"))
         try:
             validate_canonical_json(self.game_design)
         except (CanonicalJsonError, RecursionError) as exc:
@@ -360,19 +362,32 @@ class CompleteProposal:
             raise SpecValidationError(
                 "game_design._artifact_jobs must be an array when supplied."
             )
-        artifact_owners: set[str] = set()
-        for index, raw_job in enumerate(raw_artifact_jobs):
-            if not isinstance(raw_job, Mapping):
-                raise SpecValidationError(
-                    f"Artifact job {index} must be an object."
-                )
-            owner = str(raw_job.get("owner_module") or "").strip()
-            if owner:
-                if owner not in module_ids:
-                    raise SpecValidationError(
-                        f"Artifact job {index} references unknown owner module {owner!r}."
+        from .artifact_job import ArtifactJob, validate_artifact_job_graph
+
+        parsed_artifact_jobs = []
+        try:
+            for index, raw_job in enumerate(raw_artifact_jobs):
+                if not isinstance(raw_job, Mapping):
+                    raise ValueError(
+                        f"Artifact job {index} must be an object."
                     )
-                artifact_owners.add(owner)
+                parsed_artifact_jobs.append(
+                    ArtifactJob.from_dict(dict(raw_job))
+                )
+            validate_artifact_job_graph(
+                parsed_artifact_jobs,
+                module_ids=module_ids,
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise SpecValidationError(
+                f"Invalid canonical artifact job graph: {exc}"
+            ) from exc
+
+        artifact_owners = {
+            job.owner_module
+            for job in parsed_artifact_jobs
+            if job.owner_module
+        }
 
         from .platform_backend_contract import (
             deterministic_backend_capabilities,
