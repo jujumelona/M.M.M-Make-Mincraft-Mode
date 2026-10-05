@@ -65,20 +65,18 @@ def _validation_modules(checkpoint_id: str) -> tuple[Any, ...]:
         common.extend((validator, scale_policy, toolchain_contract))
     else:
         from . import (
-            java_lsp,
-            java_lsp_process_safety_contract,
-            research_validation_fingerprint_performance,
+            java_core,
+            jvm_owner_bootstrap,
+            project_model,
             validation_diagnostic_contract,
-            validation_execution_contract,
         )
 
         common.extend(
             (
-                java_lsp,
-                java_lsp_process_safety_contract,
+                java_core,
+                jvm_owner_bootstrap,
+                project_model,
                 validation_diagnostic_contract,
-                validation_execution_contract,
-                research_validation_fingerprint_performance,
             )
         )
     return tuple(common)
@@ -173,103 +171,75 @@ def _complete_jar_receipt(value: Mapping[str, Any]) -> bool:
     return True
 
 
-def _diagnostic_sort_key(value: Mapping[str, Any]) -> str:
-    return json.dumps(
-        dict(value),
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-
-
 def _complete_jdt_receipt(value: Mapping[str, Any]) -> bool:
-    if value.get("schema_version") != "mmm/java-diagnostics-v2":
+    """Accept only the canonical receipt emitted by JavaCoreService."""
+
+    if value.get("schema_version") != "mmm/java-diagnostics-v3":
+        return False
+    if value.get("verification_backend") != "jdt_core":
+        return False
+    if value.get("complete") is not True or value.get("skipped") is not False:
         return False
 
-    raw_diagnostics = value.get("diagnostics")
-    diagnostics_by_uri = value.get("diagnostics_by_uri")
-    legacy_errors: list[dict[str, Any]] | None = None
-    if isinstance(raw_diagnostics, Mapping):
-        diagnostics = raw_diagnostics
-        if diagnostics_by_uri is not None and diagnostics_by_uri != raw_diagnostics:
-            return False
-    elif isinstance(raw_diagnostics, list) and isinstance(diagnostics_by_uri, Mapping):
-        if any(not isinstance(item, Mapping) for item in raw_diagnostics):
-            return False
-        diagnostics = diagnostics_by_uri
-        legacy_errors = [dict(item) for item in raw_diagnostics]
-    else:
+    scope = value.get("verification_scope")
+    if scope not in {"full", "incremental", "targeted"}:
+        return False
+    if not isinstance(value.get("project_root"), str) or not value["project_root"]:
+        return False
+    if not isinstance(value.get("project_revision"), Mapping):
+        return False
+    if not all(
+        isinstance(value.get(key), str) and bool(value[key].strip())
+        for key in ("model_id", "model_revision", "session_id")
+    ):
+        return False
+    generation = value.get("generation")
+    if isinstance(generation, bool) or not isinstance(generation, (int, float)):
         return False
 
-    pages = value.get("pages")
-    files_opened = _nonnegative_int(value.get("files_opened"))
-    page_count = _nonnegative_int(value.get("page_count"))
+    diagnostics = value.get("diagnostics")
     error_count = _nonnegative_int(value.get("error_count"))
     warning_count = _nonnegative_int(value.get("warning_count"))
     if (
-        not isinstance(pages, list)
-        or files_opened is None
-        or page_count is None
+        not isinstance(diagnostics, Mapping)
         or error_count is None
         or warning_count is None
-        or page_count != len(pages)
-        or len(diagnostics) != files_opened
     ):
         return False
 
     observed_errors = 0
     observed_warnings = 0
-    expected_legacy_errors: list[dict[str, Any]] = []
     for uri, raw_items in diagnostics.items():
         if not isinstance(uri, str) or not uri or not isinstance(raw_items, list):
             return False
         for item in raw_items:
             if not isinstance(item, Mapping):
                 return False
-            severity = item.get("severity", 1)
-            if isinstance(severity, bool) or not isinstance(severity, int):
+            severity = item.get("severity")
+            if isinstance(severity, bool) or severity not in {1, 2, 3}:
                 return False
             if severity == 1:
                 observed_errors += 1
-                expected_legacy_errors.append(dict(item))
             elif severity == 2:
                 observed_warnings += 1
     if observed_errors != error_count or observed_warnings != warning_count:
         return False
-    if legacy_errors is not None and sorted(
-        legacy_errors, key=_diagnostic_sort_key
-    ) != sorted(expected_legacy_errors, key=_diagnostic_sort_key):
-        return False
 
-    page_files = 0
-    page_diagnostics = 0
-    page_errors = 0
-    page_warnings = 0
-    for page in pages:
-        if not isinstance(page, Mapping):
-            return False
-        file_count = _nonnegative_int(page.get("file_count"))
-        diagnostic_uri_count = _nonnegative_int(page.get("diagnostic_uri_count"))
-        errors = _nonnegative_int(page.get("error_count"))
-        warnings = _nonnegative_int(page.get("warning_count"))
+    if scope == "targeted":
+        relative_files = value.get("relative_files")
         if (
-            file_count is None
-            or diagnostic_uri_count is None
-            or errors is None
-            or warnings is None
-            or diagnostic_uri_count != file_count
+            not isinstance(relative_files, list)
+            or not relative_files
+            or any(
+                not isinstance(item, str) or not item.strip()
+                for item in relative_files
+            )
         ):
             return False
-        page_files += file_count
-        page_diagnostics += diagnostic_uri_count
-        page_errors += errors
-        page_warnings += warnings
-    return (
-        page_files == files_opened
-        and page_diagnostics == files_opened
-        and page_errors == error_count
-        and page_warnings == warning_count
-    )
+    elif "relative_files" in value:
+        return False
+
+    return True
 
 
 def cached_validation_is_reusable(checkpoint_id: str, value: Any) -> bool:
