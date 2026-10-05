@@ -16,9 +16,8 @@ from typing import Any
 
 _STATE_IDENTIFIER_PATTERN = r"^[A-Za-z_][A-Za-z0-9_]*$"
 _STATE_SCALAR_TYPES = ("boolean", "int", "long", "double", "string")
-STATE_EXPRESSION_PATTERN = r"^.*$"
-STATE_MUTATION_PATTERN = r"^.*$"
-
+_STATE_INTEGER_PATTERN = r"[-+]?[0-9]+"
+_STATE_NUMBER_PATTERN = r"[-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?"
 _STATE_EXECUTABLE_FIELDS = {
     "transitions": ("guard", "mutation"),
     "invariants": ("condition",),
@@ -48,9 +47,7 @@ def state_variable_default_schema(
     }
     if family == "number":
         schema["minLength"] = 1
-        schema["pattern"] = (
-            r"^[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?$"
-        )
+        schema["pattern"] = "^" + _STATE_NUMBER_PATTERN + "$"
     elif family == "boolean":
         schema["minLength"] = 1
         schema.pop("pattern", None)
@@ -1331,10 +1328,7 @@ def validate_state_concern(
                 raise ValueError(
                     f"STRUCTURED_STATE_VARIABLE_DEFAULT: {name!r} contains an unpaired surrogate"
                 )
-            if family == "number" and re.fullmatch(
-                r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?",
-                default,
-            ) is None:
+            if family == "number" and re.fullmatch(_STATE_NUMBER_PATTERN, default) is None:
                 raise ValueError(
                     f"STRUCTURED_STATE_VARIABLE_DEFAULT: {name!r} requires a numeric default"
                 )
@@ -1503,14 +1497,11 @@ def _default_value(record: Mapping[str, str]) -> str:
             raise ValueError("STRUCTURED_STATE_DEFAULT_BOOLEAN_INVALID")
         return "Boolean.TRUE" if lowered == "true" else "Boolean.FALSE"
     if type_name in {"int", "long"}:
-        if re.fullmatch(r"[-+]?\d+", value) is None:
+        if re.fullmatch(_STATE_INTEGER_PATTERN, value) is None:
             raise ValueError("STRUCTURED_STATE_DEFAULT_INTEGER_INVALID")
         return f"Long.valueOf({_java_string(value)})"
     if type_name == "double":
-        if re.fullmatch(
-            r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?",
-            value,
-        ) is None:
+        if re.fullmatch(_STATE_NUMBER_PATTERN, value) is None:
             raise ValueError("STRUCTURED_STATE_DEFAULT_DOUBLE_INVALID")
         return f"Double.valueOf({_java_string(value)})"
     if type_name == "string":
@@ -1980,8 +1971,6 @@ PUBLIC_API = (
 
 __all__ = [
     "PUBLIC_API",
-    "STATE_EXPRESSION_PATTERN",
-    "STATE_MUTATION_PATTERN",
     "StateSymbolTable",
     "compile_mutation_ir",
     "compile_state_expr_ir",
