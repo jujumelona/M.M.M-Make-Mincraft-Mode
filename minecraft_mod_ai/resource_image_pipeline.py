@@ -129,9 +129,6 @@ def generate_candidate(
 ) -> dict[str, Any]:
     from PIL import Image
 
-    from .model_adapters.base import ModelBackendError
-    from .model_adapters.image_diffusion import _is_cuda_memory_pressure
-
     contract = _contract(texture)
     directory.mkdir(parents=True, exist_ok=True)
     canvas = Image.new("RGBA", (texture["width"], texture["height"]), (0, 0, 0, 0))
@@ -150,17 +147,11 @@ def generate_candidate(
                 "output_path": source,
                 "seed": region_seed,
             }
-            try:
-                generate(**kwargs, width=resolution[0], height=resolution[1])
-            except ModelBackendError as exc:
-                if (
-                    fallback is None
-                    or fallback == resolution
-                    or not _is_cuda_memory_pressure(exc)
-                ):
-                    raise
-                selected_resolution = fallback
-                generate(**kwargs, width=fallback[0], height=fallback[1])
+            generate(
+                **kwargs,
+                width=resolution[0],
+                height=resolution[1],
+            )
             if not source.is_file() or source.is_symlink():
                 raise ValueError("Image backend produced no regular source PNG.")
             with Image.open(source) as raw:
