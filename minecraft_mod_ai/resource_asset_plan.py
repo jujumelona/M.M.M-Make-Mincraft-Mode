@@ -60,8 +60,15 @@ def select_plan_rows(
 def require_asset_plan(
     game_design: Mapping[str, Any],
     requests: Sequence[Any],
+    *,
+    exact: bool = False,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Return the canonical approved plan and rows for one execution request set."""
+    """Return canonical plan authority for a full proposal or one shard subset.
+
+    exact=True is the proposal/work-graph boundary: plan rows must exactly match
+    semantic asset order. exact=False is reserved for execution shards selecting
+    a strict subset from that already-approved plan.
+    """
 
     raw_plan = game_design.get("_asset_generation_plan")
     if not isinstance(raw_plan, Mapping):
@@ -73,7 +80,40 @@ def require_asset_plan(
             "Canonical resource asset plan has an unsupported schema."
         )
     plan = dict(raw_plan)
+    if set(plan) != {
+        "schema_version",
+        "image_profile_sha256",
+        "assets",
+    }:
+        raise ResourceAssetPlanError(
+            "Canonical resource asset plan has unexpected or missing fields."
+        )
+    profile_sha256 = str(plan.get("image_profile_sha256") or "")
+    if (
+        not profile_sha256.startswith("sha256:")
+        or len(profile_sha256) != 71
+        or any(ch not in "0123456789abcdef" for ch in profile_sha256[7:])
+    ):
+        raise ResourceAssetPlanError(
+            "Canonical resource asset plan has an invalid image profile SHA-256."
+        )
+
     selected = select_plan_rows(plan, requests)
+    if exact:
+        request_ids = [
+            str(getattr(request, "asset_id", "") or "").strip()
+            for request in requests
+        ]
+        plan_ids = [
+            str(row.get("asset_id") or "").strip()
+            for row in plan["assets"]
+            if isinstance(row, Mapping)
+        ]
+        if plan_ids != request_ids:
+            raise ResourceAssetPlanError(
+                "Canonical resource asset plan does not exactly match semantic "
+                f"asset order: plan={plan_ids!r}, requests={request_ids!r}"
+            )
     return plan, selected
 
 
