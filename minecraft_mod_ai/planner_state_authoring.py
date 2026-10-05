@@ -183,6 +183,7 @@ def _state_atomic_messages(
     index: int,
     fields: Sequence[str],
     current_row: Mapping[str, Any] | None = None,
+    peer_rows: Sequence[Mapping[str, Any]] = (),
     symbols_text: str = "",
     extra_instruction: str = "",
 ) -> tuple[dict[str, str], ...]:
@@ -199,6 +200,16 @@ def _state_atomic_messages(
             "Already-fixed fields for this same row (read-only):\n"
             + json.dumps(dict(current_row), ensure_ascii=True, sort_keys=True, default=str)
         )
+    if peer_rows:
+        user_parts.append(
+            "Already-authored sibling rows (read-only; keep this row distinct where needed):\n"
+            + json.dumps(
+                [dict(row) for row in peer_rows if isinstance(row, Mapping)],
+                ensure_ascii=True,
+                sort_keys=True,
+                default=str,
+            )
+        )
     if symbols_text:
         user_parts.append(symbols_text)
     if extra_instruction:
@@ -207,10 +218,10 @@ def _state_atomic_messages(
         {
             "role": "system",
             "content": (
-                "Fill exactly one host-owned state record projection. Return only the JSON "
-                "object required by the supplied schema. Never emit a state_model wrapper, "
-                "a variables/concern array, sibling fields, Markdown, prose, or loop control. "
-                "Do not rewrite fields listed as already fixed."
+                "Fill exactly one host-owned state record projection. Return only the "
+                "value or structure explicitly requested for this one field projection. "
+                "Never emit a state_model wrapper, a variables/concern array, sibling fields, "
+                "Markdown, prose, or loop control. Do not rewrite fields listed as already fixed."
             ),
         },
         {
@@ -304,6 +315,7 @@ def author_state_semantic_page(
                 index=index,
                 fields=(field,),
                 current_row=current,
+                peer_rows=rows,
                 extra_instruction=(
                     "Return only the raw scalar value for this field, with no JSON key, "
                     "object, array, quotes, Markdown, or explanation." + constraints
