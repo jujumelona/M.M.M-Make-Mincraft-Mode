@@ -41,10 +41,22 @@ def constrain_state_record_schema(
     properties = result.get("properties")
     if not isinstance(properties, dict):
         return result
-    if concern == "variables" and isinstance(properties.get("name"), dict):
-        properties["name"]["description"] = (
-            "Stable ASCII internal state identifier consumed by the host state compiler."
-        )
+    if concern == "variables":
+        if isinstance(properties.get("name"), dict):
+            properties["name"]["description"] = (
+                "Stable ASCII identifier for exactly one independently mutable state value. "
+                "Do not pack multiple logical fields into one object-shaped variable."
+            )
+        if isinstance(properties.get("type"), dict):
+            properties["type"]["description"] = (
+                "State value family. Planner-authored variables use scalar number, boolean, "
+                "or string families; legacy aggregate storage remains production-compatible."
+            )
+        if isinstance(properties.get("default"), dict):
+            properties["default"]["description"] = (
+                "Scalar default matching this variable's declared type; never encode a JSON "
+                "object or array inside this string field."
+            )
     for field in _STATE_EXECUTABLE_FIELDS.get(concern, ()):
         target = properties.get(field)
         if not isinstance(target, dict):
