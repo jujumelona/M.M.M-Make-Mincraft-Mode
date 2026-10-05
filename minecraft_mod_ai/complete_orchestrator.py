@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from .artifact_graph_executor import execute_artifact_graph
-from .artifact_job import ArtifactJob
+from .artifact_job import ArtifactJob, artifact_owner_module_ids
 from .artifact_materializer import ensure_artifact_scaffolding
 from .complete_preflight_contract import (
     REQUIRED_GATE_TO_EVIDENCE as _REQUIRED_GATE_TO_EVIDENCE,
@@ -1380,6 +1380,8 @@ class CompleteProductionOrchestrator:
                     ledger.retry(node_id)
 
         spec = approved.base_proposal.spec
+        raw_artifact_jobs = approved.game_design.get("_artifact_jobs") or []
+        artifact_owners = artifact_owner_module_ids(raw_artifact_jobs)
         try:
             validate_production_generation_project(
                 project_root,
@@ -1387,6 +1389,7 @@ class CompleteProductionOrchestrator:
                 mod_id=spec.mod_id,
                 package_name=spec.package_name,
                 policy=self.policy,
+                artifact_owners=artifact_owners,
             )
         except ProductionGenerationPreflightError as exc:
             raise CompleteProductionError(
@@ -1425,7 +1428,6 @@ class CompleteProductionOrchestrator:
             return resolved
         research_modules = tuple(module for module in ordered if is_research_shard(module))
         asset_lookup = {item.asset_id: item for item in approved.assets}
-        raw_artifact_jobs = approved.game_design.get("_artifact_jobs") or []
         artifact_jobs_by_owner: dict[str, list[ArtifactJob]] = {}
         artifact_producers: dict[str, ArtifactJob] = {}
         for raw_job in raw_artifact_jobs:
