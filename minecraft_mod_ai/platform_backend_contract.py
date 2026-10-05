@@ -20,6 +20,7 @@ EXTENDED_CONTENT_KINDS = frozenset({
     "food",
     "crop",
     "machine",
+    "block_entity",
     "effect",
     "enchantment",
     "command",
