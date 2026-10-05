@@ -17,6 +17,7 @@ from .scale_policy import ScalePolicy
 _DEPENDENCIES_BLOCK = re.compile(r"\bdependencies\s*\{")
 _GECKOLIB_DEPENDENCY_MARKER = "// MMM:geckolib:dependency"
 _JAVA_TYPE = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]*$")
+_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
 _ARCHETYPES = frozenset(
     {"biped", "quadruped", "flying", "serpentine", "construct", "custom"}
 )
@@ -51,6 +52,7 @@ class GeckoLibEntityGenerationInputs:
     entity_width: float
     entity_height: float
     spawn_group: str
+    texture_color: str
     custom_bones: list[dict[str, Any]] | None
 
     def generator_kwargs(self) -> dict[str, Any]:
@@ -66,6 +68,7 @@ class GeckoLibEntityGenerationInputs:
             "entity_width": self.entity_width,
             "entity_height": self.entity_height,
             "spawn_group": self.spawn_group,
+            "texture_color": self.texture_color,
             "custom_bones": self.custom_bones,
         }
 
@@ -83,6 +86,7 @@ def validate_geckolib_entity_inputs(
     entity_width: int | float,
     entity_height: int | float,
     spawn_group: str | None,
+    texture_color: str,
     custom_bones: list[dict[str, Any]] | None,
     policy: ScalePolicy | None = None,
 ) -> GeckoLibEntityGenerationInputs:
@@ -102,7 +106,6 @@ def validate_geckolib_entity_inputs(
 
     numeric = {
         "max_health": max_health,
-        "attack_damage": attack_damage,
         "movement_speed": movement_speed,
         "follow_range": follow_range,
         "entity_width": entity_width,
@@ -121,6 +124,21 @@ def validate_geckolib_entity_inputs(
             )
         normalized_numeric[name] = float(value)
 
+    if (
+        isinstance(attack_damage, bool)
+        or not isinstance(attack_damage, (int, float))
+        or not math.isfinite(float(attack_damage))
+        or float(attack_damage) < 0
+    ):
+        raise GeckoLibGenerationContractError(
+            "attack_damage must be a non-negative finite number."
+        )
+    normalized_attack_damage = float(attack_damage)
+    if behavior in {"hostile_melee", "neutral_melee"} and normalized_attack_damage <= 0:
+        raise GeckoLibGenerationContractError(
+            "combat entity attack_damage must be positive."
+        )
+
     if archetype not in _ARCHETYPES or (
         archetype == "custom" and not custom_bones
     ):
@@ -134,12 +152,16 @@ def validate_geckolib_entity_inputs(
     )
     if effective_spawn_group not in _SPAWN_GROUPS:
         raise GeckoLibGenerationContractError("Unknown spawn group.")
+    if not isinstance(texture_color, str) or not _COLOR.fullmatch(texture_color):
+        raise GeckoLibGenerationContractError(
+            "main_color must be an explicit #RRGGBB entity design value."
+        )
 
     return GeckoLibEntityGenerationInputs(
         texture_width=texture_width,
         texture_height=texture_height,
         max_health=normalized_numeric["max_health"],
-        attack_damage=normalized_numeric["attack_damage"],
+        attack_damage=normalized_attack_damage,
         movement_speed=normalized_numeric["movement_speed"],
         follow_range=normalized_numeric["follow_range"],
         archetype=archetype,
@@ -147,6 +169,7 @@ def validate_geckolib_entity_inputs(
         entity_width=normalized_numeric["entity_width"],
         entity_height=normalized_numeric["entity_height"],
         spawn_group=effective_spawn_group,
+        texture_color=texture_color,
         custom_bones=custom_bones,
     )
 
@@ -179,6 +202,11 @@ def geckolib_entity_inputs_from_module_config(
     spawn_group = (
         str(config["spawn_group"]) if config.get("spawn_group") else None
     )
+    raw_main_color = config.get("main_color")
+    if not isinstance(raw_main_color, str) or not raw_main_color.strip():
+        raise GeckoLibGenerationContractError(
+            "Entity generation requires explicit main_color."
+        )
     return validate_geckolib_entity_inputs(
         texture_width=texture_width,
         texture_height=texture_height,
@@ -191,6 +219,7 @@ def geckolib_entity_inputs_from_module_config(
         entity_width=entity_width,
         entity_height=entity_height,
         spawn_group=spawn_group,
+        texture_color=raw_main_color.strip(),
         custom_bones=custom_bones,
         policy=policy,
     )
