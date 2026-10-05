@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from .artifact_ports import PortKind
 from .implementation_identity import ExecutorType
 
 
@@ -155,6 +156,12 @@ def validate_artifact_job_graph(
                 raise ValueError(
                     f"ARTIFACT_JOB_REQUIRED_PORT_EMPTY: {job_id!r}[{index}]"
                 )
+            try:
+                PortKind(kind)
+            except ValueError as exc:
+                raise ValueError(
+                    f"ARTIFACT_JOB_REQUIRED_PORT_KIND: {job_id!r}[{index}] {kind!r}"
+                ) from exc
             if name not in requires:
                 raise ValueError(
                     f"ARTIFACT_JOB_REQUIRED_PORT_NOT_REQUIRED: {job_id!r} {name!r}"
@@ -184,4 +191,45 @@ def validate_artifact_job_graph(
     }
     if missing:
         raise ValueError(f"ARTIFACT_GRAPH_MISSING_PRODUCER: {missing}")
+
+    dependencies: dict[str, set[str]] = {
+        job.job_id: {
+            producers[port]
+            for port in job.requires
+        }
+        for job in materialized
+    }
+    outgoing: dict[str, set[str]] = {
+        job.job_id: set()
+        for job in materialized
+    }
+    indegree = {
+        job_id: len(required)
+        for job_id, required in dependencies.items()
+    }
+    for job_id, required in dependencies.items():
+        for producer_id in required:
+            outgoing[producer_id].add(job_id)
+
+    ready = sorted(
+        job_id
+        for job_id, degree in indegree.items()
+        if degree == 0
+    )
+    emitted = 0
+    while ready:
+        job_id = ready.pop(0)
+        emitted += 1
+        for dependent in sorted(outgoing[job_id]):
+            indegree[dependent] -= 1
+            if indegree[dependent] == 0:
+                ready.append(dependent)
+                ready.sort()
+    if emitted != len(materialized):
+        cyclic = sorted(
+            job_id
+            for job_id, degree in indegree.items()
+            if degree > 0
+        )
+        raise ValueError(f"ARTIFACT_GRAPH_CYCLE: {cyclic}")
     return materialized
