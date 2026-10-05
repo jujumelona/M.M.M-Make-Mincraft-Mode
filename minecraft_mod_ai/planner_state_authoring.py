@@ -230,21 +230,6 @@ def _state_atomic_messages(
         },
     )
 
-def _decode_state_scalar_output(raw: str) -> str:
-    """Decode one model scalar without giving the model ownership of JSON structure."""
-
-    text = str(raw or "").strip()
-    if not text:
-        return ""
-    try:
-        decoded = json.loads(text)
-    except (json.JSONDecodeError, TypeError, ValueError):
-        decoded = None
-    if isinstance(decoded, str):
-        return decoded.strip()
-    return " ".join(text.split())
-
-
 def _state_scalar_schema(
     concern: str,
     field: str,
@@ -274,7 +259,7 @@ def author_state_semantic_page(
     item_schema: Mapping[str, Any],
     existing_rows: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
-    """Author ordinary state fields as scalar text; the host owns all JSON structure."""
+    """Author one ordinary state field at a time; the host owns row/array structure."""
 
     if count <= 0:
         return {concern: []}
@@ -309,6 +294,12 @@ def author_state_semantic_page(
                 enum_values, (str, bytes, bytearray)
             ):
                 constraints = " Allowed values: " + ", ".join(str(v) for v in enum_values) + "."
+            row_schema = {
+                "type": "object",
+                "properties": {field: field_schema},
+                "required": [field],
+                "additionalProperties": False,
+            }
             messages = _state_atomic_messages(
                 prompt,
                 concern=concern,
@@ -317,27 +308,34 @@ def author_state_semantic_page(
                 current_row=current,
                 peer_rows=rows,
                 extra_instruction=(
-                    "Return only the raw scalar value for this field, with no JSON key, "
-                    "object, array, quotes, Markdown, or explanation." + constraints
+                    "Return exactly one JSON object containing only the requested field. "
+                    "Do not emit any sibling field or wrapper." + constraints
                 ),
             )
-            raw = router.generate_text(
+            raw = generate_fixed_template_value(
+                router,
                 "planner",
                 messages,
-                response_format="text",
-                response_schema=None,
+                response_schema=row_schema,
                 enable_tools=False,
-                output_token_ceiling=128,
-                force_non_thinking=True,
+                description=(
+                    f"Author scalar state field {concern}[{index}].{field}."
+                ),
+                output_token_ceiling=structured_output_token_ceiling(row_schema),
             )
-            value = _decode_state_scalar_output(raw)
+            if not isinstance(raw, Mapping) or field not in raw:
+                raise ValueError(
+                    f"STATE_SEMANTIC_FIELD_INVALID: {concern}[{index}].{field} "
+                    "did not return the required host field"
+                )
+            value = raw[field]
             errors = tuple(Draft202012Validator(field_schema).iter_errors(value))
             if errors:
                 detail = "; ".join(error.message for error in errors[:3])
                 raise ValueError(
                     f"STATE_SEMANTIC_FIELD_INVALID: {concern}[{index}].{field}: {detail}"
                 )
-            row[field] = value
+            row[field] = deepcopy(value)
         rows.append(row)
 
     return {concern: rows}
