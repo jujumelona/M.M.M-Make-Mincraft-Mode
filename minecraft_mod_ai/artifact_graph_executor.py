@@ -86,6 +86,7 @@ def _validate_completed_job(
     receipt: dict[str, Any],
     *,
     context: dict[str, Any] | None,
+    registry: PortRegistry,
     base_dir: Any,
 ) -> None:
     """Validate one materialized artifact without mutating scheduler state."""
@@ -97,6 +98,17 @@ def _validate_completed_job(
     if receipt.get("status") != "PASS":
         raise ArtifactGraphError(
             f"ARTIFACT_JOB_FAILED: {job.job_id!r} returned {receipt.get('status')!r}"
+        )
+
+    missing_outputs = [
+        name
+        for name in job.produces
+        if not registry.has(name)
+    ]
+    if missing_outputs:
+        raise ArtifactGraphError(
+            f"ARTIFACT_OUTPUT_PORT_MISSING: {job.job_id!r} did not publish "
+            f"{missing_outputs}"
         )
 
     materialization = receipt.get("materialization")
@@ -194,7 +206,13 @@ def execute_artifact_graph(
             registry=registry,
             base_dir=base_dir,
         )
-        _validate_completed_job(job, receipt, context=context, base_dir=base_dir)
+        _validate_completed_job(
+            job,
+            receipt,
+            context=context,
+            registry=registry,
+            base_dir=base_dir,
+        )
         return {
             "status": "PASS",
             "completed_jobs": [job.job_id],
@@ -326,6 +344,7 @@ def execute_artifact_graph(
                         job,
                         receipt,
                         context=context,
+                        registry=registry,
                         base_dir=base_dir,
                     )
                     validation_futures[validation_future] = (job, receipt)
