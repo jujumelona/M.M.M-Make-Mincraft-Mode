@@ -207,8 +207,9 @@ def compile_content_graph(
             "design/content_entity",
             {**context, "existing_entities": list(entities.values())},
         )
-        if not nodes:
-            raise SlotFillError(f"CONTENT_REQUIREMENT_UNRESOLVED: {rid} has no content")
+        # A requirement may be purely behavioral/system-level and therefore have no
+        # concrete Minecraft content entity. Design decisions below still own that
+        # requirement; do not force the model to invent an item/block/block_entity.
         for node in nodes:
             eid = node["entity_id"]
             prior = entities.get(eid)
@@ -545,7 +546,7 @@ def compile_content_graph(
             FactType.ENTITY_EXISTS: "entity",
             FactType.GUI_EXISTS: "gui",
             FactType.NETWORK_PACKET: "networking",
-            FactType.BLOCK_ENTITY_EXISTS: "machine",
+            FactType.BLOCK_ENTITY_EXISTS: "block_entity",
             FactType.DATA_COMPONENT: "integration",
             FactType.WORLDGEN_FEATURE: "structure",
             FactType.DIMENSION: "dimension",
