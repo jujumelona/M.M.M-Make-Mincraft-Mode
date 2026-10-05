@@ -8,6 +8,7 @@ from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
 
+from .authored_content_contract import RESOURCE_POLICY_CONCERNS
 from .platform_backend_contract import (
     ENTITY_PIPELINE_KINDS as PLATFORM_ENTITY_KINDS,
     EXTENDED_CONTENT_KINDS as PLATFORM_CONTENT_KINDS,
@@ -15,11 +16,45 @@ from .platform_backend_contract import (
 )
 from .system_pack_validation import validate_system_modules
 
-PLATFORM_HOST_KINDS = frozenset({
-    "state_store",
-    "network_sync",
-    "resource_policy",
+PLATFORM_HOST_SECTION_OWNER = {
+    "authority_and_network": "network_sync",
+    "persistence": "state_store",
+}
+PLATFORM_HOST_MODULE_IDS = {
+    "state_store": "typed_state_store",
+    "network_sync": "typed_network_sync",
+    "resource_policy": "typed_resource_policy",
+}
+PLATFORM_HOST_KINDS = frozenset(PLATFORM_HOST_MODULE_IDS)
+NETWORK_SYNC_STATEFUL_REFS = frozenset({
+    "authority_and_network.payloads",
+    "authority_and_network.synchronization",
+    "authority_and_network.reconnection",
 })
+
+
+def host_platform_kind_for_ref(ref: str) -> str | None:
+    """Return the single host-owned backend for a canonical concern ref."""
+
+    section, dot, concern = str(ref or "").partition(".")
+    if not dot:
+        return None
+    owner = PLATFORM_HOST_SECTION_OWNER.get(section)
+    if owner is not None:
+        return owner
+    if section == "resources_and_ui" and concern in RESOURCE_POLICY_CONCERNS:
+        return "resource_policy"
+    return None
+
+
+def network_sync_requires_state(covers: Sequence[str]) -> bool:
+    """Whether a network policy module must bind canonical state transport."""
+
+    return bool(
+        NETWORK_SYNC_STATEFUL_REFS
+        & {str(ref).strip() for ref in covers if str(ref).strip()}
+    )
+
 PLATFORM_KINDS = frozenset(
     set(PLATFORM_CONTENT_KINDS)
     | set(PLATFORM_SYSTEM_KIND_TO_PACK)
@@ -381,21 +416,11 @@ def _json_scalar_tree(value: Any, where: str) -> None:
     raise ValueError(f"{where}: unsupported JSON value {type(value).__name__}")
 
 
-_PERSISTENT_SYSTEM_KINDS = frozenset({
-    "quest", "class", "skill", "economy", "shop", "party", "guild",
-})
-
-# Cross-cutting authority/network records describe one host-owned transport policy
-# domain.  Do not split those records between the deterministic network policy
-# backend and the optional gameplay "networking" system pack: that makes ordinary
-# authority/security worksheet context accidentally require a second feature backend.
-_HOST_SECTION_OWNERS = {
-    "authority_and_network": "network_sync",
-    "persistence": "state_store",
-}
-
-
 def _coverage_allowed(kind: str, cover: str) -> bool:
+    host_owner = host_platform_kind_for_ref(cover)
+    if host_owner is not None:
+        return kind == host_owner
+
     if cover.startswith("resources_and_ui."):
         concern = cover.split(".", 1)[1]
         registry_kinds = {
@@ -430,30 +455,7 @@ def _coverage_allowed(kind: str, cover: str) -> bool:
             return kind in {"machine", "gui", "networking"}
         if concern == "displayed_state":
             return kind == "gui"
-        if concern in {"missing_resources", "accessibility"}:
-            return kind == "resource_policy"
         return False
-
-    section, dot, _concern = cover.partition(".")
-    if dot and section in _HOST_SECTION_OWNERS:
-        return kind == _HOST_SECTION_OWNERS[section]
-
-    if cover.startswith("persistence."):
-        # Legacy persistent gameplay packs may still advertise persistence
-        # coverage for the currently-known worksheet concerns.  The canonical
-        # host state_store path above owns the section itself and therefore does
-        # not depend on a duplicated concern-name allowlist.
-        concern = cover.split(".", 1)[1]
-        return kind in _PERSISTENT_SYSTEM_KINDS and concern in {
-            "stored_state",
-            "serialization",
-            "missing_defaults",
-            "save_triggers",
-            "load_behavior",
-            "migration",
-            "malformed_data",
-            "transfers",
-        }
 
     if cover.startswith("integration."):
         return cover in {
