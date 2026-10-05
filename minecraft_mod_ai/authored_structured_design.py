@@ -16,10 +16,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from .execution_contract_policy import (
-    PLANNER_CONCERN_MAX_RECORDS,
-    PLANNER_RECORD_COUNT_OUTPUT_TOKEN_CEILING,
-)
+from .execution_contract_policy import PLANNER_CONCERN_MAX_RECORDS
 from .model_output_atomicity_contract import structured_output_token_ceiling
 from .planning_detail_slots import DETAIL_RECORDS
 from .planning_detail_template import WORKSHEET_SECTIONS, worksheet_section_schema
