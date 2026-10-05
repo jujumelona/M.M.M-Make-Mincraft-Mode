@@ -3,7 +3,6 @@
 from .artifact_template_runner import (
     _STANDARD_PORT_DEFINITIONS,
     _bind_job_dependencies,
-    _job_value,
     _logical_port,
     execute_artifact_template,
 )
@@ -14,7 +13,6 @@ __all__ = [
     "TemplateBlocked",
     "_STANDARD_PORT_DEFINITIONS",
     "_bind_job_dependencies",
-    "_job_value",
     "_logical_port",
     "execute_artifact_template",
     "run_record_template",
