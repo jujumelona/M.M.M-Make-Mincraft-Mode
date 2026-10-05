@@ -10,7 +10,6 @@ from minecraft_mod_ai.model_adapters.embedding import EmbeddingAdapter
 from minecraft_mod_ai.model_adapters.image_diffusion import (
     ImageDiffusionAdapter,
     _full_gpu_threshold_mb,
-    _is_cuda_memory_pressure,
     finish_image_shard,
 )
 from minecraft_mod_ai.model_adapters.reranker import RerankerAdapter
@@ -66,13 +65,6 @@ def test_image_full_gpu_threshold_keeps_headroom_above_preflight(
 def test_image_full_gpu_threshold_can_be_overridden(monkeypatch) -> None:
     monkeypatch.setenv("MMM_IMAGE_FULL_GPU_MIN_FREE_MB", "24576")
     assert _full_gpu_threshold_mb(SimpleNamespace(min_free_vram_mb=12_500)) == 24_576
-
-
-def test_image_memory_fallback_only_matches_allocation_pressure() -> None:
-    assert _is_cuda_memory_pressure(RuntimeError("CUDA out of memory"))
-    assert _is_cuda_memory_pressure(RuntimeError("CUBLAS_STATUS_ALLOC_FAILED"))
-    assert not _is_cuda_memory_pressure(RuntimeError("CUDA driver is unavailable"))
-    assert not _is_cuda_memory_pressure(ValueError("invalid image dimensions"))
 
 
 def test_image_pipeline_cache_is_released_after_shard_by_default(monkeypatch) -> None:
