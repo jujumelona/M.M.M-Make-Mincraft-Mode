@@ -99,19 +99,6 @@ def _full_gpu_threshold_mb(config: Any) -> int:
     return max(14_000, int(config.min_free_vram_mb) + 1_000)
 
 
-def _accelerate_memory_budget(torch_module: Any) -> dict[Any, str]:
-    total = int(torch_module.cuda.get_device_properties(0).total_memory)
-    reserve = max(2 * 1024**3, int(total * 0.14))
-    gpu = max(4 * 1024**3, total - reserve)
-    try:
-        import psutil
-        cpu_available = int(psutil.virtual_memory().available)
-    except Exception:
-        cpu_available = 8 * 1024**3
-    cpu = max(2 * 1024**3, int(cpu_available * 0.8))
-    return {0: f"{gpu // 1024**2}MiB", "cpu": f"{cpu // 1024**2}MiB"}
-
-
 def _load_pipeline(config: Any, p: ImageGenerationConfig) -> Any:
     if p.quantization in {"bnb_4bit", "bnb_4bit_nf4"}:
         require_package("diffusers", minimum="0.39.0")
@@ -131,9 +118,12 @@ def _load_pipeline(config: Any, p: ImageGenerationConfig) -> Any:
             "transformer": DBits(load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_compute_dtype=dtype, bnb_4bit_use_double_quant=True),
             "text_encoder": TBits(load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_compute_dtype=dtype, bnb_4bit_use_double_quant=True),
         })
+        # Pipeline device maps do not support Accelerate's model-level "auto".
+        # Let each bitsandbytes component load quantized on CUDA, then apply
+        # the configured residency policy to the complete pipeline below.
         pipeline = Flux2KleinPipeline.from_pretrained(
-            p.model_id, torch_dtype=dtype, quantization_config=quant, device_map="auto",
-            max_memory=_accelerate_memory_budget(torch), low_cpu_mem_usage=True, trust_remote_code=False,
+            p.model_id, torch_dtype=dtype, quantization_config=quant,
+            low_cpu_mem_usage=True, trust_remote_code=False,
         )
     else:
         require_package("diffusers", minimum="0.39.0")
@@ -141,10 +131,6 @@ def _load_pipeline(config: Any, p: ImageGenerationConfig) -> Any:
         require_package("accelerate", minimum="1.0.0")
         from diffusers import DiffusionPipeline
         pipeline = DiffusionPipeline.from_pretrained(p.model_id, torch_dtype=torch_dtype(p.torch_dtype), trust_remote_code=False)
-        if config.cpu_offload:
-            pipeline.enable_model_cpu_offload()
-        else:
-            pipeline.to("cuda")
 
     if p.lora_model_id:
         require_package("peft", minimum="0.17.0")
@@ -155,6 +141,10 @@ def _load_pipeline(config: Any, p: ImageGenerationConfig) -> Any:
         setter = getattr(pipeline, "set_adapters", None)
         if callable(setter):
             setter(p.lora_adapter_name, adapter_weights=p.lora_scale)
+    if p.cpu_offload:
+        pipeline.enable_model_cpu_offload()
+    else:
+        pipeline.to("cuda")
     progress = getattr(pipeline, "set_progress_bar_config", None)
     if callable(progress):
         progress(disable=True)
@@ -162,7 +152,7 @@ def _load_pipeline(config: Any, p: ImageGenerationConfig) -> Any:
 
 
 def _profile_key(p: ImageGenerationConfig) -> tuple[Any, ...]:
-    return (p.model_id, p.quantization, p.torch_dtype, p.lora_model_id, p.lora_weight_name,
+    return (p.model_id, p.quantization, p.torch_dtype, p.cpu_offload, p.lora_model_id, p.lora_weight_name,
             p.lora_adapter_name, p.lora_scale, p.num_inference_steps, p.guidance_scale)
 
 
@@ -214,6 +204,12 @@ class ImageDiffusionAdapter:
                     _IMAGE_PIPELINE_ON_GPU = not bool(self.config.cpu_offload)
                     if cache_enabled:
                         _IMAGE_PIPELINE, _IMAGE_PIPELINE_KEY = pipeline, key
+                elif not self.profile.cpu_offload and not _IMAGE_PIPELINE_ON_GPU:
+                    # A full-GPU pipeline cached across shards was parked on CPU.
+                    # Offloaded pipelines instead move components via their hooks.
+                    preflight_cuda(self.config)
+                    pipeline.to("cuda")
+                    _IMAGE_PIPELINE_ON_GPU = True
                 generator = torch.Generator(device="cpu").manual_seed(int(seed))
                 with torch.inference_mode():
                     result = pipeline(prompt=str(prompt), width=int(width), height=int(height), generator=generator,
