@@ -207,7 +207,7 @@ def author_state_semantic_page(
             else {}
         )
         instruction_parts = [
-            f"Author only state_model.{concern}[{index}] fields: {\", \".join(requested)}.",
+            "Author only state_model." + concern + "[" + str(index) + "] fields: " + ", ".join(requested) + ".",
             "Return exactly the requested fields for this one row. Do not repeat, rename, ",
             "or regenerate sibling fields. The host owns row order and merging.",
         ]
