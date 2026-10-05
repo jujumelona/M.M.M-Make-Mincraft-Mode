@@ -174,9 +174,52 @@ def lower_mutations_to_dsl(mutations: Any) -> str:
     return "; ".join(statements)
 
 
+def _state_atomic_messages(
+    prompt: str,
+    *,
+    concern: str,
+    index: int,
+    fields: Sequence[str],
+    current_row: Mapping[str, Any] | None = None,
+    symbols_text: str = "",
+    extra_instruction: str = "",
+) -> tuple[dict[str, str], ...]:
+    """Build an isolated state-authoring turn with no inherited section prompt."""
+
+    requested = ", ".join(str(field) for field in fields)
+    user_parts = [
+        "Original user request:\n" + str(prompt or "").strip(),
+        "Target: state_model." + concern + "[" + str(index) + "]",
+        "Author only these fields: " + requested,
+    ]
+    if current_row:
+        user_parts.append(
+            "Already-fixed fields for this same row (read-only):\n"
+            + json.dumps(dict(current_row), ensure_ascii=True, sort_keys=True, default=str)
+        )
+    if symbols_text:
+        user_parts.append(symbols_text)
+    if extra_instruction:
+        user_parts.append(extra_instruction)
+    return (
+        {
+            "role": "system",
+            "content": (
+                "Fill exactly one host-owned state record projection. Return only the JSON "
+                "object required by the supplied schema. Never emit a state_model wrapper, "
+                "a variables/concern array, sibling fields, Markdown, prose, or loop control. "
+                "Do not rewrite fields listed as already fixed."
+            ),
+        },
+        {
+            "role": "user",
+            "content": "\n\n".join(user_parts),
+        },
+    )
+
 def author_state_semantic_page(
     router: Any,
-    messages: Sequence[Mapping[str, Any]],
+    prompt: str,
     *,
     concern: str,
     fields: Sequence[str],
@@ -224,10 +267,14 @@ def author_state_semantic_page(
         raw = generate_fixed_template_value(
             router,
             "planner",
-            (*messages, {
-                "role": "system",
-                "content": " ".join(instruction_parts),
-            }),
+            _state_atomic_messages(
+                prompt,
+                concern=concern,
+                index=index,
+                fields=requested,
+                current_row=current,
+                extra_instruction=" ".join(instruction_parts),
+            ),
             response_schema=row_schema,
             enable_tools=False,
             description=f"Author state row {index + 1} of {count} for {concern}.",
@@ -250,7 +297,7 @@ def author_state_semantic_page(
 
 def author_state_field_page(
     router: Any,
-    messages: Sequence[Mapping[str, Any]],
+    prompt: str,
     *,
     concern: str,
     field: str,
@@ -288,10 +335,14 @@ def author_state_field_page(
             raw = generate_fixed_template_value(
                 router,
                 "planner",
-                (*messages, {
-                    "role": "system",
-                    "content": instruction,
-                }),
+                _state_atomic_messages(
+                    prompt,
+                    concern=concern,
+                    index=index,
+                    fields=(field,),
+                    symbols_text=symbols_table.prompt_text(),
+                    extra_instruction=instruction,
+                ),
                 response_schema=row_schema,
                 enable_tools=False,
                 description=f"Author state {field} for row {index + 1} of {count} in {concern}.",
@@ -322,10 +373,14 @@ def author_state_field_page(
             raw = generate_fixed_template_value(
                 router,
                 "planner",
-                (*messages, {
-                    "role": "system",
-                    "content": instruction,
-                }),
+                _state_atomic_messages(
+                    prompt,
+                    concern=concern,
+                    index=index,
+                    fields=(field,),
+                    symbols_text=typed_symbols,
+                    extra_instruction=instruction,
+                ),
                 response_schema=row_schema,
                 enable_tools=False,
                 description=f"Author state {field} for row {index + 1} of {count} in {concern}.",
