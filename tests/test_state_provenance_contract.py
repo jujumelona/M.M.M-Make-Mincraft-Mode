@@ -6,12 +6,6 @@ import pytest
 
 from minecraft_mod_ai import complete_spec, spec
 from minecraft_mod_ai import design_resolution_provenance_contract as provenance
-from minecraft_mod_ai.proposal_deserialization_contract import install
-
-
-install(spec, complete_spec)
-
-
 def _minimal_base_proposal() -> spec.Proposal:
     return spec.Proposal(
         schema_version="minecraft-mod-ai/proposal-v1",
