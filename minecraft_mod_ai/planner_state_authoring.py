@@ -303,6 +303,7 @@ def author_state_field_page(
     field: str,
     count: int,
     symbols: Any,
+    existing_rows: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """Return canonical string rows after finite, validated semantic decisions."""
     if count <= 0:
@@ -316,8 +317,14 @@ def author_state_field_page(
     declared_names = sorted(symbols_table.declared_names)
     max_length = record_field_schema("state_model", concern, field)["maxLength"]
     rows: list[dict[str, str]] = []
+    prior = tuple(existing_rows or ())
 
     for index in range(count):
+        current = (
+            dict(prior[index])
+            if index < len(prior) and isinstance(prior[index], Mapping)
+            else {}
+        )
         path = f"state_model.{concern}[{index}].{field}"
         if field in STATE_EXPRESSION_FIELDS:
             inner_schema = state_expr_schema(symbols_table)
@@ -340,6 +347,7 @@ def author_state_field_page(
                     concern=concern,
                     index=index,
                     fields=(field,),
+                    current_row=current,
                     symbols_text=symbols_table.prompt_text(),
                     extra_instruction=instruction,
                 ),
@@ -378,6 +386,7 @@ def author_state_field_page(
                     concern=concern,
                     index=index,
                     fields=(field,),
+                    current_row=current,
                     symbols_text=typed_symbols,
                     extra_instruction=instruction,
                 ),
