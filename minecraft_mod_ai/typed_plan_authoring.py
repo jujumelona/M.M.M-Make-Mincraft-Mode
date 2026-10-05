@@ -17,7 +17,10 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from .fixed_template_generation import generate_fixed_template_value
-from .model_output_atomicity_contract import structured_output_token_ceiling
+from .model_output_atomicity_contract import (
+    effective_model_transport_schema,
+    structured_output_token_ceiling,
+)
 
 
 _TYPES = ["boolean", "int", "long", "double", "string", "object"]
@@ -1263,22 +1266,18 @@ _SEMANTIC_TRIGGER_EVENTS = (
 def _semantic_state_value_schema(type_name: str) -> dict[str, Any]:
     if type_name == "int":
         return {
-            "type": "string",
-            "pattern": r"^-?(?:0|[1-9][0-9]{0,9})$",
-            "maxLength": 11,
+            "type": "integer",
+            "minimum": -(2**31),
+            "maximum": 2**31 - 1,
         }
     if type_name == "long":
         return {
-            "type": "string",
-            "pattern": r"^-?(?:0|[1-9][0-9]{0,18})$",
-            "maxLength": 20,
+            "type": "integer",
+            "minimum": -(2**63),
+            "maximum": 2**63 - 1,
         }
     if type_name == "double":
-        return {
-            "type": "string",
-            "pattern": r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$",
-            "maxLength": 32,
-        }
+        return {"type": "number"}
     if type_name == "boolean":
         return {"type": "boolean"}
     if type_name == "string":
@@ -1288,16 +1287,95 @@ def _semantic_state_value_schema(type_name: str) -> dict[str, Any]:
     )
 
 
-def _semantic_capability_arg_schema(type_name: str) -> dict[str, Any]:
-    if type_name in {"int", "long", "double"}:
-        return _semantic_state_value_schema(type_name)
-    if type_name == "boolean":
-        return {"type": "boolean"}
-    if type_name == "string":
-        return {"type": "string", "maxLength": 128}
-    raise ValueError(
-        f"TYPED_PLAN_SEMANTIC_CAPABILITY_ARG_TYPE_UNSUPPORTED: {type_name!r}"
-    )
+def _semantic_capability_arg_schema(
+    type_name: str,
+    constraints: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    schema = _semantic_state_value_schema(type_name)
+    extra = dict(constraints or {})
+    allowed = {
+        "minimum",
+        "maximum",
+        "minLength",
+        "maxLength",
+        "pattern",
+        "enum",
+    }
+    unknown = set(extra) - allowed
+    if unknown:
+        raise ValueError(
+            "TYPED_PLAN_SEMANTIC_CAPABILITY_CONSTRAINT_UNSUPPORTED: "
+            + ", ".join(sorted(unknown))
+        )
+    schema.update(extra)
+    return schema
+
+
+def _capability_parameter_constraints(
+    contract: Mapping[str, Any],
+    params: Sequence[Any],
+    *,
+    capability_id: str,
+) -> tuple[Mapping[str, Any], ...]:
+    raw = contract.get("parameter_constraints")
+    if raw is None:
+        return tuple({} for _ in params)
+    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes, bytearray)):
+        raise ValueError(
+            f"TYPED_PLAN_SEMANTIC_CAPABILITY_CONSTRAINTS_INVALID: {capability_id!r}"
+        )
+    if len(raw) != len(params):
+        raise ValueError(
+            f"TYPED_PLAN_SEMANTIC_CAPABILITY_CONSTRAINT_COUNT: {capability_id!r}"
+        )
+    result: list[Mapping[str, Any]] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, Mapping):
+            raise ValueError(
+                "TYPED_PLAN_SEMANTIC_CAPABILITY_CONSTRAINT_INVALID: "
+                f"{capability_id!r} parameter {index}"
+            )
+        result.append(dict(item))
+    return tuple(result)
+
+
+def _validate_capability_scalar_constraint(
+    value: Any,
+    *,
+    type_name: str,
+    constraints: Mapping[str, Any],
+    scope: str,
+) -> None:
+    if "minimum" in constraints and value < constraints["minimum"]:
+        raise ValueError(
+            f"TYPED_PLAN_SEMANTIC_CAPABILITY_ARG_RANGE: {scope} "
+            f"{value!r} < {constraints['minimum']!r}"
+        )
+    if "maximum" in constraints and value > constraints["maximum"]:
+        raise ValueError(
+            f"TYPED_PLAN_SEMANTIC_CAPABILITY_ARG_RANGE: {scope} "
+            f"{value!r} > {constraints['maximum']!r}"
+        )
+    if isinstance(value, str):
+        if "minLength" in constraints and len(value) < int(constraints["minLength"]):
+            raise ValueError(
+                f"TYPED_PLAN_SEMANTIC_CAPABILITY_ARG_LENGTH: {scope}"
+            )
+        if "maxLength" in constraints and len(value) > int(constraints["maxLength"]):
+            raise ValueError(
+                f"TYPED_PLAN_SEMANTIC_CAPABILITY_ARG_LENGTH: {scope}"
+            )
+        pattern = constraints.get("pattern")
+        if isinstance(pattern, str) and re.fullmatch(pattern, value) is None:
+            raise ValueError(
+                f"TYPED_PLAN_SEMANTIC_CAPABILITY_ARG_PATTERN: {scope}"
+            )
+    enum = constraints.get("enum")
+    if isinstance(enum, Sequence) and not isinstance(enum, (str, bytes, bytearray)):
+        if value not in enum:
+            raise ValueError(
+                f"TYPED_PLAN_SEMANTIC_CAPABILITY_ARG_ENUM: {scope}"
+            )
 
 
 def semantic_dispatch_schema(
@@ -1376,6 +1454,11 @@ def semantic_dispatch_schema(
             "action_kind",
             "capability_id",
         ]
+        constraints = _capability_parameter_constraints(
+            contract,
+            params,
+            capability_id=capability_id,
+        )
         for index, raw_type in enumerate(params):
             ptype = str(raw_type)
             if ptype == "object":
@@ -1386,7 +1469,10 @@ def semantic_dispatch_schema(
                     )
                 continue
             field = f"arg_{index}"
-            properties[field] = _semantic_capability_arg_schema(ptype)
+            properties[field] = _semantic_capability_arg_schema(
+                ptype,
+                constraints[index],
+            )
             required.append(field)
 
         branches.append({
@@ -1521,6 +1607,11 @@ def lower_semantic_game_dispatch_to_ir(
                     f"TYPED_PLAN_SEMANTIC_CAPABILITY_PARAMETERS_INVALID: {cap_id!r}"
                 )
 
+            constraints = _capability_parameter_constraints(
+                contract,
+                params,
+                capability_id=cap_id,
+            )
             args: list[dict[str, Any]] = []
             for index, raw_type in enumerate(params):
                 ptype = str(raw_type)
@@ -1573,6 +1664,12 @@ def lower_semantic_game_dispatch_to_ir(
                     raise ValueError(
                         f"TYPED_PLAN_SEMANTIC_CAPABILITY_ARG_TYPE_UNSUPPORTED: {ptype!r}"
                     )
+                _validate_capability_scalar_constraint(
+                    value,
+                    type_name=ptype,
+                    constraints=constraints[index],
+                    scope=f"{cap_id}.{field}",
+                )
                 args.append({
                     "op": "literal",
                     "type": ptype,
@@ -1676,7 +1773,9 @@ def author_semantic_game_dispatch(
         schema,
         field="semantic_dispatch_rule",
     )
-    token_ceiling = structured_output_token_ceiling(schema)
+    token_ceiling = structured_output_token_ceiling(
+        effective_model_transport_schema(schema)
+    )
     rules: list[Mapping[str, Any]] = []
 
     for coverage_ref in refs:
