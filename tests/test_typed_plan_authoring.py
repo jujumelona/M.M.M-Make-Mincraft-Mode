@@ -646,7 +646,58 @@ def test_complete_planner_threads_deterministic_module_kinds(monkeypatch: Any) -
 
     assert received_kinds == ("block", "item")
 
+def test_permission_capability_schema_exposes_host_range_to_model():
+    from minecraft_mod_ai.model_output_atomicity_contract import (
+        effective_model_transport_schema,
+    )
+    from minecraft_mod_ai.typed_host_capabilities import (
+        typed_host_capability_contracts,
+    )
+    from minecraft_mod_ai.typed_plan_authoring import semantic_dispatch_schema
+
+    schema = semantic_dispatch_schema(
+        {},
+        typed_host_capability_contracts(),
+    )
+    permission = next(
+        branch
+        for branch in schema["oneOf"]
+        if branch["properties"].get("capability_id", {}).get("const")
+        == "command.has_permission"
+    )
+    logical = permission["properties"]["arg_1"]
+    assert logical == {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 4,
+    }
+
+    transport = effective_model_transport_schema(permission)
+    assert transport["properties"]["arg_1"]["enum"] == [0, 1, 2, 3, 4]
 
 
+def test_permission_capability_lowering_rejects_semantically_invalid_level():
+    from minecraft_mod_ai.typed_host_capabilities import (
+        typed_host_capability_contracts,
+    )
+    from minecraft_mod_ai.typed_plan_authoring import (
+        lower_semantic_game_dispatch_to_ir,
+    )
 
+    with pytest.raises(
+        ValueError,
+        match="TYPED_PLAN_SEMANTIC_CAPABILITY_ARG_RANGE",
+    ):
+        lower_semantic_game_dispatch_to_ir(
+            [
+                {
+                    "trigger_event": "command",
+                    "action_kind": "call_capability",
+                    "capability_id": "command.has_permission",
+                    "arg_1": 5,
+                }
+            ],
+            {},
+            typed_host_capability_contracts(),
+        )
 
