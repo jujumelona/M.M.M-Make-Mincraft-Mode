@@ -1470,7 +1470,15 @@ class StateSymbolTable:
             return ""
         lines = ["Canonical state symbols:", "variables:"]
         for name in sorted(self.declared_names):
-            lines.append(f"- {name}")
+            record = self.variables.get(name)
+            kind = _state_variable_value_kind(record)
+            authored_type = (
+                str(record.get("type") or "").strip()
+                if isinstance(record, Mapping)
+                else ""
+            )
+            type_text = authored_type or kind
+            lines.append(f"- {name}: type={type_text}; value_family={kind}")
         return "\n".join(lines)
 
 
