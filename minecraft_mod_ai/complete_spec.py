@@ -184,9 +184,11 @@ class ProductionModule(Mapping[str, Any]):
                     f"Invalid reviewed research shard module {self.module_id}: {exc}"
                 ) from exc
         implementation = self.config.get("implementation")
-        if implementation is not None and implementation != "custom":
+        if implementation is not None:
             raise SpecValidationError(
-                f"Module {self.module_id} implementation must be custom when supplied."
+                "CUSTOM_JAVA_BACKEND_REMOVED: production modules must use typed_host, "
+                "a supported deterministic native route, or the canonical artifact graph; "
+                f"{self.module_id} supplied implementation={implementation!r}."
             )
         try:
             encoded = json.dumps(
