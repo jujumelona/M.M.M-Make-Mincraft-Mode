@@ -82,7 +82,13 @@ def _transient_transport_failure(exc: BaseException) -> bool:
 
 
 def _native_format_replay_request(request: GenerationRequest) -> GenerationRequest:
-    """Mark one side-effect-free text replay to use Qwen's non-thinking template."""
+    """Downgrade one side-effect-free JSON turn after native schema rejection.
+
+    Structured planner text is already non-thinking on the first attempt. Repeating the
+    same strict llama.cpp json_schema therefore only repeats the same PEG failure.
+    Recovery keeps JSON-object generation bounded but drops the server-side schema
+    grammar; the unchanged host response_schema still validates the returned content.
+    """
 
     metadata = (
         dict(request.metadata)
@@ -91,6 +97,12 @@ def _native_format_replay_request(request: GenerationRequest) -> GenerationReque
     )
     metadata["mmm_force_non_thinking"] = True
     metadata["mmm_native_format_replay"] = True
+    if (
+        not request.tools
+        and request.response_format == "json"
+        and isinstance(request.response_schema, Mapping)
+    ):
+        metadata["mmm_disable_native_json_schema"] = True
     return replace(request, metadata=metadata)
 
 
@@ -163,40 +175,31 @@ class LlamaCppAdapter(ModelAdapter):
         active_request = request
         try:
             return _generate_one_turn(self, server_url, request)
-        except ModelBackendError as exc:
-            if request.tools or not is_recoverable_native_format_error(exc):
-                raise
-            active_request = _native_format_replay_request(request)
-            try:
-                print(
-                    "llama server: native response format rejected; "
-                    "replaying once with thinking disabled",
-                    flush=True,
-                )
-                return _generate_one_turn(self, server_url, active_request)
-            except ModelBackendError:
-                raise
-            except Exception as replay_exc:
-                raise ModelBackendError(
-                    role=self.config.role,
-                    model_id=self.config.model_id,
-                    cause=replay_exc,
-                ) from replay_exc
         except Exception as exc:
             if not request.tools and is_recoverable_native_format_error(exc):
                 active_request = _native_format_replay_request(request)
                 try:
-                    print(
-                        "llama server: native response format rejected; "
-                        "replaying once with thinking disabled",
-                        flush=True,
-                    )
+                    if (
+                        active_request.response_format == "json"
+                        and isinstance(active_request.response_schema, Mapping)
+                    ):
+                        print(
+                            "llama server: native schema format rejected; "
+                            "retrying once with generic JSON-object transport",
+                            flush=True,
+                        )
+                    else:
+                        print(
+                            "llama server: native response format rejected; "
+                            "replaying once with non-thinking transport",
+                            flush=True,
+                        )
                     return _generate_one_turn(self, server_url, active_request)
-                except ModelBackendError:
-                    raise
                 except Exception as replay_exc:
                     exc = replay_exc
 
+            if isinstance(exc, ModelBackendError):
+                raise exc
             if _transient_transport_failure(exc):
                 try:
                     from .. import llama_server_autotune
