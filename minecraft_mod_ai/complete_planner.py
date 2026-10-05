@@ -178,12 +178,16 @@ class CompleteGameDesignPlanner:
         if content_request_catalog["requirements"]:
             from .content_design_graph import compile_content_graph
 
+            content_mod_id = (
+                "authored_" + hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:12]
+            )
             with planner_operation("author_content_design_graph"):
                 content_design = _serialize_content_design(
                     compile_content_graph(
                         prompt,
                         self.router,
                         request_catalog=content_request_catalog,
+                        mod_id=content_mod_id,
                     )
                 )
         content_owned_refs = _content_owned_refs(
