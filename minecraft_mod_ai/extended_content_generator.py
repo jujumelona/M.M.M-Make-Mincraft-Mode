@@ -36,6 +36,59 @@ _CATALOG_SHARD_SCHEMA = "mmm/extended-module-shard-v1"
 _DIRECTORY_RECORD_DIR = ".minecraft_ai/extended-module-records"
 
 
+def validate_extended_module_contract(
+    module: ProductionModule,
+    *,
+    policy: ScalePolicy | None = None,
+) -> None:
+    """Dry-run the exact extended-content renderer contract before dispatch."""
+
+    policy = policy or ScalePolicy.from_environment()
+    module.validate(policy=policy)
+    if module.kind not in _SUPPORTED:
+        raise ExtendedContentError(
+            f"Unsupported extended content kind: {module.kind!r}"
+        )
+    config = module.config
+    display_kinds = _SUPPORTED - {"recipe", "advancement", "loot", "tag", "command"}
+    if module.kind in display_kinds:
+        for field_name in ("display_name_en", "display_name_ko"):
+            value = config.get(field_name)
+            if not isinstance(value, str) or not value.strip():
+                raise ExtendedContentError(
+                    f"{module.kind} module {module.module_id} requires non-empty "
+                    f"{field_name}."
+                )
+
+    record = _module_record(module)
+    try:
+        if module.kind in _JAVA_KINDS:
+            _shard_java(
+                "ai.minecraft.preflight",
+                "preflight",
+                "PreflightUnit",
+                [record],
+            )
+        if module.kind in {"block", "crop", "machine"}:
+            _block_resources("preflight", module.module_id, module.kind, config)
+        elif module.kind in {"recipe", "advancement", "loot", "tag"}:
+            _data_only_resource(
+                "preflight",
+                module.module_id,
+                module.kind,
+                config,
+            )
+        elif module.kind not in {"effect", "enchantment", "command"}:
+            _item_resources("preflight", module.module_id, module.kind, config)
+    except ExtendedContentError:
+        raise
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        raise ExtendedContentError(
+            f"EXTENDED_CONTENT_CONFIG_INVALID: {module.module_id}/{module.kind}: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+
+
 def _module_record(module: ProductionModule) -> dict[str, Any]:
     return {
         "module_id": module.module_id,
@@ -101,7 +154,7 @@ def generate_extended_content(
 
     adapter = adapter_from_project(info.root)
     for module in selected:
-        module.validate(policy=policy)
+        validate_extended_module_contract(module, policy=policy)
         missing_backend = missing_production_backend_capabilities(
             deterministic_backend_capabilities(adapter),
             module.kind,
