@@ -119,6 +119,50 @@ def _materialize_atomic_record_schema(schema: dict) -> dict:
     return deepcopy(schema)
 
 
+def _canonical_state_record_schema(
+    identifier: str,
+    declared_schema: dict,
+) -> dict:
+    """Project a state template's declared fields onto the canonical state schema."""
+
+    parts = identifier.split("/")
+    if len(parts) != 3 or parts[:2] != ["feature", "state_model"]:
+        return deepcopy(declared_schema)
+
+    from .structured_state_runtime import state_concern_schema
+
+    concern = parts[2]
+    canonical = state_concern_schema(concern)
+    canonical_properties = canonical.get("properties")
+    declared_required = declared_schema.get("required")
+    if (
+        not isinstance(canonical_properties, dict)
+        or not isinstance(declared_required, list)
+    ):
+        raise ValueError(
+            f"TEMPLATE_RECORD_SCHEMA: invalid canonical state schema for {identifier}"
+        )
+    missing = [
+        field
+        for field in declared_required
+        if field not in canonical_properties
+    ]
+    if missing:
+        raise ValueError(
+            f"TEMPLATE_RECORD_SCHEMA: {identifier} declares non-canonical state fields "
+            f"{missing}"
+        )
+    return {
+        "type": "object",
+        "properties": {
+            field: deepcopy(canonical_properties[field])
+            for field in declared_required
+        },
+        "required": list(declared_required),
+        "additionalProperties": False,
+    }
+
+
 def _compile_record_schema(identifier: str, schema: dict) -> dict:
     """Validate the canonical logical record without misclassifying it as one model call."""
     compiled = _materialize_atomic_record_schema(schema)
@@ -146,6 +190,10 @@ def load_record_template(identifier: str):
     if "record_schema" not in value:
         raise ValueError(f"TEMPLATE_RECORD_SCHEMA: missing record schema for {requested}")
     value = _apply_record_host_policy(requested, value)
+    value["record_schema"] = _canonical_state_record_schema(
+        requested,
+        value["record_schema"],
+    )
     value["record_schema"] = _compile_record_schema(requested, value["record_schema"])
     return value
 
