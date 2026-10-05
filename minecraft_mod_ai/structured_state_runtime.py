@@ -43,10 +43,16 @@ def constrain_state_record_schema(
         return result
     if concern == "variables":
         if isinstance(properties.get("name"), dict):
-            properties["name"]["description"] = (
-                "Stable ASCII identifier for exactly one independently mutable state value. "
-                "Do not pack multiple logical fields into one object-shaped variable."
-            )
+            properties["name"].update({
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": _STATE_IDENTIFIER_PATTERN,
+                "description": (
+                    "Stable ASCII identifier for exactly one independently mutable state value. "
+                    "Do not pack multiple logical fields into one object-shaped variable."
+                ),
+            })
         if isinstance(properties.get("type"), dict):
             properties["type"]["description"] = (
                 "State value family. Planner-authored variables use scalar number, boolean, "
@@ -1435,6 +1441,7 @@ def state_concern_schema(
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 128,
+                    "pattern": _STATE_IDENTIFIER_PATTERN,
                     "description": "Stable ASCII internal state identifier consumed by the host state compiler.",
                 },
                 "owner": {"type": "string", "minLength": 1, "maxLength": 256},
