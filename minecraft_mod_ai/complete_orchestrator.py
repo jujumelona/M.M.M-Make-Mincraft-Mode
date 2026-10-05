@@ -17,7 +17,11 @@ from pathlib import Path
 from typing import Any
 
 from .artifact_graph_executor import execute_artifact_graph
-from .artifact_job import ArtifactJob, artifact_owner_module_ids
+from .artifact_job import (
+    ArtifactJob,
+    artifact_owner_module_ids,
+    parse_artifact_jobs,
+)
 from .artifact_materializer import ensure_artifact_scaffolding
 from .complete_preflight_contract import (
     REQUIRED_GATE_TO_EVIDENCE as _REQUIRED_GATE_TO_EVIDENCE,
@@ -1374,8 +1378,10 @@ class CompleteProductionOrchestrator:
                     ledger.retry(node_id)
 
         spec = approved.base_proposal.spec
-        raw_artifact_jobs = approved.game_design.get("_artifact_jobs") or []
-        artifact_owners = artifact_owner_module_ids(raw_artifact_jobs)
+        artifact_jobs = parse_artifact_jobs(
+            approved.game_design.get("_artifact_jobs", ())
+        )
+        artifact_owners = artifact_owner_module_ids(artifact_jobs)
         try:
             validate_production_generation_project(
                 project_root,
@@ -1424,11 +1430,9 @@ class CompleteProductionOrchestrator:
         asset_lookup = {item.asset_id: item for item in approved.assets}
         artifact_jobs_by_owner: dict[str, list[ArtifactJob]] = {}
         artifact_producers: dict[str, ArtifactJob] = {}
-        for raw_job in raw_artifact_jobs:
-            job = ArtifactJob.from_dict(raw_job) if isinstance(raw_job, dict) else raw_job
-            owner = str(getattr(job, "owner_module", "") or "")
-            if owner:
-                artifact_jobs_by_owner.setdefault(owner, []).append(job)
+        for job in artifact_jobs:
+            owner = job.owner_module
+            artifact_jobs_by_owner.setdefault(owner, []).append(job)
             for port in job.produces:
                 prior = artifact_producers.get(port)
                 if prior is not None and prior.job_id != job.job_id:
