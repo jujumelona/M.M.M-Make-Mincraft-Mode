@@ -34,9 +34,6 @@ _shared_image_gen: &image_gen
   preferred_generation_resolution:
     width: 1024
     height: 1024
-  fallback_generation_resolution:
-    width: 512
-    height: 512
   lora_allowed_layouts:
     - isolated_sprite
     - seamless_tile
