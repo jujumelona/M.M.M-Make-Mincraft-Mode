@@ -12,7 +12,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, TypeVar
 
-from .artifact_job import artifact_owner_module_ids
+from .artifact_job import artifact_owner_module_ids, parse_artifact_jobs
 from .complete_spec import CompleteProposal, ProductionModule
 from .platform_backend_contract import (
     ENTITY_PIPELINE_KINDS,
@@ -94,9 +94,10 @@ def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolic
         if missing:
             raise WorkGraphError(f'Production work module {module.module_id} references missing dependencies: {sorted(missing)}')
     ordered = _topological_modules(selected_modules)
-    artifact_owners = artifact_owner_module_ids(
+    artifact_jobs = parse_artifact_jobs(
         proposal.game_design.get("_artifact_jobs", ())
     )
+    artifact_owners = artifact_owner_module_ids(artifact_jobs)
     small_backend = proposal.game_design.get("_small_model_backend")
     if (
         isinstance(small_backend, dict)
