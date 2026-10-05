@@ -118,12 +118,6 @@ def _collect(receipt: Any, *, include_deleted: bool) -> tuple[str, ...]:
                 for raw in _path_strings(value.get(key)):
                     add(raw)
 
-        for key in ("touched_paths", "written_files", "generated_files"):
-            if key == "touched_paths" and schema in _TOUCH_LIST_SCHEMAS:
-                continue
-            for raw in _path_strings(value.get(key)):
-                add(raw)
-
         for key in _CHILD_RECEIPT_KEYS:
             child = value.get(key)
             if isinstance(child, Mapping):
