@@ -315,21 +315,41 @@ def validate_worksheet_section(
         )
 
     specification = value.get("specification")
-    error = next(Draft202012Validator(specification_schema(key)).iter_errors(specification), None)
+    state_symbols = None
+    if key == "state_model" and isinstance(specification, Mapping):
+        from .structured_state_runtime import (
+            StateSymbolTable,
+            validate_structured_state_section,
+        )
+
+        variables = specification.get("variables", [])
+        state_symbols = StateSymbolTable(
+            variables
+            if isinstance(variables, list)
+            else ()
+        )
+
+    error = next(
+        Draft202012Validator(
+            specification_schema(
+                key,
+                state_symbols=state_symbols,
+            )
+        ).iter_errors(specification),
+        None,
+    )
     if error is not None:
         path = ".".join(str(part) for part in error.absolute_path)
         raise ValueError(
             f"DETAILED_PLAN_WORKSHEET: {key}.{path} violates fixed specification template: {error.message}"
         )
     if key == "state_model":
-        from .structured_state_runtime import validate_structured_state_section
-
         try:
             validate_structured_state_section(specification)
         except ValueError as exc:
             raise ValueError(
                 "DETAILED_PLAN_WORKSHEET: state_model is outside the host-compiled "
-                f"state DSL: {exc}"
+                f"state IR/DSL contract: {exc}"
             ) from exc
     # Applicability explanations and wording are authored design. Do not grade
     # them or require the author to justify every omitted concern.
