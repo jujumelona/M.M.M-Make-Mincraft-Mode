@@ -1691,7 +1691,39 @@ class CompleteProductionOrchestrator:
                 ids = [str(item.get('asset_id')) for item in node.payload.get('members', []) if isinstance(item, dict)]
                 if not ids or any(item not in asset_lookup for item in ids):
                     raise CompleteProductionError(f'Work node {node.node_id} has invalid assets.')
-                shard_proposal = replace(approved, assets=tuple(asset_lookup[item] for item in ids), approval_hash='')
+                shard_assets = tuple(asset_lookup[item] for item in ids)
+                from .resource_asset_plan import (
+                    ResourceAssetPlanError,
+                    asset_plan_sha256,
+                    require_asset_plan,
+                )
+                try:
+                    canonical_asset_plan, _ = require_asset_plan(
+                        approved.game_design,
+                        shard_assets,
+                    )
+                except ResourceAssetPlanError as exc:
+                    raise CompleteProductionError(
+                        f'Work node {node.node_id} lost canonical asset-plan authority: {exc}'
+                    ) from exc
+                expected_plan_sha256 = str(
+                    node.payload.get('asset_plan_sha256') or ''
+                )
+                observed_plan_sha256 = asset_plan_sha256(canonical_asset_plan)
+                if (
+                    not expected_plan_sha256
+                    or expected_plan_sha256 != observed_plan_sha256
+                ):
+                    raise CompleteProductionError(
+                        f'Work node {node.node_id} asset-plan identity drift: '
+                        f'expected={expected_plan_sha256!r}, '
+                        f'observed={observed_plan_sha256!r}'
+                    )
+                shard_proposal = replace(
+                    approved,
+                    assets=shard_assets,
+                    approval_hash='',
+                )
                 asset_shards.append(self._run_work_node(ledger, node, action=lambda proposal=shard_proposal: self._generate_assets(get_router(), proposal, project_root, run_root), validate_cached=self._cached_asset_shard, shared_index=shared_project_index))
             else:
                 raise CompleteProductionError(f'Unsupported work node payload kind: {kind}')
