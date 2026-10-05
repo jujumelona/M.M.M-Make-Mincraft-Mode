@@ -62,7 +62,10 @@ def _compile_new_authored_modules(
         typed_plan_uses_state,
         validate_typed_plan_ir,
     )
-    from .typed_platform_ir import PLATFORM_HOST_KINDS
+    from .typed_platform_ir import (
+        PLATFORM_HOST_KINDS,
+        network_sync_requires_state,
+    )
     from .typed_plan_support import assert_typed_plan_host_support
 
     source_sha = "sha256:" + hashlib.sha256(plan.text.encode("utf-8")).hexdigest()
@@ -178,13 +181,8 @@ def _compile_new_authored_modules(
         if isinstance(network_sync_config, Mapping)
         else ()
     )
-    network_sync_needs_state = bool(
-        network_sync_covers
-        & {
-            "authority_and_network.payloads",
-            "authority_and_network.synchronization",
-            "authority_and_network.reconnection",
-        }
+    network_sync_needs_state = network_sync_requires_state(
+        tuple(network_sync_covers)
     )
     state_required = (
         typed_plan_uses_state(validated_plan)
