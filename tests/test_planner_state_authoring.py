@@ -189,9 +189,9 @@ def test_duplicate_variable_names_are_host_deduplicated_without_retry():
 
     assert result == {
         "variables": [
-            {"name": "state_model"},
-            {"name": "state_model_2"},
-            {"name": "state_model_3"},
+            {"name": "hull_integrity"},
+            {"name": "shield_strength"},
+            {"name": "fuel_reserve"},
         ]
     }
     assert len(router.calls) == 3
