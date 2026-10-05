@@ -1059,11 +1059,21 @@ def _is_typed_host_module(module: ProductionModule) -> bool:
 
 def _pipeline_shard_size(name: str, default: int, upper: int) -> int:
     raw = os.environ.get(name, '').strip()
-    try:
-        value = int(raw) if raw else default
-    except ValueError:
+    if not raw:
         value = default
-    return max(1, min(max(1, upper), value))
+    else:
+        try:
+            value = int(raw)
+        except ValueError as exc:
+            raise WorkGraphError(
+                f"WORK_GRAPH_SHARD_SIZE_INVALID: {name}={raw!r}"
+            ) from exc
+    if value < 1 or value > max(1, upper):
+        raise WorkGraphError(
+            f"WORK_GRAPH_SHARD_SIZE_OUT_OF_RANGE: {name}={value}, "
+            f"allowed=1..{max(1, upper)}"
+        )
+    return value
 
 def _module_shards(
     modules: Sequence[ProductionModule],
