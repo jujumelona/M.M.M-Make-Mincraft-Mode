@@ -92,9 +92,9 @@ class CompleteGameDesignPlanner:
 
         text = render_structured_sections(structured_sections)
 
-        content_request_catalog = content_request_catalog(structured_sections)
+        content_catalog = content_request_catalog(structured_sections)
         content_design: dict[str, Any] = {}
-        if content_request_catalog["requirements"]:
+        if content_catalog["requirements"]:
             from .content_design_graph import compile_content_graph
 
             content_mod_id = (
@@ -105,11 +105,11 @@ class CompleteGameDesignPlanner:
                     compile_content_graph(
                         prompt,
                         self.router,
-                        request_catalog=content_request_catalog,
+                        request_catalog=content_catalog,
                         mod_id=content_mod_id,
                     )
                 )
-        content_owned_refs = content_owned_refs(
+        external_content_refs = content_owned_refs(
             structured_sections,
             content_design,
         )
@@ -229,7 +229,7 @@ class CompleteGameDesignPlanner:
                 typed_host_capability_contracts(),
                 deterministic_module_kinds=effective_kinds,
                 allowed_platform_kinds=auto_allowed_platform_kinds,
-                externally_covered_refs=content_owned_refs,
+                externally_covered_refs=external_content_refs,
                 budget=budget,
             )
         from .typed_plan_support import assert_typed_plan_host_support
