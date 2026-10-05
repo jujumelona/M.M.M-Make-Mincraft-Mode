@@ -1028,6 +1028,42 @@ public final class {class_name} {{
 def _block_resources(mod_id: str, module_id: str, kind: str, config: dict[str, Any]) -> dict[str, str]:
     assets = f"src/main/resources/assets/{mod_id}"
     data = f"src/main/resources/data/{mod_id}"
+    if kind == "block_entity":
+        return {
+            f"{assets}/blockstates/{module_id}.json": json.dumps(
+                {"variants": {"": {"model": f"{mod_id}:block/{module_id}"}}},
+                indent=2,
+            )
+            + "\n",
+            f"{assets}/models/block/{module_id}.json": json.dumps(
+                {"parent": "minecraft:block/iron_block"},
+                indent=2,
+            )
+            + "\n",
+            f"{assets}/models/item/{module_id}.json": json.dumps(
+                {"parent": f"{mod_id}:block/{module_id}"},
+                indent=2,
+            )
+            + "\n",
+            f"{data}/loot_tables/blocks/{module_id}.json": json.dumps(
+                {
+                    "type": "minecraft:block",
+                    "pools": [
+                        {
+                            "rolls": 1,
+                            "entries": [
+                                {
+                                    "type": "minecraft:item",
+                                    "name": f"{mod_id}:{module_id}",
+                                }
+                            ],
+                        }
+                    ],
+                },
+                indent=2,
+            )
+            + "\n",
+        }
     if kind == "crop":
         variants = {
             f"age={age}": {"model": f"{mod_id}:block/{module_id}_stage{min(age, 7)}"}
