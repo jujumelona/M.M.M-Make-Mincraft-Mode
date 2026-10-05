@@ -509,6 +509,13 @@ class CompleteProposal:
             raise SpecValidationError(
                 "existing_input_sha256 must be empty or a lowercase SHA-256 digest."
             )
+        if (
+            self.status is CompleteProposalStatus.APPROVED
+            and not self.approval_hash
+        ):
+            raise SpecValidationError(
+                "Complete proposal approved state requires its approval_hash integrity receipt."
+            )
         if self.approval_hash:
             if not _SHA.fullmatch(self.approval_hash):
                 raise SpecValidationError(
@@ -592,7 +599,11 @@ class CompleteProposal:
         if supplied_hash != expected:
             raise SpecValidationError("Complete proposal approval hash mismatch.")
         return CompleteProposal(
-            **{**self.__dict__, "status": CompleteProposalStatus.APPROVED}
+            **{
+                **self.__dict__,
+                "status": CompleteProposalStatus.APPROVED,
+                "approval_hash": expected,
+            }
         )
 
     def to_dict(self) -> dict[str, Any]:
