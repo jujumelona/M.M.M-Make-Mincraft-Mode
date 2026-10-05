@@ -176,11 +176,16 @@ def test_debug_fixture_runs_real_build_and_packaging_without_live_model(
     jdt_receipts = [
         receipt
         for receipt in result.module_receipts
-        if receipt.get("schema_version") == "mmm/jdt-gate-v1"
+        if receipt.get("schema_version") == "mmm/java-diagnostics-v3"
+        and receipt.get("verification_backend") == "jdt_core"
     ]
     assert len(jdt_receipts) == 1
-    assert jdt_receipts[0]["status"] == "PASS"
-    assert int(jdt_receipts[0].get("files_opened", 0)) >= 1
+    assert jdt_receipts[0]["complete"] is True
+    assert int(jdt_receipts[0]["error_count"]) == 0
+    assert all(
+        str(jdt_receipts[0].get(key) or "").strip()
+        for key in ("model_id", "model_revision", "session_id")
+    )
     assert "execution-gate:jdt:missing-jdt" not in result.unresolved_gates
     texture = (
         project_root
