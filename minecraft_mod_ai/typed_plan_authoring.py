@@ -1230,20 +1230,13 @@ def _extract_state_variable_types(
             name = str(var.get("name") or "").strip()
             if not name:
                 continue
-            raw_type = str(var.get("type") or "int").strip().lower()
-            if raw_type in ("integer", "int", "long"):
-                type_map[name] = "int"
-            elif raw_type in ("double", "float", "number"):
-                type_map[name] = "double"
-            elif raw_type in ("boolean", "bool"):
-                type_map[name] = "boolean"
-            elif raw_type == "string":
-                type_map[name] = "string"
-            else:
+            raw_type = str(var.get("type") or "").strip()
+            if raw_type not in {"boolean", "int", "long", "double", "string"}:
                 raise ValueError(
                     "TYPED_PLAN_STATE_TYPE_UNSUPPORTED: "
                     f"{name!r} declares {raw_type!r}"
                 )
+            type_map[name] = raw_type
     return type_map
 
 
