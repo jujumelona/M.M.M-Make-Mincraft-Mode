@@ -73,14 +73,25 @@ def validate_production_generation_modules(
     *,
     policy: ScalePolicy | None = None,
     validate_system_packs: bool = True,
+    artifact_owners: Iterable[str] = (),
 ) -> None:
     """Validate normalized built-in module inputs without touching project state."""
 
     policy = policy or ScalePolicy.from_environment()
     policy.validate()
     materialized = tuple(modules)
+    artifact_owned = {
+        str(module_id).strip()
+        for module_id in artifact_owners
+        if str(module_id).strip()
+    }
+    legacy_routed = tuple(
+        module
+        for module in materialized
+        if str(getattr(module, "module_id", "") or "").strip() not in artifact_owned
+    )
 
-    for module in materialized:
+    for module in legacy_routed:
         if _is_custom(module):
             continue
         kind = str(module.kind)
@@ -98,7 +109,7 @@ def validate_production_generation_modules(
 
     if not validate_system_packs:
         return
-    for pack_id, group in sorted(_system_groups(materialized).items()):
+    for pack_id, group in sorted(_system_groups(legacy_routed).items()):
         _validate_system_group(
             pack_id,
             [_system_module_dict(module) for module in group],
@@ -112,13 +123,24 @@ def validate_production_generation_project(
     mod_id: str,
     package_name: str,
     policy: ScalePolicy | None = None,
+    artifact_owners: Iterable[str] = (),
 ) -> None:
     """Validate all deterministic state before concurrent generation dispatch begins."""
 
     policy = policy or ScalePolicy.from_environment()
     materialized = tuple(modules)
+    artifact_owned = {
+        str(module_id).strip()
+        for module_id in artifact_owners
+        if str(module_id).strip()
+    }
+    legacy_routed = tuple(
+        module
+        for module in materialized
+        if str(getattr(module, "module_id", "") or "").strip() not in artifact_owned
+    )
     validate_production_generation_modules(
-        materialized,
+        legacy_routed,
         policy=policy,
         validate_system_packs=False,
     )
@@ -131,7 +153,7 @@ def validate_production_generation_project(
         raise ProductionGenerationPreflightError(
             f"Production target receipt is unavailable before generation: {exc}"
         ) from exc
-    for module in materialized:
+    for module in legacy_routed:
         if _is_custom(module):
             continue
         missing_backend = missing_production_backend_capabilities(
@@ -148,7 +170,7 @@ def validate_production_generation_project(
 
     has_entities = any(
         not _is_custom(module) and str(module.kind) in _ENTITY_KINDS
-        for module in materialized
+        for module in legacy_routed
     )
     if has_entities:
         try:
@@ -163,7 +185,7 @@ def validate_production_generation_project(
                 f"GeckoLib project cannot enter entity generation: {exc}"
             ) from exc
 
-    system_groups = _system_groups(materialized)
+    system_groups = _system_groups(legacy_routed)
     if not system_groups:
         return
     from .system_pack_generator import iter_system_module_records
