@@ -972,12 +972,12 @@ def state_expr_schema(allowed_state_symbols: Any = None) -> dict[str, Any]:
         "properties": {
             "kind": {"type": "string", "const": "literal"},
             "value": {
-                "type": ["string", "null"],
+                "type": ["string", "boolean", "null"],
                 "maxLength": 24,
                 "pattern": r"^[^{}\[\]]*$",
                 "description": (
-                    "One scalar text/null literal only. Never serialize JSON, maps, "
-                    "arrays, or another structured object into this string."
+                    "One scalar string/boolean/null literal only. Never serialize JSON, "
+                    "maps, arrays, or another structured object into this value."
                 ),
             },
         },
