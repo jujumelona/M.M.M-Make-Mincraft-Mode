@@ -66,16 +66,6 @@ class CompleteProposalStatus(str, Enum):
     APPROVED = "approved"
 
 
-def _normalize_id(identifier: str) -> str:
-    value = str(identifier).strip()
-    if not value:
-        return "unnamed_module"
-    value = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", value)
-    value = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", value).lower()
-    normalized = re.sub(r"[^a-z0-9_]", "_", value).strip("_")
-    return normalized or "unnamed_module"
-
-
 @dataclass(frozen=True)
 class ProductionModule(Mapping[str, Any]):
     module_id: str
@@ -85,11 +75,15 @@ class ProductionModule(Mapping[str, Any]):
     required_gates: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "module_id", _normalize_id(self.module_id))
+        object.__setattr__(
+            self,
+            "module_id",
+            str(self.module_id).strip(),
+        )
         object.__setattr__(
             self,
             "depends_on",
-            tuple(_normalize_id(item) for item in self.depends_on if item),
+            tuple(str(item).strip() for item in self.depends_on),
         )
 
     def __getitem__(self, key: str) -> Any:
