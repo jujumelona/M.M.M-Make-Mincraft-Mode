@@ -59,8 +59,6 @@ def _decode_long_literal(raw_value: Any, *, scope: str) -> int:
 
 
 def _decode_double_literal(raw_value: Any, *, scope: str) -> float:
-    import math
-
     try:
         text = str(raw_value).strip() if not isinstance(raw_value, (int, float)) else raw_value
         value = float(text)
@@ -2469,7 +2467,6 @@ def author_typed_plan_ir(
     from .typed_event_ir import (
         EVENT_PARAMETERS,
         EVENT_SIGNATURES,
-        event_config_schema,
         infer_event_config,
         infer_event_type,
         is_mod_initialize_trigger,
@@ -2479,7 +2476,6 @@ def author_typed_plan_ir(
         PLATFORM_HOST_KINDS,
         PLATFORM_HOST_MODULE_IDS,
         PLATFORM_KINDS,
-        platform_config_schema,
         platform_coverable_refs,
         validate_platform_modules,
     )
