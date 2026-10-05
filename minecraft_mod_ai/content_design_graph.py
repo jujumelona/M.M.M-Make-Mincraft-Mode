@@ -546,13 +546,13 @@ def compile_content_graph(
             FactType.GUI_EXISTS: "gui",
             FactType.NETWORK_PACKET: "networking",
             FactType.BLOCK_ENTITY_EXISTS: "machine",
-            FactType.DATA_COMPONENT: "custom_java",
+            FactType.DATA_COMPONENT: "integration",
             FactType.WORLDGEN_FEATURE: "structure",
             FactType.DIMENSION: "dimension",
             FactType.BIOME: "biome",
             FactType.STATUS_EFFECT: "effect",
-            FactType.SOUND_EVENT: "custom_java",
-            FactType.PARTICLE_TYPE: "custom_java",
+            FactType.SOUND_EVENT: "integration",
+            FactType.PARTICLE_TYPE: "integration",
             FactType.ENTITY_LOOT: "loot",
             FactType.ADVANCEMENT: "advancement",
             FactType.EQUIPMENT_ARMOR: "armor",
@@ -566,6 +566,8 @@ def compile_content_graph(
             "implementation_obligations": [node["role"]],
             "reason": node["role"],
         }
+        if kind == "integration":
+            config["integration_type"] = "artifact_graph_owned"
         for prop_key, prop_val in props.items():
             if prop_key not in visual_properties and prop_key not in {
                 "display_name",
