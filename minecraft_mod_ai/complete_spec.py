@@ -3,6 +3,7 @@ from __future__ import annotations
 import heapq
 import json
 import re
+from copy import deepcopy
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from enum import Enum
@@ -558,7 +559,7 @@ class CompleteProposal:
                 "status": CompleteProposalStatus.AWAITING_APPROVAL.value,
                 "requested_prompt": self.requested_prompt,
                 "base_proposal": self.base_proposal,
-                "game_design": self.game_design,
+                "game_design": deepcopy(self.game_design),
                 "modules": self.modules,
                 "assets": self.assets,
                 "acceptance_tests": self.acceptance_tests,
@@ -606,7 +607,7 @@ class CompleteProposal:
                 {
                     "module_id": module.module_id,
                     "kind": module.kind,
-                    "config": module.config,
+                    "config": deepcopy(module.config),
                     "depends_on": list(module.depends_on),
                     "required_gates": list(module.required_gates),
                 }
@@ -641,6 +642,10 @@ class CompleteProposal:
             raise SpecValidationError(
                 f"Invalid complete proposal fields; missing={sorted(missing)}, unknown={sorted(unknown)}"
             )
+        if not isinstance(data["base_proposal"], dict):
+            raise SpecValidationError("base_proposal must be a JSON object.")
+        if not isinstance(data["game_design"], dict):
+            raise SpecValidationError("game_design must be a JSON object.")
         if not isinstance(data["modules"], list):
             raise SpecValidationError("modules must be a JSON list.")
         if not isinstance(data["assets"], list):
@@ -653,10 +658,12 @@ class CompleteProposal:
                 proposal_version=_strict_int(
                     data["proposal_version"], "proposal_version"
                 ),
-                status=CompleteProposalStatus(data["status"]),
+                status=CompleteProposalStatus(
+                    _strict_string(data["status"], "status")
+                ),
                 requested_prompt=_strict_string(data["requested_prompt"], "requested_prompt"),
-                base_proposal=Proposal.from_dict(dict(data["base_proposal"])),
-                game_design=dict(data["game_design"]),
+                base_proposal=Proposal.from_dict(deepcopy(data["base_proposal"])),
+                game_design=deepcopy(data["game_design"]),
                 modules=tuple(_module_from_dict(item) for item in data["modules"]),
                 assets=tuple(_asset_from_dict(item) for item in data["assets"]),
                 acceptance_tests=tuple(
@@ -701,7 +708,7 @@ def _module_from_dict(value: Any) -> ProductionModule:
     return ProductionModule(
         module_id=_strict_string(value["module_id"], "module.module_id"),
         kind=_strict_string(value["kind"], "module.kind"),
-        config=dict(value["config"]),
+        config=deepcopy(value["config"]),
         depends_on=tuple(
             _strict_string(item, "module.depends_on[]")
             for item in value["depends_on"]
@@ -761,7 +768,7 @@ def _asset_from_dict(value: Any) -> AssetRequest:
             else _strict_int(value["requested_height"], "asset.requested_height")
         ),
         variant_count=_strict_int(value["variant_count"], "asset.variant_count"),
-        visual_spec=visual_spec,
+        visual_spec=deepcopy(visual_spec),
     )
 
 
