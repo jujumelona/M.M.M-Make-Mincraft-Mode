@@ -511,7 +511,6 @@ def validate_state_expr_ir(
     """Validate expression IR or legacy expression against symbols."""
     if expr is None or isinstance(expr, bool):
         return
-    symbol_table = symbols if isinstance(symbols, StateSymbolTable) else None
     if isinstance(symbols, StateSymbolTable):
         declared = symbols.declared_names
     elif isinstance(symbols, set):
@@ -804,6 +803,7 @@ def validate_mutation_ir(
     """Validate mutation IR or legacy mutation string against declared symbols."""
     if mutation is None:
         return
+    symbol_table = symbols if isinstance(symbols, StateSymbolTable) else None
     if isinstance(symbols, StateSymbolTable):
         declared = symbols.declared_names
     elif isinstance(symbols, set):
