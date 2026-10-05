@@ -988,8 +988,9 @@ def generate_assets(
                         evidence = generate_candidate(
                             lambda **kwargs: router.generate_image("image_generator", **kwargs), texture,
                             prompt=prompt, directory=candidate_root / asset_id / role / f"candidate-{index:02d}",
-                            output=normalized, resolution=profile.preferred_generation_resolution,
-                            fallback=profile.fallback_generation_resolution, seed=_candidate_seed(asset_id, role, index))
+                            output=normalized,
+                            resolution=profile.preferred_generation_resolution,
+                            seed=_candidate_seed(asset_id, role, index))
                     except ValueError as exc:
                         failures.append({"candidate": index, "reason": str(exc)})
                         continue
