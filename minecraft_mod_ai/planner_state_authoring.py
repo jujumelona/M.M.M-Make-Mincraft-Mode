@@ -14,6 +14,7 @@ from .model_output_atomicity_contract import structured_output_token_ceiling
 from .planning_detail_slots import record_field_schema
 from .structured_state_runtime import (
     _SUPPORTED_STATE_FUNCTIONS,
+    _state_variable_value_kind,
     StateSymbolTable,
     state_variable_default_schema,
     validate_mutation_ir,
@@ -666,153 +667,281 @@ def _author_state_condition(
     return result
 
 
-def _state_mutation_transport_schema(
-    symbols: StateSymbolTable,
-) -> dict[str, Any]:
-    """Flat model transport for state assignments; host owns typed IR assembly."""
-
-    declared = sorted(symbols.declared_names)
-    state_name_schema: dict[str, Any]
-    value_kinds = [
-        "context",
-        "number",
-        "string",
-        "boolean",
-        "null",
-        "empty_map",
-        "empty_list",
-    ]
-    if declared:
-        state_name_schema = {
-            "type": "string",
-            "enum": declared,
-            "maxLength": 128,
-        }
-        value_kinds.insert(0, "state")
-    else:
-        state_name_schema = {
-            "type": "string",
-            "const": "",
-            "maxLength": 1,
-        }
-
-    context_schema = {
-        "type": "string",
-        "maxLength": 24,
-        "pattern": r"^[A-Za-z_$][A-Za-z0-9_$.]{0,23}$",
-    }
-    assignment = {
-        "type": "object",
-        "properties": {
-            "target": state_name_schema,
-            "operator": {
-                "type": "string",
-                "enum": ["=", "+=", "-=", "*=", "/="],
-                "maxLength": 2,
-            },
-            "value_kind": {"type": "string", "enum": value_kinds},
-            "value_state": state_name_schema,
-            "value_context": context_schema,
-            "value_text": {
-                "type": "string",
-                "maxLength": 24,
-                "pattern": r"^[^{}\[\]]{0,24}$",
-            },
-            "value_number": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 24,
-                "pattern": r"^-?[0-9]+(?:\.[0-9]+)?$",
-            },
-            "value_boolean": {"type": "boolean"},
-        },
-        "required": [
-            "target",
-            "operator",
-            "value_kind",
-            "value_state",
-            "value_context",
-            "value_text",
-            "value_number",
-            "value_boolean",
-        ],
-        "additionalProperties": False,
-    }
-    return {
-        "type": "object",
-        "properties": {
-            "assignments": {
-                "type": "array",
-                "minItems": 0,
-                "maxItems": 2,
-                "items": assignment,
-            }
-        },
-        "required": ["assignments"],
-        "additionalProperties": False,
-    }
-
-
-def _mutation_value_from_transport(item: Mapping[str, Any]) -> dict[str, Any]:
-    kind = str(item.get("value_kind") or "")
-    if kind == "state":
-        return {"kind": "state_ref", "name": str(item["value_state"])}
-    if kind == "context":
-        name = str(item.get("value_context") or "").strip()
-        if not name:
-            raise ValueError("STATE_MUTATION_TRANSPORT: context name is required")
-        return {"kind": "context_ref", "name": name}
-    if kind == "number":
-        value = str(item.get("value_number") or "").strip()
-        if re.fullmatch(r"-?[0-9]+(?:\.[0-9]+)?", value) is None:
-            raise ValueError(
-                f"STATE_MUTATION_TRANSPORT: invalid numeric literal {value!r}"
-            )
-        return {"kind": "number", "value": value}
-    if kind == "string":
-        return {"kind": "literal", "value": str(item.get("value_text") or "")}
-    if kind == "boolean":
-        value = item.get("value_boolean")
-        if type(value) is not bool:
-            raise ValueError(
-                "STATE_MUTATION_TRANSPORT: value_boolean must be boolean"
-            )
-        return {"kind": "literal", "value": value}
-    if kind == "null":
-        return {"kind": "literal", "value": None}
-    if kind == "empty_map":
-        return {"kind": "empty_map"}
-    if kind == "empty_list":
-        return {"kind": "empty_list"}
-    raise ValueError(f"STATE_MUTATION_TRANSPORT: invalid value kind {kind!r}")
-
-
-def _mutation_ir_from_transport(
-    raw: Mapping[str, Any],
+def _mutation_decision_messages(
+    prompt: str,
     *,
+    concern: str,
+    field: str,
+    index: int,
+    current: Mapping[str, Any],
     symbols: StateSymbolTable,
-) -> list[dict[str, Any]]:
-    assignments = raw.get("assignments")
-    if not isinstance(assignments, Sequence) or isinstance(
-        assignments, (str, bytes, bytearray)
-    ):
-        raise ValueError("STATE_MUTATION_TRANSPORT: assignments must be an array")
-
-    result: list[dict[str, Any]] = []
-    for index, item in enumerate(assignments):
-        if not isinstance(item, Mapping):
-            raise ValueError(
-                f"STATE_MUTATION_TRANSPORT: assignments[{index}] must be an object"
+    instruction: str,
+) -> tuple[dict[str, str], ...]:
+    parts = [
+        "Original user request:\n" + str(prompt or "").strip(),
+        f"Target mutation: state_model.{concern}[{index}].{field}",
+    ]
+    if current:
+        parts.append(
+            "Already-fixed fields for this row (read-only):\n"
+            + json.dumps(
+                dict(current),
+                ensure_ascii=True,
+                sort_keys=True,
+                default=str,
             )
-        result.append(
-            {
-                "target": str(item.get("target") or ""),
-                "operator": str(item.get("operator") or ""),
-                "value": _mutation_value_from_transport(item),
-            }
         )
-    validate_mutation_ir(result, symbols=symbols)
+    symbols_text = symbols.prompt_text()
+    if symbols_text:
+        parts.append(symbols_text)
+    parts.append(instruction)
+    return (
+        {
+            "role": "system",
+            "content": (
+                "Make exactly the small mutation decision requested by the host. "
+                "Return one JSON object matching the supplied schema exactly. "
+                "Do not emit mutation, action, initial_state, assignments, kind, value, "
+                "state_model, or any typed-IR wrapper unless that exact key exists in the schema."
+            ),
+        },
+        {
+            "role": "user",
+            "content": "\n\n".join(parts),
+        },
+    )
+
+
+def _author_mutation_object(
+    router: Any,
+    prompt: str,
+    *,
+    concern: str,
+    field: str,
+    index: int,
+    current: Mapping[str, Any],
+    symbols: StateSymbolTable,
+    schema: Mapping[str, Any],
+    instruction: str,
+    description: str,
+) -> dict[str, Any]:
+    raw = generate_fixed_template_value(
+        router,
+        "planner",
+        _mutation_decision_messages(
+            prompt,
+            concern=concern,
+            field=field,
+            index=index,
+            current=current,
+            symbols=symbols,
+            instruction=instruction,
+        ),
+        response_schema=dict(schema),
+        enable_tools=False,
+        description=description,
+        output_token_ceiling=structured_output_token_ceiling(schema),
+    )
+    if not isinstance(raw, Mapping):
+        raise ValueError(
+            "STATE_MUTATION_DECISION: model result must be an object"
+        )
+    return dict(raw)
+
+
+def _mutation_target_family(
+    symbols: StateSymbolTable,
+    target: str,
+) -> str:
+    return _state_variable_value_kind(symbols.variables.get(target))
+
+
+def _mutation_compatible_state_names(
+    symbols: StateSymbolTable,
+    target_family: str,
+) -> list[str]:
+    result: list[str] = []
+    for name in sorted(symbols.declared_names):
+        family = _state_variable_value_kind(symbols.variables.get(name))
+        if target_family == "unknown" or family in {target_family, "unknown"}:
+            result.append(name)
     return result
+
+
+def _mutation_operator_choices(target_family: str) -> list[str]:
+    if target_family == "number":
+        return ["=", "+=", "-=", "*=", "/="]
+    if target_family == "string":
+        return ["=", "+="]
+    if target_family in {"boolean", "map", "list"}:
+        return ["="]
+    return ["=", "+=", "-=", "*=", "/="]
+
+
+def _mutation_value_source_choices(
+    target_family: str,
+    *,
+    has_compatible_state: bool,
+) -> list[str]:
+    if target_family == "number":
+        values = ["context", "number", "null"]
+    elif target_family == "boolean":
+        values = ["context", "true", "false", "null"]
+    elif target_family == "string":
+        values = ["context", "string", "null"]
+    else:
+        values = [
+            "context",
+            "number",
+            "string",
+            "true",
+            "false",
+            "null",
+        ]
+    if has_compatible_state:
+        values.insert(0, "state")
+    return values
+
+
+def _author_mutation_value(
+    router: Any,
+    prompt: str,
+    *,
+    concern: str,
+    field: str,
+    index: int,
+    current: Mapping[str, Any],
+    symbols: StateSymbolTable,
+    assignment_index: int,
+    target: str,
+) -> dict[str, Any]:
+    target_family = _mutation_target_family(symbols, target)
+    compatible_states = _mutation_compatible_state_names(
+        symbols,
+        target_family,
+    )
+    sources = _mutation_value_source_choices(
+        target_family,
+        has_compatible_state=bool(compatible_states),
+    )
+    source_schema = {
+        "type": "object",
+        "properties": {
+            "source": {"type": "string", "enum": sources},
+        },
+        "required": ["source"],
+        "additionalProperties": False,
+    }
+    raw_source = _author_mutation_object(
+        router,
+        prompt,
+        concern=concern,
+        field=field,
+        index=index,
+        current=current,
+        symbols=symbols,
+        schema=source_schema,
+        instruction=(
+            f"Choose only the value source for assignment {assignment_index + 1} "
+            f"to {target!r}. The target value family is {target_family!r}."
+        ),
+        description=(
+            f"Choose mutation assignment {assignment_index + 1} value source."
+        ),
+    )
+    source = str(raw_source["source"])
+
+    if source == "true":
+        return {"kind": "literal", "value": True}
+    if source == "false":
+        return {"kind": "literal", "value": False}
+    if source == "null":
+        return {"kind": "literal", "value": None}
+
+    if source == "state":
+        value_schema = {
+            "type": "object",
+            "properties": {
+                "value": {
+                    "type": "string",
+                    "enum": compatible_states,
+                    "maxLength": 128,
+                }
+            },
+            "required": ["value"],
+            "additionalProperties": False,
+        }
+    elif source == "context":
+        value_schema = {
+            "type": "object",
+            "properties": {
+                "value": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 24,
+                    "pattern": r"^[A-Za-z_$][A-Za-z0-9_$.]{0,23}$",
+                }
+            },
+            "required": ["value"],
+            "additionalProperties": False,
+        }
+    elif source == "number":
+        value_schema = {
+            "type": "object",
+            "properties": {
+                "value": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 24,
+                    "pattern": r"^-?[0-9]+(?:\.[0-9]+)?$",
+                }
+            },
+            "required": ["value"],
+            "additionalProperties": False,
+        }
+    elif source == "string":
+        value_schema = {
+            "type": "object",
+            "properties": {
+                "value": {
+                    "type": "string",
+                    "maxLength": 24,
+                    "pattern": r"^[^{}\[\]]{0,24}$",
+                }
+            },
+            "required": ["value"],
+            "additionalProperties": False,
+        }
+    else:
+        raise ValueError(
+            f"STATE_MUTATION_DECISION: invalid value source {source!r}"
+        )
+
+    raw_value = _author_mutation_object(
+        router,
+        prompt,
+        concern=concern,
+        field=field,
+        index=index,
+        current=current,
+        symbols=symbols,
+        schema=value_schema,
+        instruction=(
+            f"Choose only the {source} value for assignment {assignment_index + 1} "
+            f"to {target!r}."
+        ),
+        description=(
+            f"Choose mutation assignment {assignment_index + 1} scalar value."
+        ),
+    )
+    value = raw_value["value"]
+    if source == "state":
+        return {"kind": "state_ref", "name": str(value)}
+    if source == "context":
+        return {"kind": "context_ref", "name": str(value)}
+    if source == "number":
+        return {"kind": "number", "value": str(value)}
+    return {"kind": "literal", "value": str(value)}
 
 
 def _author_state_mutation(
@@ -826,35 +955,121 @@ def _author_state_mutation(
     symbols: StateSymbolTable,
     current: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
-    schema = _state_mutation_transport_schema(symbols)
-    raw = generate_fixed_template_value(
+    del count
+    declared = sorted(symbols.declared_names)
+    if not declared:
+        return []
+
+    count_schema = {
+        "type": "object",
+        "properties": {
+            "count": {
+                "type": "string",
+                "enum": ["zero", "one", "two"],
+            }
+        },
+        "required": ["count"],
+        "additionalProperties": False,
+    }
+    raw_count = _author_mutation_object(
         router,
-        "planner",
-        _state_atomic_messages(
+        prompt,
+        concern=concern,
+        field=field,
+        index=index,
+        current=current,
+        symbols=symbols,
+        schema=count_schema,
+        instruction=(
+            "Choose only how many state assignments this row requires: zero, one, or two."
+        ),
+        description="Choose state mutation assignment count.",
+    )
+    count_name = str(raw_count["count"])
+    assignment_count = {"zero": 0, "one": 1, "two": 2}[count_name]
+
+    result: list[dict[str, Any]] = []
+    for assignment_index in range(assignment_count):
+        target_schema = {
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "enum": declared,
+                    "maxLength": 128,
+                }
+            },
+            "required": ["target"],
+            "additionalProperties": False,
+        }
+        raw_target = _author_mutation_object(
+            router,
             prompt,
             concern=concern,
+            field=field,
             index=index,
-            fields=(field,),
-            current_row=current,
-            symbols_text=symbols.prompt_text(),
-            extra_instruction=(
-                f"Author state assignments for state_model.{concern}[{index}].{field}. "
-                "Return only the flat assignments transport. Use an empty assignments "
-                "array when this row needs no state mutation. Do not emit nested expression "
-                "IR keys such as kind, type, value objects, left, right, terms, or args; "
-                "the host constructs and validates canonical typed mutation IR."
+            current=current,
+            symbols=symbols,
+            schema=target_schema,
+            instruction=(
+                f"Choose only the target state variable for assignment {assignment_index + 1}."
             ),
-        ),
-        response_schema=schema,
-        enable_tools=False,
-        description=(
-            f"Choose flat state assignments for row {index + 1} of {count} in {concern}."
-        ),
-        output_token_ceiling=structured_output_token_ceiling(schema),
-    )
-    if not isinstance(raw, Mapping):
-        raise ValueError("STATE_MUTATION_TRANSPORT: model result must be an object")
-    return _mutation_ir_from_transport(raw, symbols=symbols)
+            description=(
+                f"Choose mutation assignment {assignment_index + 1} target."
+            ),
+        )
+        target = str(raw_target["target"])
+        family = _mutation_target_family(symbols, target)
+
+        operator_schema = {
+            "type": "object",
+            "properties": {
+                "operator": {
+                    "type": "string",
+                    "enum": _mutation_operator_choices(family),
+                }
+            },
+            "required": ["operator"],
+            "additionalProperties": False,
+        }
+        raw_operator = _author_mutation_object(
+            router,
+            prompt,
+            concern=concern,
+            field=field,
+            index=index,
+            current=current,
+            symbols=symbols,
+            schema=operator_schema,
+            instruction=(
+                f"Choose only the operator for assignment {assignment_index + 1} "
+                f"to {target!r}, whose value family is {family!r}."
+            ),
+            description=(
+                f"Choose mutation assignment {assignment_index + 1} operator."
+            ),
+        )
+        value = _author_mutation_value(
+            router,
+            prompt,
+            concern=concern,
+            field=field,
+            index=index,
+            current=current,
+            symbols=symbols,
+            assignment_index=assignment_index,
+            target=target,
+        )
+        result.append(
+            {
+                "target": target,
+                "operator": str(raw_operator["operator"]),
+                "value": value,
+            }
+        )
+
+    validate_mutation_ir(result, symbols=symbols)
+    return result
 
 
 def author_state_field_page(
