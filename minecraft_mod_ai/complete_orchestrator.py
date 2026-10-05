@@ -1658,10 +1658,25 @@ class CompleteProductionOrchestrator:
                 return
             kind = str(node.payload.get('kind', ''))
             if kind == 'module-shard':
-                member_ids = [str(item.get('module_id')) for item in node.payload.get('members', []) if isinstance(item, dict)]
-                if not member_ids or any(item not in module_lookup for item in member_ids):
-                    raise CompleteProductionError(f'Work node {node.node_id} has invalid module members.')
+                raw_members = node.payload.get('members', [])
+                member_ids = [str(item.get('module_id')) for item in raw_members if isinstance(item, dict)]
+                if (
+                    not isinstance(raw_members, list)
+                    or not member_ids
+                    or len(member_ids) != len(raw_members)
+                    or len(set(member_ids)) != len(member_ids)
+                    or any(item not in module_lookup for item in member_ids)
+                ):
+                    raise CompleteProductionError(
+                        f'Work node {node.node_id} has invalid module members.'
+                    )
                 members = [module_lookup[item] for item in member_ids]
+                expected_members = [_module_dict(module) for module in members]
+                if raw_members != expected_members:
+                    raise CompleteProductionError(
+                        f'Work node {node.node_id} module payload drifted from '
+                        'the approved proposal.'
+                    )
                 receipt = self._run_work_node(
                     ledger,
                     node,
@@ -1710,10 +1725,25 @@ class CompleteProductionOrchestrator:
                         elif options.run_blockbench:
                             unresolved.append(f'blockbench:{module.module_id}:not-run-in-source-only-mode')
             elif kind == 'asset-shard':
-                ids = [str(item.get('asset_id')) for item in node.payload.get('members', []) if isinstance(item, dict)]
-                if not ids or any(item not in asset_lookup for item in ids):
-                    raise CompleteProductionError(f'Work node {node.node_id} has invalid assets.')
+                raw_members = node.payload.get('members', [])
+                ids = [str(item.get('asset_id')) for item in raw_members if isinstance(item, dict)]
+                if (
+                    not isinstance(raw_members, list)
+                    or not ids
+                    or len(ids) != len(raw_members)
+                    or len(set(ids)) != len(ids)
+                    or any(item not in asset_lookup for item in ids)
+                ):
+                    raise CompleteProductionError(
+                        f'Work node {node.node_id} has invalid assets.'
+                    )
                 shard_assets = tuple(asset_lookup[item] for item in ids)
+                expected_assets = [asdict(asset) for asset in shard_assets]
+                if raw_members != expected_assets:
+                    raise CompleteProductionError(
+                        f'Work node {node.node_id} asset payload drifted from '
+                        'the approved proposal.'
+                    )
                 from .resource_asset_plan import (
                     ResourceAssetPlanError,
                     asset_plan_sha256,
