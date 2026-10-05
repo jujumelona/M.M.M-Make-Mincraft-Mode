@@ -16,30 +16,53 @@ _CAPABILITIES: dict[str, dict[str, Any]] = {
         "owner": "AuthoredHostCapabilities",
         "method": "playerUuid",
         "parameters": ["object"],
+        "parameter_constraints": [{}],
         "return_type": "string",
     },
     "player.send_message": {
         "owner": "AuthoredHostCapabilities",
         "method": "sendMessage",
         "parameters": ["object", "string"],
+        "parameter_constraints": [{}, {"maxLength": 256}],
         "return_type": "void",
     },
     "player.grant_item": {
         "owner": "AuthoredHostCapabilities",
         "method": "grantItem",
         "parameters": ["object", "string", "int"],
+        "parameter_constraints": [
+            {},
+            {
+                "pattern": r"^[a-z0-9_.-]+:[a-z0-9_./-]+$",
+                "maxLength": 64,
+            },
+            {"minimum": 1, "maximum": 2**31 - 1},
+        ],
         "return_type": "boolean",
     },
     "player.add_status_effect": {
         "owner": "AuthoredHostCapabilities",
         "method": "addStatusEffect",
         "parameters": ["object", "string", "int", "int"],
+        "parameter_constraints": [
+            {},
+            {
+                "pattern": r"^[a-z0-9_.-]+:[a-z0-9_./-]+$",
+                "maxLength": 64,
+            },
+            {"minimum": 1, "maximum": 2**31 - 1},
+            {"minimum": 0, "maximum": 255},
+        ],
         "return_type": "boolean",
     },
     "command.has_permission": {
         "owner": "AuthoredHostCapabilities",
         "method": "hasPermission",
         "parameters": ["object", "int"],
+        "parameter_constraints": [
+            {},
+            {"minimum": 0, "maximum": 4},
+        ],
         "return_type": "boolean",
     },
 }
