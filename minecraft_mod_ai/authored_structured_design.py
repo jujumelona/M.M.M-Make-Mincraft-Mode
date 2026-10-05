@@ -612,13 +612,9 @@ def _generate_concern_pages(
         if request.budget is not None:
             call_count = 1
             if request.section == "state_model" and fixed_count is not None:
-                projection = getattr(concerns, "field_projection", {})
-                fields = (
-                    tuple(projection.get(concern, ()))
-                    if isinstance(projection, Mapping)
-                    else ()
-                )
-                call_count = max(1, int(fixed_count) * max(1, len(fields)))
+                # Every state page now emits exactly one model call per host-fixed
+                # row, regardless of how many semantic fields the page projects.
+                call_count = max(1, int(fixed_count))
             request.budget.consume(
                 f"structured.{request.section}.page",
                 count=call_count,
@@ -738,6 +734,22 @@ def _author_section(
         )
     return merge_worksheet_section_chunks(request.section, results, set())
 
+
+def structured_authoring_call_upper_bound() -> int:
+    """Return the finite model-call ceiling implied by the host work graph."""
+
+    from .worksheet_atomic_chunker import pack_section_concerns
+
+    total = 0
+    for section in WORKSHEET_SECTIONS:
+        chunks = pack_section_concerns(section)
+        if section == "state_model":
+            concerns = {str(chunk[0]) for chunk in chunks if chunk}
+            total += len(concerns)  # one bounded cardinality decision per concern
+            total += len(chunks) * PLANNER_CONCERN_MAX_RECORDS
+        else:
+            total += len(chunks)
+    return total
 
 def author_structured_sections(
     router: Any,
