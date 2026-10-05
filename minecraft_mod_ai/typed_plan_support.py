@@ -32,6 +32,8 @@ def _compact(value: Any) -> str:
 def typed_plan_support_issues(
     structured_sections: Mapping[str, Any] | None,
     typed_plan_ir: Mapping[str, Any] | None = None,
+    *,
+    externally_covered_refs=(),
 ) -> tuple[str, ...]:
     """Return deterministic unsupported-operation diagnostics."""
 
@@ -56,6 +58,17 @@ def typed_plan_support_issues(
         for cover in module.get("covers", ())
         if isinstance(cover, str)
     }
+    external_coverage = {
+        str(ref).strip()
+        for ref in externally_covered_refs
+        if str(ref).strip()
+    }
+    unknown_external = external_coverage - active_refs
+    if unknown_external:
+        issues.extend(
+            f"external.coverage_without_active_concern:{ref}"
+            for ref in sorted(unknown_external)
+        )
     reachable_functions = set(
         typed_plan_reachable_function_ids(typed_plan_ir)
         if isinstance(typed_plan_ir, Mapping)
@@ -89,6 +102,7 @@ def typed_plan_support_issues(
             )
 
     host_bound_coverage = covered | function_covered
+    effective_coverage = host_bound_coverage | external_coverage
     phantom = sorted(host_bound_coverage - active_refs)
     issues.extend(
         f"host.coverage_without_active_concern:{ref}"
@@ -99,7 +113,7 @@ def typed_plan_support_issues(
         active = active_concern_records(normalized, section)
         for concern, rows in active.items():
             ref = f"{section}.{concern}"
-            if rows and ref not in host_bound_coverage:
+            if rows and ref not in effective_coverage:
                 issues.append(ref)
 
     for section in (
@@ -152,10 +166,13 @@ def typed_plan_support_issues(
 def assert_typed_plan_host_support(
     structured_sections: Mapping[str, Any] | None,
     typed_plan_ir: Mapping[str, Any] | None = None,
+    *,
+    externally_covered_refs=(),
 ) -> None:
     issues = typed_plan_support_issues(
         structured_sections,
         typed_plan_ir,
+        externally_covered_refs=externally_covered_refs,
     )
     if issues:
         raise ValueError(
