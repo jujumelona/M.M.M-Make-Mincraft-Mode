@@ -184,6 +184,21 @@ def test_cardinality_decision_is_tiny_and_content_free():
     assert "Do not author record content" in prompt
     assert "0 through 4" in prompt
 
+def test_state_variable_name_is_authored_after_semantic_context():
+    pages = [
+        tuple(chunk.field_projection["variables"])
+        for chunk in pack_section_concerns("state_model")
+        if "variables" in chunk
+    ]
+    flattened = [field for page in pages for field in page]
+
+    assert flattened.index("type") < flattened.index("name")
+    assert flattened.index("owner") < flattened.index("name")
+    assert flattened.index("unit") < flattened.index("name")
+    assert flattened.index("domain") < flattened.index("name")
+    assert flattened.index("name") < flattened.index("default")
+
+
 def test_state_model_symbols_do_not_change_planning_chunk_field_types():
     target = _page_for_field("state_model", "transitions", "guard")
 
