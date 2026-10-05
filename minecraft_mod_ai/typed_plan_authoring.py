@@ -1294,6 +1294,7 @@ def _semantic_capability_arg_schema(
     schema = _semantic_state_value_schema(type_name)
     extra = dict(constraints or {})
     allowed = {
+        "description",
         "minimum",
         "maximum",
         "minLength",
@@ -1793,9 +1794,22 @@ def author_semantic_game_dispatch(
                 name: state_types[name]
                 for name in sorted(state_types)
             },
-            "available_capabilities": (
-                sorted(capabilities.keys()) if capabilities else []
-            ),
+            "available_capabilities": {
+                cap_id: {
+                    "arguments": {
+                        f"arg_{index}": {"type": type_name, **constraint}
+                        for index, (type_name, constraint) in enumerate(zip(
+                            contract["parameters"],
+                            _capability_parameter_constraints(
+                                contract, contract["parameters"], capability_id=cap_id,
+                            ),
+                        ))
+                        if type_name != "object"
+                    },
+                    "return_type": contract["return_type"],
+                }
+                for cap_id, contract in sorted((capabilities or {}).items())
+            },
             "instruction": (
                 "Choose exactly one host-bound runtime action implementing the supplied "
                 "coverage_ref. Every state_key and capability_id is closed by the schema; "

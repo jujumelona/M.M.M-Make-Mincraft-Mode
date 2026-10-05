@@ -9,6 +9,7 @@ result. Machine-owned JSON remains valid for storage and transport.
 """
 
 import json
+import math
 from collections.abc import Mapping, Sequence
 from functools import wraps
 from typing import Any
@@ -195,6 +196,57 @@ def is_atomic_model_schema(schema: Mapping[str, Any]) -> bool:
     return True
 
 
+def _integer_transport_bounds(schema: Mapping[str, Any]) -> tuple[int, int]:
+    """Intersect the logical range with the existing 19-digit transport envelope."""
+    minimum, maximum = -(10**19 - 1), 10**19 - 1
+    if "minimum" in schema:
+        minimum = max(minimum, math.ceil(schema["minimum"]))
+    if "maximum" in schema:
+        maximum = min(maximum, math.floor(schema["maximum"]))
+    if "exclusiveMinimum" in schema:
+        minimum = max(minimum, math.floor(schema["exclusiveMinimum"]) + 1)
+    if "exclusiveMaximum" in schema:
+        maximum = min(maximum, math.ceil(schema["exclusiveMaximum"]) - 1)
+    if minimum > maximum:
+        raise ValueError("MODEL_INTEGER_TRANSPORT_EMPTY: integer range has no encodable value")
+    return minimum, maximum
+
+
+def _integer_range_pattern(minimum: int, maximum: int) -> str:
+    """Compile an inclusive integer interval to finite decimal alternatives."""
+
+    def digits(low: str, high: str) -> str:
+        if low == high:
+            return low
+        width = len(low)
+        if low == "0" * width and high == "9" * width:
+            return "[0-9]" if width == 1 else f"[0-9]{{{width}}}"
+        if low[0] == high[0]:
+            return low[0] + digits(low[1:], high[1:])
+        parts = [low[0] + digits(low[1:], "9" * (width - 1))]
+        first, last = int(low[0]) + 1, int(high[0]) - 1
+        if first <= last:
+            head = str(first) if first == last else f"[{first}-{last}]"
+            parts.append(head + digits("0" * (width - 1), "9" * (width - 1)))
+        parts.append(high[0] + digits("0" * (width - 1), high[1:]))
+        return "(?:" + "|".join(parts) + ")"
+
+    def unsigned(low: int, high: int) -> str:
+        parts = []
+        for width in range(len(str(low)), len(str(high)) + 1):
+            start = max(low, 0 if width == 1 else 10 ** (width - 1))
+            stop = min(high, 10**width - 1)
+            parts.append(digits(str(start), str(stop)))
+        return "(?:" + "|".join(parts) + ")"
+
+    parts = []
+    if minimum < 0:
+        parts.append("-" + unsigned(abs(min(maximum, -1)), abs(minimum)))
+    if maximum >= 0:
+        parts.append(unsigned(max(0, minimum), maximum))
+    return "^(?:" + "|".join(parts) + ")$"
+
+
 def _model_transport_schema(
     value: Any,
     *,
@@ -237,27 +289,21 @@ def _model_transport_schema(
         if (
             _schema_has_type(value, "integer")
             and "enum" not in result
-            and type(value.get("minimum")) is int
-            and type(value.get("maximum")) is int
-        ):
-            minimum = int(value["minimum"])
-            maximum = int(value["maximum"])
-            if minimum <= maximum and maximum - minimum <= 256:
-                result["enum"] = list(range(minimum, maximum + 1))
-        if (
-            _schema_has_type(value, "integer")
-            and "enum" not in result
             and "const" not in result
         ):
+            minimum, maximum = _integer_transport_bounds(value)
             raw_type = value.get("type")
-            if isinstance(raw_type, (list, tuple)) and "null" in raw_type:
-                result["type"] = ["string", "null"]
+            nullable = isinstance(raw_type, (list, tuple)) and "null" in raw_type
+            if maximum - minimum <= 256:
+                result["enum"] = list(range(minimum, maximum + 1))
+                if nullable:
+                    result["enum"].append(None)
             else:
-                result["type"] = "string"
-            result["pattern"] = r"^-?(?:0|[1-9][0-9]{0,18})$"
-            result["maxLength"] = 20
-            for k in ("minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf"):
-                result.pop(k, None)
+                result["type"] = ["string", "null"] if nullable else "string"
+                result["pattern"] = _integer_range_pattern(minimum, maximum)
+                result["maxLength"] = max(len(str(minimum)), len(str(maximum)))
+                for k in ("minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf"):
+                    result.pop(k, None)
         if (
             _schema_has_type(value, "number")
             and "enum" not in result

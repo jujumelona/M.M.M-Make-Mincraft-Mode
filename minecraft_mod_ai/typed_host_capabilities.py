@@ -23,7 +23,7 @@ _CAPABILITIES: dict[str, dict[str, Any]] = {
         "owner": "AuthoredHostCapabilities",
         "method": "sendMessage",
         "parameters": ["object", "string"],
-        "parameter_constraints": [{}, {"maxLength": 256}],
+        "parameter_constraints": [{}, {"maxLength": 256, "description": "Message text shown to the player, including notifications such as insufficient currency."}],
         "return_type": "void",
     },
     "player.grant_item": {
@@ -33,10 +33,11 @@ _CAPABILITIES: dict[str, dict[str, Any]] = {
         "parameter_constraints": [
             {},
             {
+                "description": "Registered item identifier in namespace:path form.",
                 "pattern": r"^[a-z0-9_.-]+:[a-z0-9_./-]+$",
                 "maxLength": 64,
             },
-            {"minimum": 1, "maximum": 2**31 - 1},
+            {"minimum": 1, "maximum": 2**31 - 1, "description": "Number of items to grant; strictly positive."},
         ],
         "return_type": "boolean",
     },
@@ -47,11 +48,12 @@ _CAPABILITIES: dict[str, dict[str, Any]] = {
         "parameter_constraints": [
             {},
             {
+                "description": "Registered Minecraft status-effect identifier, such as minecraft:speed; not a message or an invented status label.",
                 "pattern": r"^[a-z0-9_.-]+:[a-z0-9_./-]+$",
                 "maxLength": 64,
             },
-            {"minimum": 1, "maximum": 2**31 - 1},
-            {"minimum": 0, "maximum": 255},
+            {"minimum": 1, "maximum": 2**31 - 1, "description": "Effect duration in ticks (20 ticks = 1 second); strictly positive."},
+            {"minimum": 0, "maximum": 255, "description": "Zero-based effect amplifier; 0 means level I, 1 means level II."},
         ],
         "return_type": "boolean",
     },
