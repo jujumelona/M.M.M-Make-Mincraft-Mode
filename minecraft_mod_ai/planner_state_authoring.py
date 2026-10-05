@@ -194,7 +194,9 @@ def author_state_semantic_page(
             name_instruction = (
                 "For variables.name, choose a concrete identifier for the distinct mutable "
                 "concept described by the already-fixed fields for this row. Do not use "
-                "container/meta labels such as state_model, variables, state, variable, or value."
+                "container/meta labels such as "
+                + ", ".join(sorted(_STATE_VARIABLE_META_NAMES))
+                + "."
             )
             if used_names:
                 name_instruction += (
