@@ -76,7 +76,7 @@ def test_colab_debug_fixture_loads_validated_plan_then_uses_normal_build_dispatc
 
     proposal = dialog.reply.complete_proposal
     assert proposal.requested_prompt == (
-        "M.M.M Debug Mode fixture: add one deterministic debug token item and "
+        "M.M.M Debug Mode fixture: add one deterministic host-generated debug token item and "
         "run the normal implementation/verification pipeline."
     )
     assert [module.module_id for module in proposal.modules] == ["debug_token"]
