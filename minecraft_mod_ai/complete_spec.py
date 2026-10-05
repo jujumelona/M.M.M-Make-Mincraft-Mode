@@ -74,18 +74,6 @@ class ProductionModule(Mapping[str, Any]):
     depends_on: tuple[str, ...] = ()
     required_gates: tuple[str, ...] = ()
 
-    def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "module_id",
-            str(self.module_id).strip(),
-        )
-        object.__setattr__(
-            self,
-            "depends_on",
-            tuple(str(item).strip() for item in self.depends_on),
-        )
-
     def __getitem__(self, key: str) -> Any:
         if key == "plugin_id" or key == "module_id":
             return self.module_id
@@ -138,6 +126,20 @@ class ProductionModule(Mapping[str, Any]):
 
     def validate(self, *, policy: ScalePolicy | None = None) -> None:
         policy = policy or ScalePolicy.from_environment()
+        if not isinstance(self.module_id, str):
+            raise SpecValidationError("Production module id must be a string.")
+        if not isinstance(self.kind, str):
+            raise SpecValidationError(
+                f"Production module kind must be a string: {self.module_id!r}"
+            )
+        if not isinstance(self.depends_on, tuple):
+            raise SpecValidationError(
+                f"Module dependencies must use the canonical tuple representation: {self.module_id}"
+            )
+        if not isinstance(self.required_gates, tuple):
+            raise SpecValidationError(
+                f"Module required_gates must use the canonical tuple representation: {self.module_id}"
+            )
         if not _ID.fullmatch(self.module_id):
             raise SpecValidationError(f"Invalid production module id: {self.module_id!r}")
         if self.kind not in MODULE_KINDS:
@@ -575,10 +577,29 @@ class CompleteProposal:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        data = asdict(self)
-        data["status"] = self.status.value
-        data["base_proposal"] = self.base_proposal.to_dict()
-        return data
+        return {
+            "schema_version": self.schema_version,
+            "proposal_version": self.proposal_version,
+            "status": self.status.value,
+            "requested_prompt": self.requested_prompt,
+            "base_proposal": self.base_proposal.to_dict(),
+            "game_design": self.game_design,
+            "modules": [
+                {
+                    "module_id": module.module_id,
+                    "kind": module.kind,
+                    "config": module.config,
+                    "depends_on": list(module.depends_on),
+                    "required_gates": list(module.required_gates),
+                }
+                for module in self.modules
+            ],
+            "assets": [asdict(asset) for asset in self.assets],
+            "acceptance_tests": list(self.acceptance_tests),
+            "external_runtime_required": self.external_runtime_required,
+            "existing_input_sha256": self.existing_input_sha256,
+            "approval_hash": self.approval_hash,
+        }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> CompleteProposal:
@@ -610,25 +631,28 @@ class CompleteProposal:
             raise SpecValidationError("acceptance_tests must be a JSON list.")
         try:
             proposal = cls(
-                schema_version=str(data["schema_version"]),
+                schema_version=_strict_string(data["schema_version"], "schema_version"),
                 proposal_version=_strict_int(
                     data["proposal_version"], "proposal_version"
                 ),
                 status=CompleteProposalStatus(data["status"]),
-                requested_prompt=str(data["requested_prompt"]),
+                requested_prompt=_strict_string(data["requested_prompt"], "requested_prompt"),
                 base_proposal=Proposal.from_dict(dict(data["base_proposal"])),
                 game_design=dict(data["game_design"]),
                 modules=tuple(_module_from_dict(item) for item in data["modules"]),
                 assets=tuple(_asset_from_dict(item) for item in data["assets"]),
                 acceptance_tests=tuple(
-                    str(value) for value in data["acceptance_tests"]
+                    _strict_string(value, "acceptance_tests[]")
+                    for value in data["acceptance_tests"]
                 ),
                 external_runtime_required=_strict_bool(
                     data["external_runtime_required"],
                     "external_runtime_required",
                 ),
-                existing_input_sha256=str(data["existing_input_sha256"]),
-                approval_hash=str(data["approval_hash"]),
+                existing_input_sha256=_strict_string(
+                    data["existing_input_sha256"], "existing_input_sha256"
+                ),
+                approval_hash=_strict_string(data["approval_hash"], "approval_hash"),
             )
         except (KeyError, TypeError, ValueError) as exc:
             if isinstance(exc, SpecValidationError):
@@ -643,60 +667,90 @@ class CompleteProposal:
 def _module_from_dict(value: Any) -> ProductionModule:
     if not isinstance(value, dict):
         raise SpecValidationError("Every module must be an object.")
-    allowed = {"module_id", "kind", "config", "depends_on", "required_gates"}
-    if set(value) - allowed or not {"module_id", "kind"} <= set(value):
-        raise SpecValidationError(f"Invalid module fields: {sorted(set(value))}")
-    config = value.get("config", {})
-    depends_on = value.get("depends_on", [])
-    required_gates = value.get("required_gates", [])
-    if not isinstance(config, dict):
+    expected = {"module_id", "kind", "config", "depends_on", "required_gates"}
+    if set(value) != expected:
+        raise SpecValidationError(
+            "Invalid module fields; "
+            f"missing={sorted(expected - set(value))}, "
+            f"unknown={sorted(set(value) - expected)}"
+        )
+    if not isinstance(value["config"], dict):
         raise SpecValidationError("Module config must be an object.")
-    if not isinstance(depends_on, list):
+    if not isinstance(value["depends_on"], list):
         raise SpecValidationError("Module depends_on must be a list.")
-    if not isinstance(required_gates, list):
+    if not isinstance(value["required_gates"], list):
         raise SpecValidationError("Module required_gates must be a list.")
     return ProductionModule(
-        module_id=str(value["module_id"]),
-        kind=str(value["kind"]),
-        config=dict(config),
-        depends_on=tuple(str(item) for item in depends_on),
-        required_gates=tuple(str(item) for item in required_gates),
+        module_id=_strict_string(value["module_id"], "module.module_id"),
+        kind=_strict_string(value["kind"], "module.kind"),
+        config=dict(value["config"]),
+        depends_on=tuple(
+            _strict_string(item, "module.depends_on[]")
+            for item in value["depends_on"]
+        ),
+        required_gates=tuple(
+            _strict_string(item, "module.required_gates[]")
+            for item in value["required_gates"]
+        ),
     )
 
 
 def _asset_from_dict(value: Any) -> AssetRequest:
     if not isinstance(value, dict):
         raise SpecValidationError("Every asset must be an object.")
-    if "visual_spec" in value and "visual_description" not in value:
-        from .resource_visual_spec import resolve_visual_spec
-        visual = resolve_visual_spec(value["visual_spec"])
-        value = {**value, "visual_description": visual.prompt_fragment()}
-    semantic_required = {"asset_id", "kind", "visual_description"}
-    semantic_optional = {"render_kind", "subject_id", "owner_module_id", "container", "requested_width", "requested_height", "variant_count", "visual_spec"}
-    keys = set(value)
-    if semantic_required <= keys and not (keys - semantic_required - semantic_optional):
-        asset_id = str(value["asset_id"])
-        kind = str(value["kind"])
-        render_kind = str(value.get("render_kind", ""))
-        subject_id = str(value.get("subject_id", ""))
-        if not render_kind or not subject_id:
-            raise SpecValidationError(
-                "Semantic asset payload requires render_kind and subject_id."
-            )
-        return AssetRequest(
-            asset_id=asset_id,
-            kind=kind,
-            visual_description=str(value["visual_description"]),
-            render_kind=render_kind,
-            subject_id=subject_id,
-            owner_module_id=str(value.get("owner_module_id", "")),
-            container=str(value.get("container", "mod")),
-            requested_width=None if value.get("requested_width") is None else _strict_int(value["requested_width"], "asset.requested_width"),
-            requested_height=None if value.get("requested_height") is None else _strict_int(value["requested_height"], "asset.requested_height"),
-            variant_count=_strict_int(value.get("variant_count", 1), "asset.variant_count"),
-            visual_spec=value.get("visual_spec"),
+    expected = {
+        "asset_id",
+        "kind",
+        "visual_description",
+        "render_kind",
+        "subject_id",
+        "owner_module_id",
+        "container",
+        "requested_width",
+        "requested_height",
+        "variant_count",
+        "visual_spec",
+    }
+    if set(value) != expected:
+        raise SpecValidationError(
+            "Invalid asset fields; "
+            f"missing={sorted(expected - set(value))}, "
+            f"unknown={sorted(set(value) - expected)}"
         )
-    raise SpecValidationError(f"Invalid asset fields: {sorted(keys)}")
+    visual_spec = value["visual_spec"]
+    if visual_spec is not None and not isinstance(visual_spec, dict):
+        raise SpecValidationError("asset.visual_spec must be an object or null.")
+    return AssetRequest(
+        asset_id=_strict_string(value["asset_id"], "asset.asset_id"),
+        kind=_strict_string(value["kind"], "asset.kind"),
+        visual_description=_strict_string(
+            value["visual_description"], "asset.visual_description"
+        ),
+        render_kind=_strict_string(value["render_kind"], "asset.render_kind"),
+        subject_id=_strict_string(value["subject_id"], "asset.subject_id"),
+        owner_module_id=_strict_string(
+            value["owner_module_id"], "asset.owner_module_id"
+        ),
+        container=_strict_string(value["container"], "asset.container"),
+        requested_width=(
+            None
+            if value["requested_width"] is None
+            else _strict_int(value["requested_width"], "asset.requested_width")
+        ),
+        requested_height=(
+            None
+            if value["requested_height"] is None
+            else _strict_int(value["requested_height"], "asset.requested_height")
+        ),
+        variant_count=_strict_int(value["variant_count"], "asset.variant_count"),
+        visual_spec=visual_spec,
+    )
+
+
+def _strict_string(value: Any, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise SpecValidationError(f"{field_name} must be a JSON string.")
+    return value
 
 
 def _strict_bool(value: Any, field_name: str) -> bool:
@@ -722,42 +776,7 @@ def complete_proposal_from_parts(
     existing_input_sha256: str = "",
     external_runtime_required: bool = False,
 ) -> CompleteProposal:
-    seen_module_ids: set[str] = set()
-    sanitized_modules: list[ProductionModule] = []
-    for module in modules:
-        module_id = module.module_id
-        if module_id in seen_module_ids:
-            counter = 2
-            while f"{module_id}_{counter}" in seen_module_ids:
-                counter += 1
-            module_id = f"{module_id}_{counter}"
-        seen_module_ids.add(module_id)
-        sanitized_modules.append(
-            ProductionModule(
-                module_id=module_id,
-                kind=module.kind,
-                config=module.config,
-                depends_on=module.depends_on,
-                required_gates=module.required_gates,
-            )
-        )
-
-    valid_module_ids = set(seen_module_ids)
-    for index, module in enumerate(sanitized_modules):
-        clean_deps = tuple(
-            dependency
-            for dependency in module.depends_on
-            if dependency in valid_module_ids and dependency != module.module_id
-        )
-        if clean_deps != module.depends_on:
-            sanitized_modules[index] = ProductionModule(
-                module_id=module.module_id,
-                kind=module.kind,
-                config=module.config,
-                depends_on=clean_deps,
-                required_gates=module.required_gates,
-            )
-    modules = tuple(sanitized_modules)
+    modules = tuple(modules)
 
     from .resource_contracts import derive_module_asset_specs
 
