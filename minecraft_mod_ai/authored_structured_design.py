@@ -418,7 +418,7 @@ def _generate_authored_chunk(
         section_context=section_context,
         record_counts=record_counts,
     )
-    value = _generate_authored_page_value(router, messages, page, schema, state_symbols)
+    value = _generate_authored_page_value(\n        router, messages, page, schema, state_symbols, section_context=section_context\n    )
     if not isinstance(value, Mapping):
         raise ValueError(
             f"AUTHORED_STRUCTURED_DESIGN: {page.section} page "
@@ -433,6 +433,8 @@ def _generate_authored_page_value(
     page: _PlannerPageRequest,
     schema: Mapping[str, Any],
     state_symbols: Any,
+    *,
+    section_context: Mapping[str, Any] | None = None,
 ) -> Any:
     from .fixed_template_generation import generate_fixed_template_value
 
@@ -440,6 +442,7 @@ def _generate_authored_page_value(
         from .planner_state_authoring import (
             STATE_EXECUTABLE_FIELDS,
             author_state_field_page,
+            author_state_semantic_page,
         )
 
         concern = str(page.concerns[0])
@@ -465,6 +468,26 @@ def _generate_authored_page_value(
                 field=executable[0],
                 count=concern_schema["minItems"],
                 symbols=state_symbols,
+            )
+
+        if concern_schema.get("minItems") == concern_schema.get("maxItems"):
+            existing_rows: Sequence[Mapping[str, Any]] = ()
+            if isinstance(section_context, Mapping):
+                candidate_rows = section_context.get(concern)
+                if isinstance(candidate_rows, Sequence) and not isinstance(
+                    candidate_rows, (str, bytes, bytearray)
+                ):
+                    existing_rows = tuple(
+                        row for row in candidate_rows if isinstance(row, Mapping)
+                    )
+            return author_state_semantic_page(
+                router,
+                messages,
+                concern=concern,
+                fields=fields,
+                count=int(concern_schema["minItems"]),
+                item_schema=concern_schema["items"],
+                existing_rows=existing_rows,
             )
     return generate_fixed_template_value(
         router,
