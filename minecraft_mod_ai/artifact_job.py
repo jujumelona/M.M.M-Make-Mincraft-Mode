@@ -91,3 +91,97 @@ class ArtifactJob:
             canonical_leaf=str(data.get("canonical_leaf", "")),
             implementation_id=str(data.get("implementation_id", "")),
         )
+
+
+def validate_artifact_job_graph(
+    jobs: Iterable[ArtifactJob],
+    *,
+    module_ids: Iterable[str] = (),
+) -> tuple[ArtifactJob, ...]:
+    """Fail closed on canonical artifact-job structure before production."""
+
+    materialized = tuple(jobs)
+    allowed_owners = {
+        str(value).strip()
+        for value in module_ids
+        if str(value).strip()
+    }
+    seen_jobs: set[str] = set()
+    producers: dict[str, str] = {}
+
+    for job in materialized:
+        job_id = str(job.job_id or "").strip()
+        owner = str(job.owner_module or "").strip()
+        if not job_id:
+            raise ValueError("ARTIFACT_JOB_ID_REQUIRED")
+        if not owner:
+            raise ValueError(f"ARTIFACT_JOB_OWNER_REQUIRED: {job_id!r}")
+        if allowed_owners and owner not in allowed_owners:
+            raise ValueError(
+                f"ARTIFACT_JOB_FOREIGN_OWNER: {job_id!r} -> {owner!r}"
+            )
+        if job_id in seen_jobs:
+            raise ValueError(f"ARTIFACT_DUPLICATE_JOB_ID: {job_id!r}")
+        seen_jobs.add(job_id)
+
+        requires = tuple(str(value).strip() for value in job.requires)
+        produces = tuple(str(value).strip() for value in job.produces)
+        if any(not value for value in (*requires, *produces)):
+            raise ValueError(f"ARTIFACT_JOB_PORT_EMPTY: {job_id!r}")
+        if len(requires) != len(set(requires)):
+            raise ValueError(f"ARTIFACT_JOB_REQUIRE_DUPLICATE: {job_id!r}")
+        if len(produces) != len(set(produces)):
+            raise ValueError(f"ARTIFACT_JOB_PRODUCE_DUPLICATE: {job_id!r}")
+        overlap = sorted(set(requires) & set(produces))
+        if overlap:
+            raise ValueError(
+                f"ARTIFACT_JOB_SELF_DEPENDENCY: {job_id!r} {overlap}"
+            )
+
+        required_names: set[str] = set()
+        for index, port in enumerate(job.required_ports):
+            if not isinstance(port, Mapping):
+                raise ValueError(
+                    f"ARTIFACT_JOB_REQUIRED_PORT_INVALID: {job_id!r}[{index}]"
+                )
+            if set(port) != {"name", "kind", "target_type"}:
+                raise ValueError(
+                    f"ARTIFACT_JOB_REQUIRED_PORT_FIELDS: {job_id!r}[{index}]"
+                )
+            name = str(port.get("name") or "").strip()
+            kind = str(port.get("kind") or "").strip()
+            target_type = str(port.get("target_type") or "").strip()
+            if not name or not kind or not target_type:
+                raise ValueError(
+                    f"ARTIFACT_JOB_REQUIRED_PORT_EMPTY: {job_id!r}[{index}]"
+                )
+            if name not in requires:
+                raise ValueError(
+                    f"ARTIFACT_JOB_REQUIRED_PORT_NOT_REQUIRED: {job_id!r} {name!r}"
+                )
+            if name in required_names:
+                raise ValueError(
+                    f"ARTIFACT_JOB_REQUIRED_PORT_DUPLICATE: {job_id!r} {name!r}"
+                )
+            required_names.add(name)
+
+        for port in produces:
+            prior = producers.get(port)
+            if prior is not None and prior != job_id:
+                raise ValueError(
+                    f"ARTIFACT_DUPLICATE_PRODUCER: {port!r} by {prior!r} and {job_id!r}"
+                )
+            producers[port] = job_id
+
+    missing = {
+        job.job_id: [port for port in job.requires if port not in producers]
+        for job in materialized
+    }
+    missing = {
+        job_id: ports
+        for job_id, ports in missing.items()
+        if ports
+    }
+    if missing:
+        raise ValueError(f"ARTIFACT_GRAPH_MISSING_PRODUCER: {missing}")
+    return materialized
