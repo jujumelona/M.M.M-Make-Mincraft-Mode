@@ -688,6 +688,37 @@ def validate_state_expr_ir(
     raise ValueError(f"STRUCTURED_STATE_EXPRESSION: unknown expression kind {kind!r}")
 
 
+def compile_state_condition_ir(
+    expr: Any,
+    *,
+    declared: set[str] | None = None,
+    context: str = "context",
+) -> str:
+    """Compile any state expression in boolean/guard position."""
+
+    if isinstance(expr, str):
+        raw = expr.strip()
+        if not raw or raw.casefold() == "true":
+            return "true"
+        return _compile_condition(raw, context=context)
+    if isinstance(expr, bool):
+        return "true" if expr else "false"
+    if isinstance(expr, Mapping):
+        kind = str(expr.get("kind") or "").strip()
+        if kind in {"and", "or", "not", "implies", "compare"}:
+            return compile_state_expr_ir(
+                expr,
+                declared=declared,
+                context=context,
+            )
+    compiled = compile_state_expr_ir(
+        expr,
+        declared=declared,
+        context=context,
+    )
+    return f"$mmmTruthy({compiled})"
+
+
 def compile_state_expr_ir(
     expr: Any,
     *,
@@ -753,7 +784,10 @@ def compile_state_expr_ir(
         terms = expr.get("terms") or []
         if not terms:
             return "true"
-        compiled_terms = [compile_state_expr_ir(t, declared=declared, context=context) for t in terms]
+        compiled_terms = [
+            compile_state_condition_ir(t, declared=declared, context=context)
+            for t in terms
+        ]
         if len(compiled_terms) == 1:
             return compiled_terms[0]
         return "(" + " && ".join(f"({t})" for t in compiled_terms) + ")"
@@ -762,7 +796,10 @@ def compile_state_expr_ir(
         terms = expr.get("terms") or []
         if not terms:
             return "false"
-        compiled_terms = [compile_state_expr_ir(t, declared=declared, context=context) for t in terms]
+        compiled_terms = [
+            compile_state_condition_ir(t, declared=declared, context=context)
+            for t in terms
+        ]
         if len(compiled_terms) == 1:
             return compiled_terms[0]
         return "(" + " || ".join(f"({t})" for t in compiled_terms) + ")"
@@ -773,8 +810,12 @@ def compile_state_expr_ir(
         return f"(!$mmmTruthy({compiled}))"
 
     if kind == "implies":
-        left = compile_state_expr_ir(expr.get("left"), declared=declared, context=context)
-        right = compile_state_expr_ir(expr.get("right"), declared=declared, context=context)
+        left = compile_state_condition_ir(
+            expr.get("left"), declared=declared, context=context
+        )
+        right = compile_state_condition_ir(
+            expr.get("right"), declared=declared, context=context
+        )
         return f"((!({left})) || ({right}))"
 
     if kind == "compare":
@@ -2153,7 +2194,10 @@ def render_state_model_concern(
     def executable(index: int, record: Mapping[str, Any], field: str) -> str:
         del index
         if field in {"guard", "condition"}:
-            return compile_state_expr_ir(record.get(field), declared=declared)
+            return compile_state_condition_ir(
+                record.get(field),
+                declared=declared,
+            )
         mut_val = record.get("mutations") if "mutations" in record else record.get(field)
         return compile_mutation_ir(mut_val, declared=declared)
 
