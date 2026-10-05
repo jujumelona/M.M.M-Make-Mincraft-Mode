@@ -301,3 +301,49 @@ def test_author_structured_sections_passes_symbols_and_fails_undeclared_early():
     assert transition_prompts
     assert all("Canonical state symbols:" in prompt for prompt in transition_prompts)
     assert all("- player_currency" in prompt for prompt in transition_prompts)
+
+
+
+def test_mutation_schema_resolves_symbols_before_building_value_branches():
+    from minecraft_mod_ai.structured_state_runtime import (
+        StateSymbolTable,
+        mutations_schema,
+    )
+
+    symbols = StateSymbolTable(
+        [
+            {
+                "name": "hull",
+                "owner": "ship",
+                "type": "double",
+                "unit": "points",
+                "default": "100",
+                "domain": "0..100",
+            },
+            {
+                "name": "status",
+                "owner": "ship",
+                "type": "string",
+                "unit": "state",
+                "default": "docked",
+                "domain": "text",
+            },
+        ]
+    )
+
+    schema = mutations_schema(symbols)
+    branches = schema["items"]["oneOf"]
+
+    hull = next(
+        branch
+        for branch in branches
+        if branch["properties"]["target"].get("const") == "hull"
+    )
+    value_branches = hull["properties"]["value"]["oneOf"]
+    state_ref = next(
+        branch
+        for branch in value_branches
+        if branch.get("properties", {}).get("kind", {}).get("const") == "state_ref"
+    )
+
+    assert state_ref["properties"]["name"]["enum"] == ["hull"]
