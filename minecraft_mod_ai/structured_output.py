@@ -53,6 +53,51 @@ def decode_bounded_numeric_transport(data: Any, schema: Mapping[str, Any] | None
     if data is None:
         return None, False
 
+    for keyword in ("oneOf", "anyOf"):
+        branches = schema.get(keyword)
+        if (
+            isinstance(branches, Sequence)
+            and not isinstance(branches, (str, bytes, bytearray))
+            and branches
+        ):
+            matches: list[tuple[Any, bool]] = []
+            for branch in branches:
+                if not isinstance(branch, Mapping):
+                    continue
+                try:
+                    candidate, changed = decode_bounded_numeric_transport(
+                        data,
+                        branch,
+                    )
+                except ValueError:
+                    continue
+                validator = _validator_for(branch)
+                if not tuple(validator.iter_errors(candidate)):
+                    matches.append((candidate, changed))
+            if keyword == "oneOf":
+                if len(matches) == 1:
+                    return matches[0]
+            elif matches:
+                return matches[0]
+
+    all_of = schema.get("allOf")
+    if (
+        isinstance(all_of, Sequence)
+        and not isinstance(all_of, (str, bytes, bytearray))
+        and all_of
+    ):
+        candidate = data
+        changed_any = False
+        for branch in all_of:
+            if not isinstance(branch, Mapping):
+                continue
+            candidate, changed = decode_bounded_numeric_transport(
+                candidate,
+                branch,
+            )
+            changed_any = changed_any or changed
+        return candidate, changed_any
+
     schema_type = schema.get("type")
     is_int_schema = schema_type == "integer" or (isinstance(schema_type, (list, tuple)) and "integer" in schema_type)
     is_num_schema = schema_type == "number" or (isinstance(schema_type, (list, tuple)) and "number" in schema_type)
