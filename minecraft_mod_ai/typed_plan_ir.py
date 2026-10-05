@@ -120,18 +120,58 @@ def _capability_contracts(capabilities: Mapping[str, Any] | None) -> dict[str, d
     for cap_id, raw in dict(capabilities or {}).items():
         if not isinstance(raw, Mapping):
             raise _error(f"capability {cap_id!r}: contract must be an object")
-        _keys(raw, {"owner", "method", "parameters", "return_type"},
-              {"owner", "method", "parameters", "return_type"}, f"capability {cap_id!r}")
+        _keys(
+            raw,
+            {
+                "owner",
+                "method",
+                "parameters",
+                "parameter_constraints",
+                "return_type",
+            },
+            {"owner", "method", "parameters", "return_type"},
+            f"capability {cap_id!r}",
+        )
         owner = str(raw["owner"])
         method = str(raw["method"])
         if not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$.]*", owner):
             raise _error(f"capability {cap_id!r}: invalid owner")
         _name(method, f"capability {cap_id!r}.method")
-        params = [_type(item, f"capability {cap_id!r}.parameters")
-                  for item in _sequence(raw["parameters"], f"capability {cap_id!r}.parameters")]
-        return_type = _type(raw["return_type"], f"capability {cap_id!r}.return_type", allow_void=True)
+        params = [
+            _type(item, f"capability {cap_id!r}.parameters")
+            for item in _sequence(
+                raw["parameters"],
+                f"capability {cap_id!r}.parameters",
+            )
+        ]
+        raw_constraints = raw.get("parameter_constraints")
+        if raw_constraints is not None:
+            constraints = list(
+                _sequence(
+                    raw_constraints,
+                    f"capability {cap_id!r}.parameter_constraints",
+                )
+            )
+            if len(constraints) != len(params):
+                raise _error(
+                    f"capability {cap_id!r}: parameter constraint count mismatch"
+                )
+            for index, constraint in enumerate(constraints):
+                if not isinstance(constraint, Mapping):
+                    raise _error(
+                        f"capability {cap_id!r}.parameter_constraints[{index}]: "
+                        "constraint must be an object"
+                    )
+        return_type = _type(
+            raw["return_type"],
+            f"capability {cap_id!r}.return_type",
+            allow_void=True,
+        )
         result[str(cap_id)] = {
-            "owner": owner, "method": method, "parameters": params, "return_type": return_type,
+            "owner": owner,
+            "method": method,
+            "parameters": params,
+            "return_type": return_type,
         }
     return result
 
