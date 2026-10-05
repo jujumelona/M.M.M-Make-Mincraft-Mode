@@ -844,8 +844,10 @@ def build_authored_design_coverage_receipt(
     plan = authored_plan if isinstance(authored_plan, Mapping) else {}
     manifest = authored_manifest if isinstance(authored_manifest, Mapping) else {}
 
-    if plan.get("schema_version") != "mmm/authored-plan-v1":
-        findings.append("authored plan is missing or has an unsupported schema")
+    if plan.get("schema_version") != "mmm/authored-plan-v2":
+        findings.append(
+            "authored plan is missing or is not the canonical typed v2 schema"
+        )
     plan_prompt = str(plan.get("requested_prompt") or "").strip()
     expected_prompt = str(requested_prompt or "").strip()
     if not plan_prompt:
