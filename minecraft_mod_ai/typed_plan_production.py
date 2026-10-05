@@ -713,6 +713,149 @@ public final class AuthoredAccessibility {{
 """
     return files
 
+def validate_typed_plan_generation_contract(
+    module: ProductionModule,
+    *,
+    package_name: str,
+    mod_id: str,
+) -> dict[str, Any]:
+    """Dry-compile every model-free typed-host source contract before dispatch.
+
+    Filesystem ownership/merge checks remain generation-time concerns. Semantic
+    source rendering does not: the exact PlanIR/state/persistence/network
+    renderers are exercised here so proposal lowering cannot defer contract
+    mismatches into a generation worker.
+    """
+
+    module.validate()
+    config = module.config
+    raw_plan = config.get("typed_plan_ir")
+    if not isinstance(raw_plan, Mapping) or not raw_plan:
+        raise ValueError("TYPED_PLAN_IR_REQUIRED")
+
+    configured_package = str(
+        config.get("typed_plan_package") or package_name
+    ).strip()
+    if configured_package != package_name:
+        raise ValueError(
+            "TYPED_PLAN_PACKAGE_MISMATCH: "
+            f"{configured_package!r} != {package_name!r}"
+        )
+    expected_path = _typed_program_path(package_name)
+    configured_path = str(
+        config.get("typed_plan_path") or expected_path
+    ).replace("\\", "/").strip()
+    if configured_path != expected_path:
+        raise ValueError(
+            "TYPED_PLAN_PATH_MISMATCH: "
+            f"{configured_path!r} != {expected_path!r}"
+        )
+
+    raw_capabilities = config.get("typed_plan_capabilities")
+    capabilities = (
+        dict(raw_capabilities)
+        if isinstance(raw_capabilities, Mapping)
+        else {}
+    )
+    files: dict[str, str] = {
+        expected_path: render_typed_plan_java(
+            raw_plan,
+            package=package_name,
+            capabilities=capabilities,
+        )
+    }
+
+    capability_ids = typed_plan_capability_ids(raw_plan)
+    missing_capabilities = [
+        capability_id
+        for capability_id in capability_ids
+        if capability_id not in capabilities
+    ]
+    if missing_capabilities:
+        raise ValueError(
+            "TYPED_PLAN_CAPABILITY_BINDING_REQUIRED: "
+            + ", ".join(missing_capabilities)
+        )
+    if capability_ids:
+        files[
+            "src/main/java/"
+            + package_name.replace(".", "/")
+            + "/AuthoredHostCapabilities.java"
+        ] = render_typed_host_capabilities_java(package_name)
+
+    raw_state = config.get("typed_plan_state_section")
+    state_authority_present = isinstance(raw_state, Mapping) and bool(raw_state)
+    raw_state_store = config.get("typed_state_store")
+    raw_network_sync = config.get("typed_network_sync")
+    raw_resource_policy = config.get("typed_resource_policy")
+
+    if raw_state_store is not None:
+        if not isinstance(raw_state_store, Mapping):
+            raise ValueError("TYPED_STATE_STORE_CONFIG_INVALID")
+        if not state_authority_present:
+            raise ValueError("TYPED_STATE_STORE_STATE_AUTHORITY_REQUIRED")
+        files.update(
+            _persistence_files(
+                package_name=package_name,
+                mod_id=mod_id,
+                section=raw_state,
+                config=raw_state_store,
+            )
+        )
+
+    network_sync_needs_state = False
+    if raw_network_sync is not None:
+        if not isinstance(raw_network_sync, Mapping):
+            raise ValueError("TYPED_NETWORK_SYNC_CONFIG_INVALID")
+        network_sync_needs_state = network_sync_requires_state(
+            tuple(raw_network_sync.get("__covers", ()))
+        )
+        if network_sync_needs_state and not state_authority_present:
+            raise ValueError("TYPED_NETWORK_STATE_AUTHORITY_REQUIRED")
+        files.update(
+            _network_policy_files(
+                package_name=package_name,
+                mod_id=mod_id,
+                state_section=(
+                    raw_state
+                    if isinstance(raw_state, Mapping)
+                    else {}
+                ),
+                config=raw_network_sync,
+            )
+        )
+
+    if raw_resource_policy is not None and not isinstance(
+        raw_resource_policy, Mapping
+    ):
+        raise ValueError("TYPED_RESOURCE_POLICY_CONFIG_INVALID")
+
+    state_required = (
+        typed_plan_uses_state(raw_plan)
+        or raw_state_store is not None
+        or network_sync_needs_state
+        or state_authority_present
+    )
+    if state_required:
+        if not state_authority_present:
+            raise ValueError("TYPED_PLAN_STATE_AUTHORITY_REQUIRED")
+        files[
+            "src/main/java/"
+            + package_name.replace(".", "/")
+            + "/AuthoredStateModel.java"
+        ] = render_production_state_java(
+            raw_state,
+            package_name=package_name,
+        )
+
+    return {
+        "source_count": len(files),
+        "paths": tuple(sorted(files)),
+        "state_required": state_required,
+        "network_sync_needs_state": network_sync_needs_state,
+    }
+
+
 def generate_typed_plan_module(
     project_root: str | Path,
     *,
@@ -991,4 +1134,7 @@ def generate_typed_plan_module(
     }
 
 
-__all__ = ["generate_typed_plan_module"]
+__all__ = [
+    "generate_typed_plan_module",
+    "validate_typed_plan_generation_contract",
+]
