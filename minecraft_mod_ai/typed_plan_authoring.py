@@ -1884,6 +1884,11 @@ def _content_config_author_schema(kind: str) -> dict[str, Any]:
             **common,
             "hardness": {"type": "number", "minimum": 0, "maximum": 100},
         }, required=(*required_common, "hardness"))
+    if kind == "block_entity":
+        return _platform_schema({
+            **common,
+            "container_size": {"type": "integer", "minimum": 1, "maximum": 54},
+        }, required=(*required_common, "container_size"))
     if kind == "food":
         return _platform_schema({
             **common,
@@ -1964,6 +1969,8 @@ def _normalize_content_config(kind: str, raw: Any, module_id: str) -> dict[str, 
 
     if kind == "block":
         config["hardness"] = float(values["hardness"])
+    elif kind == "block_entity":
+        config["container_size"] = int(values["container_size"])
     elif kind == "food":
         config["hunger"] = int(values["hunger"])
         config["saturation"] = float(values["saturation"])
