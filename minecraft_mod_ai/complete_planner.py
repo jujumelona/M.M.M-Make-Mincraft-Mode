@@ -237,7 +237,7 @@ class CompleteGameDesignPlanner:
         assert_typed_plan_host_support(
             structured_sections,
             typed_plan_ir,
-            externally_covered_refs=content_owned_refs,
+            externally_covered_refs=external_content_refs,
         )
         return AuthoredPlan(
             requested_prompt=prompt,
