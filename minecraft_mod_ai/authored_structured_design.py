@@ -553,6 +553,21 @@ def _generate_concern_pages(
     results: list[tuple[int, dict[str, Any]]] = []
     fixed_count: int | None = None
 
+    if request.section == "state_model":
+        if request.budget is not None:
+            request.budget.consume("structured.state_model.cardinality")
+        fixed_count = _generate_concern_record_count(
+            request.router,
+            request.prompt,
+            section=request.section,
+            concern=concern,
+            completed=request.completed,
+            state_symbols=state_symbols,
+            section_context=base_context,
+        )
+        if fixed_count == 0:
+            return [], [(idx, {concern: []}) for idx, _page in pages]
+
     for i, (index, concerns) in enumerate(pages):
         context = deepcopy(dict(base_context or {}))
         if authored_rows:
@@ -581,11 +596,11 @@ def _generate_concern_pages(
                 f"AUTHORED_STRUCTURED_DESIGN: {request.section}.{concern} page "
                 f"{index} must return a record array"
             )
-        if i == 0:
+        if request.section != "state_model" and i == 0:
             fixed_count = len(rows)
             if fixed_count == 0:
                 return [], [(idx, {concern: []}) for idx, _page in pages]
-        elif len(rows) != fixed_count:
+        elif fixed_count is not None and len(rows) != fixed_count:
             raise ValueError(
                 f"AUTHORED_STRUCTURED_DESIGN_CARDINALITY_DRIFT: "
                 f"{request.section}.{concern} expected {fixed_count} rows, "
