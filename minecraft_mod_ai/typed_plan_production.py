@@ -382,7 +382,6 @@ def _network_policy_files(
     *,
     package_name: str,
     mod_id: str,
-    structured: Mapping[str, Any],
     state_section: Mapping[str, Any],
     config: Mapping[str, Any],
 ) -> dict[str, str]:
@@ -845,7 +844,6 @@ def generate_typed_plan_module(
             _network_policy_files(
                 package_name=package_name,
                 mod_id=info.mod_id,
-                structured=structured,
                 state_section=(
                     raw_state
                     if isinstance(raw_state, Mapping)
