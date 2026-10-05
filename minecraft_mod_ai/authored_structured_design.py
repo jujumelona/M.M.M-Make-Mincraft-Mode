@@ -16,7 +16,10 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from .execution_contract_policy import PLANNER_RECORD_COUNT_OUTPUT_TOKEN_CEILING
+from .execution_contract_policy import (
+    PLANNER_CONCERN_MAX_RECORDS,
+    PLANNER_RECORD_COUNT_OUTPUT_TOKEN_CEILING,
+)
 from .model_output_atomicity_contract import structured_output_token_ceiling
 from .planning_detail_slots import DETAIL_RECORDS
 from .planning_detail_template import WORKSHEET_SECTIONS, worksheet_section_schema
@@ -321,12 +324,7 @@ def _generate_concern_record_count(
     state_symbols: Any = None,
     section_context: Mapping[str, Any] | None = None,
 ) -> int:
-    from .fixed_template_generation import generate_fixed_template_value
-    from .worksheet_atomic_chunker import worksheet_concern_cardinality_schema
-
-    value = generate_fixed_template_value(
-        router,
-        "planner",
+    messages = list(
         _authored_cardinality_messages(
             prompt,
             section=section,
@@ -334,23 +332,39 @@ def _generate_concern_record_count(
             completed=completed,
             state_symbols=state_symbols,
             section_context=section_context,
+        )
+    )
+    messages.append({
+        "role": "system",
+        "content": (
+            "Return only one decimal integer for record_count. "
+            "No JSON, key name, punctuation, Markdown, or explanation."
         ),
-        response_schema=worksheet_concern_cardinality_schema(section, concern),
+    })
+    raw = router.generate_text(
+        "planner",
+        tuple(messages),
+        response_format="text",
+        response_schema=None,
         media_paths=(),
         enable_tools=False,
-        description=f"Choose bounded record cardinality for {section}.{concern}.",
         output_token_ceiling=PLANNER_RECORD_COUNT_OUTPUT_TOKEN_CEILING,
+        force_non_thinking=True,
     )
-    if not isinstance(value, Mapping):
-        raise ValueError(
-            f"AUTHORED_STRUCTURED_DESIGN: cardinality for {section}.{concern} must be an object"
-        )
+    text = str(raw or "").strip()
     try:
-        return int(value["record_count"])
-    except (KeyError, TypeError, ValueError) as exc:
+        value = int(text)
+    except ValueError as exc:
         raise ValueError(
-            f"AUTHORED_STRUCTURED_DESIGN: invalid cardinality for {section}.{concern}"
+            f"AUTHORED_STRUCTURED_DESIGN: invalid scalar cardinality for "
+            f"{section}.{concern}: {text!r}"
         ) from exc
+    if value < 0 or value > PLANNER_CONCERN_MAX_RECORDS:
+        raise ValueError(
+            f"AUTHORED_STRUCTURED_DESIGN: cardinality for {section}.{concern} "
+            f"is outside 0..{PLANNER_CONCERN_MAX_RECORDS}: {value}"
+        )
+    return value
 
 
 @dataclass(frozen=True)
@@ -407,17 +421,21 @@ def _generate_authored_chunk(
         record_counts=record_counts,
         state_symbols=state_symbols,
     )
-    messages = _authored_chunk_messages(
-        prompt,
-        section=page.section,
-        chunk_index=page.chunk_index,
-        chunk_count=page.chunk_count,
-        concerns=page.concerns,
-        completed=page.completed,
-        state_symbols=state_symbols,
-        section_context=section_context,
-        record_counts=record_counts,
-    )
+    messages: Sequence[Mapping[str, Any]]
+    if page.section == "state_model":
+        messages = ()
+    else:
+        messages = _authored_chunk_messages(
+            prompt,
+            section=page.section,
+            chunk_index=page.chunk_index,
+            chunk_count=page.chunk_count,
+            concerns=page.concerns,
+            completed=page.completed,
+            state_symbols=state_symbols,
+            section_context=section_context,
+            record_counts=record_counts,
+        )
     value = _generate_authored_page_value(
         router,
         prompt,
