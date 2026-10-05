@@ -85,53 +85,12 @@ def _orchestrator_owner(ledger: Any) -> str:
     return owner
 
 
-def _path_values(value: Any) -> tuple[str, ...]:
-    if not isinstance(value, (list, tuple, set)):
-        return ()
-    paths: list[str] = []
-    for item in value:
-        if isinstance(item, (str, Path)):
-            rendered = str(item).strip()
-            if rendered:
-                paths.append(rendered)
-    return tuple(paths)
-
-
 def _receipt_touched_paths(receipt: Any) -> tuple[str, ...]:
-    """Collect source paths from nested generator and patch receipts deterministically."""
+    """Compatibility name for the canonical generation mutation-path contract."""
 
-    ordered: list[str] = []
-    seen: set[str] = set()
+    from .generation_receipt_paths import receipt_mutation_paths
 
-    def add(path: str) -> None:
-        normalized = path.strip()
-        if normalized and normalized not in seen:
-            seen.add(normalized)
-            ordered.append(normalized)
-
-    def visit(value: Any) -> None:
-        if isinstance(value, dict):
-            operation = value.get("operation")
-            path = value.get("path")
-            if operation in {"create", "replace", "edit", "delete"} and isinstance(path, str):
-                add(path)
-
-            for key in ("touched_paths", "written_files", "deleted_files", "removed_files"):
-                for item in _path_values(value.get(key)):
-                    add(item)
-
-            for item in _path_values(value.get("files")):
-                add(item)
-
-            for nested in value.values():
-                visit(nested)
-            return
-        if isinstance(value, (list, tuple)):
-            for nested in value:
-                visit(nested)
-
-    visit(receipt)
-    return tuple(ordered)
+    return receipt_mutation_paths(receipt)
 
 
 def _profile_uses_shared_local_gpu(profile: str, registry: Any | None = None) -> bool:
