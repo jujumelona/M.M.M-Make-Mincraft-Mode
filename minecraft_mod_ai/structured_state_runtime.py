@@ -677,7 +677,6 @@ def _mutation_value_branches(
 ) -> list[dict[str, Any]]:
     """Return finite IR alternatives compatible with one declared target family."""
 
-    symbols = _resolve_state_symbols(allowed_state_symbols)
     variables = getattr(allowed_state_symbols, "variables", {})
     compatible_names = [
         name
