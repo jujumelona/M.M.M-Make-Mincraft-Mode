@@ -511,6 +511,7 @@ def validate_state_expr_ir(
     """Validate expression IR or legacy expression against symbols."""
     if expr is None or isinstance(expr, bool):
         return
+    symbol_table = symbols if isinstance(symbols, StateSymbolTable) else None
     if isinstance(symbols, StateSymbolTable):
         declared = symbols.declared_names
     elif isinstance(symbols, set):
@@ -756,6 +757,45 @@ def compile_state_expr_ir(
     return "true"
 
 
+def _state_expr_value_family(
+    expr: Any,
+    symbols: StateSymbolTable | None = None,
+) -> str:
+    """Return a conservative value family for mutation type checking."""
+
+    if expr is None:
+        return "null"
+    if isinstance(expr, bool):
+        return "boolean"
+    if isinstance(expr, (int, float)):
+        return "number"
+    if isinstance(expr, str):
+        return "unknown"
+    if not isinstance(expr, Mapping):
+        return "unknown"
+
+    kind = str(expr.get("kind") or "").strip()
+    if kind == "number":
+        return "number"
+    if kind == "literal":
+        value = expr.get("value")
+        if value is None:
+            return "null"
+        if isinstance(value, bool):
+            return "boolean"
+        if isinstance(value, (int, float)):
+            return "number"
+        return "string"
+    if kind == "empty_map":
+        return "map"
+    if kind == "empty_list":
+        return "list"
+    if kind == "state_ref" and symbols is not None:
+        name = str(expr.get("name") or "").strip()
+        return _state_variable_value_kind(symbols.variables.get(name))
+    return "unknown"
+
+
 def validate_mutation_ir(
     mutation: Any,
     *,
@@ -817,9 +857,40 @@ def validate_mutation_ir(
         op = item.get("operator", "=")
         if op not in {"=", "+=", "-=", "*=", "/=", ":"}:
             raise ValueError(f"STRUCTURED_STATE_MUTATION: invalid operator {op!r}")
+        normalized_op = "=" if op == ":" else op
+        target_kind = (
+            _state_variable_value_kind(symbol_table.variables.get(target))
+            if symbol_table is not None
+            else "unknown"
+        )
+        allowed_ops = (
+            {"=", "+=", "-=", "*=", "/="}
+            if target_kind == "number"
+            else {"=", "+="}
+            if target_kind == "string"
+            else {"="}
+            if target_kind in {"boolean", "map", "list"}
+            else {"=", "+=", "-=", "*=", "/="}
+        )
+        if normalized_op not in allowed_ops:
+            raise ValueError(
+                "STRUCTURED_STATE_MUTATION: operator "
+                f"{normalized_op!r} is incompatible with {target!r} "
+                f"value family {target_kind!r}"
+            )
         val = item.get("value")
         if val is not None:
             validate_state_expr_ir(val, symbols=declared)
+            value_kind = _state_expr_value_family(val, symbol_table)
+            if (
+                target_kind not in {"unknown"}
+                and value_kind not in {"unknown", "null", target_kind}
+            ):
+                raise ValueError(
+                    "STRUCTURED_STATE_MUTATION: value family "
+                    f"{value_kind!r} is incompatible with target {target!r} "
+                    f"family {target_kind!r}"
+                )
 
 
 def compile_mutation_ir(
@@ -848,7 +919,7 @@ def compile_mutation_ir(
         target = str(item.get("target") or "").strip()
         if not target:
             continue
-        if declared is not None and len(declared) > 0 and target not in declared:
+        if declared is not None and target not in declared:
             raise ValueError(
                 f"STRUCTURED_STATE_MUTATION: undeclared state variable {target!r}"
             )
