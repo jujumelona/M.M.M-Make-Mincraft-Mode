@@ -1243,53 +1243,8 @@ SEMANTIC_DISPATCH_SCHEMA = {
     "properties": {
         "rules": {
             "type": "array",
-            "maxItems": 6,
-            "items": {
-                "type": "object",
-                "properties": {
-                    "trigger_event": {
-                        "type": "string",
-                        "enum": [
-                            "player_join",
-                            "player_disconnect",
-                            "player_respawn",
-                            "server_started",
-                            "server_stopping",
-                            "server_tick",
-                            "command",
-                            "mod_initialize",
-                            "any",
-                        ],
-                    },
-                    "state_key": {"type": "string", "maxLength": 64},
-                    "action_kind": {
-                        "type": "string",
-                        "enum": [
-                            "increment_state",
-                            "set_state",
-                            "call_capability",
-                            "assert_condition",
-                            "none",
-                        ],
-                    },
-                    "int_value": {
-                        "type": "string",
-                        "pattern": r"^-?(?:0|[1-9][0-9]{0,9})$",
-                        "maxLength": 11,
-                    },
-                    "capability_id": {"type": "string", "maxLength": 64},
-                    "message": {"type": "string", "maxLength": 128},
-                },
-                "required": [
-                    "trigger_event",
-                    "state_key",
-                    "action_kind",
-                    "int_value",
-                    "capability_id",
-                    "message",
-                ],
-                "additionalProperties": False,
-            },
+            "maxItems": 8,
+            "items": {"type": "object"},
         },
     },
     "required": ["rules"],
@@ -1297,30 +1252,181 @@ SEMANTIC_DISPATCH_SCHEMA = {
 }
 
 
+_SEMANTIC_TRIGGER_EVENTS = (
+    "player_join",
+    "player_disconnect",
+    "player_respawn",
+    "server_started",
+    "server_stopping",
+    "server_tick",
+    "command",
+    "mod_initialize",
+    "any",
+)
+
+
+def _semantic_state_value_schema(type_name: str) -> dict[str, Any]:
+    if type_name == "int":
+        return {
+            "type": "integer",
+            "minimum": -(2**31),
+            "maximum": 2**31 - 1,
+        }
+    if type_name == "long":
+        return {
+            "type": "integer",
+            "minimum": -(2**63),
+            "maximum": 2**63 - 1,
+        }
+    if type_name == "double":
+        return {"type": "number"}
+    if type_name == "boolean":
+        return {"type": "boolean"}
+    if type_name == "string":
+        return {"type": "string", "maxLength": 128}
+    raise ValueError(
+        f"TYPED_PLAN_SEMANTIC_STATE_TYPE_UNSUPPORTED: {type_name!r}"
+    )
+
+
+def semantic_dispatch_schema(
+    state_types: Mapping[str, str],
+    capabilities: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Build semantic actions only from host-known state/capability namespaces."""
+
+    branches: list[dict[str, Any]] = []
+    for state_key, state_type in sorted(state_types.items()):
+        value_schema = _semantic_state_value_schema(state_type)
+        branches.append({
+            "type": "object",
+            "properties": {
+                "trigger_event": {
+                    "type": "string",
+                    "enum": list(_SEMANTIC_TRIGGER_EVENTS),
+                },
+                "action_kind": {"const": "set_state"},
+                "state_key": {"const": state_key},
+                "value": value_schema,
+            },
+            "required": [
+                "trigger_event",
+                "action_kind",
+                "state_key",
+                "value",
+            ],
+            "additionalProperties": False,
+        })
+        if state_type in {"int", "long", "double"}:
+            branches.append({
+                "type": "object",
+                "properties": {
+                    "trigger_event": {
+                        "type": "string",
+                        "enum": list(_SEMANTIC_TRIGGER_EVENTS),
+                    },
+                    "action_kind": {"const": "increment_state"},
+                    "state_key": {"const": state_key},
+                    "value": value_schema,
+                },
+                "required": [
+                    "trigger_event",
+                    "action_kind",
+                    "state_key",
+                    "value",
+                ],
+                "additionalProperties": False,
+            })
+
+    for capability_id in sorted((capabilities or {}).keys()):
+        branches.append({
+            "type": "object",
+            "properties": {
+                "trigger_event": {
+                    "type": "string",
+                    "enum": list(_SEMANTIC_TRIGGER_EVENTS),
+                },
+                "action_kind": {"const": "call_capability"},
+                "capability_id": {"const": capability_id},
+            },
+            "required": [
+                "trigger_event",
+                "action_kind",
+                "capability_id",
+            ],
+            "additionalProperties": False,
+        })
+
+    if not branches:
+        raise ValueError(
+            "TYPED_PLAN_SEMANTIC_ACTION_UNAVAILABLE: active executable logic has "
+            "no canonical state or host capability target"
+        )
+
+    return {
+        "type": "object",
+        "properties": {
+            "rules": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 8,
+                "items": {"oneOf": branches},
+            },
+        },
+        "required": ["rules"],
+        "additionalProperties": False,
+    }
+
+
 def lower_semantic_game_dispatch_to_ir(
     raw_rules: Sequence[Mapping[str, Any]],
     state_types: Mapping[str, str],
     capabilities: Mapping[str, Any] | None,
 ) -> list[dict[str, Any]]:
+    """Lower validated semantic actions without inventing identifiers or values."""
+
     statements: list[dict[str, Any]] = []
+    semantic_action_count = 0
 
     for rule_idx, rule in enumerate(raw_rules):
         if not isinstance(rule, Mapping):
-            continue
-        kind = str(rule.get("action_kind") or "none")
-        if kind == "none":
-            continue
-
+            raise ValueError(
+                f"TYPED_PLAN_SEMANTIC_RULE_INVALID: rule[{rule_idx}] must be an object"
+            )
+        kind = str(rule.get("action_kind") or "").strip()
         action_statements: list[dict[str, Any]] = []
-        if kind == "increment_state":
-            key = str(rule.get("state_key") or "counter")
-            st_type = state_types.get(key, "int")
-            raw_int = rule.get("int_value") or "1"
-            delta = _decode_int_literal(raw_int, scope=f"rule[{rule_idx}].increment")
-            action_statements.append({
-                "op": "state_set",
-                "key": {"op": "literal", "type": "string", "value": key},
-                "value": {
+
+        if kind in {"increment_state", "set_state"}:
+            key = str(rule.get("state_key") or "").strip()
+            if key not in state_types:
+                raise ValueError(
+                    f"TYPED_PLAN_SEMANTIC_STATE_UNKNOWN: rule[{rule_idx}] {key!r}"
+                )
+            st_type = state_types[key]
+            raw_value = (
+                rule["value"]
+                if "value" in rule
+                else rule.get("int_value")
+            )
+            if kind == "increment_state":
+                if st_type not in {"int", "long", "double"}:
+                    raise ValueError(
+                        "TYPED_PLAN_SEMANTIC_INCREMENT_TYPE: "
+                        f"{key!r} has non-numeric type {st_type!r}"
+                    )
+                if st_type == "int":
+                    value = _decode_int_literal(
+                        raw_value, scope=f"rule[{rule_idx}].increment"
+                    )
+                elif st_type == "long":
+                    value = _decode_long_literal(
+                        raw_value, scope=f"rule[{rule_idx}].increment"
+                    )
+                else:
+                    value = _decode_double_literal(
+                        raw_value, scope=f"rule[{rule_idx}].increment"
+                    )
+                value_expr = {
                     "op": "binary",
                     "operator": "+",
                     "left": {
@@ -1329,59 +1435,91 @@ def lower_semantic_game_dispatch_to_ir(
                         "type": st_type,
                         "context": {"op": "map", "entries": []},
                     },
-                    "right": {"op": "literal", "type": st_type, "value": delta},
-                },
-                "context": {"op": "map", "entries": []},
-            })
-        elif kind == "set_state":
-            key = str(rule.get("state_key") or "counter")
-            st_type = state_types.get(key, "int")
-            raw_int = rule.get("int_value") or "0"
-            val = _decode_int_literal(raw_int, scope=f"rule[{rule_idx}].set")
+                    "right": {"op": "literal", "type": st_type, "value": value},
+                }
+            else:
+                if st_type == "int":
+                    value = _decode_int_literal(
+                        raw_value, scope=f"rule[{rule_idx}].set"
+                    )
+                elif st_type == "long":
+                    value = _decode_long_literal(
+                        raw_value, scope=f"rule[{rule_idx}].set"
+                    )
+                elif st_type == "double":
+                    value = _decode_double_literal(
+                        raw_value, scope=f"rule[{rule_idx}].set"
+                    )
+                elif st_type == "boolean":
+                    if type(raw_value) is not bool:
+                        raise ValueError(
+                            f"TYPED_PLAN_SEMANTIC_BOOLEAN_INVALID: rule[{rule_idx}]"
+                        )
+                    value = raw_value
+                elif st_type == "string":
+                    if not isinstance(raw_value, str):
+                        raise ValueError(
+                            f"TYPED_PLAN_SEMANTIC_STRING_INVALID: rule[{rule_idx}]"
+                        )
+                    value = raw_value
+                else:
+                    raise ValueError(
+                        f"TYPED_PLAN_SEMANTIC_STATE_TYPE_UNSUPPORTED: {st_type!r}"
+                    )
+                value_expr = {
+                    "op": "literal",
+                    "type": st_type,
+                    "value": value,
+                }
+
             action_statements.append({
                 "op": "state_set",
                 "key": {"op": "literal", "type": "string", "value": key},
-                "value": {"op": "literal", "type": st_type, "value": val},
+                "value": value_expr,
                 "context": {"op": "map", "entries": []},
             })
+
         elif kind == "call_capability":
-            cap_id = str(rule.get("capability_id") or "")
-            if capabilities and cap_id in capabilities:
-                contract = capabilities[cap_id]
-                params = contract.get("parameters", [])
+            cap_id = str(rule.get("capability_id") or "").strip()
+            contract = (capabilities or {}).get(cap_id)
+            if not isinstance(contract, Mapping):
+                raise ValueError(
+                    f"TYPED_PLAN_SEMANTIC_CAPABILITY_UNKNOWN: {cap_id!r}"
+                )
+            params = contract.get("parameters", [])
 
-                def _default_cap_arg(ptype: str) -> dict[str, Any]:
-                    if ptype == "int":
-                        return {"op": "literal", "type": "int", "value": 0}
-                    if ptype == "long":
-                        return {"op": "literal", "type": "long", "value": 0}
-                    if ptype == "double":
-                        return {"op": "literal", "type": "double", "value": 0.0}
-                    if ptype == "boolean":
-                        return {"op": "literal", "type": "boolean", "value": False}
-                    if ptype == "string":
-                        return {"op": "literal", "type": "string", "value": ""}
-                    return {"op": "literal", "type": "object", "value": None}
+            def _default_cap_arg(ptype: str, index: int) -> dict[str, Any]:
+                if ptype == "object" and index == 0:
+                    return {"op": "ref", "name": "primary"}
+                if ptype == "int":
+                    return {"op": "literal", "type": "int", "value": 0}
+                if ptype == "long":
+                    return {"op": "literal", "type": "long", "value": 0}
+                if ptype == "double":
+                    return {"op": "literal", "type": "double", "value": 0.0}
+                if ptype == "boolean":
+                    return {"op": "literal", "type": "boolean", "value": False}
+                if ptype == "string":
+                    return {"op": "literal", "type": "string", "value": ""}
+                return {"op": "literal", "type": "object", "value": None}
 
-                action_statements.append({
-                    "op": "expr",
-                    "value": {
-                        "op": "capability",
-                        "id": cap_id,
-                        "args": [_default_cap_arg(p) for p in params],
-                    },
-                })
-        elif kind == "assert_condition":
-            msg = str(rule.get("message") or "assertion passed")
             action_statements.append({
-                "op": "assert",
-                "condition": {"op": "literal", "type": "boolean", "value": True},
-                "message": msg,
+                "op": "expr",
+                "value": {
+                    "op": "capability",
+                    "id": cap_id,
+                    "args": [
+                        _default_cap_arg(str(ptype), index)
+                        for index, ptype in enumerate(params)
+                    ],
+                },
             })
+        else:
+            raise ValueError(
+                f"TYPED_PLAN_SEMANTIC_ACTION_UNSUPPORTED: {kind!r}"
+            )
 
-        if not action_statements:
-            continue
-
+        semantic_action_count += len(action_statements)
         trigger = str(rule.get("trigger_event") or "any")
         if trigger != "any":
             statements.append({
@@ -1398,6 +1536,12 @@ def lower_semantic_game_dispatch_to_ir(
         else:
             statements.extend(action_statements)
 
+    if semantic_action_count == 0:
+        raise ValueError(
+            "TYPED_PLAN_SEMANTIC_BODY_EMPTY: executable logic cannot claim coverage "
+            "without at least one host-bound action"
+        )
+
     statements.append({
         "op": "return",
         "value": {"op": "literal", "type": "int", "value": 0},
@@ -1413,42 +1557,59 @@ def author_semantic_game_dispatch(
     *,
     budget: Any = None,
 ) -> list[dict[str, Any]]:
-    state_types = _extract_state_variable_types(structured_sections)
-    try:
-        if budget is not None:
-            budget.consume("typed.semantic_dispatch")
-        payload = {
-            "source_sha256": hashlib.sha256(source_text.encode("utf-8")).hexdigest(),
-            "available_states": list(state_types.keys()),
-            "available_capabilities": sorted(capabilities.keys()) if capabilities else [],
-            "instruction": "Author bounded game event rules and state actions for runtime logic dispatch.",
-        }
-        raw = generate_fixed_template_value(
-            router,
-            "planner",
-            (
-                {
-                    "role": "system",
-                    "content": (
-                        "Author game logic dispatch rules as bounded semantic operations. "
-                        "Do not author AST syntax, loops, or Java."
-                    ),
-                },
-                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-            ),
-            response_schema=SEMANTIC_DISPATCH_SCHEMA,
-            enable_tools=False,
-            description="Author bounded semantic game rules for runtime dispatch.",
-        )
-        if isinstance(raw, Mapping) and "rules" in raw and isinstance(raw["rules"], Sequence):
-            return lower_semantic_game_dispatch_to_ir(raw["rules"], state_types, capabilities)
-    except Exception:
-        pass
+    """Author executable semantic actions and fail closed on any contract error."""
 
-    return [{
-        "op": "return",
-        "value": {"op": "literal", "type": "int", "value": 0},
-    }]
+    state_types = _extract_state_variable_types(structured_sections)
+    if budget is not None:
+        budget.consume("typed.semantic_dispatch")
+
+    payload = {
+        "source_sha256": hashlib.sha256(source_text.encode("utf-8")).hexdigest(),
+        "available_states": {
+            name: state_types[name]
+            for name in sorted(state_types)
+        },
+        "available_capabilities": sorted(capabilities.keys()) if capabilities else [],
+        "instruction": (
+            "Choose one or more host-bound runtime actions. Every state_key and "
+            "capability_id is closed by the supplied schema; do not invent identifiers."
+        ),
+    }
+    schema = semantic_dispatch_schema(state_types, capabilities)
+    raw = generate_fixed_template_value(
+        router,
+        "planner",
+        (
+            {
+                "role": "system",
+                "content": (
+                    "Author bounded game logic as semantic host actions. "
+                    "Do not author AST syntax, loops, Java, or no-op coverage."
+                ),
+            },
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+        ),
+        response_schema=schema,
+        enable_tools=False,
+        description="Author bounded semantic game rules for runtime dispatch.",
+        output_token_ceiling=structured_output_token_ceiling(schema),
+    )
+    if not isinstance(raw, Mapping):
+        raise ValueError(
+            "TYPED_PLAN_SEMANTIC_RESPONSE_INVALID: expected an object"
+        )
+    rules = raw.get("rules")
+    if not isinstance(rules, Sequence) or isinstance(
+        rules, (str, bytes, bytearray)
+    ):
+        raise ValueError(
+            "TYPED_PLAN_SEMANTIC_RESPONSE_INVALID: rules must be an array"
+        )
+    return lower_semantic_game_dispatch_to_ir(
+        rules,
+        state_types,
+        capabilities,
+    )
 
 
 def _platform_schema(properties: Mapping[str, Any], *, required: Sequence[str] = ()) -> dict[str, Any]:
