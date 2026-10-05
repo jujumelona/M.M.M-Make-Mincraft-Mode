@@ -100,6 +100,7 @@ def _run_entities(router, identifier, context, progress, checkpoint):
         context=normalized,
         progress=progress,
         checkpoint=checkpoint,
+        minimum_count=1,
     )
     records = list(result["records"])
     if not records:
