@@ -52,13 +52,7 @@ def validate_extended_module_contract(
     config = module.config
     display_kinds = _SUPPORTED - {"recipe", "advancement", "loot", "tag", "command"}
     if module.kind in display_kinds:
-        for field_name in ("display_name_en", "display_name_ko"):
-            value = config.get(field_name)
-            if not isinstance(value, str) or not value.strip():
-                raise ExtendedContentError(
-                    f"{module.kind} module {module.module_id} requires non-empty "
-                    f"{field_name}."
-                )
+        _localized_module_names(module.module_id, config)
 
     record = _module_record(module)
     try:
@@ -69,7 +63,7 @@ def validate_extended_module_contract(
                 "PreflightUnit",
                 [record],
             )
-        if module.kind in {"block", "crop", "machine"}:
+        if module.kind in {"block", "crop", "machine", "block_entity"}:
             _block_resources("preflight", module.module_id, module.kind, config)
         elif module.kind in {"recipe", "advancement", "loot", "tag"}:
             _data_only_resource(
@@ -97,6 +91,23 @@ def _module_record(module: ProductionModule) -> dict[str, Any]:
         "depends_on": list(module.depends_on),
         "required_gates": list(module.required_gates),
     }
+
+
+def _localized_module_names(
+    module_id: str,
+    config: dict[str, Any],
+) -> tuple[str, str]:
+    english = str(
+        config.get("display_name_en")
+        or config.get("name")
+        or module_id.replace("_", " ").title()
+    ).strip()
+    korean = str(config.get("display_name_ko") or english).strip()
+    if not english or not korean:
+        raise ExtendedContentError(
+            f"Content module {module_id} requires a non-empty display name."
+        )
+    return english, korean
 
 
 def _directory_catalog_count(project_root: str | Path) -> int | None:
@@ -193,9 +204,8 @@ def generate_extended_content(
         module_id = item["module_id"]
         kind = item["kind"]
         config = item["config"]
-        if kind in {"block", "crop", "machine"}:
-            display_en = str(config["display_name_en"])
-            display_ko = str(config["display_name_ko"])
+        if kind in {"block", "crop", "machine", "block_entity"}:
+            display_en, display_ko = _localized_module_names(module_id, config)
             lang_en[f"block.{mod_id}.{module_id}"] = display_en
             lang_ko[f"block.{mod_id}.{module_id}"] = display_ko
             files.update(_block_resources(mod_id, module_id, kind, config))
@@ -203,8 +213,7 @@ def generate_extended_content(
                 lang_en[f"item.{mod_id}.{module_id}_seeds"] = display_en + " Seeds"
                 lang_ko[f"item.{mod_id}.{module_id}_seeds"] = display_ko + " 씨앗"
         elif kind in {"effect", "enchantment"}:
-            display_en = str(config["display_name_en"])
-            display_ko = str(config["display_name_ko"])
+            display_en, display_ko = _localized_module_names(module_id, config)
             prefix = "effect" if kind == "effect" else "enchantment"
             lang_en[f"{prefix}.{mod_id}.{module_id}"] = display_en
             lang_ko[f"{prefix}.{mod_id}.{module_id}"] = display_ko
@@ -213,8 +222,7 @@ def generate_extended_content(
         elif kind == "command":
             continue
         else:
-            display_en = str(config["display_name_en"])
-            display_ko = str(config["display_name_ko"])
+            display_en, display_ko = _localized_module_names(module_id, config)
             lang_en[f"item.{mod_id}.{module_id}"] = display_en
             lang_ko[f"item.{mod_id}.{module_id}"] = display_ko
             files.update(_item_resources(mod_id, module_id, kind, config))
@@ -609,6 +617,22 @@ public final class GeneratedExtendedContent {{
         int processingTicks
     ) {{}}
 
+    public static final class GeneratedContainerBlock extends BlockWithEntity {{
+        private final int containerSize;
+
+        public GeneratedContainerBlock(Settings settings, int containerSize) {{
+            super(settings);
+            this.containerSize = containerSize;
+        }}
+
+        int containerSize() {{ return containerSize; }}
+
+        @Override
+        public BlockEntity createBlockEntity(BlockPos pos, BlockState state) {{
+            return new GeneratedMachineBlockEntity(pos, state);
+        }}
+    }}
+
     public static final class GeneratedMachineBlock extends BlockWithEntity {{
         private final MachineDefinition definition;
 
@@ -661,11 +685,15 @@ public final class GeneratedExtendedContent {{
     }}
 
     public static final class GeneratedMachineBlockEntity extends BlockEntity {{
-        private final DefaultedList<ItemStack> items = DefaultedList.ofSize(2, ItemStack.EMPTY);
+        private final DefaultedList<ItemStack> items;
         private int progress;
 
         public GeneratedMachineBlockEntity(BlockPos pos, BlockState state) {{
             super(MACHINE_ENTITY_TYPE, pos, state);
+            int size = state.getBlock() instanceof GeneratedContainerBlock container
+                ? container.containerSize()
+                : 2;
+            this.items = DefaultedList.ofSize(size, ItemStack.EMPTY);
         }}
 
         public boolean insertInput(ItemStack source) {{
@@ -843,6 +871,21 @@ def _shard_java(
             registrations.append(
                 f'        {constant} = block("{module_id}", new Block(FabricBlockSettings.copyOf(Blocks.STONE).strength({float(config["hardness"]):.2f}f)));'
             )
+            creative.append(f"            entries.add({constant});")
+        elif kind == "block_entity":
+            container_size = int(config.get("container_size", 1))
+            if not 1 <= container_size <= 54:
+                raise ExtendedContentError(
+                    f"Invalid block entity container_size for {module_id}: {container_size}"
+                )
+            fields.append(f"    public static Block {constant};")
+            registrations.append(
+                f'''        {constant} = block("{module_id}", new GeneratedExtendedContent.GeneratedContainerBlock(
+            FabricBlockSettings.copyOf(Blocks.IRON_BLOCK).strength(3.5f),
+            {container_size}
+        ));'''
+            )
+            machine_fields.append(constant)
             creative.append(f"            entries.add({constant});")
         elif kind == "machine":
             input_id = _identifier(config["input_item"], module_id)
