@@ -125,11 +125,6 @@ def asset_plan_sha256(plan: Mapping[str, Any]) -> str:
     ).hexdigest()
 
 
-# Private compatibility name used by the migration regression test. The implementation
-# lives in this focused plan module rather than the image producer.
-_select_plan_rows = select_plan_rows
-
-
 __all__ = [
     "ResourceAssetPlanError",
     "asset_plan_sha256",
