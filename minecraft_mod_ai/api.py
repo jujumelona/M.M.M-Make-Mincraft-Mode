@@ -252,8 +252,14 @@ def _atomic_copy(source: Path, destination: Path) -> Path:
 
 
 def _saved_proposal_from_data(data: dict[str, Any]) -> CompleteProposal | AuthoredPlan:
-    if data.get("schema_version") in {"mmm/authored-plan-v1", "mmm/authored-plan-v2"}:
+    schema_version = data.get("schema_version")
+    if schema_version == "mmm/authored-plan-v2":
         return AuthoredPlan.from_dict(data)
+    if schema_version == "mmm/authored-plan-v1":
+        raise ValueError(
+            "AUTHORED_PLAN_V1_REMOVED: production requires the canonical typed "
+            "mmm/authored-plan-v2 handoff."
+        )
     from .complete_spec import CompleteProposal
 
     return CompleteProposal.from_dict(data)
