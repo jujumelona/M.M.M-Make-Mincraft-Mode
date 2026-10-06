@@ -12,10 +12,6 @@ receipt identifies the exact evaluation payload.
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-try:
-    from . import evidence_first_planning as _planning
-except ImportError:
-    _planning = None
 from . import task_artifact_contract as _task_contract
 
 _INSTALLED = False
@@ -32,7 +28,7 @@ def _branch_evidence(
         return []
     by_requirement = branch.get("requirement_evidence_refs")
     if isinstance(by_requirement, Mapping):
-        return list(_planning._strings(by_requirement.get(requirement_ref)))
+        return list(_task_contract._strings(by_requirement.get(requirement_ref)))
     return []
 
 
@@ -41,7 +37,7 @@ def _evaluation_receipt_hash(evaluation: Mapping[str, Any]) -> str:
 
     payload = dict(evaluation)
     payload.pop("evaluation_sha256", None)
-    return _planning._sha(payload)
+    return _task_contract._sha(payload)
 
 
 def _explicit_selected_alternatives(
@@ -68,10 +64,10 @@ def _explicit_selected_alternatives(
             evaluation.get("selected_candidate_id") or ""
         ).strip()
         evidence_refs = list(
-            _planning._strings(evaluation.get("evidence_refs"))
+            _task_contract._strings(evaluation.get("evidence_refs"))
         )
         requirement_refs = list(
-            _planning._strings(evaluation.get("requirement_refs"))
+            _task_contract._strings(evaluation.get("requirement_refs"))
         )
         if (
             not isinstance(candidates, Sequence)
@@ -101,7 +97,7 @@ def _explicit_selected_alternatives(
 
         selected.append(
             {
-                "decision_id": _planning._stable_id(
+                "decision_id": _task_contract._stable_id(
                     "design",
                     selected_id,
                     {
@@ -136,10 +132,10 @@ def _design_resolution(plan: Mapping[str, Any]) -> dict[str, Any]:
                 continue
             task_id = str(task.get("task_id") or "").strip()
             requirement_refs = list(
-                _planning._strings(task.get("requirement_refs"))
+                _task_contract._strings(task.get("requirement_refs"))
             )
             predicates = list(
-                _planning._strings(task.get("conditional_predicates"))
+                _task_contract._strings(task.get("conditional_predicates"))
             )
             for requirement_ref in requirement_refs:
                 for predicate in predicates:
@@ -152,7 +148,7 @@ def _design_resolution(plan: Mapping[str, Any]) -> dict[str, Any]:
                     )
                     architecture.append(
                         {
-                            "decision_id": _planning._stable_id(
+                            "decision_id": _task_contract._stable_id(
                                 "architecture",
                                 predicate,
                                 {"requirement": requirement_ref},
@@ -192,7 +188,7 @@ def _design_resolution(plan: Mapping[str, Any]) -> dict[str, Any]:
                         "provenance_role": "implementation_obligation",
                         "authority": "compiled_task_architecture",
                         "requirement_refs": list(
-                            _planning._strings(
+                            _task_contract._strings(
                                 artifact.get("requirement_refs")
                                 or requirement_refs
                             )

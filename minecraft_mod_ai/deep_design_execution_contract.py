@@ -1,24 +1,15 @@
 from __future__ import annotations
 
-"""Bind frozen game-design detail to the host Minecraft template plan.
+"""Project frozen design leaves into bounded template-fill evidence.
 
-Design leaves are bounded values for already-selected templates, not an alternate task
-planner.  This module therefore records their provenance on the compiled plan but never
-replaces ``_semantic_steps`` or ``_compile_tasks``.  The Minecraft template compiler is
-the single implementation-architecture owner.
+Task architecture is owned by the current host template compiler. This module keeps
+only the pure design-leaf projection used by callers/tests; the retired
+evidence-first-planning monkeypatch has no runtime owner.
 """
 
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any
-
-try:
-    from . import evidence_first_planning as _evidence
-except ImportError:
-    _evidence = None
-
-_INSTALLED = False
-_COMPILE_MARKER = "__mmm_design_leaf_evidence_plan__"
 
 _INDEXED_SOURCE = re.compile(r"^game_design\.(modules|core_loop|progression)\[(\d+)\]$")
 _MAPPING_SOURCE = re.compile(r"^game_design\.(combat|mod_context)\.([^\[]+)\[(\d+)\]$")
@@ -50,7 +41,10 @@ def _reuse_payload(
 ) -> dict[str, Any]:
     if isinstance(explicit, Mapping):
         return dict(explicit)
-    return _evidence._reuse_payload(game_design)
+    embedded = game_design.get("_reuse_plan")
+    if isinstance(embedded, Mapping):
+        return dict(embedded)
+    return {"capabilities": []}
 
 
 def _indexed_value(
@@ -164,53 +158,10 @@ def _execution_context(
     return tuple(output)
 
 
-def _compile_plan_with_design_context(
-    prompt: str,
-    game_design: Mapping[str, Any],
-    *,
-    component_catalog: Any = None,
-    reuse_plan: Mapping[str, Any] | None = None,
-    target_decision: Mapping[str, Any] | None = None,
-    semantic_router: Any | None = None,
-) -> dict[str, Any]:
-    original = _compile_plan_with_design_context.__wrapped__
-    plan = dict(
-        original(
-            prompt,
-            game_design,
-            component_catalog=component_catalog,
-            reuse_plan=reuse_plan,
-            target_decision=target_decision,
-            semantic_router=semantic_router,
-        )
-    )
-    context = _execution_context(game_design, reuse_plan)
-    plan["design_execution_facets"] = [dict(item) for item in context]
-    plan["design_execution_policy"] = {
-        "architecture_owner": "minecraft_template_compiler",
-        "design_leaf_role": "bounded_template_values_and_reuse_evidence",
-        "may_create_tasks": False,
-        "may_change_dependencies": False,
-        "may_change_template_id": False,
-    }
-    plan["plan_sha256"] = ""
-    plan["plan_sha256"] = _evidence._hash_without(plan, "plan_sha256")
-    _evidence.validate_evidence_first_plan(plan, prompt=prompt)
-    return plan
-
-
 def install() -> None:
-    """Attach design provenance without monkeypatching task architecture."""
+    """Compatibility entrypoint; current host compilation is already source-owned."""
 
-    global _INSTALLED
-    if _INSTALLED or _evidence is None:
-        return
-    current = _evidence.compile_evidence_first_plan
-    if not getattr(current, _COMPILE_MARKER, False):
-        _compile_plan_with_design_context.__wrapped__ = current  # type: ignore[attr-defined]
-        setattr(_compile_plan_with_design_context, _COMPILE_MARKER, True)
-        _evidence.compile_evidence_first_plan = _compile_plan_with_design_context
-    _INSTALLED = True
+    return None
 
 
-__all__ = ["install"]
+__all__ = ["_execution_context", "install"]

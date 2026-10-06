@@ -20,7 +20,7 @@ def fingerprint(value: Any) -> str:
         value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str,
     ).encode("utf-8")).hexdigest()
 
-def global_grounded_pool(grounded_domains: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+def global_grounded_pool(_grounded_domains: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
     return {"schema_version": "mmm/task-candidate-pool-v2", "queries": []}
 
 def requirement_candidate_trace(requirement: Mapping[str, Any], pool: Mapping[str, Any]) -> dict[str, Any]:

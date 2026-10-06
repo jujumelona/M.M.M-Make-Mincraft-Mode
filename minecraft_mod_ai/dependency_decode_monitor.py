@@ -300,79 +300,6 @@ def active_dependency_monitor() -> Any | None:
     return _ACTIVE_MONITOR.get()
 
 
-def _install_research_router_scope() -> None:
-    try:
-        from . import custom_generation_search_contract as generation
-    except ImportError:
-        return
-
-    cls = generation._ResearchEvidenceRouter
-    original = cls.generate_text
-    if getattr(original, "_mmm_dependency_decode_scope", False):
-        return
-
-    @wraps(original)
-    def generate_text(
-        self: Any,
-        role: str,
-        messages: Sequence[Mapping[str, Any]],
-        **kwargs: Any,
-    ) -> str:
-        if role != "coder":
-            return original(self, role, messages, **kwargs)
-        engine = self._engine()
-        seen: set[tuple[tuple[str, str, str], ...]] = set()
-        current = [dict(message) for message in messages]
-        while True:
-            token = _ACTIVE_MONITOR.set(engine.monitor)
-            try:
-                return original(self, role, current, **kwargs)
-            except DependencyDecodeAdmissionError as exc:
-                key = tuple(
-                    sorted(
-                        (
-                            str(getattr(item, "kind", "")),
-                            str(getattr(item, "value", "")),
-                            str(getattr(item, "path", "")),
-                        )
-                        for item in exc.violations
-                    )
-                )
-                if key in seen or len(seen) >= 3:
-                    raise RuntimeError(
-                        "Decode-time dependency admission made no progress after "
-                        "research-grounded correction."
-                    ) from exc
-                seen.add(key)
-                current = [
-                    *current,
-                    {
-                        "role": "system",
-                        "content": (
-                            "PackMonitor stopped the previous decode before completion. "
-                            "Regenerate from the beginning using only the authoritative "
-                            "dependency/import admission set in research_code_context. "
-                            "Blocked values: "
-                            + json.dumps(
-                                [
-                                    {
-                                        "kind": getattr(item, "kind", ""),
-                                        "value": getattr(item, "value", ""),
-                                    }
-                                    for item in exc.violations
-                                ],
-                                ensure_ascii=False,
-                                sort_keys=True,
-                            )
-                        ),
-                    },
-                ]
-            finally:
-                _ACTIVE_MONITOR.reset(token)
-
-    generate_text._mmm_dependency_decode_scope = True
-    cls.generate_text = generate_text
-
 
 def _install_llama_stream_hook() -> None:
     from . import llama_server_hardware_policy as hardware
@@ -422,7 +349,6 @@ def activate_dependency_decode_monitor() -> None:
     """Install the PackMonitor boundary exactly once."""
 
     _install_enhanced_monitor()
-    _install_research_router_scope()
     _install_llama_stream_hook()
 
 

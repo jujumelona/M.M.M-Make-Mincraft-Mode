@@ -84,12 +84,39 @@ def section_spec(section: str) -> dict[str, Any] | None:
     return deepcopy(SECTION_SPECS.get(str(section or "").strip()))
 
 def concern_contracts(section: str) -> tuple[dict[str, Any], ...]:
-    from .authored_concern_catalog import load_authored_concern_contracts
     from .authored_section_ids import EXECUTION_SECTION_SET
+    from .task_template_catalog import load_record_template, load_template
+
     name = str(section or "").strip()
     if name not in EXECUTION_SECTION_SET:
         return ()
-    return load_authored_concern_contracts(name)
+    manifest = load_template(f"criterion/{name}")
+    steps = manifest.get("steps")
+    if not isinstance(steps, list):
+        raise ImplementationGraphError(
+            f"IMPLEMENTATION_IR_CONCERN_MANIFEST_INVALID: {name}"
+        )
+
+    contracts: list[dict[str, Any]] = []
+    for raw_identifier in steps:
+        identifier = str(raw_identifier or "").strip()
+        if not identifier:
+            continue
+        template = load_record_template(identifier)
+        rules = template.get("rules")
+        contracts.append(
+            {
+                "concern": identifier.rsplit("/", 1)[-1],
+                "identifier": identifier,
+                "task": str(template.get("task") or "").strip(),
+                "rules": [
+                    str(rule)
+                    for rule in rules
+                    if str(rule).strip()
+                ] if isinstance(rules, list) else [],
+            }
+        )
+    return tuple(contracts)
 
 
 def _normalized_unit_role(value: Any) -> str:
@@ -209,7 +236,7 @@ def _host_concern_work(
     packet: Mapping[str, Any],
     unit_requirements: Mapping[str, str],
 ) -> tuple[list[str], int]:
-    def slice_concern_requirements(reqs: Any, **kw: Any) -> dict[str, str]:
+    def slice_concern_requirements(reqs: Any, **_kw: Any) -> dict[str, str]:
         return dict(reqs or {})
 
     role, _contract = _required_section_contract(payload)
