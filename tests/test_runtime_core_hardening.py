@@ -27,7 +27,8 @@ from tools import colab_runtime_setup
 
 
 def test_jdt_diagnostics_have_one_static_interpretation_authority() -> None:
-    assert validation_execution_contract._diagnostic_errors is diagnostic_errors
+    assert not hasattr(validation_execution_contract, "_diagnostic_errors")
+    assert validation_diagnostic_contract.diagnostic_errors is diagnostic_errors
     assert complete_orchestrator.JavaLanguageService is JavaLanguageService
 
 

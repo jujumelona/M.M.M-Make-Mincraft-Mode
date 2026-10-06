@@ -131,11 +131,11 @@ def test_discovery_client_reuses_one_http_pool_across_requests() -> None:
         return httpx.Response(200, json={"ok": True})
 
     client = EcosystemDiscoveryClient(transport=httpx.MockTransport(handler))
-    pooled = client._mmm_http_client
+    pooled = client._http_client
     first = client._get_json("https://api.modrinth.com/v2/search")
     second = client._get_json("https://api.modrinth.com/v2/search")
 
     assert first == {"ok": True}
     assert second == {"ok": True}
-    assert client._mmm_http_client is pooled
+    assert client._http_client is pooled
     assert len(requests) == 2
