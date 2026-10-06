@@ -11,6 +11,7 @@ model to invent an otherwise nonexistent Minecraft content entity.
 """
 
 import hashlib
+from copy import deepcopy
 import json
 from collections.abc import Mapping
 from typing import Any
@@ -20,18 +21,12 @@ from .content_design_contract import CONTENT_CONCERN_KINDS, CONTENT_KIND_TO_FACT
 
 
 CONTENT_GRAPH_DRIVER_CONCERNS = (
-    # Discover concrete owners first. Engineering-only data/registry rows are
-    # processed after owner discovery and cannot create primary content identities.
+    # Only concerns that can identify player-facing content are model-authored
+    # requirements. Engineering-only rows are host constraints and never become
+    # independent semantic requirements or decision-authoring calls.
     "assets",
     "interactions",
     "displayed_state",
-    "data_resources",
-    "registries",
-)
-
-CONTENT_GRAPH_CONTEXT_CONCERNS = (
-    *CONTENT_GRAPH_DRIVER_CONCERNS,
-    "paths",
 )
 
 CONTENT_GRAPH_HOST_CONSTRAINT_CONCERNS = frozenset({
@@ -39,6 +34,11 @@ CONTENT_GRAPH_HOST_CONSTRAINT_CONCERNS = frozenset({
     "registries",
     "data_resources",
 })
+
+CONTENT_GRAPH_CONTEXT_CONCERNS = (
+    *CONTENT_GRAPH_DRIVER_CONCERNS,
+    *tuple(sorted(CONTENT_GRAPH_HOST_CONSTRAINT_CONCERNS)),
+)
 
 # Registry/data-resource rows are engineering constraints. They may describe a
 # binding or data file without introducing a new Minecraft content identity of
@@ -136,7 +136,16 @@ def content_request_catalog(
             "allowed_content_kinds": list(CONTENT_CONCERN_KINDS[concern]),
             "minimum_entity_count": CONTENT_CONCERN_MINIMUM_ENTITY_COUNT[concern],
         })
-    return {"requirements": requirements}
+
+    host_constraints = {
+        concern: deepcopy(records.get(concern, []))
+        for concern in CONTENT_GRAPH_HOST_CONSTRAINT_CONCERNS
+        if records.get(concern)
+    }
+    return {
+        "requirements": requirements,
+        "host_constraints": host_constraints,
+    }
 
 
 def content_owned_refs(
