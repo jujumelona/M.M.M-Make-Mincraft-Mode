@@ -8,7 +8,11 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from .content_design_contract import CONTENT_KIND_TO_FACT_TYPE, CONTENT_KINDS
+from .content_design_contract import (
+    CONTENT_KIND_TO_FACT_TYPE,
+    CONTENT_KINDS,
+    CONTENT_PROPERTY_VALUE_ENUMS,
+)
 
 
 _CONTEXT_ENUM_BINDINGS = {
@@ -70,8 +74,12 @@ def _bind_requested_property(
 ) -> None:
     requested_property = context.get("requested_property")
     property_schema = properties.get("property")
+    value_schema = properties.get("value")
     if isinstance(requested_property, str) and isinstance(property_schema, dict):
         property_schema["enum"] = [requested_property]
+        allowed_values = CONTENT_PROPERTY_VALUE_ENUMS.get(requested_property)
+        if allowed_values and isinstance(value_schema, dict):
+            value_schema["enum"] = list(allowed_values)
 
 
 def context_bound_record_schema(
