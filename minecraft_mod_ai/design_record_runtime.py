@@ -211,8 +211,14 @@ def _run_properties(router, identifier, context, progress, checkpoint):
 
 
 def _run_entities(router, identifier, context, progress, checkpoint):
+    from .content_design_contract import CONTENT_KINDS
+
     template = load_record_template(identifier)
     normalized = task_context(template, context)
+    # Cardinality is selected before the entity schema is used. Give that call
+    # the same concrete vocabulary; its count-only response schema cannot carry
+    # the kind enum that the later record-authoring calls receive.
+    normalized["allowed_content_kinds"] = list(CONTENT_KINDS)
     result = run_bounded_record_template(
         router,
         identifier,

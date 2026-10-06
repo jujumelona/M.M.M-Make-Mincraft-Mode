@@ -23,10 +23,12 @@ record_schema:
     - role
   additionalProperties: false
 rules:
-  - kind is host-bound at generation time to the authoritative concrete content-kind vocabulary; use only a schema-allowed kind.
+  - Read the original game request and canonical gameplay requirements together with the resource/UI constraints. Engineering names alone do not describe the requested player-facing content.
+  - allowed_content_kinds supplies the authoritative concrete content vocabulary for both discovery and record authoring. The kind field is bound to that same vocabulary; use only a host-allowed kind.
   - Emit a concrete Minecraft content capability such as an item, block, entity, GUI, dimension, recipe, tag, or supported behavior; never emit an umbrella system such as economy, progression, exploration, combat, trading, or resource management as one content entity.
   - System-level mechanics belong in design decisions and relations between concrete content entities.
-  - Code registries, definition catalogs, lookup tables, manager classes, and other implementation-only structures are not Minecraft content entities; emit no content entity for those requirements.
+  - Code registries, definition catalogs, lookup tables, manager classes, and other implementation-only structures are not Minecraft content entities. Exclude those structures individually; still identify the concrete items, blocks, screens, recipes, or other content required by the gameplay they support.
+  - A mixed requirement containing an implementation-only structure is not an empty content requirement. Return no entities only when the entire supplied gameplay requirement needs no concrete content from the allowed vocabulary.
   - Use block_entity only for runtime state physically attached to a placed block. Never use block_entity as a synonym for a code registry, data catalog, or general module registry.
   - Describe the authored semantic role of this concrete content entity, not an implementation module or file.
   - Reuse a host-supplied existing entity_id only when its meaning and role are identical; otherwise create one deterministic lowercase identifier from the explicit requirement.

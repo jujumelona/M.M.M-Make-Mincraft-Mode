@@ -95,7 +95,10 @@ class CompleteGameDesignPlanner:
 
         text = render_structured_sections(structured_sections)
 
-        content_catalog = content_request_catalog(structured_sections)
+        content_catalog = content_request_catalog(
+            structured_sections,
+            requested_prompt=prompt,
+        )
         content_design: dict[str, Any] = {}
         if content_catalog["requirements"]:
             from .content_design_graph import compile_content_graph

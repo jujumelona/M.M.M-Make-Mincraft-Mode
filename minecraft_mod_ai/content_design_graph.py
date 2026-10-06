@@ -252,6 +252,11 @@ def compile_content_graph(
     for eid, node in entities.items():
         entity_contexts[eid] = {
             "entity": node,
+            "requirements": [
+                context
+                for context in owned
+                if context["requirement_id"] in node["requirement_refs"]
+            ],
             "relations": [
                 edge
                 for edge in relations

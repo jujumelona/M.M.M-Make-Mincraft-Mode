@@ -48,8 +48,10 @@ RESOURCES_AND_UI_OWNED_CONCERNS = frozenset({
 
 def content_request_catalog(
     structured_sections: Mapping[str, Any],
+    *,
+    requested_prompt: str = "",
 ) -> dict[str, Any]:
-    """Return one coherent content requirement for the active resource/UI slice."""
+    """Bind resource/UI constraints to the gameplay requirement they implement."""
 
     records = active_concern_records(
         structured_sections,
@@ -76,14 +78,39 @@ def content_request_catalog(
                 f"resources_and_ui.{concern}[{index}]: {fields}"
             )
 
+    from .planning_section_dependencies import SECTION_DEPENDENCIES
+
+    # Resource/UI rows describe engineering constraints. They are not a substitute
+    # for the gameplay that required those resources (a code registry alone, for
+    # example, says nothing about the concrete items or screens it serves).
+    # Preserve the same authored prerequisites used to write this worksheet slice.
+    prerequisites = {
+        section: active
+        for section in SECTION_DEPENDENCIES["resources_and_ui"]
+        if (active := active_concern_records(structured_sections, section))
+    }
+    source = {
+        "requested_prompt": requested_prompt,
+        "authored_prerequisites": prerequisites,
+        "resource_constraints": payload,
+    }
     encoded = json.dumps(
-        payload,
+        source,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
     )
     digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
-    statement = "\n".join(statements)
+    statement_parts = []
+    if requested_prompt.strip():
+        statement_parts.append("Original game request:\n" + requested_prompt)
+    if prerequisites:
+        statement_parts.append(
+            "Canonical gameplay and integration requirements:\n"
+            + json.dumps(prerequisites, ensure_ascii=False, sort_keys=True)
+        )
+    statement_parts.append("Resource/UI constraints:\n" + "\n".join(statements))
+    statement = "\n\n".join(statement_parts)
     requirement_id = f"content_resources_and_ui_{digest}"
     return {
         "requirements": [{
