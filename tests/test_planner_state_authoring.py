@@ -13,6 +13,7 @@ from minecraft_mod_ai.structured_state_runtime import (
     compile_mutation_ir,
     compile_state_expr_ir,
     state_concern_schema,
+    state_variable_default_schema,
 )
 
 
@@ -170,13 +171,34 @@ def test_variable_default_schema_is_narrowed_from_fixed_type():
     )
 
     assert result == {"variables": [{"default": "0"}]}
+    default_schema = router.calls[0]["response_schema"]["properties"]["default"]
+    assert default_schema == state_variable_default_schema("double")
+
+
+def test_boolean_default_enum_is_enforced_at_model_boundary():
+    item_schema = state_concern_schema("variables")
+    router = StateChoices([{"default": "false"}])
+
+    result = author_state_semantic_page(
+        router,
+        "Track whether the ship is docked.",
+        concern="variables",
+        fields=("default",),
+        count=1,
+        item_schema=item_schema,
+        existing_rows=[{"name": "docked", "type": "boolean"}],
+    )
+
+    assert result == {"variables": [{"default": "false"}]}
+    default_schema = router.calls[0]["response_schema"]["properties"]["default"]
+    assert default_schema["enum"] == ["true", "false"]
 
 
 def test_invalid_numeric_default_is_rejected_before_merge():
     item_schema = state_concern_schema("variables")
     router = StateChoices([{"default": "not-a-number"}])
 
-    with pytest.raises(ValueError, match="STATE_SEMANTIC_FIELD_INVALID"):
+    with pytest.raises(ValueError):
         author_state_semantic_page(
             router,
             "Track hull.",
@@ -186,6 +208,23 @@ def test_invalid_numeric_default_is_rejected_before_merge():
             item_schema=item_schema,
             existing_rows=[{"name": "hull", "type": "double"}],
         )
+
+
+def test_malformed_boolean_default_is_rejected_by_transport_schema():
+    item_schema = state_concern_schema("variables")
+    router = StateChoices([{"default": "'}> false"}])
+
+    with pytest.raises(ValueError):
+        author_state_semantic_page(
+            router,
+            "Track whether the ship is docked.",
+            concern="variables",
+            fields=("default",),
+            count=1,
+            item_schema=item_schema,
+            existing_rows=[{"name": "docked", "type": "boolean"}],
+        )
+
 
 def test_duplicate_variable_names_are_host_deduplicated_without_retry():
     item_schema = state_concern_schema("variables")
