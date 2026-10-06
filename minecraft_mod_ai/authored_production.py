@@ -293,7 +293,6 @@ def materialize_authored_execution_scaffold(
 ) -> Any:
     """Materialize the deterministic Typed PlanIR scaffold only."""
 
-    import re
     from pathlib import Path
 
     root = Path(project_root).expanduser().resolve()

@@ -6,7 +6,6 @@ import uuid
 from collections.abc import Sequence
 from contextvars import ContextVar
 from functools import wraps
-from pathlib import Path
 from typing import Any
 
 _ORCHESTRATOR_WORKER = "mmm-orchestrator"

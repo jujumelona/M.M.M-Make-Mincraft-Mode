@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-from copy import deepcopy
 from typing import Any
 
 from .bounded_record_template import run_bounded_record_template

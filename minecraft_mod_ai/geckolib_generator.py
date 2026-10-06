@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any
 
 from .generator import make_texture_png
-from .platform_catalog import adapter_from_project
 from .platform_backend_contract import (
     deterministic_backend_capabilities,
     geckolib_entity_capabilities,

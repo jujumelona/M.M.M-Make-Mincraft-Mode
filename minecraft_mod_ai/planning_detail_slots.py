@@ -6,7 +6,6 @@ from copy import deepcopy
 
 from .task_template_catalog import detail_records
 from .structured_state_runtime import (
-    constrain_state_record_schema,
     state_concern_schema,
 )
 

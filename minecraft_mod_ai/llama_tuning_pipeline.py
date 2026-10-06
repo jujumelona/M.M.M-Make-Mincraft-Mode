@@ -244,7 +244,6 @@ class NativeLlamaTuningPipeline:
         self.autotune._benchmark = bounded_benchmark
 
     def stages(self) -> tuple[TuningStage, ...]:
-        from . import agentic_optimization_contract
         from .llama_cache_reuse_efficiency_contract import (
             install as install_cache_reuse,
         )

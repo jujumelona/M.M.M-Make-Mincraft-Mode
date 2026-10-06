@@ -799,7 +799,6 @@ def _authored_feature_semantic_findings(
                 f"authored module {module_id} source is unreadable or escaped the project root"
             )
             continue
-        contract_errors = ()
         body = _authored_initialize_body(source, symbol)
         if body is None:
             findings.append(

@@ -7,7 +7,6 @@ from copy import deepcopy
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from enum import Enum
-from pathlib import PurePosixPath
 from typing import Any
 
 from .json_stream import (

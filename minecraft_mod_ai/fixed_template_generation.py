@@ -219,12 +219,6 @@ def _object_field_schemas(
     if len(properties) <= 1:
         return ()
 
-    required = parameters.get("required")
-    required_fields = {
-        str(item)
-        for item in required
-        if isinstance(required, list) and isinstance(item, str)
-    }
     projected: list[tuple[str, dict[str, Any]]] = []
     for raw_name, raw_schema in properties.items():
         if not isinstance(raw_name, str) or not isinstance(raw_schema, Mapping):

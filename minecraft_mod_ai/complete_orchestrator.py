@@ -116,7 +116,6 @@ from .project_index_execution_reuse_contract import (
     mark_post_generation,
     project_index as execution_project_index,
     tune_gradle_resources,
-    update_from_receipt as update_execution_project_index_from_receipt,
 )
 from .proposal_store import write_sharded_complete_proposal
 from .publisher import (
@@ -128,7 +127,6 @@ from .publisher import (
 from .quality_evidence import compile_quality_evidence
 from .research_ledger import is_research_shard, write_research_shard
 from .release_artifact_contract import (
-    attach_verified_release_artifact as _attach_verified_release_artifact,
     generation_receipt_sort_key as _generation_receipt_sort_key,
     replace_stale_directory_target as _replace_stale_directory_target,
     replace_stale_file_target as _replace_stale_file_target,
@@ -1435,7 +1433,6 @@ class CompleteProductionOrchestrator:
             resolved = tuple(sorted(affected))
             downstream_cache[module_id] = resolved
             return resolved
-        research_modules = tuple(module for module in ordered if is_research_shard(module))
         asset_lookup = {item.asset_id: item for item in approved.assets}
         artifact_jobs_by_owner: dict[str, list[ArtifactJob]] = {}
         artifact_producers: dict[str, ArtifactJob] = {}
