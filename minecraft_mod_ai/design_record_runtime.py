@@ -268,6 +268,7 @@ def _relation_selector(
     binding_context = {
         "selector_id": selector_id,
         "selector_context": selector_context,
+        "response_schema": response_schema,
     }
     binding = "relation-selector-v1:" + task_binding(template, binding_context, ())
     saved = (progress or {}).get(binding)
