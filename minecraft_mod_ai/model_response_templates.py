@@ -7,6 +7,7 @@ from functools import lru_cache
 
 from jsonschema import Draft202012Validator, ValidationError
 
+from .model_output_atomicity_contract import assert_atomic_model_schema
 from .task_template_catalog import RUNTIME_TEMPLATE_ROOT
 
 _CONTRACTS_PATH = RUNTIME_TEMPLATE_ROOT / "response" / "contracts.json"
@@ -21,6 +22,10 @@ def _contracts():
         if not isinstance(name, str) or not name or not isinstance(schema, dict):
             raise ValueError("RESPONSE_TEMPLATE: invalid named response contract")
         Draft202012Validator.check_schema(schema)
+        assert_atomic_model_schema(
+            schema,
+            surface=f"response contract {name!r}",
+        )
     return value
 
 
