@@ -219,3 +219,39 @@ def test_duplicate_ordinal_records_are_rejected(monkeypatch) -> None:
             "feature/test/items",
             context={"requirement": "make two distinct items"},
         )
+
+def test_saved_record_set_cannot_bypass_fresh_cardinality_limit(monkeypatch) -> None:
+    monkeypatch.setattr(
+        bounded,
+        "load_record_template",
+        lambda identifier: dict(_TEMPLATE),
+    )
+    monkeypatch.setattr(
+        bounded,
+        "task_context",
+        lambda template, context: dict(context),
+    )
+    monkeypatch.setattr(
+        bounded,
+        "task_binding",
+        lambda template, context, refs: "binding",
+    )
+
+    records = [{"name": f"item-{index}"} for index in range(17)]
+    progress = {
+        "record-set-v3:min=0:binding": {
+            "count": len(records),
+            "records": records,
+        }
+    }
+
+    import pytest
+
+    with pytest.raises(ValueError, match="TEMPLATE_RECORD_SET_COUNT"):
+        bounded.run_bounded_record_template(
+            object(),
+            "feature/test/items",
+            context={"requirement": "resume an oversized record set"},
+            progress=progress,
+        )
+
