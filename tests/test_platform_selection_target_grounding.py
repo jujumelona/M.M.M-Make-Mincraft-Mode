@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import pytest
+
 from minecraft_mod_ai.platform_catalog import PlatformAdapter
-from minecraft_mod_ai.platform_resolver import PlatformSelection
+from minecraft_mod_ai.platform_resolver import PlatformSelection, _require_supported_kinds
+from minecraft_mod_ai.spec import SpecValidationError
 from minecraft_mod_ai.target_contract import required_target_fields, validate_complete_target
 
 
@@ -118,3 +121,17 @@ def test_native_provider_target_requires_no_legacy_mapping_coordinates() -> None
     assert "yarn_mappings" not in grounded
     assert not grounded.get("mappings")
     assert grounded["target_schema_version"] == "3"
+
+
+def test_bound_target_remains_authoritative_for_module_kind_support() -> None:
+    adapter = _mapped_adapter()
+
+    with pytest.raises(
+        SpecValidationError,
+        match="deterministic backend capability.*item",
+    ):
+        _require_supported_kinds(
+            adapter,
+            ("item",),
+            explicit=False,
+        )
