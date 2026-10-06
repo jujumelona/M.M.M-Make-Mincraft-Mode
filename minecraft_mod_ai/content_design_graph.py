@@ -55,6 +55,48 @@ def _sanitize_stem(name: str) -> str:
     return stem[:30]
 
 
+_CONTENT_ENTITY_ID_MAX_LENGTH = 64
+
+
+def _collision_safe_entity_id(
+    node: Mapping,
+    requirement_id: str,
+    entities: Mapping[str, Mapping],
+) -> str:
+    """Keep authored IDs when possible; deterministically split hard kind collisions."""
+
+    entity_id = str(node["entity_id"])
+    prior = entities.get(entity_id)
+    if prior is None or prior.get("kind") == node.get("kind"):
+        return entity_id
+
+    seed = "\x1f".join(
+        (
+            requirement_id,
+            entity_id,
+            str(node.get("kind", "")),
+            str(node.get("role", "")),
+        )
+    )
+    digest = sha256(seed.encode("utf-8")).hexdigest()
+    stem = entity_id.rstrip("_") or "entity"
+
+    # The model only proposes a readable stem. Global uniqueness is a host
+    # responsibility: preserve as much of that stem as possible and bind the
+    # conflicting semantic record to a deterministic hash suffix.
+    for suffix_length in range(10, len(digest) + 1, 2):
+        prefix_budget = _CONTENT_ENTITY_ID_MAX_LENGTH - suffix_length - 1
+        prefix = stem[:prefix_budget].rstrip("_") or "entity"
+        resolved = f"{prefix}_{digest[:suffix_length]}"
+        collision = entities.get(resolved)
+        if collision is None:
+            return resolved
+        if collision.get("kind") == node.get("kind"):
+            return resolved
+
+    raise SlotFillError(f"CONTENT_ENTITY_ID_EXHAUSTED: {entity_id}")
+
+
 from .complete_spec import AssetRequest, ProductionModule
 from .implementation_fact import FactProvenance, FactType, ImplementationFact
 from .parallel_model_tasks import deterministic_model_map, serialized_callback
@@ -242,10 +284,10 @@ def compile_content_graph(
         # Generic behavioral requirements may still have no concrete content.
         # Canonical resource obligations above require a bound implementation.
         for node in nodes:
-            eid = node["entity_id"]
+            eid = _collision_safe_entity_id(node, rid, entities)
+            if eid != node["entity_id"]:
+                node = {**node, "entity_id": eid}
             prior = entities.get(eid)
-            if prior and prior["kind"] != node["kind"]:
-                raise SlotFillError(f"CONTENT_ENTITY_CONFLICT: {eid}")
             if prior is None:
                 entities[eid] = {
                     **node, "requirement_refs": [], "source_clauses": [],
