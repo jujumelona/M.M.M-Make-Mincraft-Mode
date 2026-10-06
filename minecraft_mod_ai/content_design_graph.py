@@ -183,22 +183,25 @@ def compile_content_graph(
         if isinstance(req.get("design_context"), Mapping):
             context["design_context"] = deepcopy(req["design_context"])
         if "coverage_ref" in req:
+            from .authored_content_contract import CONTENT_CONCERN_MINIMUM_ENTITY_COUNT
             from .content_design_contract import CONTENT_CONCERN_KINDS
 
             ref = req["coverage_ref"]
             concern = str(ref).removeprefix("resources_and_ui.")
+            expected_minimum = CONTENT_CONCERN_MINIMUM_ENTITY_COUNT.get(concern)
             if (
                 ref != f"resources_and_ui.{concern}"
                 or concern not in CONTENT_CONCERN_KINDS
+                or expected_minimum is None
                 or req.get("allowed_content_kinds") != list(CONTENT_CONCERN_KINDS[concern])
-                or req.get("minimum_entity_count") != 1
+                or req.get("minimum_entity_count") != expected_minimum
                 or not req.get("source_records")
             ):
                 raise SlotFillError(f"CONTENT_REQUIREMENT_BINDING_INVALID: {rid}")
             context.update({
                 "coverage_ref": ref,
                 "allowed_content_kinds": list(CONTENT_CONCERN_KINDS[concern]),
-                "minimum_entity_count": 1,
+                "minimum_entity_count": expected_minimum,
             })
             content_requirements.append({
                 "requirement_id": rid,
@@ -264,6 +267,48 @@ def compile_content_graph(
             entities[eid]["requirement_refs"].append(rid)
             entities[eid]["source_clauses"].append(statement)
         owned.append(context)
+
+    # Resource-definition nodes are only concrete content when the graph also
+    # contains the content they define. Optional engineering concerns such as
+    # registries/data_resources may legitimately contribute no content identity;
+    # discard a model-invented orphan recipe/tag instead of failing later in the
+    # relation lowerer. Required gameplay content still fails closed.
+    minimum_by_requirement = {
+        context["requirement_id"]: int(context.get("minimum_entity_count", 0))
+        for context in owned
+    }
+    orphan_resource_ids: list[str] = []
+    for eid, node in entities.items():
+        kind = str(node.get("kind") or "")
+        if kind in {"crafting_recipe", "smelting_recipe"}:
+            has_target = any(
+                other_id != eid and other.get("kind") == "item"
+                for other_id, other in entities.items()
+            )
+        elif kind == "registry_tag":
+            has_target = any(
+                other_id != eid and other.get("kind") in {"item", "block", "entity"}
+                for other_id, other in entities.items()
+            )
+        else:
+            continue
+        if has_target:
+            continue
+
+        refs = tuple(
+            str(ref)
+            for ref in node.get("requirement_refs", ())
+            if isinstance(ref, str)
+        )
+        if refs and all(minimum_by_requirement.get(ref, 0) == 0 for ref in refs):
+            orphan_resource_ids.append(eid)
+            continue
+        raise SlotFillError(
+            f"CONTENT_RESOURCE_TARGET_UNRESOLVED: {eid}: {kind}"
+        )
+
+    for eid in orphan_resource_ids:
+        entities.pop(eid, None)
 
     # Discover each ordered entity pair once, with all of its authored context.
     # Repeating the full pair graph for every concern multiplied model work and
