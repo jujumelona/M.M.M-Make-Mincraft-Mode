@@ -59,6 +59,26 @@ CONTENT_PROPERTY_VALUE_ENUMS = MappingProxyType(
         "recipe_kind": ("shaped", "shapeless"),
         "cooking_type": ("smelting", "blasting"),
         "registry_kind": tuple(REGISTRY_TAG_KIND_TO_TARGET_FACT_TYPE),
+        "count": tuple(str(value) for value in range(1, 65)),
+        "stack_limit": tuple(str(value) for value in range(1, 65)),
+    }
+)
+
+CONTENT_PROPERTY_VALUE_PATTERNS = MappingProxyType(
+    {
+        "main_color": r"^#[0-9A-Fa-f]{6}$",
+        "health": r"^(?:[1-9][0-9]*(?:\.[0-9]+)?|0\.[0-9]*[1-9][0-9]*)$",
+        "speed": r"^(?:[1-9][0-9]*(?:\.[0-9]+)?|0\.[0-9]*[1-9][0-9]*)$",
+        "tracking_range": r"^(?:[1-9][0-9]*(?:\.[0-9]+)?|0\.[0-9]*[1-9][0-9]*)$",
+        "width": r"^(?:[1-9][0-9]*(?:\.[0-9]+)?|0\.[0-9]*[1-9][0-9]*)$",
+        "height": r"^(?:[1-9][0-9]*(?:\.[0-9]+)?|0\.[0-9]*[1-9][0-9]*)$",
+        "attack_damage": r"^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$",
+        "experience": r"^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$",
+        "cookingtime": r"^[1-9][0-9]*$",
+        "container_size": r"^[1-9][0-9]*$",
+        "defense": r"^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$",
+        "toughness": r"^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$",
+        "cooldown": r"^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$",
     }
 )
 
@@ -148,6 +168,7 @@ __all__ = [
     "CONTENT_CONCERN_KINDS",
     "CONTENT_KIND_TO_FACT_TYPE",
     "CONTENT_PROPERTY_VALUE_ENUMS",
+    "CONTENT_PROPERTY_VALUE_PATTERNS",
     "CONTENT_KINDS",
     "SUPPORTED_CONTENT_FACT_TYPES",
     "REGISTRY_TAG_KIND_TO_TARGET_FACT_TYPE",
