@@ -2,10 +2,12 @@ from __future__ import annotations
 
 """Shared ownership contract for authored resource/UI content lowering.
 
-Each active resource/UI concern is an owned obligation with its original gameplay
-context. Discovery cannot retire that obligation with an unrelated count of zero.
-Path rows constrain deterministic artifact placement and never force the model to invent
-an otherwise nonexistent Minecraft content entity.
+Each active resource/UI concern remains an owned coverage obligation with its original
+gameplay context. Concrete-content concerns may require an entity binding, while
+engineering-only registry/data-resource concerns may contribute zero content identities
+and remain uncovered for Typed PlatformIR to implement. Path rows constrain deterministic
+artifact placement and never force the model to invent an otherwise nonexistent Minecraft
+content entity.
 """
 
 import hashlib
