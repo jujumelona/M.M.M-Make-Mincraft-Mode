@@ -6,7 +6,7 @@ record_schema:
     entity_id:
       type: string
       minLength: 1
-      maxLength: 32
+      maxLength: 64
       pattern: ^[a-z][a-z0-9_]+$
     kind:
       type: string
@@ -36,4 +36,5 @@ rules:
   - Use block_entity only for runtime state physically attached to a placed block. Never use block_entity as a synonym for a code registry, data catalog, or general module registry.
   - Describe the authored semantic role of this concrete content entity, not an implementation module or file.
   - Reuse a host-supplied existing entity_id only when its meaning and role are identical; otherwise create one deterministic lowercase identifier from the explicit requirement.
+  - Do not truncate two different semantic entities to the same identifier prefix. Keep distinguishing words when possible; global collision resolution remains host-owned.
   - Emit one entity per record. The host controls repetition and must stop or block before invoking this template when meaning is unresolved.
