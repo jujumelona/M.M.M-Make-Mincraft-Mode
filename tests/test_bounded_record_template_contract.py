@@ -255,3 +255,9 @@ def test_saved_record_set_cannot_bypass_fresh_cardinality_limit(monkeypatch) -> 
             progress=progress,
         )
 
+def test_record_minimum_above_host_bound_is_rejected() -> None:
+    import pytest
+
+    with pytest.raises(ValueError, match="TEMPLATE_RECORD_SET_MINIMUM"):
+        bounded.record_cardinality_response_schema(minimum_count=17)
+
