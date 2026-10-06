@@ -64,83 +64,7 @@ loom { runs { gameTestServer {
 } } }
 """
 
-_DEBUG_SOURCE = """package dev.mmm.debugfixture;
-import net.minecraft.item.Item;
-import net.minecraft.registry.Registries;
-import net.minecraft.registry.Registry;
-import net.minecraft.util.Identifier;
-
-public final class DebugToken {
-    public static final Item ITEM = Registry.register(
-        Registries.ITEM,
-        new Identifier("integrity_probe", "debug_token"),
-        new Item(new Item.Settings())
-    );
-
-    private DebugToken() {}
-}
-"""
-
-
-def _assert_initial_debug_scaffold(
-    workspace: Path,
-    *,
-    first_call: bool,
-) -> None:
-    if not first_call:
-        return
-    target = workspace / _DEBUG_TARGET
-    scaffold = target.read_text(encoding="utf-8")
-    assert "MMM_AUTHORED_FEATURE_BODY" in scaffold, (
-        "DebugToken host scaffold marker is missing before first coder generation"
-    )
-
-
-def _assert_debug_coder_contract(
-    *,
-    role: str,
-    kwargs: dict[str, object],
-    workspace: Path | None,
-    first_call: bool,
-) -> None:
-    assert role == "coder"
-    assert kwargs.get("tool_stage") == "generation"
-    assert kwargs.get("enable_tools") is False
-    assert kwargs.get("response_format") == "text"
-    assert "response_schema" not in kwargs
-    assert "output_token_ceiling" not in kwargs
-    assert workspace is not None
-
-    target = workspace / _DEBUG_TARGET
-    assert target.is_file(), "DebugToken host-owned target must exist before coder generation"
-    _assert_initial_debug_scaffold(workspace, first_call=first_call)
-
-
-class _DebugTokenRouter:
-    """Deterministic coder transport for the real DebugToken compile probe."""
-
-    def __init__(self, source: str) -> None:
-        self._source = source
-        self._workspace: Path | None = None
-        self._calls = 0
-
-    def bind_agent_workspace(self, workspace_root, *, require_fresh_evidence=True):
-        # Direct coder receives the complete host-owned grounding bundle before decode,
-        # so it deliberately bypasses model-driven evidence retrieval.
-        assert require_fresh_evidence is False
-        self._workspace = Path(workspace_root).resolve()
-
-    def generate_text(self, role, messages, **kwargs):
-        del messages
-        self._calls += 1
-        _assert_debug_coder_contract(
-            role=role,
-            kwargs=kwargs,
-            workspace=self._workspace,
-            first_call=self._calls == 1,
-        )
-        return self._source
-
+_DEBUG_REQUIRED_GATES = ("target_compile",)
 
 def _probe_spec() -> dict[str, object]:
     return {
@@ -211,6 +135,7 @@ def _materialize_project(project: Path, authority):
 def _run_debug_token_generation(root: Path, project: Path):
     from minecraft_mod_ai.colab_run_modes import write_debug_example_plan
     from minecraft_mod_ai.complete_spec import CompleteProposal
+    from minecraft_mod_ai.debug_fixture_host import materialize_debug_fixture_source
 
     debug_plan = write_debug_example_plan(
         root / "debug-proposal.json",
@@ -221,13 +146,23 @@ def _run_debug_token_generation(root: Path, project: Path):
         json.loads(debug_plan.read_text(encoding="utf-8"))
     )
     proposal.validate()
-    module = proposal.modules[0]
-    target = project / _DEBUG_TARGET
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(_DEBUG_SOURCE, encoding="utf-8")
-    result = {"status": "SOURCE_GENERATED"}
+    fixture = proposal.game_design["fixture"]
+    source_contract = fixture["source_contract"]
+    target = materialize_debug_fixture_source(
+        project,
+        package_name=proposal.base_proposal.spec.package_name,
+        mod_id=proposal.base_proposal.spec.mod_id,
+        minecraft_version=proposal.base_proposal.spec.platform.minecraft_version,
+        source_contract=source_contract,
+    )
+    relative = target.relative_to(project).as_posix()
+    result = {
+        "status": "SOURCE_GENERATED",
+        "operation_count": 1,
+        "touched_paths": [relative],
+    }
     _assert_debug_generation_receipt(project, target, result)
-    return module, result, target
+    return _DEBUG_REQUIRED_GATES, result, target
 
 
 def _assert_debug_generation_receipt(
@@ -349,7 +284,7 @@ def _required_debug_class_digest(
 def _write_debug_e2e_receipt(
     root: Path,
     project: Path,
-    module,
+    required_gates: tuple[str, ...],
     result: dict[str, object],
     target: Path,
     evidence_id: str,
@@ -366,7 +301,7 @@ def _write_debug_e2e_receipt(
         "generation_status": result.get("status"),
         "operation_count": result.get("operation_count"),
         "touched_paths": result.get("touched_paths"),
-        "required_gates": module.required_gates,
+        "required_gates": list(required_gates),
         "fabric_evidence_id": evidence_id,
     }
     (root / "debug-token-e2e.json").write_text(
@@ -391,7 +326,7 @@ def main() -> None:
     project = root / "project"
     spec, generated = _materialize_project(project, bootstrap_integrity())
     _ensure_gradle_wrapper(project)
-    module, debug_result, debug_target = _run_debug_token_generation(root, project)
+    required_gates, debug_result, debug_target = _run_debug_token_generation(root, project)
     evidence_id, evidence_record = _run_real_fabric_evidence(
         root,
         project,
@@ -401,7 +336,7 @@ def main() -> None:
     _write_debug_e2e_receipt(
         root,
         project,
-        module,
+        required_gates,
         debug_result,
         debug_target,
         evidence_id,
