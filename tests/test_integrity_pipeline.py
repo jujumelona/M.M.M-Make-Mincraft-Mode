@@ -254,3 +254,22 @@ def test_no_context_cannot_execute_canonical_job():
                       implementation_id="python_generator:minecraft/entity/registry", executor_type=ExecutorType.PYTHON_GENERATOR)
     with pytest.raises(ValueError, match="VERSION_CONTEXT_REQUIRED"):
         execute_artifact_template(job)
+
+def test_legacy_recipe_and_tag_leaves_stay_unsupported():
+    from minecraft_mod_ai.populate_version_artifact_rules import build_version_facts
+
+    facts = build_version_facts("1.21.1", base_facts={})
+    for leaf in (
+        "minecraft/recipe/requirement",
+        "minecraft/recipe/serializer",
+        "minecraft/recipe/validation",
+        "minecraft/tag/requirement",
+        "minecraft/tag/entries",
+        "minecraft/tag/validation",
+    ):
+        binding = facts["leaf_bindings"][leaf]
+        assert binding == {
+            "state": "unsupported",
+            "reason": "MODERN_RECIPE_SCHEMA_UNSUPPORTED",
+        }
+
