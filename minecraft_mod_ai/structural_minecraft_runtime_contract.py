@@ -124,11 +124,9 @@ def _rewrite_root(steps: Sequence[TemplateStep], *, prerequisites: Sequence[str]
 def _loader_leaf_steps(capability: str, steps: Sequence[TemplateStep]) -> tuple[TemplateStep, ...]:
     common = f"common_contract:{capability}"
     rewritten = []
-    replaced = False
     for step in steps:
         if capability in step.provides:
             rewritten.append(TemplateStep(name=step.name, template_id=step.template_id, outcome=step.outcome, consumes=step.consumes, provides=tuple(common if item == capability else item for item in step.provides), anchor_kinds=step.anchor_kinds, branch_features=step.branch_features))
-            replaced = True
         else:
             rewritten.append(step)
     return tuple(rewritten)

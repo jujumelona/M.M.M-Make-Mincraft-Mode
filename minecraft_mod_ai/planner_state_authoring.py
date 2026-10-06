@@ -11,9 +11,7 @@ from jsonschema import Draft202012Validator
 
 from .fixed_template_generation import generate_fixed_template_value
 from .model_output_atomicity_contract import structured_output_token_ceiling
-from .planning_detail_slots import record_field_schema
 from .structured_state_runtime import (
-    _SUPPORTED_STATE_FUNCTIONS,
     _state_variable_value_kind,
     StateSymbolTable,
     state_variable_default_schema,
@@ -162,6 +160,26 @@ def _state_scalar_schema(
     return result
 
 
+def _state_scalar_transport_schema(
+    concern: str,
+    field: str,
+    semantic_schema: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Keep transport structural while host validation owns semantic constraints."""
+
+    result = deepcopy(dict(semantic_schema))
+    if concern == "variables" and field == "default":
+        # The wire contract carries a bounded string. Type-specific numeric/boolean
+        # semantics are validated below by the host against semantic_schema so transport
+        # failures cannot bypass STATE_SEMANTIC_FIELD_INVALID.
+        result.pop("pattern", None)
+        result.pop("enum", None)
+        result["type"] = "string"
+        result["minLength"] = 0
+        result["maxLength"] = 128
+    return result
+
+
 def author_state_semantic_page(
     router: Any,
     prompt: str,
@@ -196,19 +214,24 @@ def author_state_semantic_page(
             else {}
         )
         projected_properties: dict[str, Any] = {}
+        transport_properties: dict[str, Any] = {}
         for field in requested:
             raw_schema = properties.get(field)
             if not isinstance(raw_schema, Mapping):
                 raise ValueError(
                     f"STATE_SEMANTIC_PAGE: missing schema for {concern}.{field}"
                 )
-            projected_properties[field] = _state_scalar_schema(
+            semantic_schema = _state_scalar_schema(
                 concern, field, raw_schema, fixed
+            )
+            projected_properties[field] = semantic_schema
+            transport_properties[field] = _state_scalar_transport_schema(
+                concern, field, semantic_schema
             )
 
         row_schema = {
             "type": "object",
-            "properties": projected_properties,
+            "properties": transport_properties,
             "required": list(requested),
             "additionalProperties": False,
         }
