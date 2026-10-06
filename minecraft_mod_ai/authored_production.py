@@ -780,12 +780,32 @@ def compile_authored_design(
             and str(item.get("kind") or "").strip() not in PLATFORM_HOST_KINDS
         )
     )
+
+    # Content-system modules are executable target requirements too.  Previously
+    # target binding only saw Typed PlatformIR kinds, so a saved GUI/networking
+    # design could select a target with no reviewed system-pack backend and fail
+    # much later in _compile_content_artifact_graph().  Keep artifact-owned item/
+    # block/etc. modules out of this list: their target support is owned by the
+    # canonical leaf graph rather than the legacy fixed-generator capability set.
+    from .platform_backend_contract import SYSTEM_KIND_TO_PACK
+
+    content_system_kinds = tuple(
+        dict.fromkeys(
+            str(item.get("kind") or "").strip()
+            for item in content_design.get("modules", ())
+            if isinstance(item, Mapping)
+            and str(item.get("kind") or "").strip() in SYSTEM_KIND_TO_PACK
+        )
+    )
+    target_module_kinds = tuple(
+        dict.fromkeys((*platform_module_kinds, *content_system_kinds))
+    )
     design, base = bind_platform(
         router,
         plan.requested_prompt,
         design,
         base,
-        module_kinds=platform_module_kinds,
+        module_kinds=target_module_kinds,
     )
     from .platform_catalog import adapter_for_lock_values
 
