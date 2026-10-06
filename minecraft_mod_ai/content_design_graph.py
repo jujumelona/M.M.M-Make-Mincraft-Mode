@@ -435,13 +435,7 @@ def compile_content_graph(
             | {"display_name", "slot", "defense", "toughness"},
             FactType.CUSTOM_ITEM_BEHAVIOR: {"display_name", "action", "cooldown"},
             FactType.CUSTOM_BLOCK_BEHAVIOR: {"display_name", "trigger", "interaction"},
-            FactType.CRAFTING_RECIPE: {
-                "recipe_kind",
-                "count",
-                "pattern_1",
-                "pattern_2",
-                "pattern_3",
-            },
+            FactType.CRAFTING_RECIPE: {"count"},
             FactType.SMELTING_RECIPE: {"cooking_type", "experience", "cookingtime"},
             FactType.REGISTRY_TAG: set(),
         }[fact_type]
@@ -467,7 +461,7 @@ def compile_content_graph(
             FactType.EQUIPMENT_ARMOR: {"display_name", "slot", "defense", "toughness", "main_color"},
             FactType.CUSTOM_ITEM_BEHAVIOR: {"display_name", "action", "cooldown"},
             FactType.CUSTOM_BLOCK_BEHAVIOR: {"display_name", "trigger", "interaction"},
-            FactType.CRAFTING_RECIPE: {"recipe_kind", "count"},
+            FactType.CRAFTING_RECIPE: {"count"},
             FactType.SMELTING_RECIPE: {"cooking_type", "experience", "cookingtime"},
             FactType.REGISTRY_TAG: set(),
         }[fact_type]
@@ -485,6 +479,31 @@ def compile_content_graph(
             if key not in allowed_properties:
                 raise SlotFillError(f"CONTENT_PROPERTY_UNSUPPORTED: {eid}.{key}")
             props[key] = value
+
+        if fact_type == FactType.CRAFTING_RECIPE:
+            recipe_edges = [
+                edge
+                for edge in relations
+                if edge["source_id"] == eid
+            ]
+            key_edges = sorted(
+                (
+                    edge
+                    for edge in recipe_edges
+                    if edge["relation_type"].startswith("key_")
+                ),
+                key=lambda edge: edge["relation_type"],
+            )
+            if key_edges:
+                props["recipe_kind"] = "shaped"
+                symbols = [edge["relation_type"][-1] for edge in key_edges]
+                packed = "".join(symbols)
+                props["pattern"] = [
+                    packed[index:index + 3].ljust(3)
+                    for index in range(0, len(packed), 3)
+                ]
+            else:
+                props["recipe_kind"] = "shapeless"
 
         if fact_type == FactType.REGISTRY_TAG:
             member_edges = [
@@ -1023,14 +1042,17 @@ def compile_content_graph(
                             for edge in edges
                         ):
                             raise ValueError("shaped recipe needs key_X relations")
-                        rows = [
-                            key
-                            for key in ("pattern_1", "pattern_2", "pattern_3")
-                            if key in props
-                        ]
-                        if rows != [f"pattern_{i + 1}" for i in range(len(rows))]:
-                            raise ValueError("pattern row gap")
-                        value["pattern"] = [props[key] for key in rows]
+                        pattern = props.get("pattern")
+                        if (
+                            not isinstance(pattern, list)
+                            or not 1 <= len(pattern) <= 3
+                            or any(
+                                not isinstance(row, str) or len(row) != 3
+                                for row in pattern
+                            )
+                        ):
+                            raise ValueError("host-shaped pattern required")
+                        value["pattern"] = list(pattern)
                         bindings = [
                             edge
                             for edge in edges
