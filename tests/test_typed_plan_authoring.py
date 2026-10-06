@@ -353,7 +353,7 @@ def test_all_platform_authoring_schemas_satisfy_atomic_ceiling():
         if kind in {"recipe", "advancement", "loot", "tag", "command"}:
             covers = ["resources_and_ui.paths"]
         elif kind == "networking":
-            covers = ["authority_and_network.packets"]
+            covers = ["resources_and_ui.interactions"]
         elif kind == "network_sync":
             covers = ["authority_and_network.synchronization"]
         elif kind == "state_store":

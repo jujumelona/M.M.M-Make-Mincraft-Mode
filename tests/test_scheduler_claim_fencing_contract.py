@@ -223,7 +223,11 @@ def test_project_index_refresh_runs_outside_sqlite_write_transaction(tmp_path) -
     _commit_success(
         ledger,
         node.node_id,
-        {"status": "PASS", "touched_paths": ["src/main/java/X.java"]},
+        {
+            "schema_version": "mmm/custom-module-result-v3",
+            "status": "PASS",
+            "touched_paths": ["src/main/java/X.java"],
+        },
         attempt=int(claim["attempt"]),
         owner=str(claim["lease_owner"]),
         shared_index=Index(),
