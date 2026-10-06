@@ -98,6 +98,7 @@ def _collision_safe_entity_id(
 
 
 from .complete_spec import AssetRequest, ProductionModule
+from .content_design_contract import REGISTRY_TAG_KIND_TO_TARGET_FACT_TYPE
 from .implementation_fact import FactProvenance, FactType, ImplementationFact
 from .parallel_model_tasks import deterministic_model_map, serialized_callback
 from .task_template_runner import run_record_template
@@ -510,7 +511,7 @@ def compile_content_graph(
                 "pattern_3",
             },
             FactType.SMELTING_RECIPE: {"cooking_type", "experience", "cookingtime"},
-            FactType.REGISTRY_TAG: {"registry_kind"},
+            FactType.REGISTRY_TAG: set(),
         }[fact_type]
         required_properties = {
             FactType.ITEM_EXISTS: {"display_name", "main_color", "shape"},
@@ -536,7 +537,7 @@ def compile_content_graph(
             FactType.CUSTOM_BLOCK_BEHAVIOR: {"display_name", "trigger", "interaction"},
             FactType.CRAFTING_RECIPE: {"recipe_kind", "count"},
             FactType.SMELTING_RECIPE: {"cooking_type", "experience", "cookingtime"},
-            FactType.REGISTRY_TAG: {"registry_kind"},
+            FactType.REGISTRY_TAG: set(),
         }[fact_type]
         for prop in records(
             "design/content_property",
@@ -552,6 +553,30 @@ def compile_content_graph(
             if key not in allowed_properties:
                 raise SlotFillError(f"CONTENT_PROPERTY_UNSUPPORTED: {eid}.{key}")
             props[key] = value
+
+        if fact_type == FactType.REGISTRY_TAG:
+            member_edges = [
+                edge
+                for edge in relations
+                if edge["source_id"] == eid and edge["relation_type"] == "contains"
+            ]
+            member_types = {
+                capabilities.get(edge["target_id"])
+                for edge in member_edges
+            }
+            inverse_registry_kinds = {
+                target_type: registry_kind
+                for registry_kind, target_type
+                in REGISTRY_TAG_KIND_TO_TARGET_FACT_TYPE.items()
+            }
+            if (
+                not member_edges
+                or len(member_types) != 1
+                or next(iter(member_types)) not in inverse_registry_kinds
+            ):
+                raise SlotFillError(f"CONTENT_TAG_MEMBERS_INVALID: {eid}")
+            props["registry_kind"] = inverse_registry_kinds[next(iter(member_types))]
+
         if fact_type == FactType.ENTITY_EXISTS:
             behavior_value = str(props.get("behavior", "")).strip().lower()
             if behavior_value in {"hostile_melee", "neutral_melee"} and "attack_damage" not in props:
@@ -998,10 +1023,7 @@ def compile_content_graph(
         node = entities[eid]
         if fact_type == FactType.REGISTRY_TAG:
             registry_kind = props.get("registry_kind")
-            expected = {
-                "item": FactType.ITEM_EXISTS,
-                "block": FactType.BLOCK_EXISTS,
-            }.get(registry_kind)
+            expected = REGISTRY_TAG_KIND_TO_TARGET_FACT_TYPE.get(registry_kind)
             if expected is None or any(
                 edge["relation_type"] != "contains"
                 or capabilities[edge["target_id"]] != expected
