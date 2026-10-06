@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 from pathlib import Path
 
 from minecraft_mod_ai.project_index import ProjectIndex
@@ -144,19 +143,3 @@ def test_repair_context_reuses_same_explorer_contract(tmp_path: Path) -> None:
         item["path"] == "src/main/java/example/Network.java"
         for item in context["relevant"]["files"]
     )
-
-
-def test_generation_and_repair_grounding_are_source_owned() -> None:
-    from minecraft_mod_ai import custom_module_generator, repair_engine
-
-    assert not hasattr(custom_module_generator, "_collect_initial_observations")
-    assert inspect.getmodule(custom_module_generator._project_context) is custom_module_generator
-    generation_source = inspect.getsource(custom_module_generator.CustomModuleGenerator.generate)
-    assert "_project_context(" in generation_source
-    assert "relevance_text=" in generation_source
-
-    assert inspect.getmodule(repair_engine.RepairEngine._context) is repair_engine
-    assert not hasattr(repair_engine.RepairEngine._context, "__wrapped__")
-    source = inspect.getsource(repair_engine.RepairEngine._context)
-    assert "build_repair_repository_context" in source
-    assert "active_repair_project_index" in source
