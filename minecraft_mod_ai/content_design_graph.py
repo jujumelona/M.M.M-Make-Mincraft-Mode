@@ -146,6 +146,7 @@ def _prune_optional_orphan_resource_entities(entities, owned):
 
 
 from .complete_spec import AssetRequest, ProductionModule
+from .spec_identity import canonical_spec_id
 from .content_design_contract import (
     CONTENT_FACT_TO_PRODUCTION_KIND,
     REGISTRY_TAG_KIND_TO_TARGET_FACT_TYPE,
@@ -759,7 +760,7 @@ def compile_content_graph(
 
             assets.append(
                 AssetRequest(
-                    asset_id=f"texture_{asset_kind}_{eid}",
+                    asset_id=canonical_spec_id(f"texture_{asset_kind}_{eid}"),
                     kind=asset_kind,
                     visual_description=visual_desc,
                     render_kind=render_kind,
