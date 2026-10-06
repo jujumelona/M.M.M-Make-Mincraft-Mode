@@ -336,18 +336,9 @@ def repair_evidence_route_for_errors(
     local_source: str | None = None,
     target_path: str | None = None,
 ) -> dict[str, Any]:
-    base_context: dict[str, Any] = {}
-    if isinstance(local_source, str) and local_source.strip():
-        base_context = {
-            "rag": {
-                "hits": [
-                    {
-                        "path": str(target_path or ""),
-                        "text": local_source,
-                    }
-                ]
-            }
-        }
+    # Kept in the public call contract for callers that can provide the current
+    # target source; route classification now derives only from verifier diagnostics.
+    del local_source
     bundle = verifier_diagnostic_bundle(errors)
     messages = tuple(str(value) for value in bundle.get("messages", ()) if str(value).strip())
     joined = "\n".join(messages)

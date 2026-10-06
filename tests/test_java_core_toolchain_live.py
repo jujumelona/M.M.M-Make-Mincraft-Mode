@@ -13,15 +13,12 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_project_jdk_reaches_gradle_and_preserves_release_api_boundary(tmp_path, monkeypatch):
-    from minecraft_mod_ai import jvm_owner_bootstrap
-
     # Use the real owner_command so the owner JVM selection logic
     # (max(21, project_major)) is exercised end-to-end.  The monkeypatched
     # MMM_JAVA_VERSION=25 below ensures the owner JVM must be >= 25.
     # Previous versions of this test used a bare 'java' command which
     # bypassed the owner JVM selection entirely — if the PATH java happened
     # to be 25, the test passed even though owner_command would have picked 21.
-    from minecraft_mod_ai.jvm_owner_bootstrap import owner_command as real_owner_command
     monkeypatch.setenv('MMM_PROJECT_JAVA_HOME', os.environ['MMM_TEST_JDK25_HOME'])
     monkeypatch.setenv('MMM_JAVA_VERSION', '25')
     (tmp_path / 'settings.gradle').write_text("rootProject.name='release-boundary'\n")

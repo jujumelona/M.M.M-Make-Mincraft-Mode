@@ -211,7 +211,6 @@ def _materialize_project(project: Path, authority):
 def _run_debug_token_generation(root: Path, project: Path):
     from minecraft_mod_ai.colab_run_modes import write_debug_example_plan
     from minecraft_mod_ai.complete_spec import CompleteProposal
-    from minecraft_mod_ai.platform_catalog import adapter_for_target
 
     debug_plan = write_debug_example_plan(
         root / "debug-proposal.json",
@@ -223,7 +222,6 @@ def _run_debug_token_generation(root: Path, project: Path):
     )
     proposal.validate()
     module = proposal.modules[0]
-    adapter = adapter_for_target("1.20.1", "fabric")
     target = project / _DEBUG_TARGET
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(_DEBUG_SOURCE, encoding="utf-8")

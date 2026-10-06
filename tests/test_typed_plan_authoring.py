@@ -286,8 +286,6 @@ def test_all_platform_authoring_schemas_satisfy_atomic_ceiling():
     )
 
     def _make_dummy_val(s):
-        import re
-
         if not isinstance(s, dict):
             return {}
         if "oneOf" in s and s["oneOf"]:

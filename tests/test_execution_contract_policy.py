@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 import re
 from pathlib import Path
 
@@ -16,7 +15,6 @@ from minecraft_mod_ai.execution_contract_policy import (
     JAVA_ATOMIC_LOGIC_MEMBERS_PARAMETERS,
     JAVA_ATOMIC_MEMBERS_PARAMETERS,
     JAVA_NESTED_TYPE_REQUIRED_VISIBILITY,
-    JAVA_TYPE_OWNING_CONCERNS,
     PLANNER_RECORD_ARRAY_ITEM_MAX_CHARS,
     PLANNER_RECORD_COUNT_OUTPUT_TOKEN_CEILING,
     PLANNER_RECORD_FIELD_MAX_CHARS,
