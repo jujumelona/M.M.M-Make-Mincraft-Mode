@@ -18,9 +18,9 @@ record_schema:
       minLength: 1
       maxLength: 128
   required:
-    - entity_id
-    - kind
     - role
+    - kind
+    - entity_id
   additionalProperties: false
 rules:
   - Read the original game request and canonical gameplay requirements together with the resource/UI constraints. Engineering names alone do not describe the requested player-facing content.
@@ -34,6 +34,7 @@ rules:
   - Code registries, definition catalogs, lookup tables, manager classes, and other implementation-only structures are not Minecraft content entities. Exclude those structures individually; still identify the concrete items, blocks, screens, recipes, or other content required by the gameplay they support.
   - A mixed requirement containing an implementation-only structure is not an empty content requirement. Return no entities only when the entire supplied gameplay requirement needs no concrete content from the allowed vocabulary.
   - Use block_entity only for runtime state physically attached to a placed block. Never use block_entity as a synonym for a code registry, data catalog, or general module registry.
+  - Use registry_tag only for an actual Minecraft tag resource that groups item, block, or entity-type members. Never use registry_tag for a code registry, definition catalog, lookup table, or data component; use data_component when the requirement is a Minecraft Data Component.
   - Describe the authored semantic role of this concrete content entity, not an implementation module or file.
   - Reuse a host-supplied existing entity_id only when its meaning and role are identical; otherwise create one deterministic lowercase identifier from the explicit requirement.
   - Do not truncate two different semantic entities to the same identifier prefix. Keep distinguishing words when possible; global collision resolution remains host-owned.
