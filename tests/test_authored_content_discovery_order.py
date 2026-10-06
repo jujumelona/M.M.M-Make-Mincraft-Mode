@@ -10,13 +10,16 @@ from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
 
 def test_registry_binding_runs_after_concrete_content_discovery() -> None:
     assert CONTENT_GRAPH_DRIVER_CONCERNS == (
-        "data_resources",
         "assets",
         "interactions",
         "displayed_state",
+        "data_resources",
         "registries",
     )
-    assert CONTENT_GRAPH_DRIVER_CONCERNS[-1] == "registries"
+    assert CONTENT_GRAPH_DRIVER_CONCERNS[-2:] == (
+        "data_resources",
+        "registries",
+    )
 
 
 def test_engineering_resource_rows_are_host_content_constraints() -> None:
