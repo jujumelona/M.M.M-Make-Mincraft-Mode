@@ -165,19 +165,16 @@ def _state_scalar_transport_schema(
     field: str,
     semantic_schema: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Keep transport structural while host validation owns semantic constraints."""
+    """Expose the same finite semantic contract to the structured decoder.
 
-    result = deepcopy(dict(semantic_schema))
-    if concern == "variables" and field == "default":
-        # The wire contract carries a bounded string. Type-specific numeric/boolean
-        # semantics are validated below by the host against semantic_schema so transport
-        # failures cannot bypass STATE_SEMANTIC_FIELD_INVALID.
-        result.pop("pattern", None)
-        result.pop("enum", None)
-        result["type"] = "string"
-        result["minLength"] = 0
-        result["maxLength"] = 128
-    return result
+    State defaults are already narrowed from the host-fixed variable type.  Relaxing
+    enum/pattern constraints here let malformed values cross the model boundary and
+    fail only after inference.  The llama transport projector supports finite enums
+    and bounded patterns, so producer and host validation must share one schema.
+    """
+
+    del concern, field
+    return deepcopy(dict(semantic_schema))
 
 
 def author_state_semantic_page(
