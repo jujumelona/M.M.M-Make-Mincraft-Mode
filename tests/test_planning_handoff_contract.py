@@ -92,29 +92,19 @@ def test_projection_preserves_canonical_grounding_and_verification() -> None:
     ]
 
 
-def test_authored_detail_is_lowered_without_readiness_approval() -> None:
-    from minecraft_mod_ai.planning_state_handoff import (
-        build_request_catalog_from_planning_state,
-    )
-    from minecraft_mod_ai.planning_state_pipeline import _host_initial_state, _rehash
-
-    prompt = "Players trade minerals to fund spacecraft construction."
-    state = _host_initial_state(prompt)
+def test_authored_detail_lowers_without_separate_readiness_owner() -> None:
     detail = _detail()
-    detail.update(decision_id="d_002", decision_type="detailed_implementation_plan")
     detail["grounded_bindings"] = []
     detail["reuse_candidates"] = []
     detail["artifact_obligations"][0]["constraint_evidence_refs"] = []
-    state["decisions"] = [
-        {"decision_id": "d_001", "decision_type": "requirement", "requirement_id": "req_001",
-         "statement": prompt, "semantic_capability": "space_economy",
-         "acceptance": ["Trading minerals increases the player's balance."]},
-        detail,
+
+    projection = project_detailed_plan_for_request_catalog(detail, set())
+
+    assert projection["planning_detail_contract"]["requirement_ref"] == "req_001"
+    assert projection["implementation_capabilities"] == [
+        "The server owns the authoritative economy state."
     ]
-    state = _rehash(state)
-    assert state["plan_ready"] is False
-    catalog = build_request_catalog_from_planning_state(prompt, state)
-    assert catalog["requirements"][0]["statement"] == prompt
+    assert projection["artifact_obligations"][0]["evidence_refs"] == []
 
 
 def test_request_requirement_detail_rejects_projection_drift() -> None:

@@ -105,6 +105,15 @@ def specification(section):
         for field in columns.split():
             text = f"{section} {concern} {field}: server owns the observable outcome."
             record[field] = _fixture_value(schemas[field], text)
+        if section == "state_model" and concern == "variables":
+            defaults = {
+                "boolean": "false",
+                "int": "0",
+                "long": "0",
+                "double": "0",
+                "string": "",
+            }
+            record["default"] = defaults[str(record["type"])]
         result[concern] = [record]
     result["inapplicable_concerns"] = []
     return result

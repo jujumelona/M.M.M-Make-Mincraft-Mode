@@ -347,7 +347,7 @@ def test_merge_rejects_missing_chunk_page():
         merge_worksheet_section_chunks("behavior_contract", supplied_chunks, set())
 
 
-def test_chunk_schema_rejects_undeclared_fields_before_merge():
+def test_chunk_schema_projects_undeclared_fields_before_merge():
     concern_group = pack_section_concerns("behavior_contract")[0]
     schema = worksheet_chunk_schema(
         "behavior_contract",
@@ -370,15 +370,14 @@ def test_chunk_schema_rejects_undeclared_fields_before_merge():
         "extra_hallucinated_field": "bad",
     })
 
-    with pytest.raises(
-        StructuredOutputValidationError,
-        match="Additional properties are not allowed",
-    ):
+    validated = json.loads(
         validate_structured_output(
             output,
             response_format="json",
             response_schema=schema,
         )
+    )
+    assert validated == {concern: [page_item]}
 
 
 def test_merge_auto_reconciles_empty_concerns_without_inapplicable_reasons():
