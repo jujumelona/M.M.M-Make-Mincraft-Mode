@@ -59,6 +59,43 @@ def _empty_pair_records(
     return {"records": []}
 
 
+def test_distinct_selector_cannot_repeat_model_preferred_identifier(monkeypatch) -> None:
+    seen_enums = []
+
+    def fake_generate(router, role, messages, *, response_schema, **kwargs):
+        del router, role, messages, kwargs
+        props = response_schema["properties"]
+        if "count" in props:
+            return {"count": 2}
+        if "id" in props:
+            choices = list(props["id"]["enum"])
+            seen_enums.append(choices)
+            return {"id": choices[0]}
+        raise AssertionError(response_schema)
+
+    monkeypatch.setattr(
+        design_record_runtime,
+        "generate_fixed_template_value",
+        fake_generate,
+    )
+
+    selected = design_record_runtime._select_distinct_relation_ids(
+        object(),
+        {"record_schema": {}},
+        {},
+        selector_id="regression:duplicate-input",
+        selector_context={},
+        candidate_ids=["coin", "ingot"],
+        max_count=2,
+        progress={},
+        checkpoint=None,
+        noun="ingredient",
+    )
+
+    assert selected == ["coin", "ingot"]
+    assert seen_enums == [["coin", "ingot"], ["ingot"]]
+
+
 def test_registry_tag_relations_have_host_owned_nonempty_membership(monkeypatch) -> None:
     seen_schemas = []
 
