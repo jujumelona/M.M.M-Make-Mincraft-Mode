@@ -168,6 +168,14 @@ def run_bounded_record_template(
             f"TEMPLATE_RECORD_SET_SAVED_COUNT: {identifier} checkpoint count "
             "must be an integer"
         )
+    if isinstance(saved, dict) and set(saved) not in (
+        {"count"},
+        {"count", "records"},
+    ):
+        raise ValueError(
+            f"TEMPLATE_RECORD_SET_SAVED_SHAPE: {identifier} checkpoint fields "
+            "must be exactly count or count+records"
+        )
 
     if isinstance(saved, dict) and isinstance(saved.get("records"), list):
         raw_records = saved["records"]
