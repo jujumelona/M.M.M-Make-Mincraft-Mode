@@ -26,6 +26,8 @@ rules:
   - Read the original game request and canonical gameplay requirements together with the resource/UI constraints. Engineering names alone do not describe the requested player-facing content.
   - allowed_content_kinds supplies the authoritative concrete content vocabulary for both discovery and record authoring. The kind field is bound to that same vocabulary; use only a host-allowed kind.
   - When coverage_ref is supplied, resolve that one already-authored resource/UI obligation. Shared gameplay context explains it but does not authorize unrelated entities. Reuse an existing entity when it implements the same obligation.
+  - A resource/UI concern describes an obligation, not an entity kind. Displayed state does not imply a GUI, and interactions do not imply networking. Identify the actual content owner from the authored requirement; create a screen only when a screen is explicitly required.
+  - Reusing an existing entity preserves its kind. A separate screen associated with a block has its own entity_id and a relation to the block; never classify the block itself as a GUI to cover a display obligation.
   - minimum_entity_count is host-owned. A required resource obligation must bind concrete content; it cannot be retired with count zero. Generic behavioral requirements without a minimum may still need no concrete content.
   - Emit a concrete Minecraft content capability such as an item, block, entity, GUI, dimension, recipe, tag, or supported behavior; never emit an umbrella system such as economy, progression, exploration, combat, trading, or resource management as one content entity.
   - System-level mechanics belong in design decisions and relations between concrete content entities.

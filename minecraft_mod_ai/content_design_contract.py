@@ -39,20 +39,16 @@ CONTENT_KIND_TO_FACT_TYPE = MappingProxyType(
 CONTENT_KINDS = tuple(CONTENT_KIND_TO_FACT_TYPE)
 SUPPORTED_CONTENT_FACT_TYPES = tuple(CONTENT_KIND_TO_FACT_TYPE.values())
 
-# A declared resource/UI obligation narrows the semantic work before discovery.
-# These are content kinds, not claims that a target has a reviewed native backend.
+# Concerns describe obligations of content, not the identity of that content.
+# For example, displayed state can belong to a block, item, entity, or screen.
+# Narrowing it to GUI forces discovery to invent a screen or misclassify its owner.
+# The authored requirement and existing entity identities determine the kind.
 CONTENT_CONCERN_KINDS = MappingProxyType({
     "registries": CONTENT_KINDS,
     "data_resources": CONTENT_KINDS,
-    "assets": (
-        "item", "block", "entity", "gui", "equipment_armor",
-        "custom_item_behavior", "custom_block_behavior",
-    ),
-    "interactions": (
-        "gui", "network_packet", "block_entity",
-        "custom_item_behavior", "custom_block_behavior",
-    ),
-    "displayed_state": ("gui",),
+    "assets": CONTENT_KINDS,
+    "interactions": CONTENT_KINDS,
+    "displayed_state": CONTENT_KINDS,
 })
 
 

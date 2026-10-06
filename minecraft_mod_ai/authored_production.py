@@ -535,7 +535,10 @@ def _compile_content_artifact_graph(
         raise ValueError("CONTENT_ARTIFACT_FACTS_REQUIRED")
 
     from .artifact_expansion import FACT_TO_CANONICAL_LEAVES
-    from .platform_backend_contract import native_production_route_available
+    from .platform_backend_contract import (
+        missing_production_backend_capabilities,
+        native_production_route_available,
+    )
     from .prompt_fact_types import FactType
     from .registered_leaf_binding import require_registered_leaf_binding
 
@@ -594,6 +597,7 @@ def _compile_content_artifact_graph(
     for fact in facts:
         facts_by_subject.setdefault(fact.subject, []).append(fact)
 
+    available_native_capabilities = deterministic_backend_capabilities(adapter)
     native_owner_ids: set[str] = set()
     for module in modules:
         owned_facts = facts_by_subject.get(module.module_id, ())
@@ -604,7 +608,13 @@ def _compile_content_artifact_graph(
         ]
         if not blocked:
             continue
-        if native_production_route_available(module.kind, module.config):
+        missing_native = missing_production_backend_capabilities(
+            available_native_capabilities, module.kind, module.config,
+        )
+        if (
+            native_production_route_available(module.kind, module.config)
+            and not missing_native
+        ):
             native_owner_ids.add(module.module_id)
             continue
         blocked_leaves = sorted({
@@ -614,14 +624,21 @@ def _compile_content_artifact_graph(
         })
         raise ValueError(
             "CONTENT_NO_EXECUTABLE_BACKEND: "
-            f"{module.module_id} has no admitted artifact route and no reviewed "
-            f"native backend; blocked_leaves={blocked_leaves}"
+            f"{module.module_id}/{module.kind} has no admitted artifact route "
+            f"and no reviewed native backend for {adapter.minecraft_version}; "
+            f"blocked_leaves={blocked_leaves}; "
+            f"missing_native_capabilities={sorted(missing_native)}. "
+            "A registered generator is not target support. Preserve the saved "
+            "content semantics; this target needs an executable artifact binding "
+            "or a reviewed native implementation."
         )
 
     if native_owner_ids:
         from .extended_content_generator import validate_extended_module_contract
-        from .platform_backend_contract import EXTENDED_CONTENT_KINDS
+        from .platform_backend_contract import EXTENDED_CONTENT_KINDS, SYSTEM_KIND_TO_PACK
+        from .system_pack_validation import validate_system_modules
 
+        system_modules: dict[str, list[dict[str, Any]]] = {}
         for module in modules:
             if module.module_id not in native_owner_ids:
                 continue
@@ -633,6 +650,24 @@ def _compile_content_artifact_graph(
                         "CONTENT_NATIVE_BACKEND_CONTRACT_INVALID: "
                         f"{module.module_id}/{module.kind}: {exc}"
                     ) from exc
+            else:
+                pack_id = SYSTEM_KIND_TO_PACK.get(module.kind)
+                if pack_id is not None:
+                    system_modules.setdefault(pack_id, []).append({
+                        "module_id": module.module_id,
+                        "kind": module.kind,
+                        "config": module.config,
+                        "depends_on": list(module.depends_on),
+                        "required_gates": list(module.required_gates),
+                    })
+        for pack_id, members in system_modules.items():
+            try:
+                validate_system_modules(pack_id, members)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "CONTENT_NATIVE_BACKEND_CONTRACT_INVALID: "
+                    f"{pack_id}: {exc}"
+                ) from exc
 
     artifact_facts = tuple(
         fact for fact in facts if fact.subject not in native_owner_ids
