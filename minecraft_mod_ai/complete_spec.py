@@ -298,14 +298,6 @@ class CompleteProposal:
             raise SpecValidationError(
                 "game_design must contain finite JSON values."
             ) from exc
-        evidence_plan = self.game_design.get("_evidence_first_plan")
-        retained_only = False
-        if isinstance(evidence_plan, Mapping):
-            retained_only = (
-                not evidence_plan.get("gap_catalog")
-                and not evidence_plan.get("tasks")
-                and bool(evidence_plan.get("verified_provides"))
-            )
         fixture = self.game_design.get("fixture")
         host_fixture_only = (
             self.game_design.get("mode") == "debug_fixture"
@@ -313,7 +305,7 @@ class CompleteProposal:
             and fixture.get("deterministic") is True
             and isinstance(fixture.get("source_contract"), Mapping)
         )
-        if not self.modules and not retained_only and not host_fixture_only:
+        if not self.modules and not host_fixture_only:
             raise SpecValidationError(
                 "A complete proposal must contain at least one production module."
             )
