@@ -113,75 +113,90 @@ def _resource_definition_has_targets(kind: str, entities: Mapping[str, Mapping])
 
 def _materialize_authored_resource_definitions(
     entities: dict[str, dict],
-    owned: list[dict],
+    host_constraints: Mapping[str, object],
+    owned_requirements: list[dict],
 ) -> tuple[str, ...]:
-    """Derive graph resource nodes only from explicit authored data-resource rows.
+    """Derive resource-definition nodes only after primary content exists.
 
-    Primary content discovery cannot emit recipe/tag identities.  Resource definitions
-    are introduced only after concrete targets exist, so relation lowering never sees
-    an orphan recipe/tag that must be pruned or rejected after the fact.
+    Engineering data-resource rows never become semantic requirements.  When a row
+    explicitly names a recipe/tag kind and compatible primary targets exist, the host
+    may introduce the resource node and bind its provenance to the already-authored
+    concrete content requirements.  No synthetic requirement IDs are invented.
     """
 
+    rows = host_constraints.get("data_resources")
+    if not isinstance(rows, list) or not rows:
+        return ()
+
+    requirement_refs = [
+        str(context["requirement_id"])
+        for context in owned_requirements
+        if isinstance(context.get("requirement_id"), str)
+        and str(context["requirement_id"]).strip()
+    ]
+    source_clauses = [
+        str(context["requirement"])
+        for context in owned_requirements
+        if isinstance(context.get("requirement"), str)
+        and str(context["requirement"]).strip()
+    ]
+    if not requirement_refs or not source_clauses:
+        return ()
+
     created: list[str] = []
-    for context in owned:
-        if context.get("coverage_ref") != "resources_and_ui.data_resources":
+    for index, row in enumerate(rows):
+        if not isinstance(row, Mapping):
             continue
-        rows = context.get("source_records")
-        if not isinstance(rows, list):
+        kind = resource_definition_kind_for_data_resource(row.get("kind", ""))
+        if kind is None or not _resource_definition_has_targets(kind, entities):
             continue
-        requirement_id = str(context["requirement_id"])
-        statement = str(context["requirement"])
-        for index, row in enumerate(rows):
-            if not isinstance(row, Mapping):
-                continue
-            kind = resource_definition_kind_for_data_resource(row.get("kind", ""))
-            if kind is None or not _resource_definition_has_targets(kind, entities):
-                continue
 
-            encoded = json.dumps(
-                {
-                    "requirement_id": requirement_id,
-                    "index": index,
-                    "record": dict(row),
-                    "kind": kind,
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
+        encoded = json.dumps(
+            {
+                "index": index,
+                "record": dict(row),
+                "kind": kind,
+                "requirement_refs": requirement_refs,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        digest = sha256(encoded.encode("utf-8")).hexdigest()[:12]
+        role = str(row.get("purpose") or f"{kind} resource").strip()
+        if not role:
+            role = f"{kind} resource"
+        role = role[:128]
+        stem = _sanitize_stem(str(row.get("owner") or role or kind))
+        entity_id = canonical_spec_id(f"{stem}_{kind}_{digest}")
+
+        prior = entities.get(entity_id)
+        if prior is None:
+            entities[entity_id] = {
+                "entity_id": entity_id,
+                "kind": kind,
+                "role": role,
+                "requirement_refs": list(requirement_refs),
+                "source_clauses": list(source_clauses),
+                "implementation_obligations": [role],
+                "host_derived_resource_definition": True,
+            }
+            created.append(entity_id)
+            continue
+
+        if prior.get("kind") != kind:
+            raise SlotFillError(
+                f"CONTENT_RESOURCE_ID_CONFLICT: {entity_id}: "
+                f"{prior.get('kind')} != {kind}"
             )
-            digest = sha256(encoded.encode("utf-8")).hexdigest()[:12]
-            role = str(row.get("purpose") or f"{kind} resource").strip()
-            if not role:
-                role = f"{kind} resource"
-            role = role[:128]
-            stem = _sanitize_stem(str(row.get("owner") or role or kind))
-            entity_id = canonical_spec_id(f"{stem}_{kind}_{digest}")
-
-            prior = entities.get(entity_id)
-            if prior is None:
-                entities[entity_id] = {
-                    "entity_id": entity_id,
-                    "kind": kind,
-                    "role": role,
-                    "requirement_refs": [requirement_id],
-                    "source_clauses": [statement],
-                    "implementation_obligations": [role],
-                    "host_derived_resource_definition": True,
-                }
-                created.append(entity_id)
-                continue
-
-            if prior.get("kind") != kind:
-                raise SlotFillError(
-                    f"CONTENT_RESOURCE_ID_CONFLICT: {entity_id}: "
-                    f"{prior.get('kind')} != {kind}"
-                )
+        for requirement_id in requirement_refs:
             if requirement_id not in prior["requirement_refs"]:
                 prior["requirement_refs"].append(requirement_id)
+        for statement in source_clauses:
             if statement not in prior["source_clauses"]:
                 prior["source_clauses"].append(statement)
-            if role not in prior["implementation_obligations"]:
-                prior["implementation_obligations"].append(role)
+        if role not in prior["implementation_obligations"]:
+            prior["implementation_obligations"].append(role)
 
     return tuple(created)
 
@@ -211,7 +226,11 @@ def compile_content_graph(
 
     if router is None:
         raise SlotFillError("CONTENT_GRAPH_UNRESOLVED: no router supplied")
-    requirements = (request_catalog or {}).get("requirements")
+    catalog = request_catalog or {}
+    requirements = catalog.get("requirements")
+    host_constraints = catalog.get("host_constraints", {})
+    if not isinstance(host_constraints, Mapping):
+        raise SlotFillError("CONTENT_HOST_CONSTRAINTS_INVALID")
     if requirements is None:
         requirements = list(_active_requirement_ledger(prompt))
     if request_catalog is not None and not requirements:
@@ -371,7 +390,11 @@ def compile_content_graph(
             entities[eid]["source_clauses"].append(statement)
         owned.append(context)
 
-    _materialize_authored_resource_definitions(entities, owned)
+    _materialize_authored_resource_definitions(
+        entities,
+        host_constraints,
+        owned,
+    )
 
     # Discover each ordered entity pair once, with all of its authored context.
     # Repeating the full pair graph for every concern multiplied model work and
