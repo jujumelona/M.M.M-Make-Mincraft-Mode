@@ -47,8 +47,11 @@ def _tokens(value: Any) -> set[str]:
 def _domain_terms(domain: Mapping[str, Any]) -> set[str]:
     requirement = domain.get("requirement")
     if isinstance(requirement, Mapping) and requirement:
-        return _tokenize_intent(str(requirement.get("semantic_capability") or "") + " "
-                                + str(requirement.get("statement") or ""))
+        return _tokens(
+            str(requirement.get("semantic_capability") or "")
+            + " "
+            + str(requirement.get("statement") or "")
+        )
     values = [str(domain.get("objective") or "")]
     for key in ("requirements", "queries"):
         raw = domain.get(key)
