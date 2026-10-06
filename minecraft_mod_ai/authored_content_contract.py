@@ -36,6 +36,19 @@ CONTENT_GRAPH_CONTEXT_CONCERNS = (
 
 CONTENT_GRAPH_HOST_CONSTRAINT_CONCERNS = frozenset({"paths"})
 
+# Registry/data-resource rows are engineering constraints. They may describe a
+# binding or data file without introducing a new Minecraft content identity of
+# their own. Keep those coverage units active, but do not force the small model
+# to invent a pseudo item/recipe/tag merely to satisfy cardinality.
+CONTENT_CONCERN_MINIMUM_ENTITY_COUNT = {
+    "registries": 0,
+    "data_resources": 0,
+    "assets": 1,
+    "interactions": 1,
+    "displayed_state": 1,
+}
+
+
 # Cross-stage ownership for resources_and_ui.  These sets are the authority used by
 # planning coverage, Typed PlatformIR and production lowering.  Do not duplicate
 # concern-name lists in downstream stages.
@@ -117,7 +130,7 @@ def content_request_catalog(
             "coverage_ref": coverage_ref,
             "source_records": rows,
             "allowed_content_kinds": list(CONTENT_CONCERN_KINDS[concern]),
-            "minimum_entity_count": 1,
+            "minimum_entity_count": CONTENT_CONCERN_MINIMUM_ENTITY_COUNT[concern],
         })
     return {"requirements": requirements}
 
@@ -201,6 +214,7 @@ __all__ = [
     "CONTENT_GRAPH_CONTEXT_CONCERNS",
     "CONTENT_GRAPH_DRIVER_CONCERNS",
     "CONTENT_GRAPH_HOST_CONSTRAINT_CONCERNS",
+    "CONTENT_CONCERN_MINIMUM_ENTITY_COUNT",
     "RESOURCE_POLICY_CONCERNS",
     "RESOURCES_AND_UI_OWNED_CONCERNS",
     "content_owned_refs",
