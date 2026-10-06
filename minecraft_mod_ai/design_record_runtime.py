@@ -42,26 +42,6 @@ def _record_key(record: dict[str, Any]) -> str:
 _MAX_DECISION_SLOTS = 16
 
 
-def _decision_slot_selection_schema(allowed_slots: list[str]) -> dict[str, Any]:
-    return {
-        "type": "object",
-        "properties": {
-            "slots": {
-                "type": "array",
-                "minItems": 0,
-                "maxItems": min(len(allowed_slots), _MAX_DECISION_SLOTS),
-                "uniqueItems": True,
-                "items": {
-                    "type": "string",
-                    "enum": list(allowed_slots),
-                },
-            },
-        },
-        "required": ["slots"],
-        "additionalProperties": False,
-    }
-
-
 def _run_decisions(router, identifier, context, progress, checkpoint):
     """Select semantic decision slots once, then let the host own slot identity."""
 
@@ -80,12 +60,34 @@ def _run_decisions(router, identifier, context, progress, checkpoint):
     if not allowed_slots:
         return [], normalized
 
-    selector_schema = _decision_slot_selection_schema(allowed_slots)
-    binding = "decision-slots-v1:" + task_binding(template, normalized, ())
-    saved = (progress or {}).get(binding)
-    if isinstance(saved, dict) and isinstance(saved.get("slots"), list):
-        selected_slots = list(saved["slots"])
-    else:
+    if len(allowed_slots) > _MAX_DECISION_SLOTS:
+        raise TemplateBlocked("TEMPLATE_DECISION_SLOT_SELECTION_INVALID")
+
+    safe_checkpoint = serialized_callback(checkpoint)
+    applicability_schema = {
+        "type": "object",
+        "properties": {
+            "selected": {"type": "boolean"},
+        },
+        "required": ["selected"],
+        "additionalProperties": False,
+    }
+
+    def choose_slot(job):
+        index, slot_id = job
+        binding_context = {
+            **normalized,
+            "allowed_slots": [slot_id],
+            "record_index": index,
+        }
+        binding = (
+            "decision-slot-applicability-v2:"
+            + task_binding(template, binding_context, ())
+        )
+        saved = (progress or {}).get(binding)
+        if isinstance(saved, dict) and type(saved.get("selected")) is bool:
+            return slot_id if saved["selected"] else None
+
         selected = generate_fixed_template_value(
             router,
             "planner",
@@ -93,34 +95,42 @@ def _run_decisions(router, identifier, context, progress, checkpoint):
                 {
                     "role": "system",
                     "content": (
-                        "Select the distinct design slots that require an authored decision "
-                        "for this requirement. Choose only from allowed_slots. Return an empty "
-                        "list when no listed slot requires a decision. Do not author values, "
-                        "ordinals, counts, retries, or continuation metadata."
+                        "Decide whether this one host-specified design slot requires "
+                        "an authored semantic decision for the requirement. Return only "
+                        "selected=true or selected=false. The host owns slot identity, "
+                        "cardinality, ordering, and termination."
                     ),
                 },
                 {
                     "role": "user",
-                    "content": json.dumps(normalized, ensure_ascii=False),
+                    "content": json.dumps(binding_context, ensure_ascii=False),
                 },
             ),
-            response_schema=selector_schema,
+            response_schema=applicability_schema,
             enable_tools=False,
-            description="Select applicable design decision slots.",
-            output_token_ceiling=structured_output_token_ceiling(selector_schema),
+            description="Decide applicability of one host-owned design slot.",
+            output_token_ceiling=structured_output_token_ceiling(
+                applicability_schema
+            ),
         )
-        selected_slots = list(selected["slots"])
-        if checkpoint is not None:
-            checkpoint(binding, {"slots": list(selected_slots)})
+        is_selected = bool(selected["selected"])
+        if safe_checkpoint is not None:
+            safe_checkpoint(binding, {"selected": is_selected})
+        return slot_id if is_selected else None
 
-    if (
-        len(selected_slots) != len(set(selected_slots))
-        or len(selected_slots) > _MAX_DECISION_SLOTS
-        or any(slot not in allowed_slots for slot in selected_slots)
-    ):
-        raise TemplateBlocked("TEMPLATE_DECISION_SLOT_SELECTION_INVALID")
+    applicability_results = deterministic_model_map(
+        router,
+        tuple(enumerate(allowed_slots)),
+        choose_slot,
+        role="planner",
+        thread_name_prefix="design-decision-applicability",
+    )
+    selected_slots = [
+        slot_id
+        for slot_id in applicability_results
+        if isinstance(slot_id, str)
+    ]
 
-    safe_checkpoint = serialized_callback(checkpoint)
     jobs = tuple(enumerate(selected_slots))
 
     def run_slot(job):
