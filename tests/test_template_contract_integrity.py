@@ -6,6 +6,8 @@ from typing import Any, Iterable
 
 import yaml
 
+from minecraft_mod_ai.template_contract_validation import validate_template_contract
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CANONICAL_ROOT = REPO_ROOT / "minecraft_mod_ai" / "templates"
@@ -136,6 +138,7 @@ def test_all_canonical_templates_are_valid_and_contract_safe() -> None:
     for path in files:
         data = _load(path)
         assert isinstance(data, dict), f"{path}: template root must be a mapping"
+        validate_template_contract(data)
 
         template_id = data.get("id")
         if template_id is not None:
