@@ -34,10 +34,7 @@ def _design() -> dict[str, object]:
     }
 
 
-def test_each_planned_work_item_keeps_exact_authored_requirement_identity(monkeypatch) -> None:
-    from minecraft_mod_ai import evidence_first_planning
-
-    monkeypatch.setattr(evidence_first_planning, "_validate_request_catalog", lambda *_args, **_kwargs: None)
+def test_each_planned_work_item_keeps_exact_authored_requirement_identity() -> None:
     design = _design()
     plan = compile_pre_retrieval_plan("trace requirements", design)
 
@@ -49,20 +46,14 @@ def test_each_planned_work_item_keeps_exact_authored_requirement_identity(monkey
     assert by_ref["req_beta"]["depends_on"] == [by_ref["req_alpha"]["work_id"]]
 
 
-def test_unknown_authored_dependency_fails_closed(monkeypatch) -> None:
-    from minecraft_mod_ai import evidence_first_planning
-
-    monkeypatch.setattr(evidence_first_planning, "_validate_request_catalog", lambda *_args, **_kwargs: None)
+def test_unknown_authored_dependency_fails_closed() -> None:
     design = _design()
     design["_evidence_request_catalog"]["requirements"][1]["depends_on"] = ["req_missing"]
     with pytest.raises(ValueError, match="unknown dependencies"):
         compile_pre_retrieval_plan("trace requirements", design)
 
 
-def test_tampering_with_requirement_binding_invalidates_plan(monkeypatch) -> None:
-    from minecraft_mod_ai import evidence_first_planning
-
-    monkeypatch.setattr(evidence_first_planning, "_validate_request_catalog", lambda *_args, **_kwargs: None)
+def test_tampering_with_requirement_binding_invalidates_plan() -> None:
     design = _design()
     plan = compile_pre_retrieval_plan("trace requirements", design)
     plan["planned_work"][0]["requirement_ref"] = "req_beta"

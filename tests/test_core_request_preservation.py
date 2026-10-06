@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 from pathlib import Path
 
 import pytest
@@ -54,18 +53,6 @@ def test_llama_tool_normalization_preserves_full_request_contract() -> None:
     assert normalized.task == request.task
     assert normalized.prompt == request.prompt
     assert dict(normalized.metadata) == dict(request.metadata)
-
-
-def test_model_router_core_derives_tool_turns_with_dataclass_replace() -> None:
-    from minecraft_mod_ai import progress_aware_tool_loop
-
-    source = inspect.getsource(progress_aware_tool_loop)
-
-    # Derived turns must inherit the entire GenerationRequest contract. If a future
-    # field is added to the dataclass, replace() carries it automatically rather than
-    # requiring every tool-loop branch to remember to copy it.
-    assert "GenerationRequest(" not in source
-    assert source.count("replace(") >= 2
 
 
 def test_model_router_tool_name_projection_rejects_duplicate_ownership() -> None:

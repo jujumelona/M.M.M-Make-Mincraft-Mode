@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from minecraft_mod_ai import rag_index
 from minecraft_mod_ai import small_model_retrieval_efficiency_contract as selective
+from minecraft_mod_ai.production_tools import ProductionToolService
 
 
 def _messages(reason: str):
@@ -42,13 +44,14 @@ def test_host_only_failures_do_not_request_retrieval() -> None:
 
 
 def test_selective_repair_contract_is_explicitly_installable() -> None:
-    from minecraft_mod_ai.custom_generation_search_contract import (
-        _ResearchEvidenceRouter,
-    )
-
     _install_selective_contract()
     assert getattr(
-        _ResearchEvidenceRouter.generate_text,
-        "_mmm_selective_repair_rag",
+        ProductionToolService.index_project_rag,
+        "_mmm_explicit_semantic_index_policy",
+        False,
+    )
+    assert getattr(
+        rag_index._expand_sqlite_relationships,
+        "_mmm_bidirectional_dependency_graph",
         False,
     )

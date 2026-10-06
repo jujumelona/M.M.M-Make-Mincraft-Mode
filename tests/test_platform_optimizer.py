@@ -60,12 +60,10 @@ def test_missing_loader_provider_is_fail_closed() -> None:
 
 
 def test_public_sessions_default_to_unpinned_target() -> None:
-    legacy = inspect.signature(api.ModAISession.__init__)
     complete = inspect.signature(api.CompleteModAISession.__init__)
-    assert legacy.parameters["minecraft_version"].default is None
-    assert legacy.parameters["loader"].default is None
     assert complete.parameters["minecraft_version"].default is None
     assert complete.parameters["loader"].default is None
+    assert not hasattr(api, "ModAISession")
 
 
 def test_no_historical_constructor_placeholder_or_newest_fallback() -> None:
