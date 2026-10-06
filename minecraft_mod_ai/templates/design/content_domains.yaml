@@ -9,7 +9,6 @@ record_schema:
       type: array
       minItems: 1
       maxItems: 3
-      uniqueItems: true
       items:
         type: string
         enum:
@@ -25,3 +24,4 @@ record_schema:
   additionalProperties: false
 rules:
   - Select only domains directly required by the requested gameplay; the host must skip this template when none are required.
+  - The host owns duplicate normalization and stable ordering; choose semantic domain values only.
