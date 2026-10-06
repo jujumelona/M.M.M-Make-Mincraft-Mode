@@ -6,12 +6,14 @@ This intentionally loads the selected model; mocked adapters cannot issue a PASS
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 from .model_registry import ModelRegistry
 from .model_router import ModelRouter
-import hashlib
 
 def fingerprint(value: Any) -> str:
     return "sha256:" + hashlib.sha256(json.dumps(
