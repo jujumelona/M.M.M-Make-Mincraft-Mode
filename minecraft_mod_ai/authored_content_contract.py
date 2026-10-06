@@ -20,14 +20,12 @@ from .content_design_contract import CONTENT_CONCERN_KINDS, CONTENT_KIND_TO_FACT
 
 
 CONTENT_GRAPH_DRIVER_CONCERNS = (
-    # Discover concrete owners before registry binding. Registry rows describe
-    # engineering identifiers/bindings and are the weakest source of content
-    # identity; running them first forced the small model to invent pseudo-content
-    # from catalog/registry names instead of reusing already discovered owners.
-    "data_resources",
+    # Discover concrete owners first. Engineering-only data/registry rows are
+    # processed after owner discovery and cannot create primary content identities.
     "assets",
     "interactions",
     "displayed_state",
+    "data_resources",
     "registries",
 )
 
