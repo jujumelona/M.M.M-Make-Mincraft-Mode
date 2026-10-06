@@ -132,14 +132,27 @@ def _assert_no_forbidden_schema_sentinels(data: Any, path: Path) -> None:
     visit(data)
 
 
+def test_all_template_model_contracts_match_transport() -> None:
+    failures: list[str] = []
+    for path in _yaml_files(CANONICAL_ROOT):
+        data = _load(path)
+        if not isinstance(data, dict):
+            failures.append(f"{path}: template root must be a mapping")
+            continue
+        try:
+            validate_template_contract(data)
+        except Exception as exc:
+            failures.append(f"{path.relative_to(CANONICAL_ROOT)}: {exc}")
+
+    assert not failures, "template transport contract failures:\n" + "\n".join(failures)
+
+
 def test_all_canonical_templates_are_valid_and_contract_safe() -> None:
     files = _yaml_files(CANONICAL_ROOT)
     assert files, "canonical template tree is empty"
     for path in files:
         data = _load(path)
         assert isinstance(data, dict), f"{path}: template root must be a mapping"
-        validate_template_contract(data)
-
         template_id = data.get("id")
         if template_id is not None:
             expected_id = path.relative_to(CANONICAL_ROOT).with_suffix("").as_posix()
