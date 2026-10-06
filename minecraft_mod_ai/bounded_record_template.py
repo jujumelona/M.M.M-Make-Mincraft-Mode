@@ -19,6 +19,15 @@ _EMPTY_REASON = "No applicable records in the supplied context."
 _MAX_RECORD_SET_ITEMS = 16
 
 
+def _validated_minimum_count(minimum_count: int) -> int:
+    if type(minimum_count) is not int or not 0 <= minimum_count <= _MAX_RECORD_SET_ITEMS:
+        raise ValueError(
+            f"TEMPLATE_RECORD_SET_MINIMUM: {minimum_count!r} is outside "
+            f"0..{_MAX_RECORD_SET_ITEMS}"
+        )
+    return minimum_count
+
+
 def record_cardinality_response_schema(
     template: dict[str, Any] | None = None,
     *,
@@ -27,7 +36,7 @@ def record_cardinality_response_schema(
     """Tiny semantic cardinality decision; the host owns all record iteration."""
 
     del template
-    minimum = max(0, min(int(minimum_count), _MAX_RECORD_SET_ITEMS))
+    minimum = _validated_minimum_count(minimum_count)
     return {
         "type": "object",
         "properties": {
@@ -131,7 +140,7 @@ def run_bounded_record_template(
         normalized_context,
     )
     record_validator = Draft202012Validator(record_schema)
-    minimum = max(0, min(int(minimum_count), _MAX_RECORD_SET_ITEMS))
+    minimum = _validated_minimum_count(minimum_count)
     binding = f"record-set-v3:min={minimum}:" + task_binding(
         template,
         normalized_context,
