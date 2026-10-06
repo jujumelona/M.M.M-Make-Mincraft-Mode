@@ -137,28 +137,58 @@ def _assert_no_host_only_model_constraints(
     surface: str,
     path: str = "$",
 ) -> None:
-    if isinstance(value, Mapping):
-        for key, child in value.items():
-            if key in _HOST_ONLY_MODEL_CONSTRAINT_KEYWORDS:
-                raise _configuration_error(
-                    "MODEL_SCHEMA_HOST_ONLY_CONSTRAINT: "
-                    f"{key!r} at {path} for {surface}; "
-                    "encode this invariant in host-owned structure before inference"
-                )
-            _assert_no_host_only_model_constraints(
-                child,
-                surface=surface,
-                path=f"{path}.{key}",
+    if not isinstance(value, Mapping):
+        return
+
+    for keyword in _HOST_ONLY_MODEL_CONSTRAINT_KEYWORDS:
+        if keyword in value:
+            raise _configuration_error(
+                "MODEL_SCHEMA_HOST_ONLY_CONSTRAINT: "
+                f"{keyword!r} at {path} for {surface}; "
+                "encode this invariant in host-owned structure before inference"
             )
-    elif isinstance(value, Sequence) and not isinstance(
-        value, (str, bytes, bytearray)
+
+    # Recurse only through JSON-Schema-bearing positions. Keys inside
+    # properties/$defs are user-defined names, not schema keywords.
+    for container_key in ("properties", "$defs", "definitions"):
+        container = value.get(container_key)
+        if isinstance(container, Mapping):
+            for name, child in container.items():
+                if isinstance(child, Mapping):
+                    _assert_no_host_only_model_constraints(
+                        child,
+                        surface=surface,
+                        path=f"{path}.{container_key}[{name!r}]",
+                    )
+
+    for child_key in (
+        "items",
+        "additionalProperties",
+        "if",
+        "then",
+        "else",
+        "not",
     ):
-        for index, child in enumerate(value):
+        child = value.get(child_key)
+        if isinstance(child, Mapping):
             _assert_no_host_only_model_constraints(
                 child,
                 surface=surface,
-                path=f"{path}[{index}]",
+                path=f"{path}.{child_key}",
             )
+
+    for list_key in ("oneOf", "anyOf", "allOf", "prefixItems"):
+        children = value.get(list_key)
+        if isinstance(children, Sequence) and not isinstance(
+            children, (str, bytes, bytearray)
+        ):
+            for index, child in enumerate(children):
+                if isinstance(child, Mapping):
+                    _assert_no_host_only_model_constraints(
+                        child,
+                        surface=surface,
+                        path=f"{path}.{list_key}[{index}]",
+                    )
 
 
 def assert_strict_atomicity_bounds(
