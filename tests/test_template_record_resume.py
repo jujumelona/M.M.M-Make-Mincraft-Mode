@@ -72,7 +72,7 @@ def test_interruption_resumes_from_host_owned_count_without_reasking(monkeypatch
     assert len(record_calls) == 1
     assert len(progress) == 1
     binding = next(iter(progress))
-    assert binding.startswith("record-set-v2:")
+    assert binding.startswith("record-set-v3:")
     assert progress[binding] == {"count": 2}
 
     _patch_count(
@@ -158,7 +158,7 @@ def test_saved_record_set_is_revalidated_before_any_model_call(monkeypatch):
         checkpoint=lambda key, value: progress.update({key: deepcopy(value)}),
     )
     runtime.run_record_template(None, IDENTIFIER, **kwargs)
-    key = next(item for item in progress if item.startswith("record-set-v2:"))
+    key = next(item for item in progress if item.startswith("record-set-v3:"))
     progress[key]["records"][0]["trigger"] = "   "
 
     _patch_count(
