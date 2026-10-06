@@ -8,17 +8,62 @@ acceptance prose.  It only enriches already-compiled tasks with artifact metadat
 adds plan-level artifact/design/acceptance projections.
 """
 
+import hashlib
+import json
+import re
 from collections.abc import Mapping, Sequence
-from functools import wraps
 from typing import Any
 
-try:
-    from . import evidence_first_planning as _planning
-except ImportError:
-    _planning = None
+from .acceptance_contracts import is_public_acceptance as _is_public_acceptance
 from .module_identity import logical_module_id
 
-_INSTALLED = False
+
+def _canonical(value: Any) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+
+
+def _sha(value: Any) -> str:
+    encoded = value.encode("utf-8") if isinstance(value, str) else _canonical(value).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def _hash_without(value: Mapping[str, Any], field: str) -> str:
+    payload = dict(value)
+    payload[field] = ""
+    return _sha(payload)
+
+
+def _slug(value: Any, fallback: str = "item") -> str:
+    raw = str(value or "")
+    text = re.sub(r"[^a-z0-9_]+", "_", raw.casefold()).strip("_")
+    text = re.sub(r"_+", "_", text)
+    if not text:
+        text = f"{fallback}_{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:10]}"
+    if not text[0].isalpha():
+        text = f"{fallback}_{text}"
+    return text[:36]
+
+
+def _stable_id(prefix: str, semantic: str, discriminator: Any) -> str:
+    digest = _sha({"semantic": semantic, "discriminator": discriminator})[7:17]
+    return f"{prefix}_{_slug(semantic)}_{digest}"[:63]
+
+
+def _strings(value: Any) -> tuple[str, ...]:
+    if isinstance(value, str):
+        values = (value,)
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        values = value
+    else:
+        return ()
+    return tuple(dict.fromkeys(text for item in values if (text := str(item).strip())))
 
 
 def _normalize_ownership(
@@ -45,7 +90,7 @@ def _normalize_ownership(
 
 def _artifact_obligations(task: Mapping[str, Any]) -> list[dict[str, Any]]:
     task_id = str(task.get("task_id") or "")
-    requirement_refs = list(_planning._strings(task.get("requirement_refs")))
+    requirement_refs = list(_strings(task.get("requirement_refs")))
     result: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     kind_map = {
@@ -69,7 +114,7 @@ def _artifact_obligations(task: Mapping[str, Any]) -> list[dict[str, Any]]:
         seen.add(key)
         result.append(
             {
-                "artifact_id": _planning._stable_id(
+                "artifact_id": _stable_id(
                     "artifact", artifact_kind, {"task": task_id, "locator": locator}
                 ),
                 "kind": artifact_kind,
@@ -81,7 +126,7 @@ def _artifact_obligations(task: Mapping[str, Any]) -> list[dict[str, Any]]:
             }
         )
 
-    predicates = set(_planning._strings(task.get("conditional_predicates")))
+    predicates = set(_strings(task.get("conditional_predicates")))
     feature_artifacts = {
         "needs_datagen": (
             "generated_data_resource",
@@ -113,7 +158,7 @@ def _artifact_obligations(task: Mapping[str, Any]) -> list[dict[str, Any]]:
         seen.add(key)
         result.append(
             {
-                "artifact_id": _planning._stable_id(
+                "artifact_id": _stable_id(
                     "artifact", artifact_kind, {"task": task_id, "purpose": purpose}
                 ),
                 "kind": artifact_kind,
@@ -143,13 +188,13 @@ def _postprocess_tasks(
     for raw in tasks:
         task = dict(raw)
         task_id = str(task.get("task_id") or "")
-        req_refs = list(_planning._strings(task.get("requirement_refs")))
+        req_refs = list(_strings(task.get("requirement_refs")))
         req = req_refs[0] if req_refs else ""
         gap = gap_by_req.get(req, {})
 
-        original_acceptance = list(_planning._strings(task.get("acceptance")))
+        original_acceptance = list(_strings(task.get("acceptance")))
         public = [
-            item for item in original_acceptance if _planning._is_public_acceptance(item)
+            item for item in original_acceptance if _is_public_acceptance(item)
         ]
         internal = [item for item in original_acceptance if item not in public]
         if not internal:
@@ -175,7 +220,7 @@ def _postprocess_tasks(
                 continue
             task["artifact_obligations"].append(
                 {
-                    "artifact_id": _planning._stable_id(
+                    "artifact_id": _stable_id(
                         "artifact", kind, {"task": task_id, "requirement": req}
                     ),
                     "kind": kind,
@@ -189,27 +234,27 @@ def _postprocess_tasks(
             existing_artifact_kinds.add(kind)
 
         task["implementation_capabilities"] = list(
-            _planning._strings(gap.get("implementation_capabilities"))
+            _strings(gap.get("implementation_capabilities"))
         )
         task["design_resolution_obligations"] = list(
-            _planning._strings(gap.get("design_resolution_obligations"))
+            _strings(gap.get("design_resolution_obligations"))
         )
         task["semantic_type"] = str(
             gap.get("semantic_type") or "gameplay_mechanic"
         )
         task["unlock_policy"] = dict(gap.get("unlock_policy") or {})
         task["runtime_acceptance"] = list(
-            _planning._strings(gap.get("runtime_acceptance"))
+            _strings(gap.get("runtime_acceptance"))
         )
 
         if public:
-            gates = list(_planning._strings(task.get("required_gates")))
+            gates = list(_strings(task.get("required_gates")))
             if "runtime_gameplay_validation" not in gates:
                 gates.append("runtime_gameplay_validation")
             task["required_gates"] = gates
             done = task.get("done_predicate")
             checks = list(
-                _planning._strings(
+                _strings(
                     done.get("checks") if isinstance(done, Mapping) else ()
                 )
             )
@@ -243,7 +288,7 @@ def _postprocess_tasks(
             )
         )
         task["task_sha256"] = ""
-        task["task_sha256"] = _planning._hash_without(task, "task_sha256")
+        task["task_sha256"] = _hash_without(task, "task_sha256")
         result.append(task)
     return tuple(result)
 
@@ -313,9 +358,9 @@ def _design_resolution(plan: Mapping[str, Any]) -> dict[str, Any]:
     for task in tasks if isinstance(tasks, list) else ():
         if not isinstance(task, Mapping):
             continue
-        refs = list(_planning._strings(task.get("requirement_refs")))
-        for obligation in _planning._strings(task.get("design_resolution_obligations")):
-            obligation_id = _planning._stable_id(
+        refs = list(_strings(task.get("requirement_refs")))
+        for obligation in _strings(task.get("design_resolution_obligations")):
+            obligation_id = _stable_id(
                 "design_obligation", obligation, {"task": task.get("task_id")}
             )
             if obligation_id in seen:
@@ -353,9 +398,9 @@ def _acceptance_boundary(plan: Mapping[str, Any]) -> dict[str, Any]:
             {
                 "requirement_ref": requirement.get("requirement_id"),
                 "capability": requirement.get("capability"),
-                "acceptance": list(_planning._strings(requirement.get("acceptance"))),
+                "acceptance": list(_strings(requirement.get("acceptance"))),
                 "runtime_acceptance": list(
-                    _planning._strings(requirement.get("runtime_acceptance"))
+                    _strings(requirement.get("runtime_acceptance"))
                 ),
             }
         )
@@ -367,7 +412,7 @@ def _acceptance_boundary(plan: Mapping[str, Any]) -> dict[str, Any]:
         internal.append(
             {
                 "task_ref": task.get("task_id"),
-                "checks": list(_planning._strings(task.get("internal_invariants"))),
+                "checks": list(_strings(task.get("internal_invariants"))),
             }
         )
     return {
@@ -378,73 +423,9 @@ def _acceptance_boundary(plan: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def install_task_artifact_contract() -> None:
-    """Install artifact projection without adding a second planning authority."""
+    """Compatibility entrypoint; artifact projection is source-owned by pure helpers."""
 
-    global _INSTALLED
-    if _INSTALLED:
-        return
-
-    current_ownership = _planning._ownership_context
-    if not getattr(current_ownership, "_mmm_logical_module_identity", False):
-
-        @wraps(current_ownership)
-        def ownership(game_design: Mapping[str, Any]):
-            return _normalize_ownership(game_design, current_ownership(game_design))
-
-        ownership._mmm_logical_module_identity = True
-        _planning._ownership_context = ownership
-
-    current_tasks = _planning._compile_tasks
-    if not getattr(current_tasks, "_mmm_codeplan_task_artifacts", False):
-
-        @wraps(current_tasks)
-        def compile_tasks(
-            gaps,
-            reuse,
-            target,
-            branches,
-            ownership,
-            *,
-            root_provides=None,
-            emit_trace=True,
-        ):
-            return _postprocess_tasks(
-                current_tasks(
-                    gaps,
-                    reuse,
-                    target,
-                    branches,
-                    ownership,
-                    root_provides=root_provides,
-                    emit_trace=emit_trace,
-                ),
-                gaps,
-            )
-
-        compile_tasks._mmm_codeplan_task_artifacts = True
-        compile_tasks.__wrapped__ = current_tasks
-        _planning._compile_tasks = compile_tasks
-
-    current_compile = _planning.compile_evidence_first_plan
-    if not getattr(current_compile, "_mmm_artifact_acceptance_boundary", False):
-
-        @wraps(current_compile)
-        def compile_plan(
-            prompt: str, game_design: Mapping[str, Any], **kwargs: Any
-        ):
-            plan = dict(current_compile(prompt, game_design, **kwargs))
-            plan["artifact_plan"] = _artifact_plan(plan, game_design)
-            plan["design_resolution"] = _design_resolution(plan)
-            plan["acceptance_boundary"] = _acceptance_boundary(plan)
-            plan["plan_sha256"] = ""
-            plan["plan_sha256"] = _planning._hash_without(plan, "plan_sha256")
-            _planning.validate_evidence_first_plan(plan, prompt=prompt)
-            return plan
-
-        compile_plan._mmm_artifact_acceptance_boundary = True
-        _planning.compile_evidence_first_plan = compile_plan
-
-    _INSTALLED = True
+    return None
 
 
 __all__ = [
