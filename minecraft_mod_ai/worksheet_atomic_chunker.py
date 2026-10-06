@@ -20,7 +20,8 @@ from .execution_contract_policy import (
     PLANNER_RECORD_PAGE_MAX_FIELDS,
 )
 from .model_output_atomicity_contract import (
-    _assert_closed_object_schemas,
+    assert_atomic_model_schema,
+    effective_model_transport_schema,
     structured_output_token_ceiling,
 )
 from .planning_detail_slots import DETAIL_RECORDS, record_field_schema
@@ -218,13 +219,16 @@ def pack_section_concerns(section: str) -> list[tuple[str, ...]]:
             chunk,
             record_counts={concern_name: proof_count},
         )
-        _assert_closed_object_schemas(
+        surface = f"worksheet page {key}.{concern_name}.{len(chunks) + 1}"
+        assert_atomic_model_schema(
             schema,
-            path=f"worksheet page {key}.{concern_name}.{len(chunks) + 1}",
+            surface=surface,
         )
         if not per_record_transport:
             try:
-                structured_output_token_ceiling(schema)
+                structured_output_token_ceiling(
+                    effective_model_transport_schema(schema)
+                )
             except ValueError as exc:
                 if len(fields) <= 1:
                     raise ValueError(
@@ -307,19 +311,6 @@ def pack_section_concerns(section: str) -> list[tuple[str, ...]]:
                 add_page(concern, fields[start : start + page_width])
 
     return chunks
-
-
-def _model_transport_schema(schema: Any, *, is_properties_map: bool = False) -> Any:
-    if isinstance(schema, dict):
-        return {
-            key: _model_transport_schema(value, is_properties_map=(key == "properties"))
-            for key, value in schema.items()
-            if not (key == "pattern" and not is_properties_map)
-        }
-    if isinstance(schema, list):
-        return [_model_transport_schema(value) for value in schema]
-    return schema
-
 
 
 def worksheet_concern_cardinality_schema(
