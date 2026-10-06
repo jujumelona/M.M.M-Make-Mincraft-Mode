@@ -61,10 +61,13 @@ def validate_template_contract(template):
             raise ValueError(f"TEMPLATE_SLOT_DEFAULT: {identifier}")
         schemas.append(slot["schema"])
     if schemas:
-        from .model_output_atomicity_contract import _assert_closed_object_schemas
-        for schema in schemas:
+        from .model_output_atomicity_contract import assert_atomic_model_schema
+        for index, schema in enumerate(schemas):
             Draft202012Validator.check_schema(schema)
-            _assert_closed_object_schemas(schema)
+            assert_atomic_model_schema(
+                schema,
+                surface=f"template {identifier!r} schema[{index}]",
+            )
     if "render" in template and "inputs" in template:
         declared = template["inputs"]
         if not isinstance(declared, dict) or placeholders(template["render"]) != set(declared):
