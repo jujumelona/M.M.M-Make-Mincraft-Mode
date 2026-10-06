@@ -14,18 +14,10 @@ from minecraft_mod_ai.content_design_graph import (
 )
 
 
-def _owned(
-    requirement_id: str,
-    *,
-    coverage_ref: str,
-    source_records: list[dict],
-) -> dict[str, object]:
+def _owned(requirement_id: str) -> dict[str, object]:
     return {
         "requirement_id": requirement_id,
-        "requirement": f"Implement {coverage_ref}",
-        "coverage_ref": coverage_ref,
-        "source_records": source_records,
-        "minimum_entity_count": 0,
+        "requirement": f"Implement {requirement_id}",
     }
 
 
@@ -67,19 +59,14 @@ def test_resource_definition_without_concrete_target_is_not_created() -> None:
     entities: dict[str, dict] = {}
     created = _materialize_authored_resource_definitions(
         entities,
-        [
-            _owned(
-                "resource_data",
-                coverage_ref="resources_and_ui.data_resources",
-                source_records=[
-                    {
-                        "kind": "tag",
-                        "purpose": "ship blueprint tag",
-                        "owner": "space_mode",
-                    }
-                ],
-            )
-        ],
+        {
+            "data_resources": [{
+                "kind": "tag",
+                "purpose": "ship blueprint tag",
+                "owner": "space_mode",
+            }]
+        },
+        [_owned("gameplay")],
     )
 
     assert created == ()
@@ -92,19 +79,14 @@ def test_registry_constraint_never_invents_registry_tag() -> None:
     }
     created = _materialize_authored_resource_definitions(
         entities,
-        [
-            _owned(
-                "registry_rows",
-                coverage_ref="resources_and_ui.registries",
-                source_records=[
-                    {
-                        "kind": "tag",
-                        "purpose": "ship blueprint db",
-                        "identifier": "ship_blueprint_registry",
-                    }
-                ],
-            )
-        ],
+        {
+            "registries": [{
+                "purpose": "ship blueprint db",
+                "identifier": "ship_blueprint_registry",
+                "binding_requirement": "bind without inventing a tag",
+            }]
+        },
+        [_owned("gameplay")],
     )
 
     assert created == ()
@@ -117,26 +99,21 @@ def test_explicit_tag_is_derived_only_after_concrete_member_exists() -> None:
     }
     created = _materialize_authored_resource_definitions(
         entities,
-        [
-            _owned(
-                "resource_data",
-                coverage_ref="resources_and_ui.data_resources",
-                source_records=[
-                    {
-                        "kind": "tag",
-                        "purpose": "ore resource metadata",
-                        "owner": "space_mode",
-                    }
-                ],
-            )
-        ],
+        {
+            "data_resources": [{
+                "kind": "tag",
+                "purpose": "ore resource metadata",
+                "owner": "space_mode",
+            }]
+        },
+        [_owned("gameplay")],
     )
 
     assert len(created) == 1
     node = entities[created[0]]
     assert node["kind"] == "registry_tag"
     assert node["host_derived_resource_definition"] is True
-    assert node["requirement_refs"] == ["resource_data"]
+    assert node["requirement_refs"] == ["gameplay"]
 
 
 def test_recipe_definitions_are_derived_only_with_item_targets() -> None:
@@ -145,27 +122,48 @@ def test_recipe_definitions_are_derived_only_with_item_targets() -> None:
     }
     created = _materialize_authored_resource_definitions(
         entities,
-        [
-            _owned(
-                "resource_data",
-                coverage_ref="resources_and_ui.data_resources",
-                source_records=[
-                    {
-                        "kind": "crafting recipe",
-                        "purpose": "assemble alloy",
-                        "owner": "alloy",
-                    },
-                    {
-                        "kind": "smelting recipe",
-                        "purpose": "refine alloy",
-                        "owner": "alloy",
-                    },
-                ],
-            )
-        ],
+        {
+            "data_resources": [
+                {
+                    "kind": "crafting recipe",
+                    "purpose": "assemble alloy",
+                    "owner": "alloy",
+                },
+                {
+                    "kind": "smelting recipe",
+                    "purpose": "refine alloy",
+                    "owner": "alloy",
+                },
+            ]
+        },
+        [_owned("gameplay")],
     )
 
     assert {entities[eid]["kind"] for eid in created} == {
         "crafting_recipe",
         "smelting_recipe",
     }
+
+
+def test_resource_nodes_never_create_synthetic_requirement_ids() -> None:
+    entities = {
+        "raw_alloy": _primary("item", "raw_alloy"),
+    }
+    created = _materialize_authored_resource_definitions(
+        entities,
+        {
+            "data_resources": [{
+                "kind": "tag",
+                "purpose": "alloy grouping",
+                "owner": "alloy",
+            }]
+        },
+        [_owned("content_assets_a"), _owned("content_interactions_b")],
+    )
+
+    node = entities[created[0]]
+    assert node["requirement_refs"] == [
+        "content_assets_a",
+        "content_interactions_b",
+    ]
+    assert all(not ref.startswith("resource_") for ref in node["requirement_refs"])
