@@ -6,13 +6,43 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-try:
-    from . import evidence_first_planning as _planning
-except ImportError:
-    _planning = None
 from .translation_runtime import translate_requirement
 
-_INSTALLED = False
+_BRANCHES = (
+    "needs_registry",
+    "needs_datagen",
+    "needs_persistence",
+    "needs_network",
+    "needs_client_render",
+    "needs_worldgen",
+    "needs_mixin",
+    "needs_loader_leaf",
+)
+
+
+def _strings(value: Any) -> tuple[str, ...]:
+    if isinstance(value, str):
+        values = (value,)
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        values = value
+    else:
+        return ()
+    return tuple(
+        dict.fromkeys(
+            text
+            for item in values
+            if (text := str(item).strip())
+        )
+    )
+
+
+def _mapping(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _canonical_capability(value: Any) -> str:
+    text = str(value or "").strip().casefold().removeprefix("capability:")
+    return "capability:" + text if text else ""
 
 
 def _contains_term(text: str, term: str) -> bool:
@@ -31,16 +61,16 @@ def _component_supports_requirement(
     component: Mapping[str, Any], requirement: Mapping[str, Any]
 ) -> bool:
     required = {
-        _planning._canonical_capability(value)
-        for value in _planning._strings(requirement.get("provides"))
+        _canonical_capability(value)
+        for value in _strings(requirement.get("provides"))
     }
     if not required:
-        capability = _planning._canonical_capability(requirement.get("capability"))
+        capability = _canonical_capability(requirement.get("capability"))
         if capability:
             required.add(capability)
     provided = {
-        _planning._canonical_capability(value)
-        for value in _planning._strings(component.get("provides"))
+        _canonical_capability(value)
+        for value in _strings(component.get("provides"))
         if str(value).casefold().startswith("capability:")
     }
     return bool(required & provided)
@@ -60,13 +90,13 @@ def _scoped_branch_predicates(
     components: Sequence[Mapping[str, Any]],
     target: Mapping[str, Any],
 ) -> dict[str, dict[str, Any]]:
-    topology = _planning._mapping(target.get("project_topology"))
-    loaders = _planning._strings(topology.get("loaders"))
-    module_ids = _planning._strings(topology.get("module_ids"))
+    topology = _mapping(target.get("project_topology"))
+    loaders = _strings(topology.get("loaders"))
+    module_ids = _strings(topology.get("module_ids"))
     multi_loader = len(loaders) > 1 or len(module_ids) > 1
     result: dict[str, dict[str, Any]] = {}
 
-    for branch in _planning._BRANCHES:
+    for branch in _BRANCHES:
         per_requirement: dict[str, str] = {}
         evidence_by_requirement: dict[str, list[str]] = {}
         active_refs: list[str] = []
@@ -124,7 +154,7 @@ def _branches_for_requirement(
     branches: Mapping[str, Mapping[str, Any]], requirement_ref: str
 ) -> dict[str, dict[str, Any]]:
     scoped: dict[str, dict[str, Any]] = {}
-    for name in _planning._BRANCHES:
+    for name in _BRANCHES:
         raw = branches.get(name)
         value = dict(raw) if isinstance(raw, Mapping) else {}
         statuses = value.get("requirement_status")
@@ -135,7 +165,7 @@ def _branches_for_requirement(
         )
         evidence = value.get("requirement_evidence_refs")
         refs = (
-            list(_planning._strings(evidence.get(requirement_ref)))
+            list(_strings(evidence.get(requirement_ref)))
             if isinstance(evidence, Mapping)
             else []
         )
@@ -149,13 +179,9 @@ def _branches_for_requirement(
 
 
 def install_requirement_branch_scope_contract() -> None:
-    """Install structural branch routing and replace name-only task routing."""
+    """Compatibility entrypoint; branch scoping is now source-owned here."""
 
-    global _INSTALLED
-    if _INSTALLED:
-        return
-    _planning._branch_predicates = _scoped_branch_predicates
-    _INSTALLED = True
+    return None
 
 
 __all__ = [
