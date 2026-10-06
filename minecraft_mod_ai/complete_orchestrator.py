@@ -770,7 +770,20 @@ class CompleteProductionOrchestrator:
                     raise CompleteProductionError('server_launcher is required for complete runtime verification.')
                 if not options.eula_accepted:
                     raise CompleteProductionError('Explicit Minecraft EULA acceptance is required.')
-                memory = options.server_memory_mb or self.policy.runtime_heap_mb(module_count=len(ordered), entity_count=sum(1 for module in ordered if module.kind in ENTITY_PIPELINE_KINDS), structure_count=sum(1 for module in ordered if module.kind == 'structure'))
+                worldgen_owner_ids = {
+                    str(job.get("owner_module") or "").strip()
+                    for job in approved.game_design.get("_artifact_jobs", ())
+                    if isinstance(job, Mapping)
+                    and job.get("canonical_leaf") == "minecraft/worldgen/configured_feature"
+                    and str(job.get("owner_module") or "").strip()
+                }
+                memory = options.server_memory_mb or self.policy.runtime_heap_mb(
+                    module_count=len(ordered),
+                    entity_count=sum(
+                        1 for module in ordered if module.kind in ENTITY_PIPELINE_KINDS
+                    ),
+                    structure_count=len(worldgen_owner_ids),
+                )
                 runtime_config = self._runtime_profile(run_root, memory)
                 runtime_manager = MinecraftRuntimeManager(run_root, config_path=runtime_config)
                 launcher_source = Path(options.server_launcher).expanduser().resolve()
