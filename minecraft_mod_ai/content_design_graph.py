@@ -97,6 +97,54 @@ def _collision_safe_entity_id(
     raise SlotFillError(f"CONTENT_ENTITY_ID_EXHAUSTED: {entity_id}")
 
 
+def _prune_optional_orphan_resource_entities(entities, owned):
+    """Remove pseudo resource definitions that have no concrete graph targets.
+
+    Registry/data-resource worksheet concerns are optional content owners: when the
+    small model invents a recipe/tag from an engineering-only row and the complete
+    discovered graph has no compatible target entity, leave that coverage unit for
+    Typed PlatformIR instead of manufacturing an invalid resource fact.
+    """
+
+    minimum_by_requirement = {
+        context["requirement_id"]: int(context.get("minimum_entity_count", 0))
+        for context in owned
+    }
+    orphan_resource_ids: list[str] = []
+    for eid, node in entities.items():
+        kind = str(node.get("kind") or "")
+        if kind in {"crafting_recipe", "smelting_recipe"}:
+            has_target = any(
+                other_id != eid and other.get("kind") == "item"
+                for other_id, other in entities.items()
+            )
+        elif kind == "registry_tag":
+            has_target = any(
+                other_id != eid and other.get("kind") in {"item", "block", "entity"}
+                for other_id, other in entities.items()
+            )
+        else:
+            continue
+        if has_target:
+            continue
+
+        refs = tuple(
+            str(ref)
+            for ref in node.get("requirement_refs", ())
+            if isinstance(ref, str)
+        )
+        if refs and all(minimum_by_requirement.get(ref, 0) == 0 for ref in refs):
+            orphan_resource_ids.append(eid)
+            continue
+        raise SlotFillError(
+            f"CONTENT_RESOURCE_TARGET_UNRESOLVED: {eid}: {kind}"
+        )
+
+    for eid in orphan_resource_ids:
+        entities.pop(eid, None)
+    return tuple(orphan_resource_ids)
+
+
 from .complete_spec import AssetRequest, ProductionModule
 from .content_design_contract import (
     CONTENT_FACT_TO_PRODUCTION_KIND,
@@ -268,47 +316,7 @@ def compile_content_graph(
             entities[eid]["source_clauses"].append(statement)
         owned.append(context)
 
-    # Resource-definition nodes are only concrete content when the graph also
-    # contains the content they define. Optional engineering concerns such as
-    # registries/data_resources may legitimately contribute no content identity;
-    # discard a model-invented orphan recipe/tag instead of failing later in the
-    # relation lowerer. Required gameplay content still fails closed.
-    minimum_by_requirement = {
-        context["requirement_id"]: int(context.get("minimum_entity_count", 0))
-        for context in owned
-    }
-    orphan_resource_ids: list[str] = []
-    for eid, node in entities.items():
-        kind = str(node.get("kind") or "")
-        if kind in {"crafting_recipe", "smelting_recipe"}:
-            has_target = any(
-                other_id != eid and other.get("kind") == "item"
-                for other_id, other in entities.items()
-            )
-        elif kind == "registry_tag":
-            has_target = any(
-                other_id != eid and other.get("kind") in {"item", "block", "entity"}
-                for other_id, other in entities.items()
-            )
-        else:
-            continue
-        if has_target:
-            continue
-
-        refs = tuple(
-            str(ref)
-            for ref in node.get("requirement_refs", ())
-            if isinstance(ref, str)
-        )
-        if refs and all(minimum_by_requirement.get(ref, 0) == 0 for ref in refs):
-            orphan_resource_ids.append(eid)
-            continue
-        raise SlotFillError(
-            f"CONTENT_RESOURCE_TARGET_UNRESOLVED: {eid}: {kind}"
-        )
-
-    for eid in orphan_resource_ids:
-        entities.pop(eid, None)
+    _prune_optional_orphan_resource_entities(entities, owned)
 
     # Discover each ordered entity pair once, with all of its authored context.
     # Repeating the full pair graph for every concern multiplied model work and
