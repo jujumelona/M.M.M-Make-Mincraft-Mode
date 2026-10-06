@@ -99,6 +99,7 @@ def _collision_safe_entity_id(
 
 from .complete_spec import AssetRequest, ProductionModule
 from .content_design_contract import (
+    CONTENT_FACT_TO_PRODUCTION_KIND,
     REGISTRY_TAG_KIND_TO_TARGET_FACT_TYPE,
     fact_type_for_content_kind,
 )
@@ -636,27 +637,7 @@ def compile_content_graph(
                 display_name=props["display_name"],
             )
         )
-        fact_kind_map = {
-            FactType.ITEM_EXISTS: "item",
-            FactType.BLOCK_EXISTS: "block",
-            FactType.ENTITY_EXISTS: "entity",
-            FactType.GUI_EXISTS: "gui",
-            FactType.NETWORK_PACKET: "networking",
-            FactType.BLOCK_ENTITY_EXISTS: "block_entity",
-            FactType.DATA_COMPONENT: "integration",
-            FactType.WORLDGEN_FEATURE: "structure",
-            FactType.DIMENSION: "dimension",
-            FactType.BIOME: "biome",
-            FactType.STATUS_EFFECT: "effect",
-            FactType.SOUND_EVENT: "integration",
-            FactType.PARTICLE_TYPE: "integration",
-            FactType.ENTITY_LOOT: "loot",
-            FactType.ADVANCEMENT: "advancement",
-            FactType.EQUIPMENT_ARMOR: "armor",
-            FactType.CUSTOM_ITEM_BEHAVIOR: "item",
-            FactType.CUSTOM_BLOCK_BEHAVIOR: "block",
-        }
-        kind = fact_kind_map[fact_type]
+        kind = CONTENT_FACT_TO_PRODUCTION_KIND[fact_type]
         config = {
             "name": props["display_name"],
             "requirement_refs": node["requirement_refs"],
@@ -985,7 +966,7 @@ def compile_content_graph(
                 "registry_kind": registry_kind,
                 "members": [edge["target_id"] for edge in edges],
             }
-            kind = "tag"
+            kind = CONTENT_FACT_TO_PRODUCTION_KIND[fact_type]
         else:
             if any(
                 capabilities[edge["target_id"]] != FactType.ITEM_EXISTS
@@ -1070,7 +1051,7 @@ def compile_content_graph(
                         raise ValueError("unsupported recipe kind")
             except (KeyError, ValueError) as exc:
                 raise SlotFillError(f"CONTENT_RECIPE_UNRESOLVED: {eid}: {exc}") from exc
-            kind = "recipe"
+            kind = CONTENT_FACT_TO_PRODUCTION_KIND[fact_type]
         from .resource_fact_inputs import resource_inputs
 
         fact = ImplementationFact(
