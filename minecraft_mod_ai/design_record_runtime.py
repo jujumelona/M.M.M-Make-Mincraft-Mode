@@ -5,6 +5,7 @@ import json
 from typing import Any
 
 from .bounded_record_template import run_bounded_record_template
+from .content_design_contract import relation_type_supported_for_content_pair
 from .fixed_template_generation import generate_fixed_template_value
 from .model_output_atomicity_contract import structured_output_token_ceiling
 from .parallel_model_tasks import deterministic_model_map, serialized_callback
@@ -257,7 +258,23 @@ def _run_relations(router, identifier, context, progress, checkpoint):
         raise TemplateBlocked("TEMPLATE_RELATION_ENTITY_IDS_DUPLICATE")
 
     relation_types = _relation_vocabulary()
-    allowed_relation_types = list(relation_types)
+    raw_entities = normalized.get("entities")
+    if not isinstance(raw_entities, list):
+        raise TemplateBlocked("TEMPLATE_RELATION_ENTITIES_REQUIRED")
+    entity_kind_by_id: dict[str, str] = {}
+    for entity in raw_entities:
+        if not isinstance(entity, dict):
+            raise TemplateBlocked("TEMPLATE_RELATION_ENTITY_INVALID")
+        entity_id = entity.get("entity_id")
+        kind = entity.get("kind")
+        if not isinstance(entity_id, str) or not isinstance(kind, str):
+            raise TemplateBlocked("TEMPLATE_RELATION_ENTITY_INVALID")
+        if entity_id in entity_kind_by_id and entity_kind_by_id[entity_id] != kind:
+            raise TemplateBlocked(f"TEMPLATE_RELATION_ENTITY_KIND_CONFLICT: {entity_id}")
+        entity_kind_by_id[entity_id] = kind
+    if set(entity_ids) != set(entity_kind_by_id):
+        raise TemplateBlocked("TEMPLATE_RELATION_ENTITY_CONTEXT_MISMATCH")
+
     pairs = tuple(
         (source_id, target_id)
         for source_id in entity_ids
@@ -268,6 +285,20 @@ def _run_relations(router, identifier, context, progress, checkpoint):
 
     def run_pair(pair):
         source_id, target_id = pair
+        allowed_relation_types = [
+            relation_type
+            for relation_type in relation_types
+            if relation_type_supported_for_content_pair(
+                relation_type,
+                entity_kind_by_id[source_id],
+                entity_kind_by_id[target_id],
+            )
+        ]
+        # An impossible pair is a host-known empty relation set. Do not ask the
+        # model to choose cardinality or expose the unbound full relation schema.
+        if not allowed_relation_types:
+            return []
+
         pair_context = {
             **normalized,
             "source_id": source_id,
@@ -287,7 +318,7 @@ def _run_relations(router, identifier, context, progress, checkpoint):
         result: list[dict[str, Any]] = []
         for decision in batch["records"]:
             relation_type = decision.get("relation_type")
-            if relation_type not in relation_types:
+            if relation_type not in allowed_relation_types:
                 raise TemplateBlocked(
                     f"TEMPLATE_RELATION_UNSUPPORTED: {source_id}->{target_id}: "
                     f"{relation_type}"
