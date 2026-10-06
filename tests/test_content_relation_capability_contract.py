@@ -13,6 +13,9 @@ def test_relation_capability_contract_reserves_contains_for_tag_sources() -> Non
     assert relation_type_supported_for_content_pair(
         "contains", "registry_tag", "block"
     )
+    assert relation_type_supported_for_content_pair(
+        "contains", "registry_tag", "entity"
+    )
     assert not relation_type_supported_for_content_pair(
         "contains", "item", "registry_tag"
     )
