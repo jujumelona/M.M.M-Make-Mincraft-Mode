@@ -100,6 +100,33 @@ def _collision_safe_entity_id(
     raise SlotFillError(f"CONTENT_ENTITY_ID_EXHAUSTED: {entity_id}")
 
 
+def _native_resource_module_config(
+    fact_type,
+    normalized_inputs: Mapping[str, object],
+    node: Mapping[str, object],
+) -> dict[str, object]:
+    config: dict[str, object] = {
+        "requirement_refs": list(node["requirement_refs"]),
+        "implementation_obligations": list(node["implementation_obligations"]),
+        "reason": node["role"],
+    }
+    if fact_type == FactType.REGISTRY_TAG:
+        registry = {
+            "item": "items",
+            "block": "blocks",
+            "entity_type": "entity_types",
+        }.get(str(normalized_inputs.get("registry_kind") or ""))
+        values = normalized_inputs.get("members")
+        if registry is None or not isinstance(values, list) or not values:
+            raise SlotFillError("CONTENT_TAG_NATIVE_CONFIG_INVALID")
+        config.update({
+            "registry": registry,
+            "values": list(values),
+            "replace": False,
+        })
+    return config
+
+
 def _resource_definition_has_targets(kind: str, entities: Mapping[str, Mapping]) -> bool:
     if kind in {"crafting_recipe", "smelting_recipe"}:
         return any(node.get("kind") == "item" for node in entities.values())
@@ -1189,17 +1216,17 @@ def compile_content_graph(
             parent_requirement=node["requirement_refs"][0],
             source_clause=node["source_clauses"][0],
         )
-        resource_inputs(fact, effective_mod_id)
+        _, normalized_resource_inputs = resource_inputs(fact, effective_mod_id)
         facts.append(fact)
         modules.append(
             ProductionModule(
                 eid,
                 kind,
-                {
-                    "requirement_refs": node["requirement_refs"],
-                    "implementation_obligations": list(node["implementation_obligations"]),
-                    "reason": node["role"],
-                },
+                _native_resource_module_config(
+                    fact_type,
+                    normalized_resource_inputs,
+                    node,
+                ),
                 depends_on=tuple(dict.fromkeys(edge["target_id"] for edge in edges)),
             )
         )
