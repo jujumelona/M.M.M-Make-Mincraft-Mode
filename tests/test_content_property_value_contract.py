@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from minecraft_mod_ai.content_design_contract import (
     CONTENT_PROPERTY_VALUE_ENUMS,
+    CONTENT_PROPERTY_VALUE_PATTERNS,
     REGISTRY_TAG_KIND_TO_TARGET_FACT_TYPE,
 )
 from minecraft_mod_ai.design_generation_schema import context_bound_record_schema
@@ -59,4 +60,43 @@ def test_other_late_categorical_validations_are_schema_bound() -> None:
         )
         assert schema["properties"]["value"]["enum"] == list(
             CONTENT_PROPERTY_VALUE_ENUMS[property_name]
+        )
+
+
+def test_bounded_numeric_properties_are_schema_constrained() -> None:
+    template = load_record_template("design/content_property")
+
+    count_schema = context_bound_record_schema(
+        "design/content_property",
+        template["record_schema"],
+        {
+            "requested_property": "count",
+            "allowed_properties": ["count"],
+        },
+    )
+    assert count_schema["properties"]["value"]["enum"] == [
+        str(value) for value in range(1, 65)
+    ]
+
+    for property_name in (
+        "health",
+        "speed",
+        "tracking_range",
+        "width",
+        "height",
+        "attack_damage",
+        "experience",
+        "cookingtime",
+        "main_color",
+    ):
+        schema = context_bound_record_schema(
+            "design/content_property",
+            template["record_schema"],
+            {
+                "requested_property": property_name,
+                "allowed_properties": [property_name],
+            },
+        )
+        assert schema["properties"]["value"]["pattern"] == (
+            CONTENT_PROPERTY_VALUE_PATTERNS[property_name]
         )
