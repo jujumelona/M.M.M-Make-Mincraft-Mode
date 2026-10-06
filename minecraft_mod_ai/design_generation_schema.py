@@ -52,9 +52,9 @@ def _bind_content_entity_kind(
     allowed = context.get("allowed_content_kinds", PRIMARY_CONTENT_KINDS)
     if (
         not isinstance(allowed, (list, tuple)) or not allowed
-        or any(kind not in CONTENT_KINDS for kind in allowed)
+        or any(kind not in PRIMARY_CONTENT_KINDS for kind in allowed)
     ):
-        raise DesignGenerationSchemaError("CONTENT_KIND_SCOPE_INVALID")
+        raise DesignGenerationSchemaError("CONTENT_PRIMARY_KIND_SCOPE_INVALID")
     kind_schema["enum"] = list(dict.fromkeys(allowed))
 
 
