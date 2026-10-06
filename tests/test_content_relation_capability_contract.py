@@ -60,13 +60,18 @@ def _empty_pair_records(
 
 
 def test_registry_tag_relations_have_host_owned_nonempty_membership(monkeypatch) -> None:
+    seen_schemas = []
+
     def fake_generate(router, role, messages, *, response_schema, **kwargs):
         del router, role, messages, kwargs
+        seen_schemas.append(response_schema)
         props = response_schema["properties"]
         if "member_kind" in props:
             return {"member_kind": "item"}
-        if "member_ids" in props:
-            return {"member_ids": ["ship_blueprint"]}
+        if "count" in props:
+            return {"count": 1}
+        if "id" in props:
+            return {"id": "ship_blueprint"}
         raise AssertionError(response_schema)
 
     monkeypatch.setattr(design_record_runtime, "deterministic_model_map", _serial_map)
@@ -110,18 +115,30 @@ def test_registry_tag_relations_have_host_owned_nonempty_membership(monkeypatch)
             "target_id": "ship_blueprint",
         }
     ]
+    assert all("uniqueItems" not in str(schema) for schema in seen_schemas)
 
 
 def test_crafting_recipe_relations_have_exact_output_and_bounded_inputs(monkeypatch) -> None:
+    seen_id_enums = []
+    seen_schemas = []
+
     def fake_generate(router, role, messages, *, response_schema, **kwargs):
         del router, role, messages, kwargs
+        seen_schemas.append(response_schema)
         props = response_schema["properties"]
-        if {"mode", "output_id", "input_ids"} <= set(props):
+        if {"mode", "output_id"} <= set(props):
             return {
                 "mode": "shaped",
                 "output_id": "ship_hull",
-                "input_ids": ["steel_plate", "engine_core"],
             }
+        if "count" in props:
+            return {"count": 2}
+        if "id" in props:
+            choices = list(props["id"]["enum"])
+            seen_id_enums.append(choices)
+            if "steel_plate" in choices:
+                return {"id": "steel_plate"}
+            return {"id": "engine_core"}
         raise AssertionError(response_schema)
 
     monkeypatch.setattr(design_record_runtime, "deterministic_model_map", _serial_map)
@@ -192,6 +209,9 @@ def test_crafting_recipe_relations_have_exact_output_and_bounded_inputs(monkeypa
         },
     ]
     assert sum(row["relation_type"] == "produces" for row in recipe_edges) == 1
+    assert "steel_plate" in seen_id_enums[0]
+    assert "steel_plate" not in seen_id_enums[1]
+    assert all("uniqueItems" not in str(schema) for schema in seen_schemas)
 
 
 def test_smelting_recipe_relations_have_exact_input_and_output(monkeypatch) -> None:
