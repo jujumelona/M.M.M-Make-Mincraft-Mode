@@ -91,6 +91,11 @@ def _validate_response_contracts(root: Path) -> None:
         if not isinstance(name, str) or not name or not isinstance(schema, dict):
             raise ValueError("RESPONSE_TEMPLATE: invalid named response contract")
         Draft202012Validator.check_schema(schema)
+        from .model_output_atomicity_contract import assert_atomic_model_schema
+        assert_atomic_model_schema(
+            schema,
+            surface=f"response contract {name!r}",
+        )
 
 
 def _validate_system_source_templates(root: Path) -> None:
