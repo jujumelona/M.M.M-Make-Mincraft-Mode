@@ -11,7 +11,11 @@ from minecraft_mod_ai.content_design_contract import (
 )
 from minecraft_mod_ai.content_design_graph import (
     _materialize_authored_resource_definitions,
+    _native_resource_module_config,
 )
+from minecraft_mod_ai.extended_content_generator import validate_extended_module_contract
+from minecraft_mod_ai.implementation_fact import FactType
+from minecraft_mod_ai.complete_spec import ProductionModule
 
 
 def _owned(requirement_id: str) -> dict[str, object]:
@@ -167,3 +171,24 @@ def test_resource_nodes_never_create_synthetic_requirement_ids() -> None:
         "content_interactions_b",
     ]
     assert all(not ref.startswith("resource_") for ref in node["requirement_refs"])
+
+def test_registry_tag_native_fallback_uses_normalized_resource_ids() -> None:
+    node = _primary("registry_tag", "moon_ore_tag")
+    config = _native_resource_module_config(
+        FactType.REGISTRY_TAG,
+        {
+            "registry_kind": "item",
+            "members": ["space:moon_ore"],
+            "resource_references": ["space:moon_ore"],
+        },
+        node,
+    )
+
+    assert config["registry"] == "items"
+    assert config["values"] == ["space:moon_ore"]
+    assert config["replace"] is False
+
+    validate_extended_module_contract(
+        ProductionModule("moon_ore_tag", "tag", config)
+    )
+
