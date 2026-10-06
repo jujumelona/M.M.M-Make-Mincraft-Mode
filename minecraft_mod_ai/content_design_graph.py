@@ -332,13 +332,25 @@ def compile_content_graph(
             )
         if grounded:
             context["research_facts"] = grounded
-        nodes = records(
-            "design/content_entity",
-            {**context, "existing_entities": [
-                {key: node[key] for key in ("entity_id", "kind", "role")}
-                for node in entities.values()
-            ]},
+
+        from .authored_content_contract import CONTENT_GRAPH_HOST_CONSTRAINT_CONCERNS
+
+        coverage_ref = context.get("coverage_ref")
+        concern = (
+            str(coverage_ref).removeprefix("resources_and_ui.")
+            if isinstance(coverage_ref, str)
+            else None
         )
+        if concern in CONTENT_GRAPH_HOST_CONSTRAINT_CONCERNS:
+            nodes = []
+        else:
+            nodes = records(
+                "design/content_entity",
+                {**context, "existing_entities": [
+                    {key: node[key] for key in ("entity_id", "kind", "role")}
+                    for node in entities.values()
+                ]},
+            )
         if len(nodes) < context.get("minimum_entity_count", 0):
             raise SlotFillError(f"CONTENT_REQUIREMENT_UNIMPLEMENTED: {rid}")
         # Generic behavioral requirements may still have no concrete content.
