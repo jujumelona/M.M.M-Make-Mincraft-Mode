@@ -8,7 +8,6 @@ design is only a validated projection of that frozen catalog. No language-model 
 model-generated JSON, retry loop, or model-owned identifier is permitted here.
 """
 
-import hashlib
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -154,41 +153,6 @@ def validate_ready_design(prompt: str, design: Mapping[str, Any]) -> dict[str, A
     return result
 
 
-def deterministic_bootstrap(prompt: str, design: Mapping[str, Any]) -> dict[str, Any]:
-    """Build the Proposal bootstrap deterministically; no model planning is involved."""
-    title = _text(design.get("title")) or prompt[:30].strip() or "Minecraft Mod"
-    pitch = _text(design.get("pitch")) or prompt.strip() or "Custom Minecraft Mod"
-    normalized = "".join(
-        character if character.isascii() and character.isalnum() else "_"
-        for character in title.lower()
-    )
-    stem = "_".join(part for part in normalized.split("_") if part)
-    if not stem:
-        stem = f"mmm_{hashlib.sha256(title.encode('utf-8')).hexdigest()[:10]}"
-    if not stem[0].isalpha():
-        stem = f"mmm_{stem}"
-    mod_id = f"{stem[:55].rstrip('_')}_mod"
-    return {
-        "mod_id": mod_id,
-        "mod_name": title,
-        "package_name": f"ai.minecraft.generated.{mod_id}",
-        "summary": pitch,
-        "contents": [
-            {
-                "content_id": content.content_id,
-                "kind": content.kind.value,
-                "display_name_en": content.display_name_en,
-                "display_name_ko": content.display_name_ko,
-                "color": content.color,
-                "recipe": content.recipe,
-            }
-            for content in spec.contents
-        ],
-        "deferred_capabilities": [
-            deferred.capability for deferred in proposal.deferred_requests
-        ],
-    }
-
 
 def generate_sectioned_game_design(
     router: Any,
@@ -230,7 +194,6 @@ def generate_sectioned_game_design(
 
 __all__ = [
     "canonical_game_design",
-    "deterministic_bootstrap",
     "generate_sectioned_game_design",
     "supports_agentic_research_router",
     "validate_ready_design",
