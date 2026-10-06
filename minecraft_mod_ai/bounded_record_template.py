@@ -239,12 +239,6 @@ def run_bounded_record_template(
             )
         for record in records:
             record_validator.validate(record)
-        keys = [_record_key(record) for record in records]
-        if len(keys) != len(set(keys)):
-            raise ValueError(
-                f"TEMPLATE_RECORD_SET_DUPLICATE: {identifier} returned duplicate "
-                "ordinal records"
-            )
         if checkpoint is not None:
             checkpoint(
                 binding,
@@ -253,6 +247,13 @@ def run_bounded_record_template(
                     "records": deepcopy(records),
                 },
             )
+
+    keys = [_record_key(record) for record in records]
+    if len(keys) != len(set(keys)):
+        raise ValueError(
+            f"TEMPLATE_RECORD_SET_DUPLICATE: {identifier} returned duplicate "
+            "ordinal records"
+        )
 
     return {
         "records": records,
