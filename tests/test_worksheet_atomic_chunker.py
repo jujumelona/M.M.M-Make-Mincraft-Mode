@@ -15,10 +15,7 @@ from minecraft_mod_ai.planning_detail_template import (
     WORKSHEET_SECTIONS,
     validate_worksheet_section,
 )
-from minecraft_mod_ai.structured_output import (
-    StructuredOutputValidationError,
-    validate_structured_output,
-)
+from minecraft_mod_ai.structured_output import validate_structured_output
 from minecraft_mod_ai.worksheet_atomic_chunker import (
     merge_worksheet_section_chunks,
     pack_section_concerns,
