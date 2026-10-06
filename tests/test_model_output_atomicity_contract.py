@@ -280,6 +280,20 @@ def test_host_only_constraints_are_rejected_before_inference(
         assert_atomic_model_schema(schema, surface="transport-parity-regression")
 
 
+def test_host_only_keyword_guard_does_not_reject_property_names() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "uniqueItems": {"type": "boolean"},
+            "contains": {"type": "string", "maxLength": 32},
+        },
+        "required": ["uniqueItems", "contains"],
+        "additionalProperties": False,
+    }
+
+    assert_atomic_model_schema(schema, surface="property-name-regression")
+
+
 def test_model_transport_synthesizes_missing_resource_bounds() -> None:
     logical = {
         "type": "object",
