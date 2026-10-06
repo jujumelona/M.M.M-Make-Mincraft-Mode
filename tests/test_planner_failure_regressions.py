@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import pytest
 
-from minecraft_mod_ai import agentic_research_game_design as agentic
 from minecraft_mod_ai import pre_design_research_pipeline as pipeline
 from minecraft_mod_ai import pre_design_grounded_rag as project_rag
 from minecraft_mod_ai.agent_capability_context import (
@@ -115,7 +114,6 @@ def test_document_grounding_rejects_invented_page_ref(monkeypatch, tmp_path) -> 
     }
     with pytest.raises(PreDesignResearchFailure, match="outside host-owned pages"):
         pipeline._validate_document_grounding(
-            agentic,
             project_rag,
             invented,
             document,
@@ -132,7 +130,6 @@ def test_document_grounding_rejects_invented_page_ref(monkeypatch, tmp_path) -> 
         ],
     }
     pipeline._validate_document_grounding(
-        agentic,
         project_rag,
         grounded,
         document,
