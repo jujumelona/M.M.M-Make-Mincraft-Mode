@@ -82,11 +82,13 @@ def _run_decisions(router, identifier, context, progress, checkpoint):
         + task_binding(template, binding_context, ())
     )
     saved = (progress or {}).get(binding)
-    if (
-        isinstance(saved, dict)
-        and set(saved) == set(allowed_slots)
-        and all(type(saved.get(slot_id)) is bool for slot_id in allowed_slots)
-    ):
+    if saved is not None:
+        if (
+            not isinstance(saved, dict)
+            or set(saved) != set(allowed_slots)
+            or any(type(saved.get(slot_id)) is not bool for slot_id in allowed_slots)
+        ):
+            raise TemplateBlocked("TEMPLATE_DECISION_APPLICABILITY_SAVED_INVALID")
         applicability = {
             slot_id: bool(saved[slot_id])
             for slot_id in allowed_slots
