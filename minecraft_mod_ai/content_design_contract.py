@@ -37,7 +37,53 @@ CONTENT_KIND_TO_FACT_TYPE = MappingProxyType(
 )
 
 CONTENT_KINDS = tuple(CONTENT_KIND_TO_FACT_TYPE)
+
+# Resource definitions are graph-level structures, not primary content identities.
+# The small model must never invent them during ordinary content-owner discovery.
+# They are materialized deterministically from authored data-resource records only
+# after concrete target entities already exist.
+RESOURCE_DEFINITION_KINDS = (
+    "crafting_recipe",
+    "smelting_recipe",
+    "registry_tag",
+)
+PRIMARY_CONTENT_KINDS = tuple(
+    kind for kind in CONTENT_KINDS
+    if kind not in RESOURCE_DEFINITION_KINDS
+)
 SUPPORTED_CONTENT_FACT_TYPES = tuple(CONTENT_KIND_TO_FACT_TYPE.values())
+
+
+def resource_definition_kind_for_data_resource(value: str) -> str | None:
+    normalized = "_".join(
+        part
+        for part in "".join(
+            char.lower() if char.isalnum() else "_"
+            for char in str(value or "")
+        ).split("_")
+        if part
+    )
+    aliases = {
+        "tag": "registry_tag",
+        "tags": "registry_tag",
+        "registry_tag": "registry_tag",
+        "item_tag": "registry_tag",
+        "block_tag": "registry_tag",
+        "entity_tag": "registry_tag",
+        "entity_type_tag": "registry_tag",
+        "recipe": "crafting_recipe",
+        "crafting": "crafting_recipe",
+        "crafting_recipe": "crafting_recipe",
+        "shaped_recipe": "crafting_recipe",
+        "shapeless_recipe": "crafting_recipe",
+        "smelting": "smelting_recipe",
+        "smelt": "smelting_recipe",
+        "smelting_recipe": "smelting_recipe",
+        "blasting": "smelting_recipe",
+        "blasting_recipe": "smelting_recipe",
+        "cooking_recipe": "smelting_recipe",
+    }
+    return aliases.get(normalized)
 
 # ProductionModule.kind is an execution-owner classification, not a second copy
 # of the semantic FactType vocabulary. Facts implemented exclusively through the
@@ -117,11 +163,11 @@ CONTENT_PROPERTY_VALUE_PATTERNS = MappingProxyType(
 # Narrowing it to GUI forces discovery to invent a screen or misclassify its owner.
 # The authored requirement and existing entity identities determine the kind.
 CONTENT_CONCERN_KINDS = MappingProxyType({
-    "registries": CONTENT_KINDS,
-    "data_resources": CONTENT_KINDS,
-    "assets": CONTENT_KINDS,
-    "interactions": CONTENT_KINDS,
-    "displayed_state": CONTENT_KINDS,
+    "registries": PRIMARY_CONTENT_KINDS,
+    "data_resources": PRIMARY_CONTENT_KINDS,
+    "assets": PRIMARY_CONTENT_KINDS,
+    "interactions": PRIMARY_CONTENT_KINDS,
+    "displayed_state": PRIMARY_CONTENT_KINDS,
 })
 
 
@@ -201,8 +247,11 @@ __all__ = [
     "CONTENT_PROPERTY_VALUE_ENUMS",
     "CONTENT_PROPERTY_VALUE_PATTERNS",
     "CONTENT_KINDS",
+    "PRIMARY_CONTENT_KINDS",
+    "RESOURCE_DEFINITION_KINDS",
     "SUPPORTED_CONTENT_FACT_TYPES",
     "REGISTRY_TAG_KIND_TO_TARGET_FACT_TYPE",
     "fact_type_for_content_kind",
     "relation_type_supported_for_content_pair",
+    "resource_definition_kind_for_data_resource",
 ]
