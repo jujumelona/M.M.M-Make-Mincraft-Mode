@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from copy import deepcopy
 from hashlib import sha256
 import re
+import json
 
 from .spec_identity import SPEC_ID_MAX_LENGTH, canonical_spec_id
 
@@ -99,52 +100,90 @@ def _collision_safe_entity_id(
     raise SlotFillError(f"CONTENT_ENTITY_ID_EXHAUSTED: {entity_id}")
 
 
-def _prune_optional_orphan_resource_entities(entities, owned):
-    """Remove pseudo resource definitions that have no concrete graph targets.
+def _resource_definition_has_targets(kind: str, entities: Mapping[str, Mapping]) -> bool:
+    if kind in {"crafting_recipe", "smelting_recipe"}:
+        return any(node.get("kind") == "item" for node in entities.values())
+    if kind == "registry_tag":
+        return any(
+            node.get("kind") in {"item", "block", "entity"}
+            for node in entities.values()
+        )
+    return False
 
-    Registry/data-resource worksheet concerns are optional content owners: when the
-    small model invents a recipe/tag from an engineering-only row and the complete
-    discovered graph has no compatible target entity, leave that coverage unit for
-    Typed PlatformIR instead of manufacturing an invalid resource fact.
+
+def _materialize_authored_resource_definitions(
+    entities: dict[str, dict],
+    owned: list[dict],
+) -> tuple[str, ...]:
+    """Derive graph resource nodes only from explicit authored data-resource rows.
+
+    Primary content discovery cannot emit recipe/tag identities.  Resource definitions
+    are introduced only after concrete targets exist, so relation lowering never sees
+    an orphan recipe/tag that must be pruned or rejected after the fact.
     """
 
-    minimum_by_requirement = {
-        context["requirement_id"]: int(context.get("minimum_entity_count", 0))
-        for context in owned
-    }
-    orphan_resource_ids: list[str] = []
-    for eid, node in entities.items():
-        kind = str(node.get("kind") or "")
-        if kind in {"crafting_recipe", "smelting_recipe"}:
-            has_target = any(
-                other_id != eid and other.get("kind") == "item"
-                for other_id, other in entities.items()
-            )
-        elif kind == "registry_tag":
-            has_target = any(
-                other_id != eid and other.get("kind") in {"item", "block", "entity"}
-                for other_id, other in entities.items()
-            )
-        else:
+    created: list[str] = []
+    for context in owned:
+        if context.get("coverage_ref") != "resources_and_ui.data_resources":
             continue
-        if has_target:
+        rows = context.get("source_records")
+        if not isinstance(rows, list):
             continue
+        requirement_id = str(context["requirement_id"])
+        statement = str(context["requirement"])
+        for index, row in enumerate(rows):
+            if not isinstance(row, Mapping):
+                continue
+            kind = resource_definition_kind_for_data_resource(row.get("kind", ""))
+            if kind is None or not _resource_definition_has_targets(kind, entities):
+                continue
 
-        refs = tuple(
-            str(ref)
-            for ref in node.get("requirement_refs", ())
-            if isinstance(ref, str)
-        )
-        if refs and all(minimum_by_requirement.get(ref, 0) == 0 for ref in refs):
-            orphan_resource_ids.append(eid)
-            continue
-        raise SlotFillError(
-            f"CONTENT_RESOURCE_TARGET_UNRESOLVED: {eid}: {kind}"
-        )
+            encoded = json.dumps(
+                {
+                    "requirement_id": requirement_id,
+                    "index": index,
+                    "record": dict(row),
+                    "kind": kind,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            digest = sha256(encoded.encode("utf-8")).hexdigest()[:12]
+            role = str(row.get("purpose") or f"{kind} resource").strip()
+            if not role:
+                role = f"{kind} resource"
+            role = role[:128]
+            stem = _sanitize_stem(str(row.get("owner") or role or kind))
+            entity_id = canonical_spec_id(f"{stem}_{kind}_{digest}")
 
-    for eid in orphan_resource_ids:
-        entities.pop(eid, None)
-    return tuple(orphan_resource_ids)
+            prior = entities.get(entity_id)
+            if prior is None:
+                entities[entity_id] = {
+                    "entity_id": entity_id,
+                    "kind": kind,
+                    "role": role,
+                    "requirement_refs": [requirement_id],
+                    "source_clauses": [statement],
+                    "implementation_obligations": [role],
+                    "host_derived_resource_definition": True,
+                }
+                created.append(entity_id)
+                continue
+
+            if prior.get("kind") != kind:
+                raise SlotFillError(
+                    f"CONTENT_RESOURCE_ID_CONFLICT: {entity_id}: "
+                    f"{prior.get('kind')} != {kind}"
+                )
+            if requirement_id not in prior["requirement_refs"]:
+                prior["requirement_refs"].append(requirement_id)
+            if statement not in prior["source_clauses"]:
+                prior["source_clauses"].append(statement)
+            if role not in prior["implementation_obligations"]:
+                prior["implementation_obligations"].append(role)
+
+    return tuple(created)
 
 
 from .complete_spec import AssetRequest, ProductionModule
@@ -152,6 +191,7 @@ from .content_design_contract import (
     CONTENT_FACT_TO_PRODUCTION_KIND,
     REGISTRY_TAG_KIND_TO_TARGET_FACT_TYPE,
     fact_type_for_content_kind,
+    resource_definition_kind_for_data_resource,
 )
 from .implementation_fact import FactProvenance, FactType, ImplementationFact
 from .task_template_runner import run_record_template
@@ -252,6 +292,7 @@ def compile_content_graph(
                 "coverage_ref": ref,
                 "allowed_content_kinds": list(CONTENT_CONCERN_KINDS[concern]),
                 "minimum_entity_count": expected_minimum,
+                "source_records": deepcopy(req["source_records"]),
             })
             content_requirements.append({
                 "requirement_id": rid,
@@ -318,7 +359,7 @@ def compile_content_graph(
             entities[eid]["source_clauses"].append(statement)
         owned.append(context)
 
-    _prune_optional_orphan_resource_entities(entities, owned)
+    _materialize_authored_resource_definitions(entities, owned)
 
     # Discover each ordered entity pair once, with all of its authored context.
     # Repeating the full pair graph for every concern multiplied model work and
