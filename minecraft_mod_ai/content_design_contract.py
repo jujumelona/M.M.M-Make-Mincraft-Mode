@@ -39,6 +39,29 @@ CONTENT_KIND_TO_FACT_TYPE = MappingProxyType(
 CONTENT_KINDS = tuple(CONTENT_KIND_TO_FACT_TYPE)
 SUPPORTED_CONTENT_FACT_TYPES = tuple(CONTENT_KIND_TO_FACT_TYPE.values())
 
+
+REGISTRY_TAG_KIND_TO_TARGET_FACT_TYPE = MappingProxyType(
+    {
+        "item": FactType.ITEM_EXISTS,
+        "block": FactType.BLOCK_EXISTS,
+        "entity_type": FactType.ENTITY_EXISTS,
+    }
+)
+
+# Finite semantic property vocabularies belong to the host contract. The model
+# chooses meaning only inside these closed sets; lowering must never discover a
+# new categorical value after generation.
+CONTENT_PROPERTY_VALUE_ENUMS = MappingProxyType(
+    {
+        "category": ("monster", "creature", "ambient", "water_creature", "misc"),
+        "archetype": ("biped", "quadruped", "flying", "serpentine", "construct"),
+        "behavior": ("hostile_melee", "neutral_melee", "passive", "npc"),
+        "recipe_kind": ("shaped", "shapeless"),
+        "cooking_type": ("smelting", "blasting"),
+        "registry_kind": tuple(REGISTRY_TAG_KIND_TO_TARGET_FACT_TYPE),
+    }
+)
+
 # Concerns describe obligations of content, not the identity of that content.
 # For example, displayed state can belong to a block, item, entity, or screen.
 # Narrowing it to GUI forces discovery to invent a screen or misclassify its owner.
@@ -89,7 +112,7 @@ def relation_type_supported_for_content_pair(
         }
     if source == FactType.REGISTRY_TAG:
         return (
-            target in {FactType.ITEM_EXISTS, FactType.BLOCK_EXISTS}
+            target in set(REGISTRY_TAG_KIND_TO_TARGET_FACT_TYPE.values())
             and relation_type == "contains"
         )
 
@@ -124,8 +147,10 @@ def relation_type_supported_for_content_pair(
 __all__ = [
     "CONTENT_CONCERN_KINDS",
     "CONTENT_KIND_TO_FACT_TYPE",
+    "CONTENT_PROPERTY_VALUE_ENUMS",
     "CONTENT_KINDS",
     "SUPPORTED_CONTENT_FACT_TYPES",
+    "REGISTRY_TAG_KIND_TO_TARGET_FACT_TYPE",
     "fact_type_for_content_kind",
     "relation_type_supported_for_content_pair",
 ]
