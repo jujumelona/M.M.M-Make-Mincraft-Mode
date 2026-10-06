@@ -272,42 +272,5 @@ def _isolate_test_runtime_state(
         generate_with_explicit_test_target,
     )
 
-    # A few direct evidence-planning unit tests still bypass live provider resolution.
-    # Complete their synthetic provider receipt immediately before the canonical target
-    # compiler; do not recreate the retired evidence-planner target decision owner.
-    legacy_partial_target_modules = {
-        "test_evidence_first_planning",
-        "test_evidence_first_session_integration",
-        "test_planner_structural_repair_contract",
-        "test_resource_asset_backend_contract",
-        "test_target_snapshot_hardening",
-    }
-    if request.module.__name__ in legacy_partial_target_modules:
-        from minecraft_mod_ai import evidence_first_planning as planning
-
-        original_compile_target_decision = planning.compile_target_decision
-
-        def compile_target_decision_with_synthetic_receipt(
-            selection_payload,
-            *,
-            existing_inventory=None,
-        ):
-            selection = (
-                dict(selection_payload)
-                if isinstance(selection_payload, dict)
-                else selection_payload
-            )
-            if isinstance(selection, dict) and isinstance(selection.get("target"), dict):
-                selection["target"] = _complete_partial_test_target(selection["target"])
-            return original_compile_target_decision(
-                selection,
-                existing_inventory=existing_inventory,
-            )
-
-        monkeypatch.setattr(
-            planning,
-            "compile_target_decision",
-            compile_target_decision_with_synthetic_receipt,
-        )
 
     yield
