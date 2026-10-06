@@ -783,6 +783,27 @@ def _run_relations(router, identifier, context, progress, checkpoint):
     return records, normalized
 
 
+def _normalize_content_domain_records(
+    records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for record in records:
+        raw = record.get("domains")
+        if not isinstance(raw, list):
+            raise TemplateBlocked("TEMPLATE_CONTENT_DOMAINS_REQUIRED")
+        domains = list(
+            dict.fromkeys(
+                value
+                for value in raw
+                if isinstance(value, str) and value.strip()
+            )
+        )
+        if not domains:
+            raise TemplateBlocked("TEMPLATE_CONTENT_DOMAINS_REQUIRED")
+        normalized.append({**record, "domains": domains})
+    return normalized
+
+
 def run_record_template(
     router,
     identifier: str,
@@ -826,6 +847,17 @@ def run_record_template(
         records, normalized = _run_relations(
             router, identifier, normalized, progress, checkpoint
         )
+    elif identifier == "design/content_domains":
+        batch = run_bounded_record_template(
+            router,
+            identifier,
+            context=normalized,
+            allowed_refs=allowed_refs,
+            progress=progress,
+            checkpoint=checkpoint,
+        )
+        batch["records"] = _normalize_content_domain_records(batch["records"])
+        return batch
     else:
         return run_bounded_record_template(
             router,
