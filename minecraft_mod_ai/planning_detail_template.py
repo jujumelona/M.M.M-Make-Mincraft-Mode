@@ -266,7 +266,6 @@ def _worksheet_section_schema(key: str) -> dict[str, Any]:
             "specification": specification_schema(key),
             "constraint_evidence_refs": {
                 "type": "array",
-                "uniqueItems": True,
                 "description": (
                     "Evidence references supplied by the host that constrain this authored design section. "
                     "Use an empty array when the section is a design decision rather than an external fact."
@@ -362,10 +361,13 @@ def validate_worksheet_section(
     ref_values = [ref for ref in refs if isinstance(ref, str) and ref.strip()]
     if (
         len(ref_values) != len(refs)
-        or len(set(ref_values)) != len(ref_values)
         or any(ref not in allowed_refs for ref in ref_values)
     ):
         raise ValueError(f"DETAILED_PLAN_WORKSHEET: {key} has invalid constraint evidence")
+
+    # Evidence selection is semantic; list identity is structural. Preserve the
+    # first authored occurrence and let the host own uniqueness deterministically.
+    ref_values = list(dict.fromkeys(ref_values))
 
     return {
         "specification": deepcopy(specification),
