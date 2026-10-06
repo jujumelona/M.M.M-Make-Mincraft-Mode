@@ -34,16 +34,20 @@ def _fixture_value(schema: dict[str, Any], text: str) -> Any:
         or pattern == r"^[A-Za-z_][A-Za-z0-9_]*$"
     ):
         return "stateValue"
-    if "Host state-" in description and "DSL" in description:
-        if "mutation" in description.casefold():
-            if schema_type == "array":
-                return [{
-                    "target": "stateValue",
-                    "operator": "=",
-                    "value": {"kind": "literal", "value": "1"},
-                }]
-            return {"kind": "literal", "value": "1"}
-        return {"kind": "literal", "value": "true"}
+    normalized_description = description.casefold()
+    if (
+        ("host state-" in normalized_description and "dsl" in normalized_description)
+        or "canonical typed state-mutation ir" in normalized_description
+    ):
+        if "mutation" in normalized_description or schema_type == "array":
+            # The canonical fixture's first state-variable type is boolean. Keep the
+            # generated mutation semantically compatible with that declared symbol.
+            return [{
+                "target": "stateValue",
+                "operator": "=",
+                "value": {"kind": "literal", "value": True},
+            }]
+        return {"kind": "literal", "value": True}
 
     if schema_type == "object":
         properties = schema.get("properties")

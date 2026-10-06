@@ -79,11 +79,14 @@ def test_colab_debug_fixture_loads_validated_plan_then_uses_normal_build_dispatc
         "M.M.M Debug Mode fixture: add one deterministic host-generated debug token item and "
         "run the normal implementation/verification pipeline."
     )
-    assert [module.module_id for module in proposal.modules] == ["debug_token"]
-    task = proposal.modules[0].config["evidence_task"]
-    assert task["task_id"] == "debug_token"
-    assert task["execution_role"] == "production"
-    assert task["required_gates"] == ["target_compile"]
+    # Debug Mode is host-owned and therefore does not manufacture a production
+    # module/evidence task just to drive the deterministic fixture through the build.
+    assert proposal.modules == ()
+    fixture = proposal.game_design["fixture"]
+    assert fixture["artifact_id"] == "debug_token"
+    assert fixture["kind"] == "item"
+    assert fixture["deterministic"] is True
+    assert fixture["source_contract"]["path"].endswith("/DebugToken.java")
     assert any("planner 호출 없이" in line for line in printed)
 
     options = CompleteExecutionOptions(

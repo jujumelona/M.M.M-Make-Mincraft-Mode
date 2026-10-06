@@ -357,10 +357,16 @@ def test_chunk_schema_rejects_undeclared_fields_before_merge():
     concern = str(concern_group[0])
     fields = concern_group.field_projection[concern]
     canonical_item = row("behavior_contract")["specification"][concern][0]
+    item_schema = schema["properties"][concern]["items"]["properties"]
+    page_item = {}
+    for field in fields:
+        value = canonical_item[field]
+        max_length = item_schema[field].get("maxLength")
+        if isinstance(value, str) and type(max_length) is int:
+            value = value[:max_length]
+        page_item[field] = value
     output = json.dumps({
-        concern: [
-            {field: canonical_item[field] for field in fields}
-        ],
+        concern: [page_item],
         "extra_hallucinated_field": "bad",
     })
 
