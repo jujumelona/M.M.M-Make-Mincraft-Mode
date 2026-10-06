@@ -234,6 +234,52 @@ def test_open_object_template_still_rejected() -> None:
 
 
 
+@pytest.mark.parametrize(
+    ("keyword", "fragment"),
+    [
+        (
+            "uniqueItems",
+            {
+                "type": "array",
+                "items": {"type": "string"},
+                "uniqueItems": True,
+            },
+        ),
+        (
+            "contains",
+            {
+                "type": "array",
+                "items": {"type": "string"},
+                "contains": {"const": "x"},
+            },
+        ),
+        (
+            "multipleOf",
+            {
+                "type": "integer",
+                "multipleOf": 2,
+            },
+        ),
+    ],
+)
+def test_host_only_constraints_are_rejected_before_inference(
+    keyword: str,
+    fragment: dict,
+) -> None:
+    schema = {
+        "type": "object",
+        "properties": {"value": fragment},
+        "required": ["value"],
+        "additionalProperties": False,
+    }
+
+    with pytest.raises(
+        ModelConfigurationError,
+        match=f"MODEL_SCHEMA_HOST_ONLY_CONSTRAINT.*{keyword}",
+    ):
+        assert_atomic_model_schema(schema, surface="transport-parity-regression")
+
+
 def test_model_transport_synthesizes_missing_resource_bounds() -> None:
     logical = {
         "type": "object",
