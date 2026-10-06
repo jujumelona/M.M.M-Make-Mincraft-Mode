@@ -798,11 +798,6 @@ def assert_installed(*, model_router_module: Any | None = None) -> None:
 
 
 __all__ = [
-    "MAX_COMPLETION_TOKENS",
-    "MAX_MODEL_ARRAY_ITEMS",
-    "MAX_MODEL_FIELDS",
-    "MAX_MODEL_STRING_CHARS",
-    "MAX_SCHEMA_DEPTH",
     "assert_atomic_model_schema",
     "assert_installed",
     "assert_strict_atomicity_bounds",
