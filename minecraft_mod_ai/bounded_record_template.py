@@ -166,7 +166,12 @@ def run_bounded_record_template(
                 f"{minimum} records, saved {len(records)}"
             )
         expected = saved.get("count")
-        if type(expected) is int and expected != len(records):
+        if type(expected) is not int:
+            raise ValueError(
+                f"TEMPLATE_RECORD_SET_SAVED_COUNT: {identifier} checkpoint must "
+                "contain an integer count with its records"
+            )
+        if expected != len(records):
             raise ValueError(
                 f"TEMPLATE_RECORD_SET_CARDINALITY_DRIFT: expected {expected}, "
                 f"saved {len(records)} records"
