@@ -20,6 +20,11 @@ from .project_edit import (
 )
 from .typed_host_capabilities import render_typed_host_capabilities_java
 from .typed_plan_ir import typed_plan_capability_ids, typed_plan_uses_state
+from .typed_host_generation_contract import (
+    normalize_typed_network_sync_config,
+    normalize_typed_resource_policy_config,
+    normalize_typed_state_store_config,
+)
 from .typed_platform_ir import network_sync_requires_state
 from .typed_plan_java import render_typed_plan_java
 
@@ -30,6 +35,53 @@ def _typed_program_path(package_name: str) -> str:
         + str(package_name).replace(".", "/")
         + "/AuthoredProgram.java"
     )
+
+
+def _normalized_typed_host_configs(
+    config: Mapping[str, Any],
+) -> tuple[
+    Mapping[str, Any] | None,
+    dict[str, Any] | None,
+    dict[str, Any] | None,
+    dict[str, Any] | None,
+]:
+    raw_state = config.get("typed_plan_state_section")
+    state_section = raw_state if isinstance(raw_state, Mapping) else None
+    structured_raw = config.get("typed_plan_structured_sections")
+    structured = (
+        structured_raw
+        if isinstance(structured_raw, Mapping)
+        else None
+    )
+
+    raw_state_store = config.get("typed_state_store")
+    state_store = None
+    if raw_state_store is not None:
+        if not isinstance(raw_state_store, Mapping):
+            raise ValueError("TYPED_STATE_STORE_CONFIG_INVALID")
+        state_store = normalize_typed_state_store_config(
+            raw_state_store,
+            structured_sections=structured,
+            state_section=state_section,
+        )
+
+    raw_network_sync = config.get("typed_network_sync")
+    network_sync = None
+    if raw_network_sync is not None:
+        if not isinstance(raw_network_sync, Mapping):
+            raise ValueError("TYPED_NETWORK_SYNC_CONFIG_INVALID")
+        network_sync = normalize_typed_network_sync_config(raw_network_sync)
+
+    raw_resource_policy = config.get("typed_resource_policy")
+    resource_policy = None
+    if raw_resource_policy is not None:
+        if not isinstance(raw_resource_policy, Mapping):
+            raise ValueError("TYPED_RESOURCE_POLICY_CONFIG_INVALID")
+        resource_policy = normalize_typed_resource_policy_config(
+            raw_resource_policy
+        )
+
+    return state_section, state_store, network_sync, resource_policy
 
 
 def _assert_host_owned_or_absent(
@@ -805,11 +857,13 @@ def validate_typed_plan_generation_contract(
             + "/AuthoredHostCapabilities.java"
         ] = render_typed_host_capabilities_java(package_name)
 
-    raw_state = config.get("typed_plan_state_section")
+    (
+        raw_state,
+        raw_state_store,
+        raw_network_sync,
+        raw_resource_policy,
+    ) = _normalized_typed_host_configs(config)
     state_authority_present = isinstance(raw_state, Mapping) and bool(raw_state)
-    raw_state_store = config.get("typed_state_store")
-    raw_network_sync = config.get("typed_network_sync")
-    raw_resource_policy = config.get("typed_resource_policy")
 
     if raw_state_store is not None:
         if not isinstance(raw_state_store, Mapping):
@@ -967,10 +1021,14 @@ def generate_typed_plan_module(
         if isinstance(raw_structured, Mapping)
         else {}
     )
-    raw_state = config.get("typed_plan_state_section")
+    (
+        raw_state,
+        raw_state_store,
+        raw_network_sync,
+        raw_resource_policy,
+    ) = _normalized_typed_host_configs(config)
     state_authority_present = isinstance(raw_state, Mapping) and bool(raw_state)
 
-    raw_state_store = config.get("typed_state_store")
     if raw_state_store is not None:
         if not isinstance(raw_state_store, Mapping):
             raise ValueError("TYPED_STATE_STORE_CONFIG_INVALID")
@@ -985,7 +1043,6 @@ def generate_typed_plan_module(
             )
         )
 
-    raw_network_sync = config.get("typed_network_sync")
     network_sync_needs_state = False
     if raw_network_sync is not None:
         if not isinstance(raw_network_sync, Mapping):
@@ -1008,7 +1065,6 @@ def generate_typed_plan_module(
             )
         )
 
-    raw_resource_policy = config.get("typed_resource_policy")
     if raw_resource_policy is not None:
         if not isinstance(raw_resource_policy, Mapping):
             raise ValueError("TYPED_RESOURCE_POLICY_CONFIG_INVALID")

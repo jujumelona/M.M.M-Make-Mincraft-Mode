@@ -613,7 +613,12 @@ def test_typed_state_store_materializes_persistence_without_router(
     assert len(modules) == 1
     module = modules[0]
     assert module.module_id == "authored_typed_plan"
-    assert module.config["typed_state_store"] == {"namespace": "player_state"}
+    state_store = module.config["typed_state_store"]
+    assert state_store["namespace"] == "player_state"
+    assert state_store["schema_version"].startswith("state-")
+    assert state_store["migrations"] == []
+    assert state_store["malformed_policy"] == "backup_and_reset"
+    assert state_store["transfer_on_respawn"] is False
     assert manifest["typed_program"]["state_store"] is True
 
     receipt = generate_typed_plan_module(

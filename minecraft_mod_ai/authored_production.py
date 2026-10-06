@@ -19,6 +19,11 @@ from .host_target_binding import bind_existing_project, bind_platform
 from .spec import ModSpec, Proposal, ProposalStatus
 from .platform_backend_contract import deterministic_backend_capabilities
 from .target_contract import target_coordinates_from_mapping
+from .typed_host_generation_contract import (
+    normalize_typed_network_sync_config,
+    normalize_typed_resource_policy_config,
+    normalize_typed_state_store_config,
+)
 
 _TARGET_KEYS = ("minecraft_version", "loader", "mappings")
 _AUTHORED_EXECUTION_SCHEMA = "mmm/authored-execution-manifest-v2"
@@ -129,20 +134,31 @@ def _compile_new_authored_modules(
                 raise ValueError(
                     "TYPED_PLATFORM_STATE_STORE_DUPLICATE"
                 )
-            state_store_config = deepcopy(dict(item["config"]))
+            state_store_config = normalize_typed_state_store_config(
+                item["config"],
+                structured_sections=plan.structured_sections,
+                state_section=(
+                    production_state_section
+                    if isinstance(production_state_section, Mapping)
+                    else None
+                ),
+                covers=item["covers"],
+            )
             continue
         if kind == "network_sync":
             if network_sync_config is not None:
                 raise ValueError("TYPED_PLATFORM_NETWORK_SYNC_DUPLICATE")
-            network_sync_config = {
-                **deepcopy(dict(item["config"])),
-                "__covers": list(item["covers"]),
-            }
+            network_sync_config = normalize_typed_network_sync_config(
+                item["config"],
+                covers=item["covers"],
+            )
             continue
         if kind == "resource_policy":
             if resource_policy_config is not None:
                 raise ValueError("TYPED_PLATFORM_RESOURCE_POLICY_DUPLICATE")
-            resource_policy_config = deepcopy(dict(item["config"]))
+            resource_policy_config = normalize_typed_resource_policy_config(
+                item["config"],
+            )
             continue
         if target_deterministic_kinds is not None:
             missing_backend = missing_production_backend_capabilities(

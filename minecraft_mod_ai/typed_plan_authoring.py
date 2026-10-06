@@ -161,128 +161,19 @@ def _active_concern_refs(
     return tuple(dict.fromkeys(refs))
 
 
-def _state_store_schema_version(
-    structured_sections: Mapping[str, Any] | None,
-) -> str:
-    """Derive the current persisted-state schema identity from host-canonical state."""
-
-    from .authored_structured_design import active_concern_records
-
-    state = active_concern_records(
-        structured_sections,
-        "state_model",
-    )
-    variables = tuple(
-        dict(row)
-        for row in state.get("variables", ())
-        if isinstance(row, Mapping)
-    )
-    payload = json.dumps(
-        variables,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    ).encode("utf-8")
-    return "state-" + hashlib.sha256(payload).hexdigest()[:16]
-
-
 def _state_store_config_from_structured(
     structured_sections: Mapping[str, Any] | None,
     *,
     transfer_required: bool,
 ) -> dict[str, Any]:
-    """Compile persistence policy with host-owned migration topology.
-
-    Worksheet migration records may describe legacy sources and migration
-    operations, but they do not own the destination graph. Every accepted
-    migration converges on the canonical current state-schema identity so cycles,
-    branching targets, and ambiguous sinks cannot be introduced by model output.
-    """
-
-    from .authored_structured_design import active_concern_records
-
-    persistence = active_concern_records(
-        structured_sections,
-        "persistence",
+    from .typed_host_generation_contract import (
+        canonical_typed_state_store_config,
     )
-    rows = tuple(persistence.get("migration", ()))
-    migrations: list[dict[str, Any]] = []
-    schema_version = _state_store_schema_version(structured_sections)
-    seen_operations: set[tuple[str, str, str, str, str]] = set()
 
-    for index, row in enumerate(rows):
-        if not isinstance(row, Mapping):
-            raise ValueError(
-                f"TYPED_PLAN_MIGRATION_RECORD_INVALID: {index}"
-            )
-        source = str(row.get("source_version") or "").strip()
-        operation = str(row.get("operation") or "").strip()
-        if not source:
-            raise ValueError(
-                f"TYPED_PLAN_MIGRATION_VERSION_REQUIRED: {index}"
-            )
-        if operation not in {
-            "preserve",
-            "rename_key",
-            "delete_key",
-            "set_default",
-        }:
-            raise ValueError(
-                f"TYPED_PLAN_MIGRATION_OPERATION_INVALID: {operation!r}"
-            )
-
-        if source == schema_version:
-            raise ValueError(
-                f"TYPED_PLAN_MIGRATION_SELF_LOOP: {index} uses current schema "
-                f"{schema_version!r} as its source"
-            )
-
-        source_key = row.get("source_key")
-        destination_key = row.get("destination_key")
-        value = row.get("value")
-        if operation in {"rename_key", "delete_key"} and not str(
-            source_key or ""
-        ).strip():
-            raise ValueError(
-                f"TYPED_PLAN_MIGRATION_SOURCE_KEY_REQUIRED: {index}"
-            )
-        if operation in {"rename_key", "set_default"} and not str(
-            destination_key or ""
-        ).strip():
-            raise ValueError(
-                f"TYPED_PLAN_MIGRATION_DESTINATION_KEY_REQUIRED: {index}"
-            )
-
-        operation_key = (
-            source,
-            operation,
-            str(source_key or ""),
-            str(destination_key or ""),
-            json.dumps(value, ensure_ascii=False, sort_keys=True, default=str),
-        )
-        if operation_key in seen_operations:
-            raise ValueError(
-                f"TYPED_PLAN_MIGRATION_DUPLICATE: {index} duplicates an earlier "
-                "canonical migration operation"
-            )
-        seen_operations.add(operation_key)
-        migrations.append({
-            "from_version": source,
-            "to_version": schema_version,
-            "operation": operation,
-            "source_key": source_key,
-            "destination_key": destination_key,
-            "value": value,
-        })
-
-    return {
-        "namespace": "authored_state",
-        "schema_version": schema_version,
-        "migrations": migrations,
-        "malformed_policy": "backup_and_reset",
-        "transfer_on_respawn": bool(transfer_required),
-    }
+    return canonical_typed_state_store_config(
+        structured_sections=structured_sections,
+        transfer_required=transfer_required,
+    )
 
 
 def _integration_entry_points(
