@@ -53,7 +53,7 @@ def _extended(original: Any) -> Any:
 
 
 def test_advertised_kinds_are_normalized_before_authorization() -> None:
-    assert contract._raw_advertised_kinds(_adapter(" item ", "", "block")) == frozenset(
+    assert contract._advertised_kinds(_adapter(" item ", "", "block")) == frozenset(
         {"item", "block"}
     )
 

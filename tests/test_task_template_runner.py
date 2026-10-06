@@ -129,7 +129,7 @@ def test_host_context_can_admit_known_evidence(monkeypatch):
 
 
 def test_entry_condition_record_contract_exposes_only_bounded_count_decision():
-    schema = runner.record_response_schema(
+    schema = bounded.record_cardinality_response_schema(
         load_template("feature/behavior_contract/entry_conditions")
     )
     assert schema["required"] == ["count"]

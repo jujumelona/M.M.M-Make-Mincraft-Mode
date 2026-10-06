@@ -19,15 +19,15 @@ def test_texture_cache_preserves_exact_original_bytes() -> None:
 
 def test_many_seed_names_collapse_to_at_most_fourteen_exact_patterns() -> None:
     cached = generator.make_texture_png
-    with generator._TEXTURE_CACHE_LOCK:
-        generator._TEXTURE_CACHE.clear()
+    with texture_cache._TEXTURE_CACHE_LOCK:
+        texture_cache._TEXTURE_CACHE.clear()
 
     outputs = [
         cached("#748cab", f"module_{index:04d}", kind="item", size=16)
         for index in range(100)
     ]
 
-    with generator._TEXTURE_CACHE_LOCK:
+    with texture_cache._TEXTURE_CACHE_LOCK:
         keys = list(texture_cache._TEXTURE_CACHE)
     assert len(keys) <= 14
     assert len(set(outputs)) <= 14
