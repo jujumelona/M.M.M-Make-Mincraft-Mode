@@ -147,6 +147,18 @@ def run_bounded_record_template(
         admitted_refs,
     )
     saved = (progress or {}).get(binding)
+    if saved is not None and not isinstance(saved, dict):
+        raise ValueError(
+            f"TEMPLATE_RECORD_SET_SAVED_SHAPE: {identifier} checkpoint must be an object"
+        )
+    if (
+        isinstance(saved, dict)
+        and "records" in saved
+        and not isinstance(saved.get("records"), list)
+    ):
+        raise ValueError(
+            f"TEMPLATE_RECORD_SET_SAVED_SHAPE: {identifier} records must be a list"
+        )
 
     if isinstance(saved, dict) and isinstance(saved.get("records"), list):
         raw_records = saved["records"]
