@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import pytest
+
 from minecraft_mod_ai.content_design_contract import (
     CONTENT_KINDS,
     PRIMARY_CONTENT_KINDS,
     RESOURCE_DEFINITION_KINDS,
 )
-from minecraft_mod_ai.design_generation_schema import context_bound_record_schema
+from minecraft_mod_ai.design_generation_schema import (
+    DesignGenerationSchemaError,
+    context_bound_record_schema,
+)
 
 
 def test_primary_content_vocabulary_is_strict_subset_of_all_content() -> None:
@@ -53,10 +58,12 @@ def test_explicit_primary_scope_cannot_smuggle_resource_definition_kind() -> Non
         "additionalProperties": False,
     }
 
-    bound = context_bound_record_schema(
-        "design/content_entity",
-        schema,
-        {"allowed_content_kinds": list(PRIMARY_CONTENT_KINDS)},
-    )
-
-    assert set(bound["properties"]["kind"]["enum"]) == set(PRIMARY_CONTENT_KINDS)
+    with pytest.raises(
+        DesignGenerationSchemaError,
+        match="CONTENT_PRIMARY_KIND_SCOPE_INVALID",
+    ):
+        context_bound_record_schema(
+            "design/content_entity",
+            schema,
+            {"allowed_content_kinds": ["item", "registry_tag"]},
+        )
