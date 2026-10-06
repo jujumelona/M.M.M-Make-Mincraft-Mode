@@ -4,6 +4,7 @@ from minecraft_mod_ai.authored_content_contract import (
     CONTENT_GRAPH_DRIVER_CONCERNS,
     CONTENT_GRAPH_HOST_CONSTRAINT_CONCERNS,
     content_owned_refs,
+    content_request_catalog,
 )
 from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
 
@@ -68,3 +69,70 @@ def test_data_resource_constraint_is_externally_owned_without_synthetic_entity()
     assert content_owned_refs(structured, {}) == frozenset({
         "resources_and_ui.data_resources",
     })
+
+
+def test_host_constraints_are_preserved_without_driver_requirements() -> None:
+    structured = _resource_section(
+        "data_resources",
+        [{
+            "kind": "tag",
+            "purpose": "ore resource metadata",
+            "owner": "space_mode",
+        }],
+    )
+
+    catalog = content_request_catalog(
+        structured,
+        requested_prompt="space mode",
+    )
+
+    assert catalog["requirements"] == []
+    assert catalog["host_constraints"] == {
+        "data_resources": [{
+            "kind": "tag",
+            "purpose": "ore resource metadata",
+            "owner": "space_mode",
+        }]
+    }
+
+
+def test_host_constraints_do_not_become_content_requirements() -> None:
+    specification = {
+        name: []
+        for name in DETAIL_RECORDS["resources_and_ui"]
+    }
+    specification["assets"] = [{
+        "kind": "item",
+        "purpose": "moon ore icon",
+        "owner": "moon_ore",
+    }]
+    specification["data_resources"] = [{
+        "kind": "tag",
+        "purpose": "ore grouping",
+        "owner": "moon_ore",
+    }]
+    specification["registries"] = [{
+        "purpose": "register moon ore",
+        "identifier": "moon_ore_registry",
+        "binding_requirement": "bind existing content",
+    }]
+    specification["inapplicable_concerns"] = []
+    structured = {
+        "resources_and_ui": {
+            "specification": specification,
+            "constraint_evidence_refs": [],
+        }
+    }
+
+    catalog = content_request_catalog(
+        structured,
+        requested_prompt="moon ore",
+    )
+
+    assert [row["coverage_ref"] for row in catalog["requirements"]] == [
+        "resources_and_ui.assets",
+    ]
+    assert set(catalog["host_constraints"]) == {
+        "data_resources",
+        "registries",
+    }
