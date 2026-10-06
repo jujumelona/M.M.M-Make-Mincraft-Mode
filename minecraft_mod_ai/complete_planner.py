@@ -121,7 +121,6 @@ class CompleteGameDesignPlanner:
         )
 
         kinds = deterministic_module_kinds
-        auto_allowed_platform_kinds: frozenset[str] | None = None
         if kinds is None and adapter is not None:
             kinds = deterministic_backend_capabilities(adapter)
         if kinds is None:
@@ -164,60 +163,14 @@ class CompleteGameDesignPlanner:
                     str(existing_loader),
                 )
                 kinds = deterministic_backend_capabilities(existing_adapter)
-        if kinds is None:
-            # AUTO planning filters semantic kinds by *per-target* executability.
-            # Never union primitive capabilities from different targets: doing so can
-            # synthesize support that no single immutable target receipt actually has.
-            from .platform_backend_contract import production_backend_is_supported
-            from .platform_catalog import (
-                adapter_for_target,
-                discover_target_keys,
-            )
-            from .typed_platform_ir import PLATFORM_HOST_KINDS, PLATFORM_KINDS
 
-            loader_hint = getattr(
-                self.router,
-                "_mmm_requested_loader",
-                None,
-            )
-            version_hint = getattr(
-                self.router,
-                "_mmm_requested_minecraft_version",
-                None,
-            )
-            target_keys = discover_target_keys(
-                loader=str(loader_hint) if loader_hint else None,
-                limit_per_loader=32,
-            )
-            if version_hint:
-                target_keys = tuple(
-                    (target_loader, target_version)
-                    for target_loader, target_version in target_keys
-                    if str(target_version) == str(version_hint)
-                )
-
-            target_capability_sets: list[frozenset[str]] = []
-            for target_loader, target_version in target_keys:
-                target_capability_sets.append(
-                    deterministic_backend_capabilities(
-                        adapter_for_target(
-                            str(target_version),
-                            str(target_loader),
-                        )
-                    )
-                )
-
-            executable_kinds = set(PLATFORM_HOST_KINDS)
-            executable_kinds.update(
-                kind
-                for kind in PLATFORM_KINDS
-                if kind not in PLATFORM_HOST_KINDS
-                and any(
-                    production_backend_is_supported(capabilities, kind)
-                    for capabilities in target_capability_sets
-                )
-            )
-            auto_allowed_platform_kinds = frozenset(executable_kinds)
+        # When no target is bound yet, do not pre-filter semantic platform kinds
+        # using speculative provider discovery. The canonical target binder later
+        # receives the authored module kinds and selects one immutable target via
+        # platform_resolver._require_supported_kinds(). Duplicating that admission
+        # here caused an empty/partial discovery frontier to collapse AUTO planning
+        # to host-only kinds before the real target selection could run.
+        auto_allowed_platform_kinds: frozenset[str] | None = None
         effective_kinds = tuple(sorted(kinds)) if kinds is not None else None
 
         with planner_operation("author_typed_plan_ir"):
