@@ -270,29 +270,34 @@ def test_imported_system_collision_is_rejected_before_dispatch(tmp_path: Path) -
         )
 
 
-def test_custom_routed_modules_bypass_builtin_preflight() -> None:
-    modules = (
-        _module(
-            "custom_entity",
-            "entity",
-            {
-                "implementation": "custom",
-                "movement_speed": "not-a-number",
-                "archetype": "unsupported",
-            },
-        ),
-        _module(
-            "custom_skill",
-            "skill",
-            {
-                "implementation": "custom",
-                "required_class": "missing_class",
-                "effect": "not-namespaced",
-            },
-        ),
-    )
+def test_removed_custom_generation_cannot_bypass_preflight() -> None:
+    with pytest.raises(
+        ProductionGenerationPreflightError,
+        match="CUSTOM_JAVA_BACKEND_REMOVED",
+    ):
+        validate_production_generation_modules(
+            (
+                _module(
+                    "custom_entity",
+                    "entity",
+                    {
+                        "implementation": "custom",
+                        "movement_speed": "not-a-number",
+                        "archetype": "unsupported",
+                    },
+                ),
+            )
+        )
 
-    validate_production_generation_modules(modules)
+
+def test_unknown_module_kind_is_rejected_at_preflight_boundary() -> None:
+    with pytest.raises(
+        ProductionGenerationPreflightError,
+        match="UNSUPPORTED_PRODUCTION_MODULE_KIND.*structure",
+    ):
+        validate_production_generation_modules(
+            (_module("legacy_structure", "structure", {}),)
+        )
 
 
 def test_orchestrator_owns_normalized_pre_dispatch_gate_in_source() -> None:
