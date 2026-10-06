@@ -16,7 +16,7 @@ from .authored_plan import AuthoredPlan
 from .conversation import merge_design_brief
 from .platform_backend_contract import deterministic_backend_capabilities
 from .model_concurrency import planning_work_unit_timeout_seconds
-from .spec import Proposal, SpecValidationError
+from .spec import SpecValidationError
 
 if TYPE_CHECKING:
     from .complete_orchestrator import CompleteExecutionOptions, CompletePipelineResult
@@ -544,9 +544,7 @@ class CompleteModAISession:
 
 __all__ = [
     "SUPPORTED_MINECRAFT_VERSIONS",
-    "ChatReply",
     "CompleteChatReply",
     "CompleteModAISession",
-    "ModAISession",
     "supported_minecraft_versions",
 ]
