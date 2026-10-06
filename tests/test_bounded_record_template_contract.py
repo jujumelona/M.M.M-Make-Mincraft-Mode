@@ -261,3 +261,37 @@ def test_record_minimum_above_host_bound_is_rejected() -> None:
     with pytest.raises(ValueError, match="TEMPLATE_RECORD_SET_MINIMUM"):
         bounded.record_cardinality_response_schema(minimum_count=17)
 
+def test_resumed_duplicate_records_are_rejected(monkeypatch) -> None:
+    monkeypatch.setattr(
+        bounded,
+        "load_record_template",
+        lambda identifier: dict(_TEMPLATE),
+    )
+    monkeypatch.setattr(
+        bounded,
+        "task_context",
+        lambda template, context: dict(context),
+    )
+    monkeypatch.setattr(
+        bounded,
+        "task_binding",
+        lambda template, context, refs: "binding",
+    )
+
+    progress = {
+        "record-set-v3:min=0:binding": {
+            "count": 2,
+            "records": [{"name": "same"}, {"name": "same"}],
+        }
+    }
+
+    import pytest
+
+    with pytest.raises(ValueError, match="TEMPLATE_RECORD_SET_DUPLICATE"):
+        bounded.run_bounded_record_template(
+            object(),
+            "feature/test/items",
+            context={"requirement": "resume duplicate records"},
+            progress=progress,
+        )
+
