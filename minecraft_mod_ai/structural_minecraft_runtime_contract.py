@@ -2,10 +2,15 @@ from __future__ import annotations
 
 """Compile Minecraft work only from the fixed structural translation pipeline."""
 
+import hashlib
+import json
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from .acceptance_contracts import is_public_acceptance as _is_public_acceptance
 from .minecraft_template_steps import ROOT_PROVIDE, TemplateStep
+from .root_cause_trace import emit_root_cause
 from .structural_artifact_mapping import branch_features_for_artifacts
 from .task_template_catalog import load_template
 from .translation_runtime import translate_requirement
@@ -95,6 +100,53 @@ def _required_gates(capability, branches, *, semantic_type="gameplay_mechanic", 
 class EvidencePlanError(ValueError):
     pass
 
+
+def _canonical(value: Any) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+
+
+def _sha(value: Any) -> str:
+    encoded = value.encode("utf-8") if isinstance(value, str) else _canonical(value).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def _hash_without(value: Mapping[str, Any], field: str) -> str:
+    payload = dict(value)
+    payload[field] = ""
+    return _sha(payload)
+
+
+def _slug(value: Any, fallback: str = "item") -> str:
+    raw = str(value or "")
+    text = re.sub(r"[^a-z0-9_]+", "_", raw.casefold()).strip("_")
+    text = re.sub(r"_+", "_", text)
+    if not text:
+        text = f"{fallback}_{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:10]}"
+    if not text[0].isalpha():
+        text = f"{fallback}_{text}"
+    return text[:36]
+
+
+def _stable_id(prefix: str, semantic: str, discriminator: Any) -> str:
+    digest = _sha({"semantic": semantic, "discriminator": discriminator})[7:17]
+    return f"{prefix}_{_slug(semantic)}_{digest}"[:63]
+
+
+def _class_name(value: str) -> str:
+    words = [item for item in re.split(r"[^A-Za-z0-9]+", value) if item]
+    result = "".join(item[:1].upper() + item[1:] for item in words) or "SemanticTask"
+    if not result[0].isalpha():
+        result = "Task" + result
+    return result[:96]
+
+
 def _strings(value: Any) -> tuple[str, ...]:
     if isinstance(value, str):
         values = (value,)
@@ -131,6 +183,122 @@ def _loader_leaf_steps(capability: str, steps: Sequence[TemplateStep]) -> tuple[
             rewritten.append(step)
     return tuple(rewritten)
 
+def _step_uses_branch(step: TemplateStep, branch: str) -> bool:
+    return branch in step.branch_features or (
+        branch == "needs_loader_leaf" and step.name == "loader_leaf_binding"
+    )
+
+
+def _anchors(
+    capability: str,
+    step: TemplateStep,
+    task_id: str,
+    ownership: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    base = _slug(capability)
+    class_name = _class_name(task_id)
+    namespace_path = str(ownership["namespace"]).replace(".", "/")
+    locators = {
+        "symbol": (
+            f"{ownership['source_root']}/{namespace_path}/mmmplan/{class_name}.{ownership['extension']}"
+            f"#{class_name}"
+        ),
+        "resource": f"resource:{ownership['mod_id']}:{base}/{step.name}",
+        "registry_id": f"registry:{ownership['mod_id']}:{base}/{step.name}",
+        "test": (
+            f"{ownership['test_root']}/{namespace_path}/mmmplan/{class_name}Test.{ownership['extension']}"
+            f"#{class_name}Test"
+        ),
+        "build_config": f"module:{ownership['module_id']}:build_config",
+    }
+    if step.name == "loader_leaf_binding":
+        module_ids = list(_strings(ownership.get("topology_module_ids")))
+        if len(module_ids) < 2:
+            raise EvidencePlanError(
+                "Loader-leaf task requires validated multi-module ownership anchors."
+            )
+        return [
+            {
+                "kind": "loader_module",
+                "locator": f"module:{module_id}:loader_leaf",
+                "ownership": "exclusive",
+                "status": "host_reserved",
+                "module_id": module_id,
+                "source_set": "common" if "common" in module_id.casefold() else "loader_leaf",
+            }
+            for module_id in module_ids
+        ]
+    return [
+        {
+            "kind": kind,
+            "locator": locators[kind],
+            "ownership": "exclusive",
+            "status": "host_reserved",
+            "module_id": ownership["module_id"],
+            "source_set": (
+                "test"
+                if kind == "test"
+                else "resources"
+                if kind == "resource"
+                else ownership["source_set"]
+            ),
+        }
+        for kind in step.anchor_kinds
+    ]
+
+
+def _bind_consumes_dependencies(
+    tasks: Sequence[Mapping[str, Any]],
+    *,
+    root_provides: set[str],
+    emit_trace: bool = True,
+) -> tuple[dict[str, Any], ...]:
+    providers: dict[str, list[str]] = {}
+    for task in tasks:
+        task_id = str(task.get("task_id") or "")
+        for provided in _strings(task.get("provides")):
+            providers.setdefault(provided, []).append(task_id)
+
+    bound: list[dict[str, Any]] = []
+    for raw in tasks:
+        task = dict(raw)
+        task_id = str(task["task_id"])
+        dependencies: list[str] = []
+        for consumed in _strings(task.get("consumes")):
+            if consumed in root_provides:
+                continue
+            candidates = providers.get(consumed, [])
+            if len(candidates) != 1:
+                raise EvidencePlanError(
+                    f"Task {task_id} consumes {consumed!r} without exactly one provider."
+                )
+            provider = candidates[0]
+            if provider == task_id:
+                raise EvidencePlanError(
+                    f"Task {task_id} consumes its own provide {consumed!r}."
+                )
+            if provider not in dependencies:
+                dependencies.append(provider)
+        task["depends_on"] = dependencies
+        task["task_sha256"] = ""
+        task["task_sha256"] = _hash_without(task, "task_sha256")
+        bound.append(task)
+        if emit_trace:
+            emit_root_cause(
+                "task_dependency_bound",
+                stage="planning",
+                operation="bind_task_dependencies",
+                gate="task_dependency_graph",
+                result="PASS",
+                details={
+                    "task_id": task_id,
+                    "consumes": task.get("consumes"),
+                    "depends_on": dependencies,
+                },
+            )
+    return tuple(bound)
+
+
 class _PlanningCompat:
     EvidencePlanError = EvidencePlanError
     _strings = staticmethod(_strings)
@@ -138,6 +306,12 @@ class _PlanningCompat:
     _requirement_done = staticmethod(_requirement_done)
     _rewrite_root = staticmethod(_rewrite_root)
     _loader_leaf_steps = staticmethod(_loader_leaf_steps)
+    _stable_id = staticmethod(_stable_id)
+    _step_uses_branch = staticmethod(_step_uses_branch)
+    _is_public_acceptance = staticmethod(_is_public_acceptance)
+    _anchors = staticmethod(_anchors)
+    _hash_without = staticmethod(_hash_without)
+    _bind_consumes_dependencies = staticmethod(_bind_consumes_dependencies)
 
 planning = _PlanningCompat()
 
