@@ -115,7 +115,7 @@ def _assert_closed_object_schemas(
 
 _HOST_ONLY_MODEL_CONSTRAINT_KEYWORDS = frozenset({
     # llama.cpp's projected JSON schema does not enforce these semantic
-    # cross-value constraints. Model-facing contracts must encode them
+    # constraints faithfully. Model-facing contracts must encode them
     # structurally in host-controlled calls instead of relying on late validation.
     "uniqueItems",
     "contains",
@@ -128,6 +128,13 @@ _HOST_ONLY_MODEL_CONSTRAINT_KEYWORDS = frozenset({
     "unevaluatedItems",
     "unevaluatedProperties",
     "multipleOf",
+    "allOf",
+    "if",
+    "then",
+    "else",
+    "not",
+    "$ref",
+    "prefixItems",
 })
 
 
@@ -185,6 +192,60 @@ def _assert_no_host_only_model_constraints(
             for index, child in enumerate(children):
                 if isinstance(child, Mapping):
                     _assert_no_host_only_model_constraints(
+                        child,
+                        surface=surface,
+                        path=f"{path}.{list_key}[{index}]",
+                    )
+
+
+def _assert_transportable_patterns(
+    value: Any,
+    *,
+    surface: str,
+    path: str = "$",
+) -> None:
+    if not isinstance(value, Mapping):
+        return
+
+    if isinstance(value.get("pattern"), str):
+        from .llama_schema_transport import project_llama_transport_schema
+
+        projected = project_llama_transport_schema(value)
+        if not isinstance(projected.get("pattern"), str):
+            raise _configuration_error(
+                "MODEL_SCHEMA_PATTERN_NOT_TRANSPORTABLE: "
+                f"pattern at {path} for {surface} cannot be enforced by the "
+                "configured llama.cpp structured decoder"
+            )
+
+    for container_key in ("properties", "$defs", "definitions"):
+        container = value.get(container_key)
+        if isinstance(container, Mapping):
+            for name, child in container.items():
+                if isinstance(child, Mapping):
+                    _assert_transportable_patterns(
+                        child,
+                        surface=surface,
+                        path=f"{path}.{container_key}[{name!r}]",
+                    )
+
+    for child_key in ("items", "additionalProperties"):
+        child = value.get(child_key)
+        if isinstance(child, Mapping):
+            _assert_transportable_patterns(
+                child,
+                surface=surface,
+                path=f"{path}.{child_key}",
+            )
+
+    for list_key in ("oneOf", "anyOf"):
+        children = value.get(list_key)
+        if isinstance(children, Sequence) and not isinstance(
+            children, (str, bytes, bytearray)
+        ):
+            for index, child in enumerate(children):
+                if isinstance(child, Mapping):
+                    _assert_transportable_patterns(
                         child,
                         surface=surface,
                         path=f"{path}.{list_key}[{index}]",
@@ -254,6 +315,11 @@ def assert_atomic_model_schema(schema: Mapping[str, Any], *, surface: str) -> No
 
     _assert_closed_object_schemas(schema)
     _assert_no_host_only_model_constraints(schema, surface=surface)
+    bounded_for_transport = _model_transport_schema(schema)
+    _assert_transportable_patterns(
+        bounded_for_transport,
+        surface=surface,
+    )
     raw_profile = schema.get(SCHEMA_CONTRACT_PROFILE_KEY, DEFAULT_SCHEMA_PROFILE)
     profile = str(raw_profile or DEFAULT_SCHEMA_PROFILE).strip()
     try:
