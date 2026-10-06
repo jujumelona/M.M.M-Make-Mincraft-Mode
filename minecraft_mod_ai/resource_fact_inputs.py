@@ -3,6 +3,7 @@
 import re
 from math import isfinite
 
+from .content_design_contract import REGISTRY_TAG_KIND_TO_TARGET_FACT_TYPE
 from .prompt_fact_types import FactType
 
 _ID = re.compile(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$")
@@ -29,13 +30,14 @@ def resource_inputs(fact, mod_id):
 
     result = dict(value)
     if fact.fact_type == FactType.REGISTRY_TAG:
-        if set(value) != {"registry_kind", "members"} or value["registry_kind"] not in {
-            "item",
-            "block",
-            "entity_type",
-        }:
+        if (
+            set(value) != {"registry_kind", "members"}
+            or value["registry_kind"] not in REGISTRY_TAG_KIND_TO_TARGET_FACT_TYPE
+        ):
             raise ValueError(
-                "RESOURCE_TAG_REGISTRY: item, block, or entity_type required"
+                "RESOURCE_TAG_REGISTRY: "
+                + ", ".join(REGISTRY_TAG_KIND_TO_TARGET_FACT_TYPE)
+                + " required"
             )
         if not isinstance(value["members"], list) or not value["members"]:
             raise ValueError("RESOURCE_TAG_MEMBERS: nonempty explicit members required")
