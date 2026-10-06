@@ -11,6 +11,7 @@ from jsonschema import Draft202012Validator
 from .content_design_contract import (
     CONTENT_KIND_TO_FACT_TYPE,
     CONTENT_KINDS,
+    PRIMARY_CONTENT_KINDS,
     CONTENT_PROPERTY_VALUE_ENUMS,
     CONTENT_PROPERTY_VALUE_PATTERNS,
 )
@@ -48,7 +49,7 @@ def _bind_content_entity_kind(
     kind_schema = properties.get("kind")
     if not isinstance(kind_schema, dict):
         raise DesignGenerationSchemaError("CONTENT_KIND_SCHEMA_INVALID")
-    allowed = context.get("allowed_content_kinds", CONTENT_KINDS)
+    allowed = context.get("allowed_content_kinds", PRIMARY_CONTENT_KINDS)
     if (
         not isinstance(allowed, (list, tuple)) or not allowed
         or any(kind not in CONTENT_KINDS for kind in allowed)
