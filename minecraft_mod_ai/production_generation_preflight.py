@@ -11,6 +11,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from .complete_spec import MODULE_KINDS
 from .extended_content_generator import (
     ExtendedContentError,
     validate_extended_module_contract,
@@ -37,13 +38,6 @@ class ProductionGenerationPreflightError(ValueError):
     """A normalized module set cannot enter deterministic built-in generation."""
 
 
-def _is_custom(module: Any) -> bool:
-    config = getattr(module, "config", None)
-    return getattr(module, "kind", None) == "custom_java" or (
-        isinstance(config, dict) and config.get("implementation") == "custom"
-    )
-
-
 def _system_module_dict(module: Any) -> dict[str, Any]:
     return {
         "module_id": str(module.module_id),
@@ -57,8 +51,6 @@ def _system_module_dict(module: Any) -> dict[str, Any]:
 def _system_groups(modules: Iterable[Any]) -> dict[str, list[Any]]:
     groups: dict[str, list[Any]] = {}
     for module in modules:
-        if _is_custom(module):
-            continue
         pack_id = _SYSTEM_PACK_BY_KIND.get(str(module.kind))
         if pack_id is not None:
             groups.setdefault(pack_id, []).append(module)
@@ -98,12 +90,17 @@ def validate_production_generation_modules(
     )
 
     for module in direct_routed:
-        if _is_custom(module):
+        kind = str(getattr(module, "kind", "") or "").strip()
+        config = getattr(module, "config", None)
+        if kind not in MODULE_KINDS:
             raise ProductionGenerationPreflightError(
-                "CUSTOM_JAVA_BACKEND_REMOVED: custom generation cannot enter "
-                f"production preflight: {getattr(module, 'module_id', '<unknown>')}"
+                f"UNSUPPORTED_PRODUCTION_MODULE_KIND: {kind!r}"
             )
-        kind = str(module.kind)
+        if isinstance(config, dict) and config.get("implementation") is not None:
+            raise ProductionGenerationPreflightError(
+                "CUSTOM_JAVA_BACKEND_REMOVED: production modules cannot carry "
+                f"implementation overrides: {getattr(module, 'module_id', '<unknown>')}"
+            )
         if kind in _EXTENDED_CONTENT_KINDS:
             try:
                 validate_extended_module_contract(module, policy=policy)
@@ -171,11 +168,6 @@ def validate_production_generation_project(
             f"Production target receipt is unavailable before generation: {exc}"
         ) from exc
     for module in direct_routed:
-        if _is_custom(module):
-            raise ProductionGenerationPreflightError(
-                "CUSTOM_JAVA_BACKEND_REMOVED: custom generation cannot enter "
-                f"project preflight: {getattr(module, 'module_id', '<unknown>')}"
-            )
         if str(module.kind) == "typed_host":
             try:
                 validate_typed_plan_generation_contract(
@@ -200,7 +192,7 @@ def validate_production_generation_project(
             )
 
     has_entities = any(
-        not _is_custom(module) and str(module.kind) in _ENTITY_KINDS
+        str(module.kind) in _ENTITY_KINDS
         for module in direct_routed
     )
     if has_entities:
