@@ -8,17 +8,14 @@ from minecraft_mod_ai.authored_content_contract import (
 from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
 
 
-def test_registry_binding_runs_after_concrete_content_discovery() -> None:
+def test_engineering_constraints_are_not_content_driver_requirements() -> None:
     assert CONTENT_GRAPH_DRIVER_CONCERNS == (
         "assets",
         "interactions",
         "displayed_state",
-        "data_resources",
-        "registries",
     )
-    assert CONTENT_GRAPH_DRIVER_CONCERNS[-2:] == (
-        "data_resources",
-        "registries",
+    assert set(CONTENT_GRAPH_DRIVER_CONCERNS).isdisjoint(
+        CONTENT_GRAPH_HOST_CONSTRAINT_CONCERNS
     )
 
 
