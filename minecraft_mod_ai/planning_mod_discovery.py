@@ -8,6 +8,7 @@ retrieval evidence, never proof that no candidate exists.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -30,6 +31,29 @@ def discovery_context(discovery: Mapping[str, Any]) -> str:
     }, ensure_ascii=False)
 
 
+_STOP = frozenset([
+    "the", "and", "for", "with", "from", "that", "this", "into", "can",
+    "will", "are", "has", "have", "after", "before", "through", "to", "of",
+    "in", "on", "by", "as", "an", "is", "be", "it", "players", "player",
+    "minecraft", "fabric", "forge", "neoforge", "mod", "mods",
+    "implementation", "concrete", "patterns", "support", "artifacts",
+    "useful", "find", "options", "source", "code", "api", "correctly",
+    "requirement", "systems", "system", "feature",
+])
+
+
+def terms(value: Any) -> list[str]:
+    """Return stable requirement-local catalog terms without sibling vocabulary."""
+    return list(dict.fromkeys(
+        word
+        for word in re.findall(
+            r"[a-z0-9]+|[\uac00-\ud7a3]{2,}",
+            str(value or "").casefold(),
+        )
+        if len(word) > 2 and word not in _STOP
+    ))
+
+
 def catalog_queries(
     state: Mapping[str, Any],
     research: Mapping[str, Any],
@@ -45,28 +69,31 @@ def catalog_queries(
     corrective expansion. The full task and siblings remain available in host context for
     traceability, not as automatic search terms.
     """
-    requirement = next((row for row in state.get("decisions", [])
-                        if isinstance(row, Mapping)
-                        and row.get("decision_type") == "requirement"
-                        and row.get("requirement_id") == research.get("requirement_ref")), {})
+    del prompt
+    requirement = next(
+        (
+            row
+            for row in state.get("decisions", [])
+            if isinstance(row, Mapping)
+            and row.get("decision_type") == "requirement"
+            and row.get("requirement_id") == research.get("requirement_ref")
+        ),
+        {},
+    )
     capability = str(requirement.get("semantic_capability") or "")
-
-_STOP = frozenset(["the", "and", "for", "with", "from", "that", "this", "into", "can", "will", "are", "has", "have", "after", "before", "through", "to", "of", "in", "on", "by", "as", "an", "is", "be", "it", "players", "player", "minecraft", "fabric", "forge", "neoforge", "mod", "mods", "implementation", "concrete", "patterns", "support", "artifacts", "useful", "find", "options", "source", "code", "api", "correctly", "requirement", "systems", "system", "feature"])
-
-def terms(value: Any) -> list[str]:
-    return list(dict.fromkeys(word for word in re.findall(
-        r"[a-z0-9]+|[\uac00-\ud7a3]{2,}", str(value or "").casefold(),
-    ) if len(word) > 2 and word not in _STOP))
-
     parts = terms(capability)
-
     if parts:
         return [" ".join(parts)]
 
     # Repository questions without a compiled capability retain their own authored queries;
     # do not borrow another requirement's identity or invent a mod name.
-    return list(dict.fromkeys(_query_text(q) for q in research.get("queries", [])
-                              if _query_text(q)))
+    return list(
+        dict.fromkeys(
+            _query_text(query)
+            for query in research.get("queries", [])
+            if _query_text(query)
+        )
+    )
 
 
 def discovery_receipt(domain_id: str, grounded: Mapping[str, Any]) -> dict[str, Any]:
