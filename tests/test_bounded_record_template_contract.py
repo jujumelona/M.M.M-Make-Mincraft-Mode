@@ -395,3 +395,35 @@ def test_partial_record_checkpoint_count_must_be_integer(monkeypatch) -> None:
             progress={"record-set-v3:min=0:binding": {"count": True}},
         )
 
+def test_record_checkpoint_rejects_undeclared_fields(monkeypatch) -> None:
+    monkeypatch.setattr(
+        bounded,
+        "load_record_template",
+        lambda identifier: dict(_TEMPLATE),
+    )
+    monkeypatch.setattr(
+        bounded,
+        "task_context",
+        lambda template, context: dict(context),
+    )
+    monkeypatch.setattr(
+        bounded,
+        "task_binding",
+        lambda template, context, refs: "binding",
+    )
+
+    import pytest
+
+    with pytest.raises(ValueError, match="TEMPLATE_RECORD_SET_SAVED_SHAPE"):
+        bounded.run_bounded_record_template(
+            object(),
+            "feature/test/items",
+            context={"requirement": "resume checkpoint with undeclared metadata"},
+            progress={
+                "record-set-v3:min=0:binding": {
+                    "count": 1,
+                    "debug": "unexpected",
+                }
+            },
+        )
+
