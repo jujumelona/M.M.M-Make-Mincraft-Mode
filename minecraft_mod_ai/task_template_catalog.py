@@ -7,7 +7,7 @@ import yaml
 from jsonschema import Draft202012Validator
 
 from .authored_section_ids import AUTHORING_SECTION_ORDER
-from .model_output_atomicity_contract import _assert_closed_object_schemas
+from .model_output_atomicity_contract import assert_atomic_model_schema
 
 RUNTIME_TEMPLATE_ROOT = Path(__file__).with_name("templates").resolve()
 ROOT = RUNTIME_TEMPLATE_ROOT
@@ -167,9 +167,9 @@ def _compile_record_schema(identifier: str, schema: dict) -> dict:
     """Validate the canonical logical record without misclassifying it as one model call."""
     compiled = _materialize_atomic_record_schema(schema)
     Draft202012Validator.check_schema(compiled)
-    _assert_closed_object_schemas(
+    assert_atomic_model_schema(
         compiled,
-        path=f"runtime record template {identifier!r}",
+        surface=f"runtime record template {identifier!r}",
     )
     return compiled
 
