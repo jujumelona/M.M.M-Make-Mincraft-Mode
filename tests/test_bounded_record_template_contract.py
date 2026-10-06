@@ -295,3 +295,36 @@ def test_resumed_duplicate_records_are_rejected(monkeypatch) -> None:
             progress=progress,
         )
 
+def test_resumed_record_checkpoint_requires_integer_count(monkeypatch) -> None:
+    monkeypatch.setattr(
+        bounded,
+        "load_record_template",
+        lambda identifier: dict(_TEMPLATE),
+    )
+    monkeypatch.setattr(
+        bounded,
+        "task_context",
+        lambda template, context: dict(context),
+    )
+    monkeypatch.setattr(
+        bounded,
+        "task_binding",
+        lambda template, context, refs: "binding",
+    )
+
+    progress = {
+        "record-set-v3:min=0:binding": {
+            "records": [{"name": "item-1"}],
+        }
+    }
+
+    import pytest
+
+    with pytest.raises(ValueError, match="TEMPLATE_RECORD_SET_SAVED_COUNT"):
+        bounded.run_bounded_record_template(
+            object(),
+            "feature/test/items",
+            context={"requirement": "resume malformed checkpoint"},
+            progress=progress,
+        )
+
