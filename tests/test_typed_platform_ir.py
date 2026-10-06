@@ -99,7 +99,7 @@ def test_platform_coverage_must_reference_active_canonical_concern() -> None:
     issues = typed_plan_support_issues({}, validated)
 
     assert issues == (
-        "platform.coverage_without_active_concern:resources_and_ui.registries",
+        "host.coverage_without_active_concern:resources_and_ui.registries",
     )
 
 

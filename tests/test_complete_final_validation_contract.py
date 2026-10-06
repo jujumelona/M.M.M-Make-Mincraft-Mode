@@ -21,7 +21,6 @@ from minecraft_mod_ai.complete_orchestrator_support import file_sha256
 from minecraft_mod_ai.debug_fixture_host import debug_fixture_source_contract
 from minecraft_mod_ai.complete_orchestrator import (
     CompleteProductionOrchestrator,
-    _attach_verified_release_artifact,
     _blocking_jdt_errors,
     _final_validation_failure,
     _gametest_attestation_status,
@@ -37,6 +36,9 @@ from minecraft_mod_ai.complete_orchestrator import (
     _stable_payload_sha256,
     _validate_external_execution_preflight,
     _validate_required_gate_contract,
+)
+from minecraft_mod_ai.release_artifact_contract import (
+    attach_verified_release_artifact as _attach_verified_release_artifact,
 )
 from minecraft_mod_ai.validation_diagnostic_contract import (
     release_diagnostics_timeout_seconds,
