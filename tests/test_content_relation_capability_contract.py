@@ -40,40 +40,45 @@ def test_relation_capability_contract_matches_special_lowering_shapes() -> None:
     assert not relation_type_supported_for_content_pair("opens", "item", "block")
 
 
-def test_relation_runtime_binds_contains_to_the_valid_direction(monkeypatch) -> None:
-    calls: list[tuple[str, str, tuple[str, ...]]] = []
+def _serial_map(router, jobs, run_one, **kwargs):
+    del router, kwargs
+    return [run_one(job) for job in jobs]
 
-    def serial_map(router, jobs, run_one, **kwargs):
-        del router, kwargs
-        return [run_one(job) for job in jobs]
 
-    def fake_run_bounded(
-        router,
-        identifier,
-        *,
-        context,
-        progress,
-        checkpoint,
-        **kwargs,
-    ):
-        del router, progress, checkpoint, kwargs
-        assert identifier == "design/content_relation"
-        source_id = context["source_id"]
-        target_id = context["target_id"]
-        allowed = tuple(context["allowed_relation_types"])
-        calls.append((source_id, target_id, allowed))
+def _empty_pair_records(
+    router,
+    identifier,
+    *,
+    context,
+    progress,
+    checkpoint,
+    **kwargs,
+):
+    del router, context, progress, checkpoint, kwargs
+    assert identifier == "design/content_relation"
+    return {"records": []}
 
-        if source_id == "tag_valid_ships" and target_id == "ship_blueprint":
-            assert allowed == ("contains",)
-            return {"records": [{"relation_type": "contains"}]}
-        assert "contains" not in allowed
-        return {"records": []}
 
-    monkeypatch.setattr(design_record_runtime, "deterministic_model_map", serial_map)
+def test_registry_tag_relations_have_host_owned_nonempty_membership(monkeypatch) -> None:
+    def fake_generate(router, role, messages, *, response_schema, **kwargs):
+        del router, role, messages, kwargs
+        props = response_schema["properties"]
+        if "member_kind" in props:
+            return {"member_kind": "item"}
+        if "member_ids" in props:
+            return {"member_ids": ["ship_blueprint"]}
+        raise AssertionError(response_schema)
+
+    monkeypatch.setattr(design_record_runtime, "deterministic_model_map", _serial_map)
     monkeypatch.setattr(
         design_record_runtime,
         "run_bounded_record_template",
-        fake_run_bounded,
+        _empty_pair_records,
+    )
+    monkeypatch.setattr(
+        design_record_runtime,
+        "generate_fixed_template_value",
+        fake_generate,
     )
 
     records, _ = design_record_runtime._run_relations(
@@ -90,7 +95,7 @@ def test_relation_runtime_binds_contains_to_the_valid_direction(monkeypatch) -> 
                 {
                     "entity_id": "tag_valid_ships",
                     "kind": "registry_tag",
-                    "implementation_obligations": [],
+                    "implementation_obligations": ["groups valid ship blueprints"],
                 },
             ],
         },
@@ -105,4 +110,150 @@ def test_relation_runtime_binds_contains_to_the_valid_direction(monkeypatch) -> 
             "target_id": "ship_blueprint",
         }
     ]
-    assert calls
+
+
+def test_crafting_recipe_relations_have_exact_output_and_bounded_inputs(monkeypatch) -> None:
+    def fake_generate(router, role, messages, *, response_schema, **kwargs):
+        del router, role, messages, kwargs
+        props = response_schema["properties"]
+        if {"mode", "output_id", "input_ids"} <= set(props):
+            return {
+                "mode": "shaped",
+                "output_id": "ship_hull",
+                "input_ids": ["steel_plate", "engine_core"],
+            }
+        raise AssertionError(response_schema)
+
+    monkeypatch.setattr(design_record_runtime, "deterministic_model_map", _serial_map)
+    monkeypatch.setattr(
+        design_record_runtime,
+        "run_bounded_record_template",
+        _empty_pair_records,
+    )
+    monkeypatch.setattr(
+        design_record_runtime,
+        "generate_fixed_template_value",
+        fake_generate,
+    )
+
+    records, _ = design_record_runtime._run_relations(
+        object(),
+        "design/content_relation",
+        {
+            "entity_ids": [
+                "ship_recipe",
+                "ship_hull",
+                "steel_plate",
+                "engine_core",
+            ],
+            "entities": [
+                {
+                    "entity_id": "ship_recipe",
+                    "kind": "crafting_recipe",
+                    "implementation_obligations": ["craft the ship hull"],
+                },
+                {
+                    "entity_id": "ship_hull",
+                    "kind": "item",
+                    "implementation_obligations": [],
+                },
+                {
+                    "entity_id": "steel_plate",
+                    "kind": "item",
+                    "implementation_obligations": [],
+                },
+                {
+                    "entity_id": "engine_core",
+                    "kind": "item",
+                    "implementation_obligations": [],
+                },
+            ],
+        },
+        {},
+        None,
+    )
+
+    recipe_edges = [row for row in records if row["source_id"] == "ship_recipe"]
+    assert recipe_edges == [
+        {
+            "relation_type": "produces",
+            "source_id": "ship_recipe",
+            "target_id": "ship_hull",
+        },
+        {
+            "relation_type": "key_A",
+            "source_id": "ship_recipe",
+            "target_id": "steel_plate",
+        },
+        {
+            "relation_type": "key_B",
+            "source_id": "ship_recipe",
+            "target_id": "engine_core",
+        },
+    ]
+    assert sum(row["relation_type"] == "produces" for row in recipe_edges) == 1
+
+
+def test_smelting_recipe_relations_have_exact_input_and_output(monkeypatch) -> None:
+    def fake_generate(router, role, messages, *, response_schema, **kwargs):
+        del router, role, messages, kwargs
+        props = response_schema["properties"]
+        if {"output_id", "ingredient_id"} <= set(props):
+            return {
+                "output_id": "refined_alloy",
+                "ingredient_id": "raw_alloy",
+            }
+        raise AssertionError(response_schema)
+
+    monkeypatch.setattr(design_record_runtime, "deterministic_model_map", _serial_map)
+    monkeypatch.setattr(
+        design_record_runtime,
+        "run_bounded_record_template",
+        _empty_pair_records,
+    )
+    monkeypatch.setattr(
+        design_record_runtime,
+        "generate_fixed_template_value",
+        fake_generate,
+    )
+
+    records, _ = design_record_runtime._run_relations(
+        object(),
+        "design/content_relation",
+        {
+            "entity_ids": ["smelt_alloy", "raw_alloy", "refined_alloy"],
+            "entities": [
+                {
+                    "entity_id": "smelt_alloy",
+                    "kind": "smelting_recipe",
+                    "implementation_obligations": ["smelt raw alloy"],
+                },
+                {
+                    "entity_id": "raw_alloy",
+                    "kind": "item",
+                    "implementation_obligations": [],
+                },
+                {
+                    "entity_id": "refined_alloy",
+                    "kind": "item",
+                    "implementation_obligations": [],
+                },
+            ],
+        },
+        {},
+        None,
+    )
+
+    recipe_edges = [row for row in records if row["source_id"] == "smelt_alloy"]
+    assert recipe_edges == [
+        {
+            "relation_type": "consumes",
+            "source_id": "smelt_alloy",
+            "target_id": "raw_alloy",
+        },
+        {
+            "relation_type": "produces",
+            "source_id": "smelt_alloy",
+            "target_id": "refined_alloy",
+        },
+    ]
