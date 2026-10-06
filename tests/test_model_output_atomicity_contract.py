@@ -294,6 +294,76 @@ def test_host_only_keyword_guard_does_not_reject_property_names() -> None:
     assert_atomic_model_schema(schema, surface="property-name-regression")
 
 
+@pytest.mark.parametrize(
+    "keyword",
+    ["allOf", "if", "not", "$ref", "prefixItems"],
+)
+def test_transport_dropped_schema_keywords_are_rejected_centrally(
+    keyword: str,
+) -> None:
+    if keyword == "allOf":
+        fragment = {
+            "type": "string",
+            "allOf": [{"minLength": 2}],
+        }
+    elif keyword == "if":
+        fragment = {
+            "type": "string",
+            "if": {"const": "x"},
+            "then": {"minLength": 2},
+        }
+    elif keyword == "not":
+        fragment = {
+            "type": "string",
+            "not": {"const": "x"},
+        }
+    elif keyword == "$ref":
+        fragment = {"$ref": "#/$defs/value"}
+    else:
+        fragment = {
+            "type": "array",
+            "prefixItems": [{"type": "string"}],
+            "items": {"type": "string"},
+        }
+
+    schema = {
+        "$defs": {
+            "value": {"type": "string", "maxLength": 16},
+        },
+        "type": "object",
+        "properties": {"value": fragment},
+        "required": ["value"],
+        "additionalProperties": False,
+    }
+
+    with pytest.raises(
+        ModelConfigurationError,
+        match="MODEL_SCHEMA_HOST_ONLY_CONSTRAINT",
+    ):
+        assert_atomic_model_schema(schema, surface="transport-parity-regression")
+
+
+def test_unsafe_pattern_is_rejected_before_model_inference() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "value": {
+                "type": "string",
+                "pattern": r"^\bword\b$",
+                "maxLength": 16,
+            }
+        },
+        "required": ["value"],
+        "additionalProperties": False,
+    }
+
+    with pytest.raises(
+        ModelConfigurationError,
+        match="MODEL_SCHEMA_PATTERN_NOT_TRANSPORTABLE",
+    ):
+        assert_atomic_model_schema(schema, surface="pattern-parity-regression")
+
+
 def test_model_transport_synthesizes_missing_resource_bounds() -> None:
     logical = {
         "type": "object",
