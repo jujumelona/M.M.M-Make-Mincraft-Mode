@@ -84,18 +84,6 @@ def record_field_schema(section: str, concern: str, field: str) -> dict:
     return {"type": "string", "minLength": 1, "maxLength": 512}
 
 
-def _model_transport_schema(schema, *, is_properties_map: bool = False):
-    if isinstance(schema, dict):
-        return {
-            key: _model_transport_schema(value, is_properties_map=(key == "properties"))
-            for key, value in schema.items()
-            if not (key == "pattern" and not is_properties_map)
-        }
-    if isinstance(schema, list):
-        return [_model_transport_schema(value) for value in schema]
-    return schema
-
-
 def specification_schema(
     section,
     *,
@@ -168,7 +156,9 @@ def specification_schema(
         "additionalProperties": False,
     }
     if model_transport:
-        return _model_transport_schema(schema)
+        from .model_output_atomicity_contract import effective_model_transport_schema
+
+        return effective_model_transport_schema(schema)
     return schema
 
 
