@@ -61,10 +61,15 @@ def bind_reuse_plan(proposal: CompleteProposal) -> CompleteProposal:
 
 
 def _assign_capability_owners(modules: Sequence[ProductionModule], decisions: Sequence[Mapping[str, Any]]) -> dict[int, tuple[Mapping[str, Any], ...]]:
-    candidates = [index for index, module in enumerate(modules) if module.kind != 'audio']
+    # Every incoming module has already passed CompleteProposal validation.
+    # Do not retain branches for removed production kinds such as audio/custom_java.
+    candidates = list(range(len(modules)))
     if not candidates or not decisions:
         return {}
-    preferred = next((index for index in candidates if modules[index].kind == 'custom_java'), candidates[0])
+    preferred = next(
+        (index for index in candidates if modules[index].kind == "typed_host"),
+        candidates[0],
+    )
     module_tokens = {index: _module_semantic_tokens(modules[index]) for index in candidates}
     assigned: dict[int, list[Mapping[str, Any]]] = {index: [] for index in candidates}
     for decision in decisions:
