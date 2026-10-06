@@ -39,6 +39,36 @@ CONTENT_KIND_TO_FACT_TYPE = MappingProxyType(
 CONTENT_KINDS = tuple(CONTENT_KIND_TO_FACT_TYPE)
 SUPPORTED_CONTENT_FACT_TYPES = tuple(CONTENT_KIND_TO_FACT_TYPE.values())
 
+# ProductionModule.kind is an execution-owner classification, not a second copy
+# of the semantic FactType vocabulary. Facts implemented exclusively through the
+# canonical artifact graph use the generic integration owner so they cannot leak
+# non-executable semantic labels (for example "structure") into CompleteProposal.
+CONTENT_FACT_TO_PRODUCTION_KIND = MappingProxyType(
+    {
+        FactType.ITEM_EXISTS: "item",
+        FactType.BLOCK_EXISTS: "block",
+        FactType.ENTITY_EXISTS: "entity",
+        FactType.GUI_EXISTS: "gui",
+        FactType.NETWORK_PACKET: "networking",
+        FactType.BLOCK_ENTITY_EXISTS: "block_entity",
+        FactType.DATA_COMPONENT: "integration",
+        FactType.WORLDGEN_FEATURE: "integration",
+        FactType.DIMENSION: "integration",
+        FactType.BIOME: "integration",
+        FactType.STATUS_EFFECT: "effect",
+        FactType.SOUND_EVENT: "integration",
+        FactType.PARTICLE_TYPE: "integration",
+        FactType.ENTITY_LOOT: "loot",
+        FactType.ADVANCEMENT: "advancement",
+        FactType.EQUIPMENT_ARMOR: "armor",
+        FactType.CUSTOM_ITEM_BEHAVIOR: "item",
+        FactType.CUSTOM_BLOCK_BEHAVIOR: "block",
+        FactType.CRAFTING_RECIPE: "recipe",
+        FactType.SMELTING_RECIPE: "recipe",
+        FactType.REGISTRY_TAG: "tag",
+    }
+)
+
 
 REGISTRY_TAG_KIND_TO_TARGET_FACT_TYPE = MappingProxyType(
     {
@@ -167,6 +197,7 @@ def relation_type_supported_for_content_pair(
 __all__ = [
     "CONTENT_CONCERN_KINDS",
     "CONTENT_KIND_TO_FACT_TYPE",
+    "CONTENT_FACT_TO_PRODUCTION_KIND",
     "CONTENT_PROPERTY_VALUE_ENUMS",
     "CONTENT_PROPERTY_VALUE_PATTERNS",
     "CONTENT_KINDS",
