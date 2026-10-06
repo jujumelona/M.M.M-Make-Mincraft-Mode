@@ -217,14 +217,17 @@ def _run_entities(router, identifier, context, progress, checkpoint):
     # Cardinality is selected before the entity schema is used. Give that call
     # the same concrete vocabulary; its count-only response schema cannot carry
     # the kind enum that the later record-authoring calls receive.
-    normalized["allowed_content_kinds"] = list(CONTENT_KINDS)
+    normalized.setdefault("allowed_content_kinds", list(CONTENT_KINDS))
+    minimum = normalized.get("minimum_entity_count", 0)
+    if type(minimum) is not int or minimum not in {0, 1}:
+        raise TemplateBlocked("CONTENT_MINIMUM_ENTITY_COUNT_INVALID")
     result = run_bounded_record_template(
         router,
         identifier,
         context=normalized,
         progress=progress,
         checkpoint=checkpoint,
-        minimum_count=0,
+        minimum_count=minimum,
     )
     return list(result["records"]), normalized
 

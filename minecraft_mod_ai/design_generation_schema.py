@@ -37,11 +37,19 @@ def _bind_context_enums(
                 field_schema["enum"] = normalized
 
 
-def _bind_content_entity_kind(properties: dict[str, Any]) -> None:
+def _bind_content_entity_kind(
+    properties: dict[str, Any], context: Mapping[str, Any],
+) -> None:
     kind_schema = properties.get("kind")
     if not isinstance(kind_schema, dict):
         raise DesignGenerationSchemaError("CONTENT_KIND_SCHEMA_INVALID")
-    kind_schema["enum"] = list(CONTENT_KINDS)
+    allowed = context.get("allowed_content_kinds", CONTENT_KINDS)
+    if (
+        not isinstance(allowed, (list, tuple)) or not allowed
+        or any(kind not in CONTENT_KINDS for kind in allowed)
+    ):
+        raise DesignGenerationSchemaError("CONTENT_KIND_SCOPE_INVALID")
+    kind_schema["enum"] = list(dict.fromkeys(allowed))
 
 
 def _bind_content_capability(
@@ -79,7 +87,7 @@ def context_bound_record_schema(
 
     _bind_context_enums(properties, context)
     if identifier == "design/content_entity":
-        _bind_content_entity_kind(properties)
+        _bind_content_entity_kind(properties, context)
     elif identifier == "design/content_capability":
         _bind_content_capability(properties, context)
     elif identifier == "design/content_property":

@@ -1,6 +1,7 @@
 """Requirement-bound content records and fail-closed lowering to atomic facts."""
 
 from collections.abc import Mapping
+from copy import deepcopy
 from hashlib import sha256
 import re
 
@@ -148,6 +149,7 @@ def compile_content_graph(
 
     # First discover nodes for each requirement; then bind edges against the complete host graph.
     owned = []
+    content_requirements = []
     research_facts = []
     for req in requirements:
         rid = req.get("requirement_id")
@@ -170,6 +172,31 @@ def compile_content_graph(
             )
         requirement_ids.add(rid)
         context = {"requirement_id": rid, "requirement": statement}
+        if isinstance(req.get("design_context"), Mapping):
+            context["design_context"] = deepcopy(req["design_context"])
+        if "coverage_ref" in req:
+            from .content_design_contract import CONTENT_CONCERN_KINDS
+
+            ref = req["coverage_ref"]
+            concern = str(ref).removeprefix("resources_and_ui.")
+            if (
+                ref != f"resources_and_ui.{concern}"
+                or concern not in CONTENT_CONCERN_KINDS
+                or req.get("allowed_content_kinds") != list(CONTENT_CONCERN_KINDS[concern])
+                or req.get("minimum_entity_count") != 1
+                or not req.get("source_records")
+            ):
+                raise SlotFillError(f"CONTENT_REQUIREMENT_BINDING_INVALID: {rid}")
+            context.update({
+                "coverage_ref": ref,
+                "allowed_content_kinds": list(CONTENT_CONCERN_KINDS[concern]),
+                "minimum_entity_count": 1,
+            })
+            content_requirements.append({
+                "requirement_id": rid,
+                "coverage_ref": ref,
+                "source_records": deepcopy(req["source_records"]),
+            })
         grounded = []
         requested_refs = req.get("evidence_refs", ())
         matched_refs = set()
@@ -205,33 +232,67 @@ def compile_content_graph(
             context["research_facts"] = grounded
         nodes = records(
             "design/content_entity",
-            {**context, "existing_entities": list(entities.values())},
+            {**context, "existing_entities": [
+                {key: node[key] for key in ("entity_id", "kind", "role")}
+                for node in entities.values()
+            ]},
         )
-        # A requirement may be purely behavioral/system-level and therefore have no
-        # concrete Minecraft content entity. Design decisions below still own that
-        # requirement; do not force the model to invent an item/block/block_entity.
+        if len(nodes) < context.get("minimum_entity_count", 0):
+            raise SlotFillError(f"CONTENT_REQUIREMENT_UNIMPLEMENTED: {rid}")
+        # Generic behavioral requirements may still have no concrete content.
+        # Canonical resource obligations above require a bound implementation.
         for node in nodes:
             eid = node["entity_id"]
             prior = entities.get(eid)
-            if prior and any(prior[key] != node[key] for key in ("kind", "role")):
+            if prior and prior["kind"] != node["kind"]:
                 raise SlotFillError(f"CONTENT_ENTITY_CONFLICT: {eid}")
             if prior is None:
-                entities[eid] = {**node, "requirement_refs": [], "source_clauses": []}
+                entities[eid] = {
+                    **node, "requirement_refs": [], "source_clauses": [],
+                    "implementation_obligations": [],
+                }
+            if node["role"] not in entities[eid]["implementation_obligations"]:
+                entities[eid]["implementation_obligations"].append(node["role"])
             entities[eid]["requirement_refs"].append(rid)
             entities[eid]["source_clauses"].append(statement)
         owned.append(context)
 
+    # Discover each ordered entity pair once, with all of its authored context.
+    # Repeating the full pair graph for every concern multiplied model work and
+    # made shared relations look like duplicate declarations.
+    shared_contexts = []
     for context in owned:
-        for edge in records(
-            "design/content_relation", {**context, "entity_ids": list(entities)}
-        ):
-            if edge["source_id"] not in entities or edge["target_id"] not in entities:
-                raise SlotFillError(f"CONTENT_RELATION_DANGLING: {edge}")
-            key = (edge["relation_type"], edge["source_id"], edge["target_id"])
-            if key in relation_keys:
-                raise SlotFillError(f"CONTENT_RELATION_DUPLICATE: {key}")
-            relation_keys.add(key)
-            relations.append({**edge, "parent_requirement": context["requirement_id"]})
+        shared = context.get("design_context")
+        if shared is not None and shared not in shared_contexts:
+            shared_contexts.append(shared)
+    for edge in records("design/content_relation", {
+        "requirement": prompt,
+        "requirements": [
+            {key: context[key] for key in ("requirement_id", "requirement")}
+            for context in owned
+        ],
+        "design_contexts": shared_contexts,
+        "entity_ids": list(entities),
+        "entities": [
+            {key: node[key] for key in ("entity_id", "kind", "implementation_obligations")}
+            for node in entities.values()
+        ],
+    }):
+        if edge["source_id"] not in entities or edge["target_id"] not in entities:
+            raise SlotFillError(f"CONTENT_RELATION_DANGLING: {edge}")
+        key = (edge["relation_type"], edge["source_id"], edge["target_id"])
+        if key in relation_keys:
+            raise SlotFillError(f"CONTENT_RELATION_DUPLICATE: {key}")
+        relation_keys.add(key)
+        parents = list(dict.fromkeys(
+            entities[edge["source_id"]]["requirement_refs"]
+            + entities[edge["target_id"]]["requirement_refs"]
+        ))
+        relations.append({
+            **edge, "parent_requirement": parents[0], "requirement_refs": parents,
+        })
+
+    for context in owned:
         allowed = [name.split("/")[-1] for name in ALL_DESIGN_SLOTS]
         decision_slots = set()
         for decision in records(
@@ -250,13 +311,25 @@ def compile_content_graph(
 
     entity_contexts = {}
     for eid, node in entities.items():
+        related = [
+            context for context in owned
+            if context["requirement_id"] in node["requirement_refs"]
+        ]
+        design_contexts = []
+        for context in related:
+            design_context = context.get("design_context")
+            if design_context is not None and design_context not in design_contexts:
+                design_contexts.append(design_context)
         entity_contexts[eid] = {
-            "entity": node,
+            "entity": {
+                key: node[key]
+                for key in ("entity_id", "kind", "role", "implementation_obligations")
+            },
             "requirements": [
-                context
-                for context in owned
-                if context["requirement_id"] in node["requirement_refs"]
+                {key: context[key] for key in ("requirement_id", "requirement")}
+                for context in related
             ],
+            "design_contexts": design_contexts,
             "relations": [
                 edge
                 for edge in relations
@@ -569,7 +642,7 @@ def compile_content_graph(
         config = {
             "name": props["display_name"],
             "requirement_refs": node["requirement_refs"],
-            "implementation_obligations": [node["role"]],
+            "implementation_obligations": list(node["implementation_obligations"]),
             "reason": node["role"],
         }
         if kind == "integration":
@@ -999,7 +1072,7 @@ def compile_content_graph(
                 kind,
                 {
                     "requirement_refs": node["requirement_refs"],
-                    "implementation_obligations": [node["role"]],
+                    "implementation_obligations": list(node["implementation_obligations"]),
                     "reason": node["role"],
                 },
                 depends_on=tuple(dict.fromkeys(edge["target_id"] for edge in edges)),
@@ -1022,12 +1095,16 @@ def compile_content_graph(
         "mod_context": {"prompt": prompt},
         "modules": modules,
         "assets": assets,
-        "acceptance_tests": [n["role"] for n in entities.values()],
+        "acceptance_tests": [
+            role for node in entities.values()
+            for role in node["implementation_obligations"]
+        ],
         "_design_slots": by_slot,
         "_design_decisions": decisions,
         "_implementation_facts": facts,
         "_content_domains": sorted({m.kind for m in modules}),
         "_content_entities": list(entities.values()),
+        **({"_content_requirements": content_requirements} if content_requirements else {}),
         "_content_relations": relations,
         "_research_facts": research_facts,
         "_mod_id": effective_mod_id,

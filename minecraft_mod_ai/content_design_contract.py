@@ -39,6 +39,22 @@ CONTENT_KIND_TO_FACT_TYPE = MappingProxyType(
 CONTENT_KINDS = tuple(CONTENT_KIND_TO_FACT_TYPE)
 SUPPORTED_CONTENT_FACT_TYPES = tuple(CONTENT_KIND_TO_FACT_TYPE.values())
 
+# A declared resource/UI obligation narrows the semantic work before discovery.
+# These are content kinds, not claims that a target has a reviewed native backend.
+CONTENT_CONCERN_KINDS = MappingProxyType({
+    "registries": CONTENT_KINDS,
+    "data_resources": CONTENT_KINDS,
+    "assets": (
+        "item", "block", "entity", "gui", "equipment_armor",
+        "custom_item_behavior", "custom_block_behavior",
+    ),
+    "interactions": (
+        "gui", "network_packet", "block_entity",
+        "custom_item_behavior", "custom_block_behavior",
+    ),
+    "displayed_state": ("gui",),
+})
+
 
 def fact_type_for_content_kind(kind: str) -> FactType:
     try:
@@ -48,6 +64,7 @@ def fact_type_for_content_kind(kind: str) -> FactType:
 
 
 __all__ = [
+    "CONTENT_CONCERN_KINDS",
     "CONTENT_KIND_TO_FACT_TYPE",
     "CONTENT_KINDS",
     "SUPPORTED_CONTENT_FACT_TYPES",

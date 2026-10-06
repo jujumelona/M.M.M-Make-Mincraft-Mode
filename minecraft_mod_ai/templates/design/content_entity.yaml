@@ -25,6 +25,8 @@ record_schema:
 rules:
   - Read the original game request and canonical gameplay requirements together with the resource/UI constraints. Engineering names alone do not describe the requested player-facing content.
   - allowed_content_kinds supplies the authoritative concrete content vocabulary for both discovery and record authoring. The kind field is bound to that same vocabulary; use only a host-allowed kind.
+  - When coverage_ref is supplied, resolve that one already-authored resource/UI obligation. Shared gameplay context explains it but does not authorize unrelated entities. Reuse an existing entity when it implements the same obligation.
+  - minimum_entity_count is host-owned. A required resource obligation must bind concrete content; it cannot be retired with count zero. Generic behavioral requirements without a minimum may still need no concrete content.
   - Emit a concrete Minecraft content capability such as an item, block, entity, GUI, dimension, recipe, tag, or supported behavior; never emit an umbrella system such as economy, progression, exploration, combat, trading, or resource management as one content entity.
   - System-level mechanics belong in design decisions and relations between concrete content entities.
   - Code registries, definition catalogs, lookup tables, manager classes, and other implementation-only structures are not Minecraft content entities. Exclude those structures individually; still identify the concrete items, blocks, screens, recipes, or other content required by the gameplay they support.

@@ -2,10 +2,9 @@ from __future__ import annotations
 
 """Shared ownership contract for authored resource/UI content lowering.
 
-Structured resource/UI concerns are engineering context, not independent root
-content requirements. The content graph receives one coherent requirement bundle
-when at least one executable content-driving concern is active. Path rows are
-constraints on deterministic artifact placement and never force the model to invent
+Each active resource/UI concern is an owned obligation with its original gameplay
+context. Discovery cannot retire that obligation with an unrelated count of zero.
+Path rows constrain deterministic artifact placement and never force the model to invent
 an otherwise nonexistent Minecraft content entity.
 """
 
@@ -15,6 +14,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from .authored_structured_design import active_concern_records
+from .content_design_contract import CONTENT_CONCERN_KINDS, CONTENT_KIND_TO_FACT_TYPE
 
 
 CONTENT_GRAPH_DRIVER_CONCERNS = (
@@ -61,22 +61,13 @@ def content_request_catalog(
         return {"requirements": []}
 
     payload: list[dict[str, Any]] = []
-    statements: list[str] = []
     for concern in CONTENT_GRAPH_CONTEXT_CONCERNS:
-        for index, record in enumerate(records.get(concern, ()), start=1):
+        for record in records.get(concern, ()):
             normalized = dict(record)
             payload.append({
                 "concern": concern,
                 "record": normalized,
             })
-            fields = "; ".join(
-                f"{key}={value}"
-                for key, value in normalized.items()
-                if str(value).strip()
-            )
-            statements.append(
-                f"resources_and_ui.{concern}[{index}]: {fields}"
-            )
 
     from .planning_section_dependencies import SECTION_DEPENDENCIES
 
@@ -100,25 +91,31 @@ def content_request_catalog(
         sort_keys=True,
         separators=(",", ":"),
     )
-    digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
-    statement_parts = []
-    if requested_prompt.strip():
-        statement_parts.append("Original game request:\n" + requested_prompt)
-    if prerequisites:
-        statement_parts.append(
-            "Canonical gameplay and integration requirements:\n"
-            + json.dumps(prerequisites, ensure_ascii=False, sort_keys=True)
+    requirements = []
+    for concern in CONTENT_GRAPH_DRIVER_CONCERNS:
+        rows = records.get(concern)
+        if not rows:
+            continue
+        coverage_ref = f"resources_and_ui.{concern}"
+        digest = hashlib.sha256(
+            (encoded + "\n" + coverage_ref).encode("utf-8")
+        ).hexdigest()[:16]
+        requirement_id = f"content_{concern}_{digest}"
+        focused_statement = (
+            f"Implement the declared obligation {coverage_ref}:\n"
+            + json.dumps(rows, ensure_ascii=False, sort_keys=True)
         )
-    statement_parts.append("Resource/UI constraints:\n" + "\n".join(statements))
-    statement = "\n\n".join(statement_parts)
-    requirement_id = f"content_resources_and_ui_{digest}"
-    return {
-        "requirements": [{
+        requirements.append({
             "requirement_id": requirement_id,
-            "statement": statement,
-            "source_span": {"text": statement},
-        }]
-    }
+            "statement": focused_statement,
+            "source_span": {"text": focused_statement},
+            "design_context": source,
+            "coverage_ref": coverage_ref,
+            "source_records": rows,
+            "allowed_content_kinds": list(CONTENT_CONCERN_KINDS[concern]),
+            "minimum_entity_count": 1,
+        })
+    return {"requirements": requirements}
 
 
 def content_owned_refs(
@@ -143,6 +140,50 @@ def content_owned_refs(
     }
 
     design = content_design if isinstance(content_design, Mapping) else {}
+    if "_content_requirements" in design:
+        requirements = design["_content_requirements"]
+        if not isinstance(requirements, list):
+            raise ValueError("CONTENT_REQUIREMENT_BINDINGS_INVALID")
+        modules = {
+            row.get("module_id")
+            for row in design.get("modules", ())
+            if isinstance(row, Mapping)
+        }
+        facts = {
+            (row.get("subject"), row.get("fact_type"))
+            for row in design.get("_implementation_facts", ())
+            if isinstance(row, Mapping)
+        }
+        seen = set()
+        for requirement in requirements:
+            if not isinstance(requirement, Mapping):
+                raise ValueError("CONTENT_REQUIREMENT_BINDINGS_INVALID")
+            ref = requirement.get("coverage_ref")
+            if not isinstance(ref, str) or ref in seen:
+                raise ValueError("CONTENT_REQUIREMENT_BINDINGS_INVALID")
+            seen.add(ref)
+            section, _, concern = ref.partition(".")
+            if (
+                section != "resources_and_ui"
+                or concern not in CONTENT_CONCERN_KINDS
+                or requirement.get("source_records") != records.get(concern)
+            ):
+                raise ValueError(f"CONTENT_REQUIREMENT_SOURCE_MISMATCH: {ref}")
+            rid = requirement.get("requirement_id")
+            for entity in design.get("_content_entities", ()):
+                if not isinstance(entity, Mapping):
+                    continue
+                kind = entity.get("kind")
+                entity_id = entity.get("entity_id")
+                if (
+                    rid in entity.get("requirement_refs", ())
+                    and kind in CONTENT_CONCERN_KINDS[concern]
+                    and entity_id in modules
+                    and (entity_id, CONTENT_KIND_TO_FACT_TYPE[kind].value) in facts
+                ):
+                    owned.add(ref)
+                    break
+        return frozenset(owned)
     if design.get("_implementation_facts"):
         owned.update(
             f"resources_and_ui.{concern}"
