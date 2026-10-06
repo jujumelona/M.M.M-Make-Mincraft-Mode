@@ -93,20 +93,8 @@ jobs:
           from pathlib import Path
 
           from minecraft_mod_ai.api import CompleteModAISession
-          from minecraft_mod_ai.atomic_concern_source import (
-              _messages,
-              _parse_region_content,
-              _validate_first_pass_java_semantics,
-          )
-          from minecraft_mod_ai.authored_atomic_contract import task_concern_authority
           from minecraft_mod_ai.colab_run_modes import FULL_MODE, run_plan_dialog
           from minecraft_mod_ai.complete_orchestrator import CompleteExecutionOptions
-          from minecraft_mod_ai.custom_module_generator import _call_coder
-          from minecraft_mod_ai.java_region_parser import class_body_member_contracts
-          from minecraft_mod_ai.production_local_type_recovery import (
-              decorate_type_authority_retry,
-              type_authority_repair_contract,
-          )
 
           prompt = (
               "M.M.M Debug Mode fixture: add one deterministic debug token item and "
@@ -121,140 +109,6 @@ jobs:
               model_profile=profile,
               fast_mode=False,
               kv_cache_quant="q4_0",
-          )
-
-          # Prove the actual small coder can perform the exact production repair
-          # that failed in the captured ShipObject trace. The host computes the
-          # mechanical edit contract but does not apply Java source changes itself.
-          repair_task = {
-              "task_id": "real_model_shipobject_repair",
-              "semantic_outcome": "build a ship",
-              "authored_atomic_contract": {
-                  "schema_version": "mmm/authored-atomic-contract-v1",
-                  "concerns": {
-                      "responsibilities": {
-                          "source_requirements": {
-                              "R1": "- responsibilities:",
-                              "R2": (
-                                  "  - caller callee contract: player calls "
-                                  "`build_ship()`, system returns `ShipObject`."
-                              ),
-                          },
-                          "structured_records": [],
-                      }
-                  },
-              },
-          }
-          repair_concern = {
-              "sequence": 0,
-              "identifier": "responsibilities",
-              "concern": "responsibilities",
-              "task": "implement authored responsibility",
-              "rules": [],
-          }
-          rejected_source = (
-              "private static ShipObject buildShip() {\n"
-              "    return new ShipObject();\n"
-              "}"
-          )
-          diagnostic = (
-              "ATOMIC_CONCERN_RESPONSE_INVALID: ungrounded simple Java type name(s): "
-              "ShipObject. Use an authoritative sibling/dependency type, a known JDK type, "
-              "or the exact fully-qualified external type."
-          )
-          repair_authority = task_concern_authority(
-              repair_task, "responsibilities"
-          )
-          repair_contract = type_authority_repair_contract(
-              diagnostic,
-              rejected_source=rejected_source,
-              concern_authority=repair_authority,
-          )
-          if (
-              not isinstance(repair_contract, dict)
-              or repair_contract.get("mode") != "mechanical_copy_edit"
-          ):
-              raise AssertionError(
-                  f"ShipObject repair was not mechanically bounded: {repair_contract!r}"
-              )
-
-          repair_messages = _messages(
-              section="integration",
-              concern=repair_concern,
-              task=repair_task,
-              grounding={},
-              dependency_source="",
-              current_source="",
-              response_region="members",
-              host_symbol="ShipRepairProbe",
-          )
-          repair_payload = json.loads(repair_messages[-1]["content"])
-          repair_payload["current_selected_region_source"] = rejected_source
-          decorate_type_authority_retry(
-              repair_messages, repair_payload, repair_contract
-          )
-          repair_messages[-1]["content"] = json.dumps(
-              repair_payload, ensure_ascii=False, sort_keys=True
-          )
-          repair_output = _call_coder(
-              session.router,
-              repair_messages,
-              output_token_ceiling=512,
-              force_non_thinking=True,
-              structured_java_region=False,
-              tool_stage="atomic_java",
-          )
-          repaired_region = _parse_region_content(
-              repair_output,
-              response_region="members",
-              canonical_private_nested_symbols=("ShipObject",),
-          )
-          _validate_first_pass_java_semantics(
-              repaired_region,
-              dependency_source="",
-              sibling_api=(),
-          )
-          repair_contracts = class_body_member_contracts(repaired_region)
-          has_ship_type = any(
-              row.get("kind") == "type" and row.get("symbol") == "ShipObject"
-              for row in repair_contracts
-          )
-          has_build_method = any(
-              row.get("kind") == "method"
-              and row.get("symbol") == "buildShip"
-              and row.get("return_type") == "ShipObject"
-              for row in repair_contracts
-          )
-          if not (has_ship_type and has_build_method):
-              raise AssertionError(
-                  "small coder did not complete the bounded ShipObject repair: "
-                  + repaired_region
-              )
-          repair_evidence = {
-              "schema_version": "mmm/shipobject-small-coder-repair-v1",
-              "status": "PASS",
-              "profile": profile,
-              "repair_mode": repair_contract["mode"],
-              "unknown_simple_types": repair_contract["unknown_simple_types"],
-              "repaired_region": repaired_region,
-          }
-          (output_root / "SHIPOBJECT_SMALL_CODER_REPAIR.json").write_text(
-              json.dumps(
-                  repair_evidence,
-                  ensure_ascii=False,
-                  indent=2,
-                  sort_keys=True,
-              )
-              + "\n",
-              encoding="utf-8",
-          )
-          print(
-              json.dumps(
-                  repair_evidence,
-                  ensure_ascii=False,
-                  indent=2,
-                  sort_keys=True,
-              )
           )
 
           # First prove the normal planner/source-generation path.
@@ -342,19 +196,19 @@ jobs:
           )
           debug_proposal = debug_dialog.reply.complete_proposal
           debug_proposal.validate()
-          if len(debug_proposal.modules) != 1:
+          if debug_proposal.modules != ():
               raise AssertionError(
-                  f"debug fixture module count changed: {len(debug_proposal.modules)}"
+                  "host-owned debug fixture must not manufacture production modules: "
+                  f"{debug_proposal.modules!r}"
               )
-          debug_module = debug_proposal.modules[0]
-          if debug_module.module_id != "debug_token" or debug_module.kind != "custom_java":
+          debug_fixture = debug_proposal.game_design.get("fixture", {})
+          if (
+              debug_fixture.get("artifact_id") != "debug_token"
+              or debug_fixture.get("kind") != "item"
+              or debug_fixture.get("deterministic") is not True
+          ):
               raise AssertionError(
-                  "debug fixture task drifted: "
-                  f"{debug_module.module_id!r} / {debug_module.kind!r}"
-              )
-          if tuple(debug_module.required_gates) != ("target_compile",):
-              raise AssertionError(
-                  f"debug fixture required gates drifted: {debug_module.required_gates!r}"
+                  f"debug fixture contract drifted: {debug_fixture!r}"
               )
 
           build_options = CompleteExecutionOptions(
@@ -396,43 +250,12 @@ jobs:
                   "DebugToken target_compile has no successful Gradle receipt"
               )
 
-          required_gate_failures = [
-              value
-              for value in debug_result.unresolved_gates
-              if str(value).startswith(
-                  "required-gate:debug_token:target_compile:"
-              )
-          ]
-          if required_gate_failures:
-              raise AssertionError(
-                  "DebugToken target_compile remained unresolved: "
-                  f"{required_gate_failures!r}"
-              )
-
-          module_receipt = next(
-              (
-                  receipt
-                  for receipt in debug_result.module_receipts
-                  if isinstance(receipt, dict)
-                  and receipt.get("module_id") == "debug_token"
-              ),
-              None,
-          )
-          if not isinstance(module_receipt, dict):
-              raise AssertionError("DebugToken generation receipt is missing")
-          touched = {str(path) for path in module_receipt.get("touched_paths", [])}
-          if target_rel not in touched:
-              raise AssertionError(
-                  "DebugToken receipt does not own the fresh target: "
-                  f"{sorted(touched)!r}"
-              )
-
           debug_evidence = {
               "schema_version": "mmm/debug-token-real-build-e2e-v1",
               "status": "PASS",
               "profile": profile,
               "debug_mode": True,
-              "module_id": debug_module.module_id,
+              "artifact_id": debug_fixture["artifact_id"],
               "target_path": target_rel,
               "pipeline_status": debug_result.status,
               "build_status": build.get("status"),
@@ -460,7 +283,6 @@ jobs:
           retention-days: 14
           path: |
             audit/real-model-colab-e2e/REAL_MODEL_COLAB_E2E.json
-            audit/real-model-colab-e2e/SHIPOBJECT_SMALL_CODER_REPAIR.json
             audit/real-model-colab-e2e/proposal.json
             audit/real-model-colab-e2e/debug-fixture/**
             audit/real-model-colab-e2e/runs/**/*.zip
