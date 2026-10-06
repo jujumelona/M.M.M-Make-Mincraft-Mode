@@ -15,14 +15,13 @@ from typing import Any, TypeVar
 from .artifact_job import artifact_owner_module_ids, parse_artifact_jobs
 from .complete_spec import CompleteProposal, ProductionModule
 from .platform_backend_contract import (
-    ENTITY_PIPELINE_KINDS,
-    EXTENDED_CONTENT_KINDS,
+    NATIVE_INTEGRATION_TYPES,
     SYSTEM_KIND_TO_PACK,
     deterministic_backend_capabilities,
     missing_production_backend_capabilities,
     native_production_route_available,
+    native_production_stage,
 )
-from .research_ledger import is_research_shard
 from .scale_policy import ScalePolicy
 from .spec import canonical_json
 
@@ -923,7 +922,7 @@ def _content_node_is_cpu_safe(payload: dict[str, Any]) -> bool:
         config = member.get('config')
         if not isinstance(config, dict):
             return False
-        if str(config.get('integration_type', '')) != 'mmm_local_ai_sidecar':
+        if str(config.get('integration_type', '')).strip() not in NATIVE_INTEGRATION_TYPES:
             return False
     return True
 
@@ -994,61 +993,31 @@ def _module_stage(
             raise WorkGraphError(
                 f"TYPED_HOST_PLAN_REQUIRED: {module.module_id}"
             )
-        return "host"
-    if isinstance(module.config.get("typed_plan_ir"), dict):
+    elif isinstance(module.config.get("typed_plan_ir"), dict):
         raise WorkGraphError(
             f"TYPED_HOST_KIND_REQUIRED: {module.module_id}"
         )
-    if is_research_shard(module) or module.kind == 'research_shard':
-        return 'content'
-    if module.kind == 'integration':
-        if str(module.config.get('integration_type', '')) == 'mmm_local_ai_sidecar':
-            return 'content'
+
+    stage = native_production_stage(module.kind, module.config)
+    if stage is None:
         raise WorkGraphError(
-            f"DETERMINISTIC_BACKEND_REQUIRED: unsupported integration module {module.module_id}"
+            "DETERMINISTIC_BACKEND_REQUIRED: unsupported production route "
+            f"{module.module_id}/{module.kind}"
         )
-    if module.kind in ENTITY_PIPELINE_KINDS:
-        if deterministic_module_kinds is not None:
-            missing = missing_production_backend_capabilities(
-                deterministic_module_kinds,
-                module.kind,
-                module.config,
+
+    if deterministic_module_kinds is not None:
+        missing = missing_production_backend_capabilities(
+            deterministic_module_kinds,
+            module.kind,
+            module.config,
+        )
+        if missing:
+            raise WorkGraphError(
+                "DETERMINISTIC_BACKEND_REQUIRED: "
+                f"{module.kind} requires missing backend capabilities "
+                f"{sorted(missing)}"
             )
-            if missing:
-                raise WorkGraphError(
-                    "DETERMINISTIC_BACKEND_REQUIRED: "
-                    f"{module.kind} requires missing backend capabilities {sorted(missing)}"
-                )
-        return 'entity'
-    if module.kind in SYSTEM_KIND_TO_PACK:
-        if deterministic_module_kinds is not None:
-            missing = missing_production_backend_capabilities(
-                deterministic_module_kinds,
-                module.kind,
-                module.config,
-            )
-            if missing:
-                raise WorkGraphError(
-                    "DETERMINISTIC_BACKEND_REQUIRED: "
-                    f"{module.kind} requires missing backend capabilities {sorted(missing)}"
-                )
-        return 'system'
-    if module.kind in EXTENDED_CONTENT_KINDS:
-        if deterministic_module_kinds is not None:
-            missing = missing_production_backend_capabilities(
-                deterministic_module_kinds,
-                module.kind,
-                module.config,
-            )
-            if missing:
-                raise WorkGraphError(
-                    "DETERMINISTIC_BACKEND_REQUIRED: "
-                    f"{module.kind} requires missing backend capabilities {sorted(missing)}"
-                )
-        return 'content'
-    raise WorkGraphError(
-        f"DETERMINISTIC_BACKEND_REQUIRED: unsupported module kind {module.kind!r}"
-    )
+    return stage
 
 def _is_typed_host_module(module: ProductionModule) -> bool:
     """Return whether the module is deterministic Typed PlanIR host work."""

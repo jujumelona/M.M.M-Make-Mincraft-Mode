@@ -53,31 +53,44 @@ SYSTEM_PACK_KINDS = {
 ENTITY_PIPELINE_KINDS = frozenset({"entity", "boss", "npc"})
 DEFAULT_GECKOLIB_VERSION = "4.8.2"
 
-NATIVE_PRODUCTION_MODULE_KINDS = frozenset(
-    set(EXTENDED_CONTENT_KINDS)
-    | set(SYSTEM_KIND_TO_PACK)
-    | set(ENTITY_PIPELINE_KINDS)
-    | {"typed_host"}
-)
-NATIVE_INTEGRATION_TYPES = frozenset({
-    "mmm_local_ai_sidecar",
-    "mmm_research_shard",
-})
+LOCAL_AI_SIDECAR_INTEGRATION_TYPE = "mmm_local_ai_sidecar"
+RESEARCH_SHARD_INTEGRATION_TYPE = "mmm_research_shard"
+
+NATIVE_PRODUCTION_STAGE_BY_KIND = {
+    **{kind: "content" for kind in EXTENDED_CONTENT_KINDS},
+    **{kind: "system" for kind in SYSTEM_KIND_TO_PACK},
+    **{kind: "entity" for kind in ENTITY_PIPELINE_KINDS},
+    "typed_host": "host",
+}
+NATIVE_INTEGRATION_STAGE_BY_TYPE = {
+    LOCAL_AI_SIDECAR_INTEGRATION_TYPE: "content",
+    RESEARCH_SHARD_INTEGRATION_TYPE: "content",
+}
+NATIVE_PRODUCTION_MODULE_KINDS = frozenset(NATIVE_PRODUCTION_STAGE_BY_KIND)
+NATIVE_INTEGRATION_TYPES = frozenset(NATIVE_INTEGRATION_STAGE_BY_TYPE)
+
+
+def native_production_stage(
+    kind: str,
+    config: Mapping[str, Any] | None = None,
+) -> str | None:
+    normalized = str(kind or "").strip()
+    stage = NATIVE_PRODUCTION_STAGE_BY_KIND.get(normalized)
+    if stage is not None:
+        return stage
+    if normalized != "integration":
+        return None
+    integration_type = str(
+        (config or {}).get("integration_type") or ""
+    ).strip()
+    return NATIVE_INTEGRATION_STAGE_BY_TYPE.get(integration_type)
 
 
 def native_production_route_available(
     kind: str,
     config: Mapping[str, Any] | None = None,
 ) -> bool:
-    normalized = str(kind or "").strip()
-    if normalized in NATIVE_PRODUCTION_MODULE_KINDS:
-        return True
-    if normalized != "integration":
-        return False
-    integration_type = str(
-        (config or {}).get("integration_type") or ""
-    ).strip()
-    return integration_type in NATIVE_INTEGRATION_TYPES
+    return native_production_stage(kind, config) is not None
 
 
 def deterministic_backend_capabilities(target: Any) -> frozenset[str]:
@@ -267,14 +280,19 @@ __all__ = [
     "bootstrap_content_capabilities",
     "ENTITY_PIPELINE_KINDS",
     "effective_target_backend_capabilities",
+    "LOCAL_AI_SIDECAR_INTEGRATION_TYPE",
+    "NATIVE_INTEGRATION_STAGE_BY_TYPE",
     "NATIVE_INTEGRATION_TYPES",
     "NATIVE_PRODUCTION_MODULE_KINDS",
+    "NATIVE_PRODUCTION_STAGE_BY_KIND",
+    "RESEARCH_SHARD_INTEGRATION_TYPE",
     "EXTENDED_CONTENT_KINDS",
     "SYSTEM_KIND_TO_PACK",
     "SYSTEM_PACK_KINDS",
     "geckolib_entity_capabilities",
     "missing_production_backend_capabilities",
     "native_production_route_available",
+    "native_production_stage",
     "normalize_capabilities",
     "production_backend_is_supported",
     "production_module_backend_capabilities",
