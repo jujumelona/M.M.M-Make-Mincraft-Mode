@@ -238,3 +238,55 @@ def test_more_than_sixteen_candidate_slots_are_valid(monkeypatch) -> None:
         {"slot_id": "slot_0", "value": "slot_0"},
         {"slot_id": "slot_23", "value": "slot_23"},
     ]
+
+def test_malformed_saved_decision_applicability_is_rejected(monkeypatch) -> None:
+    import pytest
+
+    monkeypatch.setattr(
+        runtime,
+        "load_record_template",
+        lambda _identifier: {
+            "id": "design/decision",
+            "task": "Resolve one decision.",
+            "rules": [],
+            "record_schema": {
+                "type": "object",
+                "properties": {
+                    "slot_id": {"type": "string"},
+                    "value": {"type": "string"},
+                },
+                "required": ["slot_id", "value"],
+                "additionalProperties": False,
+            },
+        },
+    )
+    monkeypatch.setattr(runtime, "task_context", lambda _template, context: dict(context))
+    monkeypatch.setattr(runtime, "task_binding", lambda *_args, **_kwargs: "binding")
+    monkeypatch.setattr(
+        runtime,
+        "generate_fixed_template_value",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("malformed saved applicability must not be regenerated")
+        ),
+    )
+
+    with pytest.raises(
+        runtime.TemplateBlocked,
+        match="TEMPLATE_DECISION_APPLICABILITY_SAVED_INVALID",
+    ):
+        runtime.run_record_template(
+            object(),
+            "design/decision",
+            context={
+                "requirement_id": "req-resume",
+                "requirement": "Resume decision slots.",
+                "allowed_slots": ["reward", "risk"],
+            },
+            progress={
+                "decision-slot-applicability-v3:binding": {
+                    "reward": 1,
+                    "risk": True,
+                }
+            },
+        )
+
