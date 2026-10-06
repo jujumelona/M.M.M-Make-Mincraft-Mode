@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from jsonschema import Draft202012Validator
+
 from .bounded_record_template import run_bounded_record_template
 from .content_design_contract import relation_type_supported_for_content_pair
 from .fixed_template_generation import generate_fixed_template_value
@@ -248,6 +250,318 @@ def _relation_vocabulary() -> tuple[str, ...]:
     return tuple(values)
 
 
+def _relation_selector(
+    router,
+    template,
+    normalized,
+    *,
+    selector_id: str,
+    selector_context: dict[str, Any],
+    response_schema: dict[str, Any],
+    progress,
+    checkpoint,
+    instruction: str,
+) -> dict[str, Any]:
+    """Run one finite semantic selector whose cardinality is owned by the host."""
+
+    validator = Draft202012Validator(response_schema)
+    binding_context = {
+        "selector_id": selector_id,
+        "selector_context": selector_context,
+    }
+    binding = "relation-selector-v1:" + task_binding(template, binding_context, ())
+    saved = (progress or {}).get(binding)
+    if saved is not None:
+        validator.validate(saved)
+        return dict(saved)
+
+    value = generate_fixed_template_value(
+        router,
+        "planner",
+        (
+            {
+                "role": "system",
+                "content": (
+                    instruction
+                    + " The host owns cardinality, endpoints, ordering, and termination. "
+                    "Choose only identifiers present in the supplied candidate lists."
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(selector_context, ensure_ascii=False),
+            },
+        ),
+        response_schema=response_schema,
+        enable_tools=False,
+        description="Resolve one host-bounded content resource relation plan.",
+        output_token_ceiling=structured_output_token_ceiling(response_schema),
+    )
+    validator.validate(value)
+    if checkpoint is not None:
+        checkpoint(binding, dict(value))
+    return dict(value)
+
+
+def _resource_source_relations(
+    router,
+    template,
+    normalized,
+    *,
+    entity_kind_by_id: dict[str, str],
+    entity_by_id: dict[str, dict[str, Any]],
+    progress,
+    checkpoint,
+) -> tuple[list[dict[str, Any]], set[str]]:
+    """Resolve recipe/tag source graphs with source-level cardinality invariants."""
+
+    item_ids = [
+        entity_id
+        for entity_id, kind in entity_kind_by_id.items()
+        if kind == "item"
+    ]
+    resource_kinds = {"crafting_recipe", "smelting_recipe", "registry_tag"}
+    resource_sources = {
+        entity_id
+        for entity_id, kind in entity_kind_by_id.items()
+        if kind in resource_kinds
+    }
+    records: list[dict[str, Any]] = []
+
+    base_context = {
+        "requirements": normalized.get("requirements", []),
+        "design_contexts": normalized.get("design_contexts", []),
+    }
+
+    for source_id in normalized.get("entity_ids", []):
+        source_kind = entity_kind_by_id[source_id]
+        if source_kind not in resource_kinds:
+            continue
+        source_entity = entity_by_id[source_id]
+        selector_base = {
+            **base_context,
+            "source_entity": source_entity,
+        }
+
+        if source_kind == "crafting_recipe":
+            if not item_ids:
+                raise TemplateBlocked(
+                    f"TEMPLATE_RESOURCE_RELATION_TARGET_REQUIRED: {source_id}: item"
+                )
+            schema = {
+                "type": "object",
+                "properties": {
+                    "mode": {
+                        "type": "string",
+                        "enum": ["shaped", "shapeless"],
+                    },
+                    "output_id": {
+                        "type": "string",
+                        "enum": list(item_ids),
+                    },
+                    "input_ids": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": min(9, len(item_ids)),
+                        "uniqueItems": True,
+                        "items": {
+                            "type": "string",
+                            "enum": list(item_ids),
+                        },
+                    },
+                },
+                "required": ["mode", "output_id", "input_ids"],
+                "additionalProperties": False,
+            }
+            value = _relation_selector(
+                router,
+                template,
+                normalized,
+                selector_id=f"crafting:{source_id}",
+                selector_context={
+                    **selector_base,
+                    "candidate_item_ids": list(item_ids),
+                },
+                response_schema=schema,
+                progress=progress,
+                checkpoint=checkpoint,
+                instruction=(
+                    "Resolve the crafting recipe semantics for this concrete recipe. "
+                    "Choose exactly one output item, one to nine distinct ingredient "
+                    "entities, and whether the authored recipe is shaped or shapeless."
+                ),
+            )
+            records.append(
+                {
+                    "relation_type": "produces",
+                    "source_id": source_id,
+                    "target_id": value["output_id"],
+                }
+            )
+            if value["mode"] == "shapeless":
+                for target_id in value["input_ids"]:
+                    records.append(
+                        {
+                            "relation_type": "consumes",
+                            "source_id": source_id,
+                            "target_id": target_id,
+                        }
+                    )
+            else:
+                for index, target_id in enumerate(value["input_ids"]):
+                    records.append(
+                        {
+                            "relation_type": f"key_{chr(ord('A') + index)}",
+                            "source_id": source_id,
+                            "target_id": target_id,
+                        }
+                    )
+
+        elif source_kind == "smelting_recipe":
+            if not item_ids:
+                raise TemplateBlocked(
+                    f"TEMPLATE_RESOURCE_RELATION_TARGET_REQUIRED: {source_id}: item"
+                )
+            schema = {
+                "type": "object",
+                "properties": {
+                    "output_id": {
+                        "type": "string",
+                        "enum": list(item_ids),
+                    },
+                    "ingredient_id": {
+                        "type": "string",
+                        "enum": list(item_ids),
+                    },
+                },
+                "required": ["output_id", "ingredient_id"],
+                "additionalProperties": False,
+            }
+            value = _relation_selector(
+                router,
+                template,
+                normalized,
+                selector_id=f"smelting:{source_id}",
+                selector_context={
+                    **selector_base,
+                    "candidate_item_ids": list(item_ids),
+                },
+                response_schema=schema,
+                progress=progress,
+                checkpoint=checkpoint,
+                instruction=(
+                    "Resolve this cooking recipe with exactly one input item and "
+                    "exactly one output item."
+                ),
+            )
+            records.extend(
+                (
+                    {
+                        "relation_type": "consumes",
+                        "source_id": source_id,
+                        "target_id": value["ingredient_id"],
+                    },
+                    {
+                        "relation_type": "produces",
+                        "source_id": source_id,
+                        "target_id": value["output_id"],
+                    },
+                )
+            )
+
+        else:
+            candidates_by_kind = {
+                kind: [
+                    entity_id
+                    for entity_id, candidate_kind in entity_kind_by_id.items()
+                    if candidate_kind == kind
+                ]
+                for kind in ("item", "block", "entity")
+            }
+            candidates_by_kind = {
+                kind: ids for kind, ids in candidates_by_kind.items() if ids
+            }
+            if not candidates_by_kind:
+                raise TemplateBlocked(
+                    f"TEMPLATE_RESOURCE_RELATION_TARGET_REQUIRED: {source_id}: tag member"
+                )
+            kind_schema = {
+                "type": "object",
+                "properties": {
+                    "member_kind": {
+                        "type": "string",
+                        "enum": list(candidates_by_kind),
+                    },
+                },
+                "required": ["member_kind"],
+                "additionalProperties": False,
+            }
+            kind_value = _relation_selector(
+                router,
+                template,
+                normalized,
+                selector_id=f"tag-kind:{source_id}",
+                selector_context={
+                    **selector_base,
+                    "candidate_member_kinds": list(candidates_by_kind),
+                },
+                response_schema=kind_schema,
+                progress=progress,
+                checkpoint=checkpoint,
+                instruction=(
+                    "Choose the single Minecraft registry member kind grouped by "
+                    "this tag."
+                ),
+            )
+            member_kind = kind_value["member_kind"]
+            candidate_ids = candidates_by_kind[member_kind]
+            members_schema = {
+                "type": "object",
+                "properties": {
+                    "member_ids": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": len(candidate_ids),
+                        "uniqueItems": True,
+                        "items": {
+                            "type": "string",
+                            "enum": list(candidate_ids),
+                        },
+                    },
+                },
+                "required": ["member_ids"],
+                "additionalProperties": False,
+            }
+            members_value = _relation_selector(
+                router,
+                template,
+                normalized,
+                selector_id=f"tag-members:{source_id}:{member_kind}",
+                selector_context={
+                    **selector_base,
+                    "member_kind": member_kind,
+                    "candidate_member_ids": list(candidate_ids),
+                },
+                response_schema=members_schema,
+                progress=progress,
+                checkpoint=checkpoint,
+                instruction=(
+                    "Choose one or more concrete members of this registry tag from "
+                    "the fixed member-kind candidate set."
+                ),
+            )
+            for target_id in members_value["member_ids"]:
+                records.append(
+                    {
+                        "relation_type": "contains",
+                        "source_id": source_id,
+                        "target_id": target_id,
+                    }
+                )
+
+    return records, resource_sources
+
+
 def _run_relations(router, identifier, context, progress, checkpoint):
     template = load_record_template(identifier)
     normalized = task_context(template, context)
@@ -262,6 +576,7 @@ def _run_relations(router, identifier, context, progress, checkpoint):
     if not isinstance(raw_entities, list):
         raise TemplateBlocked("TEMPLATE_RELATION_ENTITIES_REQUIRED")
     entity_kind_by_id: dict[str, str] = {}
+    entity_by_id: dict[str, dict[str, Any]] = {}
     for entity in raw_entities:
         if not isinstance(entity, dict):
             raise TemplateBlocked("TEMPLATE_RELATION_ENTITY_INVALID")
@@ -272,16 +587,26 @@ def _run_relations(router, identifier, context, progress, checkpoint):
         if entity_id in entity_kind_by_id and entity_kind_by_id[entity_id] != kind:
             raise TemplateBlocked(f"TEMPLATE_RELATION_ENTITY_KIND_CONFLICT: {entity_id}")
         entity_kind_by_id[entity_id] = kind
+        entity_by_id[entity_id] = dict(entity)
     if set(entity_ids) != set(entity_kind_by_id):
         raise TemplateBlocked("TEMPLATE_RELATION_ENTITY_CONTEXT_MISMATCH")
 
+    safe_checkpoint = serialized_callback(checkpoint)
+    resource_records, resource_sources = _resource_source_relations(
+        router,
+        template,
+        normalized,
+        entity_kind_by_id=entity_kind_by_id,
+        entity_by_id=entity_by_id,
+        progress=progress,
+        checkpoint=safe_checkpoint,
+    )
     pairs = tuple(
         (source_id, target_id)
         for source_id in entity_ids
         for target_id in entity_ids
-        if source_id != target_id
+        if source_id != target_id and source_id not in resource_sources
     )
-    safe_checkpoint = serialized_callback(checkpoint)
 
     def run_pair(pair):
         source_id, target_id = pair
@@ -351,6 +676,11 @@ def _run_relations(router, identifier, context, progress, checkpoint):
     )
     records: list[dict[str, Any]] = []
     seen: set[str] = set()
+    for record in resource_records:
+        key = _record_key(record)
+        if key not in seen:
+            seen.add(key)
+            records.append(record)
     for pair_records in pair_results:
         for record in pair_records:
             key = _record_key(record)
