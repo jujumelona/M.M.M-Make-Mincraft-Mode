@@ -12,6 +12,7 @@ from .content_design_contract import (
     CONTENT_KIND_TO_FACT_TYPE,
     CONTENT_KINDS,
     CONTENT_PROPERTY_VALUE_ENUMS,
+    CONTENT_PROPERTY_VALUE_PATTERNS,
 )
 
 
@@ -78,8 +79,12 @@ def _bind_requested_property(
     if isinstance(requested_property, str) and isinstance(property_schema, dict):
         property_schema["enum"] = [requested_property]
         allowed_values = CONTENT_PROPERTY_VALUE_ENUMS.get(requested_property)
-        if allowed_values and isinstance(value_schema, dict):
-            value_schema["enum"] = list(allowed_values)
+        value_pattern = CONTENT_PROPERTY_VALUE_PATTERNS.get(requested_property)
+        if isinstance(value_schema, dict):
+            if allowed_values:
+                value_schema["enum"] = list(allowed_values)
+            if value_pattern:
+                value_schema["pattern"] = value_pattern
 
 
 def context_bound_record_schema(
