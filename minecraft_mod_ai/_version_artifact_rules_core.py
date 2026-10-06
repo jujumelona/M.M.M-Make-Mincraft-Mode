@@ -1318,11 +1318,20 @@ def build_version_facts(
         if binding.get("state") == "admitted":
             binding["state"] = "not_reviewed"
             binding["reason"] = "REAL_EXECUTION_EVIDENCE_REQUIRED"
-    # Every canonical responsibility has an executable, typed generator profile.
+    # Only unresolved review candidates receive a generator profile. Unsupported
+    # leaves are terminal HOST decisions and must never be resurrected as executable
+    # candidates merely because they intentionally have no implementation.
     for leaf in all_canonical_leaves():
-        if leaf_bindings[leaf].get("implementation") is None:
-            leaf_bindings[leaf] = {"state": "not_reviewed", "reason": "REAL_EXECUTION_EVIDENCE_REQUIRED",
-                                   "implementation": make_implementation(leaf, minecraft_version)}
+        binding = leaf_bindings[leaf]
+        if (
+            binding.get("state") == "not_reviewed"
+            and binding.get("implementation") is None
+        ):
+            leaf_bindings[leaf] = {
+                "state": "not_reviewed",
+                "reason": "REAL_EXECUTION_EVIDENCE_REQUIRED",
+                "implementation": make_implementation(leaf, minecraft_version),
+            }
     facts["leaf_bindings"] = leaf_bindings
     facts["replacements"] = {
         "new Identifier": "Identifier.of" if is_modern_id else "new Identifier"
