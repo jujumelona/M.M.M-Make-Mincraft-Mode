@@ -5,9 +5,9 @@ from __future__ import annotations
 Each active resource/UI concern remains an owned coverage obligation with its original
 gameplay context. Concrete-content concerns may require an entity binding, while
 engineering-only registry/data-resource concerns may contribute zero content identities
-and remain uncovered for Typed PlatformIR to implement. Path rows constrain deterministic
-artifact placement and never force the model to invent an otherwise nonexistent Minecraft
-content entity.
+and remain host/content-graph constraints rather than forcing a synthetic Typed PlatformIR
+module. Path rows likewise constrain deterministic artifact placement and never force the
+model to invent an otherwise nonexistent Minecraft content entity.
 """
 
 import hashlib
@@ -36,7 +36,11 @@ CONTENT_GRAPH_CONTEXT_CONCERNS = (
     "paths",
 )
 
-CONTENT_GRAPH_HOST_CONSTRAINT_CONCERNS = frozenset({"paths"})
+CONTENT_GRAPH_HOST_CONSTRAINT_CONCERNS = frozenset({
+    "paths",
+    "registries",
+    "data_resources",
+})
 
 # Registry/data-resource rows are engineering constraints. They may describe a
 # binding or data file without introducing a new Minecraft content identity of
