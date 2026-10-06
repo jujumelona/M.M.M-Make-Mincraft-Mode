@@ -21,8 +21,9 @@ from .platform_backend_contract import (
 )
 from .scale_policy import ScalePolicy
 from .spec import Proposal, SpecValidationError
+from .spec_identity import SPEC_ID_RE
 
-_ID = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
+_ID = SPEC_ID_RE
 _SHA = re.compile(r"^sha256:[0-9a-f]{64}$")
 MODULE_KINDS = frozenset(
     set(EXTENDED_CONTENT_KINDS)
