@@ -78,8 +78,16 @@ def content_request_catalog(
         structured_sections,
         "resources_and_ui",
     )
+    host_constraints = {
+        concern: deepcopy(records.get(concern, []))
+        for concern in CONTENT_GRAPH_HOST_CONSTRAINT_CONCERNS
+        if records.get(concern)
+    }
     if not any(records.get(concern) for concern in CONTENT_GRAPH_DRIVER_CONCERNS):
-        return {"requirements": []}
+        return {
+            "requirements": [],
+            "host_constraints": host_constraints,
+        }
 
     payload: list[dict[str, Any]] = []
     for concern in CONTENT_GRAPH_CONTEXT_CONCERNS:
@@ -137,11 +145,6 @@ def content_request_catalog(
             "minimum_entity_count": CONTENT_CONCERN_MINIMUM_ENTITY_COUNT[concern],
         })
 
-    host_constraints = {
-        concern: deepcopy(records.get(concern, []))
-        for concern in CONTENT_GRAPH_HOST_CONSTRAINT_CONCERNS
-        if records.get(concern)
-    }
     return {
         "requirements": requirements,
         "host_constraints": host_constraints,
