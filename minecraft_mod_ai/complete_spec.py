@@ -15,49 +15,21 @@ from .json_stream import (
     canonical_json_sha256,
     validate_canonical_json,
 )
+from .platform_backend_contract import (
+    ENTITY_PIPELINE_KINDS,
+    EXTENDED_CONTENT_KINDS,
+    SYSTEM_KIND_TO_PACK,
+)
 from .scale_policy import ScalePolicy
 from .spec import Proposal, SpecValidationError
 
 _ID = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 _SHA = re.compile(r"^sha256:[0-9a-f]{64}$")
 MODULE_KINDS = frozenset(
-    {
-        "item",
-        "block",
-        "tool",
-        "weapon",
-        "armor",
-        "food",
-        "crop",
-        "fluid",
-        "machine",
-        "block_entity",
-        "recipe",
-        "tag",
-        "effect",
-        "enchantment",
-        "entity",
-        "boss",
-        "npc",
-        "quest",
-        "class",
-        "skill",
-        "economy",
-        "shop",
-        "gui",
-        "networking",
-        "party",
-        "guild",
-        "command",
-        "structure",
-        "biome",
-        "dimension",
-        "world_event",
-        "advancement",
-        "loot",
-        "integration",
-        "typed_host",
-    }
+    set(EXTENDED_CONTENT_KINDS)
+    | set(SYSTEM_KIND_TO_PACK)
+    | set(ENTITY_PIPELINE_KINDS)
+    | {"integration", "typed_host"}
 )
 ASSET_KINDS = frozenset({"item", "block", "entity", "gui", "environment", "icon"})
 IMPLEMENTATION_KINDS = MODULE_KINDS

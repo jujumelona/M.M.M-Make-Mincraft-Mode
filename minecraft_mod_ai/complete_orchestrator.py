@@ -95,7 +95,10 @@ from .local_ai_sidecar_generator import (
 )
 from .model_concurrency import run_with_model_execution_deadline
 from .model_router import ModelRouter
-from .platform_backend_contract import EXTENDED_CONTENT_KINDS
+from .platform_backend_contract import (
+    ENTITY_PIPELINE_KINDS,
+    EXTENDED_CONTENT_KINDS,
+)
 from .platform_catalog import adapter_for_lock_values, adapter_from_project
 from .prepared_project_resume_integrity import (
     prepared_project_cache_valid,
@@ -769,7 +772,7 @@ class CompleteProductionOrchestrator:
                     raise CompleteProductionError('server_launcher is required for complete runtime verification.')
                 if not options.eula_accepted:
                     raise CompleteProductionError('Explicit Minecraft EULA acceptance is required.')
-                memory = options.server_memory_mb or self.policy.runtime_heap_mb(module_count=len(ordered), entity_count=sum(1 for module in ordered if module.kind in {'entity', 'boss', 'npc'}), structure_count=sum(1 for module in ordered if module.kind == 'structure'))
+                memory = options.server_memory_mb or self.policy.runtime_heap_mb(module_count=len(ordered), entity_count=sum(1 for module in ordered if module.kind in ENTITY_PIPELINE_KINDS), structure_count=sum(1 for module in ordered if module.kind == 'structure'))
                 runtime_config = self._runtime_profile(run_root, memory)
                 runtime_manager = MinecraftRuntimeManager(run_root, config_path=runtime_config)
                 launcher_source = Path(options.server_launcher).expanduser().resolve()
@@ -2989,7 +2992,7 @@ class CompleteProductionOrchestrator:
         expected = {
             module.module_id
             for module in proposal.modules
-            if module.kind in {'entity', 'boss', 'npc'}
+            if module.kind in ENTITY_PIPELINE_KINDS
         }
         if not expected:
             return []
@@ -3054,7 +3057,7 @@ class CompleteProductionOrchestrator:
         evidence['runtime_visual'] = evidence['runtime_client'] and evidence['visual']
         evidence['playtest_visual'] = evidence['playtest'] and evidence['visual']
         blockbench = tuple(blockbench_receipts)
-        entity_ids = {module.module_id for module in proposal.modules if module.kind in {'entity', 'boss', 'npc'}}
+        entity_ids = {module.module_id for module in proposal.modules if module.kind in ENTITY_PIPELINE_KINDS}
 
         def blockbench_passed(owner: str) -> bool:
             expected = {owner} if owner in entity_ids else entity_ids
