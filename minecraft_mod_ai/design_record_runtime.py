@@ -304,6 +304,101 @@ def _relation_selector(
     return dict(value)
 
 
+def _select_distinct_relation_ids(
+    router,
+    template,
+    normalized,
+    *,
+    selector_id: str,
+    selector_context: dict[str, Any],
+    candidate_ids: list[str],
+    max_count: int,
+    progress,
+    checkpoint,
+    noun: str,
+) -> list[str]:
+    """Select a host-bounded distinct subset without relying on JSON uniqueItems.
+
+    llama.cpp's structured transport does not guarantee the uniqueItems keyword.
+    Keep uniqueness structural instead: choose the subset cardinality once, then
+    select each member from a shrinking enum that excludes prior selections.
+    """
+
+    if not candidate_ids:
+        raise TemplateBlocked(
+            f"TEMPLATE_RESOURCE_RELATION_TARGET_REQUIRED: {selector_id}: {noun}"
+        )
+    upper = min(max_count, len(candidate_ids))
+    count_schema = {
+        "type": "object",
+        "properties": {
+            "count": {
+                "type": "integer",
+                "enum": list(range(1, upper + 1)),
+            },
+        },
+        "required": ["count"],
+        "additionalProperties": False,
+    }
+    count_value = _relation_selector(
+        router,
+        template,
+        normalized,
+        selector_id=f"{selector_id}:count",
+        selector_context={
+            **selector_context,
+            "candidate_ids": list(candidate_ids),
+            "maximum_count": upper,
+        },
+        response_schema=count_schema,
+        progress=progress,
+        checkpoint=checkpoint,
+        instruction=(
+            f"Choose how many distinct {noun} identifiers are semantically required. "
+            f"The host permits between one and {upper}."
+        ),
+    )
+
+    remaining = list(candidate_ids)
+    selected: list[str] = []
+    for index in range(int(count_value["count"])):
+        member_schema = {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "enum": list(remaining),
+                },
+            },
+            "required": ["id"],
+            "additionalProperties": False,
+        }
+        member_value = _relation_selector(
+            router,
+            template,
+            normalized,
+            selector_id=f"{selector_id}:member:{index}",
+            selector_context={
+                **selector_context,
+                "selected_ids": list(selected),
+                "candidate_ids": list(remaining),
+                "member_index": index,
+            },
+            response_schema=member_schema,
+            progress=progress,
+            checkpoint=checkpoint,
+            instruction=(
+                f"Choose distinct {noun} identifier {index + 1}. "
+                "Previously selected identifiers have been removed by the host."
+            ),
+        )
+        chosen = member_value["id"]
+        selected.append(chosen)
+        remaining.remove(chosen)
+
+    return selected
+
+
 def _resource_source_relations(
     router,
     template,
@@ -349,7 +444,7 @@ def _resource_source_relations(
                 raise TemplateBlocked(
                     f"TEMPLATE_RESOURCE_RELATION_TARGET_REQUIRED: {source_id}: item"
                 )
-            schema = {
+            plan_schema = {
                 "type": "object",
                 "properties": {
                     "mode": {
@@ -360,37 +455,43 @@ def _resource_source_relations(
                         "type": "string",
                         "enum": list(item_ids),
                     },
-                    "input_ids": {
-                        "type": "array",
-                        "minItems": 1,
-                        "maxItems": min(9, len(item_ids)),
-                        "uniqueItems": True,
-                        "items": {
-                            "type": "string",
-                            "enum": list(item_ids),
-                        },
-                    },
                 },
-                "required": ["mode", "output_id", "input_ids"],
+                "required": ["mode", "output_id"],
                 "additionalProperties": False,
             }
             value = _relation_selector(
                 router,
                 template,
                 normalized,
-                selector_id=f"crafting:{source_id}",
+                selector_id=f"crafting:{source_id}:plan",
                 selector_context={
                     **selector_base,
                     "candidate_item_ids": list(item_ids),
                 },
-                response_schema=schema,
+                response_schema=plan_schema,
                 progress=progress,
                 checkpoint=checkpoint,
                 instruction=(
-                    "Resolve the crafting recipe semantics for this concrete recipe. "
-                    "Choose exactly one output item, one to nine distinct ingredient "
-                    "entities, and whether the authored recipe is shaped or shapeless."
+                    "Resolve the crafting recipe mode and exactly one output item. "
+                    "Ingredient cardinality and distinct endpoints are selected in "
+                    "separate host-bounded steps."
                 ),
+            )
+            input_ids = _select_distinct_relation_ids(
+                router,
+                template,
+                normalized,
+                selector_id=f"crafting:{source_id}:inputs",
+                selector_context={
+                    **selector_base,
+                    "mode": value["mode"],
+                    "output_id": value["output_id"],
+                },
+                candidate_ids=list(item_ids),
+                max_count=9,
+                progress=progress,
+                checkpoint=checkpoint,
+                noun="ingredient",
             )
             records.append(
                 {
@@ -400,7 +501,7 @@ def _resource_source_relations(
                 }
             )
             if value["mode"] == "shapeless":
-                for target_id in value["input_ids"]:
+                for target_id in input_ids:
                     records.append(
                         {
                             "relation_type": "consumes",
@@ -409,7 +510,7 @@ def _resource_source_relations(
                         }
                     )
             else:
-                for index, target_id in enumerate(value["input_ids"]):
+                for index, target_id in enumerate(input_ids):
                     records.append(
                         {
                             "relation_type": f"key_{chr(ord('A') + index)}",
@@ -516,24 +617,7 @@ def _resource_source_relations(
             )
             member_kind = kind_value["member_kind"]
             candidate_ids = candidates_by_kind[member_kind]
-            members_schema = {
-                "type": "object",
-                "properties": {
-                    "member_ids": {
-                        "type": "array",
-                        "minItems": 1,
-                        "maxItems": len(candidate_ids),
-                        "uniqueItems": True,
-                        "items": {
-                            "type": "string",
-                            "enum": list(candidate_ids),
-                        },
-                    },
-                },
-                "required": ["member_ids"],
-                "additionalProperties": False,
-            }
-            members_value = _relation_selector(
+            member_ids = _select_distinct_relation_ids(
                 router,
                 template,
                 normalized,
@@ -541,17 +625,14 @@ def _resource_source_relations(
                 selector_context={
                     **selector_base,
                     "member_kind": member_kind,
-                    "candidate_member_ids": list(candidate_ids),
                 },
-                response_schema=members_schema,
+                candidate_ids=list(candidate_ids),
+                max_count=len(candidate_ids),
                 progress=progress,
                 checkpoint=checkpoint,
-                instruction=(
-                    "Choose one or more concrete members of this registry tag from "
-                    "the fixed member-kind candidate set."
-                ),
+                noun="registry tag member",
             )
-            for target_id in members_value["member_ids"]:
+            for target_id in member_ids:
                 records.append(
                     {
                         "relation_type": "contains",
