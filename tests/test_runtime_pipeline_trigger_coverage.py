@@ -12,13 +12,13 @@ MODEL_RUNTIME_PATHS = (
 )
 EXECUTION_CONTRACT_SOURCE_PATHS = (
     "minecraft_mod_ai/execution_contract_policy.py",
-    "minecraft_mod_ai/atomic_region_paging.py",
-    "minecraft_mod_ai/atomic_java_assembly.py",
-    "minecraft_mod_ai/central_atomic_generation_contract.py",
     "minecraft_mod_ai/java_generation_policy.py",
-    "minecraft_mod_ai/repair_response_contract.py",
-    "minecraft_mod_ai/verifier_repair_window.py",
-    "minecraft_mod_ai/generation_diagnostic_repair.py",
+    "minecraft_mod_ai/typed_host_generation_contract.py",
+    "minecraft_mod_ai/generation_target_compile.py",
+    "minecraft_mod_ai/generation_compile_state.py",
+    "minecraft_mod_ai/generation_verification_contract.py",
+    "minecraft_mod_ai/generation_evidence_controller.py",
+    "minecraft_mod_ai/generation_verifier_resilience.py",
 )
 EXECUTION_CONTRACT_TARGETED_GATES = (
     ".github/workflows/production-path-contract.yml",
@@ -30,7 +30,7 @@ EXECUTION_CONTRACT_TARGETED_GATES = (
 SOURCE_OWNED_RUNTIME_PATHS = (
     "minecraft_mod_ai/acceptance_contracts.py",
     "minecraft_mod_ai/quality_evidence.py",
-    "minecraft_mod_ai/evidence_first_planning.py",
+    "minecraft_mod_ai/structural_minecraft_runtime_contract.py",
     "minecraft_mod_ai/research_rag_performance.py",
     "minecraft_mod_ai/source_observation_context.py",
     "minecraft_mod_ai/generator.py",
@@ -38,24 +38,27 @@ SOURCE_OWNED_RUNTIME_PATHS = (
     "minecraft_mod_ai/extended_registration_contract.py",
 )
 AUTHORED_PIPELINE_GATE_PATHS = (
-    "minecraft_mod_ai/authored_document_contract.py",
     "minecraft_mod_ai/authored_section_ids.py",
-    "minecraft_mod_ai/authored_ir_parser.py",
-    "minecraft_mod_ai/authored_execution_schema.py",
+    "minecraft_mod_ai/authored_structured_design.py",
     "minecraft_mod_ai/complete_planner.py",
     "minecraft_mod_ai/authored_production.py",
+    "minecraft_mod_ai/planning_contract_ssot.py",
+    "minecraft_mod_ai/planning_detail_contract.py",
+    "minecraft_mod_ai/planning_detail_slots.py",
     "minecraft_mod_ai/planning_detail_template.py",
-    "minecraft_mod_ai/planning_detail_applicability.py",
-    "minecraft_mod_ai/implementation_ir.py",
+    "minecraft_mod_ai/planning_handoff_contract.py",
+    "minecraft_mod_ai/typed_plan_ir.py",
+    "minecraft_mod_ai/typed_plan_production.py",
+    "minecraft_mod_ai/typed_host_generation_contract.py",
     "minecraft_mod_ai/implementation_decisions.py",
-    "minecraft_mod_ai/implementation_graph_execution.py",
+    "minecraft_mod_ai/task_artifact_contract.py",
     "minecraft_mod_ai/task_template_catalog.py",
 )
 DEEP_SOFTWARE_GATE_PATHS = (
     *SOURCE_OWNED_RUNTIME_PATHS,
     *AUTHORED_PIPELINE_GATE_PATHS,
     "tools/verify_integrity_minecraft.py",
-    "tests/test_implementation_ir.py",
+    "tests/test_typed_plan_ir.py",
     "minecraft_mod_ai/performance_final_tuning.py",
     "minecraft_mod_ai/performance_final_contract.py",
     "minecraft_mod_ai/work_graph.py",
