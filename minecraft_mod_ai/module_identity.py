@@ -8,6 +8,8 @@ runtime patches.
 """
 
 import re
+
+from .spec_identity import canonical_spec_id
 from collections.abc import Mapping
 from typing import Any
 
@@ -35,7 +37,7 @@ def logical_module_id(raw_path: str, item: Mapping[str, Any] | None = None) -> s
         value = "root"
     if not value[0].isalpha():
         value = "module_" + value
-    return value[:64]
+    return canonical_spec_id(value, fallback="module")
 
 
 __all__ = ["logical_module_id"]
