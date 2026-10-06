@@ -5,7 +5,7 @@ from __future__ import annotations
 The coding model authors search intent and source code; it does not own retriever
 selection. Fresh implementation semantics come from the active task capsule rather
 than filesystem existence, and verifier repair routes are delegated to the canonical
-repair-evidence classifier.
+host-owned diagnostic classifier in this module.
 """
 
 import json
@@ -348,11 +348,42 @@ def repair_evidence_route_for_errors(
                 ]
             }
         }
+    bundle = verifier_diagnostic_bundle(errors)
+    messages = tuple(str(value) for value in bundle.get("messages", ()) if str(value).strip())
+    joined = "\n".join(messages)
+
+    api_evidence = bool(
+        _IMPORT_API_RE.search(joined)
+        or _QUALIFIED_API_RE.search(joined)
+        or _MISSING_PACKAGE_RE.search(joined)
+    )
+    compatibility_markers = (
+        "nosuchmethoderror",
+        "noclassdeffounderror",
+        "mixin",
+        "mod resolution",
+        "dependency",
+        "depends on",
+        "incompatible",
+        "loader version",
+    )
+    lowered = joined.casefold()
+    if api_evidence:
+        route = "official_api"
+        reasons = ["minecraft_api_contract_failure"]
+    elif any(marker in lowered for marker in compatibility_markers):
+        route = "compatibility"
+        reasons = ["dependency_or_loader_compatibility_failure"]
+    else:
+        route = "project_local"
+        reasons = ["local_compilation_failure"]
+
+    query = verifier_recovery_query(errors, target_path=target_path)
     return {
-        "route": "project_local",
-        "reasons": ["local_compilation_failure"],
-        "query_prefix": "",
-        "suggested_queries": (),
+        "route": route,
+        "reasons": reasons,
+        "query_prefix": query,
+        "suggested_queries": (query,) if query and route != "project_local" else (),
     }
 
 

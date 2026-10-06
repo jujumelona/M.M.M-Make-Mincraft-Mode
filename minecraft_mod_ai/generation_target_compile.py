@@ -58,7 +58,7 @@ def run_generation_target_compile(
         result="START",
         details={"project_root": str(root), "target_path": target, "gradle_cache": str(cache)},
     )
-    contract_diagnostics = ()
+    contract_diagnostics: list[dict[str, Any]] = []
     if contract_diagnostics:
         build = {"status": "FAIL", "commands": [], "error": "host-authored integration contract failed"}
     else:
