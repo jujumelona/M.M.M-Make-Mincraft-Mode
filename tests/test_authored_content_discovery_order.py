@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import pytest
+
 from minecraft_mod_ai.authored_content_contract import (
     CONTENT_GRAPH_DRIVER_CONCERNS,
     CONTENT_GRAPH_HOST_CONSTRAINT_CONCERNS,
     content_owned_refs,
     content_request_catalog,
 )
+from minecraft_mod_ai.content_design_graph import SlotFillError, compile_content_graph
 from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
 
 
@@ -136,3 +139,24 @@ def test_host_constraints_do_not_become_content_requirements() -> None:
         "data_resources",
         "registries",
     }
+
+
+def test_host_constraint_cannot_be_smuggled_as_content_requirement() -> None:
+    catalog = {
+        "requirements": [{
+            "requirement_id": "content_data_resources_forbidden",
+            "statement": "engineering data resource",
+            "coverage_ref": "resources_and_ui.data_resources",
+        }],
+        "host_constraints": {},
+    }
+
+    with pytest.raises(
+        SlotFillError,
+        match="CONTENT_HOST_CONSTRAINT_AS_REQUIREMENT",
+    ):
+        compile_content_graph(
+            "test",
+            object(),
+            request_catalog=catalog,
+        )
