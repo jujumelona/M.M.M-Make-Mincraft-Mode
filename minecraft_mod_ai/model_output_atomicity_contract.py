@@ -113,6 +113,54 @@ def _assert_closed_object_schemas(
             )
 
 
+_HOST_ONLY_MODEL_CONSTRAINT_KEYWORDS = frozenset({
+    # llama.cpp's projected JSON schema does not enforce these semantic
+    # cross-value constraints. Model-facing contracts must encode them
+    # structurally in host-controlled calls instead of relying on late validation.
+    "uniqueItems",
+    "contains",
+    "minContains",
+    "maxContains",
+    "dependentRequired",
+    "dependentSchemas",
+    "patternProperties",
+    "propertyNames",
+    "unevaluatedItems",
+    "unevaluatedProperties",
+    "multipleOf",
+})
+
+
+def _assert_no_host_only_model_constraints(
+    value: Any,
+    *,
+    surface: str,
+    path: str = "$",
+) -> None:
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            if key in _HOST_ONLY_MODEL_CONSTRAINT_KEYWORDS:
+                raise _configuration_error(
+                    "MODEL_SCHEMA_HOST_ONLY_CONSTRAINT: "
+                    f"{key!r} at {path} for {surface}; "
+                    "encode this invariant in host-owned structure before inference"
+                )
+            _assert_no_host_only_model_constraints(
+                child,
+                surface=surface,
+                path=f"{path}.{key}",
+            )
+    elif isinstance(value, Sequence) and not isinstance(
+        value, (str, bytes, bytearray)
+    ):
+        for index, child in enumerate(value):
+            _assert_no_host_only_model_constraints(
+                child,
+                surface=surface,
+                path=f"{path}[{index}]",
+            )
+
+
 def assert_strict_atomicity_bounds(
     value: Any,
     *,
@@ -172,9 +220,10 @@ def assert_strict_atomicity_bounds(
 
 
 def assert_atomic_model_schema(schema: Mapping[str, Any], *, surface: str) -> None:
-    """Require a closed host-owned template; resource budgets are runtime concerns."""
+    """Require a closed, transport-enforceable host-owned model template."""
 
     _assert_closed_object_schemas(schema)
+    _assert_no_host_only_model_constraints(schema, surface=surface)
     raw_profile = schema.get(SCHEMA_CONTRACT_PROFILE_KEY, DEFAULT_SCHEMA_PROFILE)
     profile = str(raw_profile or DEFAULT_SCHEMA_PROFILE).strip()
     try:
