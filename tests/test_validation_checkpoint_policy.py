@@ -38,18 +38,17 @@ def test_validation_resume_reuses_only_stable_exact_results() -> None:
 
 def _complete_jdt_receipt() -> dict[str, object]:
     return {
-        "schema_version": "mmm/java-diagnostics-v2",
-        "files_opened": 2,
-        "page_count": 1,
-        "pages": [
-            {
-                "page_index": 0,
-                "file_count": 2,
-                "diagnostic_uri_count": 2,
-                "error_count": 1,
-                "warning_count": 0,
-            }
-        ],
+        "schema_version": "mmm/java-diagnostics-v3",
+        "verification_backend": "jdt_core",
+        "verification_scope": "full",
+        "complete": True,
+        "skipped": False,
+        "project_root": "/workspace/project",
+        "project_revision": {"digest": "sha256:project"},
+        "model_id": "sha256:model",
+        "model_revision": "sha256:model-revision",
+        "session_id": "owner-session",
+        "generation": 1,
         "error_count": 1,
         "warning_count": 0,
         "diagnostics": {
@@ -62,7 +61,7 @@ def _complete_jdt_receipt() -> dict[str, object]:
 def test_jdt_resume_never_reuses_unavailable_or_partial_result() -> None:
     assert not validation_checkpoint_policy.cached_validation_is_reusable(
         "validate-jdt",
-        {"status": "UNAVAILABLE", "error": "jdtls missing"},
+        {"status": "UNAVAILABLE", "error": "jdt core unavailable"},
     )
 
     complete = _complete_jdt_receipt()
@@ -72,7 +71,7 @@ def test_jdt_resume_never_reuses_unavailable_or_partial_result() -> None:
     )
 
     partial = _complete_jdt_receipt()
-    partial["diagnostics"] = {"file:///A.java": []}
+    partial["complete"] = False
     assert not validation_checkpoint_policy.cached_validation_is_reusable(
         "validate-jdt",
         partial,
@@ -86,24 +85,16 @@ def test_jdt_resume_never_reuses_unavailable_or_partial_result() -> None:
     )
 
 
-def test_jdt_resume_cross_checks_orchestrator_transformed_receipt() -> None:
+def test_jdt_resume_rejects_noncanonical_transformed_receipt() -> None:
     transformed = _complete_jdt_receipt()
     diagnostics_by_uri = transformed["diagnostics"]
     assert isinstance(diagnostics_by_uri, dict)
     expected_error = diagnostics_by_uri["file:///B.java"][0]
     transformed["diagnostics_by_uri"] = diagnostics_by_uri
     transformed["diagnostics"] = [expected_error]
-    assert validation_checkpoint_policy.cached_validation_is_reusable(
-        "validate-jdt",
-        transformed,
-    )
-
-    missing_legacy_error = _complete_jdt_receipt()
-    missing_legacy_error["diagnostics_by_uri"] = missing_legacy_error["diagnostics"]
-    missing_legacy_error["diagnostics"] = []
     assert not validation_checkpoint_policy.cached_validation_is_reusable(
         "validate-jdt",
-        missing_legacy_error,
+        transformed,
     )
 
 
@@ -233,11 +224,12 @@ def test_jdt_fingerprint_covers_every_runtime_owner() -> None:
         for module in validation_checkpoint_policy._validation_modules("validate-jdt")
     }
     assert {
-        "minecraft_mod_ai.java_lsp",
-        "minecraft_mod_ai.java_lsp_process_safety_contract",
+        "minecraft_mod_ai.complete_orchestrator",
+        "minecraft_mod_ai.java_core",
+        "minecraft_mod_ai.jvm_owner_bootstrap",
+        "minecraft_mod_ai.project_model",
+        "minecraft_mod_ai.validation_checkpoint_policy",
         "minecraft_mod_ai.validation_diagnostic_contract",
-        "minecraft_mod_ai.validation_execution_contract",
-        "minecraft_mod_ai.research_validation_fingerprint_performance",
     } <= names
 
 

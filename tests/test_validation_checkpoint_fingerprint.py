@@ -37,9 +37,10 @@ def test_jdt_validation_fingerprint_includes_active_jdt_gates(
     assert "minecraft_mod_ai.validation_checkpoint_policy" in names
     assert "minecraft_mod_ai.runtime_bootstrap" not in names
     assert "minecraft_mod_ai.complete_orchestrator" in names
-    assert "minecraft_mod_ai.java_lsp" in names
-    assert "minecraft_mod_ai.java_lsp_process_safety_contract" in names
+    assert "minecraft_mod_ai.java_core" in names
+    assert "minecraft_mod_ai.jvm_owner_bootstrap" in names
+    assert "minecraft_mod_ai.project_model" in names
     assert "minecraft_mod_ai.validation_diagnostic_contract" in names
-    assert "minecraft_mod_ai.validation_execution_contract" in names
-    assert "minecraft_mod_ai.research_validation_fingerprint_performance" in names
+    assert "minecraft_mod_ai.java_lsp_process_safety_contract" not in names
+    assert "minecraft_mod_ai.validation_execution_contract" not in names
     assert "minecraft_mod_ai.orchestrator_jdt_gate_contract" not in names
