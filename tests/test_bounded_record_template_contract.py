@@ -328,3 +328,43 @@ def test_resumed_record_checkpoint_requires_integer_count(monkeypatch) -> None:
             progress=progress,
         )
 
+def test_malformed_record_checkpoint_shape_is_rejected(monkeypatch) -> None:
+    monkeypatch.setattr(
+        bounded,
+        "load_record_template",
+        lambda identifier: dict(_TEMPLATE),
+    )
+    monkeypatch.setattr(
+        bounded,
+        "task_context",
+        lambda template, context: dict(context),
+    )
+    monkeypatch.setattr(
+        bounded,
+        "task_binding",
+        lambda template, context, refs: "binding",
+    )
+
+    import pytest
+
+    with pytest.raises(ValueError, match="TEMPLATE_RECORD_SET_SAVED_SHAPE"):
+        bounded.run_bounded_record_template(
+            object(),
+            "feature/test/items",
+            context={"requirement": "resume invalid checkpoint"},
+            progress={"record-set-v3:min=0:binding": "not-an-object"},
+        )
+
+    with pytest.raises(ValueError, match="TEMPLATE_RECORD_SET_SAVED_SHAPE"):
+        bounded.run_bounded_record_template(
+            object(),
+            "feature/test/items",
+            context={"requirement": "resume invalid records"},
+            progress={
+                "record-set-v3:min=0:binding": {
+                    "count": 1,
+                    "records": "not-a-list",
+                }
+            },
+        )
+
