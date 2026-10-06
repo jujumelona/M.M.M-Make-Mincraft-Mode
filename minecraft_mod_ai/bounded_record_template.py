@@ -146,6 +146,11 @@ def run_bounded_record_template(
                 f"TEMPLATE_RECORD_SET_SAVED_SHAPE: {identifier} contains a non-object record"
             )
         records = [deepcopy(item) for item in raw_records]
+        if len(records) > _MAX_RECORD_SET_ITEMS:
+            raise ValueError(
+                f"TEMPLATE_RECORD_SET_COUNT: {identifier} saved {len(records)} records "
+                f"exceeds {_MAX_RECORD_SET_ITEMS}"
+            )
         if len(records) < minimum:
             raise ValueError(
                 f"TEMPLATE_RECORD_SET_CARDINALITY_DRIFT: {identifier} requires at least "
