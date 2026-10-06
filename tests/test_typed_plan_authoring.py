@@ -640,6 +640,52 @@ def test_complete_planner_threads_deterministic_module_kinds(monkeypatch: Any) -
 
     assert received_kinds == ("block", "item")
 
+def test_complete_planner_unbound_auto_does_not_pre_filter_platform_kinds(
+    monkeypatch: Any,
+) -> None:
+    from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner
+    from minecraft_mod_ai.model_router import ModelRouter
+
+    received_allowed = "unset"
+    received_kinds = "unset"
+
+    def fake_author_typed_plan_ir(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        nonlocal received_allowed, received_kinds
+        received_allowed = kwargs.get("allowed_platform_kinds")
+        received_kinds = kwargs.get("deterministic_module_kinds")
+        return {
+            "source_sha256": "fake",
+            "functions": [],
+            "initialize": [],
+            "platform_modules": [],
+            "event_bindings": [],
+        }
+
+    monkeypatch.setattr(
+        "minecraft_mod_ai.typed_plan_authoring.author_typed_plan_ir",
+        fake_author_typed_plan_ir,
+    )
+    monkeypatch.setattr(
+        "minecraft_mod_ai.authored_structured_design.author_structured_sections",
+        lambda *args, **kwargs: {},
+    )
+    monkeypatch.setattr(
+        "minecraft_mod_ai.authored_structured_design.render_structured_sections",
+        lambda *args: "mock text",
+    )
+    monkeypatch.setattr(
+        "minecraft_mod_ai.typed_plan_support.assert_typed_plan_host_support",
+        lambda *args, **kwargs: None,
+    )
+
+    router = ModelRouter(profile="fast_test")
+    planner = CompleteGameDesignPlanner(router)
+    planner.plan("test prompt")
+
+    assert received_kinds is None
+    assert received_allowed is None
+
+
 def test_permission_capability_schema_exposes_host_range_to_model():
     from minecraft_mod_ai.model_output_atomicity_contract import (
         effective_model_transport_schema,
