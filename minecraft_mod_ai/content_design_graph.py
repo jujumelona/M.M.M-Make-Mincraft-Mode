@@ -55,7 +55,7 @@ def _sanitize_stem(name: str) -> str:
     return stem[:30]
 
 
-_CONTENT_ENTITY_ID_MAX_LENGTH = 64
+_CONTENT_ENTITY_ID_MAX_LENGTH = SPEC_ID_MAX_LENGTH
 
 
 def _collision_safe_entity_id(
@@ -146,7 +146,7 @@ def _prune_optional_orphan_resource_entities(entities, owned):
 
 
 from .complete_spec import AssetRequest, ProductionModule
-from .spec_identity import canonical_spec_id
+from .spec_identity import SPEC_ID_MAX_LENGTH, canonical_spec_id
 from .content_design_contract import (
     CONTENT_FACT_TO_PRODUCTION_KIND,
     REGISTRY_TAG_KIND_TO_TARGET_FACT_TYPE,
