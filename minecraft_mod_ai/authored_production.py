@@ -528,6 +528,66 @@ def _normalize_content_build_dependencies(
         normalized.append(rewritten)
     return tuple(normalized)
 
+def _defer_unbound_structured_content_assets(
+    modules: tuple[ProductionModule, ...],
+    assets: tuple[AssetRequest, ...],
+    version_context: Any,
+) -> tuple[tuple[ProductionModule, ...], tuple[AssetRequest, ...]]:
+    """Migrate saved semantic plans that predate structured HOST asset ownership.
+
+    gui.sprite and entity.fixed_uv cannot be synthesized from semantic colour/style
+    hints alone. They require exact HOST geometry plus a concrete consumer binding.
+    Older authored plans nevertheless emitted those requests unconditionally. When
+    the target catalog has no binding at all for that subject, defer the asset and
+    preserve its visual intent on the owning module so canonical source generation
+    can still use the semantics. A present-but-invalid binding is retained and will
+    fail closed in the normal resource contract validator.
+    """
+
+    from .resource_catalog import host_binding
+
+    structured_render_kinds = {"gui.sprite", "entity.fixed_uv"}
+    deferred_visuals: dict[str, dict[str, Any]] = {}
+    kept: list[AssetRequest] = []
+
+    for asset in assets:
+        if asset.render_kind not in structured_render_kinds:
+            kept.append(asset)
+            continue
+        binding = host_binding(version_context, asset.subject_id)
+        if binding:
+            # Do not hide malformed/partial HOST authority. The resource contract
+            # owns validation once any binding is present.
+            kept.append(asset)
+            continue
+
+        owner_id = str(asset.owner_module_id or asset.subject_id)
+        if isinstance(asset.visual_spec, Mapping):
+            deferred_visuals[owner_id] = deepcopy(dict(asset.visual_spec))
+
+    if not deferred_visuals:
+        return modules, tuple(kept)
+
+    rewritten: list[ProductionModule] = []
+    for module in modules:
+        visual_spec = deferred_visuals.get(module.module_id)
+        if visual_spec is None:
+            rewritten.append(module)
+            continue
+        config = deepcopy(module.config)
+        config.setdefault("visual_spec", visual_spec)
+        updated = ProductionModule(
+            module_id=module.module_id,
+            kind=module.kind,
+            config=config,
+            depends_on=module.depends_on,
+            required_gates=module.required_gates,
+        )
+        updated.validate()
+        rewritten.append(updated)
+    return tuple(rewritten), tuple(kept)
+
+
 def _compile_content_artifact_graph(
     plan: AuthoredPlan,
     *,
@@ -637,6 +697,11 @@ def _compile_content_artifact_graph(
         asset.validate()
         parsed_assets.append(asset)
     assets = tuple(parsed_assets)
+    modules, assets = _defer_unbound_structured_content_assets(
+        modules,
+        assets,
+        adapter.version_context,
+    )
 
     from .implementation_fact import ImplementationFact
     from .artifact_expansion import expand_facts_to_jobs
