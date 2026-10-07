@@ -1580,13 +1580,30 @@ class CompleteProductionOrchestrator:
                 artifact_jobs_to_run: list[ArtifactJob] = []
                 seen_job_ids: set[str] = set()
                 for module in members:
+                    route = route_by_module_id.get(module.module_id)
+                    if route is None:
+                        raise CompleteProductionError(
+                            f"PRODUCTION_ROUTING_MISSING_MODULE: {module.module_id}"
+                        )
                     owned_jobs = artifact_jobs_by_owner.get(module.module_id, ())
-                    if owned_jobs:
+                    if route.owner == "artifact_graph":
+                        if not owned_jobs:
+                            raise CompleteProductionError(
+                                "ARTIFACT_ROUTE_WITHOUT_JOBS: canonical routing "
+                                f"assigns {module.module_id} to the artifact graph "
+                                "but no owned ArtifactJob exists."
+                            )
                         artifact_handled_members.append(module)
                         for job in owned_jobs:
                             if job.job_id not in seen_job_ids:
                                 artifact_jobs_to_run.append(job)
                                 seen_job_ids.add(job.job_id)
+                    elif owned_jobs:
+                        raise CompleteProductionError(
+                            "ARTIFACT_JOB_ROUTING_MISMATCH: "
+                            f"{module.module_id} has ArtifactJob ownership but "
+                            f"canonical routing owner is {route.owner!r}."
+                        )
 
                 # Include only the exact transitive prerequisites of these owners.
                 # The immutable producer index is built once per generation execution,
