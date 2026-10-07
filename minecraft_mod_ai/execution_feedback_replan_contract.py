@@ -543,6 +543,8 @@ def _observations(task: Mapping[str, Any]) -> list[dict[str, Any]]:
 
 
 def _member_ids(task: Mapping[str, Any]) -> set[str]:
+    """Return semantic owners declared by one generation work-node payload."""
+
     payload = task.get("payload")
     payload = payload if isinstance(payload, Mapping) else {}
     members = payload.get("members")
@@ -551,10 +553,18 @@ def _member_ids(task: Mapping[str, Any]) -> set[str]:
         for item in members:
             if not isinstance(item, Mapping):
                 continue
-            for key in ("module_id", "asset_id"):
-                raw = item.get(key)
-                if isinstance(raw, str) and raw.strip():
-                    result.add(raw.strip())
+            module_id = item.get("module_id")
+            if isinstance(module_id, str) and module_id.strip():
+                result.add(module_id.strip())
+                continue
+            owner_module_id = item.get("owner_module_id")
+            if isinstance(owner_module_id, str) and owner_module_id.strip():
+                result.add(owner_module_id.strip())
+                continue
+            # Standalone/unowned resource assets still need a stable work owner.
+            asset_id = item.get("asset_id")
+            if isinstance(asset_id, str) and asset_id.strip():
+                result.add(asset_id.strip())
     return result
 
 
@@ -598,7 +608,14 @@ def _derive_impacted_seeds(
         task_observations = _observations(task)
         observation_owners: set[str] = set(member_ids)
         observation_requirements: set[str] = set()
-        observed_paths: set[str] = set()
+        from .generation_receipt_paths import receipt_mutation_paths
+
+        task_receipt = task.get("receipt")
+        observed_paths: set[str] = {
+            _norm_path(value)
+            for value in receipt_mutation_paths(task_receipt)
+            if isinstance(value, str) and _norm_path(value)
+        }
         for observation in task_observations:
             raw_ids = observation.get("task_ids")
             if isinstance(raw_ids, Sequence) and not isinstance(
