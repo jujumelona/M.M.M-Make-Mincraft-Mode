@@ -61,7 +61,16 @@ def _fact_artifact_route_ready(fact: Any, version_context: Any) -> bool:
     """
 
     from .artifact_expansion import FACT_TO_CANONICAL_LEAVES
+    from .prompt_fact_types import FactType
     from .registered_leaf_binding import require_registered_leaf_binding
+
+    # CONTENT_RELATION is module topology, not a file-generating artifact fact.
+    # Its executable meaning is already lowered into ProductionModule.depends_on
+    # and config.executable_relations by authored content planning. Treating it
+    # as an item integration leaf manufactures bogus item initializer jobs for
+    # GUI/entity/etc. modules and cross-wires their typed ports.
+    if fact.fact_type == FactType.CONTENT_RELATION:
+        return True
 
     leaves = FACT_TO_CANONICAL_LEAVES.get(fact.fact_type)
     if not leaves:
