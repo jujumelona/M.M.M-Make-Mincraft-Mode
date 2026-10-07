@@ -119,10 +119,24 @@ def compile_production_routing(
     selected_ids = frozenset(module_ids)
     artifact_owners = frozenset(all_artifact_owners & selected_ids)
 
-    from .platform_catalog import adapter_for_lock_values
+    non_artifact_modules = tuple(
+        module for module in selected if module.module_id not in artifact_owners
+    )
+    if non_artifact_modules:
+        try:
+            platform = proposal.base_proposal.spec.platform
+        except AttributeError as exc:
+            raise ProductionRoutingError(
+                "PRODUCTION_ROUTING_PLATFORM_REQUIRED: native routes require "
+                "the approved platform lock"
+            ) from exc
+        from .platform_catalog import adapter_for_lock_values
 
-    adapter = adapter_for_lock_values(proposal.base_proposal.spec.platform)
-    available = deterministic_backend_capabilities(adapter)
+        adapter = adapter_for_lock_values(platform)
+        available = deterministic_backend_capabilities(adapter)
+    else:
+        # Artifact-only validation does not need to resolve a native target.
+        available = frozenset()
 
     routes: list[ModuleProductionRoute] = []
     for module in selected:
