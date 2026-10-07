@@ -8,11 +8,6 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from .artifact_job import (
-    artifact_owner_module_ids,
-    canonical_client_entrypoints,
-    parse_artifact_jobs,
-)
 from .complete_spec import CompleteProposal
 from .gametest_validation import validate_gametest_metadata
 from .local_ai_sidecar_generator import (
@@ -25,6 +20,11 @@ from .local_ai_sidecar_generator import (
     normalize_local_ai_sidecar_config,
     render_local_ai_sidecar_manifest,
     render_local_ai_sidecar_source,
+)
+from .production_routing_contract import (
+    ProductionRoutingError,
+    ProductionRoutingSnapshot,
+    compile_production_routing,
 )
 from .scale_policy import ScalePolicy
 from .spec import ContentKind, ModSpec
@@ -1025,65 +1025,55 @@ def _complete_entity_ids(proposal: CompleteProposal | None) -> set[str]:
     }
 
 
+def _complete_production_routing(
+    proposal: CompleteProposal | None,
+) -> ProductionRoutingSnapshot | None:
+    """Return the canonical scheduler/validator production routing snapshot."""
+
+    if proposal is None:
+        return None
+    try:
+        return compile_production_routing(proposal)
+    except ProductionRoutingError:
+        # CompleteProposal validation owns malformed/unsupported routing. The
+        # validator must never invent artifact ownership as a recovery path.
+        return None
+
+
 def _complete_artifact_owner_ids(
     proposal: CompleteProposal | None,
 ) -> set[str]:
-    """Return modules whose production is owned by the canonical artifact graph."""
-
-    if proposal is None:
+    routing = _complete_production_routing(proposal)
+    if routing is None:
         return set()
-    game_design = (
-        proposal.game_design if isinstance(proposal.game_design, dict) else {}
-    )
-    raw_jobs = game_design.get("_artifact_jobs", ())
-    if raw_jobs is None:
-        raw_jobs = ()
-    if not isinstance(raw_jobs, (list, tuple)):
-        return set()
-    try:
-        jobs = parse_artifact_jobs(raw_jobs)
-        return set(artifact_owner_module_ids(jobs))
-    except (KeyError, TypeError, ValueError):
-        # CompleteProposal validation owns malformed artifact graphs. Validation
-        # must never authorize a malformed ownership claim.
-        return set()
+    return set(routing.artifact_owner_module_ids)
 
 
 def _complete_native_modules(
     proposal: CompleteProposal | None,
 ) -> tuple[Any, ...]:
-    """Return only modules routed through built-in/native production backends."""
+    """Return modules owned by the same native routes used by the scheduler."""
 
     if proposal is None:
         return ()
-    artifact_owners = _complete_artifact_owner_ids(proposal)
+    routing = _complete_production_routing(proposal)
+    if routing is None:
+        # Fail closed: invalid routing must not suppress native validation by
+        # accidentally authorizing artifact ownership.
+        return tuple(proposal.modules)
+    native_ids = routing.native_module_ids
     return tuple(
-        module
-        for module in proposal.modules
-        if module.module_id not in artifact_owners
+        module for module in proposal.modules if module.module_id in native_ids
     )
 
 
 def _complete_artifact_client_entrypoints(
     proposal: CompleteProposal | None,
 ) -> set[str]:
-    if proposal is None:
+    routing = _complete_production_routing(proposal)
+    if routing is None:
         return set()
-    game_design = (
-        proposal.game_design if isinstance(proposal.game_design, dict) else {}
-    )
-    raw_jobs = game_design.get("_artifact_jobs", ())
-    if raw_jobs is None:
-        raw_jobs = ()
-    if not isinstance(raw_jobs, (list, tuple)):
-        return set()
-    try:
-        jobs = parse_artifact_jobs(raw_jobs)
-        return set(canonical_client_entrypoints(jobs))
-    except (KeyError, TypeError, ValueError):
-        # CompleteProposal validation owns malformed artifact graphs. Do not let
-        # source validation accidentally authorize a malformed client contract.
-        return set()
+    return set(routing.artifact_client_entrypoints)
 
 
 def _complete_client_required(proposal: CompleteProposal | None) -> bool:
