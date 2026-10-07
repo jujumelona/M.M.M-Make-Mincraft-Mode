@@ -291,6 +291,20 @@ def _loaded_proposal_message(proposal: CompleteProposal | AuthoredPlan) -> str:
     )
 
 
+def _validate_internal_engine_preflight() -> None:
+    from .internal_package_preflight import (
+        InternalPackagePreflightError,
+        validate_internal_package_integrity,
+    )
+
+    try:
+        validate_internal_package_integrity()
+    except InternalPackagePreflightError as exc:
+        raise SpecValidationError(
+            f"MMM internal package preflight failed before execution: {exc}"
+        ) from exc
+
+
 def _production_proposal(
     session: "CompleteModAISession",
     proposal: CompleteProposal | AuthoredPlan,
@@ -412,6 +426,7 @@ class CompleteModAISession:
         *,
         media_paths: tuple[str | Path, ...] = (),
     ) -> CompleteChatReply:
+        _validate_internal_engine_preflight()
         try:
             updated_brief = merge_design_brief(self.brief, message)
         except ValueError as exc:
@@ -513,6 +528,8 @@ class CompleteModAISession:
     ) -> CompletePipelineResult:
         from .complete_orchestrator import CompleteExecutionOptions
         from .complete_spec import CompleteProposal
+
+        _validate_internal_engine_preflight()
 
         if isinstance(candidate, CompleteChatReply):
             proposal = candidate.complete_proposal
