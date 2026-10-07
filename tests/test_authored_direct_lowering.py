@@ -234,3 +234,14 @@ def test_python_generator_job_persists_schema_valid_candidate_inputs() -> None:
     assert spec["side"] == "CLIENT"
     assert spec["target_path"].startswith("src/main/java/example/space/client/generated/")
     assert spec["slots"][0]["name"] == "artifact_source"
+
+    from minecraft_mod_ai.model_output_atomicity_contract import (
+        assert_strict_atomicity_bounds,
+    )
+
+    slot_schema = spec["slots"][0]["schema"]
+    Draft202012Validator.check_schema(slot_schema)
+    assert_strict_atomicity_bounds(
+        slot_schema,
+        surface="canonical GUI source candidate",
+    )
