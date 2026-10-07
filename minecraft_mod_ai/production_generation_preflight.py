@@ -29,6 +29,7 @@ from .platform_backend_contract import (
     deterministic_backend_capabilities,
     missing_production_backend_capabilities,
 )
+from .production_routing_contract import ProductionRoutingSnapshot
 from .scale_policy import ScalePolicy
 from .system_pack_validation import validate_system_modules
 from .typed_plan_production import validate_typed_plan_generation_contract
@@ -66,27 +67,58 @@ def _validate_system_group(pack_id: str, modules: list[dict[str, Any]]) -> None:
         ) from exc
 
 
+def _direct_routed_modules(
+    modules: tuple[Any, ...],
+    *,
+    routing: ProductionRoutingSnapshot | None,
+    artifact_owners: Iterable[str],
+) -> tuple[Any, ...]:
+    if routing is not None:
+        routes = routing.route_by_module_id
+        missing = [
+            str(getattr(module, "module_id", "") or "")
+            for module in modules
+            if str(getattr(module, "module_id", "") or "") not in routes
+        ]
+        if missing:
+            raise ProductionGenerationPreflightError(
+                f"PRODUCTION_ROUTING_MISSING_MODULE: {missing[:20]}"
+            )
+        return tuple(
+            module
+            for module in modules
+            if routes[str(module.module_id)].owner == "native_host"
+        )
+
+    artifact_owned = {
+        str(module_id).strip()
+        for module_id in artifact_owners
+        if str(module_id).strip()
+    }
+    return tuple(
+        module
+        for module in modules
+        if str(getattr(module, "module_id", "") or "").strip() not in artifact_owned
+    )
+
+
 def validate_production_generation_modules(
     modules: Iterable[Any],
     *,
     policy: ScalePolicy | None = None,
     validate_system_packs: bool = True,
     artifact_owners: Iterable[str] = (),
+    routing: ProductionRoutingSnapshot | None = None,
 ) -> None:
     """Validate normalized built-in module inputs without touching project state."""
 
     policy = policy or ScalePolicy.from_environment()
     policy.validate()
     materialized = tuple(modules)
-    artifact_owned = {
-        str(module_id).strip()
-        for module_id in artifact_owners
-        if str(module_id).strip()
-    }
-    direct_routed = tuple(
-        module
-        for module in materialized
-        if str(getattr(module, "module_id", "") or "").strip() not in artifact_owned
+    direct_routed = _direct_routed_modules(
+        materialized,
+        routing=routing,
+        artifact_owners=artifact_owners,
     )
 
     for module in direct_routed:
@@ -138,25 +170,22 @@ def validate_production_generation_project(
     package_name: str,
     policy: ScalePolicy | None = None,
     artifact_owners: Iterable[str] = (),
+    routing: ProductionRoutingSnapshot | None = None,
 ) -> None:
     """Validate all deterministic state before concurrent generation dispatch begins."""
 
     policy = policy or ScalePolicy.from_environment()
     materialized = tuple(modules)
-    artifact_owned = {
-        str(module_id).strip()
-        for module_id in artifact_owners
-        if str(module_id).strip()
-    }
-    direct_routed = tuple(
-        module
-        for module in materialized
-        if str(getattr(module, "module_id", "") or "").strip() not in artifact_owned
+    direct_routed = _direct_routed_modules(
+        materialized,
+        routing=routing,
+        artifact_owners=artifact_owners,
     )
     validate_production_generation_modules(
         direct_routed,
         policy=policy,
         validate_system_packs=False,
+        routing=routing,
     )
 
     from .platform_catalog import adapter_from_project
@@ -179,11 +208,18 @@ def validate_production_generation_project(
                 raise ProductionGenerationPreflightError(
                     f"Typed host module {module.module_id} cannot enter generation: {exc}"
                 ) from exc
-        missing_backend = missing_production_backend_capabilities(
-            deterministic_backend_capabilities(adapter),
-            str(module.kind),
-            module.config,
-        )
+        available_backend = deterministic_backend_capabilities(adapter)
+        if routing is not None:
+            route = routing.route_by_module_id[str(module.module_id)]
+            missing_backend = frozenset(
+                set(route.required_capabilities) - set(available_backend)
+            )
+        else:
+            missing_backend = missing_production_backend_capabilities(
+                available_backend,
+                str(module.kind),
+                module.config,
+            )
         if missing_backend:
             raise ProductionGenerationPreflightError(
                 "DETERMINISTIC_BACKEND_REQUIRED: "
