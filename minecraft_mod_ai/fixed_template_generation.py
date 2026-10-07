@@ -80,15 +80,19 @@ def _semantic_prelude_required(
 def _tool_parameters(response_schema: Mapping[str, Any]) -> tuple[dict[str, Any], bool]:
     if response_schema.get("type") == "object" or "properties" in response_schema:
         return dict(response_schema), False
-    return (
-        {
-            "type": "object",
-            "properties": {"value": dict(response_schema)},
-            "required": ["value"],
-            "additionalProperties": False,
-        },
-        True,
-    )
+    value_schema = dict(response_schema)
+    # A scalar becomes a native argument field; its contract profile still
+    # belongs to the schema root, while its string class stays on the field.
+    profile = value_schema.pop(SCHEMA_CONTRACT_PROFILE_KEY, None)
+    parameters = {
+        "type": "object",
+        "properties": {"value": value_schema},
+        "required": ["value"],
+        "additionalProperties": False,
+    }
+    if profile is not None:
+        parameters[SCHEMA_CONTRACT_PROFILE_KEY] = profile
+    return parameters, True
 
 
 def _template_messages(

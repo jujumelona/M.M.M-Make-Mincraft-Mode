@@ -1395,7 +1395,7 @@
       "build_java_minimum": 25,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:eb8d78c3ba52e8e6c4be81e5f46c042d3491a52a30ca60860412bb11919978a5",
+      "context_id": "sha256:bf4237a56824aae06178eeb6e447a3a680b93230024e1fd5109d57ca9ec70cfc",
       "example_commit": "64fe93a188fc1b1f76a47b14f8b17dda42b324f0",
       "example_properties": {
         "fabric_api_version": "0.159.0+26.2",
@@ -1443,7 +1443,7 @@
       "build_java_minimum": 25,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:5779605c2c80ff60a4e822b0e85ce4629b8968afb7a049541aa8e236b2749425",
+      "context_id": "sha256:0cb4be51f02673fff605b4b09fa1ee8ea7af0f54e1bb3d78af5acbb1923de6cd",
       "example_commit": "9cc62c76791b782f4e6706c1a66beaa8ec163c05",
       "example_properties": {
         "fabric_api_version": "0.155.2+26.1.2",
@@ -1491,7 +1491,7 @@
       "build_java_minimum": 25,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:62a68d1384bfb09579f503d672128d3ad4ff859d89c9b0c0fd23dd056abd9e6d",
+      "context_id": "sha256:066bdbb10450fb9df8f94c816b161603df1b634611fa7cb39996fece5b99b8d9",
       "example_commit": "dfc832402f3ef35c2f7752fea28b1a52ce2b184c",
       "example_properties": {
         "fabric_api_version": "0.145.4+26.1.1",
@@ -1539,7 +1539,7 @@
       "build_java_minimum": 25,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:8f32224de7f1f3d4481e7f38408a1cb37e635aeb06c4d7c998e9d360e6f56166",
+      "context_id": "sha256:3cc453ca60e904b21d9328c855176a39549f59f3c57e198fc6bfb023a90f1ace",
       "example_commit": "3b1223799ac568329419664e95e281e3566f1657",
       "example_properties": {
         "fabric_api_version": "0.145.1+26.1",
@@ -1587,7 +1587,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:798b80ed302e2ebdbdc2d0fc3c89fc30b54fb4ab246a0801cbfa5222b1b88cff",
+      "context_id": "sha256:0622447add0f787512e3e0653a2e9f229df478f0c158e0d56f43214f27f67ef6",
       "example_commit": "0fe7f6e4605aabdfefd69e1b5f2be8a283026272",
       "example_properties": {
         "fabric_api_version": "0.141.6+1.21.11",
@@ -1635,7 +1635,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:4802daaeeda66f5f45f7b163bdcd591227b12308a530fce339ef8f8786fa041e",
+      "context_id": "sha256:ad0ca0f1963df8cef7b4751fc83a11436daef14fa6c842a1233d6722d3b4fc28",
       "example_commit": "40d278b93501e8019e2eab169465d34efc61865a",
       "example_properties": {
         "fabric_api_version": "0.138.4+1.21.10",
@@ -1683,7 +1683,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:11bb05ad9c23a18c0843fdfe5d2120ba5284ed274e562947881fd8861b0bde44",
+      "context_id": "sha256:1290f70eeb9dd59edb7a4243755694206e9adcda842b302aa2cd0923c813bf22",
       "example_commit": "486251db04735a087548964b801c1d36ebc8b05a",
       "example_properties": {
         "fabric_api_version": "0.134.1+1.21.9",
@@ -1731,7 +1731,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:516f5f35be37f4cce8403f96208fa1db6178e6719b400735a0aa9fadf2f967f8",
+      "context_id": "sha256:2cb63c0bb0cf0b4b761da85c0928cc4ff0e0866ecb9ec547de68193b55ce5170",
       "example_commit": "6542cd583d07f84359b65d5e498e25f8afafc30a",
       "example_properties": {
         "fabric_api_version": "0.136.1+1.21.8",
@@ -1777,7 +1777,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:6ac2d4f1ddd0eb4731f3a4436371e84d79201732a6f5d876f43a2c1f68570737",
+      "context_id": "sha256:c9a6ed337a0cc55a04389613f414d90b7e7887ce9aa3e067f243a7619dcbe4db",
       "example_commit": "2d16058ef73718f5f402fdf3b0bb85fe09604d80",
       "example_properties": {
         "fabric_api_version": "0.129.0+1.21.7",
@@ -1823,7 +1823,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:f8db88532b12699488f6e8b45369b58809de2eb205a7eaa44387c2e545a1363b",
+      "context_id": "sha256:337bf612f29516aeab27b67dbf4dd8435747fc2c7b75dd53da0be3dc2493afa3",
       "example_commit": "d658cbf138777c0875b7c8cddbc73dbed9e86ee8",
       "example_properties": {
         "fabric_api_version": "0.128.2+1.21.6",
@@ -1869,7 +1869,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:11aeebfcb88f39e87aad90c0ec9499c6d8ab2d9a1254a00caf6b9ec3cbb97e4c",
+      "context_id": "sha256:0cf58d74b7a705c068626401259d516f9f114fd01d1f57aa6c527d921c52cc36",
       "example_commit": "5196db45f1c733447bb3ca789db7b6bf3e7e614f",
       "example_properties": {
         "fabric_api_version": "0.128.2+1.21.5",
@@ -1915,7 +1915,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:a7af0a31d1489e0f037c7a9b1ae4719fc3bcf24a4599cc9af5a68891ff6756ef",
+      "context_id": "sha256:bb8eba569927b1eae17d22d515ef3c9c2bbd0d8e0bd4e2fc10d3966f22b8ce4e",
       "example_commit": "da15fc152af63ab29c81f6d3d3067486d83f72a2",
       "example_properties": {
         "fabric_api_version": "0.119.4+1.21.4",
@@ -1961,7 +1961,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:3ba6d30daf9102d7b2c455707a4ef10b6d63689a2250014c9dc817899e34d028",
+      "context_id": "sha256:0e7bb6793ab07969c7a16ca291a106fd57fe2c181f692f939b6c340cffdb7909",
       "example_commit": "6e80a5c1a463a62239d849d7d04b689f2a2a6d88",
       "example_properties": {
         "fabric_api_version": "0.114.1+1.21.3",
@@ -2007,7 +2007,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:f109c563a053e217588c9495cdce5a402e6f63e2b061afccbe72ccf1bb5572a1",
+      "context_id": "sha256:4e851475483dd2855fc2db266fcc6c52c3bc1a094983a29b74441fe6d1d73f50",
       "example_commit": "73b8cb38578391af67cd0e5c9e075f281af62a91",
       "example_properties": {
         "fabric_api_version": "0.106.1+1.21.2",
@@ -2053,7 +2053,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:ecf0369be88b7f91b20b138be6df13dfd8c3de36f0cbe47afd65624f2aa71623",
+      "context_id": "sha256:7587d0024569f6a726a7b554760515ffd96432b0a604c25180ae90109b1154a0",
       "example_commit": "04c3eecff217befb170d80acac7c592f938867e7",
       "example_properties": {
         "fabric_api_version": "0.116.17+1.21.1",
@@ -2099,7 +2099,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:86345ddf114188be349a3fccebc16d7734e0bf2a822ee561b51a10102e8713dd",
+      "context_id": "sha256:3e4833ebed54ed1f5d76b3b84930b1ba94a50a96a93ed9ea0f463efe7e555e28",
       "example_commit": "81417e41ad77eb13df85f1a76b53d40476f62c1c",
       "example_properties": {
         "fabric_api_version": "0.102.0+1.21",
@@ -2145,7 +2145,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:a0e768a7a14edddfe12790edeea9e1ef732efd5da1f77fbe06857f0eec36cde9",
+      "context_id": "sha256:63a458d58aa7771b7187232d59a15dec209fc2557ea43d7cfbe3f9299404512d",
       "example_commit": "fed5e607cfc5bcf679446558751f63c762f2a719",
       "example_properties": {
         "fabric_api_version": "0.100.8+1.20.6",
@@ -2191,7 +2191,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:46cc408dfa61ef3adf9e0e6a7ae5129b41725b6da7e19ae13bb73dd4e806a5bf",
+      "context_id": "sha256:ccff3ea50cd7f94acf10736665dbecf05499e66b1ab8eea0f3a2816a88ffbcb7",
       "example_commit": "00cafbf94624c61147c409f111f16184590fbbdf",
       "example_properties": {
         "fabric_api_version": "0.97.8+1.20.5",
@@ -2237,7 +2237,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:ebb4509b03c1be1c57c8d8ea24dcbaee484011b57300d89299dbf630bd27f534",
+      "context_id": "sha256:04da84565ba34b149f5e58d1f19de87724fcc103e5c85dd4891361526aacdb59",
       "example_commit": "eaa3e4552d4cb9b803391581ac65230dda78bc97",
       "example_properties": {
         "fabric_api_version": "0.97.3+1.20.4",
@@ -2283,7 +2283,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:b82b52f56377e65c7e56a81ee87d641d8987ff50c8372ffa6996c831aad12f7c",
+      "context_id": "sha256:ac5580e0dca63b5cb0cbca978dff45986573f6a00a2681eeb437ae1340314968",
       "example_commit": "e603aeb8ab279bcd8ef89a8f176c0a2be6134742",
       "example_properties": {
         "fabric_api_version": "0.91.1+1.20.3",
@@ -2329,7 +2329,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:c9c73013fa2f27a799dcb2158990af92d8589eae07aa9b0eaea8bad0cb777750",
+      "context_id": "sha256:b8655e5b7483e8dff42814317005e213e96e0b4f8e9501538022e33395267745",
       "example_commit": "aaf14b23079b4e629541fa7ecb3dbd2a4cdf8bf6",
       "example_properties": {
         "fabric_api_version": "0.91.6+1.20.2",
@@ -2375,7 +2375,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:a745bb9cff52ed050dd58d1ffe3127b5836a86ab0f6a7925156050a57c1e4558",
+      "context_id": "sha256:5f21a8d0886a8bd272257ffe58f873f6deb29c75517b3efb1372e53e962f42f9",
       "example_commit": "e1cc17e1468cb85a3369a3da29d7abf8c0703312",
       "example_properties": {
         "fabric_api_version": "0.92.12+1.20.1",
@@ -2420,7 +2420,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:237aace63d2dddae2a8be909f8ed0d9fca13022c6c7c0fc058355596fddbaa19",
+      "context_id": "sha256:ed4f96c41423d744bf170bd79f67dc322c0a91356c5dd7cd81b0c85f857d19a2",
       "example_commit": "547c9d4902bfb12f39dc4336684ad0c8b0455709",
       "example_properties": {
         "fabric_api_version": "0.83.0+1.20",
@@ -2465,7 +2465,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:002779ce8d242a5dabcc01779cedf0c57941a9f199942a8113ed9f35e9c697e2",
+      "context_id": "sha256:d7b568b4792c590a858ac76f175d1f79ca9d1e307b4499d829f9b1ba7340824d",
       "example_commit": "40109cfdef662b9cda4f38794fc71202e197c49e",
       "example_properties": {
         "fabric_api_version": "0.87.2+1.19.4",
@@ -2510,7 +2510,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:1641291b79beea5f0f6a4376656aa711d1b802c73e94452333677398ee47a3e8",
+      "context_id": "sha256:3940ff12ac51dcf980e4b93123d5bf41e4c1f6c01ff41567535d31e4d001803c",
       "example_commit": "78f7a962f4e679ce3c1b4134d6ce051b07870bf8",
       "example_properties": {
         "fabric_api_version": "0.76.1+1.19.3",
@@ -2555,7 +2555,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:0c1d3ba03007ab65ff9f5acf79ee5b97623fe9eff8b79644cf0b4af9719a75a7",
+      "context_id": "sha256:734a5bec3eb89cffbac82515fa98ea9f2b6cae4cb9a4dfb80cbd58911e659893",
       "example_commit": "96f78c9e11c58b69f68b93c9f385b6869fcf21c6",
       "example_properties": {
         "fabric_api_version": "0.77.0+1.19.2",
@@ -2601,7 +2601,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:876f341e1d44be5a5531331c6c3bca6775dfe1af7079ef7b9dbc25ecbe38b632",
+      "context_id": "sha256:30ee7aedaf2fc435364cb33fe864350d5c64ef6f2844b5ded5ae2ce025c62306",
       "example_commit": "610664bfb97aceace820f0dedf4feec273bac8fb",
       "example_properties": {
         "fabric_api_version": "0.58.5+1.19.1",
@@ -2647,7 +2647,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:0bbd9010979e0cb52529b1ad5caf62ef7b0884f4778b2e4e35e44c1021866cf0",
+      "context_id": "sha256:64a80a1ffeda8773f4f1e473015bc64308b780d9f3ab7d0995d9f4dab61bb8de",
       "example_commit": "3f6e0d36efa63ed6b672c1828c007109bb273b56",
       "example_properties": {
         "fabric_api_version": "0.58.0+1.19",
@@ -2693,7 +2693,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:b8ece8319318d100b89e743e0554079262e4172a4cb8ee08c79c45c68ae69ac5",
+      "context_id": "sha256:cc34866e4651f12af0d0bd96b21304ae194d46aef70ade2473c329769f35ee3e",
       "example_commit": "32bca4c06923a1b22801448eb3b446bcec0ffdc1",
       "example_properties": {
         "fabric_api_version": "0.77.0+1.18.2",
@@ -2739,7 +2739,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:9fc47ef76a0330be0f285f4beae78055f6ffd309aa38e37c775e1d113ed7b983",
+      "context_id": "sha256:663ff2d4a913b47e20fa4cc36fcc8d36ac4baecdffe06c345a5019a07dc036c6",
       "example_commit": "573e851ce6818d7de8e346a511ef466a53fe5506",
       "example_properties": {
         "fabric_api_version": "0.46.6+1.18",
@@ -2785,7 +2785,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:9408728104a9a0908eea6934ad9dca92622ee14d49baf9515e64eebaf1e9986f",
+      "context_id": "sha256:f681a6b2b90d3589faac910d3575a91a5a3cd4f3f182f3bcf2307d64e95973fb",
       "example_commit": "347909aa7fffe661b451472b41aa7b190a070cc4",
       "example_properties": {
         "fabric_api_version": "0.44.0+1.18",
@@ -2831,7 +2831,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:8da6183df54c20fa097425921e8a74d2e264f0cf482a72ba43e1b7edee4cce12",
+      "context_id": "sha256:f776ba2e0e728241f6a0fe6e4b09d21be130de347bd835e5c20f751a214e234c",
       "example_commit": "a6b78364647fadc74d7c96860b404bc9cdbcf22e",
       "example_properties": {
         "fabric_api_version": "0.46.1+1.17",
@@ -2876,7 +2876,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:56021622623bf292be83f5bd7bedad99a1eab9af1654de7b4b4d2064452a861b",
+      "context_id": "sha256:38826fa8327c0db71b8a6586f00a4f6469ea88f0f03342c08353788654f85807",
       "example_commit": "8f273dde9160e1be954d3a135cc88fe9251ec5fa",
       "example_properties": {
         "fabric_api_version": "0.46.1+1.17",
@@ -2921,7 +2921,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:d2e8d557d529216b9c990b614c1355a7dfcc43459d583260c734996b4da8e377",
+      "context_id": "sha256:656b70c5cdbdf30c3d28d34849af1008fba70e0a5cafb5d9d8607b46fa5a2a10",
       "example_commit": "3196fdc4f43d00350892e70d66ce0ef5b3f55609",
       "example_properties": {
         "fabric_api_version": "0.42.0+1.16",
@@ -2961,7 +2961,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:a5f352214547a43130e6e20d25f109df0964f371129bf32e24c93a46844461f7",
+      "context_id": "sha256:0ad13883568ae2459c0cd1d2d2c97a39b2774d608bd2d371215d8b955d53602b",
       "example_commit": "c014b008a8448e1776e67280b61a8fc43af04963",
       "example_properties": {
         "fabric_api_version": "0.42.0+1.16",
@@ -3001,7 +3001,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:3e2fd21b0d82d3ad215e190d644bc1421f580e4ce2b4ab8996e9530d13d6cc6a",
+      "context_id": "sha256:9402a95caff04a92159987e346b177eec3bc5f8e1ed7500b1ff068e0f0cb0538",
       "example_commit": "7249145564cdfff2758b38867854faef93845cf5",
       "example_properties": {
         "fabric_api_version": "0.42.0+1.16",
@@ -3041,7 +3041,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:52ee765c31090aa672f87444db376fa3c13828fa334abba467ac216996f0496f",
+      "context_id": "sha256:0b1c8facd7e54a8cb9b274e49e3ea7016cf6cb181dc211f43f6fbcb092103008",
       "example_commit": "22478178627e7450de46154b42cf3a66881acb66",
       "example_properties": {
         "fabric_api_version": "0.42.0+1.16",
@@ -3081,7 +3081,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:866d9e905fc62ffc4e1d5106b078383d0fe282eac959d9a9faea63251b8e6159",
+      "context_id": "sha256:eed597d50017daec5330ffd7465c441f42e595b8a1e67d7706c51b23c21f03d7",
       "example_commit": "49fe784d23dfd0dd063a2b8bb75156d57e95d7cd",
       "example_properties": {
         "fabric_api_version": "0.42.0+1.16",
@@ -3121,7 +3121,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:7d5c7d7f0f439361cfd5c7a0d0c208bea8f7587eb39cde5f723efe1fabf4e384",
+      "context_id": "sha256:917545afeaf66784088defeea748386de4ac23376dd965e875942d3ad211b662",
       "example_commit": "8123b32980f6f49db06a27ec0da3d60a769c8a38",
       "example_properties": {
         "fabric_api_version": "0.42.0+1.16",
@@ -3161,7 +3161,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:603554751a4ae05c1f603f54de1d4291c27fb71531e444733264681b22944c2b",
+      "context_id": "sha256:59758be11196ff6069ecd7178d12547cf72e73f71fc2e0160ccea69215c6761d",
       "example_commit": "66c890f00b0f1ba2cca58714c87e77b47139cc5b",
       "example_properties": {
         "fabric_api_version": "0.28.5+1.15",
@@ -3201,7 +3201,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:b759c4284329a643e294f93fcb5ae7e33a9ac00f37beb918a2f169b82398fea6",
+      "context_id": "sha256:4e54ea3ccc012c842c316ae0b6e3f80d057ae2fb1b0c41b485591f1ca3240931",
       "example_commit": "e7cedae058196ce5107bbd224ba9f7d69f3d82f7",
       "example_properties": {
         "fabric_api_version": "0.28.5+1.15",
@@ -3241,7 +3241,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:f31078058351bc034e6274c1a28b0cb4ab92c278e97b40ea872f89b4a8b99db2",
+      "context_id": "sha256:316bf6d4af506f2dc68d20a469dd25e497213accc624d66ba0135b6a63e3925e",
       "example_commit": "49f55d9da5a530fe6340cd3aced12d84594d1844",
       "example_properties": {
         "fabric_api_version": "0.28.5+1.15",
@@ -3281,7 +3281,7 @@
       "build_java_minimum": 21,
       "capabilities_count": 27,
       "compile": "not_run",
-      "context_id": "sha256:aea6c3613bcea6713cc41e4c5ea5a508a2286dc87a59e7a9544ba2736ace0700",
+      "context_id": "sha256:08bcfa08be945780d140f65e4798eaac29c4589cbd326ff513ac257c3ce14f52",
       "example_commit": "e99aab8e833dc20ca13038591327dc0f898ea570",
       "example_properties": {
         "fabric_api_version": "0.28.5+1.14",

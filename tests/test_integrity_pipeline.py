@@ -317,3 +317,57 @@ def test_not_reviewed_generator_binding_can_enter_candidate_execution_without_pr
         {},
         "class Candidate {}",
     ) is None
+
+
+def test_canonical_source_slot_preserves_declared_profile(monkeypatch):
+    from minecraft_mod_ai.integrity_bootstrap import bootstrap_integrity
+    from minecraft_mod_ai import fixed_template_generation
+    from minecraft_mod_ai.model_output_atomicity_contract import assert_atomic_model_schema
+
+    leaf = "minecraft/screen/registration"
+    source = "class MarketScreen {}"
+    schema = {
+        "type": "string", "minLength": 1, "maxLength": 16384,
+        "x-mmm-contract-profile": "source_repair",
+        "x-mmm-string-class": "source",
+    }
+    calls = []
+
+    def generate(*args, response_schema, **kwargs):
+        assert_atomic_model_schema(response_schema, surface="canonical test transport")
+        calls.append(response_schema)
+        return source
+
+    monkeypatch.setattr(fixed_template_generation, "generate_fixed_template_value", generate)
+    authority = bootstrap_integrity()
+    spec = {
+        "leaf_id": leaf, "context_id": "ctx", "requirement": "Create market screen",
+        "target_path": "src/main/java/MarketScreen.java", "language": "java",
+        "operation": "CREATE_FILE", "side": "CLIENT", "bindings": {"screen": "example:market"},
+        "render_mold": "{{artifact_source}}", "output_schema": schema,
+        "slots": [{"name": "artifact_source", "description": "Implement screen", "schema": schema}],
+    }
+    from minecraft_mod_ai.task_template_catalog import load_template
+    manifest = load_template(leaf)
+    inputs = {port["name"]: spec if port["type"] == "specification" else "example:market" for port in manifest["inputs"]}
+    output = authority.executors["python_generator:" + leaf](inputs, leaf_id=leaf, router=object(), authority=authority)
+    assert calls == [schema]
+    assert output[next(p["name"] for p in manifest["outputs"] if p["type"] == "code_fragment")] == source
+
+
+def test_native_scalar_source_wrapper_preserves_root_profile():
+    from minecraft_mod_ai.fixed_template_generation import generate_fixed_template_value
+    from minecraft_mod_ai.model_output_atomicity_contract import assert_atomic_model_schema
+
+    class Router:
+        def generate_tool_decision(self, role, messages, *, parameters, **kwargs):
+            assert_atomic_model_schema(parameters, surface="native source parameters")
+            return {"value": "class MarketScreen {}"}
+
+    schema = {
+        "type": "string", "maxLength": 16384,
+        "x-mmm-contract-profile": "source_repair", "x-mmm-string-class": "source",
+    }
+    assert generate_fixed_template_value(
+        Router(), "coder", [], response_schema=schema, enable_tools=False,
+    ) == "class MarketScreen {}"

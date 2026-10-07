@@ -20,7 +20,7 @@ def generate_canonical_leaf(inputs, *, leaf_id, router, authority):
     if router is None and spec["slots"]:
         raise ValueError("CANONICAL_GENERATOR_ROUTER_REQUIRED")
     from .implementation_template_renderer import render_template
-    from .model_output_atomicity_contract import assert_strict_atomicity_bounds
+    from .model_output_atomicity_contract import assert_atomic_model_schema
 
     values = dict(spec["bindings"])
     slots = tuple(spec["slots"])
@@ -28,7 +28,7 @@ def generate_canonical_leaf(inputs, *, leaf_id, router, authority):
         name = slot["name"]
         if name in values:
             raise ValueError("GENERATOR_SLOT_BINDING_CONFLICT")
-        assert_strict_atomicity_bounds(
+        assert_atomic_model_schema(
             slot["schema"], surface=f"canonical slot {leaf_id}:{name}"
         )
 
