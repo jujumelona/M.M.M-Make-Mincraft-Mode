@@ -9,13 +9,23 @@ from .implementation_identity import compute_content_hash
 from .registered_leaf_binding import require_registered_leaf_binding
 
 
+def _canonical_inputs_for_job(job, context):
+    supplied = context.get("canonical_inputs", {}).get(job.job_id)
+    if isinstance(supplied, dict):
+        return supplied
+    persisted = getattr(job, "deterministic_inputs", {}).get("_canonical_inputs")
+    if isinstance(persisted, dict):
+        return persisted
+    return None
+
+
 def canonical_contract(job, resolved, context, authority):
     binding = require_registered_leaf_binding(resolved, job.canonical_leaf)
     if binding.get("state") != "admitted":
         return None, None
     from .task_template_catalog import load_template
     manifest = load_template(job.canonical_leaf)
-    inputs = context.get("canonical_inputs", {}).get(job.job_id)
+    inputs = _canonical_inputs_for_job(job, context)
     if not isinstance(inputs, dict):
         raise ValueError("RUNTIME_CANONICAL_INPUTS_REQUIRED")
     authority.types.validate_input(job.canonical_leaf + ":input", inputs)
@@ -145,7 +155,7 @@ def execute_generator_job(job, *, context, router, port_registry=None, base_dir=
     if resolved is None:
         raise ValueError("GENERATOR_HOST_CONTEXT_REQUIRED")
     authority = verify_job_binding(job, resolved, context)
-    inputs = context.get("canonical_inputs", {}).get(job.job_id)
+    inputs = _canonical_inputs_for_job(job, context)
     if not isinstance(inputs, dict):
         raise ValueError("GENERATOR_CANONICAL_INPUTS_REQUIRED")
     manifest = load_template(job.canonical_leaf)
@@ -167,9 +177,28 @@ def execute_generator_job(job, *, context, router, port_registry=None, base_dir=
         prefix, suffix = spec.get("java_prefix", ""), spec.get("java_suffix", "")
         validations.append(validate_java_syntax(source, java_version=java_version,
             filename=spec.get("java_filename", Path(spec["target_path"]).name), prefix=prefix, suffix=suffix))
-        validations.append(validate_side(prefix+source+suffix, leaf_id=job.canonical_leaf, side=spec["side"],
-            classpath=context["java_classpath"], java_version=java_version,
-            classpath_sides=context.get("classpath_sides")))
+        java_classpath = context.get("java_classpath")
+        registered = require_registered_leaf_binding(resolved, job.canonical_leaf)
+        if java_classpath:
+            validations.append(validate_side(
+                prefix + source + suffix,
+                leaf_id=job.canonical_leaf,
+                side=spec["side"],
+                classpath=java_classpath,
+                java_version=java_version,
+                classpath_sides=context.get("classpath_sides"),
+            ))
+        elif registered.get("state") == "admitted":
+            raise ValueError("RUNTIME_JAVA_CLASSPATH_REQUIRED")
+        else:
+            # A registered/not-reviewed implementation is producing a candidate,
+            # not claiming admission. Project Gradle/JDT verification after
+            # materialization owns full symbol/side proof.
+            validations.append({
+                "validator": "client_side_only",
+                "status": "DEFERRED",
+                "reason": "candidate_project_classpath_not_materialized",
+            })
     target_job = replace(job, target_path=spec["target_path"], anchor=spec.get("anchor", ""),
                          operation=spec["operation"], expected_sha256=spec.get("expected_sha256", "").removeprefix("sha256:"))
     materialization = None
