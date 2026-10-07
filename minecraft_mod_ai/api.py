@@ -305,6 +305,29 @@ def _validate_internal_engine_preflight() -> None:
         ) from exc
 
 
+def _bound_platform_for_preflight(
+    session: "CompleteModAISession",
+    proposal: Any,
+) -> Any | None:
+    base = getattr(proposal, "base_proposal", None)
+    spec = getattr(base, "spec", None)
+    platform = getattr(spec, "platform", None)
+    if platform is not None:
+        return platform
+
+    adapter = getattr(session.router, "_mmm_target_adapter", None)
+    if adapter is not None:
+        return adapter
+
+    version = getattr(session.router, "_mmm_existing_minecraft_version", None)
+    loader = getattr(session.router, "_mmm_existing_loader", None)
+    if version and loader:
+        from .platform_catalog import adapter_for_target
+
+        return adapter_for_target(str(version), str(loader))
+    return None
+
+
 def _production_proposal(
     session: "CompleteModAISession",
     proposal: CompleteProposal | AuthoredPlan,
@@ -544,6 +567,20 @@ class CompleteModAISession:
         if proposal is None:
             raise SpecValidationError("Create a complete plan before building.")
 
+        selected = options or CompleteExecutionOptions(source_only=source_only)
+        if source_only and not selected.source_only:
+            selected = CompleteExecutionOptions(
+                **{**selected.__dict__, "source_only": True}
+            )
+
+        bound_platform = _bound_platform_for_preflight(self, proposal)
+        if bound_platform is not None:
+            from .complete_preflight_contract import (
+                validate_platform_toolchain_preflight,
+            )
+
+            validate_platform_toolchain_preflight(bound_platform, selected)
+
         # AuthoredPlan compilation may invoke the model several times. Prove the
         # mandatory image backend first so gated/inaccessible repositories fail
         # at build entry instead of after production authoring has already run.
@@ -566,11 +603,6 @@ class CompleteModAISession:
                 ) from exc
 
         proposal = _production_proposal(self, proposal)
-        selected = options or CompleteExecutionOptions(source_only=source_only)
-        if source_only and not selected.source_only:
-            selected = CompleteExecutionOptions(
-                **{**selected.__dict__, "source_only": True}
-            )
         result = self.orchestrator.execute(
             proposal,
             approval_hash=proposal.calculate_hash(),
