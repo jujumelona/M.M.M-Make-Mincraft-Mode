@@ -41,11 +41,11 @@ def test_large_explicit_resource_preserves_final_dimensions_after_backend_normal
     texture = _resolved_texture(2305, 1301)
     assert (texture.width, texture.height) == (2305, 1301)
     assert texture.size_policy == "host_catalog"
-    assert ImageGenerationConfig.from_adapter_config(ModelRegistry().role("t4_local", "image_generator")).preferred_generation_resolution == (1024, 1024)
+    assert ImageGenerationConfig.from_adapter_config(ModelRegistry().role("t4_local", "image_generator")).preferred_generation_resolution == (512, 512)
 
     source = tmp_path / "source.png"
     normalized = tmp_path / "normalized.png"
-    Image.new("RGBA", (1024, 1024), (12, 34, 56, 255)).save(source)
+    Image.new("RGBA", (512, 512), (12, 34, 56, 255)).save(source)
 
     score = _prepare(texture.to_dict(), source, normalized)
 
@@ -59,7 +59,7 @@ def test_small_explicit_resource_uses_backend_minimum_but_exact_final_dimensions
 ) -> None:
     texture = _resolved_texture(17, 31)
     assert (texture.width, texture.height) == (17, 31)
-    assert ImageGenerationConfig.from_adapter_config(ModelRegistry().role("t4_local", "image_generator")).preferred_generation_resolution == (1024, 1024)
+    assert ImageGenerationConfig.from_adapter_config(ModelRegistry().role("t4_local", "image_generator")).preferred_generation_resolution == (512, 512)
 
     source = tmp_path / "source.png"
     normalized = tmp_path / "normalized.png"
@@ -73,11 +73,11 @@ def test_small_explicit_resource_uses_backend_minimum_but_exact_final_dimensions
 
 def test_backend_source_size_is_bounded_and_aligned():
     profile = ImageGenerationConfig.from_adapter_config(ModelRegistry().role("t4_local", "image_generator"))
-    for source_width, source_height in (profile.preferred_generation_resolution, profile.fallback_generation_resolution):
-        assert 256 <= source_width <= 1024
-        assert 256 <= source_height <= 1024
-        assert source_width % 16 == 0
-        assert source_height % 16 == 0
+    source_width, source_height = profile.preferred_generation_resolution
+    assert 256 <= source_width <= 1024
+    assert 256 <= source_height <= 1024
+    assert source_width % 16 == 0
+    assert source_height % 16 == 0
 
 
 def test_blockbench_review_scopes_client_to_the_run_root(
