@@ -3,6 +3,7 @@ from __future__ import annotations
 """Preflight policy for approved complete-production execution."""
 
 from pathlib import Path
+import tempfile
 from typing import Any
 
 from .complete_orchestrator_support import CompleteProductionError
@@ -63,10 +64,88 @@ def validate_required_gate_contract(proposal: Any) -> None:
         )
 
 
+def _validate_java_toolchain_preflight(
+    proposal: Any,
+    options: Any,
+) -> None:
+    """Prove the selected Java/JDT runtime before generation starts."""
+
+    source_only = bool(getattr(options, "source_only", False))
+    run_jdt = bool(getattr(options, "run_jdt", False))
+    if source_only and not run_jdt:
+        return
+
+    try:
+        platform = proposal.base_proposal.spec.platform
+        raw_java = getattr(platform, "java_version")
+    except (AttributeError, TypeError) as exc:
+        raise CompleteProductionError(
+            "Approved proposal is missing the locked Java toolchain."
+        ) from exc
+
+    from .java_lsp import (
+        _java_major_version,
+        _parse_java_major,
+        _resolve_project_java_home,
+    )
+
+    required = _parse_java_major(str(raw_java))
+    if required is None or required <= 0:
+        raise CompleteProductionError(
+            f"Approved platform has invalid java_version={raw_java!r}."
+        )
+
+    try:
+        project_home = _resolve_project_java_home(
+            required,
+            require_compiler=True,
+        )
+        actual = _java_major_version(project_home)
+    except Exception as exc:
+        raise CompleteProductionError(
+            "Java toolchain preflight failed before generation: "
+            f"required={required}; {type(exc).__name__}: {exc}"
+        ) from exc
+    if actual != required:
+        raise CompleteProductionError(
+            "Java toolchain preflight resolved the wrong JDK: "
+            f"required={required}, actual={actual}, home={project_home}"
+        )
+
+    if not run_jdt:
+        return
+
+    owner_major = max(21, required)
+    try:
+        owner_home = _resolve_project_java_home(
+            owner_major,
+            require_compiler=True,
+        )
+        from .jvm_owner_bootstrap import owner_command
+
+        with tempfile.TemporaryDirectory(prefix="mmm-jdt-preflight-") as raw:
+            command = owner_command(
+                Path(raw) / "owner",
+                timeout_seconds=300,
+                java_home=owner_home,
+                required_major=owner_major,
+            )
+        if not command or not Path(command[0]).is_file():
+            raise RuntimeError("JDT owner bootstrap returned no executable Java command")
+    except Exception as exc:
+        raise CompleteProductionError(
+            "JDT owner preflight failed before generation: "
+            f"project_release={required}, owner_java={owner_major}; "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+
+
 def validate_external_execution_preflight(
     proposal: Any,
     options: Any,
 ) -> None:
+    _validate_java_toolchain_preflight(proposal, options)
+
     if bool(getattr(options, "source_only", False)):
         return
 
