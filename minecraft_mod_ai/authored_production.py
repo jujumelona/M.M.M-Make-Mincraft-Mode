@@ -768,6 +768,55 @@ def _compile_content_artifact_graph(
         )
     )
 
+    # Generator candidates persist their full semantic input so resume never has
+    # to reconstruct it from a later model call. Enrich the fact-level contract
+    # with the canonical module configuration and the normalized hard build deps.
+    module_by_id = {module.module_id: module for module in modules}
+    from .task_template_catalog import load_template
+    for job in jobs:
+        canonical_inputs = job.deterministic_inputs.get("_canonical_inputs")
+        if not isinstance(canonical_inputs, dict):
+            continue
+        manifest = load_template(job.canonical_leaf)
+        specification_ports = [
+            str(port.get("name") or "")
+            for port in manifest.get("inputs", ())
+            if port.get("type") == "specification"
+        ]
+        if len(specification_ports) != 1:
+            raise ValueError(
+                f"CANONICAL_GENERATOR_SPEC_PORT_INVALID: {job.canonical_leaf}"
+            )
+        spec_input = canonical_inputs.get(specification_ports[0])
+        if not isinstance(spec_input, dict):
+            raise ValueError(
+                f"CANONICAL_GENERATOR_SPEC_INPUT_MISSING: {job.job_id}"
+            )
+        bindings = spec_input.get("bindings")
+        if not isinstance(bindings, dict):
+            raise ValueError(
+                f"CANONICAL_GENERATOR_BINDINGS_INVALID: {job.job_id}"
+            )
+        owner = module_by_id.get(job.owner_module)
+        if owner is None:
+            raise ValueError(f"CONTENT_ARTIFACT_FOREIGN_OWNER: {job.owner_module}")
+        bindings["module_config_json"] = json.dumps(
+            owner.config,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        bindings["build_dependencies_json"] = json.dumps(
+            list(owner.depends_on),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        bindings["required_gates_json"] = json.dumps(
+            list(owner.required_gates),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
     module_ids = {module.module_id for module in modules}
     from .artifact_job import validate_artifact_job_graph
 
