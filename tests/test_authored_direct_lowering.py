@@ -337,6 +337,21 @@ def test_partial_structured_host_binding_is_not_silently_deferred() -> None:
     assert assets == (asset,)
 
 
+def test_saved_long_content_asset_id_migrates_without_replan() -> None:
+    from minecraft_mod_ai.authored_production import (
+        _canonicalize_saved_content_asset_id,
+    )
+    from minecraft_mod_ai.spec_identity import SPEC_ID_RE
+
+    raw = "texture_item_space_mode_ship_module_blueprint_registry_item_template"
+    canonical = _canonicalize_saved_content_asset_id(raw, 0)
+
+    assert canonical == (
+        "texture_item_space_mode_ship_module_blueprint_regis_b180319a9b72"
+    )
+    assert SPEC_ID_RE.fullmatch(canonical)
+
+
 def test_python_generator_job_persists_schema_valid_candidate_inputs() -> None:
     from types import SimpleNamespace
 
