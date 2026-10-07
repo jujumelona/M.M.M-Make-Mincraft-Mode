@@ -371,3 +371,51 @@ def test_native_scalar_source_wrapper_preserves_root_profile():
     assert generate_fixed_template_value(
         Router(), "coder", [], response_schema=schema, enable_tools=False,
     ) == "class MarketScreen {}"
+
+
+@pytest.mark.parametrize("leaf", ["minecraft/screen/registration", "minecraft/block_entity/registry"])
+@pytest.mark.parametrize("valid_source", [True, False])
+def test_real_candidate_source_contract_uses_transport_schema_and_host_validation(leaf, valid_source):
+    from types import SimpleNamespace
+    from minecraft_mod_ai.artifact_expansion import _canonical_candidate_inputs
+    from minecraft_mod_ai.prompt_fact_types import FactType
+    from minecraft_mod_ai.integrity_bootstrap import bootstrap_integrity
+    from minecraft_mod_ai.model_output_atomicity_contract import assert_atomic_model_schema
+    from minecraft_mod_ai.task_template_catalog import load_template
+
+    inputs = _canonical_candidate_inputs(
+        SimpleNamespace(fact_type=FactType.GUI_EXISTS, source_clause="Implement fabricator UI", display_name="Fabricator"),
+        canonical_leaf=leaf, mod_id="space", package_name="example.space",
+        package_path="example/space", subject="fabricator", minecraft_version="26.2", context_id="ctx",
+    )
+    manifest = load_template(leaf)
+    spec = inputs[next(p["name"] for p in manifest["inputs"] if p["type"] == "specification")]
+    package, name = spec["bindings"]["package_name"], spec["bindings"]["class_name"]
+    source = (
+        f"package {package}; public final class {name} implements net.fabricmc.api.ClientModInitializer "
+        "{ public void onInitializeClient() {} }"
+        if spec["side"] == "CLIENT" else f"package {package}; public final class {name} {{}}"
+    ) if valid_source else "package wrong; public class Wrong {}"
+
+    class Router:
+        calls = 0
+
+        def generate_tool_decision(self, role, messages, *, parameters, **kwargs):
+            assert_atomic_model_schema(parameters, surface="actual candidate decoder")
+            self.calls += 1
+            return {"value": source}
+
+    router = Router()
+    authority = bootstrap_integrity()
+    execute = lambda: authority.executors["python_generator:" + leaf](
+        inputs, leaf_id=leaf, router=router, authority=authority,
+    )
+    if valid_source:
+        output = execute()
+        assert output[next(p["name"] for p in manifest["outputs"] if p["type"] == "code_fragment")] == source
+    else:
+        from jsonschema import ValidationError
+        with pytest.raises(ValidationError):
+            execute()
+    assert router.calls == 1
+    assert "pattern" in spec["slots"][0]["schema"]

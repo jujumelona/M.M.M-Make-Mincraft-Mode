@@ -11,7 +11,7 @@ from .task_template_catalog import load_template
 def generate_canonical_leaf(inputs, *, leaf_id, router, authority):
     """Generate one declared artifact, keeping identity/receipt fields host-owned."""
     from .fixed_template_generation import generate_fixed_template_value
-    from .integrity_validators import validate_semantic_contract
+    from .integrity_validators import validate_semantic_contract, validate_json_schema
 
     manifest = load_template(leaf_id)
     authority.types.validate_input(f"{leaf_id}:input", inputs)
@@ -22,15 +22,23 @@ def generate_canonical_leaf(inputs, *, leaf_id, router, authority):
     from .implementation_template_renderer import render_template
     from .model_output_atomicity_contract import assert_atomic_model_schema
 
+    from .execution_contract_policy import SCHEMA_STRING_CLASS_KEY, STRING_CLASS_SOURCE
+
     values = dict(spec["bindings"])
     slots = tuple(spec["slots"])
+    model_schemas = {}
     for slot in slots:
         name = slot["name"]
         if name in values:
             raise ValueError("GENERATOR_SLOT_BINDING_CONFLICT")
-        assert_atomic_model_schema(
-            slot["schema"], surface=f"canonical slot {leaf_id}:{name}"
-        )
+        schema = dict(slot["schema"])
+        if schema.get("type") == "string" and schema.get(SCHEMA_STRING_CLASS_KEY) == STRING_CLASS_SOURCE:
+            # Package/class/lifecycle regexes are host proof obligations, not
+            # llama.cpp grammar. Keep the persisted contract intact and check
+            # the returned slot against it before rendering or publication.
+            schema.pop("pattern", None)
+        assert_atomic_model_schema(schema, surface=f"canonical slot {leaf_id}:{name}")
+        model_schemas[name] = schema
 
     def generate_slot(slot):
         return generate_fixed_template_value(
@@ -54,7 +62,7 @@ def generate_canonical_leaf(inputs, *, leaf_id, router, authority):
                     ),
                 },
             ],
-            response_schema=slot["schema"],
+            response_schema=model_schemas[slot["name"]],
             enable_tools=False,
         )
 
@@ -66,6 +74,7 @@ def generate_canonical_leaf(inputs, *, leaf_id, router, authority):
         thread_name_prefix="canonical-slot",
     )
     for slot, value in zip(slots, generated):
+        validate_json_schema(value, slot["schema"])
         values[slot["name"]] = value
 
     source = render_template({"render": spec["render_mold"]}, values)
