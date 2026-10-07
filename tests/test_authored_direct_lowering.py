@@ -232,5 +232,5 @@ def test_python_generator_job_persists_schema_valid_candidate_inputs() -> None:
     spec = inputs["screen_registration_input"]
     assert spec["context_id"] == "candidate-26.2"
     assert spec["side"] == "CLIENT"
-    assert spec["target_path"].startswith("src/client/java/")
+    assert spec["target_path"].startswith("src/main/java/example/space/client/generated/")
     assert spec["slots"][0]["name"] == "artifact_source"
