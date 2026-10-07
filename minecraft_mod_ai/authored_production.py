@@ -472,7 +472,7 @@ def _normalize_content_build_dependencies(
     from .prompt_fact_types import FactType
 
     module_ids = {module.module_id for module in modules}
-    incoming_unlocks: set[tuple[str, str]] = set()
+    projected_relation_dependencies: set[tuple[str, str]] = set()
     hard_requires: set[tuple[str, str]] = set()
 
     for fact in facts:
@@ -486,13 +486,22 @@ def _normalize_content_build_dependencies(
             if isinstance(value, Mapping)
             else ""
         )
-        if subject not in module_ids or target not in module_ids:
+        if subject not in module_ids or target not in module_ids or not relation:
             continue
-        if relation == "unlocks":
-            # The unlocked module previously depended on the unlocker.
-            incoming_unlocks.add((target, subject))
-        elif relation == "requires":
-            hard_requires.add((subject, target))
+
+        # Legacy saved content graphs projected semantic/runtime relations into
+        # ProductionModule.depends_on. Preserve the only true production-ordering
+        # relation ("requires") and strip every other relation projection. Unlocks
+        # was projected in the reverse direction; all other generic relations were
+        # projected source -> target.
+        projected = (
+            (target, subject)
+            if relation == "unlocks"
+            else (subject, target)
+        )
+        projected_relation_dependencies.add(projected)
+        if relation == "requires":
+            hard_requires.add(projected)
 
     normalized: list[ProductionModule] = []
     for module in modules:
@@ -501,7 +510,8 @@ def _normalize_content_build_dependencies(
             for dependency in module.depends_on
             if (
                 (module.module_id, dependency) in hard_requires
-                or (module.module_id, dependency) not in incoming_unlocks
+                or (module.module_id, dependency)
+                not in projected_relation_dependencies
             )
         )
         if dependencies == module.depends_on:
