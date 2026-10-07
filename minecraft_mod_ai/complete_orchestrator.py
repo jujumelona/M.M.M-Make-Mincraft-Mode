@@ -346,7 +346,6 @@ class CompleteProductionOrchestrator:
         approved = parsed.approve(approval_hash)
         if approved.status is not CompleteProposalStatus.APPROVED:
             raise SpecValidationError('Complete proposal approval did not complete.')
-        _validate_external_execution_preflight(approved, options)
         _validate_required_gate_contract(approved)
         input_is_bound = bool(approved.existing_input_sha256)
         input_is_supplied = existing_input is not None
@@ -354,6 +353,16 @@ class CompleteProductionOrchestrator:
             if input_is_bound:
                 raise CompleteProductionError('This approved complete plan is bound to an existing-project ZIP, so the same ZIP is required.')
             raise CompleteProductionError('An existing-project ZIP may be used only with a complete plan that was approved with that input.')
+
+        base = approved.base_proposal
+        spec = base.spec
+        ordered, collision_receipts = _normalize_modules(approved.modules, spec)
+        work_plan = build_production_work_plan(
+            approved,
+            policy=self.policy,
+            modules=ordered,
+        )
+
         router: ModelRouter | None = None
         if approved.assets:
             router = self.router_factory()
@@ -365,11 +374,12 @@ class CompleteProductionOrchestrator:
                     f"{exc}"
                 ) from exc
 
-        base = approved.base_proposal
-        spec = base.spec
-        ordered, collision_receipts = _normalize_modules(approved.modules, spec)
-        work_plan = build_production_work_plan(approved, policy=self.policy, modules=ordered)
-        run_root, ledger, run_resumed = self._open_run(run_name, work_plan, resume=options.resume)
+        _validate_external_execution_preflight(approved, options)
+        run_root, ledger, run_resumed = self._open_run(
+            run_name,
+            work_plan,
+            resume=options.resume,
+        )
         module_receipts: list[dict[str, Any]] = []
         blockbench_receipts: list[dict[str, Any]] = []
         asset_receipt: dict[str, Any] | None = None
