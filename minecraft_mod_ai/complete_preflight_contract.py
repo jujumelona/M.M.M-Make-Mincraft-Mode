@@ -112,6 +112,26 @@ def _validate_java_toolchain_preflight(
             f"required={required}, actual={actual}, home={project_home}"
         )
 
+    if not source_only:
+        try:
+            from .platform_catalog import adapter_for_lock_values
+            from .runner import GradleRunner, production_gradle_cache_dir
+
+            adapter = adapter_for_lock_values(platform)
+            GradleRunner(
+                production_gradle_cache_dir(),
+                download_timeout_seconds=300,
+            ).ensure_gradle(
+                str(adapter.gradle),
+                str(adapter.gradle_sha256),
+                lock_timeout_seconds=360,
+            )
+        except Exception as exc:
+            raise CompleteProductionError(
+                "Gradle distribution preflight failed before generation: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+
     if not run_jdt:
         return
 
