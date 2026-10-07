@@ -86,7 +86,7 @@ class IntegritySymbols {
         System.err.println(d.toString()); failed=true;
       }
       if(failed) System.exit(2);
-      if(mode.equals("parse")) { System.out.println("[]"); return; }
+      if(mode.equals("parse")) { Files.writeString(Path.of(args[5]), "[]"); return; }
       Trees trees=Trees.instance(task); types=task.getTypes(); elements=task.getElements();
       List<String> rows=new ArrayList<>();
       for(CompilationUnitTree unit: units) new TreePathScanner<Void,Void>() {
@@ -119,7 +119,7 @@ class IntegritySymbols {
           return super.visitIdentifier(t,v);
         }
       }.scan(unit,null);
-      System.out.println("["+String.join(",",rows)+"]");
+      Files.writeString(Path.of(args[5]), "["+String.join(",",rows)+"]");
     }
   }
 }
@@ -153,10 +153,19 @@ def analyze_java(source: str, *, classpath=(), java_version="17", filename="Inte
         input_path.write_text(source, encoding="utf-8")
         # Empty classpath must not implicitly resolve classes from the current directory.
         cp = os.pathsep.join(map(str, paths)) or str(root / "empty")
+        # JVM startup/GC warnings may be written to stdout. Keep the machine
+        # result in a dedicated per-call file so diagnostics cannot corrupt JSON.
+        output_path = root / "result.json"
         result = subprocess.run([java, str(helper), "parse" if parse_only else "resolve",
-                                 str(java_version), cp, filename, str(input_path)],
+                                 str(java_version), cp, filename, str(input_path), str(output_path)],
                                 capture_output=True, text=True, encoding="utf-8", errors="replace",
                                 timeout=timeout, cwd=root)
         if result.returncode:
             raise ValueError("JAVA_ANALYSIS_FAILED: " + result.stderr[-12000:])
-        return json.loads(result.stdout)
+        try:
+            rows = json.loads(output_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError("JAVA_ANALYSIS_PROTOCOL_ERROR: missing or invalid result JSON") from exc
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            raise ValueError("JAVA_ANALYSIS_PROTOCOL_ERROR: expected a list of symbol objects")
+        return rows
