@@ -29,6 +29,12 @@ def verify_candidate_content(job, resolved, context, spec, source=None):
     from .evidence_store import EvidenceStore
     from .integrity_evidence import _read_blob, contract_hash
     import json
+
+    registered = require_registered_leaf_binding(resolved, job.canonical_leaf)
+    if registered.get("state") != "admitted":
+        # Candidate generation is how a registered/not-reviewed leaf earns execution
+        # evidence. Requiring admitted evidence here creates an impossible cycle.
+        return None
     impl = resolved.require_leaf_binding(job.canonical_leaf)["implementation"]
     record = json.loads(_read_blob(EvidenceStore(Path(context["evidence_store"])), impl["evidence_id"]))
     candidate = record.get("candidate")
@@ -79,7 +85,11 @@ def verify_job_binding(job, resolved, context):
         "deterministic",
         "template",
     }
-    binding = resolved.require_leaf_binding(leaf) if evidence_required else registered_binding
+    binding = (
+        resolved.require_leaf_binding(leaf)
+        if evidence_required and registered_binding.get("state") == "admitted"
+        else registered_binding
+    )
     impl = binding["implementation"]
     actual = authority.implementations.get_implementation(impl["implementation_id"])
     # Execution freshness is leaf-scoped.  The authority object validates its own live

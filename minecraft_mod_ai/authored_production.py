@@ -44,6 +44,44 @@ def _main_class_name(mod_id: str) -> str:
 
     return "".join(part.capitalize() for part in str(mod_id).split("_")) + "Mod"
 
+_CANDIDATE_ARTIFACT_EXECUTOR_TYPES = frozenset({
+    "deterministic_renderer",
+    "deterministic",
+    "template",
+})
+
+
+def _fact_artifact_route_ready(fact: Any, version_context: Any) -> bool:
+    """Return whether a registered canonical leaf can produce a build candidate.
+
+    not_reviewed is deliberately not production admission. It is, however, a
+    valid candidate-generation state when the registered implementation is a
+    package-owned Python generator (or an evidence-free deterministic renderer).
+    The build/JDT/runtime stages remain responsible for proving that candidate.
+    """
+
+    from .artifact_expansion import FACT_TO_CANONICAL_LEAVES
+    from .registered_leaf_binding import require_registered_leaf_binding
+
+    leaves = FACT_TO_CANONICAL_LEAVES.get(fact.fact_type)
+    if not leaves:
+        return False
+    for leaf in leaves:
+        binding = require_registered_leaf_binding(version_context, leaf)
+        if binding.get("state") == "admitted":
+            continue
+        implementation = binding.get("implementation")
+        if not isinstance(implementation, Mapping):
+            return False
+        implementation_id = str(implementation.get("implementation_id") or "")
+        executor_type = str(implementation.get("executor_type") or "")
+        if implementation_id.startswith("python_generator:"):
+            continue
+        if executor_type in _CANDIDATE_ARTIFACT_EXECUTOR_TYPES:
+            continue
+        return False
+    return True
+
 
 def _compile_new_authored_modules(
     plan: AuthoredPlan,
@@ -540,7 +578,6 @@ def _compile_content_artifact_graph(
         native_production_route_available,
     )
     from .prompt_fact_types import FactType
-    from .registered_leaf_binding import require_registered_leaf_binding
 
     # Older saved plans conflated every BLOCK_ENTITY_EXISTS fact with the
     # processing-machine backend. Canonicalize only when the machine-specific
@@ -569,30 +606,6 @@ def _compile_content_artifact_graph(
         normalized_modules.append(module)
     modules = tuple(normalized_modules)
 
-    evidence_free_executors = {
-        "deterministic_renderer",
-        "deterministic",
-        "template",
-    }
-
-    def fact_artifact_route_ready(fact: ImplementationFact) -> bool:
-        leaves = FACT_TO_CANONICAL_LEAVES.get(fact.fact_type)
-        if not leaves:
-            return False
-        for leaf in leaves:
-            binding = require_registered_leaf_binding(adapter.version_context, leaf)
-            if binding.get("state") == "admitted":
-                continue
-            implementation = binding.get("implementation")
-            executor_type = (
-                str(implementation.get("executor_type") or "")
-                if isinstance(implementation, Mapping)
-                else ""
-            )
-            if executor_type not in evidence_free_executors:
-                return False
-        return True
-
     facts_by_subject: dict[str, list[ImplementationFact]] = {}
     for fact in facts:
         facts_by_subject.setdefault(fact.subject, []).append(fact)
@@ -604,7 +617,7 @@ def _compile_content_artifact_graph(
         blocked = [
             fact
             for fact in owned_facts
-            if not fact_artifact_route_ready(fact)
+            if not _fact_artifact_route_ready(fact, adapter.version_context)
         ]
         if not blocked:
             continue
@@ -781,25 +794,13 @@ def compile_authored_design(
         )
     )
 
-    # Content-system modules are executable target requirements too.  Previously
-    # target binding only saw Typed PlatformIR kinds, so a saved GUI/networking
-    # design could select a target with no reviewed system-pack backend and fail
-    # much later in _compile_content_artifact_graph().  Keep artifact-owned item/
-    # block/etc. modules out of this list: their target support is owned by the
-    # canonical leaf graph rather than the legacy fixed-generator capability set.
-    from .platform_backend_contract import SYSTEM_KIND_TO_PACK
-
-    content_system_kinds = tuple(
-        dict.fromkeys(
-            str(item.get("kind") or "").strip()
-            for item in content_design.get("modules", ())
-            if isinstance(item, Mapping)
-            and str(item.get("kind") or "").strip() in SYSTEM_KIND_TO_PACK
-        )
-    )
-    target_module_kinds = tuple(
-        dict.fromkeys((*platform_module_kinds, *content_system_kinds))
-    )
+    # Target binding owns Typed PlatformIR host modules only. Content modules are
+    # resolved after a target exists because their canonical artifact route is
+    # target-specific. A GUI fact may use a registered canonical candidate generator
+    # even when the target intentionally does not advertise the legacy gui-networking
+    # system-pack capability. _compile_content_artifact_graph remains fail-closed
+    # when neither that artifact route nor a reviewed native fallback is executable.
+    target_module_kinds = platform_module_kinds
     design, base = bind_platform(
         router,
         plan.requested_prompt,

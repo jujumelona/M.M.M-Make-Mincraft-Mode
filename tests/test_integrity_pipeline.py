@@ -273,3 +273,47 @@ def test_legacy_recipe_and_tag_leaves_stay_unsupported():
             "reason": "MODERN_RECIPE_SCHEMA_UNSUPPORTED",
         }
 
+
+
+def test_not_reviewed_generator_binding_can_enter_candidate_execution_without_prior_evidence():
+    from types import SimpleNamespace
+
+    from minecraft_mod_ai.artifact_job import ArtifactJob
+    from minecraft_mod_ai.integrity_dispatcher import (
+        verify_candidate_content,
+        verify_job_binding,
+    )
+    from minecraft_mod_ai.populate_version_artifact_rules import build_version_facts
+
+    leaf = "minecraft/screen/registration"
+    facts = build_version_facts("26.2", base_facts={})
+    binding = facts["leaf_bindings"][leaf]
+    assert binding["state"] == "not_reviewed"
+
+    def admitted_only(_leaf):
+        raise AssertionError(
+            "not_reviewed candidate must not require admitted execution evidence"
+        )
+
+    resolved = SimpleNamespace(
+        leaf_bindings={leaf: binding},
+        context_id="candidate-26.2",
+        require_leaf_binding=admitted_only,
+    )
+    job = ArtifactJob(
+        "screen-candidate",
+        "",
+        "market_ui",
+        canonical_leaf=leaf,
+        implementation_id=binding["implementation"]["implementation_id"],
+    )
+
+    authority = verify_job_binding(job, resolved, {})
+    assert authority.executors[job.implementation_id]
+    assert verify_candidate_content(
+        job,
+        resolved,
+        {},
+        {},
+        "class Candidate {}",
+    ) is None
