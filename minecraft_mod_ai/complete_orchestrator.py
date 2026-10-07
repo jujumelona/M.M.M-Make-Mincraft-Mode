@@ -1534,7 +1534,6 @@ class CompleteProductionOrchestrator:
         ) -> dict[str, Any]:
             stage = str(node.payload.get('generation_stage', ''))
             receipts: list[dict[str, Any]] = []
-            client_metadata_owner_ids: set[str] = set()
 
             if stage == 'content':
                 research_shards = [module for module in members if is_research_shard(module)]
@@ -1613,10 +1612,25 @@ class CompleteProductionOrchestrator:
                             inspect_fabric_project(project_root),
                             entrypoints=approved_client_entrypoints,
                         )
-                        client_metadata_owner_ids.update(
-                            job.owner_module
-                            for job in owned_client_jobs
-                            if canonical_client_entrypoints((job,))
+                        metadata_owner_ids = sorted(
+                            {
+                                job.owner_module
+                                for job in owned_client_jobs
+                                if canonical_client_entrypoints((job,))
+                            }
+                        )
+                        receipts.append(
+                            {
+                                "schema_version": "mmm/artifact-graph-execution-receipt-v1",
+                                "status": "SUCCEEDED",
+                                "module_ids": metadata_owner_ids,
+                                "touched_paths": [
+                                    "src/main/resources/fabric.mod.json"
+                                ],
+                                "completed_jobs": [],
+                                "receipts": [],
+                                "ports": {},
+                            }
                         )
 
                     receipts.append(
@@ -1707,22 +1721,6 @@ class CompleteProductionOrchestrator:
                 receipts,
                 downstream_ids=downstream_ids,
             )
-            if client_metadata_owner_ids:
-                metadata_path = "src/main/resources/fabric.mod.json"
-                for module in members:
-                    if module.module_id not in client_metadata_owner_ids:
-                        continue
-                    observation = _semantic_execution_observation(
-                        module,
-                        {
-                            "schema_version": "mmm/artifact-graph-execution-receipt-v1",
-                            "module_id": module.module_id,
-                            "touched_paths": [metadata_path],
-                        },
-                        dependent_ids=downstream_ids(module.module_id),
-                    )
-                    if observation is not None:
-                        semantic_observations.append(observation)
             return {'schema_version': 'mmm/generation-work-node-v1', 'status': 'SUCCEEDED', 'node_id': node.node_id, 'stage': stage, 'module_ids': [module.module_id for module in members], 'receipts': receipts, 'semantic_observations': semantic_observations}
 
         def process_node(node: WorkNode) -> None:

@@ -1286,6 +1286,22 @@ def validate_jar(
                             f"{group} must include {value}.",
                         )
                     )
+            if complete is not None:
+                declared_clients = _entrypoint_values(entrypoints.get("client"))
+                for required_client in sorted(
+                    _complete_artifact_client_entrypoints(complete)
+                ):
+                    checks += 1
+                    if required_client not in declared_clients:
+                        findings.append(
+                            Finding(
+                                "JAR_BAD_ENTRYPOINTS",
+                                "error",
+                                "fabric.mod.json",
+                                "client must include approved generated entrypoint "
+                                f"{required_client}.",
+                            )
+                        )
 
             required_resources = {
                 f"assets/{spec.mod_id}/lang/en_us.json",

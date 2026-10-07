@@ -57,8 +57,9 @@ def test_client_metadata_mutation_runs_inside_generation_work_node() -> None:
     node_action = source.index("def module_node_action(")
     metadata_edit = source.index("ensure_fabric_client_entrypoints(")
     assert node_action < metadata_edit
-    assert "client_metadata_owner_ids" in source
     assert '"src/main/resources/fabric.mod.json"' in source
+    assert '"module_ids": metadata_owner_ids' in source
+    assert "client_metadata_owner_ids" not in source
 
 
 def test_generated_client_entrypoints_are_merged_atomically(tmp_path) -> None:
