@@ -17,6 +17,7 @@ from .complete_spec import (
 )
 from .host_target_binding import bind_existing_project, bind_platform
 from .spec import ModSpec, Proposal, ProposalStatus
+from .spec_identity import canonical_spec_id
 from .platform_backend_contract import deterministic_backend_capabilities
 from .target_contract import target_coordinates_from_mapping
 from .typed_host_generation_contract import (
@@ -677,6 +678,7 @@ def _compile_content_artifact_graph(
         "visual_spec",
     }
     parsed_assets: list[AssetRequest] = []
+    seen_asset_ids: set[str] = set()
     for index, item in enumerate(raw_assets):
         if not isinstance(item, Mapping):
             raise ValueError(
@@ -688,8 +690,25 @@ def _compile_content_artifact_graph(
                 f"missing={sorted(asset_fields - set(item))}, "
                 f"unknown={sorted(set(item) - asset_fields)}"
             )
+
+        # Authored content assets are host-generated IDs. Plans saved before the
+        # shared identifier contract was introduced may contain an otherwise
+        # valid semantic asset whose "texture_<kind>_" prefix pushed it beyond
+        # CompleteProposal's 64-character ID bound. Canonicalize exactly at this
+        # saved-plan production boundary so resume/build does not require replan.
+        asset_payload = deepcopy(dict(item))
+        asset_payload["asset_id"] = canonical_spec_id(
+            str(asset_payload.get("asset_id") or ""),
+            fallback=f"asset_{index}",
+        )
+        if asset_payload["asset_id"] in seen_asset_ids:
+            raise ValueError(
+                "CONTENT_ASSET_ID_COLLISION_AFTER_CANONICALIZATION: "
+                f"{asset_payload['asset_id']}"
+            )
+        seen_asset_ids.add(asset_payload["asset_id"])
         try:
-            asset = AssetRequest(**deepcopy(dict(item)))
+            asset = AssetRequest(**asset_payload)
         except TypeError as exc:
             raise TypeError(
                 f"CONTENT_ASSET_SHAPE_INVALID: assets[{index}]"
