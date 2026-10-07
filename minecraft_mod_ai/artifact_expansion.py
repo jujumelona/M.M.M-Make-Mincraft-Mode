@@ -172,6 +172,116 @@ def _require_subject(fact: PromptFact) -> str:
     return subject
 
 
+def _java_type_name(value: str) -> str:
+    parts = re.findall(r"[A-Za-z0-9]+", str(value))
+    name = "".join(part[:1].upper() + part[1:] for part in parts if part)
+    if not name:
+        raise ArtifactExpansionError("CANONICAL_GENERATOR_CLASS_NAME_REQUIRED")
+    if name[0].isdigit():
+        name = "Generated" + name
+    return name
+
+
+def _canonical_candidate_inputs(
+    fact: PromptFact | ImplementationFact,
+    *,
+    canonical_leaf: str,
+    mod_id: str,
+    package_name: str,
+    package_path: str,
+    subject: str,
+    minecraft_version: str,
+    context_id: str,
+) -> dict[str, Any]:
+    """Build the persisted host-owned input contract for a generator candidate."""
+
+    manifest = load_template(canonical_leaf)
+    side_values = tuple(str(value).upper() for value in manifest.get("side", ()))
+    if len(side_values) != 1:
+        raise ArtifactExpansionError(
+            f"CANONICAL_GENERATOR_SIDE_AMBIGUOUS: {canonical_leaf}: {side_values}"
+        )
+    side = side_values[0]
+    source_root = "src/client/java" if side == "CLIENT" else "src/main/java"
+    responsibility = canonical_leaf.rsplit("/", 1)[-1]
+    class_name = _java_type_name(subject) + _java_type_name(responsibility)
+    generated_package = package_name + ".generated"
+    target_path = (
+        f"{source_root}/{package_path}/generated/{class_name}.java"
+    )
+    requirement = str(getattr(fact, "source_clause", "") or "").strip()
+    if not requirement:
+        requirement = (
+            str(getattr(fact, "display_name", "") or "").strip()
+            or f"Implement {subject} through {canonical_leaf}."
+        )
+    display_name = (
+        str(getattr(fact, "display_name", "") or "").strip()
+        or " ".join(part.capitalize() for part in subject.split("_"))
+    )
+    bindings = {
+        "mod_id": mod_id,
+        "package_name": generated_package,
+        "class_name": class_name,
+        "registry_path": subject,
+        "minecraft_version": minecraft_version,
+        "display_name": display_name,
+        "fact_type": fact.fact_type.value,
+        "source_requirement": requirement[:12000],
+    }
+    parent_requirement = str(getattr(fact, "parent_requirement", "") or "").strip()
+    if parent_requirement:
+        bindings["parent_requirement"] = parent_requirement
+
+    output_schema = {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 20000,
+        "pattern": rf"(?:class|record|interface|enum)\s+{re.escape(class_name)}\b",
+    }
+    spec = {
+        "leaf_id": canonical_leaf,
+        "context_id": context_id,
+        "requirement": requirement[:12000],
+        "target_path": target_path,
+        "language": "java",
+        "operation": "CREATE_FILE",
+        "side": side,
+        "bindings": bindings,
+        "output_schema": output_schema,
+        "render_mold": "{{artifact_source}}",
+        "slots": [
+            {
+                "name": "artifact_source",
+                "description": (
+                    "Return complete compilable Java source only, with no Markdown. "
+                    f"Use package {generated_package} and declare public class {class_name}. "
+                    f"Implement only canonical responsibility {canonical_leaf} for "
+                    f"Minecraft {minecraft_version}. Preserve the supplied gameplay "
+                    "requirement and verified bindings; do not invent unrelated systems."
+                ),
+                "schema": output_schema,
+            }
+        ],
+        "java_filename": class_name + ".java",
+    }
+
+    inputs: dict[str, Any] = {}
+    for port in manifest.get("inputs", ()):
+        name = str(port.get("name") or "")
+        port_type = str(port.get("type") or "")
+        if port_type == "identifier":
+            inputs[name] = f"{mod_id}:{subject}"
+        elif port_type == "specification":
+            inputs[name] = spec
+        elif port.get("required", True):
+            raise ArtifactExpansionError(
+                f"CANONICAL_GENERATOR_INPUT_UNSUPPORTED: {canonical_leaf}: {port_type}"
+            )
+    if not inputs:
+        raise ArtifactExpansionError(f"CANONICAL_GENERATOR_INPUTS_EMPTY: {canonical_leaf}")
+    return inputs
+
 def _require_integer_value(fact: PromptFact, *, minimum: int, maximum: int) -> int:
     value = fact.value
     if type(value) is not int:
@@ -357,6 +467,16 @@ def expand_facts_to_jobs(
                     "subject": subject,
                     "main_class": main_class_val,
                     "minecraft_version": minecraft_version,
+                    "_canonical_inputs": _canonical_candidate_inputs(
+                        fact,
+                        canonical_leaf=canonical_leaf,
+                        mod_id=mod_id,
+                        package_name=package_name,
+                        package_path=pkg_path,
+                        subject=subject,
+                        minecraft_version=minecraft_version,
+                        context_id=version_context.context_id,
+                    ),
                 }
                 
                 # Convert executor_type string to enum
