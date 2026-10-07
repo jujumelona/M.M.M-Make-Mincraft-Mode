@@ -1542,12 +1542,16 @@ class CompleteProductionOrchestrator:
                             seen_job_ids.add(prerequisite.job_id)
 
                 if artifact_jobs_to_run:
-                    ensure_artifact_scaffolding(
-                        project_root,
-                        mod_id=spec.mod_id,
-                        package_name=spec.package_name,
-                        main_class=getattr(spec, "main_class", "") or "",
-                    )
+                    # Template-backed item/block leaves need the historical anchor
+                    # scaffolding. Python generator candidates own complete files and
+                    # must not manufacture unrelated registry Java sources.
+                    if any(job.template_id for job in artifact_jobs_to_run):
+                        ensure_artifact_scaffolding(
+                            project_root,
+                            mod_id=spec.mod_id,
+                            package_name=spec.package_name,
+                            main_class=getattr(spec, "main_class", "") or "",
+                        )
                     generator_router = (
                         get_router()
                         if any(
