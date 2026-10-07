@@ -202,13 +202,15 @@ def _canonical_candidate_inputs(
             f"CANONICAL_GENERATOR_SIDE_AMBIGUOUS: {canonical_leaf}: {side_values}"
         )
     side = side_values[0]
-    source_root = "src/client/java" if side == "CLIENT" else "src/main/java"
     responsibility = canonical_leaf.rsplit("/", 1)[-1]
     class_name = _java_type_name(subject) + _java_type_name(responsibility)
-    generated_package = package_name + ".generated"
-    target_path = (
-        f"{source_root}/{package_path}/generated/{class_name}.java"
-    )
+    if side == "CLIENT":
+        generated_package = package_name + ".client.generated"
+        generated_package_path = package_path + "/client/generated"
+    else:
+        generated_package = package_name + ".generated"
+        generated_package_path = package_path + "/generated"
+    target_path = f"src/main/java/{generated_package_path}/{class_name}.java"
     requirement = str(getattr(fact, "source_clause", "") or "").strip()
     if not requirement:
         requirement = (
@@ -281,6 +283,7 @@ def _canonical_candidate_inputs(
     if not inputs:
         raise ArtifactExpansionError(f"CANONICAL_GENERATOR_INPUTS_EMPTY: {canonical_leaf}")
     return inputs
+
 
 def _require_integer_value(fact: PromptFact, *, minimum: int, maximum: int) -> int:
     value = fact.value
