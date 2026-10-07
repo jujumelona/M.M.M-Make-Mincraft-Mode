@@ -109,7 +109,7 @@ from .production_contract import (
     persist_quality_report,
     quality_unresolved,
 )
-from .project_edit import inspect_fabric_project
+from .project_edit import ensure_fabric_client_entrypoints, inspect_fabric_project
 from .project_index import ProjectIndex
 from .project_index_execution_reuse_contract import (
     execution_scoped,
@@ -1464,6 +1464,31 @@ class CompleteProductionOrchestrator:
         module_receipts: list[dict[str, Any]] = []
         blockbench_receipts: list[dict[str, Any]] = []
         unresolved: list[str] = []
+
+        generated_client_entrypoints: set[str] = set()
+        for job in artifact_jobs:
+            if job.executor_type.value != "python_generator":
+                continue
+            canonical_inputs = job.deterministic_inputs.get("_canonical_inputs")
+            if not isinstance(canonical_inputs, dict):
+                continue
+            for value in canonical_inputs.values():
+                if not isinstance(value, dict) or value.get("side") != "CLIENT":
+                    continue
+                bindings = value.get("bindings")
+                if not isinstance(bindings, dict):
+                    continue
+                package_name = str(bindings.get("package_name") or "").strip()
+                class_name = str(bindings.get("class_name") or "").strip()
+                if package_name and class_name:
+                    generated_client_entrypoints.add(
+                        f"{package_name}.{class_name}"
+                    )
+        if generated_client_entrypoints:
+            ensure_fabric_client_entrypoints(
+                inspect_fabric_project(project_root),
+                entrypoints=tuple(sorted(generated_client_entrypoints)),
+            )
         asset_shards: list[dict[str, Any]] = []
         review_futures: list[tuple[str, Future[dict[str, Any]], float]] = []
         review_futures_lock = threading.Lock()
