@@ -86,7 +86,6 @@ FACT_TO_CANONICAL_LEAVES: dict[FactType, tuple[str, ...]] = {
     FactType.EQUIPMENT_ARMOR: ("minecraft/item/properties",),
     FactType.CUSTOM_ITEM_BEHAVIOR: ("minecraft/item/interaction",),
     FactType.CUSTOM_BLOCK_BEHAVIOR: ("minecraft/block/interaction",),
-    FactType.CONTENT_RELATION: ("minecraft/item/integration",),
 }
 
 CANONICAL_LEAF_DEFAULT_TEMPLATES: dict[str, tuple[str, ...]] = {
@@ -286,7 +285,14 @@ def expand_facts_to_jobs(
     )
 
     for fact in facts:
-        # P0-2: No more generator handoff - all facts expand through canonical leaves
+        # Relations describe module topology, not a material artifact. They are
+        # already lowered into ProductionModule.depends_on/executable_relations
+        # before this stage and must never be reinterpreted as item integration.
+        if fact.fact_type == FactType.CONTENT_RELATION:
+            continue
+
+        # P0-2: No more generator handoff - all material facts expand through
+        # canonical leaves.
         canonical_leaf_ids = FACT_TO_CANONICAL_LEAVES.get(fact.fact_type)
         if not canonical_leaf_ids:
             raise ArtifactExpansionError(
