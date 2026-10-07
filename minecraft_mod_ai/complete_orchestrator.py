@@ -127,6 +127,10 @@ from .publisher import (
 )
 from .quality_evidence import compile_quality_evidence
 from .research_ledger import is_research_shard, write_research_shard
+from .resource_asset_preflight_contract import (
+    ResourceAssetPreflightError,
+    validate_asset_backend_access,
+)
 from .release_artifact_contract import (
     generation_receipt_sort_key as _generation_receipt_sort_key,
     replace_stale_directory_target as _replace_stale_directory_target,
@@ -347,12 +351,22 @@ class CompleteProductionOrchestrator:
             if input_is_bound:
                 raise CompleteProductionError('This approved complete plan is bound to an existing-project ZIP, so the same ZIP is required.')
             raise CompleteProductionError('An existing-project ZIP may be used only with a complete plan that was approved with that input.')
+        router: ModelRouter | None = None
+        if approved.assets:
+            router = self.router_factory()
+            try:
+                validate_asset_backend_access(router, approved)
+            except ResourceAssetPreflightError as exc:
+                raise CompleteProductionError(
+                    "Asset backend preflight failed before production dispatch: "
+                    f"{exc}"
+                ) from exc
+
         base = approved.base_proposal
         spec = base.spec
         ordered, collision_receipts = _normalize_modules(approved.modules, spec)
         work_plan = build_production_work_plan(approved, policy=self.policy, modules=ordered)
         run_root, ledger, run_resumed = self._open_run(run_name, work_plan, resume=options.resume)
-        router: ModelRouter | None = None
         module_receipts: list[dict[str, Any]] = []
         blockbench_receipts: list[dict[str, Any]] = []
         asset_receipt: dict[str, Any] | None = None
