@@ -138,6 +138,79 @@ def inspect_fabric_project(project_root: str | Path) -> FabricProjectInfo:
 
 
 @_atomic_shared_edit
+def ensure_fabric_client_entrypoints(
+    info: FabricProjectInfo,
+    *,
+    entrypoints: tuple[str, ...],
+) -> dict[str, Any]:
+    """Atomically register generated client initializers in Fabric metadata."""
+
+    normalized = tuple(
+        sorted(
+            {
+                str(value).strip()
+                for value in entrypoints
+                if isinstance(value, str) and str(value).strip()
+            }
+        )
+    )
+    if not normalized:
+        return {"status": "UNCHANGED", "path": str(info.fabric_mod_json)}
+    fqcn = re.compile(
+        r"^[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+$"
+    )
+    invalid = [value for value in normalized if fqcn.fullmatch(value) is None]
+    if invalid:
+        raise ProjectEditError(
+            "Fabric client entrypoint class name is invalid: " + ", ".join(invalid)
+        )
+
+    text, text_sha256 = _read_utf8_with_digest(info.fabric_mod_json)
+    resource = _json_resource(text, info.fabric_mod_json.name)
+    raw = resource.value
+    if not isinstance(raw, dict):
+        raise ProjectEditError("fabric.mod.json must be an object.")
+    declared = raw.setdefault("entrypoints", {})
+    if not isinstance(declared, dict):
+        raise ProjectEditError("Fabric entrypoints must be an object.")
+    client = declared.setdefault("client", [])
+    if not isinstance(client, list):
+        raise ProjectEditError("Fabric client entrypoints must be a list.")
+
+    existing: set[str] = set()
+    for item in client:
+        if isinstance(item, str):
+            existing.add(item)
+        elif isinstance(item, dict) and isinstance(item.get("value"), str):
+            existing.add(str(item["value"]))
+        else:
+            raise ProjectEditError("Fabric client entrypoint is invalid.")
+
+    additions = [value for value in normalized if value not in existing]
+    if not additions:
+        return {"status": "UNCHANGED", "path": str(info.fabric_mod_json)}
+    client.extend(additions)
+    content = _serialize_resource(resource)
+    relative = info.fabric_mod_json.relative_to(info.root).as_posix()
+    receipt = TransactionalSourcePatcher(info.root).apply(
+        [
+            {
+                "operation": "replace",
+                "path": relative,
+                "expected_sha256": text_sha256,
+                "content": content,
+            }
+        ]
+    )
+    return {
+        "status": "UPDATED",
+        "path": str(info.fabric_mod_json),
+        "added": additions,
+        "receipt": receipt,
+    }
+
+
+@_atomic_shared_edit
 def ensure_main_initializer_call(
     info: FabricProjectInfo,
     *,
