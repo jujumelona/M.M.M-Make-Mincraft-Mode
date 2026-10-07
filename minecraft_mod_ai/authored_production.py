@@ -65,10 +65,10 @@ def _fact_artifact_route_ready(fact: Any, version_context: Any) -> bool:
     from .prompt_fact_types import FactType
     from .registered_leaf_binding import require_registered_leaf_binding
 
-    # CONTENT_RELATION is module topology, not a file-generating artifact fact.
-    # Its executable meaning is already lowered into ProductionModule.depends_on
-    # and config.executable_relations by authored content planning. Treating it
-    # as an item integration leaf manufactures bogus item initializer jobs for
+    # CONTENT_RELATION is runtime/content topology, not a file-generating
+    # artifact fact and not production scheduling. Its executable meaning is
+    # lowered into module config/executable_relations by authored content planning.
+    # Treating it as an item integration leaf manufactures bogus initializer jobs for
     # GUI/entity/etc. modules and cross-wires their typed ports.
     if fact.fact_type == FactType.CONTENT_RELATION:
         return True
@@ -462,72 +462,23 @@ def _normalize_content_build_dependencies(
     modules: tuple[ProductionModule, ...],
     facts: tuple[Any, ...],
 ) -> tuple[ProductionModule, ...]:
-    """Keep runtime/progression relations out of the production build DAG.
+    """Migrate saved content plans onto the semantic/build dependency boundary.
 
-    Saved content designs historically projected incoming unlocks edges into
-    ProductionModule.depends_on. That turns valid gameplay progression cycles
-    into impossible build cycles. Only explicit hard requires relations are
-    production ordering edges. Unknown/non-relation dependencies are preserved.
+    content_design is host-authored semantic topology. Older saved plans projected
+    gameplay relations (including requires, drops, recipe/tag membership and
+    unlock-style edges) into ProductionModule.depends_on. Those edges are not
+    source-generation prerequisites and can form valid gameplay cycles. Strip them
+    before the CompleteProposal production DAG is validated so resume can consume
+    an already-saved plan without replanning.
     """
 
-    from .prompt_fact_types import FactType
+    # Keep the persisted-facts parameter in this boundary for backward-compatible
+    # callers. The migration is intentionally fact-independent: content_design
+    # never owns production scheduling edges, regardless of relation vocabulary.
+    _ = facts
+    from .content_design_graph import _strip_semantic_content_build_dependencies
 
-    module_ids = {module.module_id for module in modules}
-    projected_relation_dependencies: set[tuple[str, str]] = set()
-    hard_requires: set[tuple[str, str]] = set()
-
-    for fact in facts:
-        if getattr(fact, "fact_type", None) != FactType.CONTENT_RELATION:
-            continue
-        subject = str(getattr(fact, "subject", "") or "").strip()
-        target = str(getattr(fact, "object", "") or "").strip()
-        value = getattr(fact, "value", None)
-        relation = (
-            str(value.get("relation") or "").strip()
-            if isinstance(value, Mapping)
-            else ""
-        )
-        if subject not in module_ids or target not in module_ids or not relation:
-            continue
-
-        # Legacy saved content graphs projected semantic/runtime relations into
-        # ProductionModule.depends_on. Preserve the only true production-ordering
-        # relation ("requires") and strip every other relation projection. Unlocks
-        # was projected in the reverse direction; all other generic relations were
-        # projected source -> target.
-        projected = (
-            (target, subject)
-            if relation == "unlocks"
-            else (subject, target)
-        )
-        projected_relation_dependencies.add(projected)
-        if relation == "requires":
-            hard_requires.add(projected)
-
-    normalized: list[ProductionModule] = []
-    for module in modules:
-        dependencies = tuple(
-            dependency
-            for dependency in module.depends_on
-            if (
-                (module.module_id, dependency) in hard_requires
-                or (module.module_id, dependency)
-                not in projected_relation_dependencies
-            )
-        )
-        if dependencies == module.depends_on:
-            normalized.append(module)
-            continue
-        rewritten = ProductionModule(
-            module_id=module.module_id,
-            kind=module.kind,
-            config=deepcopy(module.config),
-            depends_on=dependencies,
-            required_gates=module.required_gates,
-        )
-        rewritten.validate()
-        normalized.append(rewritten)
-    return tuple(normalized)
+    return _strip_semantic_content_build_dependencies(modules)
 
 def _canonicalize_saved_content_asset_id(value: Any, index: int) -> str:
     """Map legacy host-authored asset IDs onto the shared proposal ID contract."""

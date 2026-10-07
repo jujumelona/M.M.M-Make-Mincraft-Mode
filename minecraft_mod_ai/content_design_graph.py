@@ -239,6 +239,36 @@ from .implementation_fact import FactProvenance, FactType, ImplementationFact
 from .task_template_runner import run_record_template
 
 
+def _strip_semantic_content_build_dependencies(
+    modules,
+) -> tuple[ProductionModule, ...]:
+    """Keep gameplay/content relations out of the production scheduling DAG.
+
+    Content relations describe runtime semantics and generated source references.
+    They do not require one source-generation module to finish before another:
+    canonical generators write independent files and the final compile observes
+    the complete generated source set. Keeping those semantic edges in
+    ProductionModule.depends_on can manufacture build cycles from perfectly valid
+    gameplay graphs.
+    """
+
+    normalized: list[ProductionModule] = []
+    for module in modules:
+        if not module.depends_on:
+            normalized.append(module)
+            continue
+        rewritten = ProductionModule(
+            module_id=module.module_id,
+            kind=module.kind,
+            config=deepcopy(module.config),
+            depends_on=(),
+            required_gates=module.required_gates,
+        )
+        rewritten.validate()
+        normalized.append(rewritten)
+    return tuple(normalized)
+
+
 def compile_content_graph(
     prompt,
     router,
@@ -889,7 +919,6 @@ def compile_content_graph(
             )
 
     module_by_id = {m.module_id: m for m in modules}
-    module_deps = {m.module_id: list(m.depends_on) for m in modules}
 
     def require_relation_codegen(module_id, relation_type, target_id):
         module = module_by_id.get(module_id)
@@ -938,7 +967,6 @@ def compile_content_graph(
             )
             if source in module_by_id:
                 module_by_id[source].config["drop"] = target
-                module_deps[source].append(target)
 
         elif rel_type in {"requires", "upgrades"}:
             facts.append(
@@ -953,8 +981,6 @@ def compile_content_graph(
                 )
             )
             if source in module_by_id:
-                if rel_type == "requires":
-                    module_deps[source].append(target)
                 module_by_id[source].config.setdefault(rel_type, []).append(target)
                 require_relation_codegen(source, rel_type, target)
 
@@ -1084,23 +1110,6 @@ def compile_content_graph(
 
         else:
             raise SlotFillError(f"CONTENT_RELATION_UNSUPPORTED: {edge}")
-
-    updated_modules = []
-    for m in modules:
-        deps = tuple(dict.fromkeys(module_deps.get(m.module_id, m.depends_on)))
-        if deps != m.depends_on:
-            updated_modules.append(
-                ProductionModule(
-                    m.module_id,
-                    m.kind,
-                    dict(m.config),
-                    depends_on=deps,
-                    required_gates=m.required_gates,
-                )
-            )
-        else:
-            updated_modules.append(m)
-    modules = updated_modules
 
     for eid, fact_type in capabilities.items():
         if fact_type not in {
@@ -1233,9 +1242,13 @@ def compile_content_graph(
                     normalized_resource_inputs,
                     node,
                 ),
-                depends_on=tuple(dict.fromkeys(edge["target_id"] for edge in edges)),
             )
         )
+
+    # Enforce the contract at the graph boundary as well as at each relation
+    # lowering site. This makes future relation kinds fail safe: semantic edges
+    # can never silently become production scheduling edges.
+    modules = list(_strip_semantic_content_build_dependencies(modules))
 
     by_slot = {}
     for decision in decisions:
