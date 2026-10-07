@@ -941,7 +941,8 @@ def compile_content_graph(
                 )
             )
             if source in module_by_id:
-                module_deps[source].append(target)
+                if rel_type == "requires":
+                    module_deps[source].append(target)
                 module_by_id[source].config.setdefault(rel_type, []).append(target)
                 require_relation_codegen(source, rel_type, target)
 
@@ -958,7 +959,6 @@ def compile_content_graph(
                 )
             )
             if target in module_by_id:
-                module_deps[target].append(source)
                 module_by_id[target].config.setdefault("unlocked_by", []).append(source)
                 require_relation_codegen(target, "unlocked_by", source)
 
@@ -977,7 +977,6 @@ def compile_content_graph(
                 )
             )
             if source in module_by_id:
-                module_deps[source].append(target)
                 module_by_id[source].config["opens_gui"] = target
                 require_relation_codegen(source, "opens", target)
 
@@ -996,7 +995,6 @@ def compile_content_graph(
                 )
             )
             if source in module_by_id:
-                module_deps[source].append(target)
                 module_by_id[source].config["controls"] = target
                 require_relation_codegen(source, "controls", target)
 
@@ -1015,7 +1013,6 @@ def compile_content_graph(
                 )
             )
             if source in module_by_id:
-                module_deps[source].append(target)
                 module_by_id[source].config["spawns"] = target
                 require_relation_codegen(source, "spawns", target)
 
@@ -1034,7 +1031,6 @@ def compile_content_graph(
                 )
             )
             if source in module_by_id:
-                module_deps[source].append(target)
                 module_by_id[source].config["transports_to"] = target
                 require_relation_codegen(source, "transports_to", target)
 
@@ -1053,7 +1049,6 @@ def compile_content_graph(
                 )
             )
             if source in module_by_id:
-                module_deps[source].append(target)
                 module_by_id[source].config.setdefault("displays", []).append(target)
                 require_relation_codegen(source, "displays", target)
 
@@ -1072,7 +1067,6 @@ def compile_content_graph(
                 )
             )
             if source in module_by_id:
-                module_deps[source].append(target)
                 module_by_id[source].config["sync_packet"] = target
                 require_relation_codegen(source, "synchronizes", target)
 
