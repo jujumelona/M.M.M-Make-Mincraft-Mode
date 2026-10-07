@@ -115,15 +115,69 @@ def test_unlock_relations_do_not_form_production_dependency_cycles() -> None:
         ProductionModule(farming, "gui", {}, (planetary, library)),
     )
     relations = (
-        ImplementationFact("p.unlocks.b", FactType.CONTENT_RELATION, planetary, builder, {"relation": "unlocks"}),
-        ImplementationFact("p.unlocks.f", FactType.CONTENT_RELATION, planetary, farming, {"relation": "unlocks"}),
-        ImplementationFact("l.unlocks.p", FactType.CONTENT_RELATION, library, planetary, {"relation": "unlocks"}),
-        ImplementationFact("l.unlocks.b", FactType.CONTENT_RELATION, library, builder, {"relation": "unlocks"}),
-        ImplementationFact("l.unlocks.f", FactType.CONTENT_RELATION, library, farming, {"relation": "unlocks"}),
-        ImplementationFact("b.unlocks.p", FactType.CONTENT_RELATION, builder, planetary, {"relation": "unlocks"}),
-        ImplementationFact("b.unlocks.l", FactType.CONTENT_RELATION, builder, library, {"relation": "unlocks"}),
-        ImplementationFact("f.unlocks.p", FactType.CONTENT_RELATION, farming, planetary, {"relation": "unlocks"}),
-        ImplementationFact("f.requires.l", FactType.CONTENT_RELATION, farming, library, {"relation": "requires"}),
+        ImplementationFact(
+            "p.unlocks.b",
+            FactType.CONTENT_RELATION,
+            planetary,
+            builder,
+            {"relation": "unlocks"},
+        ),
+        ImplementationFact(
+            "p.unlocks.f",
+            FactType.CONTENT_RELATION,
+            planetary,
+            farming,
+            {"relation": "unlocks"},
+        ),
+        ImplementationFact(
+            "l.unlocks.p",
+            FactType.CONTENT_RELATION,
+            library,
+            planetary,
+            {"relation": "unlocks"},
+        ),
+        ImplementationFact(
+            "l.unlocks.b",
+            FactType.CONTENT_RELATION,
+            library,
+            builder,
+            {"relation": "unlocks"},
+        ),
+        ImplementationFact(
+            "l.unlocks.f",
+            FactType.CONTENT_RELATION,
+            library,
+            farming,
+            {"relation": "unlocks"},
+        ),
+        ImplementationFact(
+            "b.unlocks.p",
+            FactType.CONTENT_RELATION,
+            builder,
+            planetary,
+            {"relation": "unlocks"},
+        ),
+        ImplementationFact(
+            "b.unlocks.l",
+            FactType.CONTENT_RELATION,
+            builder,
+            library,
+            {"relation": "unlocks"},
+        ),
+        ImplementationFact(
+            "f.unlocks.p",
+            FactType.CONTENT_RELATION,
+            farming,
+            planetary,
+            {"relation": "unlocks"},
+        ),
+        ImplementationFact(
+            "f.requires.l",
+            FactType.CONTENT_RELATION,
+            farming,
+            library,
+            {"relation": "requires"},
+        ),
     )
 
     normalized = _normalize_content_build_dependencies(modules, relations)
@@ -133,3 +187,50 @@ def test_unlock_relations_do_not_form_production_dependency_cycles() -> None:
     assert by_id[library].depends_on == ()
     assert by_id[builder].depends_on == ()
     assert by_id[farming].depends_on == (library,)
+
+
+
+def test_python_generator_job_persists_schema_valid_candidate_inputs() -> None:
+    from types import SimpleNamespace
+
+    from jsonschema import Draft202012Validator
+
+    from minecraft_mod_ai.artifact_expansion import expand_facts_to_jobs
+    from minecraft_mod_ai.canonical_schema_compiler import compile_leaf_schemas
+    from minecraft_mod_ai.implementation_fact import ImplementationFact
+    from minecraft_mod_ai.integrity_dispatcher import _canonical_inputs_for_job
+    from minecraft_mod_ai.populate_version_artifact_rules import build_version_facts
+    from minecraft_mod_ai.prompt_fact_types import FactType
+
+    leaf = "minecraft/screen/registration"
+    host_facts = build_version_facts("26.2", base_facts={})
+    resolved = SimpleNamespace(
+        minecraft="26.2",
+        context_id="candidate-26.2",
+        leaf_bindings=host_facts["leaf_bindings"],
+    )
+    fact = ImplementationFact(
+        fact_id="market_ui.exists",
+        fact_type=FactType.GUI_EXISTS,
+        subject="market_ui",
+        display_name="Market UI",
+        source_clause="Render a server-authoritative market screen.",
+    )
+
+    [job] = expand_facts_to_jobs(
+        (fact,),
+        mod_id="space_mod",
+        package_name="example.space",
+        minecraft_version="26.2",
+        version_context=resolved,
+    )
+    inputs = _canonical_inputs_for_job(job, {})
+
+    assert inputs == job.deterministic_inputs["_canonical_inputs"]
+    input_schema, _ = compile_leaf_schemas(leaf)
+    Draft202012Validator(input_schema).validate(inputs)
+    spec = inputs["screen_registration_input"]
+    assert spec["context_id"] == "candidate-26.2"
+    assert spec["side"] == "CLIENT"
+    assert spec["target_path"].startswith("src/client/java/")
+    assert spec["slots"][0]["name"] == "artifact_source"
