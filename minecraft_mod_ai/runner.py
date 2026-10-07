@@ -79,6 +79,15 @@ class _PreparedBuild:
     environment: dict[str, str]
 
 
+def production_gradle_cache_dir() -> Path:
+    """Return the shared SHA-verified Gradle distribution/dependency cache."""
+
+    configured = os.environ.get("MMM_GRADLE_CACHE_DIR", "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return (Path.home() / ".cache" / "mmm" / "production-gradle").resolve()
+
+
 class GradleRunner:
     def __init__(
         self,
