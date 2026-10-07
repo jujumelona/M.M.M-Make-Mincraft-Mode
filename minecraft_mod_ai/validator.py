@@ -8,7 +8,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from .artifact_job import canonical_client_entrypoints, parse_artifact_jobs
+from .artifact_job import (
+    artifact_owner_module_ids,
+    canonical_client_entrypoints,
+    parse_artifact_jobs,
+)
 from .complete_spec import CompleteProposal
 from .gametest_validation import validate_gametest_metadata
 from .local_ai_sidecar_generator import (
@@ -479,7 +483,8 @@ class ProjectValidator:
     ) -> int:
         checks = 0
         package_root = root / "src/main/java" / Path(*spec.package_name.split("."))
-        module_kinds = {module.kind for module in complete.modules}
+        native_modules = _complete_native_modules(complete)
+        module_kinds = {module.kind for module in native_modules}
         extended_kinds = {
             "item",
             "block",
@@ -535,7 +540,11 @@ class ProjectValidator:
                     )
                 )
 
-        entity_ids = _complete_entity_ids(complete)
+        entity_ids = {
+            module.module_id
+            for module in native_modules
+            if module.kind in {"entity", "boss", "npc"}
+        }
         for entity_id in sorted(entity_ids):
             checks += 1
             path = package_root / "entity" / f"{_class_name(entity_id)}Entity.java"
@@ -1016,6 +1025,45 @@ def _complete_entity_ids(proposal: CompleteProposal | None) -> set[str]:
     }
 
 
+def _complete_artifact_owner_ids(
+    proposal: CompleteProposal | None,
+) -> set[str]:
+    """Return modules whose production is owned by the canonical artifact graph."""
+
+    if proposal is None:
+        return set()
+    game_design = (
+        proposal.game_design if isinstance(proposal.game_design, dict) else {}
+    )
+    raw_jobs = game_design.get("_artifact_jobs", ())
+    if raw_jobs is None:
+        raw_jobs = ()
+    if not isinstance(raw_jobs, (list, tuple)):
+        return set()
+    try:
+        jobs = parse_artifact_jobs(raw_jobs)
+        return set(artifact_owner_module_ids(jobs))
+    except (KeyError, TypeError, ValueError):
+        # CompleteProposal validation owns malformed artifact graphs. Validation
+        # must never authorize a malformed ownership claim.
+        return set()
+
+
+def _complete_native_modules(
+    proposal: CompleteProposal | None,
+) -> tuple[Any, ...]:
+    """Return only modules routed through built-in/native production backends."""
+
+    if proposal is None:
+        return ()
+    artifact_owners = _complete_artifact_owner_ids(proposal)
+    return tuple(
+        module
+        for module in proposal.modules
+        if module.module_id not in artifact_owners
+    )
+
+
 def _complete_artifact_client_entrypoints(
     proposal: CompleteProposal | None,
 ) -> set[str]:
@@ -1401,7 +1449,8 @@ def _validate_complete_jar(
 ) -> int:
     checks = 0
     java_root = spec.package_name.replace(".", "/")
-    module_kinds = {module.kind for module in complete.modules}
+    native_modules = _complete_native_modules(complete)
+    module_kinds = {module.kind for module in native_modules}
     extended_kinds = {
         "item",
         "block",
@@ -1444,7 +1493,11 @@ def _validate_complete_jar(
                 f"{java_root}/system/MmmSystemConfig.class",
             }
         )
-    entity_ids = _complete_entity_ids(complete)
+    entity_ids = {
+        module.module_id
+        for module in native_modules
+        if module.kind in {"entity", "boss", "npc"}
+    }
     for entity_id in entity_ids:
         entity_class = _class_name(entity_id)
         expected_classes.update(
