@@ -41,7 +41,8 @@ def _relative_target(
     if trim > len(package_parts) - 1:
         return None
     base = package_parts[: len(package_parts) - trim]
-    return ".".join([*base, *module.split(".")])
+    module_parts = [part for part in module.split(".") if part]
+    return ".".join([*base, *module_parts])
 
 
 def validate_internal_package_integrity() -> dict[str, object]:
