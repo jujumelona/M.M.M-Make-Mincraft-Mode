@@ -25,34 +25,32 @@ def _asset() -> AssetRequest:
     )
 
 
-def test_image_backend_is_registry_owned_klein9b_q4_pixelart_lora() -> None:
+def test_image_backend_is_registry_owned_klein4b_q4_pixelart_lora() -> None:
     config = ModelRegistry().role("t4_local", "image_generator")
     profile = ImageGenerationConfig.from_adapter_config(config)
 
     assert config.adapter == "image_diffusion"
-    assert profile.model_id == "black-forest-labs/FLUX.2-klein-9B"
+    assert profile.model_id == "black-forest-labs/FLUX.2-klein-4B"
     assert profile.quantization == "bnb_4bit_nf4"
-    assert profile.lora_model_id == "artificialguybr/PIXELART-REDMOND-FLUXKLEIN9B"
-    assert profile.lora_weight_name == "[FLUX.2.Klein]PixelArt_Redmond.safetensors"
-    assert profile.lora_trigger == "Pixel Art, PixArFK"
+    assert profile.lora_model_id == "Limbicnation/pixel-art-lora"
+    assert profile.lora_weight_name == "pytorch_lora_weights.safetensors"
+    assert profile.lora_trigger == "pixel art sprite, game asset, transparent background"
     assert profile.candidate_count == 4
-    assert profile.preferred_generation_resolution == (1024, 1024)
-    assert profile.fallback_generation_resolution == (512, 512)
+    assert profile.preferred_generation_resolution == (512, 512)
 
 
 def test_image_profile_rejects_partial_lora_or_invalid_generation_geometry() -> None:
     base = SimpleNamespace(
-        model_id="black-forest-labs/FLUX.2-klein-9B",
+        model_id="black-forest-labs/FLUX.2-klein-4B",
         quantization="bnb_4bit_nf4",
         torch_dtype="float16",
         cpu_offload=True,
         extra={
-            "lora_model_id": "artificialguybr/PIXELART-REDMOND-FLUXKLEIN9B",
-            "lora_weight_name": "[FLUX.2.Klein]PixelArt_Redmond.safetensors",
-            "lora_trigger": "Pixel Art, PixArFK",
+            "lora_model_id": "Limbicnation/pixel-art-lora",
+            "lora_weight_name": "pytorch_lora_weights.safetensors",
+            "lora_trigger": "pixel art sprite, game asset, transparent background",
             "candidate_count": 4,
-            "preferred_generation_resolution": {"width": 1024, "height": 1024},
-            "fallback_generation_resolution": {"width": 512, "height": 512},
+            "preferred_generation_resolution": {"width": 512, "height": 512},
             "lora_allowed_layouts": ["isolated_sprite"],
             "prompt_requirements": ["readable silhouette at native pixel grid"],
         },
