@@ -836,8 +836,28 @@ def compile_content_graph(
                     source_clause=node["source_clauses"][0],
                 )
             )
-        modules.append(ProductionModule(eid, kind, config))
         visual = {k: v for k, v in props.items() if k in visual_properties}
+        visual_spec = {
+            "role": str(props.get("display_name") or eid),
+            "silhouette": str(visual.get("silhouette") or visual.get("shape") or ""),
+            "materials": [visual["material"]] if visual.get("material") else [],
+            "motifs": [visual["surface"]] if visual.get("surface") else [],
+            "palette": {
+                key: visual[source]
+                for key, source in (("primary", "main_color"), ("accent", "accent"))
+                if visual.get(source)
+            },
+        }
+
+        # GUI sprites and fixed-UV entity textures are structurally bound assets:
+        # geometry/layout, protected regions/UV schema, and the exact consumer
+        # binding must be owned by HOST. This semantic content pass does not have
+        # that authority, so preserve the visual intent on the module and defer
+        # the texture request until a concrete host binding exists.
+        if visual and kind in {"gui", "entity", "boss", "npc"}:
+            config["visual_spec"] = visual_spec
+
+        modules.append(ProductionModule(eid, kind, config))
         if visual:
             visual_desc = ", ".join(f"{k}: {v}" for k, v in visual.items())
             if kind in {"item", "armor"}:
@@ -846,12 +866,10 @@ def compile_content_graph(
             elif kind == "block":
                 asset_kind = "block"
                 render_kind = "block.cube_all"
-            elif kind in {"entity", "boss", "npc"}:
-                asset_kind = "entity"
-                render_kind = "entity.fixed_uv"
-            elif kind == "gui":
-                asset_kind = "gui"
-                render_kind = "gui.sprite"
+            elif kind in {"gui", "entity", "boss", "npc"}:
+                # Structured visual assets are deferred until HOST geometry/layout
+                # and an exact screen/model consumer binding are available.
+                continue
             else:
                 raise ValueError(
                     f"ASSET_KIND_UNSUPPORTED: no texture contract for module kind {kind!r} ({eid})"
@@ -866,13 +884,7 @@ def compile_content_graph(
                     subject_id=eid,
                     owner_module_id=eid,
                     container="mod",
-                    visual_spec={
-                        "role": str(props.get("display_name") or eid),
-                        "silhouette": str(visual.get("silhouette") or visual.get("shape") or ""),
-                        "materials": [visual["material"]] if visual.get("material") else [],
-                        "motifs": [visual["surface"]] if visual.get("surface") else [],
-                        "palette": {key: visual[source] for key, source in (("primary", "main_color"), ("accent", "accent")) if visual.get(source)},
-                    },
+                    visual_spec=visual_spec,
                 )
             )
 
