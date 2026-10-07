@@ -1460,7 +1460,6 @@ class CompleteProductionOrchestrator:
         artifact_jobs = parse_artifact_jobs(
             approved.game_design.get("_artifact_jobs", ())
         )
-        artifact_owners = frozenset(routing.artifact_owner_module_ids)
         try:
             validate_production_generation_project(
                 project_root,
