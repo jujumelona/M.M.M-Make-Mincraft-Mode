@@ -1437,10 +1437,30 @@ class CompleteProductionOrchestrator:
                     ledger.retry(node_id)
 
         spec = approved.base_proposal.spec
+        try:
+            routing = compile_production_routing(approved, modules=ordered)
+        except ProductionRoutingError as exc:
+            raise CompleteProductionError(
+                f"Production routing changed before dispatch: {exc}"
+            ) from exc
+        route_by_module_id = routing.route_by_module_id
+        expected_routing_hashes = {
+            str(node.payload.get("production_routing_sha256") or "")
+            for node in work_plan.nodes
+            if str(node.payload.get("kind") or "") == "module-shard"
+        }
+        if expected_routing_hashes and expected_routing_hashes != {
+            routing.contract_sha256
+        }:
+            raise CompleteProductionError(
+                "STALE_PRODUCTION_ROUTING: work graph routing fingerprint does "
+                "not match current canonical production routing."
+            )
+
         artifact_jobs = parse_artifact_jobs(
             approved.game_design.get("_artifact_jobs", ())
         )
-        artifact_owners = artifact_owner_module_ids(artifact_jobs)
+        artifact_owners = frozenset(routing.artifact_owner_module_ids)
         try:
             validate_production_generation_project(
                 project_root,
