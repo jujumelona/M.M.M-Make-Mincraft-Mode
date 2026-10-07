@@ -203,6 +203,61 @@ def test_generation_owner_wins_before_base_project_fallback():
     assert [item["node_id"] for item in matches] == ["generate-content-00000000"]
 
 
+def test_asset_receipt_path_binds_owner_module_without_semantic_observation():
+    asset_path = (
+        "/workspace/mod/src/main/resources/assets/demo/textures/item/space_crystal.png"
+    )
+    ledger = _FakeLedger(
+        [
+            {
+                "node_id": "generate-assets-00000000",
+                "stage": "generate:assets",
+                "state": "succeeded",
+                "payload": {
+                    "members": [
+                        {
+                            "asset_id": "space_crystal_texture",
+                            "owner_module_id": "space_crystal",
+                        }
+                    ]
+                },
+                "receipt": {
+                    "schema_version": "mmm/resource-production-receipt-v2",
+                    "status": "TEXTURE_PRODUCTION_PASS",
+                    "assets": [
+                        {
+                            "asset_id": "space_crystal_texture",
+                            "container": "mod",
+                            "target": asset_path,
+                        }
+                    ],
+                    "documents": [],
+                },
+            }
+        ]
+    )
+
+    seeds, owners, _requirements, matches = feedback._derive_impacted_seeds(
+        ledger,
+        {
+            "checkpoint_id": "validate-source",
+            "diagnostics": [
+                {
+                    "path": "src/main/resources/assets/demo/textures/item/space_crystal.png",
+                    "code": "BAD_TEXTURE",
+                }
+            ],
+        },
+    )
+
+    assert seeds == {"generate-assets-00000000"}
+    assert owners == {"space_crystal"}
+    assert matches[0]["diagnostic_paths"] == [
+        "src/main/resources/assets/demo/textures/item/space_crystal.png"
+    ]
+    assert matches[0]["match"]["observed_path"] is True
+
+
 def test_path_binding_does_not_use_basename_only():
     assert feedback._path_equivalent(
         "/workspace/mod/src/main/java/a/Widget.java",
