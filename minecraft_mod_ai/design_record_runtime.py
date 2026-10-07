@@ -713,47 +713,102 @@ def _run_relations(router, identifier, context, progress, checkpoint):
             return []
 
         pair_context = {
-            **normalized,
-            "source_id": source_id,
-            "target_id": target_id,
-            "allowed_relation_types": allowed_relation_types,
+            "requirements": normalized.get("requirements", []),
+            "design_contexts": normalized.get("design_contexts", []),
+            "source_entity": entity_by_id[source_id],
+            "target_entity": entity_by_id[target_id],
+            "allowed_relation_types": list(allowed_relation_types),
         }
-        batch = run_bounded_record_template(
+
+        # Generic bounded-record authoring lets each ordinal see the same enum.
+        # For relation_type-only records that makes duplicate sibling decisions
+        # possible, while the generic runtime rejects duplicates before this
+        # caller can normalize them. Make uniqueness structural instead: choose
+        # the pair cardinality once, then remove each selected relation type
+        # from the enum before the next model call.
+        count_schema = {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer",
+                    "enum": list(range(0, len(allowed_relation_types) + 1)),
+                },
+            },
+            "required": ["count"],
+            "additionalProperties": False,
+        }
+        count_value = _relation_selector(
             router,
-            identifier,
-            context=pair_context,
+            template,
+            normalized,
+            selector_id=f"pair-relations:{source_id}:{target_id}:count",
+            selector_context=pair_context,
+            response_schema=count_schema,
             progress=progress,
             checkpoint=safe_checkpoint,
+            instruction=(
+                "Choose how many distinct explicit relationships are required "
+                "for this fixed ordered entity pair. Zero is valid when the "
+                "active requirements do not explicitly relate the pair."
+            ),
         )
 
-        pair_relation_types: set[str] = set()
-        key_relation_seen = False
-        result: list[dict[str, Any]] = []
-        for decision in batch["records"]:
-            relation_type = decision.get("relation_type")
-            if relation_type not in allowed_relation_types:
-                raise TemplateBlocked(
-                    f"TEMPLATE_RELATION_UNSUPPORTED: {source_id}->{target_id}: "
-                    f"{relation_type}"
-                )
-            if relation_type in pair_relation_types:
-                continue
-            if relation_type.startswith("key_"):
-                if key_relation_seen:
-                    raise TemplateBlocked(
-                        f"TEMPLATE_RELATION_KEY_DUPLICATE: {source_id}->{target_id}"
-                    )
-                key_relation_seen = True
-
-            pair_relation_types.add(relation_type)
-            result.append(
-                {
-                    "relation_type": relation_type,
-                    "source_id": str(source_id),
-                    "target_id": str(target_id),
-                }
+        remaining = list(allowed_relation_types)
+        selected_relation_types: list[str] = []
+        for index in range(int(count_value["count"])):
+            relation_schema = {
+                "type": "object",
+                "properties": {
+                    "relation_type": {
+                        "type": "string",
+                        "enum": list(remaining),
+                    },
+                },
+                "required": ["relation_type"],
+                "additionalProperties": False,
+            }
+            decision = _relation_selector(
+                router,
+                template,
+                normalized,
+                selector_id=f"pair-relations:{source_id}:{target_id}:member:{index}",
+                selector_context={
+                    **pair_context,
+                    "selected_relation_types": list(selected_relation_types),
+                    "remaining_relation_types": list(remaining),
+                    "member_index": index,
+                },
+                response_schema=relation_schema,
+                progress=progress,
+                checkpoint=safe_checkpoint,
+                instruction=(
+                    f"Choose distinct explicit relationship {index + 1} for "
+                    "this fixed ordered entity pair. Previously selected "
+                    "relationship types have been removed by the host."
+                ),
             )
-        return result
+            relation_type = decision["relation_type"]
+            selected_relation_types.append(relation_type)
+            remaining.remove(relation_type)
+
+        key_relations = [
+            relation_type
+            for relation_type in selected_relation_types
+            if relation_type.startswith("key_")
+        ]
+        if len(key_relations) > 1:
+            raise TemplateBlocked(
+                f"TEMPLATE_RELATION_KEY_DUPLICATE: {source_id}->{target_id}"
+            )
+
+        return [
+            {
+                "relation_type": relation_type,
+                "source_id": str(source_id),
+                "target_id": str(target_id),
+            }
+            for relation_type in selected_relation_types
+        ]
 
     pair_results = deterministic_model_map(
         router,
