@@ -9,6 +9,13 @@ from typing import Any
 from .artifact_job import ArtifactJob
 from .artifact_ports import PortKind
 from .implementation_fact import ImplementationFact
+from .execution_contract_policy import (
+    SCHEMA_CONTRACT_PROFILE_KEY,
+    SCHEMA_STRING_CLASS_KEY,
+    SOURCE_REPAIR_MAX_SOURCE_CHARS,
+    SOURCE_REPAIR_SCHEMA_PROFILE,
+    STRING_CLASS_SOURCE,
+)
 from .implementation_identity import ExecutorType
 from .implementation_template_renderer import render_template
 from .prompt_fact_types import FactType, PromptFact
@@ -235,11 +242,20 @@ def _canonical_candidate_inputs(
     if parent_requirement:
         bindings["parent_requirement"] = parent_requirement
 
+    source_pattern = (
+        rf"(?s)public\s+(?:final\s+)?class\s+{re.escape(class_name)}"
+        rf"\s+implements\s+(?:net\.fabricmc\.api\.)?ClientModInitializer\b"
+        rf".*\bonInitializeClient\s*\("
+        if side == "CLIENT"
+        else rf"(?:class|record|interface|enum)\s+{re.escape(class_name)}\b"
+    )
     output_schema = {
         "type": "string",
         "minLength": 1,
-        "maxLength": 20000,
-        "pattern": rf"(?:class|record|interface|enum)\s+{re.escape(class_name)}\b",
+        "maxLength": SOURCE_REPAIR_MAX_SOURCE_CHARS,
+        "pattern": source_pattern,
+        SCHEMA_CONTRACT_PROFILE_KEY: SOURCE_REPAIR_SCHEMA_PROFILE,
+        SCHEMA_STRING_CLASS_KEY: STRING_CLASS_SOURCE,
     }
     spec = {
         "leaf_id": canonical_leaf,
@@ -257,8 +273,14 @@ def _canonical_candidate_inputs(
                 "name": "artifact_source",
                 "description": (
                     "Return complete compilable Java source only, with no Markdown. "
-                    f"Use package {generated_package} and declare public class {class_name}. "
-                    f"Implement only canonical responsibility {canonical_leaf} for "
+                    f"Use package {generated_package} and declare public final class {class_name}. "
+                    + (
+                        "The class must implement net.fabricmc.api.ClientModInitializer "
+                        "and perform its registration from public void onInitializeClient(). "
+                        if side == "CLIENT"
+                        else ""
+                    )
+                    + f"Implement only canonical responsibility {canonical_leaf} for "
                     f"Minecraft {minecraft_version}. Preserve the supplied gameplay "
                     "requirement and verified bindings; do not invent unrelated systems."
                 ),
