@@ -19,7 +19,6 @@ from typing import Any
 from .artifact_graph_executor import execute_artifact_graph
 from .artifact_job import (
     ArtifactJob,
-    artifact_owner_module_ids,
     canonical_client_entrypoints,
     parse_artifact_jobs,
 )
@@ -104,6 +103,10 @@ from .platform_catalog import adapter_for_lock_values, adapter_from_project
 from .prepared_project_resume_integrity import (
     prepared_project_cache_valid,
     prepared_project_matches_spec,
+)
+from .production_routing_contract import (
+    ProductionRoutingError,
+    compile_production_routing,
 )
 from .production_contract import (
     evaluate_quality_contract,
