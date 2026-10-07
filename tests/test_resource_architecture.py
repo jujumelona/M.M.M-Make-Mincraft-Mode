@@ -58,6 +58,42 @@ def test_module_assets_are_host_derived_and_owned() -> None:
     assert row["owner_module_id"] == "moon_blade"
 
 
+def test_long_module_asset_id_uses_complete_proposal_identity_contract() -> None:
+    from minecraft_mod_ai.complete_spec import AssetRequest
+    from minecraft_mod_ai.spec_identity import SPEC_ID_MAX_LENGTH, SPEC_ID_RE
+
+    module = ProductionModule(
+        module_id="space_mode_ship_module_blueprint_registry_item_template",
+        kind="item",
+        config={"display_name_en": "Ship Component Blueprint Registry"},
+    )
+    [row] = derive_module_asset_specs((module,))
+
+    assert row["asset_id"] == (
+        "texture_item_space_mode_ship_module_blueprint_regis_b180319a9b72"
+    )
+    assert len(row["asset_id"]) <= SPEC_ID_MAX_LENGTH
+    assert SPEC_ID_RE.fullmatch(row["asset_id"])
+
+    AssetRequest(**row).validate()
+
+
+def test_host_derived_asset_dedup_uses_canonical_long_id() -> None:
+    module = ProductionModule(
+        module_id="space_mode_ship_module_blueprint_registry_item_template",
+        kind="item",
+        config={"display_name_en": "Ship Component Blueprint Registry"},
+    )
+    canonical_id = (
+        "texture_item_space_mode_ship_module_blueprint_regis_b180319a9b72"
+    )
+
+    assert derive_module_asset_specs(
+        (module,),
+        existing_asset_ids=(canonical_id,),
+    ) == ()
+
+
 def test_item_serialization_follows_host_client_item_binding() -> None:
     asset = AssetRequest("texture_item_blade", "item", visual_description="dark steel blade", render_kind="item.generated", subject_id="blade")
     old = resolve_asset(asset, namespace="demo", minecraft_version="1.21.3")
