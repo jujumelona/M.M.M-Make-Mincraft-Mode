@@ -573,14 +573,6 @@ class CompleteModAISession:
                 **{**selected.__dict__, "source_only": True}
             )
 
-        bound_platform = _bound_platform_for_preflight(self, proposal)
-        if bound_platform is not None:
-            from .complete_preflight_contract import (
-                validate_platform_toolchain_preflight,
-            )
-
-            validate_platform_toolchain_preflight(bound_platform, selected)
-
         # AuthoredPlan compilation may invoke the model several times. Prove the
         # mandatory image backend first so gated/inaccessible repositories fail
         # at build entry instead of after production authoring has already run.
@@ -601,6 +593,14 @@ class CompleteModAISession:
                     "Image backend preflight failed before production planning: "
                     f"{exc}"
                 ) from exc
+
+        bound_platform = _bound_platform_for_preflight(self, proposal)
+        if bound_platform is not None:
+            from .complete_preflight_contract import (
+                validate_platform_toolchain_preflight,
+            )
+
+            validate_platform_toolchain_preflight(bound_platform, selected)
 
         proposal = _production_proposal(self, proposal)
         result = self.orchestrator.execute(
