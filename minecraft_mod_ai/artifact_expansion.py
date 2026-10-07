@@ -243,11 +243,15 @@ def _canonical_candidate_inputs(
         bindings["parent_requirement"] = parent_requirement
 
     source_pattern = (
-        rf"(?s)public\s+(?:final\s+)?class\s+{re.escape(class_name)}"
+        rf"(?s)\bpackage\s+{re.escape(generated_package)}\s*;.*"
+        rf"\bpublic\s+(?:final\s+)?class\s+{re.escape(class_name)}"
         rf"\s+implements\s+(?:net\.fabricmc\.api\.)?ClientModInitializer\b"
         rf".*\bonInitializeClient\s*\("
         if side == "CLIENT"
-        else rf"(?:class|record|interface|enum)\s+{re.escape(class_name)}\b"
+        else (
+            rf"(?s)\bpackage\s+{re.escape(generated_package)}\s*;.*"
+            rf"(?:class|record|interface|enum)\s+{re.escape(class_name)}\b"
+        )
     )
     output_schema = {
         "type": "string",
