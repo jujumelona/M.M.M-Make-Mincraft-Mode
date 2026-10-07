@@ -457,6 +457,67 @@ def _bound_target(design: Mapping[str, Any]) -> dict[str, str]:
     return {key: getattr(coordinates, key) for key in _TARGET_KEYS}
 
 
+def _normalize_content_build_dependencies(
+    modules: tuple[ProductionModule, ...],
+    facts: tuple[Any, ...],
+) -> tuple[ProductionModule, ...]:
+    """Keep runtime/progression relations out of the production build DAG.
+
+    Saved content designs historically projected incoming unlocks edges into
+    ProductionModule.depends_on. That turns valid gameplay progression cycles
+    into impossible build cycles. Only explicit hard requires relations are
+    production ordering edges. Unknown/non-relation dependencies are preserved.
+    """
+
+    from .prompt_fact_types import FactType
+
+    module_ids = {module.module_id for module in modules}
+    incoming_unlocks: set[tuple[str, str]] = set()
+    hard_requires: set[tuple[str, str]] = set()
+
+    for fact in facts:
+        if getattr(fact, "fact_type", None) != FactType.CONTENT_RELATION:
+            continue
+        subject = str(getattr(fact, "subject", "") or "").strip()
+        target = str(getattr(fact, "object", "") or "").strip()
+        value = getattr(fact, "value", None)
+        relation = (
+            str(value.get("relation") or "").strip()
+            if isinstance(value, Mapping)
+            else ""
+        )
+        if subject not in module_ids or target not in module_ids:
+            continue
+        if relation == "unlocks":
+            # The unlocked module previously depended on the unlocker.
+            incoming_unlocks.add((target, subject))
+        elif relation == "requires":
+            hard_requires.add((subject, target))
+
+    normalized: list[ProductionModule] = []
+    for module in modules:
+        dependencies = tuple(
+            dependency
+            for dependency in module.depends_on
+            if (
+                (module.module_id, dependency) in hard_requires
+                or (module.module_id, dependency) not in incoming_unlocks
+            )
+        )
+        if dependencies == module.depends_on:
+            normalized.append(module)
+            continue
+        rewritten = ProductionModule(
+            module_id=module.module_id,
+            kind=module.kind,
+            config=deepcopy(module.config),
+            depends_on=dependencies,
+            required_gates=module.required_gates,
+        )
+        rewritten.validate()
+        normalized.append(rewritten)
+    return tuple(normalized)
+
 def _compile_content_artifact_graph(
     plan: AuthoredPlan,
     *,
@@ -580,6 +641,8 @@ def _compile_content_artifact_graph(
     facts = tuple(parsed_facts)
     if modules and not facts:
         raise ValueError("CONTENT_ARTIFACT_FACTS_REQUIRED")
+
+    modules = _normalize_content_build_dependencies(modules, facts)
 
     from .artifact_expansion import FACT_TO_CANONICAL_LEAVES
     from .platform_backend_contract import (
