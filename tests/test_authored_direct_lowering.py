@@ -190,6 +190,73 @@ def test_unlock_relations_do_not_form_production_dependency_cycles() -> None:
 
 
 
+def test_semantic_relation_cycle_is_removed_but_hard_build_edges_survive() -> None:
+    from minecraft_mod_ai.authored_production import _normalize_content_build_dependencies
+    from minecraft_mod_ai.complete_spec import ProductionModule
+    from minecraft_mod_ai.implementation_fact import ImplementationFact
+    from minecraft_mod_ai.prompt_fact_types import FactType
+
+    blueprint = "spacemode_blueprint_types_registry_data_component"
+    fabricator = "spacemode_hull_engine_weapon_block_entity_runtime_state_manager"
+    registry = "spacemode_ship_module_registry_gui_screen_component_server_side_"
+    recipe = "host_crafting_recipe_d458014cd572"
+
+    # This is the dependency shape emitted by the saved proposal that regressed:
+    # requires + unlocks + bidirectional displays/upgrades formed one build cycle,
+    # while the recipe dependency is a real non-relation production dependency.
+    modules = (
+        ProductionModule(blueprint, "item", {}, (registry,)),
+        ProductionModule(fabricator, "gui", {}, (blueprint, registry)),
+        ProductionModule(registry, "gui", {}, (fabricator,)),
+        ProductionModule(recipe, "recipe", {}, (blueprint,)),
+    )
+    relations = (
+        ImplementationFact(
+            "blueprint.unlocks.fabricator",
+            FactType.CONTENT_RELATION,
+            blueprint,
+            fabricator,
+            {"relation": "unlocks"},
+        ),
+        ImplementationFact(
+            "blueprint.requires.registry",
+            FactType.CONTENT_RELATION,
+            blueprint,
+            registry,
+            {"relation": "requires"},
+        ),
+        ImplementationFact(
+            "fabricator.displays.registry",
+            FactType.CONTENT_RELATION,
+            fabricator,
+            registry,
+            {"relation": "displays"},
+        ),
+        ImplementationFact(
+            "registry.displays.fabricator",
+            FactType.CONTENT_RELATION,
+            registry,
+            fabricator,
+            {"relation": "displays"},
+        ),
+        ImplementationFact(
+            "registry.upgrades.fabricator",
+            FactType.CONTENT_RELATION,
+            registry,
+            fabricator,
+            {"relation": "upgrades"},
+        ),
+    )
+
+    normalized = _normalize_content_build_dependencies(modules, relations)
+    by_id = {module.module_id: module for module in normalized}
+
+    assert by_id[blueprint].depends_on == (registry,)
+    assert by_id[fabricator].depends_on == ()
+    assert by_id[registry].depends_on == ()
+    assert by_id[recipe].depends_on == (blueprint,)
+
+
 def test_python_generator_job_persists_schema_valid_candidate_inputs() -> None:
     from types import SimpleNamespace
 
