@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import tempfile
 
@@ -129,9 +128,18 @@ class IntegritySymbols {
 
 def analyze_java(source: str, *, classpath=(), java_version="17", filename="IntegrityInput.java",
                  parse_only=False, timeout=60) -> list[dict]:
-    java = shutil.which("java")
-    if not java:
-        raise RuntimeError("JAVA_TOOLCHAIN_UNAVAILABLE")
+    from .java_lsp import _resolve_project_java_home, _java_executable
+
+    # Use the same exact-target resolver as Gradle and JDT, including lazy JDK
+    # provisioning. PATH may still point at Colab's older system Java.
+    required_java = int(str(java_version).strip())
+    if required_java <= 0:
+        raise ValueError("JAVA_VERSION_INVALID")
+    java_home = _resolve_project_java_home(required_java, require_compiler=True)
+    java = str(_java_executable(java_home))
+    compiler = java_home / "bin" / ("javac.exe" if os.name == "nt" else "javac")
+    if not compiler.is_file():
+        raise RuntimeError(f"JAVA_TOOLCHAIN_COMPILER_UNAVAILABLE: Java {required_java} at {java_home}")
     paths = [Path(p).resolve() for p in classpath]
     if any(not p.exists() for p in paths):
         raise ValueError("JAVA_CLASSPATH_MISSING")

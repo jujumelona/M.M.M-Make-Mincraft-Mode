@@ -212,7 +212,7 @@ def _provision_project_java_home(required: int, detail: str) -> Path:
     )
 
 
-def _resolve_project_java_home(required_major: int | None = None) -> Path:
+def _resolve_project_java_home(required_major: int | None = None, *, require_compiler: bool = False) -> Path:
     required = required_major if required_major is not None else _requested_project_java_major()
     seen: set[Path] = set()
     homes: list[Path] = []
@@ -231,7 +231,8 @@ def _resolve_project_java_home(required_major: int | None = None) -> Path:
         if major is None:
             continue
         observed.append(f"{home}=>{major}")
-        if major == required:
+        compiler = home / "bin" / ("javac.exe" if os.name == "nt" else "javac")
+        if major == required and (not require_compiler or compiler.is_file()):
             return home
     detail = ", ".join(observed) if observed else "no usable Java homes discovered"
     return _provision_project_java_home(required, detail)

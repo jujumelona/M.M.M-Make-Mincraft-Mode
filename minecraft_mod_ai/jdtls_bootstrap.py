@@ -121,7 +121,8 @@ def _candidate_jdk_homes() -> list[Path]:
 def _find_matching_jdk(major: int) -> Path | None:
     for home in _candidate_jdk_homes():
         java = _jdk_java(home)
-        if java.is_file() and os.access(java, os.X_OK) and _java_major(str(java)) == major:
+        compiler = home / "bin" / ("javac.exe" if os.name == "nt" else "javac")
+        if java.is_file() and compiler.is_file() and os.access(java, os.X_OK) and _java_major(str(java)) == major:
             return home
     return None
 
