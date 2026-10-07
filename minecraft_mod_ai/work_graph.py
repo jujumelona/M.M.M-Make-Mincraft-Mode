@@ -1047,22 +1047,40 @@ def _module_shards(
     modules: Sequence[ProductionModule],
     *,
     policy: ScalePolicy,
-    routes: Mapping[str, Any],
+    routes: Mapping[str, Any] | None = None,
+    deterministic_module_kinds: frozenset[str] | None = None,
+    artifact_owners: frozenset[str] = frozenset(),
 ) -> Iterator[tuple[str, tuple[ProductionModule, ...]]]:
-    """Emit bounded dependency-ready waves from the canonical routing snapshot."""
+    """Emit bounded dependency-ready waves.
 
-    missing_routes = [
-        module.module_id for module in modules if module.module_id not in routes
-    ]
-    if missing_routes:
-        raise WorkGraphError(
-            "PRODUCTION_ROUTING_MISSING_MODULE: "
-            f"{missing_routes[:20]}"
-        )
-    staged = [
-        (module, str(routes[module.module_id].stage))
-        for module in modules
-    ]
+    Production callers must pass the canonical routing snapshot.  The fallback
+    arguments remain only for direct helper/tests that predate that contract.
+    """
+
+    if routes is not None:
+        missing_routes = [
+            module.module_id for module in modules if module.module_id not in routes
+        ]
+        if missing_routes:
+            raise WorkGraphError(
+                "PRODUCTION_ROUTING_MISSING_MODULE: "
+                f"{missing_routes[:20]}"
+            )
+        staged = [
+            (module, str(routes[module.module_id].stage))
+            for module in modules
+        ]
+    else:
+        staged = [
+            (
+                module,
+                "content" if module.module_id in artifact_owners else _module_stage(
+                    module,
+                    deterministic_module_kinds=deterministic_module_kinds,
+                ),
+            )
+            for module in modules
+        ]
     stage_counts: dict[str, int] = {}
     for _module, stage in staged:
         stage_counts[stage] = stage_counts.get(stage, 0) + 1
