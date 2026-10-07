@@ -529,6 +529,15 @@ def _normalize_content_build_dependencies(
         normalized.append(rewritten)
     return tuple(normalized)
 
+def _canonicalize_saved_content_asset_id(value: Any, index: int) -> str:
+    """Map legacy host-authored asset IDs onto the shared proposal ID contract."""
+
+    return canonical_spec_id(
+        str(value or ""),
+        fallback=f"asset_{index}",
+    )
+
+
 def _defer_unbound_structured_content_assets(
     modules: tuple[ProductionModule, ...],
     assets: tuple[AssetRequest, ...],
@@ -697,9 +706,9 @@ def _compile_content_artifact_graph(
         # CompleteProposal's 64-character ID bound. Canonicalize exactly at this
         # saved-plan production boundary so resume/build does not require replan.
         asset_payload = deepcopy(dict(item))
-        asset_payload["asset_id"] = canonical_spec_id(
-            str(asset_payload.get("asset_id") or ""),
-            fallback=f"asset_{index}",
+        asset_payload["asset_id"] = _canonicalize_saved_content_asset_id(
+            asset_payload.get("asset_id"),
+            index,
         )
         if asset_payload["asset_id"] in seen_asset_ids:
             raise ValueError(
