@@ -16,9 +16,7 @@ from .complete_spec import CompleteProposal, ProductionModule
 from .platform_backend_contract import (
     NATIVE_INTEGRATION_TYPES,
     SYSTEM_KIND_TO_PACK,
-    deterministic_backend_capabilities,
     missing_production_backend_capabilities,
-    native_production_route_available,
     native_production_stage,
 )
 from .production_routing_contract import (
