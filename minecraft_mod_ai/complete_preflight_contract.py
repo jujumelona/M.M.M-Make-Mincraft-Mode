@@ -64,11 +64,11 @@ def validate_required_gate_contract(proposal: Any) -> None:
         )
 
 
-def _validate_java_toolchain_preflight(
-    proposal: Any,
+def validate_platform_toolchain_preflight(
+    platform: Any,
     options: Any,
 ) -> None:
-    """Prove the selected Java/JDT runtime before generation starts."""
+    """Prove one already-bound target toolchain before model/generation work."""
 
     source_only = bool(getattr(options, "source_only", False))
     run_jdt = bool(getattr(options, "run_jdt", False))
@@ -76,11 +76,14 @@ def _validate_java_toolchain_preflight(
         return
 
     try:
-        platform = proposal.base_proposal.spec.platform
-        raw_java = getattr(platform, "java_version")
-    except (AttributeError, TypeError) as exc:
+        from .platform_catalog import adapter_for_lock_values
+
+        adapter = adapter_for_lock_values(platform)
+        raw_java = getattr(adapter, "java_version")
+    except Exception as exc:
         raise CompleteProductionError(
-            "Approved proposal is missing the locked Java toolchain."
+            "Approved target toolchain cannot be resolved before execution: "
+            f"{type(exc).__name__}: {exc}"
         ) from exc
 
     from .java_lsp import (
@@ -114,10 +117,8 @@ def _validate_java_toolchain_preflight(
 
     if not source_only:
         try:
-            from .platform_catalog import adapter_for_lock_values
             from .runner import GradleRunner, production_gradle_cache_dir
 
-            adapter = adapter_for_lock_values(platform)
             GradleRunner(
                 production_gradle_cache_dir(),
                 download_timeout_seconds=300,
@@ -158,6 +159,19 @@ def _validate_java_toolchain_preflight(
             f"project_release={required}, owner_java={owner_major}; "
             f"{type(exc).__name__}: {exc}"
         ) from exc
+
+
+def _validate_java_toolchain_preflight(
+    proposal: Any,
+    options: Any,
+) -> None:
+    try:
+        platform = proposal.base_proposal.spec.platform
+    except (AttributeError, TypeError) as exc:
+        raise CompleteProductionError(
+            "Approved proposal is missing the locked Java toolchain."
+        ) from exc
+    validate_platform_toolchain_preflight(platform, options)
 
 
 def validate_external_execution_preflight(
@@ -282,5 +296,6 @@ __all__ = [
     "REQUIRED_GATE_TO_EVIDENCE",
     "normalize_required_gate",
     "validate_external_execution_preflight",
+    "validate_platform_toolchain_preflight",
     "validate_required_gate_contract",
 ]
