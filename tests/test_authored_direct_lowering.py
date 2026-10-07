@@ -257,6 +257,86 @@ def test_semantic_relation_cycle_is_removed_but_hard_build_edges_survive() -> No
     assert by_id[recipe].depends_on == (blueprint,)
 
 
+def test_unbound_structured_content_assets_are_deferred_without_losing_visual_intent() -> None:
+    from types import SimpleNamespace
+
+    from minecraft_mod_ai.authored_production import (
+        _defer_unbound_structured_content_assets,
+    )
+    from minecraft_mod_ai.complete_spec import AssetRequest, ProductionModule
+
+    for module_kind, asset_kind, render_kind in (
+        ("gui", "gui", "gui.sprite"),
+        ("entity", "entity", "entity.fixed_uv"),
+    ):
+        module = ProductionModule("screen_or_entity", module_kind, {})
+        visual_spec = {
+            "role": "ship interface",
+            "silhouette": "",
+            "materials": [],
+            "motifs": [],
+            "palette": {"primary": "#112233"},
+        }
+        asset = AssetRequest(
+            asset_id="texture_structured_subject",
+            kind=asset_kind,
+            visual_description="main_color: #112233",
+            render_kind=render_kind,
+            subject_id="screen_or_entity",
+            owner_module_id="screen_or_entity",
+            visual_spec=visual_spec,
+        )
+        version_context = SimpleNamespace(facts={})
+
+        modules, assets = _defer_unbound_structured_content_assets(
+            (module,),
+            (asset,),
+            version_context,
+        )
+
+        assert assets == ()
+        assert modules[0].config["visual_spec"] == visual_spec
+
+
+def test_partial_structured_host_binding_is_not_silently_deferred() -> None:
+    from types import SimpleNamespace
+
+    from minecraft_mod_ai.authored_production import (
+        _defer_unbound_structured_content_assets,
+    )
+    from minecraft_mod_ai.complete_spec import AssetRequest, ProductionModule
+
+    module = ProductionModule("ship_ui", "gui", {})
+    asset = AssetRequest(
+        asset_id="texture_gui_ship_ui",
+        kind="gui",
+        visual_description="main_color: #445566",
+        render_kind="gui.sprite",
+        subject_id="ship_ui",
+        owner_module_id="ship_ui",
+        visual_spec={"role": "ship ui", "palette": {"primary": "#445566"}},
+    )
+    version_context = SimpleNamespace(
+        facts={
+            "resource_asset_bindings": {
+                # Deliberately incomplete. Presence means the normal strict
+                # resource validator must diagnose it rather than migration
+                # silently dropping the request.
+                "ship_ui": {"render_kind": "gui.sprite"},
+            }
+        }
+    )
+
+    modules, assets = _defer_unbound_structured_content_assets(
+        (module,),
+        (asset,),
+        version_context,
+    )
+
+    assert modules == (module,)
+    assert assets == (asset,)
+
+
 def test_python_generator_job_persists_schema_valid_candidate_inputs() -> None:
     from types import SimpleNamespace
 
