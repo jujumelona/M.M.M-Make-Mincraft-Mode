@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from .artifact_job import canonical_client_entrypoints, parse_artifact_jobs
 from .complete_spec import CompleteProposal
 from .gametest_validation import validate_gametest_metadata
 from .local_ai_sidecar_generator import (
@@ -394,9 +395,23 @@ class ProjectValidator:
                     )
                 )
 
-        if complete is not None and _complete_client_required(complete):
+        approved_artifact_clients = _complete_artifact_client_entrypoints(complete)
+        client_entrypoints = _entrypoint_values(entrypoints.get("client"))
+        if approved_artifact_clients:
+            for required_client in sorted(approved_artifact_clients):
+                checks += 1
+                if required_client not in client_entrypoints:
+                    findings.append(
+                        Finding(
+                            "COMPLETE_CLIENT_ENTRYPOINT_MISSING",
+                            "error",
+                            self._rel(root, path),
+                            f"client must include approved generated entrypoint {required_client}.",
+                        )
+                    )
+        elif complete is not None and _complete_client_required(complete):
             checks += 1
-            if not _entrypoint_values(entrypoints.get("client")):
+            if not client_entrypoints:
                 findings.append(
                     Finding(
                         "COMPLETE_CLIENT_ENTRYPOINT_MISSING",
@@ -1001,11 +1016,38 @@ def _complete_entity_ids(proposal: CompleteProposal | None) -> set[str]:
     }
 
 
+def _complete_artifact_client_entrypoints(
+    proposal: CompleteProposal | None,
+) -> set[str]:
+    if proposal is None:
+        return set()
+    game_design = (
+        proposal.game_design if isinstance(proposal.game_design, dict) else {}
+    )
+    raw_jobs = game_design.get("_artifact_jobs", ())
+    if raw_jobs is None:
+        raw_jobs = ()
+    if not isinstance(raw_jobs, (list, tuple)):
+        return set()
+    try:
+        jobs = parse_artifact_jobs(raw_jobs)
+        return set(canonical_client_entrypoints(jobs))
+    except (KeyError, TypeError, ValueError):
+        # CompleteProposal validation owns malformed artifact graphs. Do not let
+        # source validation accidentally authorize a malformed client contract.
+        return set()
+
+
 def _complete_client_required(proposal: CompleteProposal | None) -> bool:
     if proposal is None:
         return False
-    return bool(_complete_entity_ids(proposal)) or any(
-        module.config.get("client_required") is True for module in proposal.modules
+    return (
+        bool(_complete_entity_ids(proposal))
+        or bool(_complete_artifact_client_entrypoints(proposal))
+        or any(
+            module.config.get("client_required") is True
+            for module in proposal.modules
+        )
     )
 
 

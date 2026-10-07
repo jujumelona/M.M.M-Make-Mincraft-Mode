@@ -20,6 +20,7 @@ from .artifact_graph_executor import execute_artifact_graph
 from .artifact_job import (
     ArtifactJob,
     artifact_owner_module_ids,
+    canonical_client_entrypoints,
     parse_artifact_jobs,
 )
 from .artifact_materializer import ensure_artifact_scaffolding
@@ -416,7 +417,28 @@ class CompleteProductionOrchestrator:
             source_report = validate_source()
 
         if source_report.get('status') != 'PASS':
-            raise CompleteProductionError('Generated complete project failed deterministic validation.')
+            raw_findings = source_report.get('findings')
+            finding_rows = (
+                [item for item in raw_findings if isinstance(item, dict)]
+                if isinstance(raw_findings, list)
+                else []
+            )
+            finding_summary = "; ".join(
+                " ".join(
+                    str(value).strip()
+                    for value in (
+                        item.get('code'),
+                        item.get('path'),
+                        item.get('message'),
+                    )
+                    if str(value or '').strip()
+                )
+                for item in finding_rows[:8]
+            )[:4000]
+            suffix = f": {finding_summary}" if finding_summary else ""
+            raise CompleteProductionError(
+                "Generated complete project failed deterministic validation" + suffix
+            )
         if (
             approved.schema_version == 'mmm/complete-proposal-v1'
             and approved.game_design.get('mode') == 'debug_fixture'
@@ -1465,30 +1487,6 @@ class CompleteProductionOrchestrator:
         blockbench_receipts: list[dict[str, Any]] = []
         unresolved: list[str] = []
 
-        generated_client_entrypoints: set[str] = set()
-        for job in artifact_jobs:
-            if job.executor_type.value != "python_generator":
-                continue
-            canonical_inputs = job.deterministic_inputs.get("_canonical_inputs")
-            if not isinstance(canonical_inputs, dict):
-                continue
-            for value in canonical_inputs.values():
-                if not isinstance(value, dict) or value.get("side") != "CLIENT":
-                    continue
-                bindings = value.get("bindings")
-                if not isinstance(bindings, dict):
-                    continue
-                package_name = str(bindings.get("package_name") or "").strip()
-                class_name = str(bindings.get("class_name") or "").strip()
-                if package_name and class_name:
-                    generated_client_entrypoints.add(
-                        f"{package_name}.{class_name}"
-                    )
-        if generated_client_entrypoints:
-            ensure_fabric_client_entrypoints(
-                inspect_fabric_project(project_root),
-                entrypoints=tuple(sorted(generated_client_entrypoints)),
-            )
         asset_shards: list[dict[str, Any]] = []
         review_futures: list[tuple[str, Future[dict[str, Any]], float]] = []
         review_futures_lock = threading.Lock()
@@ -1536,6 +1534,7 @@ class CompleteProductionOrchestrator:
         ) -> dict[str, Any]:
             stage = str(node.payload.get('generation_stage', ''))
             receipts: list[dict[str, Any]] = []
+            client_metadata_owner_ids: set[str] = set()
 
             if stage == 'content':
                 research_shards = [module for module in members if is_research_shard(module)]
@@ -1599,6 +1598,26 @@ class CompleteProductionOrchestrator:
                         and r.get("materialization")
                         and r["materialization"].get("path")
                     ]
+
+                    member_ids = {module.module_id for module in members}
+                    owned_client_jobs = tuple(
+                        job
+                        for job in artifact_jobs_to_run
+                        if job.owner_module in member_ids
+                    )
+                    approved_client_entrypoints = canonical_client_entrypoints(
+                        owned_client_jobs
+                    )
+                    if approved_client_entrypoints:
+                        ensure_fabric_client_entrypoints(
+                            inspect_fabric_project(project_root),
+                            entrypoints=approved_client_entrypoints,
+                        )
+                        client_metadata_owner_ids.update(
+                            job.owner_module
+                            for job in owned_client_jobs
+                            if canonical_client_entrypoints((job,))
+                        )
 
                     receipts.append(
                         {
@@ -1688,6 +1707,22 @@ class CompleteProductionOrchestrator:
                 receipts,
                 downstream_ids=downstream_ids,
             )
+            if client_metadata_owner_ids:
+                metadata_path = "src/main/resources/fabric.mod.json"
+                for module in members:
+                    if module.module_id not in client_metadata_owner_ids:
+                        continue
+                    observation = _semantic_execution_observation(
+                        module,
+                        {
+                            "schema_version": "mmm/artifact-graph-execution-receipt-v1",
+                            "module_id": module.module_id,
+                            "touched_paths": [metadata_path],
+                        },
+                        dependent_ids=downstream_ids(module.module_id),
+                    )
+                    if observation is not None:
+                        semantic_observations.append(observation)
             return {'schema_version': 'mmm/generation-work-node-v1', 'status': 'SUCCEEDED', 'node_id': node.node_id, 'stage': stage, 'module_ids': [module.module_id for module in members], 'receipts': receipts, 'semantic_observations': semantic_observations}
 
         def process_node(node: WorkNode) -> None:

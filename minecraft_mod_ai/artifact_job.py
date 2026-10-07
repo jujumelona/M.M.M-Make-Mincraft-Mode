@@ -53,6 +53,45 @@ def artifact_owner_module_ids(jobs: Iterable[Any]) -> frozenset[str]:
     return frozenset(owners)
 
 
+def canonical_client_entrypoints(
+    jobs: Iterable["ArtifactJob"],
+) -> tuple[str, ...]:
+    """Derive approved Fabric client entrypoints from canonical artifact jobs.
+
+    The artifact graph is the persisted approval contract for Python-generator
+    candidates. Generation and validation must therefore derive client startup
+    classes from this same representation instead of a second ad-hoc flag.
+    """
+
+    entrypoints: set[str] = set()
+    for job in jobs or ():
+        if not isinstance(job, ArtifactJob):
+            raise ValueError("CANONICAL_CLIENT_ENTRYPOINT_JOB_REQUIRED")
+        if job.executor_type is not ExecutorType.PYTHON_GENERATOR:
+            continue
+        canonical_inputs = job.deterministic_inputs.get("_canonical_inputs")
+        if not isinstance(canonical_inputs, Mapping):
+            continue
+        for value in canonical_inputs.values():
+            if not isinstance(value, Mapping):
+                continue
+            if str(value.get("side") or "").strip().upper() != "CLIENT":
+                continue
+            bindings = value.get("bindings")
+            if not isinstance(bindings, Mapping):
+                raise ValueError(
+                    f"CANONICAL_CLIENT_ENTRYPOINT_BINDINGS_REQUIRED: {job.job_id}"
+                )
+            package_name = str(bindings.get("package_name") or "").strip()
+            class_name = str(bindings.get("class_name") or "").strip()
+            if not package_name or not class_name:
+                raise ValueError(
+                    f"CANONICAL_CLIENT_ENTRYPOINT_CLASS_REQUIRED: {job.job_id}"
+                )
+            entrypoints.add(f"{package_name}.{class_name}")
+    return tuple(sorted(entrypoints))
+
+
 @dataclass
 class ArtifactJob:
     job_id: str
