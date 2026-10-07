@@ -96,3 +96,40 @@ def test_gui_content_relation_does_not_create_item_initializer_dependency() -> N
     assert all(job.template_id != "fabric/item/initializer" for job in jobs)
     validate_artifact_job_graph(jobs, module_ids={"gui_market"})
 
+
+
+def test_unlock_relations_do_not_form_production_dependency_cycles() -> None:
+    from minecraft_mod_ai.authored_production import _normalize_content_build_dependencies
+    from minecraft_mod_ai.complete_spec import ProductionModule
+    from minecraft_mod_ai.implementation_fact import ImplementationFact
+    from minecraft_mod_ai.prompt_fact_types import FactType
+
+    planetary = "gui_planetary"
+    library = "gui_library"
+    builder = "gui_builder"
+    farming = "gui_farming"
+    modules = (
+        ProductionModule(planetary, "gui", {}, (library, builder, farming)),
+        ProductionModule(library, "gui", {}, (builder,)),
+        ProductionModule(builder, "gui", {}, (planetary, library)),
+        ProductionModule(farming, "gui", {}, (planetary, library)),
+    )
+    relations = (
+        ImplementationFact("p.unlocks.b", FactType.CONTENT_RELATION, planetary, builder, {"relation": "unlocks"}),
+        ImplementationFact("p.unlocks.f", FactType.CONTENT_RELATION, planetary, farming, {"relation": "unlocks"}),
+        ImplementationFact("l.unlocks.p", FactType.CONTENT_RELATION, library, planetary, {"relation": "unlocks"}),
+        ImplementationFact("l.unlocks.b", FactType.CONTENT_RELATION, library, builder, {"relation": "unlocks"}),
+        ImplementationFact("l.unlocks.f", FactType.CONTENT_RELATION, library, farming, {"relation": "unlocks"}),
+        ImplementationFact("b.unlocks.p", FactType.CONTENT_RELATION, builder, planetary, {"relation": "unlocks"}),
+        ImplementationFact("b.unlocks.l", FactType.CONTENT_RELATION, builder, library, {"relation": "unlocks"}),
+        ImplementationFact("f.unlocks.p", FactType.CONTENT_RELATION, farming, planetary, {"relation": "unlocks"}),
+        ImplementationFact("f.requires.l", FactType.CONTENT_RELATION, farming, library, {"relation": "requires"}),
+    )
+
+    normalized = _normalize_content_build_dependencies(modules, relations)
+    by_id = {module.module_id: module for module in normalized}
+
+    assert by_id[planetary].depends_on == ()
+    assert by_id[library].depends_on == ()
+    assert by_id[builder].depends_on == ()
+    assert by_id[farming].depends_on == (library,)
