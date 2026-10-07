@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 
 from .resource_catalog import host_binding, resource_geometry, texture_contract
+from .spec_identity import canonical_spec_id
 from .task_template_catalog import load_template
 
 _RESOURCE_ID = re.compile(r"^[a-z0-9_.-]+$")
@@ -288,7 +289,7 @@ def derive_module_asset_specs(modules: Sequence[Any], *, existing_asset_ids: Seq
         if not render_kind or not module_id:
             continue
         asset_kind = "block" if render_kind.startswith("block.") else "item"
-        asset_id = f"texture_{asset_kind}_{module_id}"
+        asset_id = canonical_spec_id(f"texture_{asset_kind}_{module_id}")
         if asset_id in existing:
             continue
         config = raw_config if isinstance(raw_config, Mapping) else {}
