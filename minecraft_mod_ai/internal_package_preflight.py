@@ -65,16 +65,47 @@ def validate_internal_package_integrity() -> dict[str, object]:
 
         for node in ast.walk(tree):
             target: str | None = None
-            if isinstance(node, ast.ImportFrom) and node.module:
-                if node.level:
+            if isinstance(node, ast.ImportFrom):
+                if node.level and node.module:
                     target = _relative_target(
                         package_root,
                         source,
                         level=node.level,
                         module=node.module,
                     )
-                elif node.module == package_root.name or node.module.startswith(
-                    package_root.name + "."
+                    if target is None:
+                        failures.append(
+                            f"{source.relative_to(package_root)}: "
+                            f"invalid relative import level={node.level} "
+                            f"module={node.module!r}"
+                        )
+                elif node.level and node.module is None:
+                    base = _relative_target(
+                        package_root,
+                        source,
+                        level=node.level,
+                        module="",
+                    )
+                    if base is None:
+                        failures.append(
+                            f"{source.relative_to(package_root)}: "
+                            f"invalid relative import level={node.level}"
+                        )
+                    else:
+                        for alias in node.names:
+                            if alias.name == "*":
+                                continue
+                            internal_import_count += 1
+                            candidate = f"{base}.{alias.name}"
+                            if not _module_exists(package_root, candidate):
+                                failures.append(
+                                    f"{source.relative_to(package_root)}: "
+                                    f"missing internal module {candidate}"
+                                )
+                    continue
+                elif node.module and (
+                    node.module == package_root.name
+                    or node.module.startswith(package_root.name + ".")
                 ):
                     target = node.module
             elif isinstance(node, ast.Import):
