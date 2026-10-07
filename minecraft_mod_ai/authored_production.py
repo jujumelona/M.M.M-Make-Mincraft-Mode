@@ -816,6 +816,12 @@ def _compile_content_artifact_graph(
             ensure_ascii=False,
             separators=(",", ":"),
         )
+        bindings["target_contract_json"] = json.dumps(
+            adapter.version_context.to_dict().get("target", {}),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
 
     module_ids = {module.module_id for module in modules}
     from .artifact_job import validate_artifact_job_graph
