@@ -1468,7 +1468,7 @@ class CompleteProductionOrchestrator:
                 mod_id=spec.mod_id,
                 package_name=spec.package_name,
                 policy=self.policy,
-                artifact_owners=artifact_owners,
+                routing=routing,
             )
         except ProductionGenerationPreflightError as exc:
             raise CompleteProductionError(
