@@ -25,6 +25,7 @@ from .production_routing_contract import (
     ProductionRoutingError,
     compile_production_routing,
 )
+from .production_checkpoint_policy import production_implementation_fingerprint
 from .scale_policy import ScalePolicy
 from .spec import canonical_json
 
@@ -102,7 +103,19 @@ def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolic
     except ProductionRoutingError as exc:
         raise WorkGraphError(str(exc)) from exc
     route_by_module_id = routing.route_by_module_id
-    nodes: list[WorkNode] = [_node('prepare-project', 'prepare', (), {'kind': 'prepare', 'proposal_hash': proposal_hash, 'existing_input_sha256': proposal.existing_input_sha256})]
+    nodes: list[WorkNode] = [
+        _node(
+            'prepare-project',
+            'prepare',
+            (),
+            {
+                'kind': 'prepare',
+                'proposal_hash': proposal_hash,
+                'existing_input_sha256': proposal.existing_input_sha256,
+                'production_implementation': production_implementation_fingerprint('prepare'),
+            },
+        )
+    ]
     module_node: dict[str, str] = {}
     exclusive_anchor_node: dict[str, str] = {}
     generated_nodes: list[str] = []
@@ -126,6 +139,7 @@ def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolic
             'kind': 'module-shard',
             'generation_stage': stage,
             'production_routing_sha256': routing.contract_sha256,
+            'production_implementation': production_implementation_fingerprint(stage),
             'production_routes': [
                 route_by_module_id[module.module_id].to_dict()
                 for module in members
@@ -181,6 +195,7 @@ def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolic
             {
                 'kind': 'asset-shard',
                 'asset_plan_sha256': asset_plan_digest,
+                'production_implementation': production_implementation_fingerprint('assets'),
                 'members': [asdict(asset) for asset in assets],
             },
         ))
