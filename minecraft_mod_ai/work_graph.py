@@ -6,13 +6,12 @@ import os
 import sqlite3
 import threading
 import time
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any, TypeVar
 
-from .artifact_job import artifact_owner_module_ids, parse_artifact_jobs
 from .complete_spec import CompleteProposal, ProductionModule
 from .platform_backend_contract import (
     NATIVE_INTEGRATION_TYPES,
@@ -21,6 +20,10 @@ from .platform_backend_contract import (
     missing_production_backend_capabilities,
     native_production_route_available,
     native_production_stage,
+)
+from .production_routing_contract import (
+    ProductionRoutingError,
+    compile_production_routing,
 )
 from .scale_policy import ScalePolicy
 from .spec import canonical_json
@@ -94,31 +97,11 @@ def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolic
         if missing:
             raise WorkGraphError(f'Production work module {module.module_id} references missing dependencies: {sorted(missing)}')
     ordered = _topological_modules(selected_modules)
-    artifact_jobs = parse_artifact_jobs(
-        proposal.game_design.get("_artifact_jobs", ())
-    )
-    artifact_owners = artifact_owner_module_ids(artifact_jobs)
-    small_backend = proposal.game_design.get("_small_model_backend")
-    if (
-        isinstance(small_backend, dict)
-        and small_backend.get("free_form_java") is False
-    ):
-        uncovered = [
-            module.module_id
-            for module in ordered
-            if module.module_id not in artifact_owners
-            and not native_production_route_available(module.kind, module.config)
-        ]
-        if uncovered:
-            raise WorkGraphError(
-                "SMALL_MODEL_CANONICAL_COVERAGE: free-form Java is disabled but "
-                "module(s) have neither canonical artifact ownership nor a "
-                f"deterministic host route: {uncovered[:20]}"
-            )
-
-    from .platform_catalog import adapter_for_lock_values
-    adapter = adapter_for_lock_values(proposal.base_proposal.spec.platform)
-    deterministic_module_kinds = deterministic_backend_capabilities(adapter)
+    try:
+        routing = compile_production_routing(proposal, modules=ordered)
+    except ProductionRoutingError as exc:
+        raise WorkGraphError(str(exc)) from exc
+    route_by_module_id = routing.route_by_module_id
     nodes: list[WorkNode] = [_node('prepare-project', 'prepare', (), {'kind': 'prepare', 'proposal_hash': proposal_hash, 'existing_input_sha256': proposal.existing_input_sha256})]
     module_node: dict[str, str] = {}
     exclusive_anchor_node: dict[str, str] = {}
@@ -126,8 +109,7 @@ def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolic
     for stage, members in _module_shards(
         ordered,
         policy=policy,
-        deterministic_module_kinds=deterministic_module_kinds,
-        artifact_owners=artifact_owners,
+        routes=route_by_module_id,
     ):
         node_id = f'generate-{stage}-{len(generated_nodes):08d}'
         member_ids = {module.module_id for module in members}
@@ -140,7 +122,16 @@ def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolic
                 if anchor in exclusive_anchor_node
             )
         dependencies.discard(node_id)
-        payload = {'kind': 'module-shard', 'generation_stage': stage, 'members': [_module_payload(module) for module in members]}
+        payload = {
+            'kind': 'module-shard',
+            'generation_stage': stage,
+            'production_routing_sha256': routing.contract_sha256,
+            'production_routes': [
+                route_by_module_id[module.module_id].to_dict()
+                for module in members
+            ],
+            'members': [_module_payload(module) for module in members],
+        }
         nodes.append(_node(node_id, f'generate:{stage}', sorted(dependencies), payload))
         generated_nodes.append(node_id)
         for module in members:
@@ -223,7 +214,12 @@ def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolic
             {'kind': 'release'},
         )
     )
-    graph_body = {'schema_version': 'mmm/production-work-graph-v1', 'proposal_hash': proposal_hash, 'nodes': [node.to_dict() for node in nodes]}
+    graph_body = {
+        'schema_version': 'mmm/production-work-graph-v1',
+        'proposal_hash': proposal_hash,
+        'production_routing': routing.to_dict(),
+        'nodes': [node.to_dict() for node in nodes],
+    }
     return WorkGraphPlan(schema_version='mmm/production-work-graph-v1', proposal_hash=proposal_hash, graph_hash=_hash_json(graph_body), module_count=len(selected_modules), nodes=tuple(nodes))
 
 class DurableWorkLedger:
@@ -1051,18 +1047,20 @@ def _module_shards(
     modules: Sequence[ProductionModule],
     *,
     policy: ScalePolicy,
-    deterministic_module_kinds: frozenset[str] | None = None,
-    artifact_owners: frozenset[str] = frozenset(),
+    routes: Mapping[str, Any],
 ) -> Iterator[tuple[str, tuple[ProductionModule, ...]]]:
-    """Emit bounded dependency-ready waves while exposing safe stage parallelism."""
-    staged = [
-        (
-            module,
-            "content" if module.module_id in artifact_owners else _module_stage(
-                module,
-                deterministic_module_kinds=deterministic_module_kinds,
-            ),
+    """Emit bounded dependency-ready waves from the canonical routing snapshot."""
+
+    missing_routes = [
+        module.module_id for module in modules if module.module_id not in routes
+    ]
+    if missing_routes:
+        raise WorkGraphError(
+            "PRODUCTION_ROUTING_MISSING_MODULE: "
+            f"{missing_routes[:20]}"
         )
+    staged = [
+        (module, str(routes[module.module_id].stage))
         for module in modules
     ]
     stage_counts: dict[str, int] = {}
