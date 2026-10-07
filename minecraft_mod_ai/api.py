@@ -526,6 +526,28 @@ class CompleteModAISession:
             )
         if proposal is None:
             raise SpecValidationError("Create a complete plan before building.")
+
+        # AuthoredPlan compilation may invoke the model several times. Prove the
+        # mandatory image backend first so gated/inaccessible repositories fail
+        # at build entry instead of after production authoring has already run.
+        needs_image_backend = isinstance(proposal, AuthoredPlan) or bool(
+            tuple(getattr(proposal, "assets", ()) or ())
+        )
+        if needs_image_backend:
+            from .complete_orchestrator_support import CompleteProductionError
+            from .resource_asset_preflight_contract import (
+                ResourceAssetPreflightError,
+                validate_image_backend_access,
+            )
+
+            try:
+                validate_image_backend_access(self.router)
+            except ResourceAssetPreflightError as exc:
+                raise CompleteProductionError(
+                    "Image backend preflight failed before production planning: "
+                    f"{exc}"
+                ) from exc
+
         proposal = _production_proposal(self, proposal)
         selected = options or CompleteExecutionOptions(source_only=source_only)
         if source_only and not selected.source_only:
