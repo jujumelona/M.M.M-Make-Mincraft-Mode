@@ -1548,10 +1548,19 @@ class CompleteProductionOrchestrator:
                         package_name=spec.package_name,
                         main_class=getattr(spec, "main_class", "") or "",
                     )
+                    generator_router = (
+                        get_router()
+                        if any(
+                            job.executor_type.value == "python_generator"
+                            for job in artifact_jobs_to_run
+                        )
+                        else None
+                    )
                     graph_receipt = execute_artifact_graph(
                         artifact_jobs_to_run,
                         context={"project_root": project_root, "base_dir": project_root,
                                  "resolved_version_context": spec.platform.version_context.to_dict()},
+                        router=generator_router,
                         base_dir=project_root,
                     )
                     touched_paths: list[str] = [
