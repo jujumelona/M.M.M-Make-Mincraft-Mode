@@ -88,7 +88,7 @@ def test_existing_model_alpha_is_never_replaced_by_geometric_host_mask():
         source.close()
 
 
-def test_actual_candidate_generation_records_shape_mask_and_validates(tmp_path):
+def test_actual_candidate_generation_uses_segmenter_not_shape_mask(tmp_path):
     texture = _item_texture()
     calls = []
 
@@ -98,11 +98,21 @@ def test_actual_candidate_generation_records_shape_mask_and_validates(tmp_path):
             image.save(kwargs["output_path"], "PNG")
 
     output = tmp_path / "normalized.png"
+    def fake_segmenter(image):
+        from PIL import ImageDraw
+        result = image.convert("RGBA")
+        alpha = Image.new("L", result.size, 0)
+        ImageDraw.Draw(alpha).ellipse((50, 40, 460, 475), fill=255)
+        result.putalpha(alpha)
+        alpha.close()
+        return result
+
     evidence = generate_candidate(
         generator, texture.to_dict(),
         prompt="gold cube", directory=tmp_path / "regions",
         output=output, resolution=(512, 512), seed=11, silhouette="cube",
+        segment_foreground_callback=fake_segmenter,
     )
     assert len(calls) == 1
-    assert evidence["sources"][0]["alpha_matte"] == "host_explicit_cube"
+    assert evidence["sources"][0]["alpha_matte"] == "rembg:birefnet-general"
     assert validate_texture(output, texture.to_dict())["status"] == "PASS"
