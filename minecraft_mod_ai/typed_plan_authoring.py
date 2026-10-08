@@ -1284,6 +1284,7 @@ def semantic_dispatch_schema(
     *,
     allowed_events: Sequence[str] | None = None,
     mutation_only: bool = False,
+    state_only: bool = False,
 ) -> dict[str, Any]:
     """Build semantic actions only from host-known, actually bound events."""
 
@@ -1345,8 +1346,11 @@ def semantic_dispatch_schema(
             raise ValueError(
                 f"TYPED_PLAN_SEMANTIC_CAPABILITY_CONTRACT_INVALID: {capability_id!r}"
             )
-        if mutation_only and contract.get("gameplay_mutation") is not True:
-            # Notifications, queries, and permission checks are not state writers.
+        if state_only or (
+            mutation_only and contract.get("gameplay_mutation") is not True
+        ):
+            # Canonical state transitions must write the declared state keys.
+            # A grant/effect cannot substitute for a state_model update.
             continue
         params = contract.get("parameters")
         if not isinstance(params, Sequence) or isinstance(
@@ -1701,30 +1705,31 @@ def author_semantic_game_dispatch(
     else:
         allowed_events = None
     rules: list[Mapping[str, Any]] = []
-    schemas: dict[bool, tuple[dict[str, Any], int]] = {}
+    schemas: dict[tuple[bool, bool], tuple[dict[str, Any], int]] = {}
 
     for coverage_ref in refs:
-        mutation_required = coverage_ref in {
-            "algorithm.atomic_mutations",
-            "state_model.transitions",
-            "state_model.updates",
+        state_only = coverage_ref in {
+            "state_model.transitions", "state_model.updates",
         }
-        if mutation_required not in schemas:
+        mutation_required = state_only or coverage_ref == "algorithm.atomic_mutations"
+        schema_key = (mutation_required, state_only)
+        if schema_key not in schemas:
             schema = semantic_dispatch_schema(
                 state_types, capabilities,
                 allowed_events=allowed_events,
                 mutation_only=mutation_required,
+                state_only=state_only,
             )
             assert_model_atomic_decision_schema(
                 schema, field="semantic_dispatch_rule",
             )
-            schemas[mutation_required] = (
+            schemas[schema_key] = (
                 schema,
                 structured_output_token_ceiling(
                     effective_model_transport_schema(schema)
                 ),
             )
-        schema, token_ceiling = schemas[mutation_required]
+        schema, token_ceiling = schemas[schema_key]
         if budget is not None:
             budget.consume("typed.semantic_dispatch")
 
