@@ -269,13 +269,32 @@ def gradle_failure_summary(value: Mapping[str, Any]) -> str:
                 continue
             path = str(item.get("path") or "")[:240]
             line = str(item.get("line") or "?")[:16]
-            message = str(item.get("message") or "").splitlines()[0][:240]
+            # Preserve javac's symbol/location detail. Showing only
+            # "cannot find symbol" forces another 20-minute compile cycle
+            # merely to discover which API signature was actually wrong.
+            detail_lines = [
+                line.strip() for line in str(item.get("message") or "").splitlines()
+                if line.strip()
+            ][:5]
+            message = " | ".join(detail_lines)[:420]
             fragments.append(f"diagnostic={path}:{line}: {message}")
             compiler_errors_reported += 1
             if compiler_errors_reported >= 8:
                 break
     if failed is not None:
         log = _ANSI_ESCAPE.sub("", bounded_build_log_text(failed.get("log_path")))
+        if failed.get("timed_out") is True:
+            # GameTest may hang without returning an exit code or XML report.
+            # Surface the *actual* last progress markers from the server log
+            # rather than presenting the timeout as a code-generation defect.
+            lines = [
+                line.strip() for line in log.splitlines()
+                if line.strip() and "M.M.M Make Mincraft Mode: command timed out" not in line
+            ]
+            if lines:
+                fragments.append("last_verifier_output=" + " | ".join(lines[-8:])[:700])
+            else:
+                fragments.append("last_verifier_output=NO_LOG_OUTPUT")
         match = re.search(r"(?m)^\s*\* What went wrong:\s*$", log)
         if match is not None:
             lines: list[str] = []
