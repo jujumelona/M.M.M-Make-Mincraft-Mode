@@ -927,19 +927,14 @@ def _assert_executable_gameplay_floor(
         isinstance(row, Mapping) and row.get("mode") == "source_transplant"
         for row in source_reuse.get("capabilities", ())
     )
-    executable_state_writes = False
-    stack = [plan.typed_plan_ir.get("functions", ())]
-    while stack:
-        item = stack.pop()
-        if isinstance(item, Mapping):
-            if item.get("op") == "state_set":
-                executable_state_writes = True
-                break
-            stack.extend(item.values())
-        elif isinstance(item, (list, tuple)):
-            stack.extend(item)
+    from .typed_plan_ir import typed_plan_runtime_mutations
 
-    if not (concrete_content or verified_donors or executable_state_writes):
+    # Detect only operations reachable from a bound Fabric runtime event.
+    # In addition to state_set, inventory grants and status effects are real
+    # gameplay mutations; messaging and UI-only capabilities are not.
+    runtime_mutations = typed_plan_runtime_mutations(plan.typed_plan_ir)
+
+    if not (concrete_content or verified_donors or runtime_mutations):
         raise ValueError(
             "GAMEPLAY_IMPLEMENTATION_ABSENT: authored atomic mutations or state "
             "transitions have no executable implementation; the generated "
