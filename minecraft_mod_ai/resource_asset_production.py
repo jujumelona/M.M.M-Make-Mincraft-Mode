@@ -576,7 +576,8 @@ def generate_assets(
                             prompt=prompt, directory=candidate_root / asset_id / role / f"candidate-{index:02d}",
                             output=normalized,
                             resolution=profile.preferred_generation_resolution,
-                            seed=_candidate_seed(asset_id, role, index))
+                            seed=_candidate_seed(asset_id, role, index),
+                            silhouette=str(row.get("visual_spec", {}).get("silhouette", "")))
                     except ValueError as exc:
                         failures.append({"candidate": index, "reason": str(exc)})
                         continue
