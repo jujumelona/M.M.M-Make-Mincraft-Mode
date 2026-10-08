@@ -710,3 +710,27 @@ def test_typed_host_capability_generates_owned_java_without_router(
     assert "// MMM:TYPED_HOST_CAPABILITIES_OWNER" in capability_source
     assert "public static void sendMessage" in capability_source
 
+
+
+def test_host_capabilities_select_mojang_names_for_java25_target() -> None:
+    # 2026-10-08: 26.1 is unobfuscated. Emitting Yarn names must fail the
+    # version-specific renderer test before the real Gradle gate is scheduled.
+    from minecraft_mod_ai.typed_host_capabilities import (
+        render_typed_host_capabilities_java,
+    )
+
+    modern = render_typed_host_capabilities_java(
+        "example.mod", minecraft_version="26.1.2"
+    )
+    legacy = render_typed_host_capabilities_java(
+        "example.mod", minecraft_version="1.21.5"
+    )
+    assert "net.minecraft.world.effect.MobEffectInstance" in modern
+    assert "net.minecraft.server.level.ServerPlayer" in modern
+    assert "net.minecraft.resources.Identifier" in modern
+    assert "Identifier.parse(" in modern
+    assert "net.minecraft.entity.effect.StatusEffectInstance" not in modern
+    assert "net.minecraft.server.network.ServerPlayerEntity" not in modern
+    assert "hasPermissionLevel(" not in modern
+    assert "net.minecraft.entity.effect.StatusEffectInstance" in legacy
+    assert "net.minecraft.server.network.ServerPlayerEntity" in legacy
