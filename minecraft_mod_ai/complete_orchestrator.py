@@ -1647,12 +1647,25 @@ class CompleteProductionOrchestrator:
                             package_name=spec.package_name,
                             main_class=getattr(spec, "main_class", "") or "",
                         )
+                    def _job_uses_model_slots(job: ArtifactJob) -> bool:
+                        if job.executor_type.value != "python_generator":
+                            return False
+                        inputs = job.deterministic_inputs.get("_canonical_inputs")
+                        if not isinstance(inputs, dict):
+                            return True  # Unknown contract remains fail-closed.
+                        specifications = [
+                            value for value in inputs.values()
+                            if isinstance(value, dict)
+                            and "render_mold" in value and "slots" in value
+                        ]
+                        if len(specifications) != 1:
+                            return True
+                        slots = specifications[0]["slots"]
+                        return not isinstance(slots, list) or bool(slots)
+
                     generator_router = (
                         get_router()
-                        if any(
-                            job.executor_type.value == "python_generator"
-                            for job in artifact_jobs_to_run
-                        )
+                        if any(_job_uses_model_slots(job) for job in artifact_jobs_to_run)
                         else None
                     )
                     graph_receipt = execute_artifact_graph(
