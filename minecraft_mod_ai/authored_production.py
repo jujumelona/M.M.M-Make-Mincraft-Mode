@@ -462,23 +462,15 @@ def _normalize_content_build_dependencies(
     modules: tuple[ProductionModule, ...],
     facts: tuple[Any, ...],
 ) -> tuple[ProductionModule, ...]:
-    """Migrate saved content plans onto the semantic/build dependency boundary.
+    """Separate semantic relationships from genuine build dependencies.
 
-    content_design is host-authored semantic topology. Older saved plans projected
-    gameplay relations (including requires, drops, recipe/tag membership and
-    unlock-style edges) into ProductionModule.depends_on. Those edges are not
-    source-generation prerequisites and can form valid gameplay cycles. Strip them
-    before the CompleteProposal production DAG is validated so resume can consume
-    an already-saved plan without replanning.
+    Saved plans can contain relation-derived 'unlocks'/'displays' cycles, but
+    explicit 'requires' and non-relation dependencies still control execution
+    order. Never strip every edge merely to make a schedule acyclic.
     """
-
-    # Keep the persisted-facts parameter in this boundary for backward-compatible
-    # callers. The migration is intentionally fact-independent: content_design
-    # never owns production scheduling edges, regardless of relation vocabulary.
-    _ = facts
     from .content_design_graph import _strip_semantic_content_build_dependencies
 
-    return _strip_semantic_content_build_dependencies(modules)
+    return _strip_semantic_content_build_dependencies(modules, facts)
 
 def _canonicalize_saved_content_asset_id(value: Any, index: int) -> str:
     """Map legacy host-authored asset IDs onto the shared proposal ID contract."""
