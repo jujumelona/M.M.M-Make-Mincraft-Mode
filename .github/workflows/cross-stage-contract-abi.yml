@@ -1,0 +1,44 @@
+name: Cross-stage Contract ABI (fast)
+
+# Run on every change, not only a hand-maintained subset of producer paths.
+# This intentionally starts independently of slower build/Gradle/model CI jobs.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cross-stage-contract-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract-abi:
+    name: Contract producer-consumer preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install core and test dependencies only (no model downloads)
+        run: python -m pip install --prefer-binary -e ".[dev]"
+      - name: Run cross-stage contract ABI fixtures
+        run: >-
+          python -m pytest -q
+          tests/test_cross_stage_contract_abi.py
+          tests/test_typed_plan_ir.py
+          tests/test_typed_event_ir.py
+          tests/test_typed_platform_ir.py
+      - name: Verify host capability preflight before model execution
+        run: >-
+          python -c
+          "from minecraft_mod_ai.typed_host_capabilities import typed_host_capability_contracts;
+          from minecraft_mod_ai.typed_plan_ir import validate_typed_host_capability_contracts;
+          validate_typed_host_capability_contracts(typed_host_capability_contracts());
+          print('CURRENT capability registry/Typed PlanIR ABI: PASS')"
