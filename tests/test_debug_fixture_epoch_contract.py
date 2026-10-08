@@ -84,6 +84,36 @@ def test_debug_fixture_uses_real_host_grounding_on_integrity_target():
     assert "{{" not in source
 
 
+def test_integrity_gradle_mapping_matches_host_generated_debug_source():
+    """Pre-Gradle contract: probe and host-rendered Java use one naming regime."""
+    from tools import verify_integrity_minecraft as integrity
+
+    build = integrity._BUILD_GRADLE
+    assert "mappings loom.officialMojangMappings()" in build
+    assert "net.fabricmc:yarn:" not in build
+
+    generated = fixture.render_debug_fixture_source(
+        package_name="dev.mmm.debugfixture",
+        mod_id="mmm_debug_fixture",
+        minecraft_version="1.20.1",
+    )
+    sources = (
+        generated,
+        integrity._PROBE_SOURCE,
+        integrity._PROBE_TEST_SOURCE,
+    )
+    # A Yarn project and official Mojang-mapped source cannot compile together.
+    for source in sources:
+        assert "net.minecraft.registry." not in source
+        assert "net.minecraft.util.Identifier" not in source
+        assert "net.minecraft.test." not in source
+        assert "net.minecraft.item." not in source
+    assert "net.minecraft.core.Registry" in generated
+    assert "net.minecraft.core.Registry" in integrity._PROBE_SOURCE
+    assert "net.minecraft.gametest.framework.GameTestHelper" in integrity._PROBE_TEST_SOURCE
+    assert "context.succeed()" in integrity._PROBE_TEST_SOURCE
+
+
 def test_unverified_keyed_registry_symbol_rejected(monkeypatch):
     invalid = _mock_grounding(True)
     invalid["facts"][0]["api_symbols"].pop("resource_key_create")
