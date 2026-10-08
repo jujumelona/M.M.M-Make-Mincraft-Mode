@@ -477,10 +477,19 @@ def test_opaque_flux_like_cube_runs_single_candidate_with_host_alpha_matte(tmp_p
     from minecraft_mod_ai.resource_asset_production import generate_assets
 
     router, proposal, calls = runtime()
-    # Keep the signed row profile and immutable render contract unchanged.
-    # The visual description controls only semantic silhouette, not coordinates.
-    row = proposal.game_design["_asset_generation_plan"]["assets"][0]
-    row["visual_spec"]["silhouette"] = "cube"
+    # Build an approved test row from a semantic cube request; do not mutate
+    # the signed plan or bypass immutable asset contract verification.
+    from minecraft_mod_ai.resource_asset_production import _plan_row
+
+    request = replace(
+        proposal.assets[0],
+        visual_spec={"role": "Credit", "silhouette": "cube", "materials": [],
+                     "motifs": [], "palette": {"primary": "#FFD700"}},
+    )
+    proposal.assets = (request,)
+    proposal.game_design["_asset_generation_plan"]["assets"] = [
+        _plan_row(router, proposal, request),
+    ]
 
     def opaque_gradient(role, **kwargs):
         calls.append(kwargs)
