@@ -56,3 +56,27 @@ def test_persistent_store_keeps_old_target_and_new_target_separate():
     assert "net.minecraft.world.level.storage.LevelResource" in modern
     assert "server.getWorldPath(LevelResource.ROOT)" in modern
     assert "WorldSavePath" not in modern
+
+
+
+def test_mojang_command_binding_does_not_use_yarn_literal_or_integer_permission():
+    from minecraft_mod_ai.typed_plan_java import _Renderer
+
+    event = {
+        "event": "command",
+        "function": "run",
+        "config": {"literal": "debug", "permission_level": 2},
+    }
+    modern = "\n".join(
+        _Renderer({}, {}, minecraft_version="26.1.2").event_registration(event)
+    )
+    legacy = "\n".join(
+        _Renderer({}, {}, minecraft_version="1.21.5").event_registration(event)
+    )
+    assert "net.minecraft.commands.Commands.literal(" in modern
+    assert "Commands.hasPermission(" in modern
+    assert "Commands.LEVEL_MODERATORS" in modern
+    assert "net.minecraft.server.command.CommandManager" not in modern
+    assert "hasPermissionLevel(" not in modern
+    assert "net.minecraft.server.command.CommandManager.literal(" in legacy
+    assert "hasPermissionLevel(2)" in legacy
