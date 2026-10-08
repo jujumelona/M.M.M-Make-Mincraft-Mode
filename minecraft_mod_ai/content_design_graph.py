@@ -241,27 +241,53 @@ from .task_template_runner import run_record_template
 
 def _strip_semantic_content_build_dependencies(
     modules,
+    facts=(),
 ) -> tuple[ProductionModule, ...]:
-    """Keep gameplay/content relations out of the production scheduling DAG.
+    """Drop gameplay-only scheduling edges, preserving true build prerequisites.
 
-    Content relations describe runtime semantics and generated source references.
-    They do not require one source-generation module to finish before another:
-    canonical generators write independent files and the final compile observes
-    the complete generated source set. Keeping those semantic edges in
-    ProductionModule.depends_on can manufacture build cycles from perfectly valid
-    gameplay graphs.
+    A gameplay 'unlocks', 'displays' or 'upgrades' relation does not order
+    compilation. An explicit 'requires' edge does; likewise an unclassified
+    pre-existing dependency (such as recipe -> generated item) remains until
+    independently proven semantic. Previously this erased *all* dependencies,
+    allowing genuine prerequisites to run in arbitrary order.
     """
+
+    # Relation pairs are undirected for *classification* because older design
+    # plans projected relations into the scheduling DAG in either direction.
+    # Explicit requires relations remain directional and take precedence.
+    semantic_pairs: set[frozenset[str]] = set()
+    required_edges: set[tuple[str, str]] = set()
+    for fact in facts or ():
+        kind = getattr(fact, "fact_type", None)
+        if kind != FactType.CONTENT_RELATION:
+            continue
+        subject = str(getattr(fact, "subject", "") or "")
+        target = str(getattr(fact, "object", "") or "")
+        payload = getattr(fact, "value", None)
+        if not subject or not target or not isinstance(payload, Mapping):
+            continue
+        relation = str(payload.get("relation") or "")
+        if relation == "requires":
+            required_edges.add((subject, target))
+        elif relation:
+            semantic_pairs.add(frozenset((subject, target)))
 
     normalized: list[ProductionModule] = []
     for module in modules:
-        if not module.depends_on:
+        kept = tuple(
+            target
+            for target in module.depends_on
+            if (module.module_id, target) in required_edges
+            or frozenset((module.module_id, target)) not in semantic_pairs
+        )
+        if kept == module.depends_on:
             normalized.append(module)
             continue
         rewritten = ProductionModule(
             module_id=module.module_id,
             kind=module.kind,
             config=deepcopy(module.config),
-            depends_on=(),
+            depends_on=kept,
             required_gates=module.required_gates,
         )
         rewritten.validate()
@@ -1248,7 +1274,7 @@ def compile_content_graph(
     # Enforce the contract at the graph boundary as well as at each relation
     # lowering site. This makes future relation kinds fail safe: semantic edges
     # can never silently become production scheduling edges.
-    modules = list(_strip_semantic_content_build_dependencies(modules))
+    modules = list(_strip_semantic_content_build_dependencies(modules, facts))
 
     by_slot = {}
     for decision in decisions:
