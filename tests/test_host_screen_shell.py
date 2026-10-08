@@ -68,7 +68,7 @@ def test_rendered_screen_has_real_client_command_and_screen_lifecycle():
 
 
 def test_host_java_copy_escapes_untrusted_long_labels_without_model_inference():
-    attack = 'Queue GUI"; java.lang.Runtime.getRuntime().exec("oops"); //'
+    attack = 'Queue GUI"; java.lang.Runtime.getRuntime().exec("oops"); {{source_requirement}} //'
     long_requirement = "Displays feature names " * 200
     contract = basic_screen_candidate_contract(
         package_name="example.ships.client.generated",
@@ -84,6 +84,7 @@ def test_host_java_copy_escapes_untrusted_long_labels_without_model_inference():
     # not executable Java expressions or code after the string terminator.
     assert '\"; java.lang.Runtime' not in source
     assert 'SCREEN_TITLE = "Queue GUI' in source
+    assert "{{source_requirement}}" not in source
     assert '\\n next line' not in source
     body = source.split("SCREEN_BODY = ", 1)[1].split(";", 1)[0]
     assert len(body) <= 142
