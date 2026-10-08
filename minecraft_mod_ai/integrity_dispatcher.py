@@ -222,6 +222,19 @@ def execute_generator_job(job, *, context, router, port_registry=None, base_dir=
             retired = retire_owned_legacy_client_candidate(base_dir, spec)
             if retired:
                 materialization["retired_legacy_client_path"] = retired
+    host_screen_mode = str(spec.get("bindings", {}).get("host_screen_capability") or "")
+    if host_screen_mode:
+        validations.append({
+            "validator": "host_screen_capability_scope",
+            "status": "PASS",
+            "capability": host_screen_mode,
+            "scope": "client_display_and_command_only",
+            "server_menu_and_gameplay_actions": "NOT_PROVEN",
+        })
+        if materialization is not None:
+            materialization["screen_open_command"] = (
+                "/" + str(spec["bindings"]["host_screen_command"])
+            )
     if job.produces:
         # Canonical output ports carry the actual validated output values.
         from .artifact_ports import TypedPort, PortKind
