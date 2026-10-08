@@ -709,6 +709,7 @@ def _resource_policy_files(
     package_name: str,
     mod_id: str,
     structured: Mapping[str, Any],
+    minecraft_version: str = "",
 ) -> dict[str, str]:
     missing_rows = _structured_rows(
         structured,
@@ -780,11 +781,19 @@ def _resource_policy_files(
         files[en_path] = _merged_lang_text(root, en_path, en)
         files[ko_path] = _merged_lang_text(root, ko_path, ko)
 
-        send_lines = "\n".join(
-            "            handler.player.sendMessage("
-            f"net.minecraft.text.Text.translatable({json.dumps(key)}), false);"
-            for key in message_keys
-        )
+        if str(minecraft_version).strip().startswith("26."):
+            # Changed 2026-10-08: Mojang Component replaces Yarn Text.
+            send_lines = "\n".join(
+                "            handler.player.sendSystemMessage("
+                f"net.minecraft.network.chat.Component.translatable({json.dumps(key)}));"
+                for key in message_keys
+            )
+        else:
+            send_lines = "\n".join(
+                "            handler.player.sendMessage("
+                f"net.minecraft.text.Text.translatable({json.dumps(key)}), false);"
+                for key in message_keys
+            )
         files[
             f"src/main/java/{package_path}/"
             "AuthoredAccessibility.java"
@@ -1106,6 +1115,7 @@ def generate_typed_plan_module(
                 package_name=package_name,
                 mod_id=info.mod_id,
                 structured=structured,
+                minecraft_version=str(config.get("minecraft_version") or ""),
             )
         )
 
