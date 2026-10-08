@@ -5,6 +5,47 @@ from pathlib import Path
 from minecraft_mod_ai.compiler_diagnostics import compiler_log_diagnostics
 
 
+def test_gradle_failure_summary_preserves_first_cause_and_log_location(tmp_path):
+    from minecraft_mod_ai.compiler_diagnostics import gradle_failure_summary
+
+    log = tmp_path / "gradle-build.log"
+    log.write_text(
+        "> Task :compileJava FAILED\n"
+        "FAILURE: Build failed with an exception.\n"
+        "* What went wrong:\n"
+        "Execution failed for task ':compileJava'.\n"
+        "> Compilation failed due to invalid symbol.\n"
+        "* Try:\n"
+        "> Run with --info for details.\n",
+        encoding="utf-8",
+    )
+    summary = gradle_failure_summary(
+        {
+            "error": "Gradle build failed.",
+            "commands": [{"name": "build", "exit_code": 1, "log_path": str(log)}],
+            "diagnostics": [
+                {"severity": 1, "path": "src/main/java/demo/X.java",
+                 "line": 7, "message": "cannot find symbol"}
+            ],
+        }
+    )
+    assert "gradle-build.log" in summary
+    assert "exit=1" in summary
+    assert "X.java:7: cannot find symbol" in summary
+    assert "Execution failed for task ':compileJava'." in summary
+    assert "Run with --info" not in summary
+
+
+def test_gradle_failure_summary_without_log_still_shows_failure():
+    from minecraft_mod_ai.compiler_diagnostics import gradle_failure_summary
+
+    assert "Java 25 toolchain unavailable" in gradle_failure_summary(
+        {"status": "UNAVAILABLE", "error": "Java 25 toolchain unavailable",
+         "commands": []}
+    )
+
+
+
 def test_missing_runtime_method_reports_declaring_owner_before_call_site(tmp_path):
     log = tmp_path / "runtime.log"
     log.write_text(
