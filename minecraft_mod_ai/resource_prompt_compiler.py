@@ -63,6 +63,11 @@ def compile_texture_prompt(*, visual_description: str = "", texture: TextureSpec
         topology = "one semantic surface region for deterministic UV composition, no atlas layout"
     elif layout == "gui_decoration":
         topology = "decorative GUI layer only, no slots, buttons, text boxes, progress bars or icons"
+    elif layout in {"isolated_sprite", "cutout_sprite"}:
+        # The RGB diffusion model is *not* natively alpha-generating.
+        # BiRefNet segments the output before native-pixel-grid reduction;
+        # a simple isolated foreground makes this reliably distinguishable.
+        topology += ", one centered complete foreground object on a plain contrasting background, no scene, no cast shadow"
     parts = [p.lora_trigger.strip(), "Minecraft Java resource texture", "pixel art", topology, alpha,
              f"texture role {texture.role}", visual_bible, feature_purpose, description, *p.prompt_requirements,
              "simple native-grid silhouette, avoid subpixel detail", "no text", "no numbers", "no watermark", "no screenshot", "no 3D scene"]
