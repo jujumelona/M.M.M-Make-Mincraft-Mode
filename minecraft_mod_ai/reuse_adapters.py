@@ -324,7 +324,19 @@ class FabricApiMigrationAdapter:
                 for old, new in replacements.items():
                     updated = updated.replace(old, new)
                 if "net.minecraft.registry.Registries" not in updated:
-                    updated = "import net.minecraft.registry.Registries;\n" + updated
+                    # Java imports must follow the package declaration. The
+                    # former string prepend produced syntactically invalid
+                    # donor Java whenever the source declared a package.
+                    import_line = "import net.minecraft.registry.Registries;\n"
+                    package = re.search(
+                        r"(?m)^[ \t]*package[ \t]+[A-Za-z0-9_.]+[ \t]*;",
+                        updated,
+                    )
+                    if package is None:
+                        updated = import_line + updated
+                    else:
+                        pos = package.end()
+                        updated = updated[:pos] + "\n" + import_line + updated[pos:]
 
             if updated != original:
                 files[path] = updated
