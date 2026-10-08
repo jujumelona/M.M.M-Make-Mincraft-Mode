@@ -396,7 +396,7 @@ def test_python_generator_job_persists_schema_valid_candidate_inputs() -> None:
     assert spec["side"] == "CLIENT"
     assert spec["target_path"].startswith("src/client/java/example/space/client/generated/")
     assert [slot["name"] for slot in spec["slots"]] == ["ui_title", "ui_body"]
-    assert spec["host_screen_capability"] == "basic_client_screen"
+    assert spec["bindings"]["host_screen_capability"] == "basic_client_screen"
     assert "MMM:HOST_26_SCREEN_SHELL" in spec["render_mold"]
 
     from minecraft_mod_ai.model_output_atomicity_contract import (
