@@ -9,7 +9,7 @@ requires:
   - drop_item
   - loot_directory
 dependencies:
-  - '{{subject}}.entity_registry_id'
+  - '{{subject}}.entity_registry_receipt'
   - '{{drop_item}}.registry_id'
 produces:
   - name: entity_loot_table_ref
@@ -39,9 +39,9 @@ fixture:
     - 'minecraft:entity'
     - 'space:lunar_shard'
 dependency_types:
-  '{{subject}}.entity_registry_id':
-    kind: REGISTRY_ID
-    target_type: 'EntityType<?>'
+  '{{subject}}.entity_registry_receipt':
+    kind: GENERIC
+    target_type: receipt
   '{{drop_item}}.registry_id':
     kind: REGISTRY_ID
     target_type: Item
