@@ -53,7 +53,7 @@ def test_block_entity_java_api_is_26x_mojang_and_host_owned(version):
     assert "class GeneratedBlock extends BaseEntityBlock" in source
     assert "class GeneratedBlockEntity extends BlockEntity" in source
     assert "void onInitialize()" in source
-    assert "getRenderShape" not in source  # no fabricated renderer contract
+    assert "RenderShape.MODEL" in source  # BaseEntityBlock is invisible otherwise
     assert_canonical_java_target(source, spec)
 
 
