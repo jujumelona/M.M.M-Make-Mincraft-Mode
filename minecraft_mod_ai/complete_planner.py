@@ -77,9 +77,16 @@ class CompleteGameDesignPlanner:
             render_structured_sections,
         )
         from .typed_host_capabilities import typed_host_capability_contracts
+        from .typed_plan_ir import validate_typed_host_capability_contracts
         from .typed_plan_authoring import author_typed_plan_ir
 
         from .planner_budget import PlannerBudget
+
+        # This must run BEFORE expensive local-model calls and external source
+        # discovery. Otherwise a Python-side ABI mismatch would discard the
+        # entire authored plan only at the final PlanIR validation step.
+        capability_contracts = typed_host_capability_contracts()
+        validate_typed_host_capability_contracts(capability_contracts)
 
         # Every planner loop is host-bounded at its own structural boundary.
         # Keep one ledger for accounting, but do not impose a second unrelated
@@ -224,7 +231,7 @@ class CompleteGameDesignPlanner:
                 self.router,
                 text,
                 structured_sections,
-                typed_host_capability_contracts(),
+                capability_contracts,
                 deterministic_module_kinds=effective_kinds,
                 allowed_platform_kinds=auto_allowed_platform_kinds,
                 externally_covered_refs=external_content_refs,
