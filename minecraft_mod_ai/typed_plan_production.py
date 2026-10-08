@@ -998,6 +998,24 @@ def validate_typed_plan_generation_contract(
             package_name=package_name,
         )
 
+    # Fail before Gradle's expensive compile/bootstrap if a typed HOST
+    # renderer leaks Minecraft client-only classes into the common source set.
+    # This applies to *all* typed-host files, not just AuthoredNetworkClient.
+    if str(config.get("minecraft_version") or "").startswith("26."):
+        for relative, java_source in files.items():
+            if not relative.endswith(".java"):
+                continue
+            client_symbols = (
+                "net.fabricmc.api.ClientModInitializer",
+                "net.fabricmc.fabric.api.client.",
+                "net.minecraft.client.",
+            )
+            if any(symbol in java_source for symbol in client_symbols):
+                if not relative.startswith("src/client/java/"):
+                    raise ValueError(
+                        f"TYPED_CLIENT_SOURCE_SET_VIOLATION: {relative}"
+                    )
+
     return {
         "source_count": len(files),
         "paths": tuple(sorted(files)),
