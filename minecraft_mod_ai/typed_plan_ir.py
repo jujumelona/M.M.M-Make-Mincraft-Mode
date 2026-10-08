@@ -186,6 +186,17 @@ def _capability_contracts(capabilities: Mapping[str, Any] | None) -> dict[str, d
     return result
 
 
+def validate_typed_host_capability_contracts(
+    capabilities: Mapping[str, Any] | None,
+) -> dict[str, dict[str, Any]]:
+    """Fail before any LLM calls if the planner's host capability ABI diverges.
+
+    Planner schema generation and final Typed PlanIR validation must consume
+    exactly the same normalized contract, including semantic metadata.
+    """
+    return _capability_contracts(capabilities)
+
+
 class _Validator:
     def __init__(self, plan: Mapping[str, Any], capabilities: Mapping[str, Any] | None) -> None:
         self.plan = plan
