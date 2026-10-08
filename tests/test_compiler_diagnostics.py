@@ -223,3 +223,39 @@ def test_gradle_failure_summary_displays_more_than_one_independent_compiler_erro
     })
     assert "A.java:3: missing package A" in summary
     assert "B.java:22: cannot resolve super.init()" in summary
+
+
+def test_failure_summary_includes_actual_symbol_and_gametest_timeout_log(tmp_path):
+    from minecraft_mod_ai.compiler_diagnostics import gradle_failure_summary
+
+    compile_summary = gradle_failure_summary({
+        "error": "Gradle build failed.",
+        "commands": [],
+        "diagnostics": [
+            {
+                "severity": 1,
+                "path": "src/main/java/demo/AuthoredHostCapabilities.java",
+                "line": 54,
+                "message": "cannot find symbol\\n  symbol: method getHolder(Identifier)\\n  location: MOB_EFFECT",
+            }
+        ],
+    })
+    assert "symbol: method getHolder(Identifier)" in compile_summary
+
+    log = tmp_path / "gradle-gametest.log"
+    log.write_text(
+        "Starting Minecraft dedicated GameTest server\\n"
+        "Server startup event stalled\\n",
+        encoding="utf-8",
+    )
+    timeout_summary = gradle_failure_summary({
+        "error": "Headless Fabric GameTest timed out.",
+        "commands": [{
+            "name": "gametest",
+            "exit_code": 124,
+            "timed_out": True,
+            "log_path": str(log),
+        }],
+    })
+    assert "last_verifier_output=" in timeout_summary
+    assert "Server startup event stalled" in timeout_summary
