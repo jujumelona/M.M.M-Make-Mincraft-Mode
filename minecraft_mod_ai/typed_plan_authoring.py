@@ -1192,16 +1192,9 @@ def _semantic_capability_arg_schema(
 ) -> dict[str, Any]:
     schema = _semantic_state_value_schema(type_name)
     extra = dict(constraints or {})
-    allowed = {
-        "description",
-        "minimum",
-        "maximum",
-        "minLength",
-        "maxLength",
-        "pattern",
-        "enum",
-    }
-    unknown = set(extra) - allowed
+    from .typed_plan_ir import CAPABILITY_ARGUMENT_CONSTRAINT_FIELDS
+
+    unknown = set(extra) - CAPABILITY_ARGUMENT_CONSTRAINT_FIELDS
     if unknown:
         raise ValueError(
             "TYPED_PLAN_SEMANTIC_CAPABILITY_CONSTRAINT_UNSUPPORTED: "
@@ -1760,6 +1753,9 @@ def author_semantic_game_dispatch(
                     "return_type": contract["return_type"],
                 }
                 for cap_id, contract in sorted((capabilities or {}).items())
+                if not state_only and (
+                    not mutation_required or contract.get("gameplay_mutation") is True
+                )
             },
             "instruction": (
                 "Choose exactly one host-bound runtime action implementing the supplied "
