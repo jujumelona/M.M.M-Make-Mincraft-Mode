@@ -91,4 +91,51 @@ def assert_canonical_client_source_set(project_root: str | Path, spec: Mapping[s
         )
 
 
-__all__ = ["assert_canonical_java_target", "assert_canonical_client_source_set"]
+def retire_owned_legacy_client_candidate(
+    project_root: str | Path, spec: Mapping[str, Any]
+) -> str | None:
+    """Discard only the exact former main-source location of a moved GUI candidate.
+
+    A successful new client candidate may otherwise coexist with stale invalid
+    Yarn source in main on resume and fail every later compileJava invocation.
+    Never remove arbitrary user files or an unproven candidate identity.
+    """
+    bindings = spec.get("bindings")
+    if not isinstance(bindings, Mapping):
+        return None
+    if not str(bindings.get("minecraft_version") or "").startswith("26."):
+        return None
+    if str(spec.get("side") or "").upper() != "CLIENT":
+        return None
+    current = str(spec.get("target_path") or "").replace("\\", "/")
+    if not current.startswith("src/client/java/") or "/client/generated/" not in current:
+        return None
+    name = str(bindings.get("class_name") or "")
+    package = str(bindings.get("package_name") or "")
+    if not name or not package:
+        raise ValueError("CANONICAL_CLIENT_LEGACY_IDENTITY_MISSING")
+    old_relative = current.replace("src/client/java/", "src/main/java/", 1)
+    root = Path(project_root).expanduser().resolve()
+    old = root / old_relative
+    if not old.exists():
+        return None
+    if old.is_symlink() or not old.is_file() or not old.resolve().is_relative_to(root):
+        raise ValueError("CANONICAL_CLIENT_LEGACY_PATH_UNSAFE")
+    source = old.read_text(encoding="utf-8")
+    package_match = re.search(
+        r"(?m)^\s*package\s+([A-Za-z0-9_.]+)\s*;", source
+    )
+    class_match = re.search(
+        r"\b(?:public\s+)?(?:final\s+)?class\s+([A-Za-z0-9_]+)\b", source
+    )
+    if (package_match is None or package_match.group(1) != package
+            or class_match is None or class_match.group(1) != name):
+        raise ValueError(
+            "CANONICAL_CLIENT_LEGACY_SOURCE_CONFLICT: refusing to delete "
+            f"unowned file {old_relative}"
+        )
+    old.unlink()
+    return old_relative
+
+
+__all__ = ["assert_canonical_java_target", "assert_canonical_client_source_set", "retire_owned_legacy_client_candidate"]
