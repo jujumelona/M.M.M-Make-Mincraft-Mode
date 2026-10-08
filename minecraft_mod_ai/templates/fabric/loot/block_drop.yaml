@@ -2,11 +2,12 @@ id: fabric/loot/block_drop
 artifact: json_resource
 target:
   operation: CREATE_FILE
-  file: src/main/resources/data/{{mod_id}}/loot_tables/blocks/{{registry_path}}.json
+  file: src/main/resources/data/{{mod_id}}/{{loot_directory}}/blocks/{{registry_path}}.json
 requires:
   - mod_id
   - registry_path
   - drop_item
+  - loot_directory
 dependencies:
   - "{{subject}}.block_registry_id"
   - "{{drop_item}}.registry_id"
@@ -35,6 +36,7 @@ fixture:
     mod_id: space
     registry_path: lunite_ore
     drop_item: raw_lunite
+    loot_directory: loot_table
   expected_contains:
     - "minecraft:block"
     - "space:raw_lunite"
