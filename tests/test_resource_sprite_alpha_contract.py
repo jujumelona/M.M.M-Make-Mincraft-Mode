@@ -34,54 +34,30 @@ def _opaque_diffusion_image(width=512, height=512):
     return image
 
 
-@pytest.mark.parametrize("silhouette", ["cube", "cylinder"])
-def test_opaque_variegated_diffusion_sprite_gets_explicit_host_alpha(silhouette, tmp_path):
+def test_opaque_flux_background_is_not_faked_into_alpha_by_geometry(tmp_path):
     texture = _item_texture()
     with _opaque_diffusion_image() as image:
-        processed = postprocess_region(
-            image, texture.resource_contract, (16, 16), silhouette=silhouette,
-        )
+        processed = postprocess_region(image, texture.resource_contract, (16, 16))
     try:
-        alpha = set(processed.getchannel("A").getdata())
-        assert alpha == {0, 255}
-        assert processed.getpixel((0, 0)) == (0, 0, 0, 0)
-        assert processed.getpixel((8, 8))[3] == 255
-        assert processed.info["mmm_alpha_matte"] == "host_explicit_" + silhouette
-        path = tmp_path / "item.png"
-        processed.save(path)
-        assert validate_texture(path, texture.to_dict())["status"] == "PASS"
-    finally:
-        processed.close()
-
-
-def test_unapproved_silhouette_does_not_erase_unknown_geometry(tmp_path):
-    texture = _item_texture()
-    with _opaque_diffusion_image() as image:
-        processed = postprocess_region(
-            image, texture.resource_contract, (16, 16), silhouette="complex spaceship",
-        )
-    try:
-        path = tmp_path / "unknown.png"
+        path = tmp_path / "unsegmented.png"
         processed.save(path)
         with pytest.raises(ValueError, match="transparent alpha"):
             validate_texture(path, texture.to_dict())
-        assert "mmm_alpha_matte" not in processed.info
     finally:
         processed.close()
 
 
-def test_existing_model_alpha_is_never_replaced_by_geometric_host_mask():
+def test_existing_model_alpha_is_preserved():
     texture = _item_texture()
     source = Image.new("RGBA", (32, 32), (0, 0, 0, 0))
     source.paste((30, 90, 200, 255), (3, 3, 29, 29))
     try:
         processed = postprocess_region(
-            source, texture.resource_contract, (16, 16), silhouette="cube",
+            source, texture.resource_contract, (16, 16),
         )
         try:
             assert processed.getpixel((2, 8))[3] == 255
             assert processed.getpixel((0, 0))[3] == 0
-            assert "mmm_alpha_matte" not in processed.info
         finally:
             processed.close()
     finally:
@@ -110,7 +86,7 @@ def test_actual_candidate_generation_uses_segmenter_not_shape_mask(tmp_path):
     evidence = generate_candidate(
         generator, texture.to_dict(),
         prompt="gold cube", directory=tmp_path / "regions",
-        output=output, resolution=(512, 512), seed=11, silhouette="cube",
+        output=output, resolution=(512, 512), seed=11,
         segment_foreground_callback=fake_segmenter,
     )
     assert len(calls) == 1
