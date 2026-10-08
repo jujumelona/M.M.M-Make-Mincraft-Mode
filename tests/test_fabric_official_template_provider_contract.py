@@ -253,3 +253,40 @@ def test_host_runtime_contract_preserves_existing_language_content(tmp_path: Pat
     assert existing.read_text(encoding="utf-8") == (
         '{"item.demo_mod.token":"Token"}\n'
     )
+
+
+
+def test_official_26_client_scaffold_wires_split_source_set_only_once(tmp_path):
+    from minecraft_mod_ai.fabric_official_template_provider import (
+        _ensure_modern_client_source_set,
+    )
+
+    root = tmp_path / "fabric"
+    root.mkdir()
+    script = root / "build.gradle"
+    script.write_text("plugins { id 'net.fabricmc.fabric-loom' }\n", encoding="utf-8")
+    spec = SimpleNamespace(mod_id="testmod")
+    modern = SimpleNamespace(minecraft_version="26.1.2")
+    _ensure_modern_client_source_set(root, spec, modern)
+    first = script.read_text(encoding="utf-8")
+    assert "splitEnvironmentSourceSets()" in first
+    assert 'mods { "testmod" {' in first
+    assert "sourceSet sourceSets.client" in first
+    _ensure_modern_client_source_set(root, spec, modern)
+    assert script.read_text(encoding="utf-8") == first
+
+
+def test_official_legacy_scaffold_is_not_rewritten_to_modern_client_source_set(tmp_path):
+    from minecraft_mod_ai.fabric_official_template_provider import (
+        _ensure_modern_client_source_set,
+    )
+
+    root = tmp_path / "fabric"
+    root.mkdir()
+    build = root / "build.gradle"
+    build.write_text("plugins {}\n", encoding="utf-8")
+    _ensure_modern_client_source_set(
+        root, SimpleNamespace(mod_id="testmod"),
+        SimpleNamespace(minecraft_version="1.21.5"),
+    )
+    assert build.read_text(encoding="utf-8") == "plugins {}\n"
