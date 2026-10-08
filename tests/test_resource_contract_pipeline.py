@@ -470,7 +470,7 @@ def test_host_uv_requires_explicit_lora_compatibility():
 
 
 
-def test_opaque_flux_like_cube_runs_single_candidate_with_host_alpha_matte(tmp_path):
+def test_opaque_flux_like_cube_runs_single_candidate_with_birefnet_alpha(tmp_path, monkeypatch):
     """Reproduce production log: all-different RGB corners, fully opaque PNG."""
     from PIL import Image
 
@@ -504,10 +504,24 @@ def test_opaque_flux_like_cube_runs_single_candidate_with_host_alpha_matte(tmp_p
         finally:
             image.close()
 
+    # ONNX network inference is mocked here; its session/model identity is
+    # verified separately. The production path must consume RGBA segmentation.
+    from PIL import ImageDraw
+    import minecraft_mod_ai.resource_alpha_segmentation as alpha_module
+
+    def fixture_alpha(image):
+        result = image.convert("RGBA")
+        mask = Image.new("L", result.size, 0)
+        ImageDraw.Draw(mask).ellipse((90, 40, result.width - 90, result.height - 40), fill=255)
+        result.putalpha(mask)
+        mask.close()
+        return result
+
+    monkeypatch.setattr(alpha_module, "segment_foreground", fixture_alpha)
     router.generate_image = opaque_gradient
     result = generate_assets(router, proposal, tmp_path / "mod", tmp_path / "run")
     assert result["resource_contract_validation"]["status"] == "PASS"
     assert result["assets"][0]["attempted_candidate_count"] == 1
-    assert result["assets"][0]["generation_evidence"]["sources"][0]["alpha_matte"] == "host_explicit_cube"
+    assert result["assets"][0]["generation_evidence"]["sources"][0]["alpha_matte"] == "rembg:birefnet-general"
     with Image.open(result["assets"][0]["target"]) as output:
         assert set(output.getchannel("A").getdata()) == {0, 255}
