@@ -62,7 +62,17 @@ def debug_fixture_source_contract(
         for key in ("resource_key_create", "register_item", "item_set_id")
         if isinstance(symbols.get(key), Mapping)
     ]
-    if "resource_key_create" not in required_keys or "register_item" not in required_keys:
+    # Legacy registry templates use direct Identifier/ResourceLocation registration
+    # without a ResourceKey. Keyed epochs require the key-create symbol instead.
+    templates = fact.get("templates") or ()
+    key_required = any(
+        isinstance(template, Mapping)
+        and "resource_key_create" in (template.get("symbol_usage") or ())
+        for template in templates
+    )
+    if "register_item" not in required_keys or (
+        key_required and "resource_key_create" not in required_keys
+    ):
         raise DebugFixtureHostError(
             "DEBUG_FIXTURE_HOST_REGISTRY_SYMBOLS_INCOMPLETE"
         )
@@ -92,7 +102,7 @@ def debug_fixture_source_contract(
     }
 
 
-def _selected_templates(fact: Mapping[str, Any]) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+def _selected_templates(fact: Mapping[str, Any]) -> tuple[Mapping[str, Any] | None, Mapping[str, Any]]:
     templates = fact.get("templates")
     if not isinstance(templates, list):
         raise DebugFixtureHostError("DEBUG_FIXTURE_HOST_TEMPLATES_MISSING")
@@ -113,7 +123,13 @@ def _selected_templates(fact: Mapping[str, Any]) -> tuple[Mapping[str, Any], Map
         if "register_item" in names:
             register_template = raw
 
-    if key_template is None or register_template is None:
+    if register_template is None or (
+        key_template is None
+        and any(
+            "key_symbol" in str(item)
+            for item in (register_template.get("dependencies") or ())
+        )
+    ):
         raise DebugFixtureHostError(
             "DEBUG_FIXTURE_HOST_TEMPLATE_TOPOLOGY_INCOMPLETE"
         )
@@ -130,9 +146,9 @@ def render_debug_fixture_source(
     fact = grounding["facts"][0]
     key_template, register_template = _selected_templates(fact)
 
-    key_body = str(key_template.get("render_body") or "").strip()
+    key_body = str(key_template.get("render_body") or "").strip() if key_template else ""
     register_body = str(register_template.get("render_body") or "").strip()
-    if not key_body or not register_body:
+    if not register_body or (key_template is not None and not key_body):
         raise DebugFixtureHostError("DEBUG_FIXTURE_HOST_TEMPLATE_BODY_EMPTY")
 
     replacements = {
@@ -169,6 +185,8 @@ def render_debug_fixture_source(
 
     body_lines: list[str] = []
     for fragment in (key_body, register_body):
+        if not fragment:
+            continue
         if body_lines:
             body_lines.append("")
         body_lines.extend(fragment.splitlines())
