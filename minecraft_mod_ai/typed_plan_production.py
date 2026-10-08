@@ -1268,7 +1268,6 @@ def generate_typed_plan_module(
             call_line="AuthoredStatePersistence.register()",
             marker="typed-state-persistence",
         )
-    retired_client_path = None
     if raw_network_sync is not None:
         ensure_main_initializer_call(
             info,
