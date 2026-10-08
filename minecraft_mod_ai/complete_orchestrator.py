@@ -412,6 +412,8 @@ class CompleteProductionOrchestrator:
                 authored_reuse,
                 minecraft_version=str(bound.get("minecraft_version") or ""),
                 loader=str(bound.get("loader") or ""),
+                package_name=spec.package_name,
+                mod_id=spec.mod_id,
             )
             module_receipts.append(installed_reuse)
         self._succeed_work_node(ledger, 'prepare-project', {'schema_version': 'mmm/work-node-receipt-v1', 'status': 'SUCCEEDED', 'project_root': str(project_root)})
