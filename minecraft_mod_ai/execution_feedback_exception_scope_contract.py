@@ -8,6 +8,17 @@ import sys
 def _checkpoint_for_exception(exc: BaseException | None) -> str | None:
     if exc is None:
         return None
+    # The checkpoint is a typed boundary contract, not a substring of a
+    # user-facing message. Only production errors may claim this provenance.
+    from .complete_orchestrator_support import CompleteProductionError
+
+    if isinstance(exc, CompleteProductionError):
+        checkpoint_id = getattr(exc, "checkpoint_id", None)
+        if checkpoint_id in {
+            "validate-debug-source", "validate-source", "validate-jdt", "gradle-build"
+        }:
+            return checkpoint_id
+    # Preserve the legacy messages for already-persisted exception callers.
     message = str(exc).casefold()
     if "debug fixture observable source acceptance failed" in message:
         return "validate-debug-source"
