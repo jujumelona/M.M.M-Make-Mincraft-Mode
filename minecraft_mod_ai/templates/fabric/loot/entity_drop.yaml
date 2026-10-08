@@ -1,0 +1,47 @@
+id: fabric/loot/entity_drop
+artifact: json_resource
+target:
+  operation: CREATE_FILE
+  file: src/main/resources/data/{{mod_id}}/{{loot_directory}}/entities/{{registry_path}}.json
+requires:
+  - mod_id
+  - registry_path
+  - drop_item
+  - loot_directory
+dependencies:
+  - '{{subject}}.entity_registry_id'
+  - '{{drop_item}}.registry_id'
+produces:
+  - name: entity_loot_table_ref
+    binding: '{{subject}}.entity_loot_table_ref'
+    kind: GENERIC
+    target_type: LootTable
+    value: '{{mod_id}}:entities/{{registry_path}}'
+ai_slots: []
+render:
+  language: json
+  body:
+    type: 'minecraft:entity'
+    pools:
+      - rolls: 1
+        entries:
+          - type: 'minecraft:item'
+            name: '{{mod_id}}:{{drop_item}}'
+validators:
+  - json_parse
+fixture:
+  input:
+    mod_id: space
+    registry_path: lunar_golem
+    drop_item: lunar_shard
+    loot_directory: loot_table
+  expected_contains:
+    - 'minecraft:entity'
+    - 'space:lunar_shard'
+dependency_types:
+  '{{subject}}.entity_registry_id':
+    kind: REGISTRY_ID
+    target_type: 'EntityType<?>'
+  '{{drop_item}}.registry_id':
+    kind: REGISTRY_ID
+    target_type: Item
