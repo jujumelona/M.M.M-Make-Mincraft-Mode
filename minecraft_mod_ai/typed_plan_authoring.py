@@ -2463,10 +2463,15 @@ def author_typed_plan_ir(
             if inferred_config is not None:
                 config = dict(inferred_config)
             else:
-                trigger_text = str(row.get("trigger") or "").strip()
-                cmd_slug = re.sub(r"[^a-z0-9_]+", "", trigger_text.lower())
-                literal_name = cmd_slug[:32] if cmd_slug else f"cmd_{entry_point_index + 1}"
-                config = {"literal": literal_name, "permission_level": 0}
+                # Never register a synthetic command whose literal was
+                # guessed from an ambiguous gameplay trigger. An explicit
+                # /literal or command:literal is required at plan authoring.
+                raise ValueError(
+                    "TYPED_COMMAND_LITERAL_UNBOUND: "
+                    f"{event_scope} trigger={row.get('trigger')!r}. "
+                    "Specify an explicit command name in the integration "
+                    "entry point instead of fabricating one."
+                )
 
         entry_point_covers = ["integration.entry_points"]
         if (
