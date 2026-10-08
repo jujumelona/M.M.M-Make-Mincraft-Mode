@@ -13,7 +13,6 @@ from minecraft_mod_ai.host_screen_shell import (
     screen_command_name,
 )
 from minecraft_mod_ai.implementation_template_renderer import render_template
-from minecraft_mod_ai.model_output_atomicity_contract import assert_atomic_model_schema
 
 
 def _canonical_spec(version: str = "26.1.2") -> dict:
@@ -37,22 +36,20 @@ def _canonical_spec(version: str = "26.1.2") -> dict:
     return facts["screen_registration_input"]
 
 
-def test_small_ai_only_owns_two_bounded_display_strings():
+def test_gui_has_zero_model_slots_and_full_host_rendered_static_copy():
     spec = _canonical_spec()
-    assert [slot["name"] for slot in spec["slots"]] == ["ui_title", "ui_body"]
-    assert "artifact_source" not in [slot["name"] for slot in spec["slots"]]
+    assert spec["slots"] == []
     assert spec["bindings"]["host_screen_capability"] == "basic_client_screen"
-    for slot in spec["slots"]:
-        assert_atomic_model_schema(slot["schema"], surface="host GUI tiny slot")
     assert "src/client/java/example/ships/client/generated/" in spec["target_path"]
+    assert 'SCREEN_TITLE = "Blueprint Database"' in spec["render_mold"]
+    assert 'SCREEN_BODY = "Planned: Show the spaceship blueprint database interface"' in spec["render_mold"]
+    assert "{{ui_title}}" not in spec["render_mold"]
+    assert "{{ui_body}}" not in spec["render_mold"]
 
 
 def test_rendered_screen_has_real_client_command_and_screen_lifecycle():
     spec = _canonical_spec()
-    generated = render_template(
-        {"render": spec["render_mold"]},
-        {"ui_title": "Blueprint Database", "ui_body": "View ship modules"},
-    )
+    generated = render_template({"render": spec["render_mold"]}, {})
     assert "MMM:HOST_26_SCREEN_SHELL" in generated
     assert "ClientCommandRegistrationCallback.EVENT.register(" in generated
     assert "ClientCommands.literal(" in generated
@@ -70,17 +67,34 @@ def test_rendered_screen_has_real_client_command_and_screen_lifecycle():
     Draft202012Validator(spec["output_schema"]).validate(generated)
 
 
-def test_model_cannot_inject_java_source_or_newlines_through_labels():
-    spec = _canonical_spec()
-    title, body = (slot["schema"] for slot in spec["slots"])
-    validator_title = Draft202012Validator(title)
-    validator_body = Draft202012Validator(body)
-    assert validator_title.is_valid("宇宙船 데이터 화면")
-    assert validator_body.is_valid("Show available blueprints")
-    assert not validator_title.is_valid('Hello"; System.exit(0); //')
-    assert not validator_body.is_valid("first\nsecond")
-    assert not validator_body.is_valid("System\\nexit")
+def test_host_java_copy_escapes_untrusted_long_labels_without_model_inference():
+    attack = 'Queue GUI"; java.lang.Runtime.getRuntime().exec("oops"); //'
+    long_requirement = "Displays feature names " * 200
+    contract = basic_screen_candidate_contract(
+        package_name="example.ships.client.generated",
+        class_name="QueueRegistration",
+        mod_id="ships", subject="queue",
+        default_title=attack,
+        requirement=long_requirement + "\\n next line",
+    )
+    assert contract["slots"] == []
+    source = render_template({"render": contract["render_mold"]}, {})
+    assert "Runtime.getRuntime().exec" in source
+    # Injection-like source text remains confined to an escaped string literal,
+    # not executable Java expressions or code after the string terminator.
+    assert '\"; java.lang.Runtime' not in source
+    assert 'SCREEN_TITLE = "Queue GUI' in source
+    assert '\\n next line' not in source
+    body = source.split("SCREEN_BODY = ", 1)[1].split(";", 1)[0]
+    assert len(body) <= 142
+    assert body.startswith('"Planned: ')
+    assert "…" in body
 
+
+def test_gui_generation_keeps_original_unbounded_requirement_in_contract():
+    spec = _canonical_spec()
+    assert spec["requirement"] == "Show the spaceship blueprint database interface"
+    assert spec["bindings"]["source_requirement"] == spec["requirement"]
 
 def test_legacy_screen_remains_source_generation_contract():
     spec = _canonical_spec("1.21.5")
@@ -109,18 +123,12 @@ def test_host_rejects_malformed_shell_identifiers():
 
 def test_26_2_screen_api_uses_minecraft_gui_after_fabric_migration():
     spec = _canonical_spec("26.2")
-    source = render_template(
-        {"render": spec["render_mold"]},
-        {"ui_title": "Ship Database", "ui_body": "Browse blueprints"},
-    )
+    source = render_template({"render": spec["render_mold"]}, {})
     assert "client.gui.setScreen(" in source
     assert "client.setScreen(" not in source
     assert_canonical_java_target(source, spec)
     legacy26 = _canonical_spec("26.1.2")
-    old_source = render_template(
-        {"render": legacy26["render_mold"]},
-        {"ui_title": "Ship Database", "ui_body": "Browse blueprints"},
-    )
+    old_source = render_template({"render": legacy26["render_mold"]}, {})
     assert "client.setScreen(" in old_source
     assert "client.gui.setScreen(" not in old_source
 
