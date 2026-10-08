@@ -295,6 +295,9 @@ def _canonical_candidate_inputs(
             subject=subject,
             default_title=display_name,
         )
+    if screen_contract:
+        bindings["host_screen_capability"] = screen_contract["capability"]
+        bindings["host_screen_command"] = screen_contract["command"]
     spec = {
         "leaf_id": canonical_leaf,
         "context_id": context_id,
@@ -327,8 +330,6 @@ def _canonical_candidate_inputs(
             }
         ],
         "java_filename": class_name + ".java",
-        **({"host_screen_capability": screen_contract["capability"],
-            "host_screen_command": screen_contract["command"]} if screen_contract else {}),
     }
 
     inputs: dict[str, Any] = {}
