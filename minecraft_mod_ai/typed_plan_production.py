@@ -1280,7 +1280,7 @@ def generate_typed_plan_module(
             package_name, str(config.get("minecraft_version") or ""),
         )
         if client_path in files:
-            retired_client_path = _retire_host_owned_legacy_network_client(
+            _retire_host_owned_legacy_network_client(
                 root, package_name, str(config.get("minecraft_version") or ""),
             )
             ensure_client_entrypoint(
