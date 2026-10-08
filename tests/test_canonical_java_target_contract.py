@@ -81,3 +81,26 @@ def test_valid_mojang_client_initializer_is_not_rejected():
         "}\n"
     )
     assert_canonical_java_target(java, _spec("26.1.2"))
+
+
+
+def test_modern_client_candidate_requires_split_gradle_before_model_call(tmp_path):
+    from minecraft_mod_ai.canonical_java_target_contract import (
+        assert_canonical_client_source_set,
+    )
+
+    build = tmp_path / "build.gradle"
+    build.write_text("plugins { id 'net.fabricmc.fabric-loom' }\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="CANONICAL_CLIENT_GRADLE_SOURCE_SET_MISSING"):
+        assert_canonical_client_source_set(tmp_path, _spec("26.1.2"))
+
+    build.write_text(
+        'loom {\n  splitEnvironmentSourceSets()\n'
+        '  mods { "demo" { sourceSet sourceSets.main\n'
+        '      sourceSet sourceSets.client } }\n}\n',
+        encoding="utf-8",
+    )
+    assert_canonical_client_source_set(tmp_path, _spec("26.1.2"))
+    # Legacy targets were not silently converted to a new source-set policy.
+    build.unlink()
+    assert_canonical_client_source_set(tmp_path, _spec("1.21.5"))
