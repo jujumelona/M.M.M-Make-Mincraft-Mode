@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 from typing import Any
+from packaging.version import Version
 
 from .artifact_job import ArtifactJob
 from .artifact_ports import PortKind
@@ -109,7 +110,7 @@ CANONICAL_LEAF_DEFAULT_TEMPLATES: dict[str, tuple[str, ...]] = {
     "minecraft/block/drops": ("fabric/loot/block_drop",),
     "minecraft/recipe/serializer": ("fabric/recipe/shaped", "fabric/recipe/shapeless"),
     "minecraft/tag/entries": ("fabric/tag/registry",),
-    "minecraft/loot/entry": ("fabric/loot/block_drop",),
+    "minecraft/loot/entry": ("fabric/loot/entity_drop",),
 }
 
 
@@ -611,6 +612,7 @@ def expand_facts_to_jobs(
                 "subject": subject,
                 "main_class": main_class_val,
                 "minecraft_version": minecraft_version,
+                "loot_directory": "loot_table" if Version(minecraft_version) >= Version("1.21") else "loot_tables",
                 **resource_values,
             }
             # Fact values remain host-validated; leaf topology belongs to the catalog.
@@ -622,12 +624,20 @@ def expand_facts_to_jobs(
                 deterministic_inputs["display_name"] = getattr(
                     fact, "display_name", ""
                 ) or " ".join(part.capitalize() for part in subject.split("_"))
-            if fact.fact_type == FactType.BLOCK_DROP:
-                if not fact.object:
+            if fact.fact_type in {FactType.BLOCK_DROP, FactType.ENTITY_LOOT}:
+                # Both block drops and entity loot need an explicit item
+                # reference. Earlier ENTITY_LOOT used the block mold without
+                # populating drop_item, producing RENDER_MISSING_VALUE after
+                # the entire production graph was already assembled.
+                drop_item = str(fact.object or "").strip()
+                if not _REGISTRY_PATH.fullmatch(drop_item):
                     raise ArtifactExpansionError(
-                        "ARTIFACT_DROP_TARGET_REQUIRED: block drop needs an explicit item"
+                        "ARTIFACT_DROP_TARGET_REQUIRED: "
+                        f"{fact.fact_type.value} needs a declared local item registry "
+                        "path (no invented default or unregistered external item): "
+                        f"{drop_item!r}"
                     )
-                deterministic_inputs["drop_item"] = fact.object
+                deterministic_inputs["drop_item"] = drop_item
 
             template = load_template(template_id)
             version_context.admit_template(template)
