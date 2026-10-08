@@ -12,7 +12,6 @@ NOT server-authoritative container/menu synchronization or gameplay actions.
 """
 
 import hashlib
-import json
 import re
 from typing import Any
 
@@ -21,13 +20,6 @@ from typing import Any
 # cannot inject Java statements or change class/interface structure.
 _DISPLAY_PATTERN = r'^[^"\\\x00-\x1f\x7f]{1,96}$'
 _BODY_PATTERN = r'^[^"\\\x00-\x1f\x7f]{1,160}$'
-
-
-def _literal(value: str) -> str:
-    # Host-owned strings from the planning graph still require Java escaping.
-    # Use UTF-8 source text for non-ASCII characters; Java translation of
-    # \uXXXX escapes before lexing would otherwise create injection surprises.
-    return json.dumps(str(value), ensure_ascii=False)
 
 
 def screen_command_name(mod_id: str, subject: str) -> str:
@@ -58,7 +50,6 @@ def basic_screen_candidate_contract(
     if not re.fullmatch(r"26\.(?:1|2)(?:\.[0-9]+)?", minecraft_version):
         raise ValueError("HOST_SCREEN_UNREVIEWED_MINECRAFT_EPOCH")
     cmd = screen_command_name(mod_id, subject)
-    title_fallback = _literal(default_title)
     # Fabric 26.2 moved screen control onto Minecraft.gui.
     open_screen = "client.gui.setScreen" if minecraft_version.startswith("26.2") else "client.setScreen"
     # Host controls the Java shell. The two placeholders are Java string
@@ -80,7 +71,6 @@ import net.minecraft.network.chat.Component;
 public final class {class_name} implements ClientModInitializer {{
     private static final String SCREEN_TITLE = "{{{{ui_title}}}}";
     private static final String SCREEN_BODY = "{{{{ui_body}}}}";
-    private static final String HOST_FALLBACK_TITLE = {title_fallback};
 
     @Override
     public void onInitializeClient() {{
