@@ -27,6 +27,7 @@ _CAPABILITIES: dict[str, dict[str, Any]] = {
         "return_type": "void",
     },
     "player.grant_item": {
+        "gameplay_mutation": True,
         "owner": "AuthoredHostCapabilities",
         "method": "grantItem",
         "parameters": ["object", "string", "int"],
@@ -42,6 +43,7 @@ _CAPABILITIES: dict[str, dict[str, Any]] = {
         "return_type": "boolean",
     },
     "player.add_status_effect": {
+        "gameplay_mutation": True,
         "owner": "AuthoredHostCapabilities",
         "method": "addStatusEffect",
         "parameters": ["object", "string", "int", "int"],
