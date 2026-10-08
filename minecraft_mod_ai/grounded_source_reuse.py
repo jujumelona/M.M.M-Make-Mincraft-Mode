@@ -282,7 +282,32 @@ def build_repository_reuse_plan(
     adapter = _adapter(design)
     adapter.validate()
     client = discovery_client or EcosystemDiscoveryClient()
-    cards = _grounded_repository_cards(design)
+    cards = list(_grounded_repository_cards(design))
+    # Host-owned discovery feeds reference-only repository identities into the
+    # existing immutable source, license, closure and compile-proof gates.
+    # A search hit has ZERO reuse authority until the proof below passes.
+    from .reuse_discovery import discover_repositories_for_graph
+
+    discovered = discover_repositories_for_graph(
+        tuple(str(node) for node in graph.get("nodes", ()) if str(node).strip()),
+        client,
+        capability_graph=graph,
+    )
+    by_repository = {str(card["repository"]).casefold(): i for i, card in enumerate(cards)}
+    for capability, repositories in discovered.items():
+        for repository in repositories:
+            _merge_card(cards, by_repository, {
+                "repository": repository,
+                "page_refs": ["host:ecosystem_discovery"],
+                "source_ids": ["github:" + repository],
+                "source_urls": ["https://github.com/" + repository],
+                "evidence_text": capability,
+                "evidence_tokens": sorted(_tokens(capability)),
+                "explicit_reference": False,
+                "candidate_origin": "host_ecosystem_discovery",
+                "reference_only": True,
+                "source_reuse_authority": "verification_required",
+            })
     terms_by_capability = _search_terms(graph)
     capabilities = tuple(
         dict.fromkeys(
@@ -421,6 +446,10 @@ def build_repository_reuse_plan(
         "capability_graph": graph,
         "capabilities": decisions,
         "grounded_repository_count": len(cards),
+        "host_discovered_repositories": {
+            str(capability): list(repositories)
+            for capability, repositories in discovered.items()
+        },
         "planning_rag_candidate_repository_count": len(planning_cards),
         "explicit_reference_repository_count": sum(
             bool(card.get("explicit_reference")) for card in cards
