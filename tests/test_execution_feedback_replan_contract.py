@@ -585,6 +585,19 @@ def test_verifier_infrastructure_failure_is_classified_by_feedback_owner():
     assert str(result["fingerprint"]).startswith("sha256:")
 
 
+def test_gametest_timeout_is_never_classified_as_model_repairable():
+    failure = feedback._verifier_infrastructure_failure(
+        {
+            "error_code": "GRADLE_GAMETEST_TIMEOUT",
+            "failure_class": "infrastructure_timeout",
+            "repairable": False,
+            "diagnostics": [],
+        }
+    )
+    assert failure is not None
+    assert failure["code"] == "GRADLE_GAMETEST_TIMEOUT"
+
+
 def test_feedback_execute_wrapper_carries_semantic_convergence_marker(monkeypatch):
     orchestrator, _feedback_rows = _install_feedback_loop(
         monkeypatch, failures_before_success=0
