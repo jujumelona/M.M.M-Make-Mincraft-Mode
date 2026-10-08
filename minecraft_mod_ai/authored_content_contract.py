@@ -20,6 +20,53 @@ from .authored_structured_design import active_concern_records
 from .content_design_contract import CONTENT_CONCERN_KINDS, CONTENT_KIND_TO_FACT_TYPE
 
 
+# Gameplay records are also content discovery inputs. They must never be
+# replaced by a UI-only description merely because the resources worksheet
+# happens to have three driver concerns.
+GAMEPLAY_CONTENT_DRIVER_CONCERNS: dict[str, tuple[str, ...]] = {
+    "behavior_contract": ("actors", "triggers", "preconditions", "outputs", "postconditions"),
+    "algorithm": ("ordered_operations", "branches", "updates"),
+    "integration": ("entry_points",),
+}
+
+
+def _gameplay_content_requirements(
+    structured_sections: Mapping[str, Any],
+    *,
+    requested_prompt: str,
+) -> list[dict[str, Any]]:
+    """Preserve every authored gameplay record as one small content-discovery task.
+
+    Unknown concern names are retained. Grouping per concern avoids asking the
+    local model to reprocess the entire feature specification as one huge prompt.
+    These are discovery requirements, not proof of successful implementation.
+    """
+    requirements: list[dict[str, Any]] = []
+    for section in GAMEPLAY_CONTENT_DRIVER_CONCERNS:
+        for concern, records in active_concern_records(structured_sections, section).items():
+            for ordinal, record in enumerate(records):
+                statement = json.dumps(record, ensure_ascii=False, sort_keys=True)
+                if not statement.strip():
+                    continue
+                label = f"{section}.{concern}[{ordinal}]"
+                digest = hashlib.sha256(
+                    (requested_prompt + "\n" + label + "\n" + statement).encode("utf-8")
+                ).hexdigest()[:16]
+                requirements.append({
+                    "requirement_id": f"gameplay_{digest}",
+                    "statement": f"Implement gameplay obligation {label}: {statement}",
+                    "source_span": {"text": statement},
+                    "design_context": {
+                        "requested_prompt": requested_prompt,
+                        "source_section": section,
+                        "source_concern": concern,
+                        "source_index": ordinal,
+                        "gameplay_record": deepcopy(record),
+                    },
+                })
+    return requirements
+
+
 CONTENT_GRAPH_DRIVER_CONCERNS = (
     # Only concerns that can identify player-facing content are model-authored
     # requirements. Engineering-only rows are host constraints and never become
@@ -83,9 +130,12 @@ def content_request_catalog(
         for concern in CONTENT_GRAPH_HOST_CONSTRAINT_CONCERNS
         if records.get(concern)
     }
+    gameplay_requirements = _gameplay_content_requirements(
+        structured_sections, requested_prompt=requested_prompt,
+    )
     if not any(records.get(concern) for concern in CONTENT_GRAPH_DRIVER_CONCERNS):
         return {
-            "requirements": [],
+            "requirements": gameplay_requirements,
             "host_constraints": host_constraints,
         }
 
@@ -146,7 +196,7 @@ def content_request_catalog(
         })
 
     return {
-        "requirements": requirements,
+        "requirements": [*gameplay_requirements, *requirements],
         "host_constraints": host_constraints,
     }
 
