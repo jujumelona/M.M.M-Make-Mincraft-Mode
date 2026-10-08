@@ -48,6 +48,7 @@ import net.minecraft.resources.Identifier;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.block.BaseEntityBlock;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockBehaviour;
@@ -80,6 +81,11 @@ public final class {class_name} implements ModInitializer {{
         @Override
         protected MapCodec<? extends BaseEntityBlock> codec() {{
             return simpleCodec(GeneratedBlock::new);
+        }}
+
+        @Override
+        public RenderShape getRenderShape(BlockState state) {{
+            return RenderShape.MODEL;
         }}
 
         @Override
