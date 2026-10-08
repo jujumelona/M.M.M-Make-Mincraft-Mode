@@ -517,6 +517,8 @@ def typed_plan_uses_state(plan: Mapping[str, Any]) -> bool:
 
 def typed_plan_reachable_function_ids(
     plan: Mapping[str, Any],
+    *,
+    runtime_only: bool = False,
 ) -> tuple[str, ...]:
     """Return functions reachable from runtime event bindings or initialize."""
 
@@ -538,7 +540,8 @@ def typed_plan_reachable_function_ids(
         for binding in plan.get("event_bindings", ())
         if isinstance(binding, Mapping) and str(binding.get("function") or "")
     ]
-    roots.extend(calls(plan.get("initialize", ())))
+    if not runtime_only:
+        roots.extend(calls(plan.get("initialize", ())))
 
     reachable: list[str] = []
     pending = list(dict.fromkeys(root for root in roots if root in functions))
@@ -555,6 +558,40 @@ def typed_plan_reachable_function_ids(
     return tuple(reachable)
 
 
+def typed_plan_runtime_mutations(
+    plan: Mapping[str, Any],
+) -> tuple[str, ...]:
+    """Host-proven mutations reachable through real runtime event bindings.
+
+    Merely authoring a function with a state_set is insufficient: uncalled
+    functions and initialization-only code are not gameplay implementations.
+    Read the mutating host capability registry rather than guessing from names.
+    """
+    from .typed_host_capabilities import typed_host_capability_contracts
+
+    mutating = {
+        identifier for identifier, contract in typed_host_capability_contracts().items()
+        if contract.get("gameplay_mutation") is True
+    }
+    reachable = set(typed_plan_reachable_function_ids(plan, runtime_only=True))
+    operations: set[str] = set()
+    for function in plan.get("functions", ()):
+        if (
+            not isinstance(function, Mapping)
+            or str(function.get("id") or "") not in reachable
+        ):
+            continue
+        for node in _walk_nodes(function.get("body", ())):
+            if node.get("op") == "state_set":
+                operations.add("state_set")
+            elif (
+                node.get("op") == "capability"
+                and str(node.get("id") or "") in mutating
+            ):
+                operations.add("capability:" + str(node["id"]))
+    return tuple(sorted(operations))
+
+
 def typed_plan_capability_ids(plan: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(
         str(node.get("id") or "")
@@ -567,6 +604,7 @@ __all__ = [
     "TYPED_PLAN_IR_SCHEMA_VERSION",
     "typed_plan_capability_ids",
     "typed_plan_reachable_function_ids",
+    "typed_plan_runtime_mutations",
     "typed_plan_uses_state",
     "validate_typed_plan_ir",
 ]
