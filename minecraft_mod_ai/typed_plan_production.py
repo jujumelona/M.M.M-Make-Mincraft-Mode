@@ -37,6 +37,41 @@ def _typed_program_path(package_name: str) -> str:
     )
 
 
+
+def _typed_network_client_source_path(package_name: str, minecraft_version: str) -> str:
+    source_set = "src/client/java" if str(minecraft_version).startswith("26.") else "src/main/java"
+    return f"{source_set}/{package_name.replace('.', '/')}/AuthoredNetworkClient.java"
+
+
+def _retire_host_owned_legacy_network_client(
+    root: Path, package_name: str, minecraft_version: str,
+) -> str | None:
+    """Remove old main-source client initializer only after new client source exists.
+
+    Retire solely the exact typed-host-owned generated source. Unknown or user
+    supplied Java is never removed to make compilation pass.
+    """
+    if not str(minecraft_version).startswith("26."):
+        return None
+    package_path = package_name.replace(".", "/")
+    legacy_relative = f"src/main/java/{package_path}/AuthoredNetworkClient.java"
+    correct_relative = _typed_network_client_source_path(package_name, minecraft_version)
+    legacy, correct = root / legacy_relative, root / correct_relative
+    if not legacy.exists():
+        return None
+    _assert_host_owned_or_absent(root, legacy_relative, marker="// MMM:TYPED_NETWORK_CLIENT_OWNER")
+    if not correct.is_file() or correct.is_symlink():
+        raise ValueError("TYPED_NETWORK_CLIENT_NEW_SOURCE_REQUIRED")
+    if "// MMM:TYPED_NETWORK_CLIENT_OWNER" not in correct.read_text(encoding="utf-8"):
+        raise ValueError("TYPED_NETWORK_CLIENT_NEW_SOURCE_OWNERSHIP_MISMATCH")
+    from .project_write_lock import project_path_write_locks
+    with project_path_write_locks(root, (legacy_relative,)):
+        _assert_host_owned_or_absent(root, legacy_relative, marker="// MMM:TYPED_NETWORK_CLIENT_OWNER")
+        if legacy.exists():
+            legacy.unlink()
+    return legacy_relative
+
+
 def _normalized_typed_host_configs(
     config: Mapping[str, Any],
 ) -> tuple[
@@ -1155,9 +1190,18 @@ def generate_typed_plan_module(
         )
         _assert_host_owned_or_absent(
             root,
-            f"src/main/java/{package_path}/AuthoredNetworkClient.java",
+            _typed_network_client_source_path(
+                package_name, str(config.get("minecraft_version") or ""),
+            ),
             marker="// MMM:TYPED_NETWORK_CLIENT_OWNER",
         )
+        # Resume may contain the pre-split 26.x version of this host file.
+        if str(config.get("minecraft_version") or "").startswith("26."):
+            _assert_host_owned_or_absent(
+                root,
+                f"src/main/java/{package_path}/AuthoredNetworkClient.java",
+                marker="// MMM:TYPED_NETWORK_CLIENT_OWNER",
+            )
 
     if raw_resource_policy is not None:
         package_path = package_name.replace(".", "/")
@@ -1206,6 +1250,7 @@ def generate_typed_plan_module(
             call_line="AuthoredStatePersistence.register()",
             marker="typed-state-persistence",
         )
+    retired_client_path = None
     if raw_network_sync is not None:
         ensure_main_initializer_call(
             info,
@@ -1213,11 +1258,13 @@ def generate_typed_plan_module(
             call_line="AuthoredNetworkSync.register()",
             marker="typed-network-sync",
         )
-        package_path = package_name.replace(".", "/")
-        if (
-            f"src/main/java/{package_path}/AuthoredNetworkClient.java"
-            in files
-        ):
+        client_path = _typed_network_client_source_path(
+            package_name, str(config.get("minecraft_version") or ""),
+        )
+        if client_path in files:
+            retired_client_path = _retire_host_owned_legacy_network_client(
+                root, package_name, str(config.get("minecraft_version") or ""),
+            )
             ensure_client_entrypoint(
                 info,
                 entrypoint=f"{package_name}.AuthoredNetworkClient",
