@@ -869,6 +869,7 @@ def validate_typed_plan_generation_contract(
             raw_plan,
             package=package_name,
             capabilities=capabilities,
+            minecraft_version=str(config.get("minecraft_version") or ""),
         )
     }
 
@@ -1024,6 +1025,7 @@ def generate_typed_plan_module(
         raw_plan,
         package=package_name,
         capabilities=capabilities,
+        minecraft_version=str(config.get("minecraft_version") or ""),
     )
     files = {expected_path: source}
 
