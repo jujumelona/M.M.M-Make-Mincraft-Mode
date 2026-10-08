@@ -8,6 +8,7 @@ Minecraft method signatures. Semantic/JDT/Gradle validation still owns correctne
 
 import re
 from collections.abc import Mapping
+from pathlib import Path
 
 
 _LEGACY_YARN_26 = re.compile(
@@ -67,4 +68,27 @@ def assert_canonical_java_target(source: str, spec: Mapping[str, Any]) -> None:
             )
 
 
-__all__ = ["assert_canonical_java_target"]
+
+def assert_canonical_client_source_set(project_root: str | Path, spec: Mapping[str, Any]) -> None:
+    """Require the official split-client Gradle contract before a 26.1 model call."""
+    bindings = spec.get("bindings")
+    if not isinstance(bindings, Mapping):
+        raise ValueError("CANONICAL_SOURCE_TARGET_BINDINGS_REQUIRED")
+    version = str(bindings.get("minecraft_version") or "")
+    if not version.startswith("26.") or str(spec.get("side") or "").upper() != "CLIENT":
+        return
+    root = Path(project_root).expanduser().resolve()
+    build = root / "build.gradle"
+    if not build.is_file() or build.is_symlink():
+        raise ValueError("CANONICAL_CLIENT_BUILD_GRADLE_REQUIRED")
+    script = build.read_text(encoding="utf-8")
+    if ("splitEnvironmentSourceSets" not in script or
+            "sourceSets.client" not in script):
+        raise ValueError(
+            "CANONICAL_CLIENT_GRADLE_SOURCE_SET_MISSING: Minecraft 26.1+ "
+            "GUI requires loom.splitEnvironmentSourceSets() and "
+            "the client sourceSet in loom.mods before source generation"
+        )
+
+
+__all__ = ["assert_canonical_java_target", "assert_canonical_client_source_set"]
