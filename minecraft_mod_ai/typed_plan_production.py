@@ -174,6 +174,7 @@ def _state_persistence_java(
     namespace: str,
     state_names: tuple[str, ...],
     config: Mapping[str, Any],
+    minecraft_version: str = "",
 ) -> str:
     namespace_literal = json.dumps(namespace, ensure_ascii=True)
     schema_version = str(config["schema_version"])
@@ -294,7 +295,7 @@ def _state_persistence_java(
 
     restore = "\n".join(restore_lines)
     persist = "\n".join(persist_lines)
-    return f"""package {package_name};
+    source = f"""package {package_name};
 
 import {package_name}.system.MmmPersistentStore;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
@@ -357,6 +358,14 @@ public final class AuthoredStatePersistence {{
 {transfer_method}
 }}
 """
+    if str(minecraft_version).strip().startswith("26."):
+        # Changed 2026-10-08: keep respawn transfer bound to Mojang 26.1 symbols.
+        return source.replace(
+            "net.minecraft.server.network.ServerPlayerEntity",
+            "net.minecraft.server.level.ServerPlayer",
+        ).replace("getUuidAsString()", "getUUID().toString()")
+    return source
+
 
 def _assert_exact_or_absent(
     root: Path,
@@ -379,6 +388,7 @@ def _persistence_files(
     mod_id: str,
     section: Mapping[str, Any],
     config: Mapping[str, Any],
+    minecraft_version: str = "",
 ) -> dict[str, str]:
     state_names = _state_variable_names(section)
     if not state_names:
@@ -392,13 +402,16 @@ def _persistence_files(
 
     return {
         f"src/main/java/{package_path}/system/MmmPersistentStore.java":
-            _persistent_store_java(package_name, mod_id),
+            _persistent_store_java(
+                package_name, mod_id, minecraft_version=minecraft_version
+            ),
         f"src/main/java/{package_path}/AuthoredStatePersistence.java":
             _state_persistence_java(
                 package_name,
                 namespace,
                 state_names,
                 config,
+                minecraft_version=minecraft_version,
             ),
     }
 
@@ -879,6 +892,7 @@ def validate_typed_plan_generation_contract(
                 mod_id=mod_id,
                 section=raw_state,
                 config=raw_state_store,
+                minecraft_version=str(config.get("minecraft_version") or ""),
             )
         )
 
@@ -1044,6 +1058,7 @@ def generate_typed_plan_module(
                 mod_id=info.mod_id,
                 section=raw_state,
                 config=raw_state_store,
+                minecraft_version=str(config.get("minecraft_version") or ""),
             )
         )
 
