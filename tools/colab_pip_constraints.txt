@@ -1,0 +1,7 @@
+# Google Colab Python 3.13 baseline observed in the production installation log.
+# Keep already-loaded NumPy's wheel unchanged during editable project install.
+# These versions are compatible with the existing Colab cuDF/cuML/PyTensor limits.
+# Never let rembg -> pymatting silently upgrade Numba/llvmlite.
+numpy==2.1.3
+numba==0.61.2
+llvmlite==0.44.0
