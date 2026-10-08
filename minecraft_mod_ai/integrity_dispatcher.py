@@ -165,6 +165,10 @@ def execute_generator_job(job, *, context, router, port_registry=None, base_dir=
     spec = inputs[next(p["name"] for p in manifest["inputs"] if p["type"] == "specification")]
     if spec["context_id"] != resolved.context_id:
         raise ValueError("GENERATOR_CONTEXT_MISMATCH")
+    if base_dir is not None and spec.get("language") == "java":
+        from .canonical_java_target_contract import assert_canonical_client_source_set
+
+        assert_canonical_client_source_set(base_dir, spec)
     if job.produces and len(job.produces) != len(manifest["outputs"]):
         raise ValueError("GENERATOR_OUTPUT_PORT_ARITY")
     if port_registry is not None and any(port_registry.has(name) for name in job.produces):
