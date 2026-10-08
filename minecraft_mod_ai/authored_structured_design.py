@@ -721,13 +721,17 @@ def _regular_section_page_results(
         return concern, results
 
     if allow_parallel and request.slots > 1 and len(order) > 1:
-        from concurrent.futures import ThreadPoolExecutor
+        from .deadline_executor import iter_completed_with_deadlines
 
-        with ThreadPoolExecutor(
-            max_workers=min(request.slots, len(order)),
-            thread_name_prefix=f"mmm-plan-{request.section}",
-        ) as executor:
-            groups = list(executor.map(run, order))
+        completed_groups = {
+            concern: result
+            for concern, result in iter_completed_with_deadlines(
+                order, run,
+                max_workers=min(request.slots, len(order)),
+                stage=f"authored-section-{request.section}",
+            )
+        }
+        groups = [completed_groups[concern] for concern in order]
     else:
         groups = [run(concern) for concern in order]
 
@@ -816,13 +820,17 @@ def author_structured_sections(
             )
 
         if slots > 1 and len(ready) > 1:
-            from concurrent.futures import ThreadPoolExecutor
+            from .deadline_executor import iter_completed_with_deadlines
 
-            with ThreadPoolExecutor(
-                max_workers=min(slots, len(ready)),
-                thread_name_prefix="mmm-plan-wave",
-            ) as executor:
-                authored = list(executor.map(run, ready))
+            completed_sections = {
+                section: result
+                for section, result in iter_completed_with_deadlines(
+                    ready, run,
+                    max_workers=min(slots, len(ready)),
+                    stage="authored-design-wave",
+                )
+            }
+            authored = [completed_sections[section] for section in ready]
         else:
             authored = [run(section) for section in ready]
 
