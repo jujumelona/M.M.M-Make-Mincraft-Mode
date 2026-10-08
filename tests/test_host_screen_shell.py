@@ -136,3 +136,43 @@ def test_26_2_screen_api_uses_minecraft_gui_after_fabric_migration():
 def test_future_unreviewed_gui_apis_fail_closed_instead_of_using_old_template():
     with pytest.raises(ValueError, match="HOST_SCREEN_UNREVIEWED_MINECRAFT_EPOCH"):
         _canonical_spec("26.3")
+
+
+def test_canonical_26_1_screen_generator_succeeds_without_any_ai_router():
+    """Real canonical leaf execution never reaches the fixed-template model call."""
+    from minecraft_mod_ai.canonical_generators import generate_canonical_leaf
+
+    leaf = "minecraft/screen/registration"
+    facts = _canonical_candidate_inputs(
+        SimpleNamespace(
+            source_clause="Starship queue, currency, parts and progress UI.",
+            display_name="Starship Build Queue GUI",
+            fact_type=SimpleNamespace(value="GUI_EXISTS"),
+            parent_requirement="",
+        ),
+        canonical_leaf=leaf,
+        mod_id="ships",
+        package_name="example.ships",
+        package_path="example/ships",
+        subject="starship_build_queue_gui",
+        minecraft_version="26.1.2",
+        context_id="candidate-26.1",
+    )
+    input_schema, output_schema = compile_leaf_schemas(leaf)
+
+    class ActualSchemas:
+        def validate_input(self, _, payload):
+            Draft202012Validator(input_schema).validate(payload)
+
+        def validate_output(self, _, payload):
+            Draft202012Validator(output_schema).validate(payload)
+
+    output = generate_canonical_leaf(
+        facts, leaf_id=leaf, router=None,
+        authority=SimpleNamespace(types=ActualSchemas()),
+    )
+    java = output["screen_registration_artifact"]
+    assert "Starship Build Queue GUI" in java
+    assert 'Planned: Starship queue, currency, parts and progress UI.' in java
+    assert "ClientCommandRegistrationCallback" in java
+    assert output["screen_registration_receipt"]["content_sha256"].startswith("sha256:")
