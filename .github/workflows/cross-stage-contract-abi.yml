@@ -11,9 +11,11 @@ on:
 permissions:
   contents: read
 
+# A new commit must not cancel checks of the previous commit: contract
+# regressions should remain individually observable during incremental patches.
 concurrency:
-  group: cross-stage-contract-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: cross-stage-contract-${{ github.event_name }}-${{ github.sha }}
+  cancel-in-progress: false
 
 jobs:
   contract-abi:
