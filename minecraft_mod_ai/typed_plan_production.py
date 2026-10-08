@@ -472,6 +472,7 @@ def _network_policy_files(
     mod_id: str,
     state_section: Mapping[str, Any],
     config: Mapping[str, Any],
+    minecraft_version: str = "",
 ) -> dict[str, str]:
     stateful = network_sync_requires_state(
         tuple(config.get("__covers", ()))
@@ -516,6 +517,16 @@ public final class AuthoredNetworkSync {{
     interval = int(config["sync_interval_ticks"])
     max_bytes = int(config["max_payload_bytes"])
     channel_path = "typed_state_sync"
+    if str(minecraft_version).strip().startswith("26."):
+        from .typed_network_mojang import render_mojang_network_policy_files
+
+        return render_mojang_network_policy_files(
+            package_name=package_name,
+            mod_id=mod_id,
+            field_types=field_types,
+            interval=interval,
+            max_bytes=max_bytes,
+        )
 
     write_lines: list[str] = []
     guard_lines: list[str] = []
@@ -915,6 +926,7 @@ def validate_typed_plan_generation_contract(
                     else {}
                 ),
                 config=raw_network_sync,
+                minecraft_version=str(config.get("minecraft_version") or ""),
             )
         )
 
@@ -1081,6 +1093,7 @@ def generate_typed_plan_module(
                     else {}
                 ),
                 config=raw_network_sync,
+                minecraft_version=str(config.get("minecraft_version") or ""),
             )
         )
 
