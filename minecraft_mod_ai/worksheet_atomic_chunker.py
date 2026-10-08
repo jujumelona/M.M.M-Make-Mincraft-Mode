@@ -396,6 +396,32 @@ def worksheet_chunk_schema(
             )
             for field in fields
         }
+        if key == "integration" and concern == "entry_points" and "trigger" in field_schemas:
+            # The canonical worksheet may describe an arbitrary game action,
+            # but a model-authored executable entry point must carry a real
+            # host-owned Fabric hook (or a *named* command). This constraint
+            # is applied before producing hundreds of subsequent plan pages,
+            # not after all model calls in typed_plan_authoring.
+            field_schemas["trigger"] = {
+                "type": "string",
+                "maxLength": 96,
+                "pattern": (
+                    r"^(?:mod_initialize|server_started|server_stopping|"
+                    r"server_tick|player_join|player_disconnect|"
+                    r"player_respawn|(?:command:|/)[a-z0-9_]{1,64})$"
+                ),
+                "description": (
+                    "Concrete registered Fabric source hook ONLY. Choose one "
+                    "of mod_initialize, server_started, server_stopping, "
+                    "server_tick, player_join, player_disconnect, "
+                    "player_respawn, or an explicit command:literal or "
+                    "/literal. Gameplay states such as ui_launch_unlocked "
+                    "are conditions/actions, NOT executable entry hooks. "
+                    "Do not invent an unrelated event to make the schema fit. "
+                    "If there is no true supported source hook, the design "
+                    "must be blocked rather than faked."
+                ),
+            }
         if key == "state_model" and concern == "variables":
             if "name" in field_schemas:
                 field_schemas["name"]["description"] = (
