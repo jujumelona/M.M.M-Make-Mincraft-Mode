@@ -27,6 +27,13 @@ def _parse_catalog(content: bytes):
         raise VersionContextError("HOST_BUNDLE_CATALOG_INVALID")
     if value["schema_version"] != "mmm/host-version-catalog-v1" or not isinstance(value["bundles"], list):
         raise VersionContextError("HOST_BUNDLE_CATALOG_INVALID")
+    # Publish a coherent immutable HOST snapshot for the reviewed loot-template
+    # correction. The packaged 43-version catalog carries the old entity
+    # binding; apply only the exact pinned migration, never an arbitrary
+    # late renderer default or a model-inferred registration.
+    from .host_loot_catalog_migration import migrate_published_loot_authority
+
+    value = migrate_published_loot_authority(value)
     bundles = tuple(ResolvedVersionContext.from_dict(bundle) for bundle in value["bundles"])
     return bundles, value["auto_context_id"]
 
