@@ -17,7 +17,6 @@ from .resource_asset_plan import (
     asset_plan_sha256,
     require_asset_plan,
 )
-from .spec import SpecValidationError
 
 
 class AssetProductionError(RuntimeError):
