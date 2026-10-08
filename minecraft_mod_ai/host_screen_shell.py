@@ -55,7 +55,7 @@ def basic_screen_candidate_contract(
     if not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", class_name):
         raise ValueError("HOST_SCREEN_CLASS_INVALID")
 
-    if not re.fullmatch(r"26\\.(?:1|2)(?:\\.[0-9]+)?", minecraft_version):
+    if not re.fullmatch(r"26\.(?:1|2)(?:\.[0-9]+)?", minecraft_version):
         raise ValueError("HOST_SCREEN_UNREVIEWED_MINECRAFT_EPOCH")
     cmd = screen_command_name(mod_id, subject)
     title_fallback = _literal(default_title)
