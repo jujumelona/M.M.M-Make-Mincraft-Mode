@@ -178,7 +178,13 @@ def validate_external_execution_preflight(
     proposal: Any,
     options: Any,
 ) -> None:
-    _validate_java_toolchain_preflight(proposal, options)
+    # Executable CompleteProposal instances carry a locked base_proposal.
+    # Minimal policy-only projections (used by host policy callers/tests)
+    # have only external_runtime_required: they must remain valid inputs to
+    # this *runtime-policy* check rather than crashing on a missing toolchain.
+    # Actual production always passes the validated full proposal.
+    if getattr(proposal, "base_proposal", None) is not None:
+        _validate_java_toolchain_preflight(proposal, options)
 
     if bool(getattr(options, "source_only", False)):
         return
