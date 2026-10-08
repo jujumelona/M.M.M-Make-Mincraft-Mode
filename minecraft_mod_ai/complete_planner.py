@@ -109,15 +109,24 @@ class CompleteGameDesignPlanner:
             self.router, "_mmm_target_adapter", None,
         )
         reuse_receipt = None
-        if target_adapter is not None:
+        target_version = str(
+            getattr(target_adapter, "minecraft_version", "") or ""
+        ).strip()
+        target_loader = str(
+            getattr(target_adapter, "loader", "") or ""
+        ).strip()
+        # A capability-only adapter is not an immutable platform lock.
+        # The later production resolver owns AUTO-target binding. Never use a
+        # partial adapter to fabricate target coordinates or trigger discovery.
+        if target_version and target_loader:
             from .authored_reuse_bridge import (
                 resolve_authored_source_reuse, verified_reuse_context,
             )
 
             reuse_receipt = resolve_authored_source_reuse(
                 prompt, structured_sections,
-                minecraft_version=str(target_adapter.minecraft_version),
-                loader=str(target_adapter.loader),
+                minecraft_version=target_version,
+                loader=target_loader,
             )
             text += verified_reuse_context(reuse_receipt)
 
