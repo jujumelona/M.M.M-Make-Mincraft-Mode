@@ -47,6 +47,7 @@ def basic_screen_candidate_contract(
     mod_id: str,
     subject: str,
     default_title: str,
+    minecraft_version: str = "26.1.2",
 ) -> dict[str, Any]:
     """Return the deterministic Java mold and two atomic model-fillable slots."""
     if not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$.]*", package_name):
@@ -54,8 +55,12 @@ def basic_screen_candidate_contract(
     if not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", class_name):
         raise ValueError("HOST_SCREEN_CLASS_INVALID")
 
+    if not re.fullmatch(r"26\\.(?:1|2)(?:\\.[0-9]+)?", minecraft_version):
+        raise ValueError("HOST_SCREEN_UNREVIEWED_MINECRAFT_EPOCH")
     cmd = screen_command_name(mod_id, subject)
     title_fallback = _literal(default_title)
+    # Fabric 26.2 moved screen control onto Minecraft.gui.
+    open_screen = "client.gui.setScreen" if minecraft_version.startswith("26.2") else "client.setScreen"
     # Host controls the Java shell. The two placeholders are Java string
     # *contents* only; their schemas forbid quote, slash and control injection.
     mold = f"""package {package_name};
@@ -82,7 +87,7 @@ public final class {class_name} implements ClientModInitializer {{
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {{
             dispatcher.register(ClientCommands.literal("{cmd}").executes(context -> {{
                 Minecraft client = Minecraft.getInstance();
-                client.execute(() -> client.setScreen(
+                client.execute(() -> {open_screen}(
                         new GeneratedView(Component.literal(SCREEN_TITLE))));
                 return 1;
             }}));
