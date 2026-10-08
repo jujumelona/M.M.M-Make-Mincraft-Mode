@@ -855,7 +855,10 @@ def validate_typed_plan_generation_contract(
             "src/main/java/"
             + package_name.replace(".", "/")
             + "/AuthoredHostCapabilities.java"
-        ] = render_typed_host_capabilities_java(package_name)
+        ] = render_typed_host_capabilities_java(
+            package_name,
+            minecraft_version=str(config.get("minecraft_version") or ""),
+        )
 
     (
         raw_state,
@@ -1012,7 +1015,8 @@ def generate_typed_plan_module(
             marker="// MMM:TYPED_HOST_CAPABILITIES_OWNER",
         )
         files[capability_path] = render_typed_host_capabilities_java(
-            package_name
+            package_name,
+            minecraft_version=str(config.get("minecraft_version") or ""),
         )
 
     raw_structured = config.get("typed_plan_structured_sections")
