@@ -461,7 +461,11 @@ class CompleteProposal:
                     self.modules,
                     self.acceptance_tests,
                     self.assets,
-                    evidence_plan if isinstance(evidence_plan, Mapping) else None,
+                    (
+                        self.game_design.get("_evidence_plan")
+                        if isinstance(self.game_design.get("_evidence_plan"), Mapping)
+                        else None
+                    ),
                 )
             except ValueError as exc:
                 raise SpecValidationError(
