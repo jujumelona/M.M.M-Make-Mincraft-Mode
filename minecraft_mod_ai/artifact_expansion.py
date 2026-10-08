@@ -256,6 +256,23 @@ def _canonical_candidate_inputs(
             rf"(?:class|record|interface|enum)\s+{re.escape(class_name)}\b"
         )
     )
+    # The HOST owns the immutable mapping/API epoch. The small model supplies
+    # only the leaf implementation; do not ask it to select mappings by inference.
+    epoch_source_contract = ""
+    if minecraft_version.startswith("26."):
+        epoch_source_contract = (
+            "Minecraft 26.1+ uses unobfuscated Mojang API names. "
+            "Never use Yarn classes net.minecraft.client.gui.screen.*, "
+            "net.minecraft.client.gui.widget.*, net.minecraft.text.*, "
+            "net.minecraft.util.Identifier or net.minecraft.entity.effect.*. "
+            "Client Screen is net.minecraft.client.gui.screens.Screen; "
+            "text is net.minecraft.network.chat.Component. "
+            "The ClientModInitializer registration class must NOT extend Screen: "
+            "implement UI screens as separately named classes with valid constructors, "
+            "and bind registration only to verified APIs. "
+            "If an API or required screen/menu registration is not known, "
+            "do not invent symbols or a no-op success implementation. "
+        )
     output_schema = {
         "type": "string",
         "minLength": 1,
@@ -287,6 +304,7 @@ def _canonical_candidate_inputs(
                         if side == "CLIENT"
                         else ""
                     )
+                    + epoch_source_contract
                     + f"Implement only canonical responsibility {canonical_leaf} for "
                     f"Minecraft {minecraft_version}. Preserve the supplied gameplay "
                     "requirement and verified bindings; do not invent unrelated systems."
