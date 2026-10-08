@@ -19,7 +19,8 @@ def test_mojang_network_registers_object_payload_and_bounds_length():
     )
     assert len(files) == 3
     server = files["src/main/java/demo/mod/AuthoredNetworkSync.java"]
-    client = files["src/main/java/demo/mod/AuthoredNetworkClient.java"]
+    client = files["src/client/java/demo/mod/AuthoredNetworkClient.java"]
+    assert "src/main/java/demo/mod/AuthoredNetworkClient.java" not in files
     payload = files["src/main/java/demo/mod/AuthoredStateSyncPayload.java"]
     assert "PayloadTypeRegistry.clientboundPlay().register(" in server
     assert "ServerPlayNetworking.send(player, new AuthoredStateSyncPayload(encoded))" in server
@@ -80,3 +81,46 @@ def test_mojang_command_binding_does_not_use_yarn_literal_or_integer_permission(
     assert "hasPermissionLevel(" not in modern
     assert "net.minecraft.server.command.CommandManager.literal(" in legacy
     assert "hasPermissionLevel(2)" in legacy
+
+
+def test_mojang_network_retirement_only_deletes_owned_stale_main_source(tmp_path):
+    from minecraft_mod_ai.typed_plan_production import (
+        _retire_host_owned_legacy_network_client,
+    )
+
+    package = "demo.mod"
+    old = tmp_path / "src/main/java/demo/mod/AuthoredNetworkClient.java"
+    new = tmp_path / "src/client/java/demo/mod/AuthoredNetworkClient.java"
+    old.parent.mkdir(parents=True)
+    new.parent.mkdir(parents=True)
+    old.write_text(
+        "package demo.mod;\\n// MMM:TYPED_NETWORK_CLIENT_OWNER\\n",
+        encoding="utf-8",
+    )
+    new.write_text(
+        "package demo.mod;\\n// MMM:TYPED_NETWORK_CLIENT_OWNER\\n",
+        encoding="utf-8",
+    )
+    retired = _retire_host_owned_legacy_network_client(
+        tmp_path, package, "26.2",
+    )
+    assert retired == "src/main/java/demo/mod/AuthoredNetworkClient.java"
+    assert not old.exists()
+    assert new.exists()
+    assert _retire_host_owned_legacy_network_client(tmp_path, package, "26.2") is None
+
+
+def test_mojang_network_retirement_refuses_to_delete_user_source(tmp_path):
+    from minecraft_mod_ai.typed_plan_production import (
+        _retire_host_owned_legacy_network_client,
+    )
+
+    old = tmp_path / "src/main/java/demo/mod/AuthoredNetworkClient.java"
+    new = tmp_path / "src/client/java/demo/mod/AuthoredNetworkClient.java"
+    old.parent.mkdir(parents=True)
+    new.parent.mkdir(parents=True)
+    old.write_text("package demo.mod; // user-owned", encoding="utf-8")
+    new.write_text("// MMM:TYPED_NETWORK_CLIENT_OWNER", encoding="utf-8")
+    with pytest.raises(ValueError, match="TYPED_PLAN_OWNERSHIP_CONFLICT"):
+        _retire_host_owned_legacy_network_client(tmp_path, "demo.mod", "26.2")
+    assert old.exists()
