@@ -728,6 +728,8 @@ def test_host_capabilities_select_mojang_names_for_java25_target() -> None:
     assert "net.minecraft.world.effect.MobEffectInstance" in modern
     assert "net.minecraft.server.level.ServerPlayer" in modern
     assert "net.minecraft.resources.Identifier" in modern
+    assert "BuiltInRegistries.MOB_EFFECT.get(ResourceKey.create(Registries.MOB_EFFECT, id))" in modern
+    assert "MOB_EFFECT.getHolder(id)" not in modern
     assert "Identifier.parse(" in modern
     assert "net.minecraft.entity.effect.StatusEffectInstance" not in modern
     assert "net.minecraft.server.network.ServerPlayerEntity" not in modern
