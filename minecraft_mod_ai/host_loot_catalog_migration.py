@@ -39,7 +39,7 @@ def migrate_published_loot_authority(catalog: dict) -> dict:
     if template_hashes[_BLOCK] != (
         "sha256:82d1826b61ca3b1e873a3b9525d7b3b259688ec14b8bc253d16e51275a769d3c"
     ) or template_hashes[_ENTITY] != (
-        "sha256:9174b36898a96169576a07838a5be701e6be7be5f5e5bc845a783119a52331ef"
+        "sha256:3b91f91e17277f400e3f586d3e96de7002e720849325032309f0ff7b98d14f1f"
     ):
         raise ValueError("HOST_LOOT_TEMPLATE_REVISION_UNREVIEWED")
 
