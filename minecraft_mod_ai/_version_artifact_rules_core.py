@@ -29,6 +29,7 @@ LEAF_TEMPLATES = (
     "fabric/recipe/smelting",
     "fabric/tag/registry",
     "fabric/loot/block_drop",
+    "fabric/loot/entity_drop",
     "minecraft/resource/block/blockstate_crop",
     "minecraft/resource/block/model_cube_column",
     "minecraft/resource/block/model_cube_bottom_top",
@@ -165,6 +166,25 @@ ARTIFACT_SCHEMAS = {
             },
         },
     },
+    "fabric/loot/entity_drop": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "required": ["type", "pools"],
+        "properties": {
+            "type": {"type": "string"},
+            "pools": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["rolls", "entries"],
+                    "properties": {
+                        "rolls": {"type": ["integer", "number"]},
+                        "entries": {"type": "array"},
+                    },
+                },
+            },
+        },
+    },
 }
 
 
@@ -238,6 +258,10 @@ TEMPLATE_REQUIREMENTS = {
         "required_symbols": [],
     },
     "fabric/loot/block_drop": {
+        "requires_capabilities": ["LOOT_TABLE"],
+        "required_symbols": [],
+    },
+    "fabric/loot/entity_drop": {
         "requires_capabilities": ["LOOT_TABLE"],
         "required_symbols": [],
     },
@@ -727,7 +751,7 @@ def build_version_facts(
             leaf_bindings[leaf] = {
                 "state": "admitted",
                 "implementation": make_implementation(
-                    leaf, minecraft_version, template_id="fabric/loot/block_drop", executor_type="deterministic_renderer", validator_profile="json_schema", hashes=hashes
+                    leaf, minecraft_version, template_id="fabric/loot/entity_drop", executor_type="deterministic_renderer", validator_profile="json_schema", hashes=hashes
                 ),
             }
         elif leaf == "minecraft/loot/validation":
