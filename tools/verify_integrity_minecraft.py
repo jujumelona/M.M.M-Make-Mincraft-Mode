@@ -19,29 +19,29 @@ _DEBUG_TARGET = "src/main/java/dev/mmm/debugfixture/DebugToken.java"
 
 _PROBE_SOURCE = """package probe;
 import net.fabricmc.api.ModInitializer;
-import net.minecraft.item.Item;
-import net.minecraft.registry.Registries;
-import net.minecraft.registry.Registry;
-import net.minecraft.util.Identifier;
+import net.minecraft.world.item.Item;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.Registry;
+import net.minecraft.resources.ResourceLocation;
 public class Probe implements ModInitializer {
-    public static final Item ITEM = Registry.register(Registries.ITEM,
-        new Identifier("integrity_probe", "verified_item"), new Item(new Item.Settings()));
+    public static final Item ITEM = Registry.register(BuiltInRegistries.ITEM,
+        new ResourceLocation("integrity_probe", "verified_item"), new Item(new Item.Properties()));
     public void onInitialize() {}
 }
 """
 
 _PROBE_TEST_SOURCE = """package probe;
 import net.fabricmc.fabric.api.gametest.v1.FabricGameTest;
-import net.minecraft.test.GameTest;
-import net.minecraft.test.TestContext;
-import net.minecraft.registry.Registries;
-import net.minecraft.util.Identifier;
+import net.minecraft.gametest.framework.GameTest;
+import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.ResourceLocation;
 public class ProbeTests {
-    @GameTest(templateName = FabricGameTest.EMPTY_STRUCTURE)
-    public void itemRegistered(TestContext context) {
-        if (Registries.ITEM.get(new Identifier("integrity_probe", "verified_item")) != Probe.ITEM)
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE)
+    public void itemRegistered(GameTestHelper context) {
+        if (BuiltInRegistries.ITEM.get(new ResourceLocation("integrity_probe", "verified_item")) != Probe.ITEM)
             throw new AssertionError("Registered item identity mismatch");
-        context.complete();
+        context.succeed();
     }
 }
 """
@@ -51,7 +51,7 @@ version='1.0.0'
 group='probe'
 dependencies {
     minecraft 'com.mojang:minecraft:1.20.1'
-    mappings 'net.fabricmc:yarn:1.20.1+build.10:v2'
+    mappings loom.officialMojangMappings()
     modImplementation 'net.fabricmc:fabric-loader:0.15.11'
     modImplementation 'net.fabricmc.fabric-api:fabric-api:0.92.2+1.20.1'
 }
