@@ -93,6 +93,10 @@ def infer_event_type(value: Any) -> str | None:
     text = _compact(value)
     if not text or is_mod_initialize_trigger(text):
         return None
+    # Accept exact host event IDs as written in the official typed contract.
+    # Word-boundary regexes alone do not recognize identifiers with underscores.
+    if text.lower() in EVENT_SIGNATURES:
+        return text.lower()
     matches = [
         event
         for event, patterns in _EVENT_HINTS.items()
