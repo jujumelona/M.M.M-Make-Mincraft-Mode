@@ -83,7 +83,8 @@ def _state_read(kind: str, expression: str) -> str:
 
 
 class _Renderer:
-    def __init__(self, plan: Mapping[str, Any], capabilities: Mapping[str, Any] | None) -> None:
+    def __init__(self, plan: Mapping[str, Any], capabilities: Mapping[str, Any] | None, *, minecraft_version: str = "") -> None:
+        self.minecraft_version = str(minecraft_version).strip()
         self.plan = plan
         self.capabilities = dict(capabilities or {})
         self.counter = 0
@@ -253,6 +254,23 @@ class _Renderer:
             config = binding["config"]
             literal = _string_expr(str(config["literal"]))
             permission = int(config.get("permission_level", 0))
+            if self.minecraft_version.startswith("26."):
+                permission_check = (
+                    "LEVEL_ALL", "LEVEL_MODERATORS", "LEVEL_MODERATORS",
+                    "LEVEL_GAMEMASTERS", "LEVEL_OWNERS"
+                )[permission]
+                return [
+                    indent
+                    + "net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback.EVENT."
+                    + "register((dispatcher, registryAccess, environment) -> "
+                    + "dispatcher.register("
+                    + "net.minecraft.commands.Commands.literal("
+                    + literal
+                    + ")"
+                    + ".requires(net.minecraft.commands.Commands.hasPermission("
+                    + "net.minecraft.commands.Commands." + permission_check + "))"
+                    + f".executes(context -> {call}(context.getSource()))));"
+                ]
             return [
                 indent
                 + "net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback.EVENT."
@@ -343,9 +361,12 @@ class _Renderer:
 def render_typed_plan_java(
     plan: Mapping[str, Any], *, package: str = "",
     capabilities: Mapping[str, Any] | None = None,
+    minecraft_version: str = "",
 ) -> str:
     validated = validate_typed_plan_ir(plan, capabilities=capabilities)
-    return _Renderer(validated, capabilities).render(str(package or "").strip())
+    return _Renderer(
+        validated, capabilities, minecraft_version=minecraft_version
+    ).render(str(package or "").strip())
 
 
 __all__ = ["render_typed_plan_java"]
