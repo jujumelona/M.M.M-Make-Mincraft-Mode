@@ -228,8 +228,70 @@ def compiler_log_diagnostics(
     return diagnostics
 
 
+
+def gradle_failure_summary(value: Mapping[str, Any]) -> str:
+    """Bounded, credential-redacted first-failure evidence for terminal errors.
+
+    This is for human diagnostics only. Source ownership and retry decisions
+    continue to use the structured build receipt and compiler diagnostics.
+    """
+    from .agent_tool_runtime import _redact_text
+
+    fragments: list[str] = []
+    error = str(value.get("error") or "").strip()
+    if error:
+        fragments.append(error[:160])
+    commands = value.get("commands")
+    failed: Mapping[str, Any] | None = None
+    if isinstance(commands, (list, tuple)):
+        for command in reversed(commands):
+            if not isinstance(command, Mapping):
+                continue
+            code = command.get("exit_code")
+            if command.get("timed_out") is True or (
+                isinstance(code, int) and not isinstance(code, bool) and code != 0
+            ):
+                failed = command
+                break
+    if failed is not None:
+        fragments.append(
+            f"command={str(failed.get('name') or 'gradle')[:60]}"
+            f" exit={str(failed.get('exit_code'))[:16]}"
+            f" log={str(failed.get('log_path') or '')[:350]}"
+        )
+    diagnostics = value.get("diagnostics")
+    if isinstance(diagnostics, (list, tuple)):
+        for item in diagnostics:
+            if not isinstance(item, Mapping):
+                continue
+            if item.get("severity") not in {1, "error", "ERROR"}:
+                continue
+            path = str(item.get("path") or "")[:240]
+            line = str(item.get("line") or "?")[:16]
+            message = str(item.get("message") or "").splitlines()[0][:240]
+            fragments.append(f"diagnostic={path}:{line}: {message}")
+            break
+    if failed is not None:
+        log = _ANSI_ESCAPE.sub("", bounded_build_log_text(failed.get("log_path")))
+        match = re.search(r"(?m)^\s*\* What went wrong:\s*$", log)
+        if match is not None:
+            lines: list[str] = []
+            for raw in log[match.end():].splitlines():
+                line = raw.strip()
+                if line.startswith(("* Try:", "* Exception is:", "* Get more help")):
+                    break
+                if line:
+                    lines.append(line)
+                if len(lines) >= 4:
+                    break
+            if lines:
+                fragments.append("gradle_cause=" + " | ".join(lines)[:440])
+    return _redact_text("; ".join(fragments))[:1300]
+
+
 __all__ = [
     "bounded_build_log_text",
+    "gradle_failure_summary",
     "compiler_log_diagnostics",
     "normalize_source_path",
 ]
