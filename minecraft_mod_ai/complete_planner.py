@@ -95,10 +95,53 @@ class CompleteGameDesignPlanner:
 
         text = render_structured_sections(structured_sections)
 
+        # Research/inspection happens before content identities are authored:
+        # verified source APIs are model-readable bounded facts, while unproved
+        # repository search results never enter the local model's prompt.
+        target_adapter = adapter or self.adapter or getattr(
+            self.router, "_mmm_target_adapter", None,
+        )
+        reuse_receipt = None
+        if target_adapter is not None:
+            from .authored_reuse_bridge import (
+                resolve_authored_source_reuse, verified_reuse_context,
+            )
+
+            reuse_receipt = resolve_authored_source_reuse(
+                prompt, structured_sections,
+                minecraft_version=str(target_adapter.minecraft_version),
+                loader=str(target_adapter.loader),
+            )
+            text += verified_reuse_context(reuse_receipt)
+
         content_catalog = content_request_catalog(
             structured_sections,
             requested_prompt=prompt,
         )
+        if reuse_receipt is not None:
+            from copy import deepcopy
+
+            source_apis = [
+                {
+                    "capability": row.get("capability"),
+                    "source_id": row.get("source_id"),
+                    "verified_symbols": list(
+                        row.get("proof_receipt", {}).get("verified_symbols", ())
+                    )[:16],
+                    "residual_work": row.get("proof_receipt", {}).get("work_order"),
+                }
+                for row in reuse_receipt.get("capabilities", ())
+                if isinstance(row, Mapping)
+                and row.get("mode") == "source_transplant"
+                and isinstance(row.get("proof_receipt"), Mapping)
+            ]
+            for item in content_catalog["requirements"]:
+                context = item.get("design_context")
+                if isinstance(context, Mapping):
+                    item["design_context"] = {
+                        **deepcopy(dict(context)),
+                        "host_verified_source_apis": source_apis,
+                    }
         content_design: dict[str, Any] = {}
         if content_catalog["requirements"]:
             from .content_design_graph import compile_content_graph
@@ -120,26 +163,8 @@ class CompleteGameDesignPlanner:
             content_design,
         )
 
-        # Bind concrete evidence before small-model operation authoring whenever
-        # the requested target is already known. AUTO target selection is handled
-        # after platform binding in compile_authored_design instead.
-        target_adapter = adapter or self.adapter or getattr(
-            self.router, "_mmm_target_adapter", None,
-        )
-        if target_adapter is not None:
-            from .authored_reuse_bridge import (
-                resolve_authored_source_reuse,
-                verified_reuse_context,
-            )
-
-            reuse_receipt = resolve_authored_source_reuse(
-                prompt,
-                structured_sections,
-                minecraft_version=str(target_adapter.minecraft_version),
-                loader=str(target_adapter.loader),
-            )
+        if reuse_receipt is not None:
             content_design["_host_source_reuse"] = reuse_receipt
-            text += verified_reuse_context(reuse_receipt)
 
         kinds = deterministic_module_kinds
         if kinds is None and adapter is not None:
