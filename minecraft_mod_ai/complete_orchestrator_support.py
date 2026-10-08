@@ -25,7 +25,14 @@ def file_sha256(path: Path) -> str:
 
 
 class CompleteProductionError(RuntimeError):
-    pass
+    """Production failure with optional explicit validation checkpoint provenance.
+
+    A display message must not be used as a control-plane retry identifier.
+    """
+
+    def __init__(self, message: str, *, checkpoint_id: str | None = None) -> None:
+        super().__init__(message)
+        self.checkpoint_id = checkpoint_id
 
 def _locate_existing_fabric_root(extracted_root: Path) -> Path:
     direct = extracted_root / 'src/main/resources/fabric.mod.json'
