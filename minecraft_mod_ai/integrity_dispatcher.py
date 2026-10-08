@@ -67,6 +67,9 @@ def validate_canonical_output(job, source, *, resolved, context, authority, targ
         raise ValueError("CANONICAL_OUTPUT_TARGET_MISMATCH")
     receipts = [validate_semantic_contract(source, contract=spec, context_id=resolved.context_id, leaf_id=job.canonical_leaf)]
     if spec["language"] == "java":
+        from .canonical_java_target_contract import assert_canonical_java_target
+
+        assert_canonical_java_target(source, spec)
         java_version = str(resolved.to_dict()["target"]["java_version"])
         prefix, suffix = spec.get("java_prefix", ""), spec.get("java_suffix", "")
         receipts.append(validate_java_syntax(source, java_version=java_version,
@@ -172,6 +175,9 @@ def execute_generator_job(job, *, context, router, port_registry=None, base_dir=
     verify_candidate_content(job, resolved, context, spec, source)
     validations = []
     if spec["language"] == "java":
+        from .canonical_java_target_contract import assert_canonical_java_target
+
+        assert_canonical_java_target(source, spec)
         target = resolved.to_dict()["target"]
         java_version = str(target["java_version"])
         prefix, suffix = spec.get("java_prefix", ""), spec.get("java_suffix", "")
