@@ -281,6 +281,20 @@ def _canonical_candidate_inputs(
         SCHEMA_CONTRACT_PROFILE_KEY: SOURCE_REPAIR_SCHEMA_PROFILE,
         SCHEMA_STRING_CLASS_KEY: STRING_CLASS_SOURCE,
     }
+    # 26.1 screen registrations are host-rendered, not AI-authored Java.
+    # The semantic requirement stays in the model prompt, but only two
+    # non-executable strings are requested from the small model.
+    screen_contract = None
+    if canonical_leaf == "minecraft/screen/registration" and minecraft_version.startswith("26."):
+        from .host_screen_shell import basic_screen_candidate_contract
+
+        screen_contract = basic_screen_candidate_contract(
+            package_name=generated_package,
+            class_name=class_name,
+            mod_id=mod_id,
+            subject=subject,
+            default_title=display_name,
+        )
     spec = {
         "leaf_id": canonical_leaf,
         "context_id": context_id,
@@ -291,8 +305,8 @@ def _canonical_candidate_inputs(
         "side": side,
         "bindings": bindings,
         "output_schema": output_schema,
-        "render_mold": "{{artifact_source}}",
-        "slots": [
+        "render_mold": screen_contract["render_mold"] if screen_contract else "{{artifact_source}}",
+        "slots": screen_contract["slots"] if screen_contract else [
             {
                 "name": "artifact_source",
                 "description": (
@@ -313,6 +327,8 @@ def _canonical_candidate_inputs(
             }
         ],
         "java_filename": class_name + ".java",
+        **({"host_screen_capability": screen_contract["capability"],
+            "host_screen_command": screen_contract["command"]} if screen_contract else {}),
     }
 
     inputs: dict[str, Any] = {}
