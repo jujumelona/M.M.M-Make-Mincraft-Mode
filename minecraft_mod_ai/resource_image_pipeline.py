@@ -65,8 +65,60 @@ def _clear_boundary_background(image: Any) -> None:
         pending.extend(((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)))
 
 
+
+def _apply_explicit_sprite_silhouette(image: Any, silhouette: str) -> bool:
+    """Cut an opaque diffusion output to an explicit host-approved item shape.
+
+    FLUX may render a usable colored object with a textured opaque background.
+    This cutout is permitted only if the *approved* visual specification says
+    precisely which supported shape owns the silhouette. It never invents an
+    object outline for free-form subject descriptions, model UVs, or GUI layouts.
+    An existing transparent sprite is always preserved.
+    """
+    from PIL import Image, ImageDraw
+
+    shape = silhouette.strip().casefold()
+    if shape not in {"cube", "cylinder"}:
+        return False
+    if image.mode != "RGBA":
+        raise ValueError("Explicit sprite matte requires RGBA pixel data.")
+    width, height = image.size
+    if width < 8 or height < 8:
+        raise ValueError("Explicit sprite matte requires an 8px minimum grid.")
+    if image.getchannel("A").getextrema() != (255, 255):
+        # A real alpha-bearing cutout already has its own model/host mask.
+        return False
+    mask = Image.new("L", image.size, 0)
+    try:
+        draw = ImageDraw.Draw(mask)
+        w, h = width - 1, height - 1
+        if shape == "cube":
+            # Pixel-grid isometric block outline; corners remain transparent.
+            draw.polygon(
+                [(w * .50, h * .06), (w * .90, h * .24),
+                 (w * .90, h * .76), (w * .50, h * .96),
+                 (w * .10, h * .76), (w * .10, h * .24)],
+                fill=255,
+            )
+        else:
+            # Upright disc/cylinder coin: deterministic rounded silhouette.
+            draw.ellipse((w * .13, h * .05, w * .87, h * .95), fill=255)
+        if mask.getextrema() != (0, 255):
+            raise ValueError("Explicit sprite silhouette produced no visible cutout.")
+        # Keep RGB zero at all transparent pixels, including after palette
+        # reduction, so resource validation remains byte- and palette-exact.
+        shaped = []
+        for (r, g, b, a), allowed in zip(_pixels(image), _pixels(mask)):
+            shaped.append((r, g, b, a) if allowed else (0, 0, 0, 0))
+        image.putdata(shaped)
+        return True
+    finally:
+        mask.close()
+
+
 def postprocess_region(
-    source: Any, contract: Mapping[str, Any], size: tuple[int, int]
+    source: Any, contract: Mapping[str, Any], size: tuple[int, int],
+    *, silhouette: str = "",
 ) -> Any:
     from PIL import Image
 
@@ -92,6 +144,11 @@ def postprocess_region(
     image.close()
     quantized.putalpha(alpha)
     alpha.close()
+    # Only isolated item/cross sprites with explicit semantic geometry can
+    # receive a deterministic alpha matte. All unknown shapes stay fail-closed.
+    if policy in {"transparent", "cutout"} and layout in {"isolated_sprite", "cutout_sprite"}:
+        if _apply_explicit_sprite_silhouette(quantized, silhouette):
+            quantized.info["mmm_alpha_matte"] = "host_explicit_" + silhouette.casefold().strip()
     if contract["rendering"]["tileable"]:
         w, h = quantized.size
         # Copy existing palette colors; averaging seams would create new colors.
@@ -125,6 +182,7 @@ def generate_candidate(
     output: Path,
     resolution: tuple[int, int],
     seed: int,
+    silhouette: str = "",
 ) -> dict[str, Any]:
     from PIL import Image
 
@@ -159,7 +217,10 @@ def generate_candidate(
                     raise ValueError(
                         "Image backend output does not match generation profile geometry/PNG format."
                     )
-                processed = postprocess_region(raw, contract, (width, height))
+                processed = postprocess_region(
+                    raw, contract, (width, height), silhouette=silhouette,
+                )
+                matte_method = processed.info.get("mmm_alpha_matte", "")
             canvas.paste(processed, (x, y))
             processed.close()
             sources.append(
@@ -168,6 +229,7 @@ def generate_candidate(
                     "resolution": list(selected_resolution),
                     "sha256": "sha256:"
                     + hashlib.sha256(source.read_bytes()).hexdigest(),
+                    "alpha_matte": matte_method or "source_or_boundary_background",
                 }
             )
         if contract["gui"]:
