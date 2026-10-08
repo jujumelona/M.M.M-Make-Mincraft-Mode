@@ -220,7 +220,19 @@ class ImageDiffusionAdapter:
                     raise ModelConfigurationError("Image pipeline returned no image.")
                 output = Path(output_path).expanduser().resolve()
                 output.parent.mkdir(parents=True, exist_ok=True)
-                images[0].convert("RGBA").save(output, format="PNG", optimize=False)
+                generated = images[0]
+                # Converting an opaque RGB image to RGBA does not create a
+                # transparent background; it merely adds alpha=255 everywhere.
+                # Preserve real source alpha, but never mislabel opaque output
+                # as an alpha-bearing sprite. BiRefNet creates the foreground
+                # mask later in the resource image pipeline when required.
+                has_real_alpha = (
+                    generated.mode in {"RGBA", "LA"}
+                    and generated.getchannel("A").getextrema() != (255, 255)
+                )
+                generated.convert("RGBA" if has_real_alpha else "RGB").save(
+                    output, format="PNG", optimize=False
+                )
                 if not cache_enabled:
                     _clear_cached_pipeline()
                     del pipeline, result, images, generator
