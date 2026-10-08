@@ -8,8 +8,6 @@ Minecraft method signatures. Semantic/JDT/Gradle validation still owns correctne
 
 import re
 from collections.abc import Mapping
-from pathlib import PurePosixPath
-from typing import Any
 
 
 _LEGACY_YARN_26 = re.compile(
