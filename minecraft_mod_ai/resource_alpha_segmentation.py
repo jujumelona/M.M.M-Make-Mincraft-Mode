@@ -40,7 +40,12 @@ def segment_foreground(image: Any) -> Any:
     """
     from PIL import Image
 
-    from rembg import remove
+    try:
+        from rembg import remove
+    except ImportError as exc:
+        raise ValueError(
+            'ALPHA_SEGMENTER_UNAVAILABLE: install "rembg[cpu]" via the image extra.'
+        ) from exc
 
     source = image.convert("RGB")
     try:
