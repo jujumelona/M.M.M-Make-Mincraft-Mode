@@ -43,6 +43,23 @@ def migrate_published_loot_authority(catalog: dict) -> dict:
     ):
         raise ValueError("HOST_LOOT_TEMPLATE_REVISION_UNREVIEWED")
 
+    # A freshly republished HOST catalog already contains the new bindings.
+    # Accept that coherent state unchanged; mixed/unknown snapshots remain
+    # rejected by the pinned legacy migration below.
+    already_current = all(
+        bundle["host_facts"]["artifact_rules"].get(_BLOCK, {}).get(
+            "template_sha256"
+        ) == template_hashes[_BLOCK]
+        and bundle["host_facts"]["artifact_rules"].get(_ENTITY, {}).get(
+            "template_sha256"
+        ) == template_hashes[_ENTITY]
+        and bundle["host_facts"]["leaf_bindings"]["minecraft/loot/entry"]
+        .get("implementation", {}).get("implementation_id") == _ENTITY
+        for bundle in catalog["bundles"]
+    )
+    if already_current:
+        return catalog
+
     auto_before = catalog["auto_context_id"]
     remap: dict[str, str] = {}
     for bundle in catalog["bundles"]:
