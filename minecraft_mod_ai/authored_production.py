@@ -895,6 +895,52 @@ def _compile_content_artifact_graph(
         )
     return modules, assets, jobs
 
+def _assert_executable_gameplay_floor(
+    plan: AuthoredPlan,
+    content_modules: tuple[ProductionModule, ...],
+    source_reuse: Mapping[str, Any],
+) -> None:
+    """Reject GUI-only placeholders for authored state-mutating gameplay."""
+    from .authored_structured_design import active_concern_records
+
+    algorithm = active_concern_records(plan.structured_sections, "algorithm")
+    state = active_concern_records(plan.structured_sections, "state_model")
+    authored_mutations = bool(algorithm.get("atomic_mutations")) or bool(
+        state.get("transitions") or state.get("updates")
+    )
+    if not authored_mutations:
+        return
+
+    gameplay_kinds = frozenset({
+        "item", "block", "entity", "block_entity", "effect",
+        "armor", "networking", "loot", "recipe", "advancement",
+    })
+    concrete_content = any(module.kind in gameplay_kinds for module in content_modules)
+    verified_donors = any(
+        isinstance(row, Mapping) and row.get("mode") == "source_transplant"
+        for row in source_reuse.get("capabilities", ())
+    )
+    executable_state_writes = False
+    stack = [plan.typed_plan_ir.get("functions", ())]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, Mapping):
+            if item.get("op") == "state_set":
+                executable_state_writes = True
+                break
+            stack.extend(item.values())
+        elif isinstance(item, (list, tuple)):
+            stack.extend(item)
+
+    if not (concrete_content or verified_donors or executable_state_writes):
+        raise ValueError(
+            "GAMEPLAY_IMPLEMENTATION_ABSENT: authored atomic mutations or state "
+            "transitions have no executable implementation; the generated "
+            "content is only GUI/display modules, with no state writer or "
+            "verified donor. Do not pass this off as a completed mod."
+        )
+
+
 def compile_authored_design(
     router: Any, plan: AuthoredPlan, *, existing_input_sha256: str = ""
 ) -> CompleteProposal:
@@ -1035,6 +1081,7 @@ def compile_authored_design(
             "CONTENT_TYPED_MODULE_COLLISION: "
             + ", ".join(duplicate_content_ids)
         )
+    _assert_executable_gameplay_floor(plan, content_modules, source_reuse)
     modules = (*content_modules, *modules)
     design = {
         **design,
