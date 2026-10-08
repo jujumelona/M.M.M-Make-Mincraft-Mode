@@ -1283,6 +1283,7 @@ def semantic_dispatch_schema(
     capabilities: Mapping[str, Any] | None,
     *,
     allowed_events: Sequence[str] | None = None,
+    mutation_only: bool = False,
 ) -> dict[str, Any]:
     """Build semantic actions only from host-known, actually bound events."""
 
@@ -1344,6 +1345,9 @@ def semantic_dispatch_schema(
             raise ValueError(
                 f"TYPED_PLAN_SEMANTIC_CAPABILITY_CONTRACT_INVALID: {capability_id!r}"
             )
+        if mutation_only and contract.get("gameplay_mutation") is not True:
+            # Notifications, queries, and permission checks are not state writers.
+            continue
         params = contract.get("parameters")
         if not isinstance(params, Sequence) or isinstance(
             params, (str, bytes, bytearray)
@@ -1696,19 +1700,31 @@ def author_semantic_game_dispatch(
         )
     else:
         allowed_events = None
-    schema = semantic_dispatch_schema(
-        state_types, capabilities, allowed_events=allowed_events,
-    )
-    assert_model_atomic_decision_schema(
-        schema,
-        field="semantic_dispatch_rule",
-    )
-    token_ceiling = structured_output_token_ceiling(
-        effective_model_transport_schema(schema)
-    )
     rules: list[Mapping[str, Any]] = []
+    schemas: dict[bool, tuple[dict[str, Any], int]] = {}
 
     for coverage_ref in refs:
+        mutation_required = coverage_ref in {
+            "algorithm.atomic_mutations",
+            "state_model.transitions",
+            "state_model.updates",
+        }
+        if mutation_required not in schemas:
+            schema = semantic_dispatch_schema(
+                state_types, capabilities,
+                allowed_events=allowed_events,
+                mutation_only=mutation_required,
+            )
+            assert_model_atomic_decision_schema(
+                schema, field="semantic_dispatch_rule",
+            )
+            schemas[mutation_required] = (
+                schema,
+                structured_output_token_ceiling(
+                    effective_model_transport_schema(schema)
+                ),
+            )
+        schema, token_ceiling = schemas[mutation_required]
         if budget is not None:
             budget.consume("typed.semantic_dispatch")
 
@@ -1745,7 +1761,13 @@ def author_semantic_game_dispatch(
                 "coverage_ref. Only choose an event that is actually bound by "
                 "the host; no lifecycle substitutions for unrelated actions. "
                 "Every state_key and capability_id is closed by the schema; "
-                "do not invent identifiers, arrays, loops, Java, or extra actions."
+                "do not invent identifiers, arrays, loops, Java, or extra actions. "
+                + (
+                    "This concern REQUIRES an executable mutation: set_state, "
+                    "increment_state, or a host capability marked gameplay_mutation. "
+                    "Never use notifications, reads, or GUI display instead."
+                    if mutation_required else ""
+                )
             ),
         }
         raw = generate_fixed_template_value(
@@ -2500,6 +2522,7 @@ def author_typed_plan_ir(
             "algorithm.",
             "failure_and_limits.",
         ))
+        or ref in {"state_model.transitions", "state_model.updates"}
     )
     has_mod_initialize = any(
         is_mod_initialize_trigger(row.get("trigger"))
