@@ -204,3 +204,22 @@ def test_runtime_stack_frame_binds_gametest_failure_to_generated_source(
             "code": "runtime:stack:13",
         }
     ]
+
+
+
+def test_gradle_failure_summary_displays_more_than_one_independent_compiler_error():
+    from minecraft_mod_ai.compiler_diagnostics import gradle_failure_summary
+
+    summary = gradle_failure_summary({
+        "status": "FAIL",
+        "error": "Gradle build failed.",
+        "commands": [],
+        "diagnostics": [
+            {"severity": 1, "path": "src/main/java/demo/A.java",
+             "line": 3, "message": "missing package A"},
+            {"severity": 1, "path": "src/main/java/demo/B.java",
+             "line": 22, "message": "cannot resolve super.init()"},
+        ],
+    })
+    assert "A.java:3: missing package A" in summary
+    assert "B.java:22: cannot resolve super.init()" in summary
