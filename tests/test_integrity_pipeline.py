@@ -407,9 +407,10 @@ def test_real_candidate_source_contract_uses_transport_schema_and_host_validatio
 
     router = Router()
     authority = bootstrap_integrity()
-    execute = lambda: authority.executors["python_generator:" + leaf](
-        inputs, leaf_id=leaf, router=router, authority=authority,
-    )
+    def execute():
+        return authority.executors["python_generator:" + leaf](
+            inputs, leaf_id=leaf, router=router, authority=authority,
+        )
     if valid_source:
         output = execute()
         assert output[next(p["name"] for p in manifest["outputs"] if p["type"] == "code_fragment")] == source
