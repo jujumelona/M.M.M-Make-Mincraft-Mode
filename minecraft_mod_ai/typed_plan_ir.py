@@ -14,6 +14,10 @@ from typing import Any
 
 TYPED_PLAN_IR_SCHEMA_VERSION = "mmm/typed-plan-ir-v1"
 _SCALAR_TYPES = frozenset({"boolean", "int", "long", "double", "string", "object"})
+# Shared producer/validator/authoring whitelist for capability argument metadata.
+CAPABILITY_ARGUMENT_CONSTRAINT_FIELDS = frozenset({
+    "description", "minimum", "maximum", "minLength", "maxLength", "pattern", "enum",
+})
 _NAME = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]*$")
 _JAVA_RESERVED = frozenset({
     "abstract", "assert", "boolean", "break", "byte", "case", "catch", "char",
@@ -166,11 +170,55 @@ def _capability_contracts(capabilities: Mapping[str, Any] | None) -> dict[str, d
                     f"capability {cap_id!r}: parameter constraint count mismatch"
                 )
             for index, constraint in enumerate(constraints):
+                where = f"capability {cap_id!r}.parameter_constraints[{index}]"
                 if not isinstance(constraint, Mapping):
-                    raise _error(
-                        f"capability {cap_id!r}.parameter_constraints[{index}]: "
-                        "constraint must be an object"
-                    )
+                    raise _error(f"{where}: constraint must be an object")
+                unknown = set(constraint) - CAPABILITY_ARGUMENT_CONSTRAINT_FIELDS
+                if unknown:
+                    raise _error(f"{where}: unsupported fields {sorted(unknown)!r}")
+                argument_type = params[index]
+                if argument_type == "object" and constraint:
+                    raise _error(f"{where}: object-bound parameter cannot have scalar constraints")
+                if any(field in constraint for field in ("minimum", "maximum")):
+                    if argument_type not in {"int", "long", "double"}:
+                        raise _error(f"{where}: numeric bounds require numeric parameter")
+                    for field in ("minimum", "maximum"):
+                        if field in constraint and (
+                            type(constraint[field]) not in {float, int}
+                            or not math.isfinite(constraint[field])
+                        ):
+                            raise _error(f"{where}.{field}: finite numeric value required")
+                    if (
+                        "minimum" in constraint and "maximum" in constraint
+                        and constraint["minimum"] > constraint["maximum"]
+                    ):
+                        raise _error(f"{where}: minimum exceeds maximum")
+                if any(field in constraint for field in ("minLength", "maxLength", "pattern")):
+                    if argument_type != "string":
+                        raise _error(f"{where}: string constraints require string parameter")
+                    for field in ("minLength", "maxLength"):
+                        if field in constraint and (
+                            type(constraint[field]) is not int or constraint[field] < 0
+                        ):
+                            raise _error(f"{where}.{field}: nonnegative integer required")
+                    if (
+                        "minLength" in constraint and "maxLength" in constraint
+                        and constraint["minLength"] > constraint["maxLength"]
+                    ):
+                        raise _error(f"{where}: minLength exceeds maxLength")
+                    if "pattern" in constraint:
+                        if not isinstance(constraint["pattern"], str):
+                            raise _error(f"{where}.pattern: expected string")
+                        try:
+                            re.compile(constraint["pattern"])
+                        except re.error as exc:
+                            raise _error(f"{where}.pattern: invalid regular expression") from exc
+                if "enum" in constraint and (
+                    not isinstance(constraint["enum"], list) or not constraint["enum"]
+                ):
+                    raise _error(f"{where}.enum: nonempty list required")
+                if "description" in constraint and not isinstance(constraint["description"], str):
+                    raise _error(f"{where}.description: expected string")
         return_type = _type(
             raw["return_type"],
             f"capability {cap_id!r}.return_type",
