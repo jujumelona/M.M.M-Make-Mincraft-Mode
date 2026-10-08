@@ -120,6 +120,27 @@ class CompleteGameDesignPlanner:
             content_design,
         )
 
+        # Bind concrete evidence before small-model operation authoring whenever
+        # the requested target is already known. AUTO target selection is handled
+        # after platform binding in compile_authored_design instead.
+        target_adapter = adapter or self.adapter or getattr(
+            self.router, "_mmm_target_adapter", None,
+        )
+        if target_adapter is not None:
+            from .authored_reuse_bridge import (
+                resolve_authored_source_reuse,
+                verified_reuse_context,
+            )
+
+            reuse_receipt = resolve_authored_source_reuse(
+                prompt,
+                structured_sections,
+                minecraft_version=str(target_adapter.minecraft_version),
+                loader=str(target_adapter.loader),
+            )
+            content_design["_host_source_reuse"] = reuse_receipt
+            text += verified_reuse_context(reuse_receipt)
+
         kinds = deterministic_module_kinds
         if kinds is None and adapter is not None:
             kinds = deterministic_backend_capabilities(adapter)
