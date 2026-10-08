@@ -104,3 +104,27 @@ def test_host_rejects_malformed_shell_identifiers():
             package_name="com.invalid;Runtime", class_name="SomeRegistration",
             mod_id="ships", subject="blueprint", default_title="Blueprint",
         )
+
+
+
+def test_26_2_screen_api_uses_minecraft_gui_after_fabric_migration():
+    spec = _canonical_spec("26.2")
+    source = render_template(
+        {"render": spec["render_mold"]},
+        {"ui_title": "Ship Database", "ui_body": "Browse blueprints"},
+    )
+    assert "client.gui.setScreen(" in source
+    assert "client.setScreen(" not in source
+    assert_canonical_java_target(source, spec)
+    legacy26 = _canonical_spec("26.1.2")
+    old_source = render_template(
+        {"render": legacy26["render_mold"]},
+        {"ui_title": "Ship Database", "ui_body": "Browse blueprints"},
+    )
+    assert "client.setScreen(" in old_source
+    assert "client.gui.setScreen(" not in old_source
+
+
+def test_future_unreviewed_gui_apis_fail_closed_instead_of_using_old_template():
+    with pytest.raises(ValueError, match="HOST_SCREEN_UNREVIEWED_MINECRAFT_EPOCH"):
+        _canonical_spec("26.3")
