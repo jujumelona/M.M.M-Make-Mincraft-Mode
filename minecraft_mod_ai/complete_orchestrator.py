@@ -10,7 +10,7 @@ import traceback
 import zlib
 import xml.etree.ElementTree as ET
 import zipfile
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
