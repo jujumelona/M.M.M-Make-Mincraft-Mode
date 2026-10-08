@@ -397,6 +397,23 @@ class CompleteProductionOrchestrator:
         module_receipts.extend(collision_receipts)
         project_root = run_named_checkpoint(ledger, 'prepare-project', stage='prepare', input_value={'graph_hash': work_plan.graph_hash, 'existing_input_sha256': approved.existing_input_sha256}, action=lambda: self._prepare_project(approved, run_root=run_root, existing_input=existing_input), encode=lambda value: {'project_root': str(value)}, decode=lambda receipt: Path(str(receipt['project_root'])).resolve(), validate_cached=self._valid_project_root)
         self._write_complete_approval(project_root, approved)
+        # A source-reuse proof is only meaningful if its verified Java/resources
+        # actually enter the project being compiled. Stage proof-bound files
+        # before generation and reject collisions or missing dependencies.
+        authored_reuse = approved.game_design.get("_host_source_reuse")
+        if isinstance(authored_reuse, dict):
+            from .authored_reuse_bridge import materialize_verified_authored_sources
+
+            bound = authored_reuse.get("bound_target")
+            if not isinstance(bound, dict):
+                raise CompleteProductionError("SOURCE_REUSE_TARGET_RECEIPT_MISSING")
+            installed_reuse = materialize_verified_authored_sources(
+                str(project_root),
+                authored_reuse,
+                minecraft_version=str(bound.get("minecraft_version") or ""),
+                loader=str(bound.get("loader") or ""),
+            )
+            module_receipts.append(installed_reuse)
         self._succeed_work_node(ledger, 'prepare-project', {'schema_version': 'mmm/work-node-receipt-v1', 'status': 'SUCCEEDED', 'project_root': str(project_root)})
         generation = self._execute_generation_work(approved=approved, ordered=ordered, work_plan=work_plan, ledger=ledger, project_root=project_root, run_root=run_root, options=options, router=router)
         mark_post_generation()
