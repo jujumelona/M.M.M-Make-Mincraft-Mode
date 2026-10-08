@@ -677,6 +677,7 @@ def _project_install_receipt_path() -> Path:
 def _project_install_fingerprint(target: str) -> str:
     repo_root = Path(__file__).resolve().parents[1]
     pyproject = repo_root / "pyproject.toml"
+    constraints = repo_root / "tools" / "colab_pip_constraints.txt"
     payload = {
         "schema": "mmm/project-install-receipt-v1",
         "repo_root": str(repo_root),
@@ -684,6 +685,7 @@ def _project_install_fingerprint(target: str) -> str:
         "python_version": sys.version,
         "target": target,
         "pyproject_sha256": _file_sha256(pyproject),
+        "colab_constraints_sha256": _file_sha256(constraints),
     }
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
 
@@ -723,22 +725,42 @@ def _image_stack_preflight() -> tuple[bool, str]:
 def _install_project(*, local_profile: bool) -> None:
     target = LOCAL_PROJECT_INSTALL_TARGET if local_profile else REMOTE_PROJECT_INSTALL_TARGET
     fingerprint = _project_install_fingerprint(target)
+    constraints = Path(__file__).with_name("colab_pip_constraints.txt")
     receipt_path = _project_install_receipt_path()
+    # Keep track of native Python extensions already loaded into this kernel.
+    # Replacing any of their wheel files cannot refresh those live extensions.
+    native_distributions = {
+        "numpy": "numpy",
+        "numba": "numba",
+        "llvmlite": "llvmlite",
+        "PIL": "Pillow",
+        "scipy": "scipy",
+        "sklearn": "scikit-learn",
+    }
+    loaded_native_versions = {
+        dist: getattr(sys.modules[mod], "__version__", None)
+        for mod, dist in native_distributions.items()
+        if mod in sys.modules
+    }
+    disk_native_versions_before = {
+        dist: _installed_version(dist) for dist in native_distributions.values()
+    }
     try:
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     except Exception:
         receipt = {}
     # NumPy may already be imported by a previously executed Colab cell.
     # Never silently replace a loaded compiled NumPy extension in that process.
-    loaded_numpy = sys.modules.get("numpy")
-    loaded_numpy_version = getattr(loaded_numpy, "__version__", None)
     if (
         receipt.get("schema_version") == "mmm/project-install-receipt-v1"
         and receipt.get("fingerprint") == fingerprint
         and _installed_version("mmm-make-mincraft-mode") is not None
     ):
         healthy, detail = _image_stack_preflight()
-        if healthy:
+        if healthy and all(
+            not loaded_version or loaded_version == _installed_version(dist)
+            for dist, loaded_version in loaded_native_versions.items()
+        ):
             print("project dependencies: receipt and FLUX.2 imports verified; pip skipped", flush=True)
             return
         print("project dependencies: stale receipt; FLUX.2 imports failed:", detail[-1500:], flush=True)
@@ -761,6 +783,8 @@ def _install_project(*, local_profile: bool) -> None:
             str(timeout_seconds),
             "--retries",
             str(retries),
+            "--constraint",
+            str(constraints),
             "-e",
             target,
         ]
@@ -790,11 +814,15 @@ def _install_project(*, local_profile: bool) -> None:
         # Python import state. Reinstall the compatible wheel, not a monkeypatch
         # of NumPy's private compiled symbols.
         print("project dependencies: repairing NumPy _blas_supports_fpe import failure", flush=True)
+        current_numpy = _installed_version("numpy")
+        if current_numpy is None:
+            raise RuntimeError("NumPy installation is missing; FLUX.2 cannot start.")
         _run_logged([
             sys.executable, "-m", "pip", "install",
             "--disable-pip-version-check", "--prefer-binary",
             "--only-binary=:all:", "--force-reinstall", "--no-deps",
-            "numpy>=2.2,<2.4",
+            "--constraint", str(constraints),
+            "numpy==" + current_numpy,
         ])
         repaired_numpy = True
         healthy, detail = _image_stack_preflight()
@@ -804,14 +832,28 @@ def _install_project(*, local_profile: bool) -> None:
             "Fix the reported Python packages before running production. "
             f"Original import traceback:\\n{detail}"
         )
-    if loaded_numpy_version and (
-        loaded_numpy_version != _installed_version("numpy") or repaired_numpy
-    ):
+    modified_loaded_native = [
+        dist
+        for dist, loaded_version in loaded_native_versions.items()
+        if (
+            disk_native_versions_before[dist] != _installed_version(dist)
+            or (loaded_version and loaded_version != _installed_version(dist))
+        )
+    ]
+    if repaired_numpy and "numpy" in loaded_native_versions:
+        modified_loaded_native.append("numpy")
+    if modified_loaded_native:
+        print(
+            "COLAB_RESTART_REQUIRED: installed packages are ready, but this "
+            "kernel still owns older native extensions: "
+            + ", ".join(sorted(set(modified_loaded_native))),
+            flush=True,
+        )
         raise RuntimeError(
-            "NumPy was updated while already loaded in this Colab kernel. "
-            "Restart the Colab runtime (Runtime > Restart session), then "
-            "run the setup cells again; compiled extensions cannot safely "
-            "be hot-reloaded."
+            "Colab binary dependency changes require one kernel restart. "
+            "Select Runtime > Restart session, then rerun the notebook from "
+            "cell 1. The pinned NumPy/Numba constraints prevent repeated "
+            "upgrades on subsequent setup runs."
         )
     print("project dependencies: FLUX.2/Qwen3 imports verified:", detail, flush=True)
     receipt_path.parent.mkdir(parents=True, exist_ok=True)
