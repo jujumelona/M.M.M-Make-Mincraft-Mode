@@ -313,6 +313,23 @@ def test_exception_scope_never_reuses_old_validation_for_runtime_failure():
     assert _checkpoint_for_exception(RuntimeError("VisualCritic rejected screenshots")) is None
 
 
+
+def test_production_checkpoint_provenance_survives_error_message_changes():
+    # Source retries must not depend on wording supplied to notebook users.
+    failure = CompleteProductionError(
+        "Gradle/GameTest failed; Typed host production does not mutate source.",
+        checkpoint_id="gradle-build",
+    )
+    assert _checkpoint_for_exception(failure) == "gradle-build"
+    assert _checkpoint_for_exception(
+        CompleteProductionError("Other error", checkpoint_id="validate-source")
+    ) == "validate-source"
+    assert _checkpoint_for_exception(
+        CompleteProductionError("Unrelated runtime failure", checkpoint_id="validate-jar")
+    ) is None
+    assert _checkpoint_for_exception(RuntimeError("Other error")) is None
+
+
 def test_blocked_debug_source_receipt_is_failed_validation_feedback():
     receipt = {
         "status": "BLOCKED",
