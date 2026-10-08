@@ -85,3 +85,25 @@ def test_authored_transplant_uses_actual_mod_package_and_mod_id(tmp_path, monkey
     assert (out / "src/main/resources/assets/spacemod/lang/en_us.json").is_file()
     assert (out / "src/main/resources/META-INF/mmm-third-party").is_dir()
     assert (out / ".minecraft_ai/reuse/source_provenance.json").is_file()
+
+
+def test_fabric_api_migration_keeps_java_package_before_import():
+    from minecraft_mod_ai.reuse_adapters import FabricApiMigrationAdapter
+
+    files = {
+        "src/main/java/example/ModItems.java": (
+            "package example;\n"
+            "import net.minecraft.registry.Registry;\n"
+            "final class ModItems { Object items = Registry.ITEM; }\n"
+        ),
+    }
+    migration = FabricApiMigrationAdapter()
+    assert migration.can_apply(files, {"mappings": "yarn"})
+    receipt = migration.apply(files, {"mappings": "yarn"})
+    source = files["src/main/java/example/ModItems.java"]
+    assert receipt.applied
+    assert source.startswith("package example;\n")
+    assert source.index("package example;") < source.index(
+        "import net.minecraft.registry.Registries;"
+    ) < source.index("final class ModItems")
+    assert "Registries.ITEM" in source
