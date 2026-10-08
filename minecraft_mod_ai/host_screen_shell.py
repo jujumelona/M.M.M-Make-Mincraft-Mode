@@ -23,11 +23,11 @@ def _host_display_literal(value: str, *, limit: int, fallback: str) -> str:
 
     The full requirement is retained by the production contract; only the
     one-line *visual label* is shortened to fit a 16px Minecraft sprite UI.
-    Quotes, backslashes, control, format and unpaired surrogate characters
-    are excluded rather than escaping arbitrary Java source text.
+    Quotes, backslashes, braces (template markers), control, format and
+    unpaired surrogates are excluded rather than rendering model syntax.
     """
     safe = "".join(
-        ch if ch.isprintable() and ch not in {'"', "\\"} else " "
+        ch if ch.isprintable() and ch not in {'"', "\\", "{", "}"} else " "
         for ch in str(value)
     )
     safe = " ".join(safe.split())
