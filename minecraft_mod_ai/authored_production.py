@@ -987,6 +987,30 @@ def compile_authored_design(
     target = _bound_target(design)
     design = {**design, **target}
 
+    # External-source discovery/proof is a host decision and must be explicitly
+    # attached to the production artifact, not left in an unrelated research log.
+    # Resolve after immutable target binding for AUTO; reuse planning receipts
+    # only when they were proven against the exact selected target.
+    from .authored_reuse_bridge import resolve_authored_source_reuse
+    source_reuse = content_design.get("_host_source_reuse")
+    exact_reuse_target = {
+        "minecraft_version": str(adapter.minecraft_version),
+        "loader": str(adapter.loader),
+    }
+    if (
+        not isinstance(source_reuse, Mapping)
+        or source_reuse.get("bound_target") != exact_reuse_target
+    ):
+        source_reuse = resolve_authored_source_reuse(
+            plan.requested_prompt,
+            plan.structured_sections,
+            minecraft_version=exact_reuse_target["minecraft_version"],
+            loader=exact_reuse_target["loader"],
+        )
+    if source_reuse.get("schema_version") != "mmm/grounded-repository-reuse-plan-v2":
+        raise ValueError("AUTHORED_SOURCE_REUSE_CONTRACT_INVALID")
+    design["_host_source_reuse"] = deepcopy(dict(source_reuse))
+
     production_state_section = compile_production_state_section(plan)
     modules, manifest = _compile_new_authored_modules(
         plan,
