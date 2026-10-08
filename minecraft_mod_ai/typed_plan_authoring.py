@@ -2393,11 +2393,22 @@ def author_typed_plan_ir(
             continue
 
         event_scope = f"integration.entry_points[{entry_point_index}]"
-        event = infer_event_type(row.get("trigger")) or author._enum(
-            "event_type",
-            sorted(EVENT_SIGNATURES),
-            scope=event_scope,
-        )
+        # An arbitrary gameplay action is not a Fabric lifecycle event.
+        # Previously the small model could select player_join/respawn for a
+        # custom trigger such as launch_sequence_initiated; the build would
+        # pass while running unrelated logic at login instead of at launch.
+        # Require a concrete supported trigger before claiming executable
+        # integration coverage.  A new gameplay trigger needs an explicit
+        # host-owned event adapter, not a guessed lifecycle substitution.
+        event = infer_event_type(row.get("trigger"))
+        if event is None:
+            raise ValueError(
+                "TYPED_GAMEPLAY_TRIGGER_UNBOUND: "
+                f"{event_scope} trigger={row.get('trigger')!r}. "
+                "No corresponding deterministic Fabric event hook or explicit "
+                "command binding exists. Do not replace a gameplay action with "
+                "player_join, player_respawn, or another unrelated event."
+            )
         function_id = f"entryPoint{entry_point_index + 1}_{event}"
         if function_id in known_ids:
             raise ValueError(
