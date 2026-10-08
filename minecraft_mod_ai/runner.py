@@ -377,6 +377,20 @@ class GradleRunner:
                 )
                 commands.append(gametest_result)
                 gametest_mode = "explicit_task"
+                if gametest_result.timed_out:
+                    # A stalled external Minecraft server is NOT a Java
+                    # candidate defect and cannot be repaired by replanning
+                    # generation. Preserve the actual server log as evidence.
+                    return self._failed_build(
+                        prepared,
+                        commands,
+                        f"Headless Fabric GameTest timed out after {self.command_timeout_seconds}s; "
+                        "inspect gradle-gametest.log for server startup or test execution.",
+                        include_artifacts=True,
+                        failure_class="infrastructure_timeout",
+                        error_code="GRADLE_GAMETEST_TIMEOUT",
+                        repairable=False,
+                    )
                 if gametest_result.exit_code != 0:
                     return self._failed_build(
                         prepared,
