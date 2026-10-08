@@ -63,6 +63,26 @@ def run_java(tmp_path, plan, harness, *, capabilities=None, state=False):
     return executed.stdout
 
 
+def test_host_capability_mutation_metadata_is_validated_before_ir_authoring():
+    from minecraft_mod_ai.typed_host_capabilities import typed_host_capability_contracts
+    from minecraft_mod_ai.typed_plan_ir import validate_typed_host_capability_contracts
+
+    contracts = typed_host_capability_contracts()
+    validated = validate_typed_host_capability_contracts(contracts)
+    assert validated["player.grant_item"]["gameplay_mutation"] is True
+    assert validated["player.add_status_effect"]["gameplay_mutation"] is True
+    assert validated["player.send_message"]["gameplay_mutation"] is False
+    assert validate_typed_plan_ir(
+        plan_for([{"op": "return", "value": literal(1)}]),
+        capabilities=contracts,
+    )
+
+    invalid = copy.deepcopy(contracts)
+    invalid["player.grant_item"]["gameplay_mutation"] = "true"
+    with pytest.raises(ValueError, match="gameplay_mutation: expected boolean"):
+        validate_typed_host_capability_contracts(invalid)
+
+
 def test_validation_is_pure_and_generation_is_deterministic():
     plan = plan_for([{"op": "return", "value": literal(42)}])
     original = copy.deepcopy(plan)
