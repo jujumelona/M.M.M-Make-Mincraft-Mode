@@ -117,6 +117,7 @@ def bootstrap_fabric_project(
         "java": actual_java,
     }
     _pin_generated_toolchain(root, adapter)
+    _ensure_modern_client_source_set(root, spec, adapter)
     _clean_fresh_template_examples(root, spec)
     runtime_contract = _install_host_runtime_contract(root, spec, adapter)
     gametest_contract = _install_host_gametest_contract(root, spec, adapter)
@@ -261,6 +262,50 @@ def _download_text(url: str) -> str:
         return _download_bytes(url).decode("utf-8")
     except UnicodeDecodeError as exc:
         raise FabricTemplateProviderError(f"Official bootstrap text was not UTF-8: {url}") from exc
+
+
+def _ensure_modern_client_source_set(root: Path, spec: Any, adapter: Any) -> None:
+    """Bind client-only canonical GUI candidates to Fabric's split source set.
+
+    The official CLI owns the rest of the scaffold. When it omits the documented
+    split-source wiring, insert only this explicit Loom contract once, before
+    any model work is scheduled. Do not alter legacy/Yarn target projects.
+    """
+    if not str(adapter.minecraft_version).startswith("26."):
+        return
+    build = root / "build.gradle"
+    if not build.is_file() or build.is_symlink():
+        raise FabricTemplateProviderError("FABRIC_CLIENT_BUILD_GRADLE_REQUIRED")
+    text = build.read_text(encoding="utf-8")
+    split = "splitEnvironmentSourceSets" in text
+    client_bound = "sourceSet sourceSets.client" in text
+    if split and client_bound:
+        return
+    additions = []
+    if not split:
+        additions.append("    splitEnvironmentSourceSets()")
+    if not client_bound:
+        mod_id = str(spec.mod_id)
+        if not re.fullmatch(r"[a-z][a-z0-9_-]{1,63}", mod_id):
+            raise FabricTemplateProviderError("FABRIC_CLIENT_MOD_ID_INVALID")
+        additions.extend(
+            [
+                f'    mods {{ "{mod_id}" {{',
+                "        sourceSet sourceSets.main",
+                "        sourceSet sourceSets.client",
+                "    } }",
+            ]
+        )
+    marker = "// MMM:OFFICIAL_SPLIT_CLIENT_SOURCE_SET"
+    if marker in text:
+        raise FabricTemplateProviderError(
+            "FABRIC_CLIENT_SOURCE_SET_INCOMPLETE: existing host source-set marker is inconsistent"
+        )
+    build.write_text(
+        text.rstrip() + "\n\n" + marker + "\nloom {\n"
+        + "\n".join(additions) + "\n}\n",
+        encoding="utf-8",
+    )
 
 
 def _pin_generated_toolchain(root: Path, adapter: Any) -> None:
