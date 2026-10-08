@@ -582,7 +582,16 @@ def expand_facts_to_jobs(
                     operation="generate",
                     requires=(),
                     required_ports=(),
-                    produces=(),
+                    # The canonical entity registry generator produces one
+                    # verified receipt and one source artifact. Publish their
+                    # real typed outputs so entity loot can depend on actual
+                    # registration generation, not an invented entity ID port.
+                    produces=(
+                        (f"{subject}.entity_registry_receipt",
+                         f"{subject}.entity_registry_artifact")
+                        if canonical_leaf == "minecraft/entity/registry"
+                        else ()
+                    ),
                     deterministic_inputs=deterministic_inputs,
                     context_id=version_context.context_id,
                     canonical_leaf=canonical_leaf,
