@@ -467,3 +467,38 @@ def test_host_uv_requires_explicit_lora_compatibility():
     texture = resolve_asset(request("entity", "entity.fixed_uv"), namespace="demo", minecraft_version="1.21.4", version_context=context(binding)).textures[0]
     with pytest.raises(ValueError, match="LoRA compatibility"):
         compile_texture_prompt(visual_description="stone", texture=texture, image_config=ModelRegistry().role("t4_local", "image_generator"))
+
+
+
+def test_opaque_flux_like_cube_runs_single_candidate_with_host_alpha_matte(tmp_path):
+    """Reproduce production log: all-different RGB corners, fully opaque PNG."""
+    from PIL import Image
+
+    from minecraft_mod_ai.resource_asset_production import generate_assets
+
+    router, proposal, calls = runtime()
+    # Keep the signed row profile and immutable render contract unchanged.
+    # The visual description controls only semantic silhouette, not coordinates.
+    row = proposal.game_design["_asset_generation_plan"]["assets"][0]
+    row["visual_spec"]["silhouette"] = "cube"
+
+    def opaque_gradient(role, **kwargs):
+        calls.append(kwargs)
+        width, height = kwargs["width"], kwargs["height"]
+        image = Image.new("RGBA", (width, height))
+        image.putdata([
+            (100 + x * 70 // width, 40 + y * 70 // height, 30, 255)
+            for y in range(height) for x in range(width)
+        ])
+        try:
+            image.save(kwargs["output_path"], format="PNG")
+        finally:
+            image.close()
+
+    router.generate_image = opaque_gradient
+    result = generate_assets(router, proposal, tmp_path / "mod", tmp_path / "run")
+    assert result["resource_contract_validation"]["status"] == "PASS"
+    assert result["assets"][0]["attempted_candidate_count"] == 1
+    assert result["assets"][0]["generation_evidence"]["sources"][0]["alpha_matte"] == "host_explicit_cube"
+    with Image.open(result["assets"][0]["target"]) as output:
+        assert set(output.getchannel("A").getdata()) == {0, 255}
