@@ -104,3 +104,40 @@ def test_modern_client_candidate_requires_split_gradle_before_model_call(tmp_pat
     # Legacy targets were not silently converted to a new source-set policy.
     build.unlink()
     assert_canonical_client_source_set(tmp_path, _spec("1.21.5"))
+
+
+
+def test_retire_only_owned_legacy_gui_candidate_after_new_client_write(tmp_path):
+    from minecraft_mod_ai.canonical_java_target_contract import (
+        retire_owned_legacy_client_candidate,
+    )
+
+    spec = _spec("26.1.2")
+    old_rel = spec["target_path"].replace("src/client/java/", "src/main/java/")
+    old = tmp_path / old_rel
+    old.parent.mkdir(parents=True)
+    identity = spec["bindings"]
+    old.write_text(
+        f"package {identity['package_name']};\n"
+        f"public final class {identity['class_name']} "
+        "implements net.fabricmc.api.ClientModInitializer { "
+        "public void onInitializeClient() {} }\n",
+        encoding="utf-8",
+    )
+    assert retire_owned_legacy_client_candidate(tmp_path, spec) == old_rel
+    assert not old.exists()
+    assert retire_owned_legacy_client_candidate(tmp_path, spec) is None
+
+
+def test_retire_refuses_mismatched_legacy_source(tmp_path):
+    from minecraft_mod_ai.canonical_java_target_contract import (
+        retire_owned_legacy_client_candidate,
+    )
+
+    spec = _spec("26.1.2")
+    old = tmp_path / spec["target_path"].replace("src/client/java/", "src/main/java/")
+    old.parent.mkdir(parents=True)
+    old.write_text("package unrelated; public final class UserCode {}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="CANONICAL_CLIENT_LEGACY_SOURCE_CONFLICT"):
+        retire_owned_legacy_client_candidate(tmp_path, spec)
+    assert old.exists()
