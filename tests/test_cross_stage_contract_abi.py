@@ -145,6 +145,36 @@ def test_content_driver_concerns_are_real_canonical_template_records():
     )
 
 
+def test_gameplay_content_catalog_handoff_preserves_typed_entrypoint():
+    from minecraft_mod_ai.authored_content_contract import content_request_catalog
+    from minecraft_mod_ai.authored_structured_design import normalize_structured_sections
+
+    section = "integration"
+    all_concerns = DETAIL_RECORDS[section]
+    spec = {concern: [] for concern in all_concerns}
+    spec["inapplicable_concerns"] = []
+    spec["entry_points"] = [{
+        field: "command /launch" if field == "trigger" else "spacecraft launch"
+        for field in all_concerns["entry_points"].split()
+    }]
+    structured = {
+        section: {
+            "specification": spec,
+            "constraint_evidence_refs": [],
+        }
+    }
+    normalize_structured_sections(structured)
+    catalog = content_request_catalog(
+        structured, requested_prompt="Build a launchable spacecraft"
+    )
+    assert len(catalog["requirements"]) == 1
+    item = catalog["requirements"][0]
+    assert item["requirement_id"].startswith("gameplay_")
+    assert item["design_context"]["source_section"] == "integration"
+    assert item["design_context"]["source_concern"] == "entry_points"
+    assert item["design_context"]["gameplay_record"]["trigger"] == "command /launch"
+
+
 def test_platform_authoring_schemas_are_json_schema_valid():
     for kind in PLATFORM_KINDS:
         Draft202012Validator.check_schema(platform_config_schema(kind))
