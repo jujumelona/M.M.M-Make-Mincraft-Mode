@@ -108,6 +108,8 @@ def materialize_verified_authored_sources(
     *,
     minecraft_version: str,
     loader: str,
+    package_name: str = "",
+    mod_id: str = "",
 ) -> dict[str, Any]:
     """Install only proof-bound donor source into the real production workspace.
 
@@ -129,6 +131,11 @@ def materialize_verified_authored_sources(
     ]
     if not chosen:
         return {"schema_version": "mmm/authored-source-install-v1", "donor_count": 0, "files": []}
+    if not package_name.strip() or not mod_id.strip():
+        raise ValueError(
+            "SOURCE_REUSE_TARGET_IDENTITY_REQUIRED: verified transplant needs "
+            "the actual mod package and mod ID for deterministic adaptation."
+        )
 
     root = Path(project_root).resolve()
     downloaded = materialize_source_slices(root, reuse_plan)
@@ -153,6 +160,8 @@ def materialize_verified_authored_sources(
         "fabric_api": adapter.fabric_api,
         "fabric_loom": adapter.fabric_loom,
         "gradle": adapter.gradle,
+        "target_package": package_name,
+        "target_modid": mod_id,
     }
     attribution: list[dict[str, Any]] = []
     for chosen_row, donor in zip(chosen, donors):
