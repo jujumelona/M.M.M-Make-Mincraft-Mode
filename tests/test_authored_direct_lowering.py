@@ -395,7 +395,7 @@ def test_python_generator_job_persists_schema_valid_candidate_inputs() -> None:
     assert spec["context_id"] == "candidate-26.2"
     assert spec["side"] == "CLIENT"
     assert spec["target_path"].startswith("src/client/java/example/space/client/generated/")
-    assert [slot["name"] for slot in spec["slots"]] == ["ui_title", "ui_body"]
+    assert spec["slots"] == []  # Host does not call a small model for static GUI labels
     assert spec["bindings"]["host_screen_capability"] == "basic_client_screen"
     assert "MMM:HOST_26_SCREEN_SHELL" in spec["render_mold"]
 
