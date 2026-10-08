@@ -297,9 +297,27 @@ def _canonical_candidate_inputs(
             requirement=requirement,
             minecraft_version=minecraft_version,
         )
+    block_entity_contract = None
+    if (
+        canonical_leaf == "minecraft/block_entity/registry"
+        and minecraft_version.startswith("26.")
+    ):
+        from .host_block_entity_shell import basic_block_entity_candidate_contract
+
+        block_entity_contract = basic_block_entity_candidate_contract(
+            package_name=generated_package,
+            class_name=class_name,
+            mod_id=mod_id,
+            subject=subject,
+            minecraft_version=minecraft_version,
+        )
     if screen_contract:
         bindings["host_screen_capability"] = screen_contract["capability"]
         bindings["host_screen_command"] = screen_contract["command"]
+    if block_entity_contract:
+        bindings["host_block_entity_capability"] = block_entity_contract["capability"]
+        bindings["host_block_entity_entrypoint"] = block_entity_contract["entrypoint"]
+    host_contract = screen_contract or block_entity_contract
     spec = {
         "leaf_id": canonical_leaf,
         "context_id": context_id,
@@ -310,8 +328,8 @@ def _canonical_candidate_inputs(
         "side": side,
         "bindings": bindings,
         "output_schema": output_schema,
-        "render_mold": screen_contract["render_mold"] if screen_contract else "{{artifact_source}}",
-        "slots": screen_contract["slots"] if screen_contract else [
+        "render_mold": host_contract["render_mold"] if host_contract else "{{artifact_source}}",
+        "slots": host_contract["slots"] if host_contract else [
             {
                 "name": "artifact_source",
                 "description": (
