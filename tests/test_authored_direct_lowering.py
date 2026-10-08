@@ -395,18 +395,16 @@ def test_python_generator_job_persists_schema_valid_candidate_inputs() -> None:
     assert spec["context_id"] == "candidate-26.2"
     assert spec["side"] == "CLIENT"
     assert spec["target_path"].startswith("src/client/java/example/space/client/generated/")
-    assert spec["slots"][0]["name"] == "artifact_source"
+    assert [slot["name"] for slot in spec["slots"]] == ["ui_title", "ui_body"]
+    assert spec["host_screen_capability"] == "basic_client_screen"
+    assert "MMM:HOST_26_SCREEN_SHELL" in spec["render_mold"]
 
     from minecraft_mod_ai.model_output_atomicity_contract import (
-        assert_strict_atomicity_bounds,
+        assert_atomic_model_schema,
     )
 
-    slot_schema = spec["slots"][0]["schema"]
-    Draft202012Validator.check_schema(slot_schema)
-    from minecraft_mod_ai.execution_contract_policy import SCHEMA_CONTRACT_PROFILE_KEY
-
-    assert_strict_atomicity_bounds(
-        slot_schema,
-        surface="canonical GUI source candidate",
-        profile=slot_schema[SCHEMA_CONTRACT_PROFILE_KEY],
-    )
+    for slot in spec["slots"]:
+        Draft202012Validator.check_schema(slot["schema"])
+        assert_atomic_model_schema(
+            slot["schema"], surface="canonical GUI atomic display slot"
+        )
