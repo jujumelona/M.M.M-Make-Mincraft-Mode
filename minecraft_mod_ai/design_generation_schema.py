@@ -10,7 +10,6 @@ from jsonschema import Draft202012Validator
 
 from .content_design_contract import (
     CONTENT_KIND_TO_FACT_TYPE,
-    CONTENT_KINDS,
     PRIMARY_CONTENT_KINDS,
     CONTENT_PROPERTY_VALUE_ENUMS,
     CONTENT_PROPERTY_VALUE_PATTERNS,
