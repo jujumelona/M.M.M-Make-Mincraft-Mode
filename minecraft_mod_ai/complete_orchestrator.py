@@ -113,7 +113,11 @@ from .production_contract import (
     persist_quality_report,
     quality_unresolved,
 )
-from .project_edit import ensure_fabric_client_entrypoints, inspect_fabric_project
+from .project_edit import (
+    ensure_fabric_client_entrypoints,
+    ensure_fabric_main_entrypoints,
+    inspect_fabric_project,
+)
 from .project_index import ProjectIndex
 from .project_index_execution_reuse_contract import (
     execution_scoped,
@@ -1672,6 +1676,48 @@ class CompleteProductionOrchestrator:
                         for job in artifact_jobs_to_run
                         if job.owner_module in member_ids
                     )
+                    # Only host-owned 26.x BlockEntity shell classes are
+                    # ModInitializer entrypoints. Arbitrary model Java files
+                    # must never receive implicit execution authority.
+                    block_entity_main_entrypoints: set[str] = set()
+                    for candidate in owned_client_jobs:
+                        if candidate.canonical_leaf != "minecraft/block_entity/registry":
+                            continue
+                        persisted = candidate.deterministic_inputs.get("_canonical_inputs", {})
+                        if not isinstance(persisted, dict):
+                            continue
+                        for value in persisted.values():
+                            if not isinstance(value, dict):
+                                continue
+                            binding = value.get("bindings")
+                            if not isinstance(binding, dict):
+                                continue
+                            if binding.get("host_block_entity_capability") != "basic_block_entity_with_owned_block":
+                                continue
+                            expected = str(binding.get("host_block_entity_entrypoint") or "")
+                            if expected != (
+                                str(binding.get("package_name") or "") + "."
+                                + str(binding.get("class_name") or "")
+                            ):
+                                raise CompleteProductionError("HOST_BLOCK_ENTITY_ENTRYPOINT_CONTRACT_MISMATCH")
+                            block_entity_main_entrypoints.add(expected)
+                    if block_entity_main_entrypoints:
+                        ensure_fabric_main_entrypoints(
+                            inspect_fabric_project(project_root),
+                            entrypoints=tuple(sorted(block_entity_main_entrypoints)),
+                        )
+                        receipts.append({
+                            "schema_version": "mmm/artifact-graph-execution-receipt-v1",
+                            "status": "SUCCEEDED",
+                            "module_ids": sorted({
+                                j.owner_module for j in owned_client_jobs
+                                if j.canonical_leaf == "minecraft/block_entity/registry"
+                            }),
+                            "touched_paths": ["src/main/resources/fabric.mod.json"],
+                            "completed_jobs": [],
+                            "receipts": [],
+                            "ports": {},
+                        })
                     approved_client_entrypoints = canonical_client_entrypoints(
                         owned_client_jobs
                     )
