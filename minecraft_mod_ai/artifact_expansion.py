@@ -294,6 +294,7 @@ def _canonical_candidate_inputs(
             mod_id=mod_id,
             subject=subject,
             default_title=display_name,
+            requirement=requirement,
             minecraft_version=minecraft_version,
         )
     if screen_contract:
