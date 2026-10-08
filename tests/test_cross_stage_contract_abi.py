@@ -89,6 +89,16 @@ def test_production_capability_metadata_fail_closed_and_mutation_routing():
     with pytest.raises(ValueError, match="unknown fields"):
         validate_typed_host_capability_contracts(bad)
 
+    bad = copy.deepcopy(actual)
+    bad["player.grant_item"]["parameter_constraints"][2]["pattern"] = ".*"
+    with pytest.raises(ValueError, match="string constraints require string"):
+        validate_typed_host_capability_contracts(bad)
+
+    bad = copy.deepcopy(actual)
+    bad["player.grant_item"]["parameter_constraints"][2]["magic_filter"] = 9
+    with pytest.raises(ValueError, match="unsupported fields"):
+        validate_typed_host_capability_contracts(bad)
+
     schema = semantic_dispatch_schema(
         {}, actual, allowed_events=("command",), mutation_only=True,
     )
