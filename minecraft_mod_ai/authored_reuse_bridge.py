@@ -172,10 +172,52 @@ def materialize_verified_authored_sources(
             if not relative:
                 raise ValueError("SOURCE_REUSE_INVALID_PATH")
             blobs[relative] = Path(item["path"]).read_bytes()
+        # Ship the *pinned original license text* with every transplanted
+        # source. A metadata license ID alone is not an attribution notice.
+        license_text = next((
+            value for path, value in blobs.items()
+            if path.casefold().split("/")[-1] in {
+                "license", "license.txt", "license.md",
+                "copying", "copying.txt", "copying.md",
+            }
+        ), None)
+        if license_text is None:
+            import httpx
+
+            repository = str(donor["repository"])
+            commit = str(donor["commit_sha"])
+            with httpx.Client(timeout=15, follow_redirects=True) as http:
+                for filename in (
+                    "LICENSE", "LICENSE.md", "LICENSE.txt",
+                    "COPYING", "COPYING.md", "COPYING.txt",
+                ):
+                    url = (
+                        "https://raw.githubusercontent.com/"
+                        + repository + "/" + commit + "/" + filename
+                    )
+                    try:
+                        response = http.get(url)
+                    except httpx.HTTPError:
+                        continue
+                    if response.status_code == 200 and 0 < len(response.content) < 256_000:
+                        license_text = response.content
+                        break
+        if not license_text:
+            raise RuntimeError(
+                "SOURCE_REUSE_LICENSE_NOTICE_REQUIRED: " + str(donor["repository"])
+            )
+        license_filename = (
+            str(donor["repository"]).replace("/", "__").replace(".", "_")
+            + "-" + str(donor["commit_sha"])[:12] + ".LICENSE"
+        )
+        prepared["src/main/resources/META-INF/mmm-third-party/" + license_filename] = (
+            license_text if isinstance(license_text, bytes) else license_text.encode("utf-8"),
+            str(donor["repository"]),
+        )
         adapted, _ = apply_deterministic_adapters(blobs, target_context)
         copied_for_donor = 0
         for relative, data in adapted.items():
-            relative = str(relative).replace("\\\\", "/")
+            relative = str(relative).replace(chr(92), "/")
             if not relative.startswith(supported) or relative.endswith("/"):
                 continue
             if not isinstance(data, (str, bytes)):
