@@ -135,9 +135,20 @@ def postprocess_region(
         a = 255 if policy == "opaque" or a >= rules["alpha_threshold"] else 0
         pixels.append((r, g, b, a) if a else (0, 0, 0, 0))
     image.putdata(pixels)
+    # A host cutout adds the canonical transparent (0,0,0,0) color. Reserve
+    # one palette slot so the final PNG never exceeds the approved color cap.
+    eligible_explicit_matte = (
+        policy in {"transparent", "cutout"}
+        and layout in {"isolated_sprite", "cutout_sprite"}
+        and silhouette.strip().casefold() in {"cube", "cylinder"}
+        and image.getchannel("A").getextrema() == (255, 255)
+    )
+    quantization_colors = rules["palette_colors"] - int(eligible_explicit_matte)
+    if quantization_colors < 1:
+        raise ValueError("Resource palette cannot reserve alpha silhouette color.")
     alpha = image.getchannel("A")
     quantized = image.quantize(
-        colors=rules["palette_colors"],
+        colors=quantization_colors,
         method=Image.Quantize.FASTOCTREE,
         dither=Image.Dither.NONE,
     ).convert("RGBA")
