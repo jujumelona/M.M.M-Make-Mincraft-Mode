@@ -24,9 +24,13 @@ from .content_design_contract import CONTENT_CONCERN_KINDS, CONTENT_KIND_TO_FACT
 # replaced by a UI-only description merely because the resources worksheet
 # happens to have three driver concerns.
 GAMEPLAY_CONTENT_DRIVER_CONCERNS: dict[str, tuple[str, ...]] = {
-    "behavior_contract": ("actors", "triggers", "preconditions", "outputs", "postconditions"),
-    "algorithm": ("ordered_operations", "branches", "updates"),
+    # One small task per playable entry and per ordered gameplay step.
+    # Actors, limits and postconditions are context, not independent item
+    # identities. Asking for entities for all of those was a call explosion.
     "integration": ("entry_points",),
+    "algorithm": ("steps",),
+    # Only used when neither explicit entries nor steps were authored.
+    "behavior_contract": ("outputs",),
 }
 
 
@@ -42,9 +46,17 @@ def _gameplay_content_requirements(
     These are discovery requirements, not proof of successful implementation.
     """
     requirements: list[dict[str, Any]] = []
-    for section in GAMEPLAY_CONTENT_DRIVER_CONCERNS:
-        for concern, records in active_concern_records(structured_sections, section).items():
-            for ordinal, record in enumerate(records):
+    explicit = any(
+        active_concern_records(structured_sections, section).get(concern)
+        for section in ("integration", "algorithm")
+        for concern in GAMEPLAY_CONTENT_DRIVER_CONCERNS[section]
+    )
+    for section, concerns in GAMEPLAY_CONTENT_DRIVER_CONCERNS.items():
+        if section == "behavior_contract" and explicit:
+            continue
+        available = active_concern_records(structured_sections, section)
+        for concern in concerns:
+            for ordinal, record in enumerate(available.get(concern, ())):
                 statement = json.dumps(record, ensure_ascii=False, sort_keys=True)
                 if not statement.strip():
                     continue
