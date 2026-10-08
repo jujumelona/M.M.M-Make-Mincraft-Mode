@@ -128,10 +128,19 @@ def _capability_contracts(capabilities: Mapping[str, Any] | None) -> dict[str, d
                 "parameters",
                 "parameter_constraints",
                 "return_type",
+                "gameplay_mutation",
             },
             {"owner", "method", "parameters", "return_type"},
             f"capability {cap_id!r}",
         )
+        # The planner uses this host-owned metadata to exclude notifications
+        # and reads from gameplay-mutation decisions. It is not a Java method
+        # argument, but it is part of the same authoritative capability contract.
+        mutation = raw.get("gameplay_mutation", False)
+        if type(mutation) is not bool:
+            raise _error(
+                f"capability {cap_id!r}.gameplay_mutation: expected boolean"
+            )
         owner = str(raw["owner"])
         method = str(raw["method"])
         if not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$.]*", owner):
@@ -172,6 +181,7 @@ def _capability_contracts(capabilities: Mapping[str, Any] | None) -> dict[str, d
             "method": method,
             "parameters": params,
             "return_type": return_type,
+            "gameplay_mutation": mutation,
         }
     return result
 
