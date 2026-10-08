@@ -4,6 +4,9 @@ import json
 
 import pytest
 
+from minecraft_mod_ai.model_output_atomicity_contract import effective_model_transport_schema
+from minecraft_mod_ai.structured_output import StructuredOutputValidationError
+
 from minecraft_mod_ai.planner_state_authoring import (
     author_state_field_page,
     author_state_semantic_page,
@@ -172,7 +175,15 @@ def test_variable_default_schema_is_narrowed_from_fixed_type():
 
     assert result == {"variables": [{"default": "0"}]}
     default_schema = router.calls[0]["response_schema"]["properties"]["default"]
-    assert default_schema == state_variable_default_schema("double")
+    semantic = state_variable_default_schema("double")
+    projected = effective_model_transport_schema({
+        "type": "object",
+        "properties": {"default": semantic},
+        "required": ["default"],
+        "additionalProperties": False,
+    })["properties"]["default"]
+    assert default_schema == projected
+    assert semantic["pattern"]  # Host validation retains the strict numeric pattern.
 
 
 def test_boolean_default_enum_is_enforced_at_model_boundary():
@@ -198,7 +209,7 @@ def test_invalid_numeric_default_is_rejected_before_merge():
     item_schema = state_concern_schema("variables")
     router = StateChoices([{"default": "not-a-number"}])
 
-    with pytest.raises(ValueError):
+    with pytest.raises((ValueError, StructuredOutputValidationError)):
         author_state_semantic_page(
             router,
             "Track hull.",
@@ -214,7 +225,7 @@ def test_malformed_boolean_default_is_rejected_by_transport_schema():
     item_schema = state_concern_schema("variables")
     router = StateChoices([{"default": "'}> false"}])
 
-    with pytest.raises(ValueError):
+    with pytest.raises((ValueError, StructuredOutputValidationError)):
         author_state_semantic_page(
             router,
             "Track whether the ship is docked.",
