@@ -15,7 +15,6 @@ from urllib.request import urlopen
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 _LEAF = "minecraft/item/registry"
-_DEBUG_TARGET = "src/main/java/dev/mmm/debugfixture/DebugToken.java"
 
 _PROBE_SOURCE = """package probe;
 import net.fabricmc.api.ModInitializer;
@@ -284,7 +283,7 @@ def _run_real_fabric_evidence(
                 if isinstance(digest, str):
                     diagnostic = _read_blob(store, digest).decode("utf-8", "replace")
                     print(
-                        f"--- {gate_name} {stream} (final 16000 chars) ---\\n"
+                        f"--- {gate_name} {stream} (final 16000 chars) ---\n"
                         + diagnostic[-16000:],
                         file=sys.stderr, flush=True,
                     )
