@@ -688,6 +688,38 @@ def _project_install_fingerprint(target: str) -> str:
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
 
 
+def _image_stack_preflight() -> tuple[bool, str]:
+    """Import the real FLUX.2/Qwen3 dependency chain in a clean interpreter.
+
+    A successful package installation (or a cached install receipt) does not
+    guarantee that NumPy's compiled extension and its Python files agree.
+    This intentionally does not download model weights or allocate GPU memory.
+    """
+    code = (
+        "import numpy as np\n"
+        "import numpy.testing\n"
+        "from scipy.sparse import csr_matrix\n"
+        "from transformers import Qwen3ForCausalLM\n"
+        "from diffusers import Flux2KleinPipeline\n"
+        "print('numpy=' + np.__version__ + ' FLUX.2 imports=OK')\n"
+    )
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "FLUX.2 dependency import timed out after 120 seconds"
+    output = result.stdout.strip()
+    if result.returncode:
+        return False, output[-8000:]
+    return True, output
+
+
 def _install_project(*, local_profile: bool) -> None:
     target = LOCAL_PROJECT_INSTALL_TARGET if local_profile else REMOTE_PROJECT_INSTALL_TARGET
     fingerprint = _project_install_fingerprint(target)
@@ -696,13 +728,20 @@ def _install_project(*, local_profile: bool) -> None:
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     except Exception:
         receipt = {}
+    # NumPy may already be imported by a previously executed Colab cell.
+    # Never silently replace a loaded compiled NumPy extension in that process.
+    loaded_numpy = sys.modules.get("numpy")
+    loaded_numpy_version = getattr(loaded_numpy, "__version__", None)
     if (
         receipt.get("schema_version") == "mmm/project-install-receipt-v1"
         and receipt.get("fingerprint") == fingerprint
         and _installed_version("mmm-make-mincraft-mode") is not None
     ):
-        print("project dependencies: receipt hit; pip skipped", flush=True)
-        return
+        healthy, detail = _image_stack_preflight()
+        if healthy:
+            print("project dependencies: receipt and FLUX.2 imports verified; pip skipped", flush=True)
+            return
+        print("project dependencies: stale receipt; FLUX.2 imports failed:", detail[-1500:], flush=True)
 
     print("project dependencies: installing", target, flush=True)
     last_error: subprocess.CalledProcessError | None = None
@@ -743,6 +782,38 @@ def _install_project(*, local_profile: bool) -> None:
             break
     if last_error is not None:
         raise last_error
+
+    healthy, detail = _image_stack_preflight()
+    repaired_numpy = False
+    if not healthy and "_blas_supports_fpe" in detail:
+        # The exact observed Colab failure is an inconsistent NumPy binary /
+        # Python import state. Reinstall the compatible wheel, not a monkeypatch
+        # of NumPy's private compiled symbols.
+        print("project dependencies: repairing NumPy _blas_supports_fpe import failure", flush=True)
+        _run_logged([
+            sys.executable, "-m", "pip", "install",
+            "--disable-pip-version-check", "--prefer-binary",
+            "--only-binary=:all:", "--force-reinstall", "--no-deps",
+            "numpy>=2.2,<2.4",
+        ])
+        repaired_numpy = True
+        healthy, detail = _image_stack_preflight()
+    if not healthy:
+        raise RuntimeError(
+            "FLUX.2 Klein dependency imports remain broken after installation. "
+            "Fix the reported Python packages before running production. "
+            f"Original import traceback:\\n{detail}"
+        )
+    if loaded_numpy_version and (
+        loaded_numpy_version != _installed_version("numpy") or repaired_numpy
+    ):
+        raise RuntimeError(
+            "NumPy was updated while already loaded in this Colab kernel. "
+            "Restart the Colab runtime (Runtime > Restart session), then "
+            "run the setup cells again; compiled extensions cannot safely "
+            "be hot-reloaded."
+        )
+    print("project dependencies: FLUX.2/Qwen3 imports verified:", detail, flush=True)
     receipt_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = receipt_path.with_suffix(receipt_path.suffix + ".tmp")
     temporary.write_text(
@@ -988,13 +1059,15 @@ def setup_colab_runtime(
 
     local_profile = _is_local_profile(profile)
     _reset_inactive_profile_state(local_profile=local_profile)
+    # Install and check binary packages before importing torch/NumPy in this
+    # kernel; replacing a loaded NumPy extension requires a session restart.
+    _install_project(local_profile=local_profile)
     torch = None
     llama_server_binary = ""
     if local_profile:
         print("CUDA: checking", flush=True)
         torch = _require_local_cuda()
         llama_server_binary = _ensure_native_server(torch)
-    _install_project(local_profile=local_profile)
     _preflight_jdtls()
     if not local_profile:
         try:
