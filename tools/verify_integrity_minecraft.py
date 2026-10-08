@@ -257,11 +257,38 @@ def _run_real_fabric_evidence(
         timeout=900,
         candidate=candidate,
     )
-    evidence_record = verify_execution_evidence(
-        store,
-        evidence_id,
-        expected=expected,
-    )
+    try:
+        evidence_record = verify_execution_evidence(
+            store,
+            evidence_id,
+            expected=expected,
+        )
+    except ValueError:
+        # The verifier owns a content-addressed evidence bundle, but in CI its
+        # original error only named a failed gate. Emit bounded, authenticated
+        # Gradle diagnostics so API/mappings mismatches are actionable without
+        # manually downloading artifacts. Do not treat failed evidence as PASS.
+        from minecraft_mod_ai.integrity_evidence import _read_blob
+
+        recorded = json.loads(_read_blob(store, evidence_id))
+        for gate_name, gate in recorded.get("gates", {}).items():
+            if gate.get("status") == "PASS":
+                continue
+            print(
+                f"REAL_FABRIC_GATE_FAILED: {gate_name}; "
+                f"exit_code={gate.get('exit_code')}; command={gate.get('command')}",
+                file=sys.stderr, flush=True,
+            )
+            for stream in ("stdout", "stderr"):
+                digest = gate.get(stream)
+                if isinstance(digest, str):
+                    diagnostic = _read_blob(store, digest).decode("utf-8", "replace")
+                    print(
+                        f"--- {gate_name} {stream} (final 16000 chars) ---\\n"
+                        + diagnostic[-16000:],
+                        file=sys.stderr, flush=True,
+                    )
+        raise
     (root / "result.json").write_text(
         json.dumps({"evidence_id": evidence_id, "expected": expected}, indent=2),
         encoding="utf-8",
