@@ -135,15 +135,21 @@ def postprocess_region(
         a = 255 if policy == "opaque" or a >= rules["alpha_threshold"] else 0
         pixels.append((r, g, b, a) if a else (0, 0, 0, 0))
     image.putdata(pixels)
-    # A host cutout adds the canonical transparent (0,0,0,0) color. Reserve
-    # one palette slot so the final PNG never exceeds the approved color cap.
-    eligible_explicit_matte = (
+    # Reserve one RGB palette slot for transparent black on *any* cutout,
+    # including BiRefNet output. Otherwise 32 opaque colors + 1 transparent
+    # entry would violate the host's exact PNG palette-size contract.
+    alpha_bounds = image.getchannel("A").getextrema()
+    will_add_shape_mask = (
         policy in {"transparent", "cutout"}
         and layout in {"isolated_sprite", "cutout_sprite"}
         and silhouette.strip().casefold() in {"cube", "cylinder"}
-        and image.getchannel("A").getextrema() == (255, 255)
+        and alpha_bounds == (255, 255)
     )
-    quantization_colors = rules["palette_colors"] - int(eligible_explicit_matte)
+    reserve_alpha_color = (
+        policy in {"transparent", "cutout"}
+        and (alpha_bounds[0] == 0 or will_add_shape_mask)
+    )
+    quantization_colors = rules["palette_colors"] - int(reserve_alpha_color)
     if quantization_colors < 1:
         raise ValueError("Resource palette cannot reserve alpha silhouette color.")
     alpha = image.getchannel("A")
@@ -233,7 +239,10 @@ def generate_candidate(
                 needs_segmentation = (
                     contract["rendering"]["alpha"] in {"transparent", "cutout"}
                     and contract["geometry"]["layout"] in {"isolated_sprite", "cutout_sprite"}
-                    and raw.convert("RGBA").getchannel("A").getextrema() == (255, 255)
+                    and (
+                        raw.mode not in {"RGBA", "LA"}
+                        or raw.getchannel("A").getextrema() == (255, 255)
+                    )
                 )
                 if needs_segmentation:
                     # This stage, NOT FLUX or the old cube/cylinder geometry
