@@ -211,6 +211,62 @@ def ensure_fabric_client_entrypoints(
 
 
 @_atomic_shared_edit
+@_atomic_shared_edit
+def ensure_fabric_main_entrypoints(
+    info: FabricProjectInfo,
+    *,
+    entrypoints: tuple[str, ...],
+) -> dict[str, Any]:
+    """Merge approved host generated ModInitializer classes atomically.
+
+    A Python-generator candidate source file is not an executed Fabric mod
+    until its fully-qualified class is present in the main entrypoint list.
+    The package's existing scaffold main initializer is preserved.
+    """
+    normalized = tuple(sorted(set(entrypoints)))
+    if not normalized:
+        return {"status": "UNCHANGED", "path": str(info.fabric_mod_json)}
+    fqcn = re.compile(
+        r"^[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+$"
+    )
+    if any(not isinstance(name, str) or fqcn.fullmatch(name) is None for name in normalized):
+        raise ProjectEditError("Fabric host main entrypoint class name invalid.")
+    path = info.fabric_mod_json
+    if path.is_symlink() or not path.is_file():
+        raise ProjectEditError("Fabric main metadata must be a regular file.")
+    text, expected_sha = _read_utf8_with_digest(path)
+    resource = _json_resource(text, path.name)
+    raw = resource.value
+    if not isinstance(raw, dict):
+        raise ProjectEditError("fabric.mod.json must contain an object.")
+    entries = raw.setdefault("entrypoints", {})
+    if not isinstance(entries, dict):
+        raise ProjectEditError("Fabric entrypoints must be an object.")
+    main = entries.setdefault("main", [])
+    if not isinstance(main, list):
+        raise ProjectEditError("Fabric main entrypoints must be an array.")
+    present: set[str] = set()
+    for item in main:
+        if isinstance(item, str):
+            present.add(item)
+        elif isinstance(item, dict) and isinstance(item.get("value"), str):
+            present.add(item["value"])
+        else:
+            raise ProjectEditError("Fabric main entrypoint entry invalid.")
+    additions = [value for value in normalized if value not in present]
+    if not additions:
+        return {"status": "UNCHANGED", "path": str(path)}
+    main.extend(additions)
+    return TransactionalSourcePatcher(info.root).apply(
+        [{
+            "operation": "replace",
+            "path": path.relative_to(info.root).as_posix(),
+            "expected_sha256": expected_sha,
+            "content": _serialize_resource(resource),
+        }]
+    )
+
+
 def ensure_main_initializer_call(
     info: FabricProjectInfo,
     *,
