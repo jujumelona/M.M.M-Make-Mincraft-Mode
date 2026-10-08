@@ -705,6 +705,13 @@ class Proposal:
             )
         if not self.requested_prompt.strip():
             raise SpecValidationError("requested_prompt must not be empty.")
+        # Approval integrity is a basic envelope invariant. Report it before
+        # target/toolchain/evidence resolution, which may be unavailable and
+        # must not mask a malformed approved-state receipt.
+        if self.status is ProposalStatus.APPROVED and not self.approval_hash:
+            raise SpecValidationError(
+                "Proposal approved state requires its approval_hash integrity receipt."
+            )
         self.spec.validate()
         if not self.acceptance_tests:
             raise SpecValidationError(
@@ -739,10 +746,6 @@ class Proposal:
         ):
             raise SpecValidationError(
                 "imported_source_snapshot_hash must be empty or a lowercase sha256 digest."
-            )
-        if self.status is ProposalStatus.APPROVED and not self.approval_hash:
-            raise SpecValidationError(
-                "Proposal approved state requires its approval_hash integrity receipt."
             )
         if self.approval_hash:
             if not SHA256_PATTERN.fullmatch(self.approval_hash):
