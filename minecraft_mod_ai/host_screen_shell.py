@@ -14,7 +14,6 @@ NOT server-authoritative container/menu synchronization or gameplay actions.
 import hashlib
 import json
 import re
-from collections.abc import Mapping
 from typing import Any
 
 
