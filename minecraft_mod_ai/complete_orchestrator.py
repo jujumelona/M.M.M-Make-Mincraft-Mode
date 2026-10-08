@@ -2140,6 +2140,48 @@ class CompleteProductionOrchestrator:
                 pool.shutdown(wait=True, cancel_futures=True)
             lease_heartbeat_stop.set()
             lease_heartbeat_thread.join(timeout=heartbeat_seconds + 5.0)
+        # Reconcile *all* approved client initializers after every generation
+        # shard has finished. Per-shard wiring only sees local owner modules
+        # and can miss client jobs executed as transitive prerequisites or
+        # reused from a checkpoint. The final validator must see the complete
+        # approved set, not a partial shard-local subset.
+        expected_clients = canonical_client_entrypoints(artifact_jobs)
+        if expected_clients:
+            for job in artifact_jobs:
+                if job.executor_type.value != "python_generator":
+                    continue
+                persisted = job.deterministic_inputs.get("_canonical_inputs", {})
+                if not isinstance(persisted, dict):
+                    continue
+                for value in persisted.values():
+                    if not isinstance(value, dict) or str(value.get("side") or "").upper() != "CLIENT":
+                        continue
+                    source_rel = str(value.get("target_path") or "").replace("\\", "/")
+                    if not source_rel.startswith("src/client/java/"):
+                        raise CompleteProductionError(
+                            f"CLIENT_GENERATED_SOURCE_SET_MISMATCH: {job.job_id}: {source_rel}"
+                        )
+                    source_file = project_root / source_rel
+                    if not source_file.is_file() or source_file.is_symlink():
+                        raise CompleteProductionError(
+                            f"CLIENT_GENERATED_SOURCE_MISSING: {job.job_id}: {source_rel}"
+                        )
+                    code = source_file.read_text(encoding="utf-8")
+                    if "implements ClientModInitializer" not in code:
+                        raise CompleteProductionError(
+                            f"CLIENT_GENERATED_INITIALIZER_INVALID: {job.job_id}: {source_rel}"
+                        )
+            entrypoint_receipt = ensure_fabric_client_entrypoints(
+                inspect_fabric_project(project_root),
+                entrypoints=expected_clients,
+            )
+            module_receipts.append({
+                "schema_version": "mmm/client-entrypoints-reconciliation-v1",
+                "status": "SUCCEEDED",
+                "entrypoints": list(expected_clients),
+                "metadata_status": entrypoint_receipt.get("status", "UNKNOWN"),
+                "touched_paths": ["src/main/resources/fabric.mod.json"],
+            })
         module_receipts.sort(key=_generation_receipt_sort_key)
         asset_shards.sort(key=_generation_receipt_sort_key)
         unresolved.sort()
