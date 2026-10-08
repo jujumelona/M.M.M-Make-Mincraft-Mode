@@ -51,8 +51,8 @@ rag = [
 ]
 ui = ["gradio>=6.24,<7"]
 image = [
-  # NumPy 2.4+ has caused _blas_supports_fpe import crashes in Colab FLUX.2/Qwen3 stacks.
-  "numpy>=2.2,<2.4",
+  # Keep the Colab preinstalled NumPy 2.1.x eligible; wheel consistency is enforced by setup.
+  "numpy>=2.1,<2.4",
   "bitsandbytes>=0.45,<1; sys_platform == 'linux'",
   "diffusers>=0.39,<1",
   "peft>=0.17,<1",
