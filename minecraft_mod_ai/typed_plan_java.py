@@ -247,7 +247,7 @@ class _Renderer:
             return [
                 indent
                 + "net.fabricmc.fabric.api.entity.event.v1.ServerPlayerEvents."
-                + f"COPY_FROM.register((oldPlayer, newPlayer, alive) -> "
+                + "COPY_FROM.register((oldPlayer, newPlayer, alive) -> "
                 + f"{call}(oldPlayer, newPlayer, alive));"
             ]
         if event == "command":
