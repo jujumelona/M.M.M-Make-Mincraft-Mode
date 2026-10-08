@@ -704,6 +704,28 @@ def _state_section_page_results(
     return [by_index[index] for index, _page in indexed]
 
 
+def _ordered_bounded_planning_results(
+    tasks: Sequence[str],
+    worker: Any,
+    *,
+    slots: int,
+    stage: str,
+) -> list[Any]:
+    """One deadline-bounded scheduler for independent design concerns and waves.
+
+    Restore the caller's stable worksheet order after completion-order execution.
+    This retains parallelism without nested, unbounded executor ownership.
+    """
+    if slots <= 1 or len(tasks) <= 1:
+        return [worker(task) for task in tasks]
+    from .deadline_executor import iter_completed_with_deadlines
+
+    completed = dict(iter_completed_with_deadlines(
+        tasks, worker, max_workers=min(slots, len(tasks)), stage=stage,
+    ))
+    return [completed[task] for task in tasks]
+
+
 def _regular_section_page_results(
     request: _PlannerSectionRequest,
     indexed: Sequence[tuple[int, Sequence[str]]],
@@ -720,20 +742,11 @@ def _regular_section_page_results(
         )
         return concern, results
 
-    if allow_parallel and request.slots > 1 and len(order) > 1:
-        from .deadline_executor import iter_completed_with_deadlines
-
-        completed_groups = {
-            concern: result
-            for concern, result in iter_completed_with_deadlines(
-                order, run,
-                max_workers=min(request.slots, len(order)),
-                stage=f"authored-section-{request.section}",
-            )
-        }
-        groups = [completed_groups[concern] for concern in order]
-    else:
-        groups = [run(concern) for concern in order]
+    groups = _ordered_bounded_planning_results(
+        order, run,
+        slots=request.slots if allow_parallel else 1,
+        stage=f"authored-section-{request.section}",
+    )
 
     by_index: dict[int, dict[str, Any]] = {}
     for _concern, results in groups:
@@ -819,20 +832,9 @@ def author_structured_sections(
                 allow_parallel=len(ready) == 1,
             )
 
-        if slots > 1 and len(ready) > 1:
-            from .deadline_executor import iter_completed_with_deadlines
-
-            completed_sections = {
-                section: result
-                for section, result in iter_completed_with_deadlines(
-                    ready, run,
-                    max_workers=min(slots, len(ready)),
-                    stage="authored-design-wave",
-                )
-            }
-            authored = [completed_sections[section] for section in ready]
-        else:
-            authored = [run(section) for section in ready]
+        authored = _ordered_bounded_planning_results(
+            ready, run, slots=slots, stage="authored-design-wave",
+        )
 
         authored_by_section = dict(authored)
         for section in WORKSHEET_SECTIONS:
