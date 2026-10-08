@@ -614,9 +614,14 @@ class CompleteProductionOrchestrator:
             ),
         )
         if build.get('status') != 'PASS':
+            from .compiler_diagnostics import gradle_failure_summary
+
+            failure_detail = gradle_failure_summary(build)
             raise CompleteProductionError(
                 'Gradle/GameTest failed; Typed host production does not mutate '
                 'source through an AI repair fallback.'
+                + (f' First failure: {failure_detail}' if failure_detail else ''),
+                checkpoint_id='gradle-build',
             )
 
         final_manifest = str(
