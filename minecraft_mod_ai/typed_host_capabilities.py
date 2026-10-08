@@ -88,6 +88,8 @@ import net.minecraft.core.Holder;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.effect.MobEffect;
 import net.minecraft.world.effect.MobEffectInstance;
@@ -133,7 +135,7 @@ public final class AuthoredHostCapabilities {{
     public static boolean addStatusEffect(Object value, String effectId, int durationTicks, int amplifier) {{
         if (durationTicks < 1 || amplifier < 0 || amplifier > 255) return false;
         Identifier id = Identifier.parse(effectId);
-        Holder<MobEffect> effect = BuiltInRegistries.MOB_EFFECT.getHolder(id).orElse(null);
+        Holder<MobEffect> effect = BuiltInRegistries.MOB_EFFECT.get(ResourceKey.create(Registries.MOB_EFFECT, id)).orElse(null);
         if (effect == null) return false;
         return player(value).addEffect(new MobEffectInstance(effect, durationTicks, amplifier));
     }}
