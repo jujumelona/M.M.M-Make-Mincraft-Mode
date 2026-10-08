@@ -261,6 +261,7 @@ def gradle_failure_summary(value: Mapping[str, Any]) -> str:
         )
     diagnostics = value.get("diagnostics")
     if isinstance(diagnostics, (list, tuple)):
+        compiler_errors_reported = 0
         for item in diagnostics:
             if not isinstance(item, Mapping):
                 continue
@@ -270,7 +271,9 @@ def gradle_failure_summary(value: Mapping[str, Any]) -> str:
             line = str(item.get("line") or "?")[:16]
             message = str(item.get("message") or "").splitlines()[0][:240]
             fragments.append(f"diagnostic={path}:{line}: {message}")
-            break
+            compiler_errors_reported += 1
+            if compiler_errors_reported >= 8:
+                break
     if failed is not None:
         log = _ANSI_ESCAPE.sub("", bounded_build_log_text(failed.get("log_path")))
         match = re.search(r"(?m)^\s*\* What went wrong:\s*$", log)
@@ -286,7 +289,9 @@ def gradle_failure_summary(value: Mapping[str, Any]) -> str:
                     break
             if lines:
                 fragments.append("gradle_cause=" + " | ".join(lines)[:440])
-    return _redact_text("; ".join(fragments))[:1300]
+    # Changed 2026-10-08: show several independent errors from one failed
+    # compile so a user need not repeat an entire Colab run to reveal error #2.
+    return _redact_text("; ".join(fragments))[:4000]
 
 
 __all__ = [
