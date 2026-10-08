@@ -2,8 +2,8 @@ from __future__ import annotations
 
 """Host-owned Minecraft 26.1+ basic client-screen Java mold.
 
-The model supplies only two bounded, non-executable display strings.
-All imports, class shapes, source-set ownership, Fabric lifecycle wiring,
+The host derives display strings from the approved semantic contract.
+No model calls are needed for static screen descriptions. Imports, class shapes, source-set ownership, Fabric lifecycle wiring,
 Screen callbacks, and client command registration come from this host module.
 
 References: Fabric documentation for 26.1.2 CustomScreen.java and
@@ -16,11 +16,26 @@ import re
 from typing import Any
 
 
-# Exclude Java string delimiters, escapes and control characters; the model
-# cannot inject Java statements or change class/interface structure.
-_DISPLAY_PATTERN = r'^[^"\\\x00-\x1f\x7f]{1,96}$'
-_BODY_PATTERN = r'^[^"\\\x00-\x1f\x7f]{1,160}$'
+# Java identifiers and screen text are two separate ownership boundaries.
+# For static UI copy, never insert user or model text as Java syntax.
+def _host_display_literal(value: str, *, limit: int, fallback: str) -> str:
+    """Build a bounded Java UTF-8 string literal from approved prose.
 
+    The full requirement is retained by the production contract; only the
+    one-line *visual label* is shortened to fit a 16px Minecraft sprite UI.
+    Quotes, backslashes, control, format and unpaired surrogate characters
+    are excluded rather than escaping arbitrary Java source text.
+    """
+    safe = "".join(
+        ch if ch.isprintable() and ch not in {'"', "\\"} else " "
+        for ch in str(value)
+    )
+    safe = " ".join(safe.split())
+    if not safe:
+        safe = fallback
+    if len(safe) > limit:
+        safe = safe[:limit - 1].rstrip() + "…"
+    return '"' + safe + '"'
 
 def screen_command_name(mod_id: str, subject: str) -> str:
     """Namespaced, short and collision-resistant command for basic UI access."""
@@ -39,9 +54,10 @@ def basic_screen_candidate_contract(
     mod_id: str,
     subject: str,
     default_title: str,
+    requirement: str = "",
     minecraft_version: str = "26.1.2",
 ) -> dict[str, Any]:
-    """Return the deterministic Java mold and two atomic model-fillable slots."""
+    """Return a complete deterministic Java mold with zero model slots."""
     if not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$.]*", package_name):
         raise ValueError("HOST_SCREEN_PACKAGE_INVALID")
     if not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", class_name):
@@ -50,10 +66,18 @@ def basic_screen_candidate_contract(
     if not re.fullmatch(r"26\.(?:1|2)(?:\.[0-9]+)?", minecraft_version):
         raise ValueError("HOST_SCREEN_UNREVIEWED_MINECRAFT_EPOCH")
     cmd = screen_command_name(mod_id, subject)
+    title_literal = _host_display_literal(
+        default_title, limit=80, fallback=subject.replace("_", " "),
+    )
+    # Do not claim that currency balances, inventory widgets or game systems
+    # work before their separate server/menu/interaction receipts are verified.
+    description = "Planned: " + (requirement.strip() or default_title)
+    body_literal = _host_display_literal(
+        description, limit=140, fallback="Planned client screen",
+    )
     # Fabric 26.2 moved screen control onto Minecraft.gui.
     open_screen = "client.gui.setScreen" if minecraft_version.startswith("26.2") else "client.setScreen"
-    # Host controls the Java shell. The two placeholders are Java string
-    # *contents* only; their schemas forbid quote, slash and control injection.
+    # Static copy is a host-reviewed quoted Java literal, not a model slot.
     mold = f"""package {package_name};
 
 import net.fabricmc.api.ClientModInitializer;
@@ -69,8 +93,8 @@ import net.minecraft.network.chat.Component;
 // Basic client GUI. Open with /{cmd}; gameplay/menu integration requires a
 // separate verified server-side screen handler and network contract.
 public final class {class_name} implements ClientModInitializer {{
-    private static final String SCREEN_TITLE = "{{{{ui_title}}}}";
-    private static final String SCREEN_BODY = "{{{{ui_body}}}}";
+    private static final String SCREEN_TITLE = {title_literal};
+    private static final String SCREEN_BODY = {body_literal};
 
     @Override
     public void onInitializeClient() {{
@@ -113,38 +137,7 @@ public final class {class_name} implements ClientModInitializer {{
 """
     return {
         "render_mold": mold,
-        "slots": [
-            {
-                "name": "ui_title",
-                "description": (
-                    "Output only the short human-readable heading for this "
-                    "Minecraft client screen. No Java, quotes or escapes. "
-                    f"Screen subject: {subject}. Suggested title: {default_title}."
-                ),
-                "schema": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 96,
-                    "pattern": _DISPLAY_PATTERN,
-                },
-            },
-            {
-                "name": "ui_body",
-                "description": (
-                    "Output one short on-screen description of the user's "
-                    "requested interface. No Java, quotes or escapes. "
-                    "Do not claim gameplay operations, database integration "
-                    "or network synchronization already exist. "
-                    f"Screen subject: {subject}."
-                ),
-                "schema": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 160,
-                    "pattern": _BODY_PATTERN,
-                },
-            },
-        ],
+        "slots": [],
         "capability": "basic_client_screen",
         "command": cmd,
     }
