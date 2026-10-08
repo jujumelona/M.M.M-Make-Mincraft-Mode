@@ -217,7 +217,10 @@ def _canonical_candidate_inputs(
     else:
         generated_package = package_name + ".generated"
         generated_package_path = package_path + "/generated"
-    target_path = f"src/main/java/{generated_package_path}/{class_name}.java"
+    # Keep modern client-only classes out of the common compileJava source set.
+    # Fabric 26.1+ is unobfuscated and the official scaffold has a client set.
+    source_root = "src/client/java" if side == "CLIENT" and minecraft_version.startswith("26.") else "src/main/java"
+    target_path = f"{source_root}/{generated_package_path}/{class_name}.java"
     requirement = str(getattr(fact, "source_clause", "") or "").strip()
     if not requirement:
         requirement = (
