@@ -1281,9 +1281,20 @@ def _validate_capability_scalar_constraint(
 def semantic_dispatch_schema(
     state_types: Mapping[str, str],
     capabilities: Mapping[str, Any] | None,
+    *,
+    allowed_events: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """Build semantic actions only from host-known state/capability namespaces."""
+    """Build semantic actions only from host-known, actually bound events."""
 
+    trigger_events = (
+        tuple(dict.fromkeys(allowed_events))
+        if allowed_events is not None
+        else _SEMANTIC_TRIGGER_EVENTS
+    )
+    if not trigger_events or any(
+        event not in _SEMANTIC_TRIGGER_EVENTS for event in trigger_events
+    ):
+        raise ValueError("TYPED_SEMANTIC_TRIGGER_SET_INVALID")
     branches: list[dict[str, Any]] = []
     for state_key, state_type in sorted(state_types.items()):
         value_schema = _semantic_state_value_schema(state_type)
@@ -1292,7 +1303,7 @@ def semantic_dispatch_schema(
             "properties": {
                 "trigger_event": {
                     "type": "string",
-                    "enum": list(_SEMANTIC_TRIGGER_EVENTS),
+                    "enum": list(trigger_events),
                 },
                 "action_kind": {"const": "set_state"},
                 "state_key": {"const": state_key},
@@ -1312,7 +1323,7 @@ def semantic_dispatch_schema(
                 "properties": {
                     "trigger_event": {
                         "type": "string",
-                        "enum": list(_SEMANTIC_TRIGGER_EVENTS),
+                        "enum": list(trigger_events),
                     },
                     "action_kind": {"const": "increment_state"},
                     "state_key": {"const": state_key},
@@ -1344,7 +1355,7 @@ def semantic_dispatch_schema(
         properties: dict[str, Any] = {
             "trigger_event": {
                 "type": "string",
-                "enum": list(_SEMANTIC_TRIGGER_EVENTS),
+                "enum": list(trigger_events),
             },
             "action_kind": {"const": "call_capability"},
             "capability_id": {"const": capability_id},
@@ -1658,6 +1669,7 @@ def author_semantic_game_dispatch(
     *,
     coverage_refs: Sequence[str],
     budget: Any = None,
+    bound_events: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Author exactly one bounded semantic action per host-owned coverage unit."""
 
@@ -1668,7 +1680,25 @@ def author_semantic_game_dispatch(
             "TYPED_PLAN_SEMANTIC_COVERAGE_REQUIRED: dispatch has no host-owned coverage units"
         )
 
-    schema = semantic_dispatch_schema(state_types, capabilities)
+    active_events = (
+        tuple(dict.fromkeys(str(item) for item in bound_events))
+        if bound_events is not None
+        else None
+    )
+    # An "any" action executes for every wrapper. Permit it only when there
+    # is one real wrapper so the model cannot accidentally mutate on join,
+    # respawn and server tick simultaneously.
+    if active_events is not None:
+        if not active_events:
+            raise ValueError("TYPED_SEMANTIC_WITHOUT_RUNTIME_EVENT")
+        allowed_events = (
+            (*active_events, "any") if len(active_events) == 1 else active_events
+        )
+    else:
+        allowed_events = None
+    schema = semantic_dispatch_schema(
+        state_types, capabilities, allowed_events=allowed_events,
+    )
     assert_model_atomic_decision_schema(
         schema,
         field="semantic_dispatch_rule",
@@ -1689,6 +1719,7 @@ def author_semantic_game_dispatch(
                 structured_sections,
                 (coverage_ref,),
             ),
+            "bound_trigger_events": list(allowed_events or _SEMANTIC_TRIGGER_EVENTS),
             "available_states": {
                 name: state_types[name]
                 for name in sorted(state_types)
@@ -1711,7 +1742,9 @@ def author_semantic_game_dispatch(
             },
             "instruction": (
                 "Choose exactly one host-bound runtime action implementing the supplied "
-                "coverage_ref. Every state_key and capability_id is closed by the schema; "
+                "coverage_ref. Only choose an event that is actually bound by "
+                "the host; no lifecycle substitutions for unrelated actions. "
+                "Every state_key and capability_id is closed by the schema; "
                 "do not invent identifiers, arrays, loops, Java, or extra actions."
             ),
         }
@@ -2467,7 +2500,7 @@ def author_typed_plan_ir(
         is_mod_initialize_trigger(row.get("trigger"))
         for row in entry_points
     )
-    if logic_refs and not event_bindings and not has_mod_initialize:
+    if logic_refs and not event_bindings:
         raise ValueError(
             "TYPED_PLAN_LOGIC_ENTRY_POINT_REQUIRED: executable semantics "
             "have no runtime entry point."
@@ -2495,6 +2528,9 @@ def author_typed_plan_ir(
             capabilities,
             coverage_refs=logic_refs,
             budget=budget,
+            bound_events=tuple(
+                dict.fromkeys(str(binding["event"]) for binding in event_bindings)
+            ),
         )
 
     def literal(kind: str, value: Any) -> dict[str, Any]:
