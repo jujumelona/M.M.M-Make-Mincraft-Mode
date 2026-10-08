@@ -8,6 +8,10 @@ from typing import Any
 from .model_adapters.image_diffusion import ImageGenerationConfig
 from .resource_contracts import TextureSpec
 from .resource_visual_spec import VisualSpec, resolve_visual_spec
+from .resource_alpha_segmentation import (
+    ALPHA_SEGMENTATION_MODEL, ALPHA_SEGMENTATION_PROVIDER,
+    ALPHA_SEGMENTATION_CONTRACT,
+)
 from .task_template_catalog import load_template
 
 _TOPOLOGY = {
@@ -27,7 +31,10 @@ _ALPHA = {
 def image_profile_fingerprint(config: Any) -> str:
     p = ImageGenerationConfig.from_adapter_config(config)
     payload = {"profile": asdict(p), "adapter": config.adapter, "provider": config.provider,
-               "base_url": config.base_url}
+               "base_url": config.base_url,
+               "alpha_segmentation": {"model": ALPHA_SEGMENTATION_MODEL,
+                                      "provider": ALPHA_SEGMENTATION_PROVIDER,
+                                      "contract": ALPHA_SEGMENTATION_CONTRACT}}
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
