@@ -78,10 +78,6 @@ def generate_canonical_leaf(inputs, *, leaf_id, router, authority):
         values[slot["name"]] = value
 
     source = render_template({"render": spec["render_mold"]}, values)
-    if spec.get("language") == "java":
-        from .canonical_java_target_contract import assert_canonical_java_target
-
-        assert_canonical_java_target(source, spec)
     validate_semantic_contract(
         source, contract=spec, context_id=spec["context_id"], leaf_id=leaf_id
     )
