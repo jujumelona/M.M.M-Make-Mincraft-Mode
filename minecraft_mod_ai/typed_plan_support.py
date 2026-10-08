@@ -10,7 +10,7 @@ is no coder fallback.
 from collections.abc import Mapping
 from typing import Any
 
-from .typed_event_ir import is_mod_initialize_trigger
+from .typed_event_ir import infer_event_config, infer_event_type, is_mod_initialize_trigger
 from .typed_plan_ir import typed_plan_reachable_function_ids
 
 from .authored_structured_design import (
@@ -129,8 +129,8 @@ def typed_plan_support_issues(
 
     integration = active_concern_records(normalized, "integration")
     entry_points = tuple(integration.get("entry_points", ()))
-    bound_entry_points = {
-        binding.get("entry_point_index")
+    bindings_by_entry = {
+        binding.get("entry_point_index"): binding
         for binding in (
             typed_plan_ir.get("event_bindings", ())
             if isinstance(typed_plan_ir, Mapping)
@@ -139,6 +139,7 @@ def typed_plan_support_issues(
         if isinstance(binding, Mapping)
         and type(binding.get("entry_point_index")) is int
     }
+    bound_entry_points = set(bindings_by_entry)
 
     for index, row in enumerate(entry_points):
         trigger = row.get("trigger")
@@ -153,6 +154,30 @@ def typed_plan_support_issues(
                 "integration.entry_points"
                 f"[{index}].trigger={_compact(trigger)!r}"
             )
+            continue
+        # A valid binding ID/signature alone cannot prove that it is the
+        # *correct* entry point. Reject silently substituted lifecycle hooks,
+        # and ensure commands retain the literal actually declared by design.
+        binding = bindings_by_entry[index]
+        expected_event = infer_event_type(trigger)
+        actual_event = str(binding.get("event") or "")
+        if expected_event is None or actual_event != expected_event:
+            issues.append(
+                f"integration.entry_points[{index}].event_mismatch:"
+                f"declared={_compact(trigger)!r},bound={actual_event!r}"
+            )
+            continue
+        if actual_event == "command":
+            expected_config = infer_event_config("command", trigger)
+            actual_config = binding.get("config")
+            if (
+                expected_config is None
+                or not isinstance(actual_config, Mapping)
+                or actual_config.get("literal") != expected_config["literal"]
+            ):
+                issues.append(
+                    f"integration.entry_points[{index}].command_literal_mismatch"
+                )
 
     valid_entry_points = set(range(len(entry_points)))
     for index in sorted(bound_entry_points - valid_entry_points):
