@@ -294,6 +294,7 @@ def _canonical_candidate_inputs(
             mod_id=mod_id,
             subject=subject,
             default_title=display_name,
+            minecraft_version=minecraft_version,
         )
     if screen_contract:
         bindings["host_screen_capability"] = screen_contract["capability"]
