@@ -403,7 +403,10 @@ def test_python_generator_job_persists_schema_valid_candidate_inputs() -> None:
 
     slot_schema = spec["slots"][0]["schema"]
     Draft202012Validator.check_schema(slot_schema)
+    from minecraft_mod_ai.execution_contract_policy import SCHEMA_CONTRACT_PROFILE_KEY
+
     assert_strict_atomicity_bounds(
         slot_schema,
         surface="canonical GUI source candidate",
+        profile=slot_schema[SCHEMA_CONTRACT_PROFILE_KEY],
     )
