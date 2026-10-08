@@ -58,7 +58,8 @@ _BASE_OWNED_PREFIXES = (
     "src/gametest/resources/",
 )
 _VERIFIER_INFRASTRUCTURE_CODES = frozenset(
-    {"JDT_DIAGNOSTICS_UNAVAILABLE", "VERIFIER_UNAVAILABLE"}
+    {"JDT_DIAGNOSTICS_UNAVAILABLE", "VERIFIER_UNAVAILABLE", "GRADLE_GAMETEST_TIMEOUT",
+     "GRADLE_COMPILE_TIMEOUT"}
 )
 _RELEASE_NOT_FOUND = re.compile(
     r"\brelease\s+(?P<major>\d+)\s+is\s+not\s+found\s+in\s+the\s+system\b",
@@ -487,6 +488,12 @@ def _latest_failed_feedback(ledger: Any) -> dict[str, Any] | None:
         "checkpoint_updated_at": float(updated_at),
         "diagnostics": diagnostics,
         "diagnostic_fingerprint": _sha(diagnostics),
+        # Preserve verifier-classified failures from the checkpoint. A
+        # GameTest timeout has no source path by definition, and must never
+        # be treated as evidence that an LLM module should be regenerated.
+        "error_code": str(receipt.get("error_code") or ""),
+        "failure_class": str(receipt.get("failure_class") or ""),
+        "repairable": receipt.get("repairable"),
         "failure_scope": "current_exception",
     }
 
