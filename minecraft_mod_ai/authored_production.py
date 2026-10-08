@@ -911,11 +911,18 @@ def _assert_executable_gameplay_floor(
     if not authored_mutations:
         return
 
-    gameplay_kinds = frozenset({
-        "item", "block", "entity", "block_entity", "effect",
-        "armor", "networking", "loot", "recipe", "advancement",
-    })
-    concrete_content = any(module.kind in gameplay_kinds for module in content_modules)
+    # Registration alone is not implementation: an item, recipe, HUD or
+    # network-packet declaration cannot perform a purchase or state transition.
+    concrete_content = any(
+        (
+            module.kind == "item"
+            and bool(module.config.get("action"))
+        ) or (
+            module.kind == "block"
+            and bool(module.config.get("interaction") or module.config.get("trigger"))
+        )
+        for module in content_modules
+    )
     verified_donors = any(
         isinstance(row, Mapping) and row.get("mode") == "source_transplant"
         for row in source_reuse.get("capabilities", ())
