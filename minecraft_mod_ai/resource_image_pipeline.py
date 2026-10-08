@@ -194,8 +194,10 @@ def generate_candidate(
     resolution: tuple[int, int],
     seed: int,
     silhouette: str = "",
+    segment_foreground_callback: Callable | None = None,
 ) -> dict[str, Any]:
     from PIL import Image
+    from .resource_alpha_segmentation import segment_foreground
 
     contract = _contract(texture)
     directory.mkdir(parents=True, exist_ok=True)
@@ -228,10 +230,33 @@ def generate_candidate(
                     raise ValueError(
                         "Image backend output does not match generation profile geometry/PNG format."
                     )
-                processed = postprocess_region(
-                    raw, contract, (width, height), silhouette=silhouette,
+                needs_segmentation = (
+                    contract["rendering"]["alpha"] in {"transparent", "cutout"}
+                    and contract["geometry"]["layout"] in {"isolated_sprite", "cutout_sprite"}
+                    and raw.convert("RGBA").getchannel("A").getextrema() == (255, 255)
                 )
-                matte_method = processed.info.get("mmm_alpha_matte", "")
+                if needs_segmentation:
+                    # This stage, NOT FLUX or the old cube/cylinder geometry
+                    # shortcut, must supply the alpha channel. Run at diffusion
+                    # resolution before reducing the asset to Minecraft pixels.
+                    matting = (
+                        segment_foreground if segment_foreground_callback is None
+                        else segment_foreground_callback
+                    )
+                    extracted = matting(raw)
+                    try:
+                        processed = postprocess_region(
+                            extracted, contract, (width, height), silhouette="",
+                        )
+                    finally:
+                        extracted.close()
+                    matte_method = "rembg:birefnet-general"
+                else:
+                    processed = postprocess_region(
+                        raw, contract, (width, height), silhouette="",
+                    )
+                    matte_method = "source_alpha_or_boundary_background"
+
             canvas.paste(processed, (x, y))
             processed.close()
             sources.append(
