@@ -171,7 +171,7 @@ public final class AuthoredNetworkClient implements ClientModInitializer {{
     return {
         f"src/main/java/{package_path}/AuthoredStateSyncPayload.java": payload,
         f"src/main/java/{package_path}/AuthoredNetworkSync.java": server,
-        f"src/main/java/{package_path}/AuthoredNetworkClient.java": client,
+        f"src/client/java/{package_path}/AuthoredNetworkClient.java": client,
     }
 
 
