@@ -72,3 +72,54 @@ def test_cleanup_ignores_snapshot_for_current_kernel(monkeypatch, tmp_path):
     )
 
     assert watchdog.cleanup_orphaned_managed_process() == {}
+
+
+def test_cgroup_zero_available_is_critical_not_host_free_memory(monkeypatch):
+    monkeypatch.setattr(watchdog, "_meminfo", lambda: (16 * 1024**3, 10 * 1024**3))
+    monkeypatch.setattr(
+        watchdog, "_cgroup_memory",
+        lambda: (12 * 1024**3, 12 * 1024**3, {"oom": 2, "oom_kill": 0}),
+    )
+    snapshot = watchdog._sample(0)
+    assert snapshot["effective_mem_available_bytes"] == 0
+    assert snapshot["pressure"] == "critical"
+
+
+def test_preflight_fails_before_production_with_memory_evidence(monkeypatch, tmp_path):
+    import pytest
+
+    path = tmp_path / "ram-last.json"
+    monkeypatch.setenv("MMM_RUNTIME_MEMORY_SNAPSHOT", str(path))
+    monkeypatch.setenv("MMM_COLAB_RAM_RESERVE_MIB", "2048")
+    monkeypatch.setattr(watchdog, "_meminfo", lambda: (16 * 1024**3, 9 * 1024**3))
+    monkeypatch.setattr(
+        watchdog, "_cgroup_memory",
+        lambda: (11 * 1024**3, 12 * 1024**3, {"oom": 3, "oom_kill": 1}),
+    )
+    with pytest.raises(MemoryError, match="COLAB_RAM_HEADROOM_EXHAUSTED") as err:
+        watchdog.assert_memory_headroom("before_production_build")
+    assert "reserve_mib=2048" in str(err.value)
+    assert "available_mib=1024" in str(err.value)
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["effective_mem_available_bytes"] == 1024**3
+    assert saved["cgroup_memory_events"]["oom_kill"] == 1
+
+
+def test_guard_does_not_kill_unowned_process_or_without_colab(monkeypatch, tmp_path):
+    import threading
+
+    sample = {
+        "effective_mem_available_bytes": 256 * 1024**2,
+        "managed_start_ticks": 100,
+    }
+    killed = []
+    monkeypatch.delenv("MMM_COLAB_SETUP_RECEIPT", raising=False)
+    monkeypatch.setattr(watchdog, "_sample", lambda pid: sample)
+    monkeypatch.setattr(watchdog, "_atomic_write", lambda snapshot: None)
+    monkeypatch.setattr(watchdog, "_process_start_ticks", lambda pid: 100)
+    monkeypatch.setattr(watchdog.os, "kill", lambda pid, signal: killed.append(pid))
+    stop = threading.Event()
+    monkeypatch.setattr(stop, "wait", lambda interval: stop.set())
+    monkeypatch.setattr(watchdog, "_MANAGED_PID", 12345)
+    watchdog._watchdog_loop(stop, 0.1)
+    assert killed == []
