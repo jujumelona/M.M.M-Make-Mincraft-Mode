@@ -136,18 +136,19 @@ def test_prebuilt_fact_graph_lowers_on_real_fabric_target_without_model() -> Non
     from minecraft_mod_ai.platform_catalog import adapter_for_target
 
     plan = build_prebuilt_debug_plan()
-    adapter = adapter_for_target("1.21.8", "fabric")
-    modules, assets, jobs = _compile_content_artifact_graph(
-        plan,
-        adapter=adapter,
-        mod_id="mmm_debug_crystal",
-        package_name="ai.minecraft.generated.mmm_debug_crystal",
-    )
-    assert not assets
-    assert {module.module_id for module in modules} == {
-        "crystal_fragment", "crystal_block", "crystal_block_recipe",
-    }
-    assert jobs
-    assert {job.owner_module for job in jobs} == {
-        "crystal_fragment", "crystal_block", "crystal_block_recipe",
-    }
+    for version in ("1.21.8", "26.2"):
+        adapter = adapter_for_target(version, "fabric")
+        modules, assets, jobs = _compile_content_artifact_graph(
+            plan,
+            adapter=adapter,
+            mod_id="mmm_debug_crystal",
+            package_name="ai.minecraft.generated.mmm_debug_crystal",
+        )
+        assert not assets
+        assert {module.module_id for module in modules} == {
+            "crystal_fragment", "crystal_block", "crystal_block_recipe",
+        }
+        assert jobs
+        assert {job.owner_module for job in jobs} == {
+            "crystal_fragment", "crystal_block", "crystal_block_recipe",
+        }
