@@ -989,7 +989,21 @@ class CompleteProductionOrchestrator:
             ledger.fail('runtime-playtest', 'Runtime, interaction, and visual evidence are still required.', input_required=True)
         self._persist_work_evidence(project_root, ledger, work_plan)
         quality_report = self._evaluate_quality(approved=approved, run_root=run_root, project_root=project_root, source_validation=source_report, build_report=build, jar_validation=jar_validation, module_receipts=module_receipts, asset_receipt=asset_receipt, blockbench_receipts=blockbench_receipts, runtime_receipt=runtime_receipt, playtest_receipt=playtest_receipt, visual_receipt=visual_receipt)
-        quality_passed = quality_report is None or quality_report.get('overall_status') == 'PASS'
+        # An authored v1 proposal does not carry the v2 quality contract.
+        # Previously None was interpreted as PASS, allowing a compiled GUI
+        # placeholder to be certified without any quality evaluation. Treat
+        # missing authored quality evidence as an unresolved release gate.
+        authored_plan_present = (
+            isinstance(approved.game_design.get('authored_plan'), dict)
+            and isinstance(approved.game_design.get('_authored_execution_manifest'), dict)
+        )
+        if quality_report is None and authored_plan_present:
+            unresolved.append('quality:authored-quality-contract-missing')
+        quality_passed = (
+            quality_report.get('overall_status') == 'PASS'
+            if quality_report is not None
+            else not authored_plan_present
+        )
         if quality_report is not None:
             unresolved.extend(f'quality:{dimension_id}' for dimension_id in quality_unresolved(quality_report))
             self._record_quality_nodes(ledger, quality_report, allow_success=True)
