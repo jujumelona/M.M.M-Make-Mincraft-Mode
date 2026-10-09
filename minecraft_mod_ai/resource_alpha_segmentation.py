@@ -8,6 +8,11 @@ a separate non-commercial license.
 from __future__ import annotations
 
 from functools import lru_cache
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
 from typing import Any
 
 ALPHA_SEGMENTATION_MODEL = "birefnet-general"
@@ -69,10 +74,124 @@ def segment_foreground(image: Any) -> Any:
     return result
 
 
+def _available_host_ram_bytes() -> int | None:
+    """Return the effective RAM headroom, accounting for container limits."""
+    from .runtime_memory_watchdog import _cgroup_memory, _meminfo
+
+    _total, available = _meminfo()
+    used, limit, _events = _cgroup_memory()
+    if limit > 0:
+        remaining = max(0, limit - used)
+        return min(available, remaining) if available else remaining
+    return available or None
+
+
+def _preflight_worker_ram() -> None:
+    """Fail explicitly rather than asking the OOM killer to choose a process."""
+    raw = os.environ.get("MMM_ALPHA_MIN_AVAILABLE_MB", "3072")
+    try:
+        minimum_mb = int(raw)
+    except ValueError as exc:
+        raise ValueError("MMM_ALPHA_MIN_AVAILABLE_MB must be an integer") from exc
+    if minimum_mb < 0:
+        raise ValueError("MMM_ALPHA_MIN_AVAILABLE_MB cannot be negative")
+    available = _available_host_ram_bytes()
+    if available is not None and available < minimum_mb * 1024 * 1024:
+        raise ValueError(
+            "ALPHA_SEGMENTER_INSUFFICIENT_HOST_RAM: "
+            f"{available // (1024 * 1024)} MiB free; "
+            f"requires at least {minimum_mb} MiB before starting BiRefNet. "
+            "Free host RAM, stop concurrent JVM builds, or increase Colab RAM."
+        )
+
+
+def segment_foreground_isolated(image: Any) -> Any:
+    """Run CPU ONNX inference outside the FLUX-owning Python process.
+
+    Native ONNX crashes become explicit subprocess errors, and allocations are
+    returned to the OS when the worker exits. Production must call this only
+    after releasing the diffusion pipeline's CPU-offloaded weights.
+    """
+    from PIL import Image
+
+    _preflight_worker_ram()
+    with tempfile.TemporaryDirectory(prefix="mmm-alpha-") as temporary:
+        source = Path(temporary) / "input.png"
+        target = Path(temporary) / "output.png"
+        image.convert("RGB").save(source, format="PNG")
+        timeout_raw = os.environ.get("MMM_ALPHA_WORKER_TIMEOUT_SECONDS", "300")
+        try:
+            timeout = max(1, int(timeout_raw))
+        except ValueError as exc:
+            raise ValueError("MMM_ALPHA_WORKER_TIMEOUT_SECONDS must be an integer") from exc
+        env = os.environ.copy()
+        env.setdefault("OMP_NUM_THREADS", "2")
+        env.setdefault("OMP_THREAD_LIMIT", "2")
+        try:
+            completed = subprocess.run(
+                [sys.executable, "-m", "minecraft_mod_ai.resource_alpha_segmentation",
+                 "--worker", str(source), str(target)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout,
+                check=False,
+                env=env,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise ValueError(
+                f"ALPHA_SEGMENTER_WORKER_TIMEOUT: BiRefNet exceeded {timeout}s"
+            ) from exc
+        if completed.returncode != 0:
+            tail = (completed.stderr or "")[-1600:]
+            possible_oom = completed.returncode in (-9, 137)
+            kind = "ALPHA_SEGMENTER_WORKER_OOM_SUSPECT" if possible_oom else "ALPHA_SEGMENTER_WORKER_FAILED"
+            raise ValueError(
+                f"{kind}: exit={completed.returncode}; {tail}"
+            )
+        if not target.is_file():
+            raise ValueError("ALPHA_SEGMENTER_WORKER_MISSING_OUTPUT")
+        with Image.open(target) as result:
+            result.load()
+            if result.mode != "RGBA" or result.size != image.size:
+                raise ValueError("ALPHA_SEGMENTER_INVALID_IMAGE_OR_GEOMETRY")
+            alpha = result.getchannel("A")
+            try:
+                low, high = alpha.getextrema()
+            finally:
+                alpha.close()
+            if low == high or high == 0:
+                raise ValueError("ALPHA_SEGMENTER_FAILED_TO_EXTRACT_SUBJECT")
+            detached = result.copy()
+        detached.info["mmm_alpha_matte"] = ALPHA_SEGMENTATION_ENGINE + ":" + ALPHA_SEGMENTATION_MODEL
+        return detached
+
+
+def _worker_main(source: str, target: str) -> None:
+    """Subprocess-only entry point; the parent never imports ONNX Runtime."""
+    from PIL import Image
+
+    with Image.open(source) as raw:
+        raw.load()
+        result = segment_foreground(raw)
+        try:
+            result.save(target, format="PNG", optimize=False)
+        finally:
+            result.close()
+
+
 __all__ = [
     "ALPHA_SEGMENTATION_MODEL",
     "ALPHA_SEGMENTATION_ENGINE",
     "ALPHA_SEGMENTATION_PROVIDER",
     "ALPHA_SEGMENTATION_CONTRACT",
     "segment_foreground",
+    "segment_foreground_isolated",
 ]
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 4 or sys.argv[1] != "--worker":
+        raise SystemExit("Usage: python -m minecraft_mod_ai.resource_alpha_segmentation --worker INPUT OUTPUT")
+    _worker_main(sys.argv[2], sys.argv[3])
