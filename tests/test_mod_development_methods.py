@@ -91,12 +91,12 @@ def test_skill_policy_has_no_standalone_map_tools() -> None:
     assert "compile_world_ir" not in REVIEWED_TOOL_STAGES
 
     plan = compile_skill_contract("plan-game-design")
-    worldgen = compile_skill_contract("generate-worldgen")
+    production = compile_skill_contract("execute-complete-production")
 
     assert "generate_world_ir" not in plan.allowed_tools
-    assert "compile_world_ir" not in worldgen.allowed_tools
-    assert "generate_fabric_project" in worldgen.allowed_tools
-    assert "run_gametest" in worldgen.allowed_tools
+    assert "compile_world_ir" not in production.allowed_tools
+    assert "execute_complete_project" in production.allowed_tools
+    assert "run_gametest" in production.allowed_tools
 
 
 def _fake_contract_modules():
