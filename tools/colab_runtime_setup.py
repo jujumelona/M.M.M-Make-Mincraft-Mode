@@ -710,12 +710,15 @@ def _image_stack_preflight() -> tuple[bool, str]:
         "from transformers import Qwen3ForCausalLM\n"
         "from diffusers import Flux2KleinPipeline\n"
         "from importlib.metadata import version as distribution_version\n"
-        "from rembg.sessions.birefnet_general import BiRefNetSessionGeneral\n"
+        "from rembg.sessions.birefnet_general_lite import BiRefNetSessionGeneralLite\n"
+        "from rembg.sessions.u2netp import U2netpSession\n"
         "rembg_version = distribution_version('rembg')\n"
         "if rembg_version != '2.0.67':\n"
         "    raise RuntimeError('ALPHA_SEGMENTER_INCOMPATIBLE_REMBG_VERSION: installed=' + rembg_version + ' required=2.0.67')\n"
-        "if BiRefNetSessionGeneral.name() != 'birefnet-general':\n"
+        "if BiRefNetSessionGeneralLite.name() != 'birefnet-general-lite':\n"
         "    raise RuntimeError('ALPHA_SEGMENTER_MODEL_CLASS_MISMATCH')\n"
+        "if U2netpSession.name() != 'u2netp':\n"
+        "    raise RuntimeError('ALPHA_SEGMENTER_FALLBACK_CLASS_MISMATCH')\n"
         "print('numpy=' + np.__version__ + ' rembg=' + rembg_version + ' FLUX.2/rembg imports=OK')\n"
     )
     try:
