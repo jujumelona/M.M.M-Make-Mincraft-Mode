@@ -91,5 +91,7 @@ def test_colab_image_stack_pins_backtracked_package_families():
         "huggingface-hub", "peft", "sentence-transformers", "transformers",
     ):
         assert package in values
-    assert values["rembg"] == "2.0.77"
+    assert values["rembg"] == "2.0.67"
+    assert values["numpy"] == "2.1.3"
+    assert values["scikit-image"] == "0.25.2"
     assert setup._PROJECT_PIP_INSTALL_DEADLINE_SECONDS == 240
