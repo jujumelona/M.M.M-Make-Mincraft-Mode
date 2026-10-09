@@ -242,8 +242,15 @@ def resolve_plan_path(
     run_mode: str,
     output_root: str | Path,
     configured_path: str = "",
+    debug_strategy: str | None = None,
 ) -> Path:
     mode = validate_run_mode(run_mode)
+    if debug_strategy in {"prebuilt", "host_smoke"}:
+        if mode != FULL_MODE:
+            raise ValueError("Debug Mode는 RUN_MODE=Full에서만 사용할 수 있습니다.")
+        # Never overwrite the user's ordinary proposal.json or replay input.
+        # Debug fixture files own a distinct, deterministic output namespace.
+        return Path(output_root) / "debug" / f"{debug_strategy}-proposal.json"
     configured = configured_path.strip()
     if configured:
         path = Path(configured).expanduser()
