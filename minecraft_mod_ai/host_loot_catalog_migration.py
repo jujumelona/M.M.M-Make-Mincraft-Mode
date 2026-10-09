@@ -26,6 +26,43 @@ _ENTITY = "fabric/loot/entity_drop"
 
 def migrate_published_loot_authority(catalog: dict) -> dict:
     """Upgrade only the known misbound loot contract; reject unexpected inputs."""
+    # This migration is only applicable to snapshots that actually publish
+    # loot authority. A separate HOST fixture/catalog without loot bindings
+    # remains valid and must not be treated as the legacy 43-version snapshot.
+    scopes = []
+    for bundle in catalog["bundles"]:
+        if not isinstance(bundle, dict):
+            raise ValueError("HOST_LOOT_CATALOG_INVALID_SHAPE")
+        facts = bundle.get("host_facts")
+        if not isinstance(facts, dict) or any(
+            not isinstance(facts.get(key), dict)
+            for key in ("capabilities", "artifact_rules", "leaf_bindings")
+        ):
+            raise ValueError("HOST_LOOT_CATALOG_INVALID_SHAPE")
+        rules = facts["artifact_rules"]
+        bindings = facts["leaf_bindings"]
+        scopes.append(
+            facts["capabilities"].get("LOOT_TABLE") is True
+            or _BLOCK in rules
+            or _ENTITY in rules
+            or "minecraft/block/drops" in bindings
+            or "minecraft/loot/entry" in bindings
+        )
+    if not any(scopes):
+        return catalog
+    if not all(scopes):
+        raise ValueError("HOST_LOOT_CATALOG_MIXED_SCOPE")
+
+    # Partially published loot authority cannot be silently downgraded to a
+    # no-loot catalog. It must fail closed before looking up either binding.
+    for bundle in catalog["bundles"]:
+        bindings = bundle["host_facts"]["leaf_bindings"]
+        if (
+            "minecraft/block/drops" not in bindings
+            or "minecraft/loot/entry" not in bindings
+        ):
+            raise ValueError("HOST_LOOT_CATALOG_MIGRATION_UNRECOGNIZED")
+
     from .populate_version_artifact_rules import (
         TEMPLATE_REQUIREMENTS,
         make_implementation,
@@ -53,6 +90,8 @@ def migrate_published_loot_authority(catalog: dict) -> dict:
         and bundle["host_facts"]["artifact_rules"].get(_ENTITY, {}).get(
             "template_sha256"
         ) == template_hashes[_ENTITY]
+        and bundle["host_facts"]["leaf_bindings"]["minecraft/block/drops"]
+        .get("implementation", {}).get("implementation_id") == _BLOCK
         and bundle["host_facts"]["leaf_bindings"]["minecraft/loot/entry"]
         .get("implementation", {}).get("implementation_id") == _ENTITY
         for bundle in catalog["bundles"]

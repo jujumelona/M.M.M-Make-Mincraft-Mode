@@ -154,6 +154,58 @@ def test_reuse_rejects_missing_or_different_context():
         classifier.classify(ImplementationFact("ore.exists", FactType.ITEM_EXISTS, "ore"))
 
 
+def test_no_loot_host_catalog_bypasses_pinned_loot_migration():
+    from minecraft_mod_ai.host_loot_catalog_migration import (
+        migrate_published_loot_authority,
+    )
+
+    ctx = target_fixture().version_context
+    catalog = {
+        "schema_version": "mmm/host-version-catalog-v1",
+        "auto_context_id": ctx.context_id,
+        "bundles": [ctx.to_dict()],
+    }
+    assert migrate_published_loot_authority(catalog) is catalog
+    assert catalog["bundles"][0]["context_id"] == ctx.context_id
+
+
+def test_partial_loot_authority_fails_closed_without_key_error():
+    from minecraft_mod_ai.host_loot_catalog_migration import (
+        migrate_published_loot_authority,
+    )
+
+    ctx = target_fixture().version_context
+    bundle = ctx.to_dict()
+    bundle["host_facts"]["capabilities"]["LOOT_TABLE"] = True
+    catalog = {
+        "schema_version": "mmm/host-version-catalog-v1",
+        "auto_context_id": ctx.context_id,
+        "bundles": [bundle],
+    }
+    with pytest.raises(ValueError, match="HOST_LOOT_CATALOG_MIGRATION_UNRECOGNIZED"):
+        migrate_published_loot_authority(catalog)
+
+
+def test_mixed_loot_and_no_loot_snapshots_are_rejected():
+    from minecraft_mod_ai.host_loot_catalog_migration import (
+        migrate_published_loot_authority,
+    )
+
+    ctx = target_fixture().version_context
+    bare = ctx.to_dict()
+    loot = ctx.to_dict()
+    loot["host_facts"]["artifact_rules"]["fabric/loot/block_drop"] = {
+        "template_sha256": "sha256:unknown"
+    }
+    catalog = {
+        "schema_version": "mmm/host-version-catalog-v1",
+        "auto_context_id": ctx.context_id,
+        "bundles": [bare, loot],
+    }
+    with pytest.raises(ValueError, match="HOST_LOOT_CATALOG_MIXED_SCOPE"):
+        migrate_published_loot_authority(catalog)
+
+
 def test_host_catalog_has_no_live_component_fallback(tmp_path, monkeypatch):
     from minecraft_mod_ai.host_version_catalog import host_target, host_versions
 
