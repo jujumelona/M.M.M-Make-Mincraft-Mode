@@ -11,6 +11,7 @@ import time
 import xml.etree.ElementTree as ET
 from functools import wraps
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from .gametest_execution_evidence_contract import (
@@ -549,6 +550,36 @@ def install(*, runner_module: Any, validation_module: Any) -> None:
         # Parallel production replaces GradleRunner._build_locked; it must
         # forward the same explicitly granted EULA into its own subprocess.
         environment = self._gametest_environment(environment)
+
+        # Do not bypass the original host-owned GameTest EULA preflight.
+        # Check before any Gradle distribution download/build subprocess.
+        build_text = (root / "build.gradle").read_text(encoding="utf-8")
+        host_gametest = (
+            run_gametest
+            and "// M.M.M host-owned server GameTest contract" in build_text
+        )
+        if host_gametest:
+            preflight = getattr(self, "_host_gametest_eula_preflight_error", None)
+            if preflight is None:
+                raise runner_module.BuildRunnerError(
+                    "Parallel Gradle runner lacks the host GameTest EULA preflight."
+                )
+            eula_error = preflight(
+                SimpleNamespace(project_root=root, environment=environment),
+                "runGameTest",
+            )
+            if eula_error is not None:
+                return runner_module.BuildReport(
+                    status="FAIL",
+                    gradle_version=version,
+                    commands=(),
+                    jar_path=None,
+                    gametest_report=None,
+                    error=eula_error,
+                    failure_class="configuration_error",
+                    error_code="GRADLE_GAMETEST_EULA_REQUIRED",
+                    repairable=False,
+                )
 
         state = root / ".minecraft_ai"
         logs = state / "logs"
