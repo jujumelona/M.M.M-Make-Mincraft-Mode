@@ -79,12 +79,32 @@ def test_authored_transplant_uses_actual_mod_package_and_mod_id(tmp_path, monkey
         package_name="dev.example.spacemod", mod_id="spacemod",
     )
     assert result["donor_count"] == 1
-    java = (out / "src/main/java/org/donor/ExampleItem.java").read_text(encoding="utf-8")
+    java_path = out / "src/main/java/dev/example/spacemod/ExampleItem.java"
+    assert java_path.is_file()
+    assert not (out / "src/main/java/org/donor/ExampleItem.java").exists()
+    java = java_path.read_text(encoding="utf-8")
     assert "package dev.example.spacemod;" in java
     assert 'Identifier.of("spacemod", "fuel")' in java
     assert (out / "src/main/resources/assets/spacemod/lang/en_us.json").is_file()
     assert (out / "src/main/resources/META-INF/mmm-third-party").is_dir()
     assert (out / ".minecraft_ai/reuse/source_provenance.json").is_file()
+
+
+def test_java_package_relocation_does_not_overwrite_another_donor_source():
+    from minecraft_mod_ai.reuse_adapters import PackageRelocationAdapter
+
+    files = {
+        "src/main/java/org/donor/Example.java": (
+            "package org.donor; public final class Example {}"
+        ),
+        "src/main/java/dev/example/spacemod/Example.java": (
+            "package dev.example.spacemod; public final class Example {}"
+        ),
+    }
+    with pytest.raises(ValueError, match="SOURCE_REUSE_JAVA_PACKAGE_PATH_COLLISION"):
+        PackageRelocationAdapter().apply(
+            files, {"target_package": "dev.example.spacemod"}
+        )
 
 
 def test_fabric_api_migration_keeps_java_package_before_import():
