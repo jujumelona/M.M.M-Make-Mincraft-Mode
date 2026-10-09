@@ -9,6 +9,7 @@ Dependency coordinates are owned exclusively by dependency_resolver.py.
 """
 
 import hashlib
+import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -175,6 +176,35 @@ class PackageRelocationAdapter:
         )
 
 
+def _rewrite_donor_translation_keys(
+    contents: str,
+    *,
+    donor_modid: str,
+    target_modid: str,
+) -> str:
+    """Update namespace segment of language keys, preserving their values."""
+    try:
+        translation_map = json.loads(contents)
+    except json.JSONDecodeError as exc:
+        raise ValueError("SOURCE_REUSE_LANGUAGE_JSON_INVALID") from exc
+    if not isinstance(translation_map, dict):
+        raise ValueError("SOURCE_REUSE_LANGUAGE_JSON_INVALID")
+    modified: dict[str, Any] = {}
+    for old_key, value in translation_map.items():
+        if not isinstance(old_key, str) or not isinstance(value, str):
+            raise ValueError("SOURCE_REUSE_LANGUAGE_ENTRY_INVALID")
+        segments = old_key.split(".")
+        if len(segments) >= 2 and segments[1] == donor_modid:
+            segments[1] = target_modid
+        key = ".".join(segments)
+        if key in modified and modified[key] != value:
+            raise ValueError("SOURCE_REUSE_LANGUAGE_KEY_COLLISION: " + key)
+        modified[key] = value
+    if modified == translation_map:
+        return contents
+    return json.dumps(modified, ensure_ascii=False, indent=2) + "\n"
+
+
 class ModIdRewriteAdapter:
     """Rewrite donor mod IDs and resource namespaces to the target mod ID."""
 
@@ -248,6 +278,18 @@ class ModIdRewriteAdapter:
                     f'ResourceLocation.fromNamespaceAndPath("{target_modid}", ',
                     updated,
                 )
+                if (
+                    path.startswith((
+                        f"src/main/resources/assets/{donor_modid}/lang/",
+                        f"src/client/resources/assets/{donor_modid}/lang/",
+                    ))
+                    and path.endswith(".json")
+                ):
+                    updated = _rewrite_donor_translation_keys(
+                        updated,
+                        donor_modid=donor_modid,
+                        target_modid=target_modid,
+                    )
                 if path.endswith("fabric.mod.json"):
                     updated = re.sub(
                         rf'"id"\s*:\s*"{re.escape(donor_modid)}"',
