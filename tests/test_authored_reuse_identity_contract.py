@@ -98,7 +98,7 @@ def test_java_package_relocation_does_not_overwrite_another_donor_source():
             "package org.donor; public final class Example {}"
         ),
         "src/main/java/dev/example/spacemod/Example.java": (
-            "package dev.example.spacemod; public final class Example {}"
+            "package dev.example.spacemod; public final class Example { static final int EXISTING = 1; }"
         ),
     }
     with pytest.raises(ValueError, match="SOURCE_REUSE_JAVA_PACKAGE_PATH_COLLISION"):
