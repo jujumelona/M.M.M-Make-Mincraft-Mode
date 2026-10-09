@@ -63,6 +63,7 @@ make_implementation = _core.make_implementation
 all_canonical_leaves = _core.all_canonical_leaves
 
 
+# Host rule hashes use the same prefixed digest encoding as ResolvedVersionContext.
 def template_hashes() -> dict[str, str]:
     """Return hashes for legacy core templates plus reviewed epoch templates."""
     from .integrity_bootstrap import bootstrap_integrity
