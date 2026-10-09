@@ -133,6 +133,25 @@ def test_resource_namespace_rewrite_rejects_target_collision():
     ]
 
 
+def test_yarn_only_migration_fails_closed_for_mojang_mappings():
+    from minecraft_mod_ai.reuse_adapters import FabricApiMigrationAdapter
+
+    source = {
+        "src/main/java/example/ModItems.java": (
+            "package example;\n"
+            "final class ModItems { Object items = Registry.ITEM; }\n"
+        ),
+    }
+    with pytest.raises(ValueError, match="SOURCE_REUSE_MAPPING_ADAPTER_UNSUPPORTED"):
+        FabricApiMigrationAdapter().can_apply(
+            source, {"mappings_kind": "mojang"}
+        )
+    assert "Registry.ITEM" in source["src/main/java/example/ModItems.java"]
+    assert FabricApiMigrationAdapter().can_apply(
+        source, {"mappings_kind": "yarn"}
+    )
+
+
 def test_fabric_api_migration_keeps_java_package_before_import():
     from minecraft_mod_ai.reuse_adapters import FabricApiMigrationAdapter
 
