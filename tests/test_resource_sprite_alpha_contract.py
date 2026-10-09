@@ -129,3 +129,30 @@ def test_all_regions_generated_then_flux_released_before_any_onnx(tmp_path, monk
     )
     assert events == ["generate", "generate", "release", "matte", "matte"]
     assert validate_texture(output, texture.to_dict())["status"] == "PASS"
+
+
+def test_candidate_records_actual_fallback_model_without_faking_alpha(tmp_path):
+    texture = _item_texture()
+
+    def generator(**kwargs):
+        with _opaque_diffusion_image(kwargs["width"], kwargs["height"]) as source:
+            source.save(kwargs["output_path"], "PNG")
+
+    def fallback_segmenter(image):
+        from PIL import ImageDraw
+        result = image.convert("RGBA")
+        with Image.new("L", result.size, 0) as mask:
+            ImageDraw.Draw(mask).ellipse((60, 60, 440, 440), fill=255)
+            result.putalpha(mask)
+        result.info["mmm_alpha_matte"] = "rembg:u2netp"
+        return result
+
+    output = tmp_path / "recovered.png"
+    evidence = generate_candidate(
+        generator, texture.to_dict(),
+        prompt="pixel art coin", directory=tmp_path / "regions",
+        output=output, resolution=(512, 512), seed=42,
+        segment_foreground_callback=fallback_segmenter,
+    )
+    assert evidence["sources"][0]["alpha_matte"] == "rembg:u2netp"
+    assert validate_texture(output, texture.to_dict())["status"] == "PASS"
