@@ -156,3 +156,51 @@ def test_candidate_records_actual_fallback_model_without_faking_alpha(tmp_path):
     )
     assert evidence["sources"][0]["alpha_matte"] == "rembg:u2netp"
     assert validate_texture(output, texture.to_dict())["status"] == "PASS"
+
+
+def test_cross_asset_batch_generates_both_sources_before_single_model_release(tmp_path):
+    from PIL import ImageDraw
+    from minecraft_mod_ai import resource_image_pipeline as pipeline
+
+    texture = _item_texture().to_dict()
+    events = []
+
+    def generator(**kwargs):
+        events.append("generate")
+        with _opaque_diffusion_image(kwargs["width"], kwargs["height"]) as generated:
+            generated.save(kwargs["output_path"], "PNG")
+
+    def segmenter(raw):
+        events.append("segment")
+        rgba = raw.convert("RGBA")
+        with Image.new("L", raw.size, 0) as mask:
+            ImageDraw.Draw(mask).ellipse((50, 60, 470, 470), fill=255)
+            rgba.putalpha(mask)
+        rgba.info["mmm_alpha_matte"] = "rembg:u2netp"
+        return rgba
+
+    first = pipeline.prepare_candidate_sources(
+        generator, texture, prompt="first",
+        directory=tmp_path / "first", resolution=(512, 512), seed=11,
+    )
+    second = pipeline.prepare_candidate_sources(
+        generator, texture, prompt="second",
+        directory=tmp_path / "second", resolution=(512, 512), seed=12,
+    )
+    assert len(first) == len(second) == 1
+    assert first[0][2] and second[0][2]
+    events.append("release")
+    out1, out2 = tmp_path / "first.png", tmp_path / "second.png"
+    receipt1 = pipeline.finalize_candidate_sources(
+        texture, first, output=out1, resolution=(512, 512),
+        segment_foreground_callback=segmenter,
+    )
+    receipt2 = pipeline.finalize_candidate_sources(
+        texture, second, output=out2, resolution=(512, 512),
+        segment_foreground_callback=segmenter,
+    )
+    assert events == ["generate", "generate", "release", "segment", "segment"]
+    assert receipt1["sources"][0]["alpha_matte"] == "rembg:u2netp"
+    assert receipt2["sources"][0]["alpha_matte"] == "rembg:u2netp"
+    assert validate_texture(out1, texture)["status"] == "PASS"
+    assert validate_texture(out2, texture)["status"] == "PASS"
