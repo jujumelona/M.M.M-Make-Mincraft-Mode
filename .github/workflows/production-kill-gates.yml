@@ -92,6 +92,10 @@ jobs:
       lane2: ${{ steps.plan.outputs.lane2 }}
       lane3: ${{ steps.plan.outputs.lane3 }}
       lane4: ${{ steps.plan.outputs.lane4 }}
+      lane5: ${{ steps.plan.outputs.lane5 }}
+      lane6: ${{ steps.plan.outputs.lane6 }}
+      lane7: ${{ steps.plan.outputs.lane7 }}
+      lane8: ${{ steps.plan.outputs.lane8 }}
     steps:
       - uses: actions/checkout@v6
       - id: plan
@@ -106,13 +110,13 @@ jobs:
           expected = sorted(path.as_posix() for path in Path("tests").glob("test_*.py"))
           assert expected, "no test files discovered"
 
-          # Four long-lived runners preserve the existing lane topology while avoiding
-          # one hosted runner allocation and one dependency install per test file.
+          # Eight long-lived runners amortize dependency installation while each
+          # pytest test file keeps its own process and failure artifact.
           # max_jobs_per_lane is deliberately set from the discovered file count here:
           # these are no longer GitHub matrix cells, so no matrix-capacity limit applies.
           lanes = build_file_lanes(
               expected,
-              lane_count=4,
+              lane_count=8,
               max_jobs_per_lane=len(expected),
           )
           cells = [cell for lane in lanes for cell in lane]
@@ -245,11 +249,51 @@ jobs:
       LANE_ID: L4
     steps: *test_steps
 
+  lane5:
+    name: Kill gate lane L5
+    needs: file-plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TEST_CELLS_JSON: ${{ needs.file-plan.outputs.lane5 }}
+      LANE_ID: L5
+    steps: *test_steps
+
+  lane6:
+    name: Kill gate lane L6
+    needs: file-plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TEST_CELLS_JSON: ${{ needs.file-plan.outputs.lane6 }}
+      LANE_ID: L6
+    steps: *test_steps
+
+  lane7:
+    name: Kill gate lane L7
+    needs: file-plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TEST_CELLS_JSON: ${{ needs.file-plan.outputs.lane7 }}
+      LANE_ID: L7
+    steps: *test_steps
+
+  lane8:
+    name: Kill gate lane L8
+    needs: file-plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TEST_CELLS_JSON: ${{ needs.file-plan.outputs.lane8 }}
+      LANE_ID: L8
+    steps: *test_steps
+
   gate:
     name: Production Kill Gate
     if: ${{ always() }}
     timeout-minutes: 5
-    needs: [file-plan, collection-contract, lane1, lane2, lane3, lane4]
+    needs: [file-plan, collection-contract, lane1, lane2, lane3, lane4, lane5, lane6, lane7, lane8]
     runs-on: ubuntu-latest
     steps:
       - name: Fail closed on every mandatory result
@@ -260,14 +304,23 @@ jobs:
           LANE2: ${{ needs.lane2.result }}
           LANE3: ${{ needs.lane3.result }}
           LANE4: ${{ needs.lane4.result }}
+          LANE5: ${{ needs.lane5.result }}
+          LANE6: ${{ needs.lane6.result }}
+          LANE7: ${{ needs.lane7.result }}
+          LANE8: ${{ needs.lane8.result }}
         shell: bash
         run: |
           set -euo pipefail
-          printf 'plan=%s collection=%s lanes=%s,%s,%s,%s\n' \
-            "$PLAN" "$COLLECTION" "$LANE1" "$LANE2" "$LANE3" "$LANE4"
+          printf 'plan=%s collection=%s lanes=%s,%s,%s,%s,%s,%s,%s,%s\n' \
+            "$PLAN" "$COLLECTION" "$LANE1" "$LANE2" "$LANE3" "$LANE4" \
+            "$LANE5" "$LANE6" "$LANE7" "$LANE8"
           test "$PLAN" = success
           test "$COLLECTION" = success
           test "$LANE1" = success
           test "$LANE2" = success
           test "$LANE3" = success
           test "$LANE4" = success
+          test "$LANE5" = success
+          test "$LANE6" = success
+          test "$LANE7" = success
+          test "$LANE8" = success
