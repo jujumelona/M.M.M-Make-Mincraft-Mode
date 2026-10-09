@@ -39,13 +39,18 @@ def test_model_facing_chunk_requires_complete_bounded_field_page() -> None:
         record_counts={"actors": 1},
     )
     validator = Draft202012Validator(schema)
-    complete = {"name": "player", "role": "actor", "authority": "server"}
+    complete_record = {"name": "player", "role": "actor", "authority": "server"}
+    # pack_section_concerns is allowed to split a concern into atomic field
+    # pages. Validate exactly the projection of THIS page, not all fields of
+    # the complete merged worksheet record.
+    projected = tuple(page.field_projection["actors"])
+    complete = {field: complete_record[field] for field in projected}
     assert validator.is_valid({"actors": [complete]})
-    # Model-facing pages require EVERY projected field. Host filling of
-    # omitted values happens only after the bounded model contract.
-    assert not validator.is_valid({"actors": [{"name": "player"}]})
     assert not validator.is_valid({"actors": [{}]})
-    assert not validator.is_valid({"actors": [{**complete, "name": "a" * 65}]})
+    missing = {key: value for key, value in complete.items() if key != projected[0]}
+    assert not validator.is_valid({"actors": [missing]})
+    oversized = {**complete, projected[0]: "a" * 513}
+    assert not validator.is_valid({"actors": [oversized]})
 
 
 def test_merge_salvages_partial_chunk_and_host_fills_omissions() -> None:
