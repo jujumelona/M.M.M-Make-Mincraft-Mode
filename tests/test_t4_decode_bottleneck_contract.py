@@ -166,7 +166,12 @@ def test_qwen_game_design_schema_stays_host_owned() -> None:
     )
 
     payload = module._server_payload(adapter, request)
-    for forbidden in ("response_format", "json_schema", "grammar"):
-        assert forbidden not in payload
+    # The server owns only structural sampling; the host still validates the
+    # complete schema after decoding. Stripping these constraints made Qwen
+    # emit unconstrained JSON and invalidated the bounded output contract.
+    assert payload["response_format"] == {"type": "json_object"}
+    assert payload["json_schema"]["type"] == "object"
+    assert "game_design" in payload["json_schema"]["properties"]
+    assert "grammar" not in payload
     assert payload["reasoning_effort"] == "none"
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
