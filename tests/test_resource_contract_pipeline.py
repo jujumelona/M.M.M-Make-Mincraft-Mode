@@ -180,7 +180,6 @@ def test_uv_regions_are_generated_separately_and_composed(tmp_path):
         directory=tmp_path,
         output=output,
         resolution=(512, 512),
-        fallback=None,
         seed=1,
     )
     assert len(calls) == 2
@@ -231,7 +230,6 @@ def test_gui_protected_regions_survive_generated_decoration(tmp_path):
         directory=tmp_path,
         output=output,
         resolution=(512, 512),
-        fallback=None,
         seed=1,
     )
     validate_texture(output, texture.to_dict())
@@ -444,7 +442,7 @@ def test_animation_generation_writes_distinct_frames_and_validates_sidecar(tmp_p
         Image.new("RGBA", (512, 512), (40 * len(calls), 20, 30, 255)).save(kwargs["output_path"])
     output = tmp_path / "animated.png"
     generate_candidate(generate, texture.to_dict(), prompt="stone", directory=tmp_path, output=output,
-                       resolution=(512, 512), fallback=None, seed=1)
+                       resolution=(512, 512), seed=1)
     assert len(calls) == 2 and calls[0]["seed"] != calls[1]["seed"]
     with Image.open(output) as sheet:
         assert sheet.size == (16, 32)
@@ -457,28 +455,51 @@ def test_animation_generation_writes_distinct_frames_and_validates_sidecar(tmp_p
         validate_texture(output, texture.to_dict(), check_metadata=True)
 
 
-def test_only_memory_failure_uses_registry_fallback(tmp_path):
+def test_memory_failure_does_not_mutate_approved_generation_profile(tmp_path):
     from PIL import Image
 
     from minecraft_mod_ai.model_adapters.base import ModelBackendError
     from minecraft_mod_ai.resource_image_pipeline import generate_candidate
 
-    texture = resolve_asset(request("block", "block.cube_all"), namespace="demo", minecraft_version="1.21.4").textures[0]
+    texture = resolve_asset(
+        request("block", "block.cube_all"),
+        namespace="demo", minecraft_version="1.21.4",
+    ).textures[0]
     calls = []
+
     def generate(**kwargs):
         calls.append(kwargs["width"])
         if kwargs["width"] == 1024:
-            raise ModelBackendError(role="image_generator", model_id="fixture", cause="CUDA out of memory")
-        Image.new("RGBA", (512, 512), (20, 40, 80, 255)).save(kwargs["output_path"])
-    evidence = generate_candidate(generate, texture.to_dict(), prompt="stone", directory=tmp_path,
-                                  output=tmp_path / "result.png", resolution=(1024, 1024), fallback=(512, 512), seed=1)
-    assert calls == [1024, 512]
-    assert evidence["sources"][0]["resolution"] == [512, 512]
+            raise ModelBackendError(
+                role="image_generator", model_id="fixture",
+                cause="CUDA out of memory",
+            )
+        Image.new("RGBA", (512, 512), (20, 40, 80, 255)).save(
+            kwargs["output_path"]
+        )
+
+    with pytest.raises(ModelBackendError, match="CUDA out of memory"):
+        generate_candidate(
+            generate, texture.to_dict(),
+            prompt="stone", directory=tmp_path,
+            output=tmp_path / "result.png", resolution=(1024, 1024), seed=1,
+        )
+    # Host-approved resolution is immutable; generation must not silently
+    # degrade to 512 and claim the same resource-profile receipt.
+    assert calls == [1024]
+
     def broken(**kwargs):
-        raise ModelBackendError(role="image_generator", model_id="fixture", cause="authentication rejected")
+        raise ModelBackendError(
+            role="image_generator", model_id="fixture",
+            cause="authentication rejected",
+        )
+
     with pytest.raises(ModelBackendError, match="authentication"):
-        generate_candidate(broken, texture.to_dict(), prompt="stone", directory=tmp_path,
-                           output=tmp_path / "result.png", resolution=(1024, 1024), fallback=(512, 512), seed=1)
+        generate_candidate(
+            broken, texture.to_dict(),
+            prompt="stone", directory=tmp_path,
+            output=tmp_path / "result.png", resolution=(1024, 1024), seed=1,
+        )
 
 
 def test_host_uv_requires_explicit_lora_compatibility():
