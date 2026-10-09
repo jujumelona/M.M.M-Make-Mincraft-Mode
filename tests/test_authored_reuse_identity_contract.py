@@ -107,6 +107,23 @@ def test_java_package_relocation_does_not_overwrite_another_donor_source():
         )
 
 
+def test_resource_namespace_rewrite_rejects_target_collision():
+    from minecraft_mod_ai.reuse_adapters import ModIdRewriteAdapter
+
+    files = {
+        "src/main/resources/assets/donor/lang/en_us.json": '{"item":"donor"}',
+        "src/main/resources/assets/spacemod/lang/en_us.json": '{"item":"target"}',
+    }
+    original = files.copy()
+    with pytest.raises(ValueError, match="SOURCE_REUSE_RESOURCE_NAMESPACE_COLLISION"):
+        ModIdRewriteAdapter().apply(
+            files, {"donor_modid": "donor", "target_modid": "spacemod"}
+        )
+    assert files["src/main/resources/assets/spacemod/lang/en_us.json"] == original[
+        "src/main/resources/assets/spacemod/lang/en_us.json"
+    ]
+
+
 def test_fabric_api_migration_keeps_java_package_before_import():
     from minecraft_mod_ai.reuse_adapters import FabricApiMigrationAdapter
 
