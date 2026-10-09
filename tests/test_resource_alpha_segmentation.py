@@ -10,6 +10,25 @@ from PIL import Image, ImageDraw
 from minecraft_mod_ai import resource_alpha_segmentation as alpha
 
 
+@pytest.fixture(autouse=True)
+def fake_onnxruntime_options(monkeypatch):
+    ort = ModuleType("onnxruntime")
+
+    class Options:
+        intra_op_num_threads = 0
+        inter_op_num_threads = 0
+        execution_mode = None
+        enable_mem_pattern = True
+        enable_cpu_mem_arena = True
+
+    ort.SessionOptions = Options
+    ort.ExecutionMode = SimpleNamespace(ORT_SEQUENTIAL="sequential")
+    monkeypatch.setitem(sys.modules, "onnxruntime", ort)
+    alpha._get_session.cache_clear()
+    yield
+    alpha._get_session.cache_clear()
+
+
 def test_birefnet_model_selected_explicitly_never_uses_bria_default(monkeypatch):
     calls = []
     module = ModuleType("rembg")
