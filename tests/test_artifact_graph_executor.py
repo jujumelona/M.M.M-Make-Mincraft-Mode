@@ -147,6 +147,8 @@ def test_multiple_required_ports_from_one_producer_count_as_one_dependency(monke
 
     def fake_execute(job, **_kwargs):
         executed.append(job.job_id)
+        for name in job.produces:
+            _kwargs["registry"].register(name, job.job_id)
         return {"status": "PASS", "job_id": job.job_id}
 
     monkeypatch.setattr(executor, "_execute_one", fake_execute)
@@ -186,6 +188,8 @@ def test_dependency_releases_after_validation_without_waiting_for_unrelated_job(
             assert release_unrelated.wait(timeout=2)
         elif job.job_id == "consumer":
             consumer_entered.set()
+        for name in job.produces:
+            _kwargs["registry"].register(name, job.job_id)
         return {"status": "PASS", "job_id": job.job_id}
 
     monkeypatch.setenv("MMM_ARTIFACT_MAX_WORKERS", "2")
