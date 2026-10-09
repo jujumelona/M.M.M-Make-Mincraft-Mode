@@ -9,6 +9,22 @@ from minecraft_mod_ai.complete_orchestrator import (
     _run_release_jdt_verification,
 )
 from minecraft_mod_ai.complete_orchestrator_support import file_sha256
+from minecraft_mod_ai.java_core import JavaCoreService
+
+
+def _clean_jdt_core_receipt():
+    """Mirror the identity-bearing JDT Core receipt, not the retired LSP shape."""
+    return {
+        "schema_version": "mmm/java-diagnostics-v3",
+        "verification_backend": "jdt_core",
+        "verification_scope": "full",
+        "complete": True,
+        "diagnostics": {},
+        "error_count": 0,
+        "model_id": "fixture-model-id",
+        "model_revision": "fixture-model-revision",
+        "session_id": "fixture-session-id",
+    }
 
 
 def test_absent_optional_jdt_evidence_does_not_emit_a_failure(monkeypatch):
@@ -121,13 +137,7 @@ def test_required_jdt_does_not_fallback_to_successful_gradle_build():
 
 def test_required_jdt_accepts_only_real_clean_jdt_receipt():
     assert _jdt_failures(
-        {
-            "schema_version": "mmm/java-diagnostics-v2",
-            "status": "PASS",
-            "diagnostics": {},
-            "error_count": 0,
-            "files_opened": 1,
-        },
+        _clean_jdt_core_receipt(),
         build_report={
             "status": "PASS",
             "commands": [{"name": "build", "exit_code": 0, "timed_out": False}],
@@ -152,12 +162,7 @@ def test_run_jdt_option_blocks_release_when_jdt_is_unavailable():
 
 
 def test_run_jdt_option_accepts_real_clean_jdt_receipt():
-    receipt = {
-        "schema_version": "mmm/java-diagnostics-v2",
-        "diagnostics": {},
-        "error_count": 0,
-        "files_opened": 1,
-    }
+    receipt = _clean_jdt_core_receipt()
 
     assert _jdt_release_evidence_passed(receipt)
     assert _requested_verification_failures(
@@ -178,14 +183,7 @@ def test_run_jdt_option_is_independent_from_proposal_required_gates():
 
 
 def test_jdt_release_evidence_unwraps_reviewed_transport_envelope():
-    receipt = {
-        "structured_content": {
-            "schema_version": "mmm/java-diagnostics-v2",
-            "diagnostics": {},
-            "error_count": 0,
-            "files_opened": 2,
-        }
-    }
+    receipt = {"structured_content": _clean_jdt_core_receipt()}
 
     assert _jdt_release_evidence_passed(receipt)
 
@@ -269,52 +267,79 @@ def test_blockbench_required_gate_uses_entity_review_receipt(tmp_path):
     assert failures == []
 
 
-def test_release_jdt_retries_transient_service_ready_once(monkeypatch, tmp_path):
+def test_legacy_lsp_receipt_cannot_satisfy_release_jdt_gate():
+    receipt = {
+        "schema_version": "mmm/java-diagnostics-v2",
+        "status": "PASS",
+        "diagnostics": {},
+        "error_count": 0,
+        "files_opened": 2,
+    }
+    assert not _jdt_release_evidence_passed(receipt)
+    assert _jdt_failures(receipt) == [
+        "required-gate:debug_token:jdt:missing-jdt"
+    ]
+
+
+def test_jdt_core_receipt_requires_complete_identity_and_clean_diagnostics():
+    for field in ("model_id", "model_revision", "session_id"):
+        receipt = _clean_jdt_core_receipt()
+        del receipt[field]
+        assert not _jdt_release_evidence_passed(receipt), field
+
+    receipt = _clean_jdt_core_receipt()
+    receipt["complete"] = False
+    assert not _jdt_release_evidence_passed(receipt)
+
+    receipt = _clean_jdt_core_receipt()
+    receipt["verification_backend"] = "legacy_lsp"
+    assert not _jdt_release_evidence_passed(receipt)
+
+    receipt = _clean_jdt_core_receipt()
+    receipt["error_count"] = 1
+    receipt["diagnostics"] = {
+        "file:///Example.java": [
+            {"severity": 1, "code": "COMPILER_ERROR", "message": "invalid source"}
+        ]
+    }
+    assert not _jdt_release_evidence_passed(receipt)
+
+
+def test_release_jdt_calls_jdt_core_once_with_requested_timeout(monkeypatch, tmp_path):
     calls = []
-    receipts = iter([
-        {
-            "status": "UNAVAILABLE",
-            "error": "JDTWorkspaceBootstrapError: ServiceReady was not observed before validation",
-            "diagnostics": {},
-            "error_count": 0,
-            "files_opened": 0,
-        },
-        {
-            "schema_version": "mmm/java-diagnostics-v2",
-            "status": "PASS",
-            "diagnostics": {},
-            "error_count": 0,
-            "files_opened": 2,
-        },
-    ])
+    expected = _clean_jdt_core_receipt()
+
     def fake_run(*args, **kwargs):
         calls.append((args, kwargs))
-        return next(receipts)
+        return expected
+
     monkeypatch.setattr(
         "minecraft_mod_ai.complete_orchestrator.run_jdt_diagnostics",
         fake_run,
     )
-    receipt = _run_release_jdt_verification(tmp_path, timeout_seconds=7, attempts=2)
-    assert receipt["verification_attempts"] == 2
-    assert receipt["files_opened"] == 2
-    assert len(calls) == 2
+    receipt = _run_release_jdt_verification(tmp_path, timeout_seconds=7)
+    assert receipt is expected
+    assert calls == [((JavaCoreService, tmp_path), {"timeout_seconds": 7})]
 
 
-def test_release_jdt_does_not_retry_nontransient_unavailable(monkeypatch, tmp_path):
+def test_release_jdt_preserves_unavailable_without_unreviewed_retries(monkeypatch, tmp_path):
     calls = []
+    expected = {
+        "status": "UNAVAILABLE",
+        "error": "OwnerRPCError: no project JDK matching Java 25",
+        "diagnostics": {},
+        "error_count": 0,
+    }
+
     def fake_run(*args, **kwargs):
         calls.append((args, kwargs))
-        return {
-            "status": "UNAVAILABLE",
-            "error": "JDTWorkspaceBootstrapError: no project JDK matching Java 25",
-            "diagnostics": {},
-            "error_count": 0,
-            "files_opened": 0,
-        }
+        return expected
+
     monkeypatch.setattr(
         "minecraft_mod_ai.complete_orchestrator.run_jdt_diagnostics",
         fake_run,
     )
-    receipt = _run_release_jdt_verification(tmp_path, timeout_seconds=7, attempts=3)
-    assert receipt["verification_attempts"] == 1
-    assert len(calls) == 1
+    receipt = _run_release_jdt_verification(tmp_path, timeout_seconds=7)
+    assert receipt is expected
+    assert not _jdt_release_evidence_passed(receipt)
+    assert calls == [((JavaCoreService, tmp_path), {"timeout_seconds": 7})]
