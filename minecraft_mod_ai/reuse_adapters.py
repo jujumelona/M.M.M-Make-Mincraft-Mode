@@ -234,14 +234,28 @@ class ModIdRewriteAdapter:
         post_hashes: dict[str, str] = {}
 
         if not donor_modid:
+            descriptor = files.get("src/main/resources/fabric.mod.json")
+            if isinstance(descriptor, str):
+                try:
+                    parsed = json.loads(descriptor)
+                except json.JSONDecodeError as exc:
+                    raise ValueError("SOURCE_REUSE_MOD_DESCRIPTOR_INVALID") from exc
+                if isinstance(parsed, dict):
+                    donor_modid = str(parsed.get("id") or "").strip()
+        if not donor_modid:
+            donor_namespaces: set[str] = set()
             for path in files:
                 match = re.search(
                     r"src/(?:main|client)/resources/(?:assets|data)/([a-z0-9_.-]+)/",
                     path,
                 )
                 if match:
-                    donor_modid = match.group(1).strip()
-                    break
+                    namespace = match.group(1).strip()
+                    if namespace and namespace not in {"minecraft", target_modid}:
+                        donor_namespaces.add(namespace)
+            if len(donor_namespaces) > 1:
+                raise ValueError("SOURCE_REUSE_RESOURCE_NAMESPACE_AMBIGUOUS")
+            donor_modid = next(iter(donor_namespaces), "")
 
         for path in list(files):
             original = files[path]
