@@ -23,7 +23,7 @@ RUN_MODES = (
 
 AUDIT_RELATIVE_PATH = "tools/full_project_audit.py"
 DEBUG_MODE = "Debug"
-DEBUG_STRATEGIES = ("model_path", "host_smoke")
+DEBUG_STRATEGIES = ("model_path", "model_replay", "host_smoke")
 DEBUG_DEFAULT_PROMPT = (
     "Fabric Minecraft 모드: 플레이어가 수정 조각을 획득하고, "
     "조각 4개로 수정 블록을 제작할 수 있게 구현해줘. "
@@ -415,7 +415,7 @@ def run_plan_dialog(
 
     model_path is a *real* model-authored plan and reference-retrieval path,
     not a hand-built CompleteProposal that bypasses the planning contracts.
-    host_smoke remains available for narrow deterministic registry testing.
+    model_replay repeats a recorded real-model AuthoredPlan without another model call.\n    host_smoke remains available for narrow deterministic registry testing.
     """
 
     del input_fn
@@ -450,11 +450,17 @@ def run_plan_dialog(
         from .typed_plan_ir import validate_typed_plan_ir
         from .typed_host_capabilities import typed_host_capability_contracts
 
-        model_prompt = prompt.strip() or DEBUG_DEFAULT_PROMPT
-        # Use precisely the public Full-mode model path, including structured
-        # sections, typed PlanIR, content design, and pre-design research. An
-        # invented debug-only source decision would hide production ABI drift.
-        reply = session.plan(model_prompt)
+        if debug_strategy == "model_replay":
+            if not target.is_file():
+                raise FileNotFoundError(
+                    f"DEBUG_MODEL_REPLAY_PLAN_MISSING: 실제 모델이 저장한 AuthoredPlan이 필요합니다: {target}"
+                )
+            reply = session.load_plan(target)
+        else:
+            model_prompt = prompt.strip() or DEBUG_DEFAULT_PROMPT
+            # The ordinary Full-mode planner owns structured sections, Typed
+            # PlanIR, content discovery and candidate source retrieval.
+            reply = session.plan(model_prompt)
         authored = getattr(reply, "complete_proposal", None)
         if not isinstance(authored, AuthoredPlan):
             raise RuntimeError(
@@ -485,10 +491,14 @@ def run_plan_dialog(
                 "or typed host operation was authored"
             )
         expected_hash = authored.calculate_hash()
-        saved = Path(session.save_plan(target))
-        # Exercise the real serialization boundary before production. This
-        # catches a model/plan-loader contract discrepancy immediately.
-        reloaded = session.load_plan(saved)
+        if debug_strategy == "model_replay":
+            saved = target
+            reloaded = reply
+        else:
+            saved = Path(session.save_plan(target))
+            # Exercise the real serialization boundary before production.
+            # Reject model/saved-plan ABI drift rather than hiding it.
+            reloaded = session.load_plan(saved)
         restored = getattr(reloaded, "complete_proposal", None)
         if not isinstance(restored, AuthoredPlan) or restored.calculate_hash() != expected_hash:
             raise RuntimeError("DEBUG_MODEL_PLAN_ROUNDTRIP_MISMATCH")
@@ -520,7 +530,7 @@ def run_plan_dialog(
                 "일반 제작의 타깃 바인딩 후 검색·선택·증명을 수행합니다."
             )
         print_fn(
-            "Debug model_path: 실제 모델 플랜 → 저장/재로드 → 일반 제작. "
+            f"Debug {debug_strategy}: 실제 모델 작성 플랜 → 일반 제작. "
             "참고 모드는 authored reuse 검색/증명 및 타깃 바인딩 후 재검증 경로를 사용합니다."
         )
         return PlanDialogResult(reply=reloaded, plan_path=saved, approved=True)
