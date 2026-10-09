@@ -8,6 +8,7 @@ import pytest
 from minecraft_mod_ai.model_adapters.base import GenerationResponse, ToolCall
 from minecraft_mod_ai.model_router import ModelRouter
 from minecraft_mod_ai.model_output_atomicity_contract import structured_output_token_ceiling
+from minecraft_mod_ai.fixed_template_generation import generate_fixed_template_value
 
 
 class _Adapter:
@@ -54,6 +55,11 @@ class _Router(ModelRouter):
         yield
 
 
+def _planner_json_response(adapter, request):
+    adapter.request = request
+    return '{"value":"ok"}'
+
+
 def test_generate_text_propagates_output_token_ceiling_into_request_metadata() -> None:
     router = _Router()
 
@@ -69,7 +75,7 @@ def test_generate_text_propagates_output_token_ceiling_into_request_metadata() -
 
 
 
-def test_generate_tool_decision_derives_planner_budget_from_schema() -> None:
+def test_generate_planner_json_derives_proven_budget_from_schema() -> None:
     router = _Router()
     parameters = {
         "type": "object",
@@ -77,11 +83,12 @@ def test_generate_tool_decision_derives_planner_budget_from_schema() -> None:
         "required": ["value"],
         "additionalProperties": False,
     }
-    result = router.generate_tool_decision(
+    router.adapter.generate = lambda request: _planner_json_response(router.adapter, request)
+    result = generate_fixed_template_value(
+        router,
         "planner",
         [{"role": "user", "content": "fill one bounded field"}],
-        tool_name="bounded_probe",
-        parameters=parameters,
+        response_schema=parameters,
     )
 
     assert result == {"value": "ok"}
@@ -93,15 +100,15 @@ def test_generate_tool_decision_derives_planner_budget_from_schema() -> None:
     assert router.adapter.request.metadata["mmm_force_non_thinking"] is True
 
 
-def test_generate_tool_decision_rejects_unbounded_planner_schema_without_budget() -> None:
+def test_generate_planner_json_rejects_unbounded_schema_without_budget() -> None:
     router = _Router()
 
-    with pytest.raises(Exception, match="PLANNER_TOOL_DECISION_BUDGET_UNPROVABLE"):
-        router.generate_tool_decision(
+    with pytest.raises(Exception, match="MODEL_TRANSPORT_NOT_FINITE"):
+        generate_fixed_template_value(
+            router,
             "planner",
             [{"role": "user", "content": "fill one number"}],
-            tool_name="unbounded_probe",
-            parameters={
+            response_schema={
                 "type": "object",
                 "properties": {"value": {"type": "number"}},
                 "required": ["value"],
@@ -112,7 +119,7 @@ def test_generate_tool_decision_rejects_unbounded_planner_schema_without_budget(
     assert router.adapter.request is None
 
 
-def test_generate_tool_decision_rejects_explicit_budget_below_schema_proof() -> None:
+def test_generate_planner_json_rejects_budget_below_schema_proof() -> None:
     router = _Router()
     parameters = {
         "type": "object",
@@ -122,13 +129,30 @@ def test_generate_tool_decision_rejects_explicit_budget_below_schema_proof() -> 
     }
     required = structured_output_token_ceiling(parameters)
 
-    with pytest.raises(Exception, match="PLANNER_TOOL_DECISION_BUDGET_TOO_SMALL"):
-        router.generate_tool_decision(
+    with pytest.raises(Exception, match="FIXED_TEMPLATE_OUTPUT_BUDGET_TOO_SMALL"):
+        generate_fixed_template_value(
+            router,
             "planner",
             [{"role": "user", "content": "fill one bounded field"}],
-            tool_name="bounded_probe",
-            parameters=parameters,
+            response_schema=parameters,
             output_token_ceiling=required - 1,
         )
 
+    assert router.adapter.request is None
+
+
+def test_planner_native_tool_decision_transport_is_forbidden() -> None:
+    router = _Router()
+    with pytest.raises(Exception, match="PLANNER_NATIVE_TOOL_TRANSPORT_REMOVED"):
+        router.generate_tool_decision(
+            "planner",
+            [{"role": "user", "content": "irrelevant"}],
+            tool_name="deprecated_planner_tool",
+            parameters={
+                "type": "object",
+                "properties": {"value": {"type": "string", "maxLength": 16}},
+                "required": ["value"],
+                "additionalProperties": False,
+            },
+        )
     assert router.adapter.request is None
