@@ -131,3 +131,20 @@ def test_colab_notebook_wires_debug_dialog_reply_into_normal_session_build() -> 
     assert "reply = dialog.reply" in code
     assert "if DEBUG_MODE and RUN_MODE != \"Full\":" in code
     assert "BUILD_RESULT = session.build(reply, run_name=RUN_NAME, options=options)" in code
+
+
+def test_colab_build_checks_setup_and_rembg_version_before_generation() -> None:
+    """A rerun of only cell 6 cannot bypass the installed runtime contract."""
+    notebook_path = Path(__file__).resolve().parents[1] / "M.M.M_Make_Mincraft_Mode_Colab.ipynb"
+    notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+    source = "".join(next(
+        cell["source"] for cell in notebook["cells"] if cell.get("id") == "build"
+    ))
+    compile(source, "<colab:build>", "exec")
+    dispatch = source.index("session.build(")
+    assert source.index("module.assert_setup_state(") < dispatch
+    assert source.index('_distribution_version("rembg")') < dispatch
+    assert source.index('_Version("2.0.77")') < dispatch
+    assert source.index("BUILD_DEPENDENCY_PREFLIGHT:") < dispatch
+    # rembg transitively imports onnxruntime; leave it in the isolated worker.
+    assert "from rembg import" not in source
