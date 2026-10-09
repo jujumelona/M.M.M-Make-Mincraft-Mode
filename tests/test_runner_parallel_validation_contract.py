@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 from minecraft_mod_ai.runner import GradleRunner
 from minecraft_mod_ai.runner_parallel_validation_contract import (
+    _build_cache_profile,
     _executed_gametest_task,
     _host_gametest_contract,
     _structured_gametest_report,
@@ -947,3 +948,14 @@ def test_parallel_host_gametest_forwards_explicit_consent_to_subprocess(
     runner.build(project, run_gametest=True)
     assert captured and all(value == "true" for value in captured)
     assert runner.ensure_calls
+
+
+def test_parallel_build_cache_separates_inherited_eula_consent(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runner = _FakeGradleRunner(tmp_path / "cache")
+    monkeypatch.setenv("MMM_ACCEPT_MINECRAFT_EULA", "true")
+    consented_profile = _build_cache_profile(runner)
+    monkeypatch.setenv("MMM_ACCEPT_MINECRAFT_EULA", "false")
+    unconsented_profile = _build_cache_profile(runner)
+    assert consented_profile != unconsented_profile
