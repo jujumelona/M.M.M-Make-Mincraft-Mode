@@ -1067,11 +1067,31 @@ def compile_authored_design(
             for key in ("nodes", "search_terms", "retrieval_policy_version")
         )
     ):
+        # A debug fixture may preselect reference-only repository identities.
+        # The normal inspector must still establish closure/license/compile proof;
+        # preselection is never a donor admission or a reusable proof receipt.
+        debug_selection = content_design.get("_debug_reference_selection")
+        reference_repositories: list[str] = []
+        if isinstance(debug_selection, Mapping):
+            if debug_selection.get("policy") != "reference_only_until_host_inspection_and_proof":
+                raise ValueError("DEBUG_REFERENCE_SELECTION_POLICY_INVALID")
+            rows = debug_selection.get("reference_candidates", ())
+            if not isinstance(rows, list):
+                raise ValueError("DEBUG_REFERENCE_CANDIDATES_INVALID")
+            for row in rows:
+                if (
+                    not isinstance(row, Mapping)
+                    or row.get("selection_role") != "reference_only"
+                    or not isinstance(row.get("repository"), str)
+                ):
+                    raise ValueError("DEBUG_REFERENCE_CANDIDATE_INVALID")
+                reference_repositories.append(row["repository"])
         source_reuse = resolve_authored_source_reuse(
             plan.requested_prompt,
             plan.structured_sections,
             minecraft_version=exact_reuse_target["minecraft_version"],
             loader=exact_reuse_target["loader"],
+            reference_repositories=tuple(reference_repositories),
         )
     if source_reuse.get("schema_version") != "mmm/grounded-repository-reuse-plan-v2":
         raise ValueError("AUTHORED_SOURCE_REUSE_CONTRACT_INVALID")
