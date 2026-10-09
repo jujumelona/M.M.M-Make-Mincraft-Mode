@@ -5,6 +5,14 @@ on:
   push:
     branches: [main]
     paths:
+      # Every runtime, test, notebook or workflow change can invalidate the
+      # executable Colab production pipeline. Select ALL test files, not only
+      # files mentioned in a manually curated workflow path allowlist.
+      - 'minecraft_mod_ai/**'
+      - 'tests/**'
+      - 'tools/**'
+      - 'M.M.M_Make_Mincraft_Mode_Colab.ipynb'
+      - '.github/workflows/**'
       - 'minecraft_mod_ai/llama_*.py'
       - 'minecraft_mod_ai/qwen*.py'
       - 'minecraft_mod_ai/generation_output_budget.py'
