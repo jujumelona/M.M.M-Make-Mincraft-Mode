@@ -704,10 +704,15 @@ def _image_stack_preflight() -> tuple[bool, str]:
         "from transformers import Qwen3ForCausalLM\n"
         "from diffusers import Flux2KleinPipeline\n"
         "import inspect\n"
+        "from importlib.metadata import version as distribution_version\n"
+        "from packaging.version import Version\n"
         "from rembg import new_session\n"
+        "rembg_version = distribution_version('rembg')\n"
+        "if not Version('2.0.77') <= Version(rembg_version) < Version('3'):\n"
+        "    raise RuntimeError('ALPHA_SEGMENTER_INCOMPATIBLE_REMBG_VERSION: installed=' + rembg_version + ' required>=2.0.77,<3')\n"
         "if 'sess_opts' not in inspect.signature(new_session).parameters:\n"
-        "    raise RuntimeError('ALPHA_SEGMENTER_INCOMPATIBLE_REMBG_API: rembg[cpu]>=2.0.77 required')\n"
-        "print('numpy=' + np.__version__ + ' FLUX.2/rembg imports=OK')\n"
+        "    raise RuntimeError('ALPHA_SEGMENTER_INCOMPATIBLE_REMBG_API: installed=' + rembg_version + ' missing new_session(sess_opts=...)')\n"
+        "print('numpy=' + np.__version__ + ' rembg=' + rembg_version + ' FLUX.2/rembg imports=OK')\n"
     )
     try:
         result = subprocess.run(
