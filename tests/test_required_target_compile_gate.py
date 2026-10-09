@@ -188,6 +188,24 @@ def test_jdt_release_evidence_unwraps_reviewed_transport_envelope():
     assert _jdt_release_evidence_passed(receipt)
 
 
+def test_failed_jdt_core_status_cannot_pass_with_warning_only_diagnostics():
+    # A failed status with warning-only diagnostics does not create a severity-1
+    # diagnostic. The release gate must still reject the failed verifier state.
+    for status in ("FAILED", "ERROR", "UNAVAILABLE", "AVAILABLE", "OK", "DEFERRED_TO_POST_BUILD"):
+        receipt = _clean_jdt_core_receipt()
+        receipt["status"] = status
+        receipt["diagnostics"] = {
+            "file:///Example.java": [
+                {"severity": 2, "message": "warning only"}
+            ]
+        }
+        assert not _jdt_release_evidence_passed(receipt), status
+
+    successful = _clean_jdt_core_receipt()
+    successful["status"] = "PASS"
+    assert _jdt_release_evidence_passed(successful)
+
+
 def test_jdt_release_evidence_rejects_deferred_postbuild_state():
     receipt = {
         "status": "DEFERRED_TO_POST_BUILD",

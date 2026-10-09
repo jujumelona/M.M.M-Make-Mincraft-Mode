@@ -58,7 +58,9 @@ def jdt_release_evidence_passed(receipt: dict[str, Any] | None) -> bool:
     if diagnostic_errors(receipt):
         return False
     status = str(normalized.get("status") or "").strip().upper()
-    if status == "DEFERRED_TO_POST_BUILD":
+    # JDT Core's identity-bound receipts omit status. Explicit non-PASS states,
+    # including FAILED with warning-only diagnostics, must fail closed.
+    if status not in {"", "PASS"}:
         return False
     try:
         error_count = int(normalized.get("error_count", -1))
