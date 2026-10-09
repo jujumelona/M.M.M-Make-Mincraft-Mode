@@ -91,6 +91,14 @@ def test_integrity_gradle_mapping_matches_host_generated_debug_source():
     build = integrity._BUILD_GRADLE
     assert "mappings loom.officialMojangMappings()" in build
     assert "net.fabricmc:yarn:" not in build
+    # Loom's transitive third-party plugins (ASM, Guava, Gson) are hosted in
+    # Maven Central, not reliably mirrored by Fabric's own repository.
+    settings = integrity._project_files(
+        integrity._probe_spec(),
+        {"item_registry_artifact": integrity._PROBE_SOURCE},
+    )["settings.gradle"]
+    assert "mavenCentral()" in settings
+    assert "maven.fabricmc.net" in settings
 
     generated = fixture.render_debug_fixture_source(
         package_name="dev.mmm.debugfixture",
