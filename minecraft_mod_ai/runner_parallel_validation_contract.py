@@ -247,6 +247,7 @@ def _build_cache_profile(self: Any) -> tuple[Any, ...]:
         int(getattr(self, "download_timeout_seconds", 0)),
         int(getattr(self, "command_timeout_seconds", 0)),
         tuple((name, os.environ.get(name, "")) for name in _BUILD_POLICY_ENV),
+        bool(getattr(self, "eula_accepted", False)),
     )
 
 
@@ -545,6 +546,9 @@ def install(*, runner_module: Any, validation_module: Any) -> None:
             runner_module=runner_module, adapter=adapter, version=version)
         if unavailable is not None:
             return unavailable
+        # Parallel production replaces GradleRunner._build_locked; it must
+        # forward the same explicitly granted EULA into its own subprocess.
+        environment = self._gametest_environment(environment)
 
         state = root / ".minecraft_ai"
         logs = state / "logs"
