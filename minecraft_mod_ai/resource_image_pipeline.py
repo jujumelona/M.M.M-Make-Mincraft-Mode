@@ -197,16 +197,15 @@ def generate_candidate(
                     )
                     extracted = matting(raw)
                     try:
+                        # Capture provenance before closing the generated image.
+                        matte_method = extracted.info.get(
+                            "mmm_alpha_matte", "rembg:birefnet-general-lite"
+                        )
                         processed = postprocess_region(
                             extracted, contract, (width, height),
                         )
                     finally:
                         extracted.close()
-                    # Evidence must identify the model actually used after any
-                    # low-memory recovery, rather than always claiming BiRefNet.
-                    matte_method = extracted.info.get(
-                        "mmm_alpha_matte", "rembg:birefnet-general-lite"
-                    )
                 else:
                     processed = postprocess_region(raw, contract, (width, height))
                     matte_method = "source_alpha_or_boundary_background"
