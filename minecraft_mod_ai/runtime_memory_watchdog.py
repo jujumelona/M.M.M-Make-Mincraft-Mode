@@ -86,7 +86,7 @@ def _atomic_write(payload: dict[str, Any]) -> None:
     path = _snapshot_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary = path.with_suffix(path.suffix + f".{os.getpid()}.{threading.get_ident()}.tmp")
         temporary.write_text(
             json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n",
             encoding="utf-8",
