@@ -179,11 +179,18 @@ jobs:
               "tools/colab_runtime_setup.py",
               "tests/test_deterministic_debug_full_pipeline_e2e.py",
               "tests/test_gametest_eula_consent_forwarding.py",
+              "tests/test_runner_parallel_validation_contract.py",
+              "tests/test_production_ci_e2e_gate.py",
               ".github/workflows/partial-ci.yml",
               ".github/workflows/deterministic-debug-full-e2e.yml",
           }
           production_prefixes = (
               "minecraft_mod_ai/runner",
+              "minecraft_mod_ai/resource_",
+              "minecraft_mod_ai/model_",
+              "minecraft_mod_ai/work_graph",
+              "minecraft_mod_ai/typed_plan_",
+              "minecraft_mod_ai/authored_production",
               "minecraft_mod_ai/complete_orchestrator",
               "minecraft_mod_ai/colab_",
               "minecraft_mod_ai/complete_preflight",
