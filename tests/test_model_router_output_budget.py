@@ -100,23 +100,35 @@ def test_generate_planner_json_derives_proven_budget_from_schema() -> None:
     assert router.adapter.request.metadata["mmm_force_non_thinking"] is True
 
 
-def test_generate_planner_json_rejects_unbounded_schema_without_budget() -> None:
+def test_generate_planner_json_bounds_and_decodes_numeric_transport() -> None:
     router = _Router()
+    original_schema = {
+        "type": "object",
+        "properties": {"value": {"type": "number"}},
+        "required": ["value"],
+        "additionalProperties": False,
+    }
 
-    with pytest.raises(Exception, match="MODEL_TRANSPORT_NOT_FINITE"):
-        generate_fixed_template_value(
-            router,
-            "planner",
-            [{"role": "user", "content": "fill one number"}],
-            response_schema={
-                "type": "object",
-                "properties": {"value": {"type": "number"}},
-                "required": ["value"],
-                "additionalProperties": False,
-            },
-        )
+    def numeric_response(request):
+        router.adapter.request = request
+        return '{"value":"1.25"}'
 
-    assert router.adapter.request is None
+    router.adapter.generate = numeric_response
+    result = generate_fixed_template_value(
+        router,
+        "planner",
+        [{"role": "user", "content": "fill one number"}],
+        response_schema=original_schema,
+    )
+
+    assert result == {"value": 1.25}
+    assert router.adapter.request is not None
+    wire_field = router.adapter.request.response_schema["properties"]["value"]
+    # A lexical number has a finite decoder bound, even when the logical
+    # output schema did not choose an arbitrary numerical range.
+    assert wire_field["type"] == "string"
+    assert wire_field["maxLength"] == 32
+    assert router.adapter.request.metadata["mmm_force_non_thinking"] is True
 
 
 def test_generate_planner_json_rejects_budget_below_schema_proof() -> None:
