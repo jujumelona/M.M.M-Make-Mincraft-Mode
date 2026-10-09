@@ -1127,7 +1127,8 @@ def setup_colab_runtime(
     _reset_inactive_profile_state(local_profile=local_profile)
     # Install and check binary packages before importing torch/NumPy in this
     # kernel; replacing a loaded NumPy extension requires a session restart.
-    _install_project(local_profile=local_profile)
+    os.environ["MMM_RUNTIME_STAGE"] = "setup_dependencies"
+    _install_project(local_profile=local_profile
     # Record memory before GPU/model/toolchain initialization. The sampling
     # thread also survives across image and Gradle stages until kernel exit.
     from minecraft_mod_ai.runtime_memory_watchdog import (
@@ -1147,6 +1148,7 @@ def setup_colab_runtime(
         if orphan:
             print("COLAB_ORPHAN_CLEANUP: " + json.dumps(orphan), flush=True)
     start_kernel_memory_watchdog()
+    os.environ["MMM_RUNTIME_STAGE"] = "setup_native_cuda"
     assert_memory_headroom("post_install_pre_cuda")
     torch = None
     llama_server_binary = ""
@@ -1154,6 +1156,7 @@ def setup_colab_runtime(
         print("CUDA: checking", flush=True)
         torch = _require_local_cuda()
         llama_server_binary = _ensure_native_server(torch)
+    os.environ["MMM_RUNTIME_STAGE"] = "setup_jdtls"
     _preflight_jdtls()
     if not local_profile:
         try:
@@ -1221,6 +1224,7 @@ def setup_colab_runtime(
         )
         print("llama-server:", llama_server_binary)
     print("Setup fingerprint:", fingerprint)
+    os.environ["MMM_RUNTIME_STAGE"] = "setup_complete"
     return {
         "repo_dir": str(checkout),
         "used_commit": commit,
