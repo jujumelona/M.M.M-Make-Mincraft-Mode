@@ -558,6 +558,24 @@ def generate_assets(
                     raise AssetProductionError(f"Static texture conflicts with existing animation metadata: {stale}")
     candidate_root = run_root / ".minecraft_ai" / "resource-candidates"
     receipts = []
+    # Cold BiRefNet download/reconstruction peaks should never overlap with
+    # FLUX.2 Klein weights and CPU offload hooks. Prepare the checksum-verified
+    # checkpoint first, but do not load the ONNX inference graph in this process.
+    needs_foreground_model = any(
+        isinstance(texture, Mapping)
+        and str(texture.get("alpha_policy") or "") in {"cutout", "transparent"}
+        and str(texture.get("topology") or "") in {"cutout_sprite", "isolated_sprite"}
+        for row in rows for texture in row.get("textures", ())
+    )
+    if needs_foreground_model:
+        from .resource_alpha_segmentation import prepare_foreground_model_isolated
+
+        try:
+            prepare_foreground_model_isolated()
+        except ValueError as exc:
+            raise AssetProductionError(
+                f"Foreground model checkpoint preflight failed before diffusion: {exc}"
+            ) from exc
     with router.image_generation_session("image_generator"):
         for row in rows:
             container = str(row.get("container") or "mod")
