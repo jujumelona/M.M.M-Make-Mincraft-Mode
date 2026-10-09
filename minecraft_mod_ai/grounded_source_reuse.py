@@ -293,6 +293,8 @@ def build_repository_reuse_plan(
         tuple(str(node) for node in graph.get("nodes", ()) if str(node).strip()),
         client,
         capability_graph=graph,
+        minecraft_version=adapter.minecraft_version,
+        loader=adapter.loader,
     )
     by_repository = {str(card["repository"]).casefold(): i for i, card in enumerate(cards)}
     for capability, repositories in discovered.items():
