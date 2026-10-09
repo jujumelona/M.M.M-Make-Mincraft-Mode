@@ -508,17 +508,28 @@ class DurableWorkLedger:
         return invalidate_execution_feedback(self, feedback)
 
     def cached_receipt(self, node_id: str, *, input_hash: str | None=None) -> dict[str, Any] | None:
+        from .work_graph_receipt_read import verified_task_row
+
         with self._connect() as connection:
-            row = connection.execute('\n                SELECT state, input_hash, receipt_json\n                FROM tasks WHERE node_id = ?\n                ', (node_id,)).fetchone()
-        if row is None or row[0] != WorkState.SUCCEEDED.value:
+            exists = connection.execute(
+                'SELECT 1 FROM tasks WHERE node_id = ?', (node_id,),
+            ).fetchone()
+            if exists is None:
+                return None
+            row = verified_task_row(
+                self, connection, node_id, error_type=WorkGraphError,
+            )
+        if row[4] != WorkState.SUCCEEDED.value:
             return None
-        if input_hash is not None and row[1] != input_hash:
+        if input_hash is not None and row[2] != input_hash:
             return None
-        return json.loads(row[2]) if row[2] else {}
+        return json.loads(row[9]) if row[9] else {}
 
     def cached_checkpoint(self, checkpoint_id: str, *, input_hash: str) -> dict[str, Any] | None:
+        from .work_graph_receipt_read import verified_checkpoint_row
+
         with self._connect() as connection:
-            row = connection.execute('\n                SELECT state, input_hash, receipt_json\n                FROM checkpoints WHERE checkpoint_id = ?\n                ', (checkpoint_id,)).fetchone()
+            row = verified_checkpoint_row(self, connection, checkpoint_id)
         if row is None or row[0] != WorkState.SUCCEEDED.value or row[1] != input_hash:
             return None
         return json.loads(row[2]) if row[2] else {}
@@ -680,8 +691,23 @@ class DurableWorkLedger:
             clauses.append('state = ?')
             params.append(state.value)
         params.append(limit + 1)
+        from .work_graph_receipt_read import verified_task_page
+
         with self._connect() as connection:
-            rows = connection.execute(f"\n                SELECT node_id, stage, input_hash, payload_json, state,\n                       attempt, lease_owner, lease_until, output_hash,\n                       receipt_json, error, updated_at\n                FROM tasks\n                WHERE {' AND '.join(clauses)}\n                ORDER BY node_id LIMIT ?\n                ", tuple(params)).fetchall()
+            statement = (
+                "SELECT node_id, stage, input_hash, payload_json, state, "
+                "attempt, lease_owner, lease_until, output_hash, "
+                "receipt_json, receipt_hash, error, updated_at "
+                "FROM tasks WHERE " + " AND ".join(clauses) +
+                " ORDER BY node_id LIMIT ?"
+            )
+
+            def reread():
+                return connection.execute(statement, tuple(params)).fetchall()
+
+            rows = verified_task_page(
+                self, connection, reread(), reread=reread,
+            )
             page_rows = rows[:limit]
             node_ids = [str(row[0]) for row in page_rows]
             dependencies: dict[str, list[str]] = {node_id: [] for node_id in node_ids}
@@ -704,8 +730,8 @@ class DurableWorkLedger:
                 'lease_until': row[7],
                 'output_hash': row[8],
                 'receipt': json.loads(row[9]) if row[9] else None,
-                'error': row[10],
-                'updated_at': row[11],
+                'error': row[11],
+                'updated_at': row[12],
                 'dependencies': dependencies[str(row[0])],
             }
             for row in page_rows
