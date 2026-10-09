@@ -31,6 +31,14 @@ def test_packaged_catalog_has_exact_requests_and_evidence_bindings(monkeypatch):
         assert len(row["loom_selection"]["binary_sha256"]) == 64
         assert context.facts["artifact_rules"]
         assert len(context.facts["artifact_rules"]) >= 14
+        # HOST catalog regeneration must retain the digest scheme. Bare hex
+        # strings break immutable template admission and loot catalog migration.
+        assert all(
+            isinstance(rule["template_sha256"], str)
+            and rule["template_sha256"].startswith("sha256:")
+            and len(rule["template_sha256"]) == 71
+            for rule in context.facts["artifact_rules"].values()
+        )
         assert context.facts["capabilities"]["REGISTER_ITEM"] is True
         assert context.facts["capabilities"]["REGISTER_BLOCK"] is True
     assert all(len(source["sha256"]) == 64 and source["bytes"] > 0 for source in report["sources"].values())
