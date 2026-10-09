@@ -236,7 +236,7 @@ class ModIdRewriteAdapter:
         if not donor_modid:
             for path in files:
                 match = re.search(
-                    r"src/main/resources/(?:assets|data)/([a-z0-9_.-]+)/",
+                    r"src/(?:main|client)/resources/(?:assets|data)/([a-z0-9_.-]+)/",
                     path,
                 )
                 if match:
@@ -314,12 +314,12 @@ class ModIdRewriteAdapter:
 
         if donor_modid and donor_modid != target_modid:
             for old_path in list(files):
-                for folder in ("assets", "data"):
-                    target_prefix = (
-                        f"src/main/resources/{folder}/{donor_modid}/"
-                    )
-                    new_prefix = f"src/main/resources/{folder}/{target_modid}/"
-                    if old_path.startswith(target_prefix):
+                for scope in ("main", "client"):
+                    for folder in ("assets", "data"):
+                        target_prefix = f"src/{scope}/resources/{folder}/{donor_modid}/"
+                        new_prefix = f"src/{scope}/resources/{folder}/{target_modid}/"
+                        if not old_path.startswith(target_prefix):
+                            continue
                         new_path = old_path.replace(target_prefix, new_prefix, 1)
                         if new_path in files and files[new_path] != files[old_path]:
                             raise ValueError(
