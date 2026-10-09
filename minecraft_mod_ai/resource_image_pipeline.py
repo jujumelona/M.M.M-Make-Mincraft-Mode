@@ -137,18 +137,18 @@ def frame_segmented_foreground(source: Any, *, alpha_threshold: int = 128) -> An
         silhouette = alpha.point(lambda value: 255 if value >= alpha_threshold else 0)
         try:
             bounds = silhouette.getbbox()
+            coverage = silhouette.histogram()[255] / (source.width * source.height)
         finally:
             silhouette.close()
     finally:
         alpha.close()
     if bounds is None:
         raise ValueError("ALPHA_MASK_EMPTY_AT_SOURCE")
-    # A model that marks nearly the entire image as foreground has not
-    # isolated an object; scaling such a mask would preserve the defect.
-    x0, y0, x1, y1 = bounds
-    if (x1 - x0) * (y1 - y0) >= source.width * source.height * 0.98:
+    # Evaluate opaque *pixel* coverage, not bbox area: thin diagonal
+    # swords can touch all four image edges without filling the canvas.
+    if coverage >= 0.98:
         raise ValueError(
-            f"ALPHA_MASK_NOT_ISOLATED: bbox={bounds} size={source.size}"
+            f"ALPHA_MASK_NOT_ISOLATED: coverage={coverage:.4f} size={source.size}"
         )
     with source.crop(bounds) as subject:
         target_width, target_height = source.size
