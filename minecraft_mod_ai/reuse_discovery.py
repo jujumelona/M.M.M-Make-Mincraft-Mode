@@ -287,6 +287,32 @@ def _github_repository(value: Any) -> str:
     return candidate if re.fullmatch(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}", candidate) else ""
 
 
+def _github_candidate_is_minecraft_mod(candidate: Mapping[str, Any]) -> bool:
+    """Reject broad GitHub keyword hits before spending donor-inspection work.
+
+    GitHub searches READMEs as well as repository names. A general Rust,
+    security, or agent index can therefore match `minecraft mod` in its README
+    without providing any mod sources. Accept repository-level Minecraft and
+    modding signals, not a search-result position or a README-only match.
+    Modrinth/CurseForge already scope results to Minecraft projects.
+    """
+    repository = _candidate_repository(candidate).casefold()
+    name = repository.rsplit("/", 1)[-1]
+    if name.startswith(("awesome-", "list-of-", "awesome_")):
+        return False
+    description = (
+        str(candidate.get("title") or "")
+        + " " + str(candidate.get("summary") or "")
+    ).casefold()
+    if not re.search(r"\b(minecraft|fabricmc|neoforge|quiltmc|mc[-_]?mod)\b", description):
+        return False
+    return bool(re.search(
+        r"\b(mods?|modding|addons?|add-ons?|fabric|forge|quilt|"
+        r"resource[ -]packs?|texture[ -]packs?|datapacks?|data[ -]packs?)\b",
+        description,
+    ))
+
+
 def _candidate_repository(candidate: Mapping[str, Any]) -> str:
     return (
         _github_repository(candidate.get("repository"))
@@ -436,6 +462,8 @@ def discover_repositories_for_graph(
             return capability, provider, _resolve_modrinth_candidates(candidates)
         values: list[tuple[str, float]] = []
         for index, candidate in enumerate(candidates):
+            if provider == "github" and not _github_candidate_is_minecraft_mod(candidate):
+                continue
             repository = _candidate_repository(candidate)
             if repository:
                 values.append((repository, 1.0 / (1 + index)))
