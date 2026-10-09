@@ -144,7 +144,7 @@ def test_colab_build_checks_setup_and_rembg_version_before_generation() -> None:
     dispatch = source.index("session.build(")
     assert source.index("module.assert_setup_state(") < dispatch
     assert source.index('_distribution_version("rembg")') < dispatch
-    assert source.index('_Version("2.0.77")') < dispatch
+    assert source.index('_rembg_version != "2.0.67"') < dispatch
     assert source.index("BUILD_DEPENDENCY_PREFLIGHT:") < dispatch
     # rembg transitively imports onnxruntime; leave it in the isolated worker.
     assert "from rembg import" not in source
