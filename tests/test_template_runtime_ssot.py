@@ -100,11 +100,15 @@ def test_removed_feature_template_pipeline_is_not_a_second_execution_authority()
     assert "from .artifact_template_runner import" in runner
     assert "execute_artifact_template" in runner
     assert "feature_template_pipeline" not in runner
-    workflow = yaml.safe_load(
-        (TEMPLATES / "feature" / "workflow.yaml").read_text(encoding="utf-8")
+    atomicity = yaml.safe_load(
+        (TEMPLATES / "feature" / "atomic_check.yaml").read_text(encoding="utf-8")
     )
-    assert workflow["execution"] == "sequence"
-    assert workflow["steps"]
+    decomposition = yaml.safe_load(
+        (TEMPLATES / "feature" / "decompose.yaml").read_text(encoding="utf-8")
+    )
+    assert atomicity["id"] == "feature/atomic_check"
+    assert decomposition["id"] == "feature/decompose"
+    assert "failed atomic checks" in decomposition["rules"][1]
 
 
 def test_workflow_sequences_have_one_authority() -> None:
