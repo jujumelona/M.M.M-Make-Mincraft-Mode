@@ -159,7 +159,7 @@ def test_debug_fixture_runs_real_build_and_packaging_without_live_model(
             run_mineflayer=False,
             run_visual_review=False,
             cleanup_runtime=True,
-            eula_accepted=False,
+            eula_accepted=True,
         ),
     )
 
@@ -297,7 +297,7 @@ def test_debug_fixture_releases_when_only_jdt_infrastructure_is_unavailable(
             run_mineflayer=False,
             run_visual_review=False,
             cleanup_runtime=True,
-            eula_accepted=False,
+            eula_accepted=True,
         ),
     )
 
