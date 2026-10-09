@@ -423,7 +423,7 @@ def ensure_artifact_scaffolding(
         if missing_imports:
             content = content.replace(
                 package_declaration,
-                package_declaration + "\\n\\n" + "\\n".join(missing_imports),
+                package_declaration + "\n\n" + "\n".join(missing_imports),
                 1,
             )
             blocks_path.write_text(content, encoding="utf-8")
