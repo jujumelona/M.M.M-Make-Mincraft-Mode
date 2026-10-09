@@ -126,6 +126,29 @@ def _preflight_worker_ram() -> None:
         )
 
 
+def _preflight_checkpoint_download_ram() -> None:
+    """A streaming checkpoint fetch is not an ONNX inference allocation.
+
+    The full BiRefNet inference worker retains its stricter, separate 3 GiB
+    safety gate. Checkpoint preparation only needs room for the Python/pooch
+    download subprocess and disk-backed streamed bytes.
+    """
+    raw = os.environ.get("MMM_ALPHA_PREPARE_MIN_AVAILABLE_MB", "512")
+    try:
+        minimum_mb = int(raw)
+    except ValueError as exc:
+        raise ValueError("MMM_ALPHA_PREPARE_MIN_AVAILABLE_MB must be an integer") from exc
+    if minimum_mb < 0:
+        raise ValueError("MMM_ALPHA_PREPARE_MIN_AVAILABLE_MB cannot be negative")
+    available = _available_host_ram_bytes()
+    if available is not None and available < minimum_mb * 1048576:
+        raise ValueError(
+            "ALPHA_SEGMENTER_PREPARE_INSUFFICIENT_HOST_RAM: "
+            f"{available // 1048576} MiB free, "
+            f"requires {minimum_mb} MiB before a streaming checkpoint download"
+        )
+
+
 def prepare_foreground_model_isolated() -> None:
     """Download the checksummed BiRefNet checkpoint before FLUX is resident.
 
@@ -139,7 +162,7 @@ def prepare_foreground_model_isolated() -> None:
         raise ValueError("MMM_ALPHA_PREPARE_TIMEOUT_SECONDS must be an integer") from exc
     if timeout < 1:
         raise ValueError("MMM_ALPHA_PREPARE_TIMEOUT_SECONDS must be positive")
-    _preflight_worker_ram()
+    _preflight_checkpoint_download_ram()
     try:
         completed = subprocess.run(
             [sys.executable, "-m", "minecraft_mod_ai.resource_alpha_segmentation",
