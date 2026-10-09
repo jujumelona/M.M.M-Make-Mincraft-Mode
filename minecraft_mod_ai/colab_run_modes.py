@@ -467,6 +467,23 @@ def run_plan_dialog(
         validate_typed_plan_ir(
             authored.typed_plan_ir, capabilities=typed_host_capability_contracts()
         )
+        content = authored.content_design
+        if content.get("modules") and not content.get("_implementation_facts"):
+            raise RuntimeError(
+                "DEBUG_MODEL_PLAN_CONTENT_FACTS_MISSING: content modules cannot "
+                "reach canonical artifact production without implementation facts"
+            )
+        has_content = bool(content.get("modules"))
+        has_typed_work = bool(
+            authored.typed_plan_ir.get("functions")
+            or authored.typed_plan_ir.get("initialize")
+            or authored.typed_plan_ir.get("platform_modules")
+        )
+        if not (has_content or has_typed_work):
+            raise RuntimeError(
+                "DEBUG_MODEL_PLAN_EMPTY_IMPLEMENTATION: no executable content "
+                "or typed host operation was authored"
+            )
         expected_hash = authored.calculate_hash()
         saved = Path(session.save_plan(target))
         # Exercise the real serialization boundary before production. This
@@ -476,6 +493,32 @@ def run_plan_dialog(
         if not isinstance(restored, AuthoredPlan) or restored.calculate_hash() != expected_hash:
             raise RuntimeError("DEBUG_MODEL_PLAN_ROUNDTRIP_MISMATCH")
         show_full_plan(reloaded, print_fn=print_fn)
+        source_receipt = restored.content_design.get("_host_source_reuse")
+        if isinstance(source_receipt, Mapping):
+            print_fn(
+                "Debug source-reuse plan:",
+                json.dumps(
+                    {
+                        "bound_target": source_receipt.get("bound_target"),
+                        "origin": source_receipt.get("origin"),
+                        "capabilities": [
+                            {
+                                "capability": row.get("capability"),
+                                "mode": row.get("mode"),
+                                "source_id": row.get("source_id"),
+                            }
+                            for row in source_receipt.get("capabilities", ())
+                            if isinstance(row, Mapping)
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        else:
+            print_fn(
+                "Debug source-reuse: 플랜 단계에 검증된 후보가 없으면 "
+                "일반 제작의 타깃 바인딩 후 검색·선택·증명을 수행합니다."
+            )
         print_fn(
             "Debug model_path: 실제 모델 플랜 → 저장/재로드 → 일반 제작. "
             "참고 모드는 authored reuse 검색/증명 및 타깃 바인딩 후 재검증 경로를 사용합니다."
