@@ -20,7 +20,8 @@ def _events(stderr: str) -> list[dict[str, object]]:
     ]
 
 
-def test_structured_content_jdt_receipt_is_not_misclassified_unavailable(capsys) -> None:
+def test_structured_content_jdt_receipt_is_not_misclassified_unavailable(capsys, monkeypatch) -> None:
+    monkeypatch.setenv("MMM_ROOT_CAUSE_TRACE_STDERR", "all")
     receipt = {
         "structured_content": {
             "status": "PASS",
@@ -79,7 +80,8 @@ def test_structured_content_preserves_real_java_error_instead_of_wrapper_error(c
     assert classified[-1]["details"]["severity_1_count"] == 1
 
 
-def test_structured_content_camel_case_is_supported(capsys) -> None:
+def test_structured_content_camel_case_is_supported(capsys, monkeypatch) -> None:
+    monkeypatch.setenv("MMM_ROOT_CAUSE_TRACE_STDERR", "all")
     inner = {"status": "PASS", "diagnostics": {}}
     normalized, path = unwrap_diagnostic_receipt({"structuredContent": inner})
 
