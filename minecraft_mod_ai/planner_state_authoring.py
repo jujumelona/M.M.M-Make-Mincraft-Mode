@@ -186,11 +186,15 @@ def author_state_semantic_page(
     count: int,
     item_schema: Mapping[str, Any],
     existing_rows: Sequence[Mapping[str, Any]] = (),
+    on_additional_call: Any = None,
 ) -> dict[str, Any]:
-    """Author one host-fixed state row projection per model call.
+    """Author host-fixed state rows, splitting only output-exhausted projections.
 
-    The host owns cardinality, row identity, field names, schema and merging. The
-    model chooses only the semantic values for the fields in the current projection.
+    The normal route stays one generation per record. If a model exhausts
+    the schema-bounded decode allowance, the *failed row only* is retried in
+    sequential single-field projections. Earlier rows are never regenerated.
+    Each scalar is validated against its original semantic schema before being
+    committed to the row; an unsplittable failure remains fatal.
     """
     if count <= 0:
         return {concern: []}
@@ -202,6 +206,11 @@ def author_state_semantic_page(
     if not isinstance(properties, Mapping):
         raise ValueError("STATE_SEMANTIC_PAGE: item schema has no properties")
 
+    from .llama_finish_reason_contract import (
+        OUTPUT_EXHAUSTED,
+        completion_boundary_error,
+    )
+
     rows: list[dict[str, Any]] = []
     prior = tuple(existing_rows or ())
     for index in range(count):
@@ -210,102 +219,130 @@ def author_state_semantic_page(
             if index < len(prior) and isinstance(prior[index], Mapping)
             else {}
         )
-        projected_properties: dict[str, Any] = {}
-        transport_properties: dict[str, Any] = {}
-        for field in requested:
-            raw_schema = properties.get(field)
-            if not isinstance(raw_schema, Mapping):
-                raise ValueError(
-                    f"STATE_SEMANTIC_PAGE: missing schema for {concern}.{field}"
-                )
-            semantic_schema = _state_scalar_schema(
-                concern, field, raw_schema, fixed
-            )
-            projected_properties[field] = semantic_schema
-            transport_properties[field] = _state_scalar_transport_schema(
-                concern, field, semantic_schema
-            )
 
-        row_schema = {
-            "type": "object",
-            "properties": transport_properties,
-            "required": list(requested),
-            "additionalProperties": False,
-        }
-        used_names = (
-            _used_state_variable_names(prior, rows, fixed)
-            if concern == "variables" and "name" in requested
-            else set()
-        )
-        name_instruction = ""
-        if concern == "variables" and "name" in requested:
-            name_instruction = (
-                "For variables.name, choose a concrete identifier for the distinct mutable "
-                "concept described by the already-fixed fields for this row. Do not use "
-                "container/meta labels such as "
-                + ", ".join(sorted(_STATE_VARIABLE_META_NAMES))
-                + "."
+        def author_fields(
+            active_fields: tuple[str, ...],
+            current: Mapping[str, Any],
+        ) -> dict[str, Any]:
+            projected_properties: dict[str, Any] = {}
+            transport_properties: dict[str, Any] = {}
+            for field in active_fields:
+                raw_schema = properties.get(field)
+                if not isinstance(raw_schema, Mapping):
+                    raise ValueError(
+                        f"STATE_SEMANTIC_PAGE: missing schema for {concern}.{field}"
+                    )
+                semantic_schema = _state_scalar_schema(
+                    concern, field, raw_schema, current
+                )
+                projected_properties[field] = semantic_schema
+                transport_properties[field] = _state_scalar_transport_schema(
+                    concern, field, semantic_schema
+                )
+
+            row_schema = {
+                "type": "object",
+                "properties": transport_properties,
+                "required": list(active_fields),
+                "additionalProperties": False,
+            }
+            used_names = (
+                _used_state_variable_names(prior, rows, current)
+                if concern == "variables" and "name" in active_fields
+                else set()
             )
-            if used_names:
-                name_instruction += (
-                    " Already-used variable names that must not be repeated: "
-                    + ", ".join(sorted(used_names))
+            name_instruction = ""
+            if concern == "variables" and "name" in active_fields:
+                name_instruction = (
+                    "For variables.name, choose a concrete identifier for the distinct mutable "
+                    "concept described by the already-fixed fields for this row. Do not use "
+                    "container/meta labels such as "
+                    + ", ".join(sorted(_STATE_VARIABLE_META_NAMES))
                     + "."
                 )
-        messages = _state_atomic_messages(
-            prompt,
-            concern=concern,
-            index=index,
-            fields=requested,
-            current_row=fixed,
-            peer_rows=rows,
-            extra_instruction=(
-                "Return exactly one JSON object containing only the requested fields for "
-                "this row. Do not emit any sibling field, concern array, or wrapper."
-                + (" " + name_instruction if name_instruction else "")
-            ),
-        )
-        raw = generate_fixed_template_value(
-            router,
-            "planner",
-            messages,
-            response_schema=row_schema,
-            enable_tools=False,
-            description=(
-                f"Author state row projection {concern}[{index}]: "
-                + ", ".join(requested)
-            ),
-            output_token_ceiling=structured_output_token_ceiling(row_schema),
-        )
-        if not isinstance(raw, Mapping):
-            raise ValueError(
-                f"STATE_SEMANTIC_PAGE: {concern}[{index}] must be an object"
+                if used_names:
+                    name_instruction += (
+                        " Already-used variable names that must not be repeated: "
+                        + ", ".join(sorted(used_names))
+                        + "."
+                    )
+            messages = _state_atomic_messages(
+                prompt,
+                concern=concern,
+                index=index,
+                fields=active_fields,
+                current_row=current,
+                peer_rows=rows,
+                extra_instruction=(
+                    "Return exactly one JSON object containing only the requested fields for "
+                    "this row. Do not emit any sibling field, concern array, or wrapper."
+                    + (" " + name_instruction if name_instruction else "")
+                ),
             )
+            raw = generate_fixed_template_value(
+                router,
+                "planner",
+                messages,
+                response_schema=row_schema,
+                enable_tools=False,
+                description=(
+                    f"Author state row projection {concern}[{index}]: "
+                    + ", ".join(active_fields)
+                ),
+                output_token_ceiling=structured_output_token_ceiling(row_schema),
+            )
+            if not isinstance(raw, Mapping):
+                raise ValueError(
+                    f"STATE_SEMANTIC_PAGE: {concern}[{index}] must be an object"
+                )
+            result: dict[str, Any] = {}
+            for field in active_fields:
+                if field not in raw:
+                    raise ValueError(
+                        f"STATE_SEMANTIC_FIELD_INVALID: {concern}[{index}].{field} "
+                        "did not return the required host field"
+                    )
+                value = raw[field]
+                errors = tuple(
+                    Draft202012Validator(projected_properties[field]).iter_errors(value)
+                )
+                if errors:
+                    detail = "; ".join(error.message for error in errors[:3])
+                    raise ValueError(
+                        f"STATE_SEMANTIC_FIELD_INVALID: {concern}[{index}].{field}: {detail}"
+                    )
+                if concern == "variables" and field == "name":
+                    value = _canonical_state_variable_name(
+                        str(value).strip(),
+                        fixed=current,
+                        used=used_names,
+                        index=index,
+                    )
+                result[field] = deepcopy(value)
+            return result
 
-        row: dict[str, Any] = {}
-        for field in requested:
-            if field not in raw:
-                raise ValueError(
-                    f"STATE_SEMANTIC_FIELD_INVALID: {concern}[{index}].{field} "
-                    "did not return the required host field"
-                )
-            value = raw[field]
-            field_schema = projected_properties[field]
-            errors = tuple(Draft202012Validator(field_schema).iter_errors(value))
-            if errors:
-                detail = "; ".join(error.message for error in errors[:3])
-                raise ValueError(
-                    f"STATE_SEMANTIC_FIELD_INVALID: {concern}[{index}].{field}: {detail}"
-                )
-            if concern == "variables" and field == "name":
-                name = str(value).strip()
-                value = _canonical_state_variable_name(
-                    name,
-                    fixed=fixed,
-                    used=used_names,
-                    index=index,
-                )
-            row[field] = deepcopy(value)
+        try:
+            row = author_fields(requested, fixed)
+        except Exception as exc:
+            boundary = completion_boundary_error(exc)
+            if (
+                boundary is None
+                or boundary.kind != OUTPUT_EXHAUSTED
+                or len(requested) < 2
+            ):
+                raise
+            # Count the extra model calls through the caller's planning budget.
+            # Never quietly exceed the host's fixed call allowance.
+            print(
+                f"STATE_OUTPUT_EXHAUSTED: splitting {concern}[{index}] into "
+                f"{len(requested)} scalar projections",
+                flush=True,
+            )
+            row = {}
+            for field in requested:
+                if on_additional_call is not None:
+                    on_additional_call()
+                row.update(author_fields((field,), {**fixed, **row}))
         rows.append(row)
 
     return {concern: rows}
