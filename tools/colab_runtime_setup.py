@@ -1084,6 +1084,24 @@ def _build_receipt(
     }
 
 
+def _start_bootstrap_memory_monitor(checkout: Path) -> Any:
+    """Start a stdlib-only RAM sampler before pip or the CUDA stack is imported."""
+    source = checkout / "minecraft_mod_ai" / "runtime_memory_watchdog.py"
+    spec = importlib.util.spec_from_file_location("_mmm_bootstrap_memory_monitor", source)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("COLAB_RAM_MONITOR_IMPORT_FAILED")
+    monitor = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(monitor)
+    previous = monitor.previous_kernel_crash_diagnostic()
+    if previous:
+        print("COLAB_PREVIOUS_KERNEL_MEMORY: " + json.dumps(previous, sort_keys=True), flush=True)
+        orphan = monitor.cleanup_orphaned_managed_process()
+        if orphan:
+            print("COLAB_ORPHAN_CLEANUP: " + json.dumps(orphan, sort_keys=True), flush=True)
+    monitor.start_kernel_memory_watchdog()
+    return monitor
+
+
 def setup_colab_runtime(
     *,
     repo_dir: str | Path,
@@ -1128,7 +1146,11 @@ def setup_colab_runtime(
     # Install and check binary packages before importing torch/NumPy in this
     # kernel; replacing a loaded NumPy extension requires a session restart.
     os.environ["MMM_RUNTIME_STAGE"] = "setup_dependencies"
-    _install_project(local_profile=local_profile
+    bootstrap_monitor = _start_bootstrap_memory_monitor(checkout)
+    try:
+        _install_project(local_profile=local_profile)
+    finally:
+        bootstrap_monitor.shutdown_kernel_memory_watchdog()
     # Record memory before GPU/model/toolchain initialization. The sampling
     # thread also survives across image and Gradle stages until kernel exit.
     from minecraft_mod_ai.runtime_memory_watchdog import (
