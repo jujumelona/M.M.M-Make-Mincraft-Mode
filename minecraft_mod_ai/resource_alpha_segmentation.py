@@ -126,6 +126,41 @@ def _preflight_worker_ram() -> None:
         )
 
 
+def prepare_foreground_model_isolated() -> None:
+    """Download the checksummed BiRefNet checkpoint before FLUX is resident.
+
+    A short-lived subprocess avoids overlapping first-time model downloads
+    with the large CPU-offloaded diffusion pipeline.
+    """
+    timeout_raw = os.environ.get("MMM_ALPHA_PREPARE_TIMEOUT_SECONDS", "480")
+    try:
+        timeout = int(timeout_raw)
+    except ValueError as exc:
+        raise ValueError("MMM_ALPHA_PREPARE_TIMEOUT_SECONDS must be an integer") from exc
+    if timeout < 1:
+        raise ValueError("MMM_ALPHA_PREPARE_TIMEOUT_SECONDS must be positive")
+    _preflight_worker_ram()
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-m", "minecraft_mod_ai.resource_alpha_segmentation",
+             "--prepare"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout,
+            check=False,
+            env=os.environ.copy(),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError("ALPHA_SEGMENTER_PREPARE_TIMEOUT") from exc
+    if completed.returncode:
+        raise ValueError(
+            f"ALPHA_SEGMENTER_PREPARE_FAILED: exit={completed.returncode}; "
+            + (completed.stderr or "")[-900:]
+        )
+
+
 def segment_foreground_isolated(image: Any) -> Any:
     """Run CPU ONNX inference outside the FLUX-owning Python process.
 
@@ -209,10 +244,20 @@ __all__ = [
     "ALPHA_SEGMENTATION_CONTRACT",
     "segment_foreground",
     "segment_foreground_isolated",
+    "prepare_foreground_model_isolated",
 ]
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 4 or sys.argv[1] != "--worker":
-        raise SystemExit("Usage: python -m minecraft_mod_ai.resource_alpha_segmentation --worker INPUT OUTPUT")
-    _worker_main(sys.argv[2], sys.argv[3])
+    if len(sys.argv) == 2 and sys.argv[1] == "--prepare":
+        from rembg.sessions.birefnet_general import BiRefNetSessionGeneral
+
+        # This is rembg's checksummed model downloader, not inference.
+        BiRefNetSessionGeneral.download_models()
+    elif len(sys.argv) == 4 and sys.argv[1] == "--worker":
+        _worker_main(sys.argv[2], sys.argv[3])
+    else:
+        raise SystemExit(
+            "Usage: python -m minecraft_mod_ai.resource_alpha_segmentation "
+            "--prepare | --worker INPUT OUTPUT"
+        )
