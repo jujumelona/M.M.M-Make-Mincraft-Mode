@@ -496,3 +496,88 @@ def test_intermediate_memory_full_u2net_oom_falls_back_safely(monkeypatch):
         result = alpha.segment_foreground_isolated(source)
         result.close()
     assert attempts == ["u2net", "u2netp", "u2netp"]
+
+
+def test_unusable_full_u2net_mask_recovers_without_regenerating_source(monkeypatch):
+    monkeypatch.setattr(alpha, "_available_host_ram_bytes", lambda: 5700 * 1048576)
+    attempts = []
+    sources = []
+
+    def fake_run(command, **kwargs):
+        model = kwargs["env"]["MMM_ALPHA_WORKER_MODEL"]
+        attempts.append(model)
+        source, target = Path(command[-2]), Path(command[-1])
+        sources.append(source.read_bytes())
+        with Image.open(source) as raw:
+            rgba = raw.convert("RGBA")
+        if model == "u2net":
+            # A confidently wrong mask must be rejected, not accepted.
+            rgba.putalpha(255)
+        else:
+            with Image.new("L", rgba.size, 0) as mask:
+                ImageDraw.Draw(mask).ellipse((4, 4, 28, 28), fill=255)
+                rgba.putalpha(mask)
+        rgba.save(target, "PNG")
+        rgba.close()
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(alpha.subprocess, "run", fake_run)
+    with Image.new("RGB", (32, 32), "grey") as source:
+        result = alpha.segment_foreground_isolated(source)
+        try:
+            assert result.info["mmm_alpha_matte"] == "rembg:u2netp"
+            assert result.getpixel((0, 0))[3] == 0
+            assert result.getpixel((16, 16))[3] == 255
+        finally:
+            result.close()
+    assert attempts == ["u2net", "u2netp"]
+    assert sources[0] == sources[1]  # No diffusion regeneration.
+
+
+def test_all_mask_models_fail_without_fabricating_alpha(monkeypatch):
+    monkeypatch.setattr(alpha, "_available_host_ram_bytes", lambda: 5700 * 1048576)
+    attempts = []
+
+    def fake_run(command, **kwargs):
+        attempts.append(kwargs["env"]["MMM_ALPHA_WORKER_MODEL"])
+        source, target = Path(command[-2]), Path(command[-1])
+        with Image.open(source) as raw:
+            rgba = raw.convert("RGBA")
+        rgba.putalpha(255)
+        rgba.save(target, "PNG")
+        rgba.close()
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(alpha.subprocess, "run", fake_run)
+    with Image.new("RGB", (32, 32), "grey") as source:
+        with pytest.raises(ValueError, match="ALPHA_SEGMENTER_UNUSABLE_MASK"):
+            alpha.segment_foreground_isolated(source)
+    assert attempts == ["u2net", "u2netp"]
+
+
+def test_explicit_no_subject_worker_error_may_try_next_real_model(monkeypatch):
+    monkeypatch.setattr(alpha, "_available_host_ram_bytes", lambda: 5700 * 1048576)
+    attempts = []
+
+    def fake_run(command, **kwargs):
+        name = kwargs["env"]["MMM_ALPHA_WORKER_MODEL"]
+        attempts.append(name)
+        if name == "u2net":
+            return SimpleNamespace(
+                returncode=1, stderr="ALPHA_SEGMENTER_FAILED_TO_EXTRACT_SUBJECT", stdout=""
+            )
+        source, target = Path(command[-2]), Path(command[-1])
+        with Image.open(source) as raw:
+            rgba = raw.convert("RGBA")
+        with Image.new("L", rgba.size, 0) as mask:
+            ImageDraw.Draw(mask).ellipse((4, 4, 28, 28), fill=255)
+            rgba.putalpha(mask)
+        rgba.save(target, "PNG")
+        rgba.close()
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(alpha.subprocess, "run", fake_run)
+    with Image.new("RGB", (32, 32), "grey") as source:
+        result = alpha.segment_foreground_isolated(source)
+        result.close()
+    assert attempts == ["u2net", "u2netp"]
