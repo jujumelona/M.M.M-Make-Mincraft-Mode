@@ -15,16 +15,22 @@ import sys
 import tempfile
 from typing import Any
 
-ALPHA_SEGMENTATION_MODEL = "birefnet-general"
+ALPHA_SEGMENTATION_MODEL = "birefnet-general-lite"
+ALPHA_SEGMENTATION_FALLBACK_MODEL = "u2netp"
 ALPHA_SEGMENTATION_ENGINE = "rembg"
 ALPHA_SEGMENTATION_PROVIDER = "CPUExecutionProvider"
-ALPHA_SEGMENTATION_CONTRACT = "mmm/alpha-segmentation-birefnet-general-v1"
+ALPHA_SEGMENTATION_CONTRACT = "mmm/alpha-segmentation-birefnet-lite-u2netp-v2"
 
 
 @lru_cache(maxsize=1)
-def _get_session() -> Any:
+def _get_session(model_name: str = ALPHA_SEGMENTATION_MODEL) -> Any:
     try:
-        from rembg.sessions.birefnet_general import BiRefNetSessionGeneral
+        if model_name == ALPHA_SEGMENTATION_MODEL:
+            from rembg.sessions.birefnet_general_lite import BiRefNetSessionGeneralLite as model_class
+        elif model_name == ALPHA_SEGMENTATION_FALLBACK_MODEL:
+            from rembg.sessions.u2netp import U2netpSession as model_class
+        else:
+            raise ValueError(f"ALPHA_SEGMENTER_MODEL_NOT_ALLOWED: {model_name}")
     except ImportError as exc:
         raise ValueError(
             'ALPHA_SEGMENTER_UNAVAILABLE: install "rembg[cpu]==2.0.67" via the '
@@ -53,16 +59,16 @@ def _get_session() -> Any:
     # double-passes user supplied sess_opts. Construct its exported concrete
     # BiRefNet session instead; BaseSession(model, sess_opts, providers=...)
     # preserves all ONNX memory controls and the explicit MIT model choice.
-    if BiRefNetSessionGeneral.name() != ALPHA_SEGMENTATION_MODEL:
+    if model_class.name() != model_name:
         raise ValueError("ALPHA_SEGMENTER_MODEL_CLASS_MISMATCH")
-    return BiRefNetSessionGeneral(
-        ALPHA_SEGMENTATION_MODEL,
+    return model_class(
+        model_name,
         session_options,
         providers=[ALPHA_SEGMENTATION_PROVIDER],
     )
 
 
-def segment_foreground(image: Any) -> Any:
+def segment_foreground(image: Any, *, model_name: str = ALPHA_SEGMENTATION_MODEL) -> Any:
     """Return a separate RGBA image with model-produced foreground alpha.
 
     Never fake transparency by cutting a geometry-shaped region, and never
@@ -80,7 +86,7 @@ def segment_foreground(image: Any) -> Any:
 
     source = image.convert("RGB")
     try:
-        result = remove(source, session=_get_session(), alpha_matting=False)
+        result = remove(source, session=_get_session(model_name), alpha_matting=False)
     finally:
         source.close()
     if not isinstance(result, Image.Image) or result.size != image.size:
@@ -96,7 +102,7 @@ def segment_foreground(image: Any) -> Any:
             raise ValueError("ALPHA_SEGMENTER_FAILED_TO_EXTRACT_SUBJECT")
     finally:
         alpha.close()
-    result.info["mmm_alpha_matte"] = ALPHA_SEGMENTATION_ENGINE + ":" + ALPHA_SEGMENTATION_MODEL
+    result.info["mmm_alpha_matte"] = ALPHA_SEGMENTATION_ENGINE + ":" + model_name
     return result
 
 
@@ -202,7 +208,8 @@ def segment_foreground_isolated(image: Any) -> Any:
     with tempfile.TemporaryDirectory(prefix="mmm-alpha-") as temporary:
         source = Path(temporary) / "input.png"
         target = Path(temporary) / "output.png"
-        image.convert("RGB").save(source, format="PNG")
+        with image.convert("RGB") as converted:
+            converted.save(source, format="PNG")
         timeout_raw = os.environ.get("MMM_ALPHA_WORKER_TIMEOUT_SECONDS", "300")
         try:
             timeout = max(1, int(timeout_raw))
@@ -215,39 +222,41 @@ def segment_foreground_isolated(image: Any) -> Any:
         env["OMP_THREAD_LIMIT"] = "1"
         from .runtime_memory_watchdog import _cgroup_memory
 
-        _used_before, _limit_before, memory_events_before = _cgroup_memory()
-        try:
-            completed = subprocess.run(
-                [sys.executable, "-m", "minecraft_mod_ai.resource_alpha_segmentation",
-                 "--worker", str(source), str(target)],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=timeout,
-                check=False,
-                env=env,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise ValueError(
-                f"ALPHA_SEGMENTER_WORKER_TIMEOUT: BiRefNet exceeded {timeout}s"
-            ) from exc
-        if completed.returncode != 0:
-            # The kernel's OOM counter separates a confirmed cgroup OOM kill
-            # from a SIGKILL sent by some other process. Keep the original
-            # failure class for callers that must fail closed.
+        # Separate licensed CPU workers avoid simultaneous FLUX/ONNX residency.
+        # Only a SIGKILL permits recovery with the smaller Apache-2.0 U2NetP.
+        failures = []
+        chosen_model = None
+        for model_name in (ALPHA_SEGMENTATION_MODEL, ALPHA_SEGMENTATION_FALLBACK_MODEL):
+            _used_before, _limit_before, memory_events_before = _cgroup_memory()
+            env["MMM_ALPHA_WORKER_MODEL"] = model_name
+            try:
+                completed = subprocess.run(
+                    [sys.executable, "-m", "minecraft_mod_ai.resource_alpha_segmentation",
+                     "--worker", str(source), str(target)],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=timeout,
+                    check=False,
+                    env=env,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise ValueError(
+                    f"ALPHA_SEGMENTER_WORKER_TIMEOUT: model={model_name}; worker exceeded {timeout}s"
+                ) from exc
+            if completed.returncode == 0:
+                chosen_model = model_name
+                break
+
             _used_after, _limit_after, memory_events_after = _cgroup_memory()
             oom_kill_delta = max(
-                0,
-                memory_events_after.get("oom_kill", 0)
+                0, memory_events_after.get("oom_kill", 0)
                 - memory_events_before.get("oom_kill", 0),
             )
             memory_headroom = _available_host_ram_bytes()
-            # Progress bars fill stderr with thousands of redraws; report
-            # diagnostics, not repeated download percentages.
             stderr = completed.stderr or ""
             stderr_lines = stderr.replace("\r", "\n").splitlines()
-            # Keep enough traceback context instead of just its final frames.
             tail = " | ".join(stderr_lines[-20:])[-3000:]
             incompatible_api = (
                 "ALPHA_SEGMENTER_INCOMPATIBLE_REMBG_API" in stderr
@@ -264,12 +273,25 @@ def segment_foreground_isolated(image: Any) -> Any:
                 " Rerun Colab setup cell 2 to install rembg[cpu]==2.0.67."
                 if incompatible_api else ""
             )
-            raise ValueError(
-                f"{kind}: exit={completed.returncode}; "
+            failures.append(
+                f"{kind}: model={model_name}; exit={completed.returncode}; "
                 f"cgroup_oom_kill_delta={oom_kill_delta}; "
                 f"available_mib={memory_headroom // 1048576 if memory_headroom is not None else 'unknown'}; "
                 f"stderr_tail={tail}{remediation}"
             )
+            # SIGKILL alone is not proof of cgroup OOM when delta is zero.
+            # API/backend faults fail closed; retrying them with weaker weights
+            # would only conceal the original infrastructure error.
+            if not possible_oom or model_name == ALPHA_SEGMENTATION_FALLBACK_MODEL:
+                raise ValueError(" | ".join(failures))
+            print(
+                "ALPHA_SEGMENTER_RECOVERY: killed lite worker; "
+                f"trying fallback={ALPHA_SEGMENTATION_FALLBACK_MODEL}; "
+                + failures[-1],
+                flush=True,
+            )
+        if chosen_model is None:
+            raise ValueError(" | ".join(failures))
         if not target.is_file():
             raise ValueError("ALPHA_SEGMENTER_WORKER_MISSING_OUTPUT")
         with Image.open(target) as result:
@@ -284,7 +306,7 @@ def segment_foreground_isolated(image: Any) -> Any:
             if low == high or high == 0:
                 raise ValueError("ALPHA_SEGMENTER_FAILED_TO_EXTRACT_SUBJECT")
             detached = result.copy()
-        detached.info["mmm_alpha_matte"] = ALPHA_SEGMENTATION_ENGINE + ":" + ALPHA_SEGMENTATION_MODEL
+        detached.info["mmm_alpha_matte"] = ALPHA_SEGMENTATION_ENGINE + ":" + chosen_model
         return detached
 
 
@@ -294,7 +316,7 @@ def _worker_main(source: str, target: str) -> None:
 
     with Image.open(source) as raw:
         raw.load()
-        result = segment_foreground(raw)
+        result = segment_foreground(raw, model_name=os.environ.get("MMM_ALPHA_WORKER_MODEL", ALPHA_SEGMENTATION_MODEL))
         try:
             result.save(target, format="PNG", optimize=False)
         finally:
@@ -303,6 +325,7 @@ def _worker_main(source: str, target: str) -> None:
 
 __all__ = [
     "ALPHA_SEGMENTATION_MODEL",
+    "ALPHA_SEGMENTATION_FALLBACK_MODEL",
     "ALPHA_SEGMENTATION_ENGINE",
     "ALPHA_SEGMENTATION_PROVIDER",
     "ALPHA_SEGMENTATION_CONTRACT",
@@ -314,13 +337,17 @@ __all__ = [
 
 if __name__ == "__main__":
     if len(sys.argv) == 2 and sys.argv[1] == "--prepare":
-        from rembg.sessions.birefnet_general import BiRefNetSessionGeneral
-
-        # Check the explicitly licensed model class before the large download.
-        if BiRefNetSessionGeneral.name() != ALPHA_SEGMENTATION_MODEL:
-            raise ValueError("ALPHA_SEGMENTER_MODEL_CLASS_MISMATCH")
-        # This is rembg's checksummed model downloader, not inference.
-        BiRefNetSessionGeneral.download_models()
+        from rembg.sessions.birefnet_general_lite import BiRefNetSessionGeneralLite
+        from rembg.sessions.u2netp import U2netpSession
+        # Check and prefetch both permitted, checksum-verified ONNX weights.
+        # Neither the noncommercial BRIA weights nor rembg's default is used.
+        for model_class, expected in (
+            (BiRefNetSessionGeneralLite, ALPHA_SEGMENTATION_MODEL),
+            (U2netpSession, ALPHA_SEGMENTATION_FALLBACK_MODEL),
+        ):
+            if model_class.name() != expected:
+                raise ValueError("ALPHA_SEGMENTER_MODEL_CLASS_MISMATCH")
+            model_class.download_models()
     elif len(sys.argv) == 4 and sys.argv[1] == "--worker":
         _worker_main(sys.argv[2], sys.argv[3])
     else:
