@@ -488,6 +488,13 @@ def _wait_ready(process: subprocess.Popen[bytes], port: int) -> str:
     origin = f"http://127.0.0.1:{port}"
     last_error = "server did not become ready"
     while time.monotonic() < deadline:
+        if os.environ.get("MMM_COLAB_SETUP_RECEIPT", "").strip():
+            from .runtime_memory_watchdog import assert_memory_headroom
+            try:
+                assert_memory_headroom("llama_server_startup")
+            except MemoryError:
+                _stop_server(process)
+                raise
         if process.poll() is not None:
             raise RuntimeError(f"llama-server exited with code {process.returncode}.")
         try:
