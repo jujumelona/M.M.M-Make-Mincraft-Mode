@@ -58,6 +58,7 @@ def fake_onnxruntime_options(monkeypatch):
     monkeypatch.setitem(sys.modules, "rembg.sessions.u2netp", fallback_module)
     alpha._get_session.cache_clear()
     monkeypatch.setattr(alpha, "_LITE_WORKER_SIGKILLED", False)
+    monkeypatch.setattr(alpha, "_U2NET_WORKER_SIGKILLED", False)
     yield
     alpha._get_session.cache_clear()
 
@@ -489,3 +490,9 @@ def test_intermediate_memory_full_u2net_oom_falls_back_safely(monkeypatch):
         finally:
             result.close()
     assert attempts == ["u2net", "u2netp"]
+
+    # The next candidate must not kill another full-size U2Net worker.
+    with Image.new("RGB", (32, 32), "grey") as source:
+        result = alpha.segment_foreground_isolated(source)
+        result.close()
+    assert attempts == ["u2net", "u2netp", "u2netp"]
