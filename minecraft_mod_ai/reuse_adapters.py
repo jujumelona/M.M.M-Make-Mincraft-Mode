@@ -267,6 +267,10 @@ class ModIdRewriteAdapter:
                     new_prefix = f"src/main/resources/{folder}/{target_modid}/"
                     if old_path.startswith(target_prefix):
                         new_path = old_path.replace(target_prefix, new_prefix, 1)
+                        if new_path in files and files[new_path] != files[old_path]:
+                            raise ValueError(
+                                "SOURCE_REUSE_RESOURCE_NAMESPACE_COLLISION: " + new_path
+                            )
                         content = files.pop(old_path)
                         files[new_path] = content
                         if new_path not in modified:
