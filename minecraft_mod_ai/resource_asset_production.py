@@ -529,7 +529,9 @@ def generate_assets(
 ) -> dict[str, Any]:
     proposal = _asset_execution_projection(proposal)
     from .model_adapters.image_diffusion import ImageGenerationConfig
-    from .resource_image_pipeline import generate_candidate, validate_texture
+    from .resource_image_pipeline import (
+        prepare_candidate_sources, finalize_candidate_sources, validate_texture,
+    )
     from .model_adapters.image_diffusion import release_image_pipeline_for_segmentation
     if not proposal.assets:
         return {
@@ -597,64 +599,136 @@ def generate_assets(
                     f"Foreground model checkpoint preflight failed after text-model "
                     f"handoff: {exc}"
                 ) from exc
+        # One image-asset batch: first render ALL source PNGs under a single
+        # FLUX residency, then drop its CPU-offloaded model, then run ONNX.
+        # The old per-texture generation->matting loop repeatedly rebuilt a
+        # 16GB diffusion pipeline and accumulated allocator pressure.
+        tasks = []
         for row in rows:
             container = str(row.get("container") or "mod")
             container_root = _container_root(project_root, run_root, container)
             for texture in row.get("textures", ()):
                 if not isinstance(texture, Mapping):
                     raise AssetProductionError("Invalid texture contract.")
-                asset_id, role, prompt = str(row["asset_id"]), str(texture["role"]), str(texture["prompt"])
-                failures = []
-                selected = None
-                for index in range(profile.candidate_count):
-                    normalized = candidate_root / asset_id / role / f"normalized-{index:02d}.png"
-                    try:
-                        evidence = generate_candidate(
-                            lambda **kwargs: router.generate_image("image_generator", **kwargs), texture,
-                            prompt=prompt, directory=candidate_root / asset_id / role / f"candidate-{index:02d}",
-                            output=normalized,
-                            resolution=profile.preferred_generation_resolution,
-                            seed=_candidate_seed(asset_id, role, index),
-                            before_segmentation=release_image_pipeline_for_segmentation)
-                    except ValueError as exc:
-                        # Retrying with new image seeds cannot fix RAM exhaustion,
-                        # native ONNX crashes or a missing segmentation backend.
-                        if str(exc).startswith((
-                            "ALPHA_SEGMENTER_INSUFFICIENT_HOST_RAM:",
-                            "ALPHA_SEGMENTER_WORKER_OOM_SUSPECT:",
-                            "ALPHA_SEGMENTER_WORKER_FAILED:",
-                            "ALPHA_SEGMENTER_INCOMPATIBLE_REMBG_API:",
-                            "ALPHA_SEGMENTER_WORKER_TIMEOUT:",
-                            "ALPHA_SEGMENTER_WORKER_MISSING_OUTPUT",
-                        )):
-                            raise AssetProductionError(
-                                f"Foreground segmentation infrastructure failed "
-                                f"for {asset_id}:{role}: {exc}"
-                            ) from exc
-                        failures.append({"candidate": index, "reason": str(exc)})
-                        continue
-                    # Successful candidates all have the same selection score in this
-                    # contract. The tie-breaker is the lowest index, so the first successful
-                    # candidate is already the mathematically final winner. Generating later
-                    # seeds cannot change the selected result.
-                    selected = (1000.0, index, normalized, evidence)
-                    break
-                if selected is None:
-                    raise AssetProductionError(f"No candidate satisfies resource contract for {asset_id}:{role}: {failures}")
-                score, index, winner, evidence = selected
-                target = _safe_target(container_root, str(texture["target_path"]))
-                _atomic_write_bytes(target, winner.read_bytes())
-                receipts.append({
-                    "asset_id": asset_id, "role": role, "render_kind": row["render_kind"],
-                    "container": container, "target": str(target), "target_path": str(texture["target_path"]),
-                    "width": int(texture["width"]), "height": int(texture["height"]),
-                    "topology": str(texture["topology"]), "alpha_policy": str(texture["alpha_policy"]),
-                    "selected_candidate": index, "selected_score": score, "candidate_count": profile.candidate_count,
-                    "attempted_candidate_count": index + 1,
-                    "generation_evidence": evidence, "rejected_candidates": failures,
-                    "prompt_sha256": "sha256:" + hashlib.sha256(prompt.encode()).hexdigest(),
-                    "sha256": "sha256:" + hashlib.sha256(target.read_bytes()).hexdigest(), "placeholder": False,
+                tasks.append({
+                    "row": row,
+                    "texture": texture,
+                    "container": container,
+                    "container_root": container_root,
+                    "asset_id": str(row["asset_id"]),
+                    "role": str(texture["role"]),
+                    "prompt": str(texture["prompt"]),
+                    "failures": [],
+                    "selected": None,
                 })
+
+        infrastructure_failures = (
+            "ALPHA_SEGMENTER_INSUFFICIENT_HOST_RAM:",
+            "ALPHA_SEGMENTER_WORKER_OOM_SUSPECT:",
+            "ALPHA_SEGMENTER_WORKER_FAILED:",
+            "ALPHA_SEGMENTER_INCOMPATIBLE_REMBG_API:",
+            "ALPHA_SEGMENTER_WORKER_TIMEOUT:",
+            "ALPHA_SEGMENTER_WORKER_MISSING_OUTPUT",
+            "COLAB_RAM_HEADROOM_EXHAUSTED:",
+        )
+        for index in range(profile.candidate_count):
+            active = [task for task in tasks if task["selected"] is None]
+            if not active:
+                break
+
+            source_batches = []
+            # Pure diffusion pass: NEVER instantiate an ONNX segmenter here.
+            for task in active:
+                asset_id, role, texture = (
+                    task["asset_id"], task["role"], task["texture"]
+                )
+                normalized = candidate_root / asset_id / role / f"normalized-{index:02d}.png"
+                try:
+                    pending = prepare_candidate_sources(
+                        lambda **kwargs: router.generate_image("image_generator", **kwargs),
+                        texture,
+                        prompt=task["prompt"],
+                        directory=candidate_root / asset_id / role / f"candidate-{index:02d}",
+                        resolution=profile.preferred_generation_resolution,
+                        seed=_candidate_seed(asset_id, role, index),
+                    )
+                except ValueError as exc:
+                    if str(exc).startswith(infrastructure_failures):
+                        raise AssetProductionError(
+                            f"Asset generation infrastructure failed for {asset_id}:{role}: {exc}"
+                        ) from exc
+                    task["failures"].append({"candidate": index, "reason": str(exc)})
+                    continue
+                source_batches.append((task, normalized, pending))
+
+            needs_mask = any(
+                needs for _, _, pending in source_batches
+                for _, _, needs in pending
+            )
+            if needs_mask:
+                print(
+                    f"ASSET_PHASE_HANDOFF: generated_sources={len(source_batches)} "
+                    f"candidate_round={index}; releasing_FLUX_once_before_ONNX",
+                    flush=True,
+                )
+                release_image_pipeline_for_segmentation()
+                # Memory preflight must be checked AFTER FLUX leaves CPU RAM.
+                from .runtime_memory_watchdog import assert_memory_headroom
+                if os.environ.get("MMM_COLAB_SETUP_RECEIPT", "").strip():
+                    assert_memory_headroom("before_alpha_segmentation")
+
+            # Segmentation pass: one isolated ONNX worker at a time, and no
+            # FLUX reload unless a failed candidate requires another round.
+            for task, normalized, pending in source_batches:
+                asset_id, role, texture = (
+                    task["asset_id"], task["role"], task["texture"]
+                )
+                try:
+                    evidence = finalize_candidate_sources(
+                        texture, pending, output=normalized,
+                        resolution=profile.preferred_generation_resolution,
+                    )
+                except ValueError as exc:
+                    if str(exc).startswith(infrastructure_failures):
+                        raise AssetProductionError(
+                            f"Foreground segmentation infrastructure failed "
+                            f"for {asset_id}:{role}: {exc}"
+                        ) from exc
+                    task["failures"].append({"candidate": index, "reason": str(exc)})
+                    continue
+                task["selected"] = (1000.0, index, normalized, evidence)
+
+        for task in tasks:
+            selected = task["selected"]
+            asset_id, role = task["asset_id"], task["role"]
+            if selected is None:
+                raise AssetProductionError(
+                    f"No candidate satisfies resource contract for "
+                    f"{asset_id}:{role}: {task['failures']}"
+                )
+            score, index, winner, evidence = selected
+            texture, row = task["texture"], task["row"]
+            target = _safe_target(task["container_root"], str(texture["target_path"]))
+            _atomic_write_bytes(target, winner.read_bytes())
+            receipts.append({
+                "asset_id": asset_id, "role": role, "render_kind": row["render_kind"],
+                "container": task["container"], "target": str(target),
+                "target_path": str(texture["target_path"]),
+                "width": int(texture["width"]), "height": int(texture["height"]),
+                "topology": str(texture["topology"]),
+                "alpha_policy": str(texture["alpha_policy"]),
+                "selected_candidate": index, "selected_score": score,
+                "candidate_count": profile.candidate_count,
+                "attempted_candidate_count": index + 1,
+                "generation_evidence": evidence,
+                "rejected_candidates": task["failures"],
+                "prompt_sha256": "sha256:" + hashlib.sha256(
+                    task["prompt"].encode()
+                ).hexdigest(),
+                "sha256": "sha256:" + hashlib.sha256(target.read_bytes()).hexdigest(),
+                "placeholder": False,
+            })
+
     documents = _write_documents(project_root, run_root, rows)
     resource_checks = []
     for row in rows:
