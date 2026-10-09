@@ -127,67 +127,77 @@ def generation_regions(contract: Mapping[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-def generate_candidate(
+def prepare_candidate_sources(
     generate: Callable,
     texture: Mapping[str, Any],
     *,
     prompt: str,
     directory: Path,
-    output: Path,
     resolution: tuple[int, int],
     seed: int,
+) -> list[tuple[dict[str, Any], Path, bool]]:
+    """Run only FLUX generation and persist its actual RGB/alpha source images.
+
+    Separating generation from matting permits all assets in a work shard to
+    share one FLUX model residency before its CPU-offloaded weights are freed.
+    """
+    from PIL import Image
+
+    contract = _contract(texture)
+    directory.mkdir(parents=True, exist_ok=True)
+    pending = []
+    for index, region in enumerate(generation_regions(contract)):
+        source = directory / f"region-{index:03d}.png"
+        region_seed = int.from_bytes(
+            hashlib.sha256(f"{seed}:{index}".encode()).digest()[:8], "big"
+        ) & ((1 << 63) - 1)
+        generate(
+            prompt=prompt + f", semantic region {region['name']}",
+            output_path=source,
+            seed=region_seed,
+            width=resolution[0],
+            height=resolution[1],
+        )
+        if not source.is_file() or source.is_symlink():
+            raise ValueError("Image backend produced no regular source PNG.")
+        with Image.open(source) as raw:
+            raw.load()
+            if raw.format != "PNG" or raw.size != resolution:
+                raise ValueError(
+                    "Image backend output does not match generation profile geometry/PNG format."
+                )
+            needs_segmentation = (
+                contract["rendering"]["alpha"] in {"transparent", "cutout"}
+                and contract["geometry"]["layout"] in {"isolated_sprite", "cutout_sprite"}
+                and (
+                    raw.mode not in {"RGBA", "LA"}
+                    or raw.getchannel("A").getextrema() == (255, 255)
+                )
+            )
+        pending.append((region, source, needs_segmentation))
+    return pending
+
+
+def finalize_candidate_sources(
+    texture: Mapping[str, Any],
+    pending: list[tuple[dict[str, Any], Path, bool]],
+    *,
+    output: Path,
+    resolution: tuple[int, int],
     segment_foreground_callback: Callable | None = None,
-    before_segmentation: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
-    """Generate every source before segmentation to avoid simultaneous model residency."""
+    """Matte already-generated PNGs without launching or reloading FLUX."""
     from PIL import Image
     from .resource_alpha_segmentation import segment_foreground_isolated as segment_foreground
 
     contract = _contract(texture)
-    directory.mkdir(parents=True, exist_ok=True)
     canvas = Image.new("RGBA", (texture["width"], texture["height"]), (0, 0, 0, 0))
     sources = []
-    pending = []
     try:
-        # Finish all diffusion inference first: even animated/UV textures must
-        # not repeatedly reload FLUX between individual BiRefNet invocations.
-        for index, region in enumerate(generation_regions(contract)):
-            source = directory / f"region-{index:03d}.png"
-            region_seed = int.from_bytes(
-                hashlib.sha256(f"{seed}:{index}".encode()).digest()[:8], "big"
-            ) & ((1 << 63) - 1)
-            generate(
-                prompt=prompt + f", semantic region {region['name']}",
-                output_path=source,
-                seed=region_seed,
-                width=resolution[0],
-                height=resolution[1],
-            )
-            if not source.is_file() or source.is_symlink():
-                raise ValueError("Image backend produced no regular source PNG.")
-            with Image.open(source) as raw:
-                raw.load()
-                if raw.format != "PNG" or raw.size != resolution:
-                    raise ValueError(
-                        "Image backend output does not match generation profile geometry/PNG format."
-                    )
-                needs_segmentation = (
-                    contract["rendering"]["alpha"] in {"transparent", "cutout"}
-                    and contract["geometry"]["layout"] in {"isolated_sprite", "cutout_sprite"}
-                    and (
-                        raw.mode not in {"RGBA", "LA"}
-                        or raw.getchannel("A").getextrema() == (255, 255)
-                    )
-                )
-            pending.append((region, source, needs_segmentation))
-
-        if any(needs for _, _, needs in pending) and before_segmentation is not None:
-            # Release the diffusion pipeline and its CPU offload weights before
-            # rembg allocates its large ONNX session on host RAM.
-            before_segmentation()
-
         for region, source, needs_segmentation in pending:
             x, y, width, height = region["box"]
+            if not source.is_file() or source.is_symlink():
+                raise ValueError("Generated image source is missing before matting.")
             with Image.open(source) as raw:
                 raw.load()
                 if needs_segmentation:
@@ -197,7 +207,6 @@ def generate_candidate(
                     )
                     extracted = matting(raw)
                     try:
-                        # Capture provenance before closing the generated image.
                         matte_method = extracted.info.get(
                             "mmm_alpha_matte", "rembg:birefnet-general-lite"
                         )
@@ -209,7 +218,6 @@ def generate_candidate(
                 else:
                     processed = postprocess_region(raw, contract, (width, height))
                     matte_method = "source_alpha_or_boundary_background"
-
             try:
                 canvas.paste(processed, (x, y))
             finally:
@@ -236,6 +244,31 @@ def generate_candidate(
             json.dumps(contract, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest(),
     }
+
+
+def generate_candidate(
+    generate: Callable,
+    texture: Mapping[str, Any],
+    *,
+    prompt: str,
+    directory: Path,
+    output: Path,
+    resolution: tuple[int, int],
+    seed: int,
+    segment_foreground_callback: Callable | None = None,
+    before_segmentation: Callable[[], None] | None = None,
+) -> dict[str, Any]:
+    """Compatibility entry: FLUX once, release, then actual segmentation."""
+    pending = prepare_candidate_sources(
+        generate, texture, prompt=prompt, directory=directory,
+        resolution=resolution, seed=seed,
+    )
+    if any(needs for _, _, needs in pending) and before_segmentation is not None:
+        before_segmentation()
+    return finalize_candidate_sources(
+        texture, pending, output=output, resolution=resolution,
+        segment_foreground_callback=segment_foreground_callback,
+    )
 
 
 def validate_texture(
