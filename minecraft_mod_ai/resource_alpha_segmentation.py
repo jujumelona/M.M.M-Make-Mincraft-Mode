@@ -217,7 +217,7 @@ def segment_foreground_isolated(image: Any) -> Any:
             memory_headroom = _available_host_ram_bytes()
             # Progress bars fill stderr with thousands of redraws; report
             # diagnostics, not repeated download percentages.
-            stderr_lines = (completed.stderr or "").replace("\\r", "\\n").splitlines()
+            stderr_lines = (completed.stderr or "").replace("\r", "\n").splitlines()
             tail = " | ".join(stderr_lines[-3:])[-350:]
             possible_oom = completed.returncode in (-9, 137)
             kind = (
