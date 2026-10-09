@@ -202,7 +202,11 @@ def generate_candidate(
                         )
                     finally:
                         extracted.close()
-                    matte_method = "rembg:birefnet-general"
+                    # Evidence must identify the model actually used after any
+                    # low-memory recovery, rather than always claiming BiRefNet.
+                    matte_method = extracted.info.get(
+                        "mmm_alpha_matte", "rembg:birefnet-general-lite"
+                    )
                 else:
                     processed = postprocess_region(raw, contract, (width, height))
                     matte_method = "source_alpha_or_boundary_background"
