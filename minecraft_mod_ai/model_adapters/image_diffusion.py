@@ -175,6 +175,18 @@ def finish_image_shard() -> None:
         _release_cuda()
 
 
+def release_image_pipeline_for_segmentation() -> None:
+    """Force-drop FLUX and its CPU offload hooks before CPU-only BiRefNet starts.
+
+    This intentionally overrides MMM_IMAGE_CACHE_ACROSS_SHARDS: parking a
+    CPU-offloaded diffusion pipeline keeps multi-GB weights in host RAM.
+    The next image generation can lazily load it again from the disk cache.
+    """
+    with _IMAGE_LOCK:
+        _clear_cached_pipeline()
+        _release_cuda()
+
+
 class ImageDiffusionAdapter:
     """Typed image backend. Registry owns model, quantization, LoRA and inference settings."""
 
@@ -248,4 +260,4 @@ class ImageDiffusionAdapter:
 
 
 ImageDiffusionAdapter.generate_image._mmm_adaptive_image_residency = True  # type: ignore[attr-defined]
-__all__ = ["ImageDiffusionAdapter", "ImageGenerationConfig", "finish_image_shard"]
+__all__ = ["ImageDiffusionAdapter", "ImageGenerationConfig", "finish_image_shard", "release_image_pipeline_for_segmentation"]
