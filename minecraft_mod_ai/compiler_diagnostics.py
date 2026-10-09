@@ -240,7 +240,12 @@ def gradle_failure_summary(value: Mapping[str, Any]) -> str:
     fragments: list[str] = []
     error = str(value.get("error") or "").strip()
     if error:
-        fragments.append(error[:160])
+        # Preserve actionable preflight remediation (e.g. the exact EULA opt-in
+        # environment variable) without removing the final 4 KiB redaction cap.
+        fragments.append(error[:700])
+    error_code = str(value.get("error_code") or "").strip()
+    if error_code:
+        fragments.append(f"error_code={error_code[:100]}")
     commands = value.get("commands")
     failed: Mapping[str, Any] | None = None
     if isinstance(commands, (list, tuple)):
