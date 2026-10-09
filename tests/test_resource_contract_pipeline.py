@@ -9,6 +9,18 @@ from minecraft_mod_ai.resource_contracts import resolve_asset
 from minecraft_mod_ai.resource_prompt_compiler import image_profile_fingerprint
 
 
+@pytest.fixture(autouse=True)
+def _mock_external_alpha_checkpoint_download(monkeypatch):
+    # These are contract tests with synthetic image generators. The isolated
+    # checkpoint downloader itself is covered by test_resource_alpha_segmentation.
+    from minecraft_mod_ai import resource_alpha_segmentation
+
+    monkeypatch.setattr(
+        resource_alpha_segmentation, "prepare_foreground_model_isolated",
+        lambda: None,
+    )
+
+
 def request(kind="item", render="item.generated"):
     return AssetRequest("blade", kind, "obsidian blade", render, "blade")
 
