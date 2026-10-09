@@ -71,7 +71,9 @@ def test_python_system_template_modules_contain_no_java_source_bodies() -> None:
         text = (PKG / filename).read_text(encoding="utf-8")
         assert "return f'''package" not in text
         assert "return f\"\"\"package" not in text
-        assert "import net.minecraft" not in text
+        # Version-specific import substitutions are data, not inline Java
+        # template bodies; the canonical classes live in .java.fmt files.
+        assert "public final class " not in text
         ast.parse(text)
     assert "_party_java" not in (PKG / "system_templates_social.py").read_text(encoding="utf-8")
 
@@ -81,7 +83,12 @@ def test_record_execution_has_no_model_owned_status_loop() -> None:
     batch = (PKG / "task_template_batch_runner.py").read_text(encoding="utf-8")
     assert "record_cardinality_response_schema" in bounded
     assert '"count"' in bounded
-    assert '"minimum": 0' in bounded
+    # The minimum comes from an explicit host argument, not an embedded
+    # magic zero. The default remains zero when no records are required.
+    assert '"minimum": minimum' in bounded
+    from minecraft_mod_ai.bounded_record_template import record_cardinality_response_schema
+    count_schema = record_cardinality_response_schema()
+    assert count_schema["properties"]["count"]["minimum"] == 0
     assert "record/done" not in bounded
     assert "authored/applicable records" in bounded
     assert "count 0" in bounded
