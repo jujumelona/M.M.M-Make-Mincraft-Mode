@@ -176,3 +176,67 @@ def test_gametest_timeout_is_non_repairable_verifier_failure(tmp_path: Path) -> 
     assert result.failure_class == "infrastructure_timeout"
     assert result.repairable is False
     assert [name for name, _ in runner.calls] == ["build", "gametest"]
+
+
+
+def _host_owned_eula_project(tmp_path: Path, *, eula_setting: str) -> Path:
+    project = tmp_path / "host-eula"
+    project.mkdir()
+    (project / "build.gradle").write_text(
+        "// M.M.M host-owned server GameTest contract\n"
+        "fabricApi { configureTests { enableGameTests = true\n"
+        f" {eula_setting}\n"
+        "} }\n",
+        encoding="utf-8",
+    )
+    return project
+
+
+def test_host_owned_gametest_without_eula_opt_in_fails_before_gradle(tmp_path: Path) -> None:
+    project = _host_owned_eula_project(
+        tmp_path,
+        eula_setting='eula = (System.getenv("MMM_ACCEPT_MINECRAFT_EULA") ?: "false").equalsIgnoreCase("true")',
+    )
+    runner = _RecordingRunner(tmp_path / "cache")
+    result = runner._execute_prepared_build(_prepared(project), run_gametest=True)
+    assert result.status == "FAIL"
+    assert result.error_code == "GRADLE_GAMETEST_EULA_REQUIRED"
+    assert result.repairable is False
+    assert "Minecraft EULA" in result.error
+    assert runner.calls == []
+
+
+def test_host_owned_gametest_runs_after_explicit_env_opt_in(tmp_path: Path) -> None:
+    project = _host_owned_eula_project(
+        tmp_path,
+        eula_setting='eula = (System.getenv("MMM_ACCEPT_MINECRAFT_EULA") ?: "false").equalsIgnoreCase("true")',
+    )
+    runner = _RecordingRunner(tmp_path / "cache")
+    prepared = _prepared(project)
+    prepared.environment["MMM_ACCEPT_MINECRAFT_EULA"] = "true"
+    result = runner._execute_prepared_build(prepared, run_gametest=True)
+    assert result.status == "PASS"
+    assert [name for name, _ in runner.calls] == ["build", "gametest"]
+
+
+def test_host_owned_legacy_eula_config_needs_migration(tmp_path: Path) -> None:
+    project = _host_owned_eula_project(
+        tmp_path,
+        eula_setting="enableClientGameTests = false",
+    )
+    runner = _RecordingRunner(tmp_path / "cache")
+    prepared = _prepared(project)
+    prepared.environment["MMM_ACCEPT_MINECRAFT_EULA"] = "true"
+    result = runner._execute_prepared_build(prepared, run_gametest=True)
+    assert result.status == "FAIL"
+    assert result.error_code == "GRADLE_GAMETEST_EULA_REQUIRED"
+    assert "predates" in result.error
+    assert runner.calls == []
+
+
+def test_host_owned_literal_eula_acceptance_is_respected(tmp_path: Path) -> None:
+    project = _host_owned_eula_project(tmp_path, eula_setting="eula = true")
+    runner = _RecordingRunner(tmp_path / "cache")
+    result = runner._execute_prepared_build(_prepared(project), run_gametest=True)
+    assert result.status == "PASS"
+    assert [name for name, _ in runner.calls] == ["build", "gametest"]
