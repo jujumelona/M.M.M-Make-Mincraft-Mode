@@ -436,6 +436,8 @@ def discover_repositories_for_graph(
     client: Any,
     *,
     capability_graph: Mapping[str, Any] | None = None,
+    minecraft_version: str | None = None,
+    loader: str | None = None,
 ) -> dict[str, tuple[str, ...]]:
     """Adaptive two-wave discovery with cross-capability representative selection."""
 
@@ -466,7 +468,14 @@ def discover_repositories_for_graph(
         if provider == "curseforge":
             return capability, provider, _search_curseforge(provider_query, limit=_query_limit())
         try:
-            page = client.search(provider, provider_query, limit=_query_limit(), target_profile="minecraft_mod")
+            target_kwargs = (
+                {"minecraft_version": minecraft_version, "loader": loader}
+                if minecraft_version and loader else {}
+            )
+            page = client.search(
+                provider, provider_query, limit=_query_limit(),
+                target_profile="minecraft_mod", **target_kwargs,
+            )
         except Exception:
             return capability, provider, []
         raw = page.get("candidates") if isinstance(page, Mapping) else None
