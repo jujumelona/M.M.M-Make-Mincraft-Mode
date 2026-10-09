@@ -197,6 +197,14 @@ def run_bounded_record_template(
             f"TEMPLATE_RECORD_SET_SAVED_COUNT: {identifier} checkpoint count "
             "must be an integer"
         )
+    # A checkpoint with records but no count has a missing required
+    # cardinality, not an unknown-field shape. Reject before shape checking
+    # so the failure identifies the actual failed invariant.
+    if isinstance(saved, dict) and "records" in saved and "count" not in saved:
+        raise ValueError(
+            f"TEMPLATE_RECORD_SET_SAVED_COUNT: {identifier} checkpoint "
+            "records require an integer count"
+        )
     if isinstance(saved, dict) and set(saved) not in (
         {"count"},
         {"count", "records"},

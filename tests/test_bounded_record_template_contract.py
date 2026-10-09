@@ -312,21 +312,21 @@ def test_resumed_record_checkpoint_requires_integer_count(monkeypatch) -> None:
         lambda template, context, refs: "binding",
     )
 
-    progress = {
-        "record-set-v3:min=0:binding": {
-            "records": [{"name": "item-1"}],
-        }
-    }
-
     import pytest
 
-    with pytest.raises(ValueError, match="TEMPLATE_RECORD_SET_SAVED_COUNT"):
-        bounded.run_bounded_record_template(
-            object(),
-            "feature/test/items",
-            context={"requirement": "resume malformed checkpoint"},
-            progress=progress,
-        )
+    for saved_records in ([], [{"name": "item-1"}]):
+        progress = {
+            "record-set-v3:min=0:binding": {
+                "records": saved_records,
+            }
+        }
+        with pytest.raises(ValueError, match="TEMPLATE_RECORD_SET_SAVED_COUNT"):
+            bounded.run_bounded_record_template(
+                object(),
+                "feature/test/items",
+                context={"requirement": "resume malformed checkpoint"},
+                progress=progress,
+            )
 
 def test_malformed_record_checkpoint_shape_is_rejected(monkeypatch) -> None:
     monkeypatch.setattr(
