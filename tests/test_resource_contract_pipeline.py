@@ -76,7 +76,10 @@ def test_resolution_changes_invalidate_approved_profile():
         config,
         extra={
             **config.extra,
-            "preferred_generation_resolution": {"width": 512, "height": 512},
+            "preferred_generation_resolution": {
+                "width": 1024 if config.extra["preferred_generation_resolution"]["width"] == 512 else 512,
+                "height": 1024 if config.extra["preferred_generation_resolution"]["height"] == 512 else 512,
+            },
         },
     )
     assert image_profile_fingerprint(config) != image_profile_fingerprint(changed)
@@ -316,7 +319,9 @@ def test_production_consumes_registry_and_checks_real_resource_set(tmp_path):
 
     router, proposal, calls = runtime()
     result = generate_assets(router, proposal, tmp_path / "project", tmp_path / "run")
-    assert calls[0]["width"] == 1024
+    assert calls[0]["width"] == ModelRegistry().role(
+        "t4_local", "image_generator"
+    ).extra["preferred_generation_resolution"]["width"]
     assert result["resource_contract_validation"]["status"] == "PASS"
     assert result["resource_graph_validation"]["checked_reference_count"] == 1
     with Image.open(result["assets"][0]["target"]) as image:
@@ -407,6 +412,12 @@ def test_structured_semantics_deserialize_without_freeform_prompt():
             "kind": "item",
             "render_kind": "item.generated",
             "subject_id": "blade",
+            "visual_description": "",
+            "owner_module_id": "",
+            "container": "mod",
+            "requested_width": None,
+            "requested_height": None,
+            "variant_count": 1,
             "visual_spec": {"role": "weapon", "materials": ["obsidian"]},
         }
     )
