@@ -90,7 +90,7 @@ def test_actual_candidate_generation_uses_segmenter_not_shape_mask(tmp_path):
         segment_foreground_callback=fake_segmenter,
     )
     assert len(calls) == 1
-    assert evidence["sources"][0]["alpha_matte"] == "rembg:birefnet-general"
+    assert evidence["sources"][0]["alpha_matte"] == "rembg:birefnet-general-lite"
     assert validate_texture(output, texture.to_dict())["status"] == "PASS"
 
 
