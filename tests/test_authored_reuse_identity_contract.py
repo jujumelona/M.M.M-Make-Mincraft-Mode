@@ -91,7 +91,10 @@ def test_authored_transplant_uses_actual_mod_package_and_mod_id(tmp_path, monkey
     java = java_path.read_text(encoding="utf-8")
     assert "package dev.example.spacemod;" in java
     assert 'Identifier.of("spacemod", "fuel")' in java
-    assert (out / "src/main/resources/assets/spacemod/lang/en_us.json").is_file()
+    lang = out / "src/main/resources/assets/spacemod/lang/en_us.json"
+    assert lang.is_file()
+    assert '"item.spacemod.fuel"' in lang.read_text(encoding="utf-8")
+    assert '"item.donor.fuel"' not in lang.read_text(encoding="utf-8")
     texture_path = out / "src/main/resources/assets/spacemod/textures/item/fuel.png"
     assert texture_path.read_bytes().startswith(b"\x89PNG")
     assert not (out / "src/main/resources/assets/donor/textures/item/fuel.png").exists()
@@ -153,6 +156,16 @@ def test_mojang_resource_location_namespace_rewrite():
     assert 'new ResourceLocation("spacemod", "fuel")' in source
     assert 'ResourceLocation.fromNamespaceAndPath("spacemod", "fuel")' in source
     assert '"donor"' not in source
+
+
+def test_language_key_relocation_rejects_duplicate_keys():
+    from minecraft_mod_ai.reuse_adapters import _rewrite_donor_translation_keys
+
+    payload = '{"item.donor.fuel":"old","item.spacemod.fuel":"new"}'
+    with pytest.raises(ValueError, match="SOURCE_REUSE_LANGUAGE_KEY_COLLISION"):
+        _rewrite_donor_translation_keys(
+            payload, donor_modid="donor", target_modid="spacemod"
+        )
 
 
 def test_yarn_only_migration_fails_closed_for_mojang_mappings():
