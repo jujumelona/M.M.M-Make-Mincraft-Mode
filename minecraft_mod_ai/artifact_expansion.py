@@ -698,6 +698,16 @@ def expand_facts_to_jobs(
                 registry_suffix = registry_port_by_subject.get(
                     local_subject, expected_tag_port or "registry_id"
                 )
+                if fact.fact_type in {FactType.CRAFTING_RECIPE, FactType.SMELTING_RECIPE}:
+                    # Recipe inputs and outputs are Item identities, even when
+                    # their source fact declares a placeable Block. The Block
+                    # producer publishes a distinct BlockItem REGISTRY_ID port;
+                    # consuming its Block REGISTRY_ID must not type-check.
+                    if registry_suffix not in {"registry_id", "block_registry_id"}:
+                        raise ArtifactExpansionError(
+                            "ARTIFACT_RECIPE_NON_ITEM_REFERENCE: " + ref
+                        )
+                    registry_suffix = "registry_id"
                 if expected_tag_port is not None and registry_suffix != expected_tag_port:
                     raise ArtifactExpansionError(
                         "ARTIFACT_RESOURCE_TAG_REGISTRY_MISMATCH: "
