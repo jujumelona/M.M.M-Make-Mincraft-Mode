@@ -386,7 +386,12 @@ def ensure_artifact_scaffolding(
             f"package {package_name}.registry;\n\n"
             "import net.minecraft.core.Registry;\n"
             "import net.minecraft.core.registries.BuiltInRegistries;\n"
-            "import net.minecraft.world.level.block.Block;\n\n"
+            "import net.minecraft.world.level.block.Block;\n"
+            "import net.minecraft.world.level.block.state.BlockBehaviour;\n"
+            "import net.minecraft.world.item.BlockItem;\n"
+            "import net.minecraft.world.item.Item;\n"
+            "import net.minecraft.resources.ResourceKey;\n"
+            "import net.minecraft.core.registries.Registries;\n\n"
             "public final class ModBlocks {\n"
             "    private ModBlocks() {}\n\n"
             "    /* MMM:block_registry */\n\n"
@@ -396,6 +401,32 @@ def ensure_artifact_scaffolding(
         materialize_whole_file(blocks_path, mod_blocks_skeleton)
     else:
         content = blocks_path.read_text(encoding="utf-8")
+        # A previously prepared/resumed project may have the block anchor but
+        # not the imports required to register the BlockItem that recipes consume.
+        # Bring both scaffold forms to the same compile contract without deleting
+        # or replacing any user-authored registry body.
+        block_item_imports = (
+            "net.minecraft.world.level.block.state.BlockBehaviour",
+            "net.minecraft.world.item.BlockItem",
+            "net.minecraft.world.item.Item",
+            "net.minecraft.resources.ResourceKey",
+            "net.minecraft.core.registries.Registries",
+        )
+        package_declaration = f"package {package_name}.registry;"
+        if package_declaration not in content:
+            raise MaterializeError("BLOCK_REGISTRY_PACKAGE_MISMATCH")
+        missing_imports = [
+            f"import {symbol};"
+            for symbol in block_item_imports
+            if f"import {symbol};" not in content
+        ]
+        if missing_imports:
+            content = content.replace(
+                package_declaration,
+                package_declaration + "\\n\\n" + "\\n".join(missing_imports),
+                1,
+            )
+            blocks_path.write_text(content, encoding="utf-8")
         if "/* MMM:block_registry */" not in content:
             last_brace = content.rfind("}")
             if last_brace != -1:
