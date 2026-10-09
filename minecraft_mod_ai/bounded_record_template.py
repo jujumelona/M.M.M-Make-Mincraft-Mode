@@ -235,7 +235,12 @@ def run_bounded_record_template(
                 f"saved {len(records)} records"
             )
         for record in records:
-            _validate_record_semantics(\n                record,\n                identifier=identifier,\n                schema=record_schema,\n                validator=record_validator,\n            )
+            _validate_record_semantics(
+                record,
+                identifier=identifier,
+                schema=record_schema,
+                validator=record_validator,
+            )
     else:
         if isinstance(saved, dict) and type(saved.get("count")) is int:
             count = int(saved["count"])
@@ -301,7 +306,12 @@ def run_bounded_record_template(
                 f"received {len(records)}"
             )
         for record in records:
-            _validate_record_semantics(\n                record,\n                identifier=identifier,\n                schema=record_schema,\n                validator=record_validator,\n            )
+            _validate_record_semantics(
+                record,
+                identifier=identifier,
+                schema=record_schema,
+                validator=record_validator,
+            )
         if checkpoint is not None:
             checkpoint(
                 binding,
