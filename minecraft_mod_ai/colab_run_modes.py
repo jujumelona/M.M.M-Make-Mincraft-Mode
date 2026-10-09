@@ -87,8 +87,12 @@ def _user_download_zip(build_result: Any) -> Path | None:
     if not artifact_name or Path(artifact_name).name != artifact_name:
         return None
 
-    root = Path(raw_root).expanduser().resolve()
-    if not root.is_dir() or root.is_symlink():
+    # Reject the original symlink before resolving: Path.resolve() hides it.
+    raw_directory = Path(raw_root).expanduser()
+    if raw_directory.is_symlink():
+        return None
+    root = raw_directory.resolve()
+    if not root.is_dir():
         return None
 
     names = [artifact_name]
@@ -113,12 +117,17 @@ def _user_download_zip(build_result: Any) -> Path | None:
 
     members: list[Path] = []
     for name in names:
-        candidate = (root / name).resolve()
+        # Resolve only after checking the lexical member; resolved paths are
+        # never symlinks, even if the bundle member itself was a symlink.
+        raw_candidate = root / name
+        if raw_candidate.is_symlink():
+            return None
+        candidate = raw_candidate.resolve()
         try:
             candidate.relative_to(root)
         except ValueError:
             return None
-        if not candidate.is_file() or candidate.is_symlink():
+        if not candidate.is_file():
             return None
         expected_sha256 = expected_hashes.get(name)
         if not expected_sha256:
