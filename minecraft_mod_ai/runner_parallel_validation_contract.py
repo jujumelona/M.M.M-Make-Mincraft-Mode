@@ -31,6 +31,9 @@ _BUILD_POLICY_ENV = (
     "GRADLE_OPTS",
     "JAVA_OPTS",
     "MMM_GRADLE_WORKERS",
+    # Consent inherited from the kernel also changes the executable contract:
+    # never reuse a PASS generated with acceptance after consent is revoked.
+    "MMM_ACCEPT_MINECRAFT_EULA",
 )
 
 
