@@ -103,7 +103,7 @@ def _project_files(spec: dict[str, object], generated: dict[str, object]) -> dic
         "src/main/java/probe/ProbeTests.java": _PROBE_TEST_SOURCE,
         "settings.gradle": (
             "pluginManagement { repositories { maven { url='https://maven.fabricmc.net/' }; "
-            "gradlePluginPortal() } }\nrootProject.name='integrity-probe'\n"
+            "mavenCentral(); gradlePluginPortal() } }\nrootProject.name='integrity-probe'\n"
         ),
         "gradle.properties": (
             "minecraft_version=1.20.1\n"
