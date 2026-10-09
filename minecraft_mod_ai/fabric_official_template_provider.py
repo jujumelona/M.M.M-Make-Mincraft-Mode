@@ -602,10 +602,29 @@ fabricApi {{
         modId = "{test_mod_id}"
         enableGameTests = true
         enableClientGameTests = false
+        // Read and accept https://aka.ms/MinecraftEULA before opting in.
+        eula = (System.getenv("MMM_ACCEPT_MINECRAFT_EULA") ?: "false").equalsIgnoreCase("true")
     }}
 }}
 """
         )
+    # The same generated project can be resumed after this host upgrade. Migrate
+    # only the host-owned block, without rewriting a user's custom GameTest DSL.
+    if (
+        "// M.M.M host-owned server GameTest contract" in build_text
+        and "MMM_ACCEPT_MINECRAFT_EULA" not in build_text
+    ):
+        marker = "        enableClientGameTests = false\\n"
+        if marker in build_text:
+            build_text = build_text.replace(
+                marker,
+                marker
+                + '        // Read and accept https://aka.ms/MinecraftEULA before opting in.\\n'
+                + '        eula = (System.getenv("MMM_ACCEPT_MINECRAFT_EULA") ?: "false").equalsIgnoreCase("true")\\n',
+                1,
+            )
+            build_path.write_text(build_text, encoding="utf-8")
+
     classpath_marker = "// M.M.M host-owned GameTest source-set classpath bridge"
     if classpath_marker not in build_text:
         additions.append(
