@@ -22,6 +22,13 @@ produces:
     kind: JAVA_SYMBOL
     target_type: "Block"
     value: "ModBlocks.{{java_constant}}"
+  # Crafting recipes refer to Item identities, not Block identities.
+  # Publishing this port is valid only because the render also registers BlockItem.
+  - name: block_item_registry_id
+    binding: "{{subject}}.registry_id"
+    kind: REGISTRY_ID
+    target_type: "Item"
+    value: "{{mod_id}}:{{registry_path}}"
 ai_slots: []
 render:
   language: java
@@ -31,6 +38,14 @@ render:
             BuiltInRegistries.BLOCK,
             ModBlockIds.{{java_constant}}_KEY,
             new Block(BlockBehaviour.Properties.of().setId(ModBlockIds.{{java_constant}}_KEY)/* MMM:block_properties:{{registry_path}} */)
+        );
+    public static final ResourceKey<Item> {{java_constant}}_ITEM_KEY =
+        ResourceKey.create(Registries.ITEM, ModBlockIds.{{java_constant}}_KEY.location());
+    public static final Item {{java_constant}}_ITEM =
+        Registry.register(
+            BuiltInRegistries.ITEM,
+            {{java_constant}}_ITEM_KEY,
+            new BlockItem({{java_constant}}, new Item.Properties().setId({{java_constant}}_ITEM_KEY))
         );
 validators:
   - java_parse
@@ -46,6 +61,8 @@ fixture:
     - "ModBlockIds.LUNITE_ORE_KEY"
     - "lunite_ore"
     - "LUNITE_ORE"
+    - "new BlockItem("
+    - "BuiltInRegistries.ITEM"
 dependency_types:
   '{{subject}}.block_key_symbol':
     kind: JAVA_SYMBOL
