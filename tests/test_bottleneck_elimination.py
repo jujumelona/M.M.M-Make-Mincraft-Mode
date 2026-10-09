@@ -38,7 +38,20 @@ class _AtomicRouter:
             assert len(fields) == 1
             if "property" in fields:
                 return json.dumps({"property": requested})
-            return json.dumps({"value": f"value_{requested}"})
+            values = {
+                "display_name": "Test Entity",
+                "category": "monster",
+                "health": "20",
+                "speed": "0.25",
+                "tracking_range": "16",
+                "width": "0.6",
+                "height": "1.8",
+            }
+            chosen = values[requested]
+            enum = fields["value"].get("enum")
+            if enum is not None:
+                chosen = enum[0]
+            return json.dumps({"value": chosen})
         if "count" in fields:
             assert "source_entity" in context
             assert "target_entity" in context
