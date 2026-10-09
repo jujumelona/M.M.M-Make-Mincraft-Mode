@@ -1,8 +1,9 @@
 """Commercial-permissive foreground alpha for opaque diffusion image assets.
 
 FLUX.2 Klein 4B's local Diffusers output is RGB, not native transparent PNG.
-Use explicitly chosen BiRefNet-General-Lite (MIT) and a U2NetP (Apache-2.0)
-SIGKILL fallback. Never let rembg select its non-commercial BRIA default.
+Use explicitly licensed BiRefNet-General-Lite (MIT), full U2Net
+(Apache-2.0) for constrained hosts, and U2NetP (Apache-2.0) only for
+low-memory/OOM fallback. Never use rembg's non-commercial BRIA default.
 """
 from __future__ import annotations
 
@@ -15,10 +16,11 @@ import tempfile
 from typing import Any
 
 ALPHA_SEGMENTATION_MODEL = "birefnet-general-lite"
+ALPHA_SEGMENTATION_MID_MODEL = "u2net"
 ALPHA_SEGMENTATION_FALLBACK_MODEL = "u2netp"
 ALPHA_SEGMENTATION_ENGINE = "rembg"
 ALPHA_SEGMENTATION_PROVIDER = "CPUExecutionProvider"
-ALPHA_SEGMENTATION_CONTRACT = "mmm/alpha-segmentation-birefnet-lite-u2netp-v2"
+ALPHA_SEGMENTATION_CONTRACT = "mmm/alpha-segmentation-birefnet-lite-u2net-u2netp-v3"
 # Once the primary was SIGKILLed, skip further risky ONNX attempts in this
 # Python kernel. The flag is not persisted between Colab sessions.
 _LITE_WORKER_SIGKILLED = False
@@ -30,6 +32,8 @@ def _get_session(model_name: str = ALPHA_SEGMENTATION_MODEL) -> Any:
     try:
         if model_name == ALPHA_SEGMENTATION_MODEL:
             from rembg.sessions.birefnet_general_lite import BiRefNetSessionGeneralLite as model_class
+        elif model_name == ALPHA_SEGMENTATION_MID_MODEL:
+            from rembg.sessions.u2net import U2netSession as model_class
         elif model_name == ALPHA_SEGMENTATION_FALLBACK_MODEL:
             from rembg.sessions.u2netp import U2netpSession as model_class
         else:
@@ -209,25 +213,31 @@ def segment_foreground_isolated(image: Any) -> Any:
 
     global _LITE_WORKER_SIGKILLED
     _preflight_worker_ram()
-    # Observed Colab cgroup headroom was ~6.5GiB when BiRefNet-Lite was
-    # repeatedly SIGKILLed. Prefer the smaller, real U2NetP ONNX model below
-    # 8GiB or after a previous kill. Do not attempt a fake/background mask.
+    # BiRefNet-Lite exceeded the observed ~6 GiB Colab memory headroom.
+    # Full U2Net is materially more capable than the tiny U2NetP and fits
+    # intermediate memory budgets. Do not silently downgrade a 5-7 GiB
+    # machine to the smallest segmenter.
     headroom = _available_host_ram_bytes()
     minimum_lite_mib = int(os.environ.get("MMM_ALPHA_LITE_MIN_AVAILABLE_MIB", "8192"))
+    minimum_u2net_mib = int(os.environ.get("MMM_ALPHA_U2NET_MIN_AVAILABLE_MIB", "4608"))
     if minimum_lite_mib < 3072:
         raise ValueError("MMM_ALPHA_LITE_MIN_AVAILABLE_MIB must be >= 3072")
-    fallback_first = _LITE_WORKER_SIGKILLED or (
-        headroom is not None and headroom < minimum_lite_mib * 1048576
-    )
-    model_order = (
-        (ALPHA_SEGMENTATION_FALLBACK_MODEL,) if fallback_first
-        else (ALPHA_SEGMENTATION_MODEL, ALPHA_SEGMENTATION_FALLBACK_MODEL)
-    )
-    if fallback_first:
+    if not 3072 <= minimum_u2net_mib <= minimum_lite_mib:
+        raise ValueError("MMM_ALPHA_U2NET_MIN_AVAILABLE_MIB must be 3072..MMM_ALPHA_LITE_MIN_AVAILABLE_MIB")
+    if _LITE_WORKER_SIGKILLED:
+        model_order = (ALPHA_SEGMENTATION_FALLBACK_MODEL,)
+    elif headroom is None or headroom >= minimum_lite_mib * 1048576:
+        model_order = (ALPHA_SEGMENTATION_MODEL, ALPHA_SEGMENTATION_FALLBACK_MODEL)
+    elif headroom >= minimum_u2net_mib * 1048576:
+        model_order = (ALPHA_SEGMENTATION_MID_MODEL, ALPHA_SEGMENTATION_FALLBACK_MODEL)
+    else:
+        model_order = (ALPHA_SEGMENTATION_FALLBACK_MODEL,)
+    if model_order[0] != ALPHA_SEGMENTATION_MODEL:
         print(
-            f"ALPHA_SEGMENTER_LOW_RAM: using real u2netp ONNX; "
+            f"ALPHA_SEGMENTER_MEMORY_POLICY: selected={model_order[0]} "
             f"available_mib={headroom // 1048576 if headroom is not None else 'unknown'} "
-            f"lite_min_mib={minimum_lite_mib} previous_lite_kill={_LITE_WORKER_SIGKILLED}",
+            f"lite_min_mib={minimum_lite_mib} u2net_min_mib={minimum_u2net_mib} "
+            f"previous_lite_kill={_LITE_WORKER_SIGKILLED}",
             flush=True,
         )
     with tempfile.TemporaryDirectory(prefix="mmm-alpha-") as temporary:
@@ -307,12 +317,12 @@ def segment_foreground_isolated(image: Any) -> Any:
                 f"stderr_tail={tail}{remediation}"
             )
             # SIGKILL alone is not proof of cgroup OOM when delta is zero.
-            # API/backend faults fail closed; retrying them with weaker weights
-            # would only conceal the original infrastructure error.
+            # Only a killed primary can fall back to the next explicit model;
+            # API/backend faults remain fail-closed.
             if not possible_oom or model_name == ALPHA_SEGMENTATION_FALLBACK_MODEL:
                 raise ValueError(" | ".join(failures))
             print(
-                "ALPHA_SEGMENTER_RECOVERY: killed lite worker; "
+                f"ALPHA_SEGMENTER_RECOVERY: killed worker={model_name}; "
                 f"trying fallback={ALPHA_SEGMENTATION_FALLBACK_MODEL}; "
                 + failures[-1],
                 flush=True,
@@ -352,6 +362,7 @@ def _worker_main(source: str, target: str) -> None:
 
 __all__ = [
     "ALPHA_SEGMENTATION_MODEL",
+    "ALPHA_SEGMENTATION_MID_MODEL",
     "ALPHA_SEGMENTATION_FALLBACK_MODEL",
     "ALPHA_SEGMENTATION_ENGINE",
     "ALPHA_SEGMENTATION_PROVIDER",
@@ -365,11 +376,13 @@ __all__ = [
 if __name__ == "__main__":
     if len(sys.argv) == 2 and sys.argv[1] == "--prepare":
         from rembg.sessions.birefnet_general_lite import BiRefNetSessionGeneralLite
+        from rembg.sessions.u2net import U2netSession
         from rembg.sessions.u2netp import U2netpSession
-        # Check and prefetch both permitted, checksum-verified ONNX weights.
+        # Prefetch all explicitly permitted, checksum-verified ONNX weights.
         # Neither the noncommercial BRIA weights nor rembg's default is used.
         for model_class, expected in (
             (BiRefNetSessionGeneralLite, ALPHA_SEGMENTATION_MODEL),
+            (U2netSession, ALPHA_SEGMENTATION_MID_MODEL),
             (U2netpSession, ALPHA_SEGMENTATION_FALLBACK_MODEL),
         ):
             if model_class.name() != expected:
