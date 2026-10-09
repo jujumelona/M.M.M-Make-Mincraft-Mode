@@ -826,7 +826,7 @@ def _authored_feature_semantic_findings(
         except (OSError, UnicodeError):
             findings.append(f"generated registration is unreadable: {java_path.name}")
             continue
-        if re.search(r"Planned:\\s*Implement gameplay obligation", java_text):
+        if re.search(r"Planned:\s*Implement gameplay obligation", java_text):
             findings.append(
                 f"generated registration is a nonfunctional requirement placeholder: "
                 f"{java_path.relative_to(root)}"
