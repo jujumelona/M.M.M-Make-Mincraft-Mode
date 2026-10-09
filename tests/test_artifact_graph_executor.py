@@ -20,6 +20,17 @@ from minecraft_mod_ai.artifact_ports import PortRegistry
 from minecraft_mod_ai.prompt_fact_types import FactType, PromptFact
 
 
+@pytest.fixture(autouse=True)
+def _isolate_graph_scheduling_from_host_version_gate(monkeypatch):
+    """These scheduling/locking tests mock execution; version isolation is
+    tested separately against real immutable host bundles."""
+    monkeypatch.setattr(
+        "minecraft_mod_ai.resolved_version_context.execution_context",
+        lambda _context, _job: None,
+    )
+
+
+
 def test_expanded_item_jobs_execute_through_scoped_port_graph():
     jobs = expand_facts_to_jobs(
         [
