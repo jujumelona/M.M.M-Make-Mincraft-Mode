@@ -345,6 +345,25 @@ class CompleteProductionOrchestrator:
     def execute(self, proposal: CompleteProposal | dict[str, Any], *, approval_hash: str, run_name: str, options: CompleteExecutionOptions | None=None, existing_input: str | Path | None=None) -> CompletePipelineResult:
         options = options or CompleteExecutionOptions()
         options.validate(policy=self.policy)
+        # Old Colab notebooks can import the latest GitHub code while keeping
+        # stale in-memory cell-1 variables. Catch the missing explicit consent
+        # before loading Qwen/FLUX or performing any expensive generation.
+        # Normal Python/library callers are not forced into Colab policy.
+        if (
+            os.environ.get("MMM_COLAB_SETUP_RECEIPT", "").strip()
+            and options.run_gametest
+            and not options.source_only
+            and not options.eula_accepted
+            and os.environ.get("MMM_ACCEPT_MINECRAFT_EULA", "").strip().lower() != "true"
+        ):
+            raise CompleteProductionError(
+                "GRADLE_GAMETEST_EULA_REQUIRED (before generation): "
+                "The open Colab notebook did not pass Minecraft EULA consent. "
+                "Open the latest main notebook and rerun settings cell 1 "
+                "with ACCEPT_EULA=True, or explicitly set "
+                "MMM_ACCEPT_MINECRAFT_EULA=true in the active Colab process. "
+                "No AI model or GameTest server was started."
+            )
         parsed = proposal if isinstance(proposal, CompleteProposal) else CompleteProposal.from_dict(proposal)
         parsed.validate(policy=self.policy)
         approved = parsed.approve(approval_hash)
