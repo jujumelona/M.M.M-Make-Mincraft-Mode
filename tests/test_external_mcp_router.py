@@ -303,7 +303,7 @@ def test_external_mcp_registry_has_one_packaged_canonical_source() -> None:
 
 
 def test_effective_skill_policy_is_target_dynamic() -> None:
-    contract = compile_skill_contract("generate-fabric-core")
+    contract = compile_skill_contract("execute-complete-production")
     flattened = str(contract.to_dict())
     assert "1.20.1" not in flattened
     assert "Java 17" not in flattened
