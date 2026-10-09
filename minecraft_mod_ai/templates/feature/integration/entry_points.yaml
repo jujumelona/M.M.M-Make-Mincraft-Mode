@@ -31,7 +31,7 @@ rules:
 - Use only a real bound lifecycle hook or an explicit named command such as command:open_ui.
 - UI unlock states, button clicks, skill effects, and similar semantic actions are not source hooks. Preserve those semantics in their behavior or UI records, not in trigger.
 - Never choose an unrelated lifecycle event merely to satisfy the trigger schema.
-- If the requested action has no supported source hook, return blocked with the exact missing adapter; do not invent one.
+- If no source hook is supported, never invent one. The host will reject the unresolved source-hook contract before executable generation.
 - Preserve supplied evidence identifiers. Never invent external APIs, paths or facts.
 - Return done only after all records for this concern are supplied.
 - Return not_applicable with a concrete reason only when this concern does not apply.
