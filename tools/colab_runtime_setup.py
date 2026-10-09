@@ -42,10 +42,11 @@ _LOCAL_PROFILE_ENV_NAMES = (
 )
 REMOTE_PROJECT_INSTALL_TARGET = ".[ui,rag,image,speech,production-audio]"
 LOCAL_PROJECT_INSTALL_TARGET = ".[ui,local-model,rag,image,speech,production-audio]"
-_PROJECT_PIP_NETWORK_ATTEMPTS = (
-    (60, 8),
-    (180, 12),
-)
+# A pip network timeout is not an overall resolver deadline. Keep both
+# bounded so a Colab setup cell cannot spend hours backtracking.
+_PROJECT_PIP_INSTALL_DEADLINE_SECONDS = 240
+_PROJECT_PIP_NETWORK_TIMEOUT_SECONDS = 25
+_PROJECT_PIP_NETWORK_RETRIES = 2
 
 # Pinned official ggml-org/llama.cpp release commit. Local GGUF execution uses the
 # native llama-server binary from the verified prebuilt bundle. Source compilation is
@@ -774,47 +775,58 @@ def _install_project(*, local_profile: bool) -> None:
             return
         print("project dependencies: stale receipt; FLUX.2 imports failed:", detail[-1500:], flush=True)
 
-    print("project dependencies: installing", target, flush=True)
-    last_error: subprocess.CalledProcessError | None = None
-    for attempt, (timeout_seconds, retries) in enumerate(
-        _PROJECT_PIP_NETWORK_ATTEMPTS,
-        start=1,
-    ):
-        command = [
-            sys.executable,
-            "-m",
-            "pip",
-            "install",
-            "--prefer-binary",
-            "--no-build-isolation",
-            "--disable-pip-version-check",
-            "--timeout",
-            str(timeout_seconds),
-            "--retries",
-            str(retries),
-            "--constraint",
-            str(constraints),
-            "-e",
-            target,
-        ]
-        try:
-            _run_logged(command)
-        except subprocess.CalledProcessError as exc:
-            last_error = exc
-            if attempt >= len(_PROJECT_PIP_NETWORK_ATTEMPTS):
-                raise
-            print(
-                "project dependencies: pip attempt failed; retrying whole install",
-                f"attempt={attempt}/{len(_PROJECT_PIP_NETWORK_ATTEMPTS)}",
-                f"next_timeout={_PROJECT_PIP_NETWORK_ATTEMPTS[attempt][0]}s",
-                f"next_retries={_PROJECT_PIP_NETWORK_ATTEMPTS[attempt][1]}",
-                flush=True,
-            )
-        else:
-            last_error = None
-            break
-    if last_error is not None:
-        raise last_error
+    print(
+        "project dependencies: installing",
+        target,
+        f"deadline={_PROJECT_PIP_INSTALL_DEADLINE_SECONDS}s",
+        flush=True,
+    )
+    # GNU timeout applies to the whole pip process, including dependency
+    # backtracking and downloads; pip's own --timeout covers only socket I/O.
+    # No whole-install retry: that would repeat the same expensive resolution.
+    timeout_binary = shutil.which("timeout")
+    if not timeout_binary:
+        raise RuntimeError(
+            "COLAB_PIP_DEADLINE_UNAVAILABLE: GNU timeout is required by the "
+            "Colab installation contract; refusing an unbounded pip install."
+        )
+    command = [
+        timeout_binary,
+        "--signal=TERM",
+        "--kill-after=10s",
+        f"{_PROJECT_PIP_INSTALL_DEADLINE_SECONDS}s",
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "--prefer-binary",
+        "--no-build-isolation",
+        "--disable-pip-version-check",
+        "--timeout",
+        str(_PROJECT_PIP_NETWORK_TIMEOUT_SECONDS),
+        "--retries",
+        str(_PROJECT_PIP_NETWORK_RETRIES),
+        "--constraint",
+        str(constraints),
+        "-e",
+        target,
+    ]
+    try:
+        _run_logged(command)
+    except subprocess.CalledProcessError as exc:
+        if exc.returncode in (124, 137):
+            raise RuntimeError(
+                "COLAB_PIP_INSTALL_DEADLINE_EXCEEDED: editable dependency "
+                f"install exceeded {_PROJECT_PIP_INSTALL_DEADLINE_SECONDS}s. "
+                "Stopped resolver/download instead of waiting indefinitely. "
+                "Inspect pip's last output for package conflicts, and update "
+                "tools/colab_pip_constraints.txt as one compatible set."
+            ) from exc
+        raise RuntimeError(
+            "COLAB_PIP_INSTALL_FAILED: pinned Colab dependencies did not "
+            f"install (exit={exc.returncode}); see pip output above. "
+            "Do not silently downgrade rembg or ignore resolver conflicts."
+        ) from exc
 
     healthy, detail = _image_stack_preflight()
     repaired_numpy = False
