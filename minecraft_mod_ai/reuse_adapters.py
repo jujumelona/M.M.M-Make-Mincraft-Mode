@@ -437,6 +437,73 @@ class ResidualSymbolAnalyzer:
         return tuple(dict.fromkeys(symbol for symbol in unresolved_symbols if symbol))
 
 
+def _relocate_binary_resource_namespaces(
+    binaries: Mapping[str, bytes],
+    existing_text: Mapping[str, str],
+    *,
+    original_paths: Sequence[str],
+    target_context: Mapping[str, Any],
+) -> tuple[dict[str, bytes], AdapterReceipt | None]:
+    """Route binary PNG/model assets through the same namespace as text JSON.
+
+    ModIdRewriteAdapter operates on decoded text and cannot see binary files.
+    A donor with multiple non-vanilla namespaces needs an explicit donor_modid;
+    silently guessing would break unrelated assets.
+    """
+    target = str(target_context.get("target_modid") or "").strip()
+    if not target or not binaries:
+        return dict(binaries), None
+    prefixes = (
+        "src/main/resources/assets/", "src/main/resources/data/",
+        "src/client/resources/assets/", "src/client/resources/data/",
+    )
+    donor = str(target_context.get("donor_modid") or "").strip()
+    if not donor:
+        candidates: set[str] = set()
+        for path in original_paths:
+            for prefix in prefixes:
+                if path.startswith(prefix):
+                    namespace = path[len(prefix):].split("/", 1)[0]
+                    if namespace not in {"", "minecraft", target}:
+                        candidates.add(namespace)
+        if len(candidates) > 1:
+            raise ValueError("SOURCE_REUSE_BINARY_NAMESPACE_AMBIGUOUS")
+        donor = next(iter(candidates), "")
+    if not donor or donor == target:
+        return dict(binaries), None
+
+    relocated: dict[str, bytes] = {}
+    before: dict[str, str] = {}
+    after: dict[str, str] = {}
+    for path, payload in binaries.items():
+        destination = path
+        for prefix in prefixes:
+            if path.startswith(prefix + donor + "/"):
+                destination = prefix + target + "/" + path[len(prefix + donor + "/"):]
+                break
+        if destination in existing_text or (
+            destination in relocated and relocated[destination] != payload
+        ):
+            raise ValueError(
+                "SOURCE_REUSE_RESOURCE_NAMESPACE_COLLISION: " + destination
+            )
+        relocated[destination] = payload
+        if destination != path:
+            before[path] = _sha_bytes(payload)
+            after[destination] = _sha_bytes(payload)
+    receipt = (
+        AdapterReceipt(
+            adapter_name="BinaryResourceNamespaceAdapter",
+            applied=True,
+            modified_files=tuple(sorted(after)),
+            pre_hashes=before,
+            post_hashes=after,
+            details=f"Relocated {len(after)} binary resources from {donor} to {target}.",
+        ) if after else None
+    )
+    return relocated, receipt
+
+
 def apply_deterministic_adapters(
     files: Mapping[str, str | bytes],
     target_context: Mapping[str, Any],
@@ -490,5 +557,12 @@ def apply_deterministic_adapters(
         if adapter.can_apply(working_files, target_context):
             receipts.append(adapter.apply(working_files, target_context))
 
+    binary_files, binary_receipt = _relocate_binary_resource_namespaces(
+        binary_files, working_files,
+        original_paths=tuple(files),
+        target_context=target_context,
+    )
+    if binary_receipt is not None:
+        receipts.append(binary_receipt)
     result_files: dict[str, str | bytes] = {**working_files, **binary_files}
     return result_files, tuple(receipts)
