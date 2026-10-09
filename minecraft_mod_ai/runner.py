@@ -343,6 +343,16 @@ class GradleRunner:
             else ["--no-daemon", "build"]
         )
         gametest_task = self._gametest_task(prepared.project_root) if run_gametest else None
+        eula_error = self._host_gametest_eula_preflight_error(prepared, gametest_task)
+        if eula_error is not None:
+            return self._failed_build(
+                prepared,
+                commands,
+                eula_error,
+                failure_class="configuration_error",
+                error_code="GRADLE_GAMETEST_EULA_REQUIRED",
+                repairable=False,
+            )
         if gametest_task == "runGameTest":
             build_arguments.extend(("-x", gametest_task))
         build_arguments.append("--stacktrace")
@@ -506,6 +516,48 @@ class GradleRunner:
         if result.exit_code != 0 or result.timed_out:
             return None, result
         return self._task_from_listing(result.log_path), result
+
+    @staticmethod
+    def _host_gametest_eula_preflight_error(
+        prepared: _PreparedBuild,
+        gametest_task: str | None,
+    ) -> str | None:
+        """Reject unattended GameTest when its host-owned EULA consent is absent.
+
+        This checks the actual Gradle subprocess environment, not the notebook
+        kernel environment. Host-generated GameTest is intentionally opt-in: no
+        tool or template may silently agree to the Minecraft EULA for a user.
+        """
+
+        if gametest_task != "runGameTest":
+            return None
+        build_script = prepared.project_root / "build.gradle"
+        if not build_script.is_file() or build_script.is_symlink():
+            return None
+        try:
+            build_text = build_script.read_text(encoding="utf-8", errors="strict")
+        except (OSError, UnicodeError):
+            return None  # Gradle will report the real broken-build error.
+        if "// M.M.M host-owned server GameTest contract" not in build_text:
+            return None
+        # An explicit literal in a manually edited host script is also consent.
+        if re.search(r"(?m)^\\s*eula\\s*=\\s*true\\s*(?://.*)?$", build_text):
+            return None
+        accepted = prepared.environment.get("MMM_ACCEPT_MINECRAFT_EULA", "").strip().lower() == "true"
+        if not accepted:
+            return (
+                "Host Fabric GameTest requires Minecraft EULA acceptance. "
+                "Read https://aka.ms/MinecraftEULA and, only if you agree, "
+                "set MMM_ACCEPT_MINECRAFT_EULA=true in the Colab process "
+                "environment before building. No GameTest server was started."
+            )
+        if 'System.getenv("MMM_ACCEPT_MINECRAFT_EULA")' not in build_text:
+            return (
+                "The resumed host-generated build.gradle predates the EULA-aware "
+                "GameTest configuration. Regenerate/update the host GameTest "
+                "scaffold; opt-in alone cannot activate its old run configuration."
+            )
+        return None
 
     @staticmethod
     def _gametest_task(project_root: Path) -> str:
