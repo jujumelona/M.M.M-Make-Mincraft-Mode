@@ -162,6 +162,13 @@ def build_prebuilt_debug_plan() -> AuthoredPlan:
             "search_terms": graph["search_terms"],
             "verification_stage": "production_after_target_binding",
             "donor_claims": [],
+            "reference_candidates": [
+                {
+                    "repository": "FabricMC/fabric-example-mod",
+                    "selection_role": "reference_only",
+                    "purpose": "Example Fabric item/block registration; compatibility must be proven",
+                }
+            ],
         },
         "acceptance_tests": [
             "Item and block registration are generated and loadable.",
