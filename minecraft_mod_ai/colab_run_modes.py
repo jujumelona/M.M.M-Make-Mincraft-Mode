@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .debug_prebuilt_plan import DEBUG_PREBUILT_PROMPT, write_prebuilt_debug_plan
+
 PLAN_MODE = "Plan"
 FULL_MODE = "Full"
 EXISTING_MOD_MODE = "Revise"
@@ -23,7 +25,7 @@ RUN_MODES = (
 
 AUDIT_RELATIVE_PATH = "tools/full_project_audit.py"
 DEBUG_MODE = "Debug"
-DEBUG_STRATEGIES = ("model_path", "model_replay", "host_smoke")
+DEBUG_STRATEGIES = ("prebuilt", "model_path", "model_replay", "host_smoke")
 DEBUG_DEFAULT_PROMPT = (
     "Fabric Minecraft 모드: 플레이어가 수정 조각을 획득하고, "
     "조각 4개로 수정 블록을 제작할 수 있게 구현해줘. "
@@ -405,15 +407,17 @@ def run_plan_dialog(
     prompt: str,
     plan_path: str | Path,
     debug_mode: bool = False,
-    debug_strategy: str = "model_path",
+    debug_strategy: str = "prebuilt",
     minecraft_version: str = "Auto",
     loader: str = "Auto",
     input_fn: Callable[[str], str] = input,
     print_fn: Callable[..., None] = print,
 ) -> PlanDialogResult:
-    """Plan and build through the production route; keep host-smoke separate.
+    """Load a pre-authored debug plan by default, then use normal production.
 
-    model_path is a *real* model-authored plan and reference-retrieval path,
+    prebuilt exercises the saved AuthoredPlan and canonical content graph with no
+    planning LLM calls. Source-reuse donor proofs still belong to production.
+    model_path is an opt-in real model-authored plan and reference-retrieval path,
     not a hand-built CompleteProposal that bypasses the planning contracts.
     model_replay repeats a recorded real-model AuthoredPlan without another model call.\n    host_smoke remains available for narrow deterministic registry testing.
     """
@@ -433,6 +437,14 @@ def run_plan_dialog(
             raise ValueError(
                 f"지원하지 않는 Debug 전략: {debug_strategy!r}; "
                 f"allowed={DEBUG_STRATEGIES}"
+            )
+        if debug_strategy == "prebuilt":
+            from .debug_prebuilt_plan import write_prebuilt_debug_plan
+
+            write_prebuilt_debug_plan(target)
+            print_fn(
+                "Debug prebuilt: 사전 작성한 다중 기능 AuthoredPlan 로드; "
+                "AI 계획 호출 없음. 실제 요청 프롬프트는 이 고정 시나리오에 사용하지 않습니다."
             )
         if debug_strategy == "host_smoke":
             write_debug_example_plan(
@@ -455,6 +467,8 @@ def run_plan_dialog(
                 raise FileNotFoundError(
                     f"DEBUG_MODEL_REPLAY_PLAN_MISSING: 실제 모델이 저장한 AuthoredPlan이 필요합니다: {target}"
                 )
+            reply = session.load_plan(target)
+        elif debug_strategy == "prebuilt":
             reply = session.load_plan(target)
         else:
             model_prompt = prompt.strip() or DEBUG_DEFAULT_PROMPT
@@ -491,7 +505,7 @@ def run_plan_dialog(
                 "or typed host operation was authored"
             )
         expected_hash = authored.calculate_hash()
-        if debug_strategy == "model_replay":
+        if debug_strategy in {"model_replay", "prebuilt"}:
             saved = target
             reloaded = reply
         else:
@@ -530,8 +544,9 @@ def run_plan_dialog(
                 "일반 제작의 타깃 바인딩 후 검색·선택·증명을 수행합니다."
             )
         print_fn(
-            f"Debug {debug_strategy}: 실제 모델 작성 플랜 → 일반 제작. "
-            "참고 모드는 authored reuse 검색/증명 및 타깃 바인딩 후 재검증 경로를 사용합니다."
+            f"Debug {debug_strategy}: 저장된 AuthoredPlan → 일반 제작. "
+            "실제 참고 모드 재사용은 타깃 바인딩 후 호스트 검색·검증·증명 경로를 사용하며 "
+            "사전 계획은 확인되지 않은 donor를 검증된 코드로 표시하지 않습니다."
         )
         return PlanDialogResult(reply=reloaded, plan_path=saved, approved=True)
 
@@ -578,4 +593,6 @@ __all__ = [
     "show_full_plan",
     "validate_run_mode",
     "write_debug_example_plan",
+    "DEBUG_PREBUILT_PROMPT",
+    "write_prebuilt_debug_plan",
 ]
