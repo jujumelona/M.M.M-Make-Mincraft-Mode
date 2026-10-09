@@ -541,9 +541,12 @@ class GradleRunner:
         if "// M.M.M host-owned server GameTest contract" not in build_text:
             return None
         # An explicit literal in a manually edited host script is also consent.
-        if re.search(r"(?m)^\\s*eula\\s*=\\s*true\\s*(?://.*)?$", build_text):
+        if re.search(r"(?m)^\s*eula\s*=\s*true\s*(?://.*)?$", build_text):
             return None
-        accepted = prepared.environment.get("MMM_ACCEPT_MINECRAFT_EULA", "").strip().lower() == "true"
+        accepted = (
+            prepared.environment.get("MMM_ACCEPT_MINECRAFT_EULA", "").strip().lower()
+            == "true"
+        )
         if not accepted:
             return (
                 "Host Fabric GameTest requires Minecraft EULA acceptance. "
