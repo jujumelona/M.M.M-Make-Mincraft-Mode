@@ -73,8 +73,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: production-kill-gates-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+# Every commit must keep its own complete proof; a subsequent commit must not
+# silently cancel the still-running test evidence for an earlier revision.
+  group: production-kill-gates-${{ github.event_name }}-${{ github.sha }}
+  cancel-in-progress: false
 
 env:
   PYTHONUTF8: "1"
