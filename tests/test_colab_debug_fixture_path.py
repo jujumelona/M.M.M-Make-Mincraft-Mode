@@ -64,6 +64,7 @@ def test_colab_debug_fixture_loads_validated_plan_then_uses_normal_build_dispatc
         prompt="ignored because Debug Mode owns the deterministic fixture",
         plan_path=plan_path,
         debug_mode=True,
+        debug_strategy="host_smoke",
         minecraft_version="26.2",
         loader="Auto",
         print_fn=lambda *parts, **_kwargs: printed.append(" ".join(map(str, parts))),
@@ -87,7 +88,7 @@ def test_colab_debug_fixture_loads_validated_plan_then_uses_normal_build_dispatc
     assert fixture["kind"] == "item"
     assert fixture["deterministic"] is True
     assert fixture["source_contract"]["path"].endswith("/DebugToken.java")
-    assert any("planner 호출 없이" in line for line in printed)
+    assert any("host_smoke" in line for line in printed)
 
     options = CompleteExecutionOptions(
         run_blockbench=False,
