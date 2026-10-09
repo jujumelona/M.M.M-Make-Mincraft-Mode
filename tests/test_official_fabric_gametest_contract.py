@@ -44,6 +44,8 @@ def test_official_scaffold_is_gametest_ready_before_first_build(tmp_path: Path) 
     assert 'modId = "mmm_debug_fixture_gametest"' in build
     assert "enableGameTests = true" in build
     assert "enableClientGameTests = false" in build
+    assert 'System.getenv("MMM_ACCEPT_MINECRAFT_EULA")' in build
+    assert 'eula = (System.getenv("MMM_ACCEPT_MINECRAFT_EULA") ?: "false").equalsIgnoreCase("true")' in build
     assert "// M.M.M host-owned GameTest source-set classpath bridge" in build
     assert (
         "compileClasspath += sourceSets.main.output + "
@@ -99,9 +101,41 @@ def test_official_scaffold_is_gametest_ready_before_first_build(tmp_path: Path) 
     assert repeated.count("configureTests") == 1
     assert repeated.count("// M.M.M host-owned GameTest source-set classpath bridge") == 1
     assert repeated.count("fabric-api.gametest.report-file") == 1
+    assert repeated.count('eula = (System.getenv("MMM_ACCEPT_MINECRAFT_EULA")') == 1
     repeated_metadata = json.loads(
         (root / receipt["metadata"]).read_text(encoding="utf-8")
     )
     assert repeated_metadata["entrypoints"]["fabric-gametest"].count(
         "dev.mmm.debugfixture.MmmDebugFixtureModGameTests"
     ) == 1
+
+
+def test_existing_host_scaffold_gets_eula_opt_in_without_duplicate_config(tmp_path: Path) -> None:
+    root = tmp_path / "resumed"
+    resources = root / "src/main/resources"
+    resources.mkdir(parents=True)
+    (resources / "fabric.mod.json").write_text(
+        json.dumps({"id": "example", "entrypoints": {"main": ["dev.example.ExampleMod"]}}),
+        encoding="utf-8",
+    )
+    (root / "build.gradle").write_text(
+        """// M.M.M host-owned server GameTest contract
+fabricApi {
+    configureTests {
+        createSourceSet = true
+        modId = "example_gametest"
+        enableGameTests = true
+        enableClientGameTests = false
+    }
+}
+""",
+        encoding="utf-8",
+    )
+    spec = SimpleNamespace(mod_id="example", package_name="dev.example")
+    adapter = SimpleNamespace(minecraft_version="1.21.8")
+    provider._install_host_gametest_contract(root, spec, adapter)
+    provider._install_host_gametest_contract(root, spec, adapter)
+    updated = (root / "build.gradle").read_text(encoding="utf-8")
+    assert updated.count('eula = (System.getenv("MMM_ACCEPT_MINECRAFT_EULA")') == 1
+    assert updated.count("configureTests") == 1
+    assert updated.count("fabric-api.gametest.report-file") == 1
