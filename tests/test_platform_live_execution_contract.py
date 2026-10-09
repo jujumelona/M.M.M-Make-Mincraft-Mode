@@ -128,7 +128,7 @@ def test_source_owned_prepare_routes_fresh_unreviewed_target_before_legacy_gener
     base = SimpleNamespace(
         spec=SimpleNamespace(platform=platform_lock, mod_id="debug_fixture")
     )
-    approved = SimpleNamespace(base_proposal=base)
+    approved = SimpleNamespace(base_proposal=base, game_design={})
     expected = (tmp_path / "official-project").resolve()
     calls: list[tuple[object, Path, object, type[Exception]]] = []
 
@@ -165,6 +165,13 @@ def test_source_owned_prepare_routes_fresh_unreviewed_target_before_legacy_gener
     orchestrator = complete_orchestrator.CompleteProductionOrchestrator(
         workspace_root=tmp_path / "workspace",
         router_factory=lambda: None,
+    )
+    # This test checks fresh-project routing, not debug GameTest fixture
+    # materialization; keep the latter an explicit isolated downstream stage.
+    monkeypatch.setattr(
+        orchestrator,
+        "_bind_debug_fixture_runtime",
+        lambda _approved, root: root,
     )
     source_prepare = inspect.unwrap(
         complete_orchestrator.CompleteProductionOrchestrator._prepare_project
