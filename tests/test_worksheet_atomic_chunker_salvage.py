@@ -39,9 +39,13 @@ def test_model_facing_chunk_requires_complete_bounded_field_page() -> None:
         record_counts={"actors": 1},
     )
     validator = Draft202012Validator(schema)
-    assert validator.is_valid({"actors": [{"name": "player"}]})
+    complete = {"name": "player", "role": "actor", "authority": "server"}
+    assert validator.is_valid({"actors": [complete]})
+    # Model-facing pages require EVERY projected field. Host filling of
+    # omitted values happens only after the bounded model contract.
+    assert not validator.is_valid({"actors": [{"name": "player"}]})
     assert not validator.is_valid({"actors": [{}]})
-    assert not validator.is_valid({"actors": [{"name": "a" * 65}]})
+    assert not validator.is_valid({"actors": [{**complete, "name": "a" * 65}]})
 
 
 def test_merge_salvages_partial_chunk_and_host_fills_omissions() -> None:
