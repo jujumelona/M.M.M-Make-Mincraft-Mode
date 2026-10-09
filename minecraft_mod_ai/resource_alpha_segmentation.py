@@ -30,9 +30,30 @@ def _get_session() -> Any:
             'ALPHA_SEGMENTER_UNAVAILABLE: install "rembg[cpu]" via the image extra; '
             "opaque diffusion sprites cannot be published without alpha segmentation."
         ) from exc
+    # BiRefNet's full-size session can exceed Colab host RAM when FLUX and a
+    # JVM have recently been active. Constrain ONNX allocations at creation
+    # rather than only setting an OpenMP hint on its parent process.
+    import onnxruntime as ort
+
+    threads_raw = os.environ.get("MMM_ALPHA_ONNX_THREADS", "1")
+    try:
+        threads = int(threads_raw)
+    except ValueError as exc:
+        raise ValueError("MMM_ALPHA_ONNX_THREADS must be an integer") from exc
+    if not 1 <= threads <= 4:
+        raise ValueError("MMM_ALPHA_ONNX_THREADS must be between 1 and 4")
+    session_options = ort.SessionOptions()
+    session_options.intra_op_num_threads = threads
+    session_options.inter_op_num_threads = 1
+    session_options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+    session_options.enable_mem_pattern = False
+    session_options.enable_cpu_mem_arena = False
+
     # Explicit model ID is a licensing contract. rembg's DEFAULT is not allowed.
     return new_session(
-        ALPHA_SEGMENTATION_MODEL, providers=[ALPHA_SEGMENTATION_PROVIDER],
+        ALPHA_SEGMENTATION_MODEL,
+        sess_opts=session_options,
+        providers=[ALPHA_SEGMENTATION_PROVIDER],
     )
 
 
