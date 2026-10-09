@@ -21,6 +21,30 @@ ALPHA_SEGMENTATION_PROVIDER = "CPUExecutionProvider"
 ALPHA_SEGMENTATION_CONTRACT = "mmm/alpha-segmentation-birefnet-general-v1"
 
 
+def _require_custom_session_options_api(new_session: Any) -> None:
+    """Reject rembg before model download if it cannot accept ONNX session opts.
+
+    rembg <=2.0.76 always constructs its own sess_opts and forwards an explicitly
+    supplied sess_opts again via **kwargs, crashing BaseSession.__init__. Silently
+    dropping these settings is unsafe for BiRefNet under Colab RAM pressure.
+    """
+    import inspect
+
+    try:
+        parameter = inspect.signature(new_session).parameters.get("sess_opts")
+    except (ValueError, TypeError):
+        parameter = None
+    if parameter is None or parameter.kind not in (
+        inspect.Parameter.KEYWORD_ONLY,
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+    ):
+        raise ValueError(
+            "ALPHA_SEGMENTER_INCOMPATIBLE_REMBG_API: installed rembg does not "
+            "support new_session(sess_opts=...). Install rembg[cpu]>=2.0.77,<3 "
+            "through the current project image extra before image generation."
+        )
+
+
 @lru_cache(maxsize=1)
 def _get_session() -> Any:
     try:
@@ -30,6 +54,7 @@ def _get_session() -> Any:
             'ALPHA_SEGMENTER_UNAVAILABLE: install "rembg[cpu]" via the image extra; '
             "opaque diffusion sprites cannot be published without alpha segmentation."
         ) from exc
+    _require_custom_session_options_api(new_session)
     # BiRefNet's full-size session can exceed Colab host RAM when FLUX and a
     # JVM have recently been active. Constrain ONNX allocations at creation
     # rather than only setting an OpenMP hint on its parent process.
@@ -297,8 +322,12 @@ __all__ = [
 
 if __name__ == "__main__":
     if len(sys.argv) == 2 and sys.argv[1] == "--prepare":
+        from rembg import new_session
         from rembg.sessions.birefnet_general import BiRefNetSessionGeneral
 
+        # Validate the worker API before the 1+ GiB checkpoint download and
+        # before the diffusion model is loaded by the next generation step.
+        _require_custom_session_options_api(new_session)
         # This is rembg's checksummed model downloader, not inference.
         BiRefNetSessionGeneral.download_models()
     elif len(sys.argv) == 4 and sys.argv[1] == "--worker":
