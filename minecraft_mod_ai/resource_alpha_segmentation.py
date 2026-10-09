@@ -1,9 +1,8 @@
 """Commercial-permissive foreground alpha for opaque diffusion image assets.
 
 FLUX.2 Klein 4B's local Diffusers output is RGB, not native transparent PNG.
-The host requests a *specific* BiRefNet general segmentation checkpoint via
-rembg (MIT). NEVER let rembg choose its default: its default Bria weights have
-a separate non-commercial license.
+Use explicitly chosen BiRefNet-General-Lite (MIT) and a U2NetP (Apache-2.0)
+SIGKILL fallback. Never let rembg select its non-commercial BRIA default.
 """
 from __future__ import annotations
 
@@ -36,8 +35,8 @@ def _get_session(model_name: str = ALPHA_SEGMENTATION_MODEL) -> Any:
             'ALPHA_SEGMENTER_UNAVAILABLE: install "rembg[cpu]==2.0.67" via the '
             'image extra; BiRefNet general and explicit ONNX options are required.'
         ) from exc
-    # BiRefNet's full-size session can exceed Colab host RAM when FLUX and a
-    # JVM have recently been active. Constrain ONNX allocations at creation
+    # Even the lightweight model can exceed constrained Colab host RAM.
+    # Constrain ONNX allocations at creation
     # rather than only setting an OpenMP hint on its parent process.
     import onnxruntime as ort
 
@@ -58,7 +57,7 @@ def _get_session(model_name: str = ALPHA_SEGMENTATION_MODEL) -> Any:
     # rembg 2.0.67's public new_session() *always* constructs sess_opts and
     # double-passes user supplied sess_opts. Construct its exported concrete
     # BiRefNet session instead; BaseSession(model, sess_opts, providers=...)
-    # preserves all ONNX memory controls and the explicit MIT model choice.
+    # preserves all ONNX memory controls and the explicit licensed model choice.
     if model_class.name() != model_name:
         raise ValueError("ALPHA_SEGMENTER_MODEL_CLASS_MISMATCH")
     return model_class(
@@ -140,7 +139,7 @@ def _preflight_worker_ram() -> None:
 def _preflight_checkpoint_download_ram() -> None:
     """A streaming checkpoint fetch is not an ONNX inference allocation.
 
-    The full BiRefNet inference worker retains its stricter, separate 3 GiB
+    The ONNX inference worker retains its stricter, separate 3 GiB
     safety gate. Checkpoint preparation only needs room for the Python/pooch
     download subprocess and disk-backed streamed bytes.
     """
@@ -161,7 +160,7 @@ def _preflight_checkpoint_download_ram() -> None:
 
 
 def prepare_foreground_model_isolated() -> None:
-    """Download the checksummed BiRefNet checkpoint before FLUX is resident.
+    """Download both checksummed foreground models before FLUX is resident.
 
     A short-lived subprocess avoids overlapping first-time model downloads
     with the large CPU-offloaded diffusion pipeline.
