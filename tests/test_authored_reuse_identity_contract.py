@@ -158,6 +158,22 @@ def test_mojang_resource_location_namespace_rewrite():
     assert '"donor"' not in source
 
 
+def test_client_resource_namespace_relocation_preserves_translations():
+    from minecraft_mod_ai.reuse_adapters import ModIdRewriteAdapter
+
+    files = {
+        "src/client/resources/assets/donor/lang/en_us.json":
+            '{"item.donor.controller":"Controller"}',
+    }
+    receipt = ModIdRewriteAdapter().apply(
+        files, {"target_modid": "spacemod"}
+    )
+    assert receipt.applied
+    assert "src/client/resources/assets/donor/lang/en_us.json" not in files
+    target = files["src/client/resources/assets/spacemod/lang/en_us.json"]
+    assert '"item.spacemod.controller"' in target
+
+
 def test_language_key_relocation_rejects_duplicate_keys():
     from minecraft_mod_ai.reuse_adapters import _rewrite_donor_translation_keys
 
