@@ -35,7 +35,7 @@ def test_skill_policy_physically_excludes_removed_tools() -> None:
     )
     selected = "\n".join(
         packaged["skills"][name]
-        for name in ("plan-game-design", "generate-worldgen")
+        for name in ("plan-game-design", "execute-complete-production")
     )
     assert "generate_world_ir" not in selected
     assert "compile_world_ir" not in selected
