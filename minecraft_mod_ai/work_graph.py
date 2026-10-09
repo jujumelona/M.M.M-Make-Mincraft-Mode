@@ -175,7 +175,13 @@ def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolic
             ) from exc
         asset_plan_digest = asset_plan_sha256(canonical_asset_plan)
 
-    for index, assets in enumerate(_chunks(selected_assets, max(1, policy.java_shard_size))):
+    asset_shard_size = max(1, policy.java_shard_size)
+    if os.environ.get("MMM_ASSET_SINGLE_SHARD", "").strip().lower() in {"1", "true", "yes"}:
+        # On memory-constrained Colab, all image assets must share one FLUX
+        # residency. Their module dependencies are still declared explicitly,
+        # but the scheduler cannot interleave repeated multi-GB reloads.
+        asset_shard_size = max(asset_shard_size, len(selected_assets))
+    for index, assets in enumerate(_chunks(selected_assets, asset_shard_size)):
         node_id = f'generate-assets-{index:08d}'
         dependencies = {'prepare-project'}
         for asset in assets:
