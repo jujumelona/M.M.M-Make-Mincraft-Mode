@@ -567,12 +567,27 @@ def generate_assets(
         and str(texture.get("topology") or "") in {"cutout_sprite", "isolated_sprite"}
         for row in rows for texture in row.get("textures", ())
     )
+    if needs_foreground_model:
+        from .resource_alpha_segmentation import _available_host_ram_bytes
+
+        handoff_ram_before = _available_host_ram_bytes()
     with router.image_generation_session("image_generator"):
         # This scope shuts down the managed llama server before touching any
         # image resources. Prefetch MUST follow that shutdown: checking RAM
         # outside the scope measures the still-resident 9B text model and
         # incorrectly fails even when the image stage could run safely.
         if needs_foreground_model:
+            handoff_ram_after = _available_host_ram_bytes()
+            def _mib(value: int | None) -> str:
+                return str(value // 1048576) if value is not None else "unknown"
+
+            print(
+                "ASSET_MEMORY_HANDOFF: Qwen image-session transition "
+                f"available_before_mib={_mib(handoff_ram_before)} "
+                f"available_after_mib={_mib(handoff_ram_after)} "
+                f"delta_mib={_mib(handoff_ram_after - handoff_ram_before) if handoff_ram_before is not None and handoff_ram_after is not None else 'unknown'}",
+                flush=True,
+            )
             from .resource_alpha_segmentation import prepare_foreground_model_isolated
 
             try:
