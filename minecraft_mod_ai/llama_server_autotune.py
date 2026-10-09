@@ -396,7 +396,10 @@ def _base_args(binary: str, model_path: str, config: Any, port: int) -> list[str
     if batch is not None:
         args.extend(("--batch-size", str(batch)))
     if ubatch is not None:
-        args.extend(("--ubatch-size", str(ubatch)))
+        # llama.cpp requires physical microbatch <= logical batch. Respect
+        # explicit user overrides without passing an impossible combination.
+        effective_ubatch = min(ubatch, batch) if batch is not None else ubatch
+        args.extend(("--ubatch-size", str(effective_ubatch)))
     if kv:
         args.extend(("--cache-type-k", kv, "--cache-type-v", kv))
     return args
@@ -443,10 +446,14 @@ def _start_server(
         runtime._replace_option(args, ("--cache-ram",), str(runtime._cache_ram_mib()))
 
     if getattr(variant, "ubatch", 0) > 0:
+        chosen_ubatch = int(variant.ubatch)
+        explicit_batch = _env_optional_int("MMM_LLAMA_BATCH")
+        if explicit_batch is not None:
+            chosen_ubatch = min(chosen_ubatch, explicit_batch)
         runtime._replace_option(
             args,
             ("--ubatch-size", "-ub"),
-            str(int(variant.ubatch)),
+            str(chosen_ubatch),
         )
     if slots > 1:
         if "--cont-batching" not in args and "-cb" not in args:
