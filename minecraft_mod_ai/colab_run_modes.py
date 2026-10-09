@@ -448,6 +448,7 @@ def run_plan_dialog(
         from .authored_plan import AuthoredPlan
         from .authored_structured_design import normalize_structured_sections
         from .typed_plan_ir import validate_typed_plan_ir
+        from .typed_host_capabilities import typed_host_capability_contracts
 
         model_prompt = prompt.strip() or DEBUG_DEFAULT_PROMPT
         # Use precisely the public Full-mode model path, including structured
@@ -463,7 +464,9 @@ def run_plan_dialog(
             raise RuntimeError("DEBUG_MODEL_PLAN_STRUCTURED_SECTIONS_MISSING")
         if not authored.typed_plan_ir:
             raise RuntimeError("DEBUG_MODEL_PLAN_TYPED_IR_MISSING")
-        validate_typed_plan_ir(authored.typed_plan_ir)
+        validate_typed_plan_ir(
+            authored.typed_plan_ir, capabilities=typed_host_capability_contracts()
+        )
         expected_hash = authored.calculate_hash()
         saved = Path(session.save_plan(target))
         # Exercise the real serialization boundary before production. This
