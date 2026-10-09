@@ -13,6 +13,8 @@ _STOP: threading.Event | None = None
 _THREAD: threading.Thread | None = None
 _MANAGED_PID: int | None = None
 _MIN_AVAILABLE: int | None = None
+_KERNEL_MONITOR_ENABLED = False
+_MEMORY_GUARD_MIB = 2048  # Fail closed before a Colab kernel is OOM-killed.
 
 
 def _snapshot_path() -> Path:
@@ -104,16 +106,13 @@ def _sample(managed_pid: int) -> dict[str, Any]:
         if cgroup_max > 0
         else 0
     )
-    effective_available = available
-    if cgroup_available:
-        effective_available = (
-            min(effective_available, cgroup_available)
-            if effective_available
-            else cgroup_available
-        )
-    if _MIN_AVAILABLE is None or (
-        effective_available and effective_available < _MIN_AVAILABLE
-    ):
+    # A completely exhausted cgroup has ZERO free bytes. Never treat this
+    # as a missing reading and fall back to /proc/meminfo's larger host total.
+    effective_available = (
+        min(available, cgroup_available) if available
+        else cgroup_available
+    ) if cgroup_max > 0 else available
+    if _MIN_AVAILABLE is None or effective_available < _MIN_AVAILABLE:
         _MIN_AVAILABLE = effective_available
     return {
         "schema_version": "mmm/runtime-memory-snapshot-v1",
@@ -133,60 +132,128 @@ def _sample(managed_pid: int) -> dict[str, Any]:
         "cgroup_memory_events": cgroup_events,
         "pressure": (
             "critical"
-            if effective_available and effective_available < 768 * 1024 * 1024
+            if effective_available < 768 * 1024 * 1024
             else "low"
-            if effective_available and effective_available < 1536 * 1024 * 1024
+            if effective_available < 1536 * 1024 * 1024
             else "ok"
         ),
     }
 
 
-def start_managed_process_watchdog(pid: int) -> None:
-    global _STOP, _THREAD, _MANAGED_PID, _MIN_AVAILABLE
+def _memory_reserve_bytes() -> int:
+    """Use an explicit Colab reserve; invalid/negative overrides fail closed."""
+    raw = os.environ.get("MMM_COLAB_RAM_RESERVE_MIB", str(_MEMORY_GUARD_MIB))
+    try:
+        mib = int(raw.strip())
+    except ValueError as exc:
+        raise ValueError("MMM_COLAB_RAM_RESERVE_MIB must be a positive integer") from exc
+    if mib < 512:
+        raise ValueError("MMM_COLAB_RAM_RESERVE_MIB must be >=512")
+    return mib * 1024 * 1024
 
+
+def assert_memory_headroom(stage: str, *, reserve_bytes: int | None = None) -> dict[str, Any]:
+    """Reject new heavyweight allocations when cgroup memory is near exhausted.
+
+    Never kill the notebook kernel. This is a best-effort preflight, not a
+    guarantee against allocations occurring between samples.
+    """
+    sample = _sample(_MANAGED_PID or 0)
+    _atomic_write(sample)
+    reserve = _memory_reserve_bytes() if reserve_bytes is None else reserve_bytes
+    available = int(sample["effective_mem_available_bytes"])
+    if available < reserve:
+        raise MemoryError(
+            f"COLAB_RAM_HEADROOM_EXHAUSTED: stage={stage}; "
+            f"available_mib={available // 1048576}; "
+            f"reserve_mib={reserve // 1048576}; "
+            f"kernel_rss_mib={sample['kernel_rss_bytes'] // 1048576}; "
+            f"managed_rss_mib={sample['managed_rss_bytes'] // 1048576}; "
+            f"cgroup_oom_kill={sample['cgroup_memory_events'].get('oom_kill', 0)}; "
+            f"snapshot={_snapshot_path()}"
+        )
+    return sample
+
+
+def _watchdog_loop(stop: threading.Event, interval: float) -> None:
+    global _MANAGED_PID
+    while not stop.is_set():
+        pid = _MANAGED_PID or 0
+        sample = _sample(pid)
+        _atomic_write(sample)
+        # A managed native subprocess is owned by MMM. If the cgroup gets
+        # critically low, stop *only* this verified child to protect Jupyter.
+        # The notebook kernel and unrelated services are never signaled.
+        if (
+            pid > 0
+            and _process_start_ticks(pid) == sample["managed_start_ticks"]
+            and sample["managed_start_ticks"] > 0
+            and int(sample["effective_mem_available_bytes"]) < _memory_reserve_bytes()
+        ):
+            try:
+                cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
+                if b"llama-server" in cmdline:
+                    sample["protective_action"] = "terminate_managed_llama_server"
+                    _atomic_write(sample)
+                    os.kill(pid, signal.SIGTERM)
+                    print(
+                        "COLAB_RAM_GUARD: terminated managed llama-server before "
+                        "critical host memory exhaustion; snapshot="
+                        + str(_snapshot_path()),
+                        flush=True,
+                    )
+                    with _LOCK:
+                        if _MANAGED_PID == pid:
+                            _MANAGED_PID = None
+            except (OSError, ProcessLookupError, PermissionError):
+                pass
+        stop.wait(interval)
+
+
+def start_kernel_memory_watchdog() -> None:
+    """Begin Colab forensics before pip, llama-server, image, and Gradle stages."""
+    global _STOP, _THREAD, _KERNEL_MONITOR_ENABLED
+    with _LOCK:
+        _KERNEL_MONITOR_ENABLED = True
+        if _THREAD is not None and _THREAD.is_alive():
+            return
+        raw = os.environ.get("MMM_RUNTIME_MEMORY_SAMPLE_SECONDS", "1")
+        try:
+            interval = max(0.25, float(raw))
+        except ValueError:
+            interval = 1.0
+        stop = threading.Event()
+        _STOP = stop
+        _THREAD = threading.Thread(
+            target=_watchdog_loop,
+            args=(stop, interval),
+            name="mmm_colab_memory_watchdog",
+            daemon=True,
+        )
+        _THREAD.start()
+
+
+def start_managed_process_watchdog(pid: int) -> None:
+    global _MANAGED_PID
     pid = int(pid)
     if pid <= 0:
         return
-    stop_managed_process_watchdog()
-    interval_raw = os.environ.get("MMM_RUNTIME_MEMORY_SAMPLE_SECONDS", "2").strip()
-    try:
-        interval = max(0.5, float(interval_raw))
-    except ValueError:
-        interval = 2.0
-    stop = threading.Event()
     with _LOCK:
-        _STOP = stop
         _MANAGED_PID = pid
-        _MIN_AVAILABLE = None
-
-        def run() -> None:
-            while not stop.is_set():
-                _atomic_write(_sample(pid))
-                if not Path(f"/proc/{pid}").exists():
-                    return
-                stop.wait(interval)
-
-        thread = threading.Thread(
-            target=run,
-            name="mmm_runtime_memory_watchdog",
-            daemon=True,
-        )
-        _THREAD = thread
-        thread.start()
+    start_kernel_memory_watchdog()
 
 
 def stop_managed_process_watchdog() -> None:
-    global _STOP, _THREAD, _MANAGED_PID
-
+    global _MANAGED_PID, _THREAD, _STOP
     with _LOCK:
-        stop = _STOP
-        thread = _THREAD
-        _STOP = None
-        _THREAD = None
         _MANAGED_PID = None
-    if stop is not None:
+        if _KERNEL_MONITOR_ENABLED:
+            return
+        stop, thread = _STOP, _THREAD
+        _STOP, _THREAD = None, None
+    if stop:
         stop.set()
-    if thread is not None and thread is not threading.current_thread():
+    if thread and thread is not threading.current_thread():
         thread.join(timeout=0.5)
 
 
@@ -288,5 +355,7 @@ __all__ = [
     "previous_kernel_crash_diagnostic",
     "read_last_snapshot",
     "start_managed_process_watchdog",
+    "start_kernel_memory_watchdog",
+    "assert_memory_headroom",
     "stop_managed_process_watchdog",
 ]
