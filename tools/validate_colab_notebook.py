@@ -72,7 +72,7 @@ def validate_notebook() -> str:
         "module.assert_setup_state(",
         'used_commit=USED_COMMIT',
         '_distribution_version("rembg")',
-        '_Version("2.0.77")',
+        '_rembg_version != "2.0.67"',
         "BUILD_DEPENDENCY_PREFLIGHT:",
     ):
         if required not in build:
