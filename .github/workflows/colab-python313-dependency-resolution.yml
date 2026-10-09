@@ -37,3 +37,49 @@ jobs:
             'numpy==2.1.3' \
             'numba==0.61.2' \
             'llvmlite==0.44.0'
+
+      - name: Install and import the actual NumPy-compatible rembg/ONNX stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM --kill-after=10s 180s \
+            python -m pip install --only-binary=:all: --disable-pip-version-check \
+            --timeout 25 --retries 2 \
+            -c tools/colab_pip_constraints.txt \
+            'numpy==2.1.3' 'Pillow==11.3.0' 'numba==0.61.2' \
+            'llvmlite==0.44.0' 'rembg[cpu]==2.0.67'
+          python - <<'PY'
+          import importlib.util
+          from importlib.metadata import version
+          from pathlib import Path
+          import onnxruntime as ort
+          from rembg.sessions.birefnet_general import BiRefNetSessionGeneral
+
+          assert version("rembg") == "2.0.67"
+          assert BiRefNetSessionGeneral.name() == "birefnet-general"
+          spec = importlib.util.spec_from_file_location(
+              "mmm_alpha_smoke", Path("minecraft_mod_ai/resource_alpha_segmentation.py")
+          )
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+
+          calls = []
+          old_inference = ort.InferenceSession
+          old_download = BiRefNetSessionGeneral.download_models
+          try:
+              ort.InferenceSession = lambda path, *, sess_options, providers: (
+                  calls.append((path, sess_options, providers)) or object()
+              )
+              BiRefNetSessionGeneral.download_models = classmethod(
+                  lambda cls: "/tmp/metadata-only-birefnet.onnx"
+              )
+              session = module._get_session()
+              assert session.model_name == "birefnet-general"
+              assert calls[0][2] == ["CPUExecutionProvider"]
+              assert calls[0][1].intra_op_num_threads == 1
+              assert calls[0][1].enable_cpu_mem_arena is False
+              print("REMBG_2067_BIREFNET_DIRECT_SESSION: PASS")
+          finally:
+              ort.InferenceSession = old_inference
+              BiRefNetSessionGeneral.download_models = old_download
+          PY
