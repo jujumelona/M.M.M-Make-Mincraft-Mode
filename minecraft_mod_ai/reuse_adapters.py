@@ -143,7 +143,22 @@ class PackageRelocationAdapter:
                     flags=re.MULTILINE,
                 )
 
-            if updated != original:
+            new_path = path
+            if package_match:
+                old_prefix = "src/main/java/" + old_package.replace(".", "/") + "/"
+                if path.startswith(old_prefix):
+                    new_path = (
+                        "src/main/java/" + new_package.replace(".", "/") + "/"
+                        + path[len(old_prefix):]
+                    )
+            if new_path != path:
+                if new_path in files and files[new_path] != updated:
+                    raise ValueError("SOURCE_REUSE_JAVA_PACKAGE_PATH_COLLISION: " + new_path)
+                files.pop(path)
+                files[new_path] = updated
+                modified.append(new_path)
+                post_hashes[new_path] = _sha(updated)
+            elif updated != original:
                 files[path] = updated
                 modified.append(path)
                 post_hashes[path] = _sha(updated)
