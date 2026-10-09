@@ -26,6 +26,7 @@ def fake_onnxruntime_options(monkeypatch):
     monkeypatch.setitem(sys.modules, "onnxruntime", ort)
     sessions = ModuleType("rembg.sessions")
     session_module = ModuleType("rembg.sessions.birefnet_general_lite")
+    mid_module = ModuleType("rembg.sessions.u2net")
     fallback_module = ModuleType("rembg.sessions.u2netp")
 
     class BiRefNetSessionGeneralLite:
@@ -38,15 +39,22 @@ def fake_onnxruntime_options(monkeypatch):
             self.session_options = sess_opts
             self.providers = providers
 
+    class U2netSession(BiRefNetSessionGeneralLite):
+        @classmethod
+        def name(cls):
+            return "u2net"
+
     class U2netpSession(BiRefNetSessionGeneralLite):
         @classmethod
         def name(cls):
             return "u2netp"
 
     session_module.BiRefNetSessionGeneralLite = BiRefNetSessionGeneralLite
+    mid_module.U2netSession = U2netSession
     fallback_module.U2netpSession = U2netpSession
     monkeypatch.setitem(sys.modules, "rembg.sessions", sessions)
     monkeypatch.setitem(sys.modules, "rembg.sessions.birefnet_general_lite", session_module)
+    monkeypatch.setitem(sys.modules, "rembg.sessions.u2net", mid_module)
     monkeypatch.setitem(sys.modules, "rembg.sessions.u2netp", fallback_module)
     alpha._get_session.cache_clear()
     monkeypatch.setattr(alpha, "_LITE_WORKER_SIGKILLED", False)
@@ -135,7 +143,7 @@ def test_image_profile_hash_is_bound_to_matte_model_identity():
     cfg = ModelRegistry().role("t4_local", "image_generator")
     assert image_profile_fingerprint(cfg).startswith("sha256:")
     assert alpha.ALPHA_SEGMENTATION_MODEL == "birefnet-general-lite"
-    assert alpha.ALPHA_SEGMENTATION_CONTRACT.endswith("-v2")
+    assert alpha.ALPHA_SEGMENTATION_CONTRACT.endswith("-v3")
 
 
 def test_isolated_worker_transfers_real_alpha_without_loading_onnx_in_parent(monkeypatch):
@@ -374,7 +382,7 @@ def test_colab_observed_6517_mib_skips_sigkill_prone_lite(monkeypatch):
     def fake_run(command, **kwargs):
         model = kwargs["env"]["MMM_ALPHA_WORKER_MODEL"]
         attempts.append(model)
-        assert model == "u2netp"
+        assert model == "u2net"
         source, target = Path(command[-2]), Path(command[-1])
         with Image.open(source) as original:
             rgba = original.convert("RGBA")
@@ -389,12 +397,12 @@ def test_colab_observed_6517_mib_skips_sigkill_prone_lite(monkeypatch):
     with Image.new("RGB", (32, 32), "grey") as source:
         result = alpha.segment_foreground_isolated(source)
     try:
-        assert result.info["mmm_alpha_matte"] == "rembg:u2netp"
+        assert result.info["mmm_alpha_matte"] == "rembg:u2net"
         assert result.getpixel((16, 16))[3] == 255
         assert result.getpixel((0, 0))[3] == 0
     finally:
         result.close()
-    assert attempts == ["u2netp"]
+    assert attempts == ["u2net"]
 
 
 def test_sigkill_sets_global_policy_to_skip_lite_next_time(monkeypatch):
@@ -422,3 +430,62 @@ def test_sigkill_sets_global_policy_to_skip_lite_next_time(monkeypatch):
             output = alpha.segment_foreground_isolated(source)
             output.close()
     assert attempts == ["birefnet-general-lite", "u2netp", "u2netp"]
+
+
+def test_full_u2net_uses_explicit_licensed_session(monkeypatch):
+    session = alpha._get_session("u2net")
+    assert session.name_used == "u2net"
+    assert session.providers == ["CPUExecutionProvider"]
+    assert session.session_options.enable_cpu_mem_arena is False
+
+
+def test_low_memory_still_uses_tiny_u2netp(monkeypatch):
+    monkeypatch.setattr(alpha, "_available_host_ram_bytes", lambda: 3900 * 1048576)
+    attempts = []
+
+    def fake_run(command, **kwargs):
+        attempts.append(kwargs["env"]["MMM_ALPHA_WORKER_MODEL"])
+        source, target = Path(command[-2]), Path(command[-1])
+        with Image.open(source) as raw:
+            rgba = raw.convert("RGBA")
+        with Image.new("L", rgba.size, 0) as mask:
+            ImageDraw.Draw(mask).ellipse((4, 4, 28, 28), fill=255)
+            rgba.putalpha(mask)
+        rgba.save(target, "PNG")
+        rgba.close()
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(alpha.subprocess, "run", fake_run)
+    with Image.new("RGB", (32, 32), "grey") as source:
+        result = alpha.segment_foreground_isolated(source)
+        result.close()
+    assert attempts == ["u2netp"]
+
+
+def test_intermediate_memory_full_u2net_oom_falls_back_safely(monkeypatch):
+    monkeypatch.setattr(alpha, "_available_host_ram_bytes", lambda: 5900 * 1048576)
+    attempts = []
+
+    def fake_run(command, **kwargs):
+        name = kwargs["env"]["MMM_ALPHA_WORKER_MODEL"]
+        attempts.append(name)
+        if name == "u2net":
+            return SimpleNamespace(returncode=-9, stderr="", stdout="")
+        source, target = Path(command[-2]), Path(command[-1])
+        with Image.open(source) as raw:
+            rgba = raw.convert("RGBA")
+        with Image.new("L", rgba.size, 0) as mask:
+            ImageDraw.Draw(mask).ellipse((4, 4, 28, 28), fill=255)
+            rgba.putalpha(mask)
+        rgba.save(target, "PNG")
+        rgba.close()
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(alpha.subprocess, "run", fake_run)
+    with Image.new("RGB", (32, 32), "grey") as source:
+        result = alpha.segment_foreground_isolated(source)
+        try:
+            assert result.info["mmm_alpha_matte"] == "rembg:u2netp"
+        finally:
+            result.close()
+    assert attempts == ["u2net", "u2netp"]
