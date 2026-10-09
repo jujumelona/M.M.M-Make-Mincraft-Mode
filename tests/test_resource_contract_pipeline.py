@@ -537,3 +537,70 @@ def test_opaque_flux_like_cube_runs_single_candidate_with_birefnet_alpha(tmp_pat
     assert result["assets"][0]["generation_evidence"]["sources"][0]["alpha_matte"] == "rembg:birefnet-general"
     with Image.open(result["assets"][0]["target"]) as output:
         assert set(output.getchannel("A").getdata()) == {0, 255}
+
+
+def test_alpha_prefetch_occurs_only_after_text_server_shutdown(tmp_path, monkeypatch):
+    """Prevent preflight from measuring RAM while Qwen's managed server is resident."""
+    from contextlib import contextmanager
+
+    from minecraft_mod_ai import resource_alpha_segmentation as alpha
+    from minecraft_mod_ai.resource_asset_production import generate_assets
+
+    router, proposal, _calls = runtime()
+    events = []
+
+    @contextmanager
+    def image_stage(_role):
+        events.append("text_server_stopped")
+        try:
+            yield router
+        finally:
+            events.append("stage_closed")
+
+    router.image_generation_session = image_stage
+    original_generate = router.generate_image
+
+    def generate(_role, **kwargs):
+        events.append("diffusion")
+        return original_generate(_role, **kwargs)
+
+    router.generate_image = generate
+    monkeypatch.setattr(
+        alpha, "prepare_foreground_model_isolated",
+        lambda: events.append("alpha_checkpoint_prepared"),
+    )
+    generate_assets(router, proposal, tmp_path / "project", tmp_path / "run")
+    assert events == [
+        "text_server_stopped",
+        "alpha_checkpoint_prepared",
+        "diffusion",
+        "stage_closed",
+    ]
+
+
+def test_alpha_preflight_failure_still_releases_image_session(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+
+    from minecraft_mod_ai import resource_alpha_segmentation as alpha
+    from minecraft_mod_ai.resource_asset_production import AssetProductionError, generate_assets
+
+    router, proposal, _calls = runtime()
+    events = []
+
+    @contextmanager
+    def image_stage(_role):
+        events.append("shutdown")
+        try:
+            yield router
+        finally:
+            events.append("released")
+
+    def fail_preparation():
+        events.append("preflight")
+        raise ValueError("ALPHA_SEGMENTER_INSUFFICIENT_HOST_RAM: low memory")
+
+    router.image_generation_session = image_stage
+    monkeypatch.setattr(alpha, "prepare_foreground_model_isolated", fail_preparation)
+    with pytest.raises(AssetProductionError, match="after text-model handoff"):
+        generate_assets(router, proposal, tmp_path / "project", tmp_path / "run")
+    assert events == ["shutdown", "preflight", "released"]
