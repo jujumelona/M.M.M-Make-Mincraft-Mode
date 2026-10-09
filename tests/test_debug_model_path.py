@@ -136,3 +136,48 @@ def test_debug_rejects_unknown_strategy_before_planner(tmp_path: Path) -> None:
             print_fn=lambda *args, **kwargs: None,
         )
     assert session.prompts == []
+
+
+def test_model_replay_uses_saved_actual_authored_plan_without_planner(tmp_path: Path) -> None:
+    session = _ModelSession()
+    target = tmp_path / "proposal.json"
+    original = _plan("recorded model choice")
+    target.write_text(json.dumps(original.to_dict()), encoding="utf-8")
+    replayed = run_plan_dialog(
+        session=session, run_mode=FULL_MODE, prompt="ignored on replay",
+        plan_path=target, debug_mode=True, debug_strategy="model_replay",
+        print_fn=lambda *args, **kwargs: None,
+    )
+    assert session.prompts == []
+    assert session.loads == 1
+    assert replayed.reply.complete_proposal.calculate_hash() == original.calculate_hash()
+
+
+def test_model_replay_requires_original_recorded_plan(tmp_path: Path) -> None:
+    session = _ModelSession()
+    with pytest.raises(FileNotFoundError, match="DEBUG_MODEL_REPLAY_PLAN_MISSING"):
+        run_plan_dialog(
+            session=session, run_mode=FULL_MODE, prompt="",
+            plan_path=tmp_path / "missing.json", debug_mode=True,
+            debug_strategy="model_replay", print_fn=lambda *_, **__: None,
+        )
+    assert session.prompts == []
+
+
+def test_debug_rejects_empty_non_executable_model_plan(tmp_path: Path) -> None:
+    session = _ModelSession()
+
+    def empty_plan(prompt: str):
+        original = _plan(prompt)
+        value = original.to_dict()
+        value["content_design"] = {}
+        plan = AuthoredPlan.from_dict(value)
+        return SimpleNamespace(complete_proposal=plan, message=plan.text)
+
+    session.plan = empty_plan
+    with pytest.raises(RuntimeError, match="DEBUG_MODEL_PLAN_EMPTY_IMPLEMENTATION"):
+        run_plan_dialog(
+            session=session, run_mode=FULL_MODE, prompt="empty",
+            plan_path=tmp_path / "proposal.json", debug_mode=True,
+            print_fn=lambda *_, **__: None,
+        )
