@@ -23,6 +23,12 @@ RUN_MODES = (
 
 AUDIT_RELATIVE_PATH = "tools/full_project_audit.py"
 DEBUG_MODE = "Debug"
+DEBUG_STRATEGIES = ("model_path", "host_smoke")
+DEBUG_DEFAULT_PROMPT = (
+    "Fabric Minecraft 모드: 플레이어가 수정 조각을 획득하고, "
+    "조각 4개로 수정 블록을 제작할 수 있게 구현해줘. "
+    "아이템 등록, 레시피, 리소스, 실제 게임 내 검증까지 포함해줘."
+)
 
 
 @dataclass(frozen=True)
@@ -399,16 +405,17 @@ def run_plan_dialog(
     prompt: str,
     plan_path: str | Path,
     debug_mode: bool = False,
+    debug_strategy: str = "model_path",
     minecraft_version: str = "Auto",
     loader: str = "Auto",
     input_fn: Callable[[str], str] = input,
     print_fn: Callable[..., None] = print,
 ) -> PlanDialogResult:
-    """Create/load a plan and continue without a manual approval prompt.
+    """Plan and build through the production route; keep host-smoke separate.
 
-    When ``debug_mode`` is enabled, the LLM planner is not called. A deterministic,
-    host-owned example CompleteProposal is written, validated by ``session.load_plan``,
-    and then returned to the normal build path.
+    model_path is a *real* model-authored plan and reference-retrieval path,
+    not a hand-built CompleteProposal that bypasses the planning contracts.
+    host_smoke remains available for narrow deterministic registry testing.
     """
 
     del input_fn
@@ -422,15 +429,55 @@ def run_plan_dialog(
         raise RuntimeError("Audit 모드는 플랜/제작 대신 프로젝트 전체 진단만 실행합니다.")
 
     if debug_mode:
-        write_debug_example_plan(
-            target,
-            minecraft_version=minecraft_version,
-            loader=loader,
+        if debug_strategy not in DEBUG_STRATEGIES:
+            raise ValueError(
+                f"지원하지 않는 Debug 전략: {debug_strategy!r}; "
+                f"allowed={DEBUG_STRATEGIES}"
+            )
+        if debug_strategy == "host_smoke":
+            write_debug_example_plan(
+                target,
+                minecraft_version=minecraft_version,
+                loader=loader,
+            )
+            reply = session.load_plan(target)
+            show_full_plan(reply, print_fn=print_fn)
+            print_fn("Debug host_smoke: 호스트 아이템 등록만 검사합니다. 실제 플랜/참고 모드 경로 검증이 아닙니다.")
+            return PlanDialogResult(reply=reply, plan_path=target, approved=True)
+
+        from .authored_plan import AuthoredPlan
+        from .authored_structured_design import normalize_structured_sections
+        from .typed_plan_ir import validate_typed_plan_ir
+
+        model_prompt = prompt.strip() or DEBUG_DEFAULT_PROMPT
+        # Use precisely the public Full-mode model path, including structured
+        # sections, typed PlanIR, content design, and pre-design research. An
+        # invented debug-only source decision would hide production ABI drift.
+        reply = session.plan(model_prompt)
+        authored = getattr(reply, "complete_proposal", None)
+        if not isinstance(authored, AuthoredPlan):
+            raise RuntimeError(
+                "DEBUG_MODEL_PLAN_TYPE_MISMATCH: planner must return AuthoredPlan"
+            )
+        if not normalize_structured_sections(authored.structured_sections):
+            raise RuntimeError("DEBUG_MODEL_PLAN_STRUCTURED_SECTIONS_MISSING")
+        if not authored.typed_plan_ir:
+            raise RuntimeError("DEBUG_MODEL_PLAN_TYPED_IR_MISSING")
+        validate_typed_plan_ir(authored.typed_plan_ir)
+        expected_hash = authored.calculate_hash()
+        saved = Path(session.save_plan(target))
+        # Exercise the real serialization boundary before production. This
+        # catches a model/plan-loader contract discrepancy immediately.
+        reloaded = session.load_plan(saved)
+        restored = getattr(reloaded, "complete_proposal", None)
+        if not isinstance(restored, AuthoredPlan) or restored.calculate_hash() != expected_hash:
+            raise RuntimeError("DEBUG_MODEL_PLAN_ROUNDTRIP_MISMATCH")
+        show_full_plan(reloaded, print_fn=print_fn)
+        print_fn(
+            "Debug model_path: 실제 모델 플랜 → 저장/재로드 → 일반 제작. "
+            "참고 모드는 authored reuse 검색/증명 및 타깃 바인딩 후 재검증 경로를 사용합니다."
         )
-        reply = session.load_plan(target)
-        show_full_plan(reply, print_fn=print_fn)
-        print_fn("Debug Mode: planner 호출 없이 예제 플랜을 주입해 바로 제작 단계로 진행합니다.")
-        return PlanDialogResult(reply=reply, plan_path=target, approved=True)
+        return PlanDialogResult(reply=reloaded, plan_path=saved, approved=True)
 
     if mode == EXISTING_PLAN_MODE:
         reply = session.load_plan(target)
@@ -455,6 +502,8 @@ __all__ = [
     "AUDIT_MODE",
     "AUDIT_RELATIVE_PATH",
     "DEBUG_MODE",
+    "DEBUG_STRATEGIES",
+    "DEBUG_DEFAULT_PROMPT",
     "EXISTING_MOD_MODE",
     "EXISTING_PLAN_MODE",
     "FULL_MODE",
