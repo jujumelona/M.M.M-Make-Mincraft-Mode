@@ -22,6 +22,7 @@ on:
       - "minecraft_mod_ai/authored_production.py"
       - "minecraft_mod_ai/complete_planner.py"
       - "minecraft_mod_ai/model_router.py"
+      - "tests/test_execution_contract_policy.py"
       - "tests/test_typed_plan_ir.py"
       - "tests/test_typed_platform_ir.py"
       - "tests/test_typed_event_ir.py"
@@ -42,6 +43,7 @@ on:
       - "minecraft_mod_ai/authored_production.py"
       - "minecraft_mod_ai/complete_planner.py"
       - "minecraft_mod_ai/model_router.py"
+      - "tests/test_execution_contract_policy.py"
       - "tests/test_typed_plan_ir.py"
       - "tests/test_typed_platform_ir.py"
       - "tests/test_typed_event_ir.py"
@@ -88,6 +90,7 @@ jobs:
           --junit audit/implementation-ir.xml
           --durations 30
           --maxfail 30
+          tests/test_execution_contract_policy.py
           tests/test_typed_plan_ir.py
           tests/test_typed_platform_ir.py
           tests/test_typed_event_ir.py
