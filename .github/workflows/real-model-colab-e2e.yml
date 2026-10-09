@@ -11,6 +11,14 @@ on:
   push:
     branches: [main]
     paths:
+      # Running the real pipeline must reflect changes to Colab image, build,
+      # and GameTest boundaries, not just model/parser code.
+      - 'M.M.M_Make_Mincraft_Mode_Colab.ipynb'
+      - 'tools/colab_runtime_setup.py'
+      - 'minecraft_mod_ai/runner.py'
+      - 'minecraft_mod_ai/runner_parallel_validation_contract.py'
+      - 'minecraft_mod_ai/complete_orchestrator.py'
+      - 'minecraft_mod_ai/resource_*.py'
       - 'minecraft_mod_ai/model_adapters/**'
       - 'minecraft_mod_ai/model_router.py'
       - 'minecraft_mod_ai/performance_final_contract.py'
@@ -58,6 +66,8 @@ jobs:
     timeout-minutes: 45
     env:
       PYTHONUTF8: '1'
+      # Consent was explicitly approved for the notebook and this test host.
+      MMM_ACCEPT_MINECRAFT_EULA: 'true'
       MMM_MODEL_PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.profile || 't4_quality' }}
     steps:
       - uses: actions/checkout@v6
@@ -214,7 +224,7 @@ jobs:
           build_options = CompleteExecutionOptions(
               source_only=False,
               run_jdt=False,
-              run_gametest=False,
+              run_gametest=True,
               auto_repair=False,
               run_blockbench=False,
               run_runtime=False,
@@ -222,7 +232,7 @@ jobs:
               run_mineflayer=False,
               run_visual_review=False,
               cleanup_runtime=True,
-              eula_accepted=False,
+              eula_accepted=True,
           )
           debug_result = session.build(
               debug_dialog.reply,
@@ -241,13 +251,25 @@ jobs:
               command
               for command in build.get("commands", [])
               if isinstance(command, dict)
-              and command.get("name") in {"build", "clean_build"}
+              and command.get("name") in {"build", "clean_build", "incremental_build"}
               and command.get("exit_code") == 0
               and command.get("timed_out") is not True
           ]
           if not successful_build_commands:
               raise AssertionError(
                   "DebugToken target_compile has no successful Gradle receipt"
+              )
+          # A synthetic build PASS cannot stand in for a running Minecraft
+          # server GameTest; require structured execution evidence.
+          gametest_report = build.get("gametest_report")
+          if (
+              build.get("gametest_task") not in {"runGameTest", "runGameTestServer"}
+              or not isinstance(gametest_report, str)
+              or not Path(gametest_report).is_file()
+          ):
+              raise AssertionError(
+                  "Real-model DebugToken run did not execute a passing GameTest: "
+                  f"{build!r}"
               )
 
           debug_evidence = {
