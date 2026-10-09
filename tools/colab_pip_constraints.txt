@@ -25,3 +25,7 @@ transformers==5.18.0
 rembg==2.0.67
 # Keep Colab RAPIDS cuCIM's scikit-image cap (<0.26).
 scikit-image==0.25.2
+# Avoid a future OpenCV/ONNX wheel silently changing the preinstalled NumPy ABI.
+opencv-python-headless==4.12.0.88
+onnxruntime==1.23.2
+pymatting==1.1.15
