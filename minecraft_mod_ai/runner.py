@@ -95,10 +95,23 @@ class GradleRunner:
         *,
         download_timeout_seconds: int = 300,
         command_timeout_seconds: int = 1200,
+        eula_accepted: bool = False,
     ) -> None:
         self.cache_dir = cache_dir.resolve()
         self.download_timeout_seconds = download_timeout_seconds
         self.command_timeout_seconds = command_timeout_seconds
+        self.eula_accepted = bool(eula_accepted)
+
+    def _gametest_environment(self, environment: dict[str, str]) -> dict[str, str]:
+        """Forward an explicitly accepted EULA to the actual Gradle process.
+
+        The orchestrator and Gradle verifier must use the SAME consent value.
+        Never grant consent automatically for other GradleRunner callers.
+        """
+        env = dict(environment)
+        if self.eula_accepted:
+            env["MMM_ACCEPT_MINECRAFT_EULA"] = "true"
+        return env
 
     @staticmethod
     def _trusted_project_root(project_root: Path) -> Path:
@@ -283,7 +296,7 @@ class GradleRunner:
         logs = project_root / ".minecraft_ai" / "logs"
         logs.mkdir(parents=True, exist_ok=True)
         gradle = self._ensure_gradle(gradle_version, gradle_sha256)
-        environment = os.environ.copy()
+        environment = self._gametest_environment(os.environ.copy())
         environment["GRADLE_USER_HOME"] = str(self.cache_dir / "gradle-user-home")
         environment["CI"] = "true"
         environment["JAVA_HOME"] = str(java_home)
