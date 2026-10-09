@@ -32,16 +32,58 @@ def authored_capability_graph(
         if str(name) != "base_mod"
     ]
     full_request = " ".join(requested_prompt.split())
+
+    # Do not search a Korean/free-form multi-feature request as one GitHub
+    # keyword query. The approved structured plan already identifies concrete
+    # systems and interactions in provider-searchable technical vocabulary.
+    # These are *retrieval hints*, not newly invented gameplay requirements.
+    import re
+
+    hints: list[str] = []
+    for section, collection, keys in (
+        ("reuse_assessment", "adaptations", ("part",)),
+        ("resources_and_ui", "assets", ("purpose", "production_owner")),
+        ("integration", "entry_points", ("boundary",)),
+        ("behavior_contract", "outputs", ("name",)),
+    ):
+        raw_section = structured_sections.get(section, {})
+        spec = raw_section.get("specification", {}) if isinstance(raw_section, Mapping) else {}
+        records = spec.get(collection, ()) if isinstance(spec, Mapping) else ()
+        if not isinstance(records, (list, tuple)):
+            continue
+        for record in records:
+            if not isinstance(record, Mapping):
+                continue
+            for key in keys:
+                phrase = re.sub(r"[_./-]+", " ", str(record.get(key) or "").casefold())
+                phrase = " ".join(phrase.split())
+                words = phrase.split()
+                if (
+                    1 <= len(words) <= 6
+                    and len(phrase) <= 70
+                    and phrase not in {"player", "host", "game system", "game"}
+                    and phrase not in hints
+                ):
+                    hints.append(phrase)
     nodes = list(dict.fromkeys(
         ["custom gameplay " + full_request[:150]]
         + ["minecraft fabric " + name for name in features]
+        + ["minecraft fabric " + hint for hint in hints]
     ))
     return {
         "nodes": nodes,
         "search_terms": [
-            {"capability": node, "terms": [full_request[:200], node]}
+            {
+                "capability": node,
+                "terms": (
+                    [f"minecraft {node.removeprefix('minecraft fabric ')} mod", node]
+                    if node.startswith("minecraft fabric ")
+                    else [*("minecraft " + hint + " mod" for hint in hints), node]
+                ),
+            }
             for node in nodes
         ],
+        "retrieval_policy_version": "structured-intent-v2",
         "coverage_policy": "discovery_hints_only; authored design remains authoritative",
     }
 
