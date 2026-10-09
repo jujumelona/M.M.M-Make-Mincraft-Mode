@@ -73,10 +73,10 @@ permissions:
   contents: read
 
 concurrency:
-# Every commit must keep its own complete proof; a subsequent commit must not
-# silently cancel the still-running test evidence for an earlier revision.
-  group: production-kill-gates-${{ github.event_name }}-${{ github.sha }}
-  cancel-in-progress: false
+  # During successive fixes, the latest main commit is authoritative.
+  # The complete failure artifacts from an earlier run remain retained.
+  group: production-kill-gates-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   PYTHONUTF8: "1"
