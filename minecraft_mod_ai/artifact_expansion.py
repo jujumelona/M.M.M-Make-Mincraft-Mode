@@ -476,6 +476,28 @@ def expand_facts_to_jobs(
         )
     pkg_path = _java_package_path(package_name)
 
+    # Material facts, not the recipe template, own each local registry identity.
+    # A recipe may consume items yet produce a block; using a single global
+    # registry suffix creates a phantom `block.registry_id` dependency.
+    facts = tuple(facts)
+    registry_port_by_subject: dict[str, str] = {}
+    registry_fact_ports = {
+        FactType.ITEM_EXISTS: "registry_id",
+        FactType.BLOCK_EXISTS: "block_registry_id",
+        FactType.ENTITY_EXISTS: "entity_registry_id",
+    }
+    for registry_fact in facts:
+        registry_port = registry_fact_ports.get(registry_fact.fact_type)
+        if registry_port is None:
+            continue
+        prior_port = registry_port_by_subject.get(registry_fact.subject)
+        if prior_port is not None and prior_port != registry_port:
+            raise ArtifactExpansionError(
+                "ARTIFACT_RESOURCE_REGISTRY_KIND_CONFLICT: "
+                + str(registry_fact.subject)
+            )
+        registry_port_by_subject[registry_fact.subject] = registry_port
+
     jobs: list[ArtifactJob] = []
     seen_jobs: dict[str, ArtifactJob] = {}
     main_class_val = (
@@ -660,30 +682,37 @@ def expand_facts_to_jobs(
             target_path = render_binding(template["target"]["file"])
             anchor = render_binding(template["target"].get("anchor", ""))
             requires = [render_binding(value) for value in template["dependencies"]]
-            registry_suffix = {
+            expected_tag_port = {
                 "item": "registry_id",
                 "block": "block_registry_id",
                 "entity_type": "entity_registry_id",
-            }.get(resource_values.get("registry_kind"), "registry_id")
-            requires.extend(
-                f"{ref.split(':', 1)[1]}.{registry_suffix}"
-                for ref in resource_values.get("resource_references", [])
-                if ref.split(":", 1)[0] == mod_id
-            )
+            }.get(resource_values.get("registry_kind"))
             required_types = {
                 render_binding(name): types
                 for name, types in template.get("dependency_types", {}).items()
             }
             for ref in resource_values.get("resource_references", []):
-                if ref.split(":", 1)[0] == mod_id:
-                    required_types[f"{ref.split(':', 1)[1]}.{registry_suffix}"] = {
-                        "kind": "REGISTRY_ID",
-                        "target_type": {
-                            "registry_id": "Item",
-                            "block_registry_id": "Block",
-                            "entity_registry_id": "EntityType<?>",
-                        }[registry_suffix],
-                    }
+                namespace, local_subject = ref.split(":", 1)
+                if namespace != mod_id:
+                    continue
+                registry_suffix = registry_port_by_subject.get(
+                    local_subject, expected_tag_port or "registry_id"
+                )
+                if expected_tag_port is not None and registry_suffix != expected_tag_port:
+                    raise ArtifactExpansionError(
+                        "ARTIFACT_RESOURCE_TAG_REGISTRY_MISMATCH: "
+                        + f"{ref}: expected {expected_tag_port}, found {registry_suffix}"
+                    )
+                port_name = f"{local_subject}.{registry_suffix}"
+                requires.append(port_name)
+                required_types[port_name] = {
+                    "kind": "REGISTRY_ID",
+                    "target_type": {
+                        "registry_id": "Item",
+                        "block_registry_id": "Block",
+                        "entity_registry_id": "EntityType<?>",
+                    }[registry_suffix],
+                }
             produces = [
                 render_binding(port["binding"]) for port in template["produces"]
             ]
