@@ -25,21 +25,29 @@ def fake_onnxruntime_options(monkeypatch):
     ort.ExecutionMode = SimpleNamespace(ORT_SEQUENTIAL="sequential")
     monkeypatch.setitem(sys.modules, "onnxruntime", ort)
     sessions = ModuleType("rembg.sessions")
-    session_module = ModuleType("rembg.sessions.birefnet_general")
+    session_module = ModuleType("rembg.sessions.birefnet_general_lite")
+    fallback_module = ModuleType("rembg.sessions.u2netp")
 
-    class BiRefNetSessionGeneral:
+    class BiRefNetSessionGeneralLite:
         @classmethod
         def name(cls):
-            return "birefnet-general"
+            return "birefnet-general-lite"
 
         def __init__(self, name, sess_opts, *, providers):
             self.name_used = name
             self.session_options = sess_opts
             self.providers = providers
 
-    session_module.BiRefNetSessionGeneral = BiRefNetSessionGeneral
+    class U2netpSession(BiRefNetSessionGeneralLite):
+        @classmethod
+        def name(cls):
+            return "u2netp"
+
+    session_module.BiRefNetSessionGeneralLite = BiRefNetSessionGeneralLite
+    fallback_module.U2netpSession = U2netpSession
     monkeypatch.setitem(sys.modules, "rembg.sessions", sessions)
-    monkeypatch.setitem(sys.modules, "rembg.sessions.birefnet_general", session_module)
+    monkeypatch.setitem(sys.modules, "rembg.sessions.birefnet_general_lite", session_module)
+    monkeypatch.setitem(sys.modules, "rembg.sessions.u2netp", fallback_module)
     alpha._get_session.cache_clear()
     yield
     alpha._get_session.cache_clear()
@@ -48,14 +56,14 @@ def fake_onnxruntime_options(monkeypatch):
 def test_birefnet_model_selected_explicitly_never_uses_bria_default(monkeypatch):
     calls = []
     module = ModuleType("rembg")
-    from rembg.sessions.birefnet_general import BiRefNetSessionGeneral
-    original_init = BiRefNetSessionGeneral.__init__
+    from rembg.sessions.birefnet_general_lite import BiRefNetSessionGeneralLite
+    original_init = BiRefNetSessionGeneralLite.__init__
 
     def track_session(self, name, sess_opts, *, providers):
         calls.append(("session", name, {"providers": providers, "sess_opts": sess_opts}))
         original_init(self, name, sess_opts, providers=providers)
 
-    monkeypatch.setattr(BiRefNetSessionGeneral, "__init__", track_session)
+    monkeypatch.setattr(BiRefNetSessionGeneralLite, "__init__", track_session)
     def remove(img, *, session, alpha_matting):
         calls.append(("remove", img.size, alpha_matting))
         result = img.convert("RGBA")
@@ -75,10 +83,10 @@ def test_birefnet_model_selected_explicitly_never_uses_bria_default(monkeypatch)
                 assert result.size == source.size
                 assert result.getpixel((0, 0))[3] == 0
                 assert result.getpixel((128, 128))[3] == 255
-                assert result.info["mmm_alpha_matte"] == "rembg:birefnet-general"
+                assert result.info["mmm_alpha_matte"] == "rembg:birefnet-general-lite"
             finally:
                 result.close()
-        assert calls[0][:2] == ("session", "birefnet-general")
+        assert calls[0][:2] == ("session", "birefnet-general-lite")
         assert calls[0][2]["providers"] == ["CPUExecutionProvider"]
         options = calls[0][2]["sess_opts"]
         assert options.intra_op_num_threads == 1
@@ -125,8 +133,8 @@ def test_image_profile_hash_is_bound_to_matte_model_identity():
     from minecraft_mod_ai.resource_prompt_compiler import image_profile_fingerprint
     cfg = ModelRegistry().role("t4_local", "image_generator")
     assert image_profile_fingerprint(cfg).startswith("sha256:")
-    assert alpha.ALPHA_SEGMENTATION_MODEL == "birefnet-general"
-    assert alpha.ALPHA_SEGMENTATION_CONTRACT.endswith("-v1")
+    assert alpha.ALPHA_SEGMENTATION_MODEL == "birefnet-general-lite"
+    assert alpha.ALPHA_SEGMENTATION_CONTRACT.endswith("-v2")
 
 
 def test_isolated_worker_transfers_real_alpha_without_loading_onnx_in_parent(monkeypatch):
@@ -152,7 +160,7 @@ def test_isolated_worker_transfers_real_alpha_without_loading_onnx_in_parent(mon
             assert output.mode == "RGBA"
             assert output.getpixel((0, 0))[3] == 0
             assert output.getpixel((32, 32))[3] == 255
-            assert output.info["mmm_alpha_matte"] == "rembg:birefnet-general"
+            assert output.info["mmm_alpha_matte"] == "rembg:birefnet-general-lite"
         finally:
             output.close()
     assert len(events) == 1
@@ -288,7 +296,7 @@ def test_rembg_2067_direct_session_skips_incompatible_factory(monkeypatch):
     alpha._get_session.cache_clear()
 
     session = alpha._get_session()
-    assert session.name_used == "birefnet-general"
+    assert session.name_used == "birefnet-general-lite"
     assert session.providers == ["CPUExecutionProvider"]
     assert session.session_options.intra_op_num_threads == 1
     assert session.session_options.enable_cpu_mem_arena is False
@@ -296,9 +304,64 @@ def test_rembg_2067_direct_session_skips_incompatible_factory(monkeypatch):
 
 
 def test_rembg_direct_session_rejects_wrong_model_class(monkeypatch):
-    from rembg.sessions.birefnet_general import BiRefNetSessionGeneral
+    from rembg.sessions.birefnet_general_lite import BiRefNetSessionGeneralLite
 
-    monkeypatch.setattr(BiRefNetSessionGeneral, "name", classmethod(lambda cls: "bria-rmbg"))
+    monkeypatch.setattr(BiRefNetSessionGeneralLite, "name", classmethod(lambda cls: "bria-rmbg"))
     alpha._get_session.cache_clear()
     with pytest.raises(ValueError, match="ALPHA_SEGMENTER_MODEL_CLASS_MISMATCH"):
         alpha._get_session()
+
+def test_sigkill_retries_once_with_licensed_lightweight_fallback(monkeypatch):
+    monkeypatch.setattr(alpha, "_available_host_ram_bytes", lambda: 6404 * 1048576)
+    attempts = []
+
+    def fake_run(command, **kwargs):
+        model = kwargs["env"]["MMM_ALPHA_WORKER_MODEL"]
+        attempts.append(model)
+        if model == alpha.ALPHA_SEGMENTATION_MODEL:
+            return SimpleNamespace(returncode=-9, stderr="", stdout="")
+        source, target = Path(command[-2]), Path(command[-1])
+        with Image.open(source) as raw:
+            rgba = raw.convert("RGBA")
+        with Image.new("L", rgba.size, 0) as mask:
+            ImageDraw.Draw(mask).ellipse((8, 8, 24, 24), fill=255)
+            rgba.putalpha(mask)
+        rgba.save(target, "PNG")
+        rgba.close()
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(alpha.subprocess, "run", fake_run)
+    with Image.new("RGB", (32, 32), "grey") as source:
+        result = alpha.segment_foreground_isolated(source)
+    try:
+        assert result.getpixel((16, 16))[3] == 255
+        assert result.getpixel((0, 0))[3] == 0
+        assert result.info["mmm_alpha_matte"] == "rembg:u2netp"
+    finally:
+        result.close()
+    assert attempts == ["birefnet-general-lite", "u2netp"]
+
+
+def test_non_sigkill_backend_failure_never_masks_error_with_fallback(monkeypatch):
+    monkeypatch.setattr(alpha, "_available_host_ram_bytes", lambda: 8 * 1024**3)
+    attempts = []
+
+    def fail(command, **kwargs):
+        attempts.append(kwargs["env"]["MMM_ALPHA_WORKER_MODEL"])
+        return SimpleNamespace(returncode=1, stderr="invalid onnx graph", stdout="")
+
+    monkeypatch.setattr(alpha.subprocess, "run", fail)
+    with Image.new("RGB", (32, 32)) as source:
+        with pytest.raises(ValueError, match="ALPHA_SEGMENTER_WORKER_FAILED") as error:
+            alpha.segment_foreground_isolated(source)
+    assert "invalid onnx graph" in str(error.value)
+    assert attempts == ["birefnet-general-lite"]
+
+
+def test_fallback_uses_explicit_onnx_class_and_provider(monkeypatch):
+    fallback = alpha._get_session("u2netp")
+    assert fallback.name_used == "u2netp"
+    assert fallback.providers == ["CPUExecutionProvider"]
+    assert fallback.session_options.enable_cpu_mem_arena is False
+    with pytest.raises(ValueError, match="ALPHA_SEGMENTER_MODEL_NOT_ALLOWED"):
+        alpha._get_session("bria-rmbg")
