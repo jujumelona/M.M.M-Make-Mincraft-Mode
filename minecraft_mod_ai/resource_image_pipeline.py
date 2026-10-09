@@ -113,6 +113,59 @@ def postprocess_region(
     return quantized
 
 
+def frame_segmented_foreground(source: Any, *, alpha_threshold: int = 128) -> Any:
+    """Fit an ONNX-produced, visible subject to the native sprite canvas.
+
+    The diffusion model renders a large RGB image, while Minecraft items are
+    usually only 16x16. Resizing the entire image can sample *only background*
+    at the 16x16 nearest-neighbor grid even if the segmentation mask was valid.
+    Crop to the actual alpha silhouette before downscaling; never invent alpha
+    or accept an empty/low-confidence segmentation mask.
+    """
+    from PIL import Image
+
+    if source.mode != "RGBA":
+        raise ValueError("ALPHA_SEGMENTER_MISSING_RGBA_ALPHA")
+    alpha = source.getchannel("A")
+    try:
+        extrema = alpha.getextrema()
+        if extrema[1] < alpha_threshold:
+            raise ValueError(
+                f"ALPHA_MASK_BELOW_NATIVE_THRESHOLD: max_alpha={extrema[1]} "
+                f"threshold={alpha_threshold}"
+            )
+        silhouette = alpha.point(lambda value: 255 if value >= alpha_threshold else 0)
+        try:
+            bounds = silhouette.getbbox()
+        finally:
+            silhouette.close()
+    finally:
+        alpha.close()
+    if bounds is None:
+        raise ValueError("ALPHA_MASK_EMPTY_AT_SOURCE")
+    # A model that marks nearly the entire image as foreground has not
+    # isolated an object; scaling such a mask would preserve the defect.
+    x0, y0, x1, y1 = bounds
+    if (x1 - x0) * (y1 - y0) >= source.width * source.height * 0.98:
+        raise ValueError(
+            f"ALPHA_MASK_NOT_ISOLATED: bbox={bounds} size={source.size}"
+        )
+    with source.crop(bounds) as subject:
+        target_width, target_height = source.size
+        scale = min(
+            0.82 * target_width / max(1, subject.width),
+            0.82 * target_height / max(1, subject.height),
+        )
+        width = max(1, min(target_width, round(subject.width * scale)))
+        height = max(1, min(target_height, round(subject.height * scale)))
+        with subject.resize((width, height), Image.Resampling.LANCZOS) as fitted:
+            canvas = Image.new("RGBA", source.size, (0, 0, 0, 0))
+            canvas.paste(
+                fitted, ((target_width - width) // 2, (target_height - height) // 2)
+            )
+    return canvas
+
+
 def generation_regions(contract: Mapping[str, Any]) -> list[dict[str, Any]]:
     uv = contract["rendering"]["uv_schema"]
     if uv:
@@ -210,9 +263,17 @@ def finalize_candidate_sources(
                         matte_method = extracted.info.get(
                             "mmm_alpha_matte", "rembg:birefnet-general-lite"
                         )
-                        processed = postprocess_region(
-                            extracted, contract, (width, height),
-                        )
+                        # Segmenter masks can be valid at source resolution
+                        # but disappear under nearest-neighbor 16x16 sampling.
+                        # Frame only real mask pixels; fail if the model did
+                        # not identify a foreground at all.
+                        with frame_segmented_foreground(
+                            extracted,
+                            alpha_threshold=int(contract["postprocess"]["alpha_threshold"]),
+                        ) as framed:
+                            processed = postprocess_region(
+                                framed, contract, (width, height),
+                            )
                     finally:
                         extracted.close()
                 else:
