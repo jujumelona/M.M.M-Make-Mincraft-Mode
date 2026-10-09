@@ -24,6 +24,7 @@ ALPHA_SEGMENTATION_CONTRACT = "mmm/alpha-segmentation-birefnet-lite-u2net-u2netp
 # Once the primary was SIGKILLed, skip further risky ONNX attempts in this
 # Python kernel. The flag is not persisted between Colab sessions.
 _LITE_WORKER_SIGKILLED = False
+_U2NET_WORKER_SIGKILLED = False
 
 
 
@@ -211,7 +212,7 @@ def segment_foreground_isolated(image: Any) -> Any:
     """
     from PIL import Image
 
-    global _LITE_WORKER_SIGKILLED
+    global _LITE_WORKER_SIGKILLED, _U2NET_WORKER_SIGKILLED
     _preflight_worker_ram()
     # BiRefNet-Lite exceeded the observed ~6 GiB Colab memory headroom.
     # Full U2Net is materially more capable than the tiny U2NetP and fits
@@ -224,7 +225,7 @@ def segment_foreground_isolated(image: Any) -> Any:
         raise ValueError("MMM_ALPHA_LITE_MIN_AVAILABLE_MIB must be >= 3072")
     if not 3072 <= minimum_u2net_mib <= minimum_lite_mib:
         raise ValueError("MMM_ALPHA_U2NET_MIN_AVAILABLE_MIB must be 3072..MMM_ALPHA_LITE_MIN_AVAILABLE_MIB")
-    if _LITE_WORKER_SIGKILLED:
+    if _LITE_WORKER_SIGKILLED or _U2NET_WORKER_SIGKILLED:
         model_order = (ALPHA_SEGMENTATION_FALLBACK_MODEL,)
     elif headroom is None or headroom >= minimum_lite_mib * 1048576:
         model_order = (ALPHA_SEGMENTATION_MODEL, ALPHA_SEGMENTATION_FALLBACK_MODEL)
@@ -237,7 +238,8 @@ def segment_foreground_isolated(image: Any) -> Any:
             f"ALPHA_SEGMENTER_MEMORY_POLICY: selected={model_order[0]} "
             f"available_mib={headroom // 1048576 if headroom is not None else 'unknown'} "
             f"lite_min_mib={minimum_lite_mib} u2net_min_mib={minimum_u2net_mib} "
-            f"previous_lite_kill={_LITE_WORKER_SIGKILLED}",
+            f"previous_lite_kill={_LITE_WORKER_SIGKILLED} "
+            f"previous_u2net_kill={_U2NET_WORKER_SIGKILLED}",
             flush=True,
         )
     with tempfile.TemporaryDirectory(prefix="mmm-alpha-") as temporary:
@@ -300,6 +302,8 @@ def segment_foreground_isolated(image: Any) -> Any:
             possible_oom = completed.returncode in (-9, 137)
             if possible_oom and model_name == ALPHA_SEGMENTATION_MODEL:
                 _LITE_WORKER_SIGKILLED = True
+            if possible_oom and model_name == ALPHA_SEGMENTATION_MID_MODEL:
+                _U2NET_WORKER_SIGKILLED = True
             if incompatible_api:
                 kind = "ALPHA_SEGMENTER_INCOMPATIBLE_REMBG_API"
             elif possible_oom:
