@@ -158,6 +158,21 @@ def test_mojang_resource_location_namespace_rewrite():
     assert '"donor"' not in source
 
 
+def test_multiple_donor_resource_namespaces_require_explicit_identity():
+    from minecraft_mod_ai.reuse_adapters import ModIdRewriteAdapter
+
+    files = {
+        "src/main/resources/assets/first/lang/en_us.json": '{"item.first.a":"A"}',
+        "src/main/resources/assets/second/lang/en_us.json": '{"item.second.b":"B"}',
+    }
+    with pytest.raises(ValueError, match="SOURCE_REUSE_RESOURCE_NAMESPACE_AMBIGUOUS"):
+        ModIdRewriteAdapter().apply(files, {"target_modid": "spacemod"})
+    assert set(files) == {
+        "src/main/resources/assets/first/lang/en_us.json",
+        "src/main/resources/assets/second/lang/en_us.json",
+    }
+
+
 def test_client_resource_namespace_relocation_preserves_translations():
     from minecraft_mod_ai.reuse_adapters import ModIdRewriteAdapter
 
