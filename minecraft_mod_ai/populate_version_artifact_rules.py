@@ -71,7 +71,7 @@ def template_hashes() -> dict[str, str]:
     authority.verify_live()
     for identifier in LEAF_TEMPLATES:
         authority.implementations.get_implementation(identifier)
-    return {identifier: _sha256_text(_encode(load_template(identifier))) for identifier in LEAF_TEMPLATES}
+    return {identifier: "sha256:" + _sha256_text(_encode(load_template(identifier))) for identifier in LEAF_TEMPLATES}
 
 
 def _item_template_ids(minecraft_version: str) -> tuple[str, str | None]:
