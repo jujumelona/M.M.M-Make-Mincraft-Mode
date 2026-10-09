@@ -63,6 +63,7 @@ def test_debug_mode_skips_planner_and_loads_round_trip_valid_fixture(tmp_path: P
         prompt="",
         plan_path=target,
         debug_mode=True,
+        debug_strategy="host_smoke",
         minecraft_version="26.2",
         loader="fabric",
         print_fn=lambda *_, **__: None,
