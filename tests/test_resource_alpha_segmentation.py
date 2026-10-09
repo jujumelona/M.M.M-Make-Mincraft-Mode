@@ -58,10 +58,15 @@ def test_birefnet_model_selected_explicitly_never_uses_bria_default(monkeypatch)
                 assert result.info["mmm_alpha_matte"] == "rembg:birefnet-general"
             finally:
                 result.close()
-        assert calls == [
-            ("session", "birefnet-general", {"providers": ["CPUExecutionProvider"]}),
-            ("remove", (256, 256), False),
-        ]
+        assert calls[0][:2] == ("session", "birefnet-general")
+        assert calls[0][2]["providers"] == ["CPUExecutionProvider"]
+        options = calls[0][2]["sess_opts"]
+        assert options.intra_op_num_threads == 1
+        assert options.inter_op_num_threads == 1
+        assert options.execution_mode == "sequential"
+        assert options.enable_mem_pattern is False
+        assert options.enable_cpu_mem_arena is False
+        assert calls[1] == ("remove", (256, 256), False)
     finally:
         alpha._get_session.cache_clear()
 
