@@ -2,9 +2,22 @@ from __future__ import annotations
 
 import threading
 
+import pytest
+
 from minecraft_mod_ai.artifact_job import ArtifactJob
 from minecraft_mod_ai.artifact_ports import PortKind, PortRegistry, TypedPort
 import minecraft_mod_ai.artifact_graph_executor as executor
+
+
+@pytest.fixture(autouse=True)
+def _isolate_graph_scheduling_from_host_version_gate(monkeypatch):
+    """These scheduling/locking tests mock execution; version isolation is
+    tested separately against real immutable host bundles."""
+    monkeypatch.setattr(
+        "minecraft_mod_ai.resolved_version_context.execution_context",
+        lambda _context, _job: None,
+    )
+
 
 
 def _job(job_id: str, *, requires=(), produces=()) -> ArtifactJob:
