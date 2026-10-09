@@ -1039,15 +1039,33 @@ def compile_authored_design(
     # attached to the production artifact, not left in an unrelated research log.
     # Resolve after immutable target binding for AUTO; reuse planning receipts
     # only when they were proven against the exact selected target.
-    from .authored_reuse_bridge import resolve_authored_source_reuse
+    from .authored_reuse_bridge import (
+        authored_capability_graph,
+        resolve_authored_source_reuse,
+    )
     source_reuse = content_design.get("_host_source_reuse")
     exact_reuse_target = {
         "minecraft_version": str(adapter.minecraft_version),
         "loader": str(adapter.loader),
     }
+    expected_reuse_graph = authored_capability_graph(
+        plan.requested_prompt, plan.structured_sections,
+    )
+    cached_graph = (
+        source_reuse.get("capability_graph")
+        if isinstance(source_reuse, Mapping) else None
+    )
+    # A matching Minecraft version is NOT proof that a cached search used
+    # the current plan or retrieval algorithm. Invalidate old all-fresh
+    # receipts after the structured-intent search upgrade.
     if (
         not isinstance(source_reuse, Mapping)
         or source_reuse.get("bound_target") != exact_reuse_target
+        or not isinstance(cached_graph, Mapping)
+        or any(
+            cached_graph.get(key) != expected_reuse_graph.get(key)
+            for key in ("nodes", "search_terms", "retrieval_policy_version")
+        )
     ):
         source_reuse = resolve_authored_source_reuse(
             plan.requested_prompt,
