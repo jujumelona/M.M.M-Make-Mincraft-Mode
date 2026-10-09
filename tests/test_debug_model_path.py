@@ -95,7 +95,7 @@ def test_model_path_uses_real_authored_output_and_roundtrip(tmp_path: Path) -> N
         run_mode=FULL_MODE,
         prompt="custom user requested gameplay",
         plan_path=target,
-        debug_mode=True,
+        debug_mode=True, debug_strategy="model_path",
         print_fn=lambda *args, **kwargs: None,
     )
     assert session.prompts == ["custom user requested gameplay"]
@@ -110,7 +110,7 @@ def test_model_path_default_prompt_runs_model_not_host_fixture(tmp_path: Path) -
     session = _ModelSession()
     run_plan_dialog(
         session=session, run_mode=FULL_MODE, prompt="   ",
-        plan_path=tmp_path / "proposal.json", debug_mode=True,
+        plan_path=tmp_path / "proposal.json", debug_mode=True, debug_strategy="model_path",
         print_fn=lambda *args, **kwargs: None,
     )
     assert session.prompts == [DEBUG_DEFAULT_PROMPT]
@@ -121,7 +121,7 @@ def test_model_path_fails_closed_when_reload_changes_authored_plan(tmp_path: Pat
         run_plan_dialog(
             session=_ModelSession(corrupt_reload=True),
             run_mode=FULL_MODE, prompt="real gameplay",
-            plan_path=tmp_path / "proposal.json", debug_mode=True,
+            plan_path=tmp_path / "proposal.json", debug_mode=True, debug_strategy="model_path",
             print_fn=lambda *args, **kwargs: None,
         )
 
@@ -178,6 +178,6 @@ def test_debug_rejects_empty_non_executable_model_plan(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="DEBUG_MODEL_PLAN_EMPTY_IMPLEMENTATION"):
         run_plan_dialog(
             session=session, run_mode=FULL_MODE, prompt="empty",
-            plan_path=tmp_path / "proposal.json", debug_mode=True,
+            plan_path=tmp_path / "proposal.json", debug_mode=True, debug_strategy="model_path",
             print_fn=lambda *_, **__: None,
         )
