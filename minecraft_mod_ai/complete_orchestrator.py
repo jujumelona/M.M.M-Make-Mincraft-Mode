@@ -613,7 +613,10 @@ class CompleteProductionOrchestrator:
         gradle_cache = production_gradle_cache_dir()
 
         def run_build() -> dict[str, Any]:
-            build = GradleRunner(gradle_cache).build(
+            build = GradleRunner(
+                gradle_cache,
+                eula_accepted=options.eula_accepted,
+            ).build(
                 project_root,
                 run_gametest=options.run_gametest,
             ).to_dict()
