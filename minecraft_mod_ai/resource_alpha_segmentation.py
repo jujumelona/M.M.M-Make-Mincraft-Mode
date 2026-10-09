@@ -21,47 +21,15 @@ ALPHA_SEGMENTATION_PROVIDER = "CPUExecutionProvider"
 ALPHA_SEGMENTATION_CONTRACT = "mmm/alpha-segmentation-birefnet-general-v1"
 
 
-def _require_custom_session_options_api(new_session: Any) -> None:
-    """Reject rembg before model download if it cannot accept ONNX session opts.
-
-    rembg <=2.0.76 always constructs its own sess_opts and forwards an explicitly
-    supplied sess_opts again via **kwargs, crashing BaseSession.__init__. Silently
-    dropping these settings is unsafe for BiRefNet under Colab RAM pressure.
-    """
-    import inspect
-
-    try:
-        parameter = inspect.signature(new_session).parameters.get("sess_opts")
-    except (ValueError, TypeError):
-        parameter = None
-    if parameter is None or parameter.kind not in (
-        inspect.Parameter.KEYWORD_ONLY,
-        inspect.Parameter.POSITIONAL_OR_KEYWORD,
-    ):
-        from importlib.metadata import PackageNotFoundError, version
-
-        try:
-            installed = version("rembg")
-        except PackageNotFoundError:
-            installed = "not-installed"
-        raise ValueError(
-            "ALPHA_SEGMENTER_INCOMPATIBLE_REMBG_API: "
-            f"installed rembg={installed}; new_session(sess_opts=...) unavailable. "
-            "Rerun Colab setup cell 2 to install rembg[cpu]>=2.0.77,<3 "
-            "before image generation."
-        )
-
-
 @lru_cache(maxsize=1)
 def _get_session() -> Any:
     try:
-        from rembg import new_session
+        from rembg.sessions.birefnet_general import BiRefNetSessionGeneral
     except ImportError as exc:
         raise ValueError(
-            'ALPHA_SEGMENTER_UNAVAILABLE: install "rembg[cpu]" via the image extra; '
-            "opaque diffusion sprites cannot be published without alpha segmentation."
+            'ALPHA_SEGMENTER_UNAVAILABLE: install "rembg[cpu]==2.0.67" via the '
+            'image extra; BiRefNet general and explicit ONNX options are required.'
         ) from exc
-    _require_custom_session_options_api(new_session)
     # BiRefNet's full-size session can exceed Colab host RAM when FLUX and a
     # JVM have recently been active. Constrain ONNX allocations at creation
     # rather than only setting an OpenMP hint on its parent process.
@@ -81,10 +49,15 @@ def _get_session() -> Any:
     session_options.enable_mem_pattern = False
     session_options.enable_cpu_mem_arena = False
 
-    # Explicit model ID is a licensing contract. rembg's DEFAULT is not allowed.
-    return new_session(
+    # rembg 2.0.67's public new_session() *always* constructs sess_opts and
+    # double-passes user supplied sess_opts. Construct its exported concrete
+    # BiRefNet session instead; BaseSession(model, sess_opts, providers=...)
+    # preserves all ONNX memory controls and the explicit MIT model choice.
+    if BiRefNetSessionGeneral.name() != ALPHA_SEGMENTATION_MODEL:
+        raise ValueError("ALPHA_SEGMENTER_MODEL_CLASS_MISMATCH")
+    return BiRefNetSessionGeneral(
         ALPHA_SEGMENTATION_MODEL,
-        sess_opts=session_options,
+        session_options,
         providers=[ALPHA_SEGMENTATION_PROVIDER],
     )
 
@@ -288,7 +261,7 @@ def segment_foreground_isolated(image: Any) -> Any:
             else:
                 kind = "ALPHA_SEGMENTER_WORKER_FAILED"
             remediation = (
-                " Rerun Colab setup cell 2 to upgrade rembg[cpu]>=2.0.77,<3."
+                " Rerun Colab setup cell 2 to install rembg[cpu]==2.0.67."
                 if incompatible_api else ""
             )
             raise ValueError(
@@ -341,12 +314,11 @@ __all__ = [
 
 if __name__ == "__main__":
     if len(sys.argv) == 2 and sys.argv[1] == "--prepare":
-        from rembg import new_session
         from rembg.sessions.birefnet_general import BiRefNetSessionGeneral
 
-        # Validate the worker API before the 1+ GiB checkpoint download and
-        # before the diffusion model is loaded by the next generation step.
-        _require_custom_session_options_api(new_session)
+        # Check the explicitly licensed model class before the large download.
+        if BiRefNetSessionGeneral.name() != ALPHA_SEGMENTATION_MODEL:
+            raise ValueError("ALPHA_SEGMENTER_MODEL_CLASS_MISMATCH")
         # This is rembg's checksummed model downloader, not inference.
         BiRefNetSessionGeneral.download_models()
     elif len(sys.argv) == 4 and sys.argv[1] == "--worker":
