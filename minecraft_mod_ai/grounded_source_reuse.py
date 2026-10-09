@@ -163,6 +163,29 @@ def _grounded_repository_cards(design: Mapping[str, Any]) -> tuple[dict[str, Any
         _merge_card(cards, by_repository, raw)
 
 
+    # Prebuilt Debug selects real repository identities, never executable donors.
+    # Restrict identities, retain reference-only status, then use the SAME
+    # target-bound inspection, license and compile proofs as regular production.
+    preselected = design.get("_preselected_reference_repositories", ())
+    if not isinstance(preselected, (list, tuple)) or len(preselected) > 8:
+        raise ValueError("DEBUG_REFERENCE_CANDIDATES_INVALID")
+    for raw in preselected:
+        if not isinstance(raw, str) or not raw.strip():
+            raise ValueError("DEBUG_REFERENCE_CANDIDATE_INVALID")
+        repository = _normalize_reference_repository(raw)
+        _merge_card(cards, by_repository, {
+            "repository": repository,
+            "page_refs": ["host:prebuilt_debug_reference"],
+            "source_ids": ["github:" + repository],
+            "source_urls": ["https://github.com/" + repository],
+            "evidence_text": "",
+            "evidence_tokens": [],
+            "explicit_reference": True,
+            "candidate_origin": "prebuilt_debug_reference",
+            "reference_only": True,
+            "source_reuse_authority": "verification_required",
+        })
+
     for host_card in _host_reference_cards():
         _merge_card(cards, by_repository, host_card)
 
