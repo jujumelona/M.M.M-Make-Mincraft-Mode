@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 
@@ -94,6 +94,7 @@ def resolve_authored_source_reuse(
     *,
     minecraft_version: str,
     loader: str,
+    reference_repositories: Sequence[str] = (),
 ) -> dict[str, Any]:
     from .grounded_source_reuse import build_repository_reuse_plan
 
@@ -104,6 +105,9 @@ def resolve_authored_source_reuse(
     }
     design = {
         "_pre_retrieval_plan": frozen,
+        # Debug-authored references have zero reuse authority. The normal host
+        # inspector and target compile proof still decide source_transplant.
+        "_preselected_reference_repositories": list(reference_repositories),
         "_platform_selection": {
             "target": {
                 "minecraft_version": minecraft_version,
