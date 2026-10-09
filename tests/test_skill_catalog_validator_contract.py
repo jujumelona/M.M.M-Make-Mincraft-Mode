@@ -22,14 +22,17 @@ def test_entire_canonical_skill_catalog_compiles() -> None:
         assert set(contract.validators) <= REVIEWED_VALIDATORS
 
 
-def test_generate_fabric_core_uses_canonical_validator_ids() -> None:
-    contract = compile_skill_contract("generate-fabric-core")
+def test_complete_production_uses_canonical_validator_ids() -> None:
+    contract = compile_skill_contract("execute-complete-production")
     assert contract.validators == (
-        "approval_and_fidelity",
-        "path_containment",
-        "version_lock",
-        "source_validation",
-        "capability_receipts",
+        "proposal_identity",
+        "transactional_writes",
+        "full_build_gates",
+        "external_quality_gates",
+        "requirement_traceability",
+        "quality_convergence",
+        "evidence_freshness",
+        "no_self_certification",
     )
 
 
@@ -37,7 +40,7 @@ def test_skill_contract_reports_all_unreviewed_validators_at_once(tmp_path: Path
     source = (
         Path(__file__).resolve().parents[1]
         / "skills"
-        / "generate-fabric-core"
+        / "execute-complete-production"
         / "SKILL.md"
     ).read_text(encoding="utf-8")
 
@@ -49,7 +52,7 @@ def test_skill_contract_reports_all_unreviewed_validators_at_once(tmp_path: Path
     end = source.index("```", start)
     policy = yaml.safe_load(source[start:end])
     validators = list(policy["validators"])
-    validators[validators.index("approval_and_fidelity")] = "validator-not-reviewed-one"
+    validators[validators.index("proposal_identity")] = "validator-not-reviewed-one"
     validators.insert(1, "validator-not-reviewed-two")
     policy["validators"] = validators
     replacement = "\n" + yaml.safe_dump(
@@ -60,12 +63,12 @@ def test_skill_contract_reports_all_unreviewed_validators_at_once(tmp_path: Path
     )
     source = source[:start] + replacement + source[end:]
 
-    target = tmp_path / "generate-fabric-core" / "SKILL.md"
+    target = tmp_path / "execute-complete-production" / "SKILL.md"
     target.parent.mkdir(parents=True)
     target.write_text(source, encoding="utf-8")
 
     with pytest.raises(SkillPolicyError) as error:
-        compile_skill_contract("generate-fabric-core", tmp_path)
+        compile_skill_contract("execute-complete-production", tmp_path)
 
     message = str(error.value)
     assert "validator-not-reviewed-one" in message
