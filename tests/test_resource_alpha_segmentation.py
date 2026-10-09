@@ -233,9 +233,9 @@ def test_streamed_checkpoint_still_blocks_unsafe_low_ram(monkeypatch):
 def test_legacy_factory_typeerror_is_reported_as_compatibility_not_oom(monkeypatch):
     monkeypatch.setattr(alpha, "_available_host_ram_bytes", lambda: 8 * 1024**3)
     worker_stderr = (
-        "Traceback (most recent call last):\\n"
-        '  File "/usr/local/lib/python3.13/dist-packages/rembg/session_factory.py", line 48\\n'
-        "TypeError: BaseSession.__init__() got multiple values for argument 'sess_opts'\\n"
+        "Traceback (most recent call last):\n"
+        '  File "/usr/local/lib/python3.13/dist-packages/rembg/session_factory.py", line 48\n'
+        "TypeError: BaseSession.__init__() got multiple values for argument 'sess_opts'\n"
     )
     monkeypatch.setattr(
         alpha.subprocess, "run",
