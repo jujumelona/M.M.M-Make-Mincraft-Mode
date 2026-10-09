@@ -56,6 +56,7 @@ def validate_notebook() -> str:
 
     configuration = _source_by_id(notebook, "configuration")
     plan = _source_by_id(notebook, "plan")
+    build = _source_by_id(notebook, "build")
     if "KV_CACHE_AUTOTUNE = True" not in configuration:
         raise SystemExit("Canonical Colab must default KV cache autotuning on")
     if 'os.environ["MMM_LLAMA_KV_AUTOTUNE"]' not in plan:
@@ -64,6 +65,22 @@ def validate_notebook() -> str:
         "session = CompleteModAISession("
     ):
         raise SystemExit("KV autotune policy must be applied before session construction")
+
+    # Resumed build cells must not bypass the checkout and dependency receipt
+    # established in cell 2; reject stale rembg before any GPU image work.
+    for required in (
+        "module.assert_setup_state(",
+        'used_commit=USED_COMMIT',
+        '_distribution_version("rembg")',
+        '_Version("2.0.77")',
+        "BUILD_DEPENDENCY_PREFLIGHT:",
+    ):
+        if required not in build:
+            raise SystemExit("Build cell missing runtime preflight: " + required)
+    if build.index("module.assert_setup_state(") > build.index("session.build("):
+        raise SystemExit("Build cell must validate setup before session.build")
+    if build.index('_distribution_version("rembg")') > build.index("session.build("):
+        raise SystemExit("Build cell must validate rembg before session.build")
 
     colab_name = notebook.metadata.get("colab", {}).get("name")
     if colab_name != NOTEBOOK_PATH.name:
