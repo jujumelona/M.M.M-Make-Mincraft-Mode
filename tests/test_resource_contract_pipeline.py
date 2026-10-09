@@ -568,7 +568,7 @@ def test_opaque_flux_like_cube_runs_single_candidate_with_birefnet_alpha(tmp_pat
     result = generate_assets(router, proposal, tmp_path / "mod", tmp_path / "run")
     assert result["resource_contract_validation"]["status"] == "PASS"
     assert result["assets"][0]["attempted_candidate_count"] == 1
-    assert result["assets"][0]["generation_evidence"]["sources"][0]["alpha_matte"] == "rembg:birefnet-general"
+    assert result["assets"][0]["generation_evidence"]["sources"][0]["alpha_matte"] == "rembg:birefnet-general-lite"
     with Image.open(result["assets"][0]["target"]) as output:
         assert set(output.getchannel("A").getdata()) == {0, 255}
 
