@@ -32,8 +32,8 @@ def fake_onnxruntime_options(monkeypatch):
 def test_birefnet_model_selected_explicitly_never_uses_bria_default(monkeypatch):
     calls = []
     module = ModuleType("rembg")
-    def session(name, **kw):
-        calls.append(("session", name, kw))
+    def session(name, *, sess_opts=None, **kw):
+        calls.append(("session", name, {**kw, "sess_opts": sess_opts}))
         return object()
     def remove(img, *, session, alpha_matting):
         calls.append(("remove", img.size, alpha_matting))
@@ -74,7 +74,7 @@ def test_birefnet_model_selected_explicitly_never_uses_bria_default(monkeypatch)
 @pytest.mark.parametrize("mode", ["RGB", "L"])
 def test_alpha_model_rejects_non_rgba_outputs(monkeypatch, mode):
     module = ModuleType("rembg")
-    module.new_session = lambda *args, **kwargs: object()
+    module.new_session = lambda *args, sess_opts=None, **kwargs: object()
     module.remove = lambda image, **kwargs: Image.new(mode, image.size)
     monkeypatch.setitem(sys.modules, "rembg", module)
     alpha._get_session.cache_clear()
@@ -88,7 +88,7 @@ def test_alpha_model_rejects_non_rgba_outputs(monkeypatch, mode):
 
 def test_alpha_model_rejects_all_opaque_masks(monkeypatch):
     module = ModuleType("rembg")
-    module.new_session = lambda *args, **kwargs: object()
+    module.new_session = lambda *args, sess_opts=None, **kwargs: object()
     module.remove = lambda image, **kwargs: Image.new("RGBA", image.size, (20, 30, 40, 255))
     monkeypatch.setitem(sys.modules, "rembg", module)
     alpha._get_session.cache_clear()
@@ -228,3 +228,40 @@ def test_streamed_checkpoint_still_blocks_unsafe_low_ram(monkeypatch):
         ValueError, match="ALPHA_SEGMENTER_PREPARE_INSUFFICIENT_HOST_RAM"
     ):
         alpha.prepare_foreground_model_isolated()
+
+
+def test_rembg_pre_2077_api_fails_before_loading_model(monkeypatch):
+    """Exact root cause from the production log: old factory forwards sess_opts twice."""
+    module = ModuleType("rembg")
+    calls = []
+
+    def old_new_session(model_name="u2net", *args, **kwargs):
+        calls.append((model_name, args, kwargs))
+        raise TypeError("BaseSession.__init__() got multiple values for argument 'sess_opts'")
+
+    module.new_session = old_new_session
+    monkeypatch.setitem(sys.modules, "rembg", module)
+    alpha._get_session.cache_clear()
+    with pytest.raises(ValueError, match="ALPHA_SEGMENTER_INCOMPATIBLE_REMBG_API"):
+        alpha._get_session()
+    assert calls == []  # reject API before downloading weights / creating ONNX sessions
+
+
+def test_rembg_2077_signature_allows_memory_constrained_session(monkeypatch):
+    module = ModuleType("rembg")
+    calls = []
+
+    def new_session(model_name="u2net", *args, sess_opts=None, **kwargs):
+        calls.append((model_name, sess_opts, kwargs))
+        return object()
+
+    module.new_session = new_session
+    monkeypatch.setitem(sys.modules, "rembg", module)
+    alpha._get_session.cache_clear()
+    alpha._get_session()
+    assert len(calls) == 1
+    name, options, kw = calls[0]
+    assert name == "birefnet-general"
+    assert options.intra_op_num_threads == 1
+    assert options.enable_cpu_mem_arena is False
+    assert kw["providers"] == ["CPUExecutionProvider"]
