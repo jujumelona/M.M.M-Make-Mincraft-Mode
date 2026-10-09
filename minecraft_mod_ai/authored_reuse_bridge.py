@@ -199,6 +199,7 @@ def materialize_verified_authored_sources(
         "minecraft_version": adapter.minecraft_version,
         "loader": adapter.loader,
         "mappings": adapter.yarn_mappings,
+        "mappings_kind": adapter.mappings_kind,
         "java_version": adapter.java_version,
         "fabric_loader": adapter.fabric_loader,
         "fabric_api": adapter.fabric_api,
