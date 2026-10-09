@@ -412,6 +412,7 @@ def _generate_authored_chunk(
     state_symbols: Any = None,
     section_context: Mapping[str, Any] | None = None,
     record_counts: Mapping[str, int | None] | None = None,
+    on_additional_call: Any = None,
 ) -> dict[str, Any]:
     """Generate exactly one host-bounded concern field page."""
 
@@ -459,6 +460,7 @@ def _generate_authored_chunk(
         schema,
         state_symbols,
         section_context=section_context,
+        on_additional_call=on_additional_call,
     )
     if not isinstance(value, Mapping):
         raise ValueError(
@@ -477,6 +479,7 @@ def _generate_authored_page_value(
     state_symbols: Any,
     *,
     section_context: Mapping[str, Any] | None = None,
+    on_additional_call: Any = None,
 ) -> Any:
     from .fixed_template_generation import generate_fixed_template_value
 
@@ -540,6 +543,7 @@ def _generate_authored_page_value(
                 count=int(concern_schema["minItems"]),
                 item_schema=concern_schema["items"],
                 existing_rows=existing_rows,
+                on_additional_call=on_additional_call,
             )
     return generate_fixed_template_value(
         router,
@@ -649,6 +653,11 @@ def _generate_concern_pages(
             state_symbols=state_symbols,
             section_context=context or None,
             record_counts={concern: fixed_count},
+            on_additional_call=(
+                (lambda: request.budget.consume("structured.state_model.scalar_recovery"))
+                if request.section == "state_model" and request.budget is not None
+                else None
+            ),
         )
         rows = value.get(concern, [])
         if not isinstance(rows, list):
