@@ -152,6 +152,22 @@ def test_prebuilt_fact_graph_lowers_on_real_fabric_target_without_model() -> Non
         assert {job.owner_module for job in jobs} == {
             "crystal_fragment", "crystal_block", "crystal_block_recipe",
         }
+        recipe = next(job for job in jobs if job.owner_module == "crystal_block_recipe")
+        block_registration = next(
+            job for job in jobs
+            if job.template_id == "fabric/block/register_basic"
+            and job.owner_module == "crystal_block"
+        )
+        assert "crystal_block.block_registry_id" in block_registration.produces
+        assert "crystal_block.registry_id" in block_registration.produces
+        assert "crystal_block.registry_id" in recipe.requires
+        assert "crystal_block.block_registry_id" not in recipe.requires
+        assert {
+            "name": "crystal_block.registry_id",
+            "kind": "REGISTRY_ID",
+            "target_type": "Item",
+        } in recipe.required_ports
+
 
 
 def test_debug_plan_path_does_not_overwrite_user_proposal(tmp_path: Path) -> None:
