@@ -186,6 +186,7 @@ def _watchdog_loop(stop: threading.Event, interval: float) -> None:
         # The notebook kernel and unrelated services are never signaled.
         if (
             pid > 0
+            and bool(os.environ.get("MMM_COLAB_SETUP_RECEIPT", "").strip())
             and _process_start_ticks(pid) == sample["managed_start_ticks"]
             and sample["managed_start_ticks"] > 0
             and int(sample["effective_mem_available_bytes"]) < _memory_reserve_bytes()
@@ -255,6 +256,20 @@ def stop_managed_process_watchdog() -> None:
         stop.set()
     if thread and thread is not threading.current_thread():
         thread.join(timeout=0.5)
+
+
+def shutdown_kernel_memory_watchdog() -> None:
+    """Stop owned monitor before a hot Git checkout replaces this module."""
+    global _KERNEL_MONITOR_ENABLED, _MANAGED_PID, _THREAD, _STOP
+    with _LOCK:
+        _KERNEL_MONITOR_ENABLED = False
+        _MANAGED_PID = None
+        stop, thread = _STOP, _THREAD
+        _STOP, _THREAD = None, None
+    if stop is not None:
+        stop.set()
+    if thread is not None and thread is not threading.current_thread():
+        thread.join(timeout=1.0)
 
 
 def read_last_snapshot() -> dict[str, Any]:
@@ -356,6 +371,7 @@ __all__ = [
     "read_last_snapshot",
     "start_managed_process_watchdog",
     "start_kernel_memory_watchdog",
+    "shutdown_kernel_memory_watchdog",
     "assert_memory_headroom",
     "stop_managed_process_watchdog",
 ]
