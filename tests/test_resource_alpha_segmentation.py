@@ -24,6 +24,22 @@ def fake_onnxruntime_options(monkeypatch):
     ort.SessionOptions = Options
     ort.ExecutionMode = SimpleNamespace(ORT_SEQUENTIAL="sequential")
     monkeypatch.setitem(sys.modules, "onnxruntime", ort)
+    sessions = ModuleType("rembg.sessions")
+    session_module = ModuleType("rembg.sessions.birefnet_general")
+
+    class BiRefNetSessionGeneral:
+        @classmethod
+        def name(cls):
+            return "birefnet-general"
+
+        def __init__(self, name, sess_opts, *, providers):
+            self.name_used = name
+            self.session_options = sess_opts
+            self.providers = providers
+
+    session_module.BiRefNetSessionGeneral = BiRefNetSessionGeneral
+    monkeypatch.setitem(sys.modules, "rembg.sessions", sessions)
+    monkeypatch.setitem(sys.modules, "rembg.sessions.birefnet_general", session_module)
     alpha._get_session.cache_clear()
     yield
     alpha._get_session.cache_clear()
@@ -32,9 +48,14 @@ def fake_onnxruntime_options(monkeypatch):
 def test_birefnet_model_selected_explicitly_never_uses_bria_default(monkeypatch):
     calls = []
     module = ModuleType("rembg")
-    def session(name, *, sess_opts=None, **kw):
-        calls.append(("session", name, {**kw, "sess_opts": sess_opts}))
-        return object()
+    from rembg.sessions.birefnet_general import BiRefNetSessionGeneral
+    original_init = BiRefNetSessionGeneral.__init__
+
+    def track_session(self, name, sess_opts, *, providers):
+        calls.append(("session", name, {"providers": providers, "sess_opts": sess_opts}))
+        original_init(self, name, sess_opts, providers=providers)
+
+    monkeypatch.setattr(BiRefNetSessionGeneral, "__init__", track_session)
     def remove(img, *, session, alpha_matting):
         calls.append(("remove", img.size, alpha_matting))
         result = img.convert("RGBA")
@@ -43,7 +64,6 @@ def test_birefnet_model_selected_explicitly_never_uses_bria_default(monkeypatch)
         result.putalpha(mask)
         mask.close()
         return result
-    module.new_session = session
     module.remove = remove
     monkeypatch.setitem(sys.modules, "rembg", module)
     alpha._get_session.cache_clear()
@@ -254,38 +274,31 @@ def test_legacy_factory_typeerror_is_reported_as_compatibility_not_oom(monkeypat
     assert "cgroup_oom_kill_delta=" in message
 
 
-def test_rembg_pre_2077_api_fails_before_loading_model(monkeypatch):
-    """Exact root cause from the production log: old factory forwards sess_opts twice."""
+def test_rembg_2067_direct_session_skips_incompatible_factory(monkeypatch):
+    """The legacy factory must not be called, even if it would throw."""
     module = ModuleType("rembg")
-    calls = []
+    events = []
 
-    def old_new_session(model_name="u2net", *args, **kwargs):
-        calls.append((model_name, args, kwargs))
+    def broken_factory(*_args, **_kwargs):
+        events.append("factory_called")
         raise TypeError("BaseSession.__init__() got multiple values for argument 'sess_opts'")
 
-    module.new_session = old_new_session
+    module.new_session = broken_factory
     monkeypatch.setitem(sys.modules, "rembg", module)
     alpha._get_session.cache_clear()
-    with pytest.raises(ValueError, match="ALPHA_SEGMENTER_INCOMPATIBLE_REMBG_API"):
+
+    session = alpha._get_session()
+    assert session.name_used == "birefnet-general"
+    assert session.providers == ["CPUExecutionProvider"]
+    assert session.session_options.intra_op_num_threads == 1
+    assert session.session_options.enable_cpu_mem_arena is False
+    assert events == []
+
+
+def test_rembg_direct_session_rejects_wrong_model_class(monkeypatch):
+    from rembg.sessions.birefnet_general import BiRefNetSessionGeneral
+
+    monkeypatch.setattr(BiRefNetSessionGeneral, "name", classmethod(lambda cls: "bria-rmbg"))
+    alpha._get_session.cache_clear()
+    with pytest.raises(ValueError, match="ALPHA_SEGMENTER_MODEL_CLASS_MISMATCH"):
         alpha._get_session()
-    assert calls == []  # reject API before downloading weights / creating ONNX sessions
-
-
-def test_rembg_2077_signature_allows_memory_constrained_session(monkeypatch):
-    module = ModuleType("rembg")
-    calls = []
-
-    def new_session(model_name="u2net", *args, sess_opts=None, **kwargs):
-        calls.append((model_name, sess_opts, kwargs))
-        return object()
-
-    module.new_session = new_session
-    monkeypatch.setitem(sys.modules, "rembg", module)
-    alpha._get_session.cache_clear()
-    alpha._get_session()
-    assert len(calls) == 1
-    name, options, kw = calls[0]
-    assert name == "birefnet-general"
-    assert options.intra_op_num_threads == 1
-    assert options.enable_cpu_mem_arena is False
-    assert kw["providers"] == ["CPUExecutionProvider"]
