@@ -91,12 +91,20 @@ def test_record_execution_has_no_model_owned_status_loop() -> None:
     assert '"status"' not in batch
 
 
-def test_feature_convergence_is_semantic_not_depth_limited() -> None:
-    text = (PKG / "feature_template_pipeline.py").read_text(encoding="utf-8")
-    assert "max_depth" not in text
-    assert "semantic ancestry cycle/no-progress" in text
-    assert "semantically duplicate children" in text
-    assert "unresolved atomic checks did not strictly decrease" in text
+def test_removed_feature_template_pipeline_is_not_a_second_execution_authority() -> None:
+    # Feature work now uses the canonical artifact-template runtime. The old
+    # recursive feature_template_pipeline was deleted, so inspecting its old
+    # semantic-depth constants was a false contract and a FileNotFoundError.
+    assert not (PKG / "feature_template_pipeline.py").exists()
+    runner = (PKG / "task_template_runner.py").read_text(encoding="utf-8")
+    assert "from .artifact_template_runner import" in runner
+    assert "execute_artifact_template" in runner
+    assert "feature_template_pipeline" not in runner
+    workflow = yaml.safe_load(
+        (TEMPLATES / "feature" / "workflow.yaml").read_text(encoding="utf-8")
+    )
+    assert workflow["execution"] == "sequence"
+    assert workflow["steps"]
 
 
 def test_workflow_sequences_have_one_authority() -> None:
