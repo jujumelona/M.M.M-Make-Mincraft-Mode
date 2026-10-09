@@ -236,6 +236,18 @@ class ModIdRewriteAdapter:
                     f'Identifier.of("{target_modid}", ',
                     updated,
                 )
+                # Official Mojang-mapped targets use ResourceLocation, not
+                # Yarn Identifier. Keep the same namespace rewrite contract.
+                updated = re.sub(
+                    rf'new\s+ResourceLocation\s*\(\s*"{re.escape(donor_modid)}"\s*,\s*',
+                    f'new ResourceLocation("{target_modid}", ',
+                    updated,
+                )
+                updated = re.sub(
+                    rf'ResourceLocation\.fromNamespaceAndPath\s*\(\s*"{re.escape(donor_modid)}"\s*,\s*',
+                    f'ResourceLocation.fromNamespaceAndPath("{target_modid}", ',
+                    updated,
+                )
                 if path.endswith("fabric.mod.json"):
                     updated = re.sub(
                         rf'"id"\s*:\s*"{re.escape(donor_modid)}"',
