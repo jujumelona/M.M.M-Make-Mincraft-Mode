@@ -345,6 +345,11 @@ def _free_port(preferred: int) -> int:
     raise RuntimeError("No local TCP port is available for llama-server.")
 
 
+def _cap_ubatch_to_logical_batch(ubatch: int, batch: int | None) -> int:
+    """Apply llama.cpp's physical <= logical batch invariant centrally."""
+    return min(ubatch, batch) if batch is not None else ubatch
+
+
 def _base_args(binary: str, model_path: str, config: Any, port: int) -> list[str]:
     parallel = _env_optional_int("MMM_LLAMA_PARALLEL")
     context = _env_optional_int("MMM_LLAMA_SERVER_CTX")
@@ -398,7 +403,7 @@ def _base_args(binary: str, model_path: str, config: Any, port: int) -> list[str
     if ubatch is not None:
         # llama.cpp requires physical microbatch <= logical batch. Respect
         # explicit user overrides without passing an impossible combination.
-        effective_ubatch = min(ubatch, batch) if batch is not None else ubatch
+        effective_ubatch = _cap_ubatch_to_logical_batch(ubatch, batch)
         args.extend(("--ubatch-size", str(effective_ubatch)))
     if kv:
         args.extend(("--cache-type-k", kv, "--cache-type-v", kv))
@@ -448,8 +453,9 @@ def _start_server(
     if getattr(variant, "ubatch", 0) > 0:
         chosen_ubatch = int(variant.ubatch)
         explicit_batch = _env_optional_int("MMM_LLAMA_BATCH")
-        if explicit_batch is not None:
-            chosen_ubatch = min(chosen_ubatch, explicit_batch)
+        chosen_ubatch = _cap_ubatch_to_logical_batch(
+            chosen_ubatch, explicit_batch,
+        )
         runtime._replace_option(
             args,
             ("--ubatch-size", "-ub"),
