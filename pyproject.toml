@@ -56,7 +56,8 @@ image = [
   "bitsandbytes>=0.45,<1; sys_platform == 'linux'",
   "diffusers>=0.39,<1",
   "peft>=0.17,<1",
-  "rembg[cpu]>=2.0.67,<3",
+  # 2.0.77 added the new_session(sess_opts=...) parameter required by BiRefNet.
+  "rembg[cpu]>=2.0.77,<3",
   "sentencepiece>=0.2,<1",
   "transformers>=4.56.0",
 ]
