@@ -201,3 +201,50 @@ def test_explicit_binary_ownership_and_target_confinement(tmp_path):
     job.target_path = "../escaped.bin"
     with pytest.raises(MaterializeError, match="TARGET_ESCAPE"):
         materialize_job_output(job, b"escape", base_dir=tmp_path)
+
+
+def test_block_scaffold_includes_real_block_item_types_for_recipe_results(tmp_path: Path):
+    from minecraft_mod_ai.artifact_materializer import ensure_artifact_scaffolding
+
+    package = "ai.minecraft.generated.mmm_debug_crystal"
+    ensure_artifact_scaffolding(
+        tmp_path,
+        mod_id="mmm_debug_crystal",
+        package_name=package,
+    )
+    blocks = (
+        tmp_path / "src/main/java"
+        / Path(package.replace(".", "/"))
+        / "registry/ModBlocks.java"
+    )
+    original = blocks.read_text(encoding="utf-8")
+    for symbol in (
+        "net.minecraft.world.item.BlockItem",
+        "net.minecraft.world.item.Item",
+        "net.minecraft.resources.ResourceKey",
+        "net.minecraft.core.registries.Registries",
+        "net.minecraft.world.level.block.state.BlockBehaviour",
+    ):
+        assert f"import {symbol};" in original
+
+    # Simulate a previously prepared run with an old scaffold. Updating the
+    # prepared scaffold must not delete the existing registry body or its anchor.
+    outdated = original.replace(
+        "import net.minecraft.world.item.BlockItem;\\n", ""
+    ).replace(
+        "import net.minecraft.resources.ResourceKey;\\n", ""
+    )
+    blocks.write_text(outdated, encoding="utf-8")
+    ensure_artifact_scaffolding(
+        tmp_path,
+        mod_id="mmm_debug_crystal",
+        package_name=package,
+    )
+    updated = blocks.read_text(encoding="utf-8")
+    assert updated == original
+    ensure_artifact_scaffolding(
+        tmp_path,
+        mod_id="mmm_debug_crystal",
+        package_name=package,
+    )
+    assert blocks.read_text(encoding="utf-8") == updated
