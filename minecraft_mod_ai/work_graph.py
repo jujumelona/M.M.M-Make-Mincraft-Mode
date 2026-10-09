@@ -754,13 +754,18 @@ class DurableWorkLedger:
         target = Path(path).expanduser().resolve()
         target.parent.mkdir(parents=True, exist_ok=True)
         temporary = target.with_name(f'.{target.name}.tmp')
+        # Portable evidence must be independently auditably hashed. Verify
+        # the persisted DB first; never export a tampered succeeded receipt.
+        with self._connect() as connection:
+            self._verify_stored_receipts(connection)
+            connection.commit()
         with temporary.open('w', encoding='utf-8', newline='\n') as stream:
             stream.write(canonical_json({'record_type': 'summary', 'value': self.summary()}) + '\n')
             with self._connect() as connection:
-                for row in connection.execute('\n                    SELECT node_id, stage, input_hash, state, attempt,\n                           output_hash, receipt_json, error, updated_at\n                    FROM tasks ORDER BY node_id\n                    '):
-                    stream.write(canonical_json({'record_type': 'task', 'node_id': row[0], 'stage': row[1], 'input_hash': row[2], 'state': row[3], 'attempt': row[4], 'output_hash': row[5], 'receipt': json.loads(row[6]) if row[6] else None, 'error': row[7], 'updated_at': row[8]}) + '\n')
-                for row in connection.execute('\n                    SELECT checkpoint_id, stage, input_hash, state, attempt,\n                           output_hash, receipt_json, error, updated_at\n                    FROM checkpoints ORDER BY checkpoint_id\n                    '):
-                    stream.write(canonical_json({'record_type': 'checkpoint', 'checkpoint_id': row[0], 'stage': row[1], 'input_hash': row[2], 'state': row[3], 'attempt': row[4], 'output_hash': row[5], 'receipt': json.loads(row[6]) if row[6] else None, 'error': row[7], 'updated_at': row[8]}) + '\n')
+                for row in connection.execute('\n                    SELECT node_id, stage, input_hash, state, attempt,\n                           output_hash, receipt_json, receipt_hash, error, updated_at\n                    FROM tasks ORDER BY node_id\n                    '):
+                    stream.write(canonical_json({'record_type': 'task', 'node_id': row[0], 'stage': row[1], 'input_hash': row[2], 'state': row[3], 'attempt': row[4], 'output_hash': row[5], 'receipt': json.loads(row[6]) if row[6] else None, 'receipt_hash': row[7], 'error': row[8], 'updated_at': row[9]}) + '\n')
+                for row in connection.execute('\n                    SELECT checkpoint_id, stage, input_hash, state, attempt,\n                           output_hash, receipt_json, receipt_hash, error, updated_at\n                    FROM checkpoints ORDER BY checkpoint_id\n                    '):
+                    stream.write(canonical_json({'record_type': 'checkpoint', 'checkpoint_id': row[0], 'stage': row[1], 'input_hash': row[2], 'state': row[3], 'attempt': row[4], 'output_hash': row[5], 'receipt': json.loads(row[6]) if row[6] else None, 'receipt_hash': row[7], 'error': row[8], 'updated_at': row[9]}) + '\n')
         temporary.replace(target)
         return target
 
