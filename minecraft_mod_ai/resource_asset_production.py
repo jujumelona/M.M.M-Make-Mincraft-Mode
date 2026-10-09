@@ -567,16 +567,21 @@ def generate_assets(
         and str(texture.get("topology") or "") in {"cutout_sprite", "isolated_sprite"}
         for row in rows for texture in row.get("textures", ())
     )
-    if needs_foreground_model:
-        from .resource_alpha_segmentation import prepare_foreground_model_isolated
-
-        try:
-            prepare_foreground_model_isolated()
-        except ValueError as exc:
-            raise AssetProductionError(
-                f"Foreground model checkpoint preflight failed before diffusion: {exc}"
-            ) from exc
     with router.image_generation_session("image_generator"):
+        # This scope shuts down the managed llama server before touching any
+        # image resources. Prefetch MUST follow that shutdown: checking RAM
+        # outside the scope measures the still-resident 9B text model and
+        # incorrectly fails even when the image stage could run safely.
+        if needs_foreground_model:
+            from .resource_alpha_segmentation import prepare_foreground_model_isolated
+
+            try:
+                prepare_foreground_model_isolated()
+            except ValueError as exc:
+                raise AssetProductionError(
+                    f"Foreground model checkpoint preflight failed after text-model "
+                    f"handoff: {exc}"
+                ) from exc
         for row in rows:
             container = str(row.get("container") or "mod")
             container_root = _container_root(project_root, run_root, container)
