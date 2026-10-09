@@ -623,6 +623,7 @@ def generate_assets(
                             "ALPHA_SEGMENTER_INSUFFICIENT_HOST_RAM:",
                             "ALPHA_SEGMENTER_WORKER_OOM_SUSPECT:",
                             "ALPHA_SEGMENTER_WORKER_FAILED:",
+                            "ALPHA_SEGMENTER_INCOMPATIBLE_REMBG_API:",
                             "ALPHA_SEGMENTER_WORKER_TIMEOUT:",
                             "ALPHA_SEGMENTER_WORKER_MISSING_OUTPUT",
                         )):
