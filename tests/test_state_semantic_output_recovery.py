@@ -132,3 +132,31 @@ def test_scalar_fallback_consumes_budget_before_second_call(monkeypatch) -> None
             on_additional_call=budget_denied,
         )
     assert len(calls) == 1
+
+
+def test_numeric_state_default_recovers_without_accepting_text(monkeypatch) -> None:
+    """The exact logged 814-token failure can occur on a 128-char default."""
+    schemas = []
+
+    def generate(_router, _role, _messages, **kwargs):
+        schemas.append(kwargs["response_schema"])
+        if len(schemas) == 1:
+            raise _exhausted()
+        return {"default": "100"}
+
+    monkeypatch.setattr(state, "generate_fixed_template_value", generate)
+    output = state.author_state_semantic_page(
+        None, "Ship power starts at 100",
+        concern="variables", fields=("default",), count=1,
+        item_schema={"properties": {
+            "default": {
+                "type": "string", "maxLength": 128,
+                "pattern": r"^[^{}\\[\\]]*$",
+            },
+        }},
+        existing_rows=({"type": "number", "name": "ship_power"},),
+    )
+    assert output == {"variables": [{"default": "100"}]}
+    assert "pattern" in schemas[0]["properties"]["default"]
+    assert "pattern" not in schemas[1]["properties"]["default"]
+
