@@ -255,6 +255,11 @@ def _validate_checkout(
                 flush=True,
             )
         _shutdown_loaded_managed_llama_server()
+        previous_watchdog = sys.modules.get("minecraft_mod_ai.runtime_memory_watchdog")
+        if previous_watchdog is not None:
+            stop_watchdog = getattr(previous_watchdog, "shutdown_kernel_memory_watchdog", None)
+            if callable(stop_watchdog):
+                stop_watchdog()
         for name in list(sys.modules):
             if name == "minecraft_mod_ai" or name.startswith("minecraft_mod_ai."):
                 sys.modules.pop(name, None)
