@@ -129,6 +129,7 @@ def _sample(managed_pid: int) -> dict[str, Any]:
         _MIN_AVAILABLE = effective_available
     return {
         "schema_version": "mmm/runtime-memory-snapshot-v1",
+        "stage": os.environ.get("MMM_RUNTIME_STAGE", "unknown").strip() or "unknown",
         "sampled_at_unix": time.time(),
         "kernel_pid": os.getpid(),
         "kernel_start_ticks": _process_start_ticks(os.getpid()),
@@ -325,6 +326,7 @@ def previous_kernel_crash_diagnostic() -> dict[str, Any]:
         "current_cgroup_oom_kill": current_oom_kill,
         "cgroup_oom_kill_increased": current_oom_kill > prior_oom_kill,
         "last_pressure": snapshot.get("pressure"),
+        "last_stage": snapshot.get("stage"),
     }
 
 
