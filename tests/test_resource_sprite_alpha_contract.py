@@ -92,3 +92,40 @@ def test_actual_candidate_generation_uses_segmenter_not_shape_mask(tmp_path):
     assert len(calls) == 1
     assert evidence["sources"][0]["alpha_matte"] == "rembg:birefnet-general"
     assert validate_texture(output, texture.to_dict())["status"] == "PASS"
+
+
+def test_all_regions_generated_then_flux_released_before_any_onnx(tmp_path, monkeypatch):
+    from minecraft_mod_ai import resource_image_pipeline as pipeline
+    texture = _item_texture()
+    events = []
+
+    # Two regions exercise the model-residency boundary without loading FLUX.
+    monkeypatch.setattr(pipeline, "generation_regions", lambda _contract: [
+        {"name": "first", "box": [0, 0, 16, 16]},
+        {"name": "second", "box": [0, 0, 16, 16]},
+    ])
+
+    def generator(**kwargs):
+        events.append("generate")
+        with _opaque_diffusion_image(kwargs["width"], kwargs["height"]) as image:
+            image.save(kwargs["output_path"], "PNG")
+
+    def matting(image):
+        from PIL import ImageDraw
+        events.append("matte")
+        result = image.convert("RGBA")
+        with Image.new("L", result.size, 0) as alpha:
+            ImageDraw.Draw(alpha).ellipse((60, 60, 440, 440), fill=255)
+            result.putalpha(alpha)
+        return result
+
+    output = tmp_path / "candidate.png"
+    pipeline.generate_candidate(
+        generator, texture.to_dict(),
+        prompt="two frame asset", directory=tmp_path / "regions",
+        output=output, resolution=(512, 512), seed=5,
+        before_segmentation=lambda: events.append("release"),
+        segment_foreground_callback=matting,
+    )
+    assert events == ["generate", "generate", "release", "matte", "matte"]
+    assert validate_texture(output, texture.to_dict())["status"] == "PASS"
