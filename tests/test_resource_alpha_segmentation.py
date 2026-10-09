@@ -199,3 +199,32 @@ def test_alpha_checkpoint_preparation_failure_is_not_silent(monkeypatch):
     )
     with pytest.raises(ValueError, match="ALPHA_SEGMENTER_PREPARE_FAILED"):
         alpha.prepare_foreground_model_isolated()
+
+
+def test_streamed_checkpoint_works_with_1486_mib_but_inference_remains_guarded(
+    monkeypatch,
+):
+    """The exact Colab log headroom must not block a download-only subprocess."""
+    monkeypatch.setattr(alpha, "_available_host_ram_bytes", lambda: 1486 * 1048576)
+    monkeypatch.delenv("MMM_ALPHA_MIN_AVAILABLE_MB", raising=False)
+    monkeypatch.delenv("MMM_ALPHA_PREPARE_MIN_AVAILABLE_MB", raising=False)
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append(command[-1])
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(alpha.subprocess, "run", fake_run)
+    alpha.prepare_foreground_model_isolated()
+    assert commands == ["--prepare"]
+    with pytest.raises(ValueError, match="ALPHA_SEGMENTER_INSUFFICIENT_HOST_RAM"):
+        alpha._preflight_worker_ram()
+
+
+def test_streamed_checkpoint_still_blocks_unsafe_low_ram(monkeypatch):
+    monkeypatch.setattr(alpha, "_available_host_ram_bytes", lambda: 200 * 1048576)
+    monkeypatch.delenv("MMM_ALPHA_PREPARE_MIN_AVAILABLE_MB", raising=False)
+    with pytest.raises(
+        ValueError, match="ALPHA_SEGMENTER_PREPARE_INSUFFICIENT_HOST_RAM"
+    ):
+        alpha.prepare_foreground_model_isolated()
