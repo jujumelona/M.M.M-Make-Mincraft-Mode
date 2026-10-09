@@ -561,7 +561,9 @@ def test_opaque_flux_like_cube_runs_single_candidate_with_birefnet_alpha(tmp_pat
         mask.close()
         return result
 
-    monkeypatch.setattr(alpha_module, "segment_foreground", fixture_alpha)
+    # Candidate generation intentionally calls the isolated subprocess entry
+    # point; stub that exact boundary rather than the in-process helper.
+    monkeypatch.setattr(alpha_module, "segment_foreground_isolated", fixture_alpha)
     router.generate_image = opaque_gradient
     result = generate_assets(router, proposal, tmp_path / "mod", tmp_path / "run")
     assert result["resource_contract_validation"]["status"] == "PASS"
