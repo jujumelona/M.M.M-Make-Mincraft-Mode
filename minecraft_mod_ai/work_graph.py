@@ -176,7 +176,8 @@ def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolic
         asset_plan_digest = asset_plan_sha256(canonical_asset_plan)
 
     asset_shard_size = max(1, policy.java_shard_size)
-    if os.environ.get("MMM_ASSET_SINGLE_SHARD", "").strip().lower() in {"1", "true", "yes"}:
+    if (os.environ.get("MMM_ASSET_SINGLE_SHARD", "").strip().lower() in {"1", "true", "yes"}
+            or bool(os.environ.get("MMM_COLAB_SETUP_RECEIPT", "").strip())):
         # On memory-constrained Colab, all image assets must share one FLUX
         # residency. Their module dependencies are still declared explicitly,
         # but the scheduler cannot interleave repeated multi-GB reloads.
