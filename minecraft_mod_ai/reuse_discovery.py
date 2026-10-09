@@ -209,17 +209,31 @@ def _ontology_search_queries(capability: str) -> tuple[str, ...]:
 
 
 def _query_variants(capability: str, terms: Sequence[str]) -> tuple[str, ...]:
-    """Build bounded provider queries while preserving unbounded semantic scope.
+    """Prioritize short, source-searchable capability queries over request dumps.
 
-    The bound here is an external-I/O budget, not a planning cardinality cap. The
-    most reusable, ontology-backed search phrases are deliberately placed first so
-    long source clauses cannot crowd them out of the provider budget.
+    GitHub cannot search an entire authored requirements paragraph as one AND
+    query. Structured retrieval terms and ontology aliases take precedence;
+    long narrative strings are intentionally excluded from the provider budget.
     """
-
     values: list[str] = []
     seen: set[str] = set()
+
+    specific_terms = tuple(
+        " ".join(str(raw or "").split())
+        for raw in terms
+        if 2 <= len(" ".join(str(raw or "").split())) <= 90
+    )
+    if capability.startswith("custom gameplay "):
+        for query in specific_terms:
+            _append_query(values, seen, query)
+
     for query in _ontology_search_queries(capability):
-        _append_query(values, seen, query)
+        if len(query) <= 90:
+            _append_query(values, seen, query)
+
+    if not capability.startswith("custom gameplay "):
+        for query in specific_terms:
+            _append_query(values, seen, query)
 
     semantic = " ".join(
         _TOKEN.findall(
@@ -229,15 +243,14 @@ def _query_variants(capability: str, terms: Sequence[str]) -> tuple[str, ...]:
             .replace(":", " ")
         )
     )
-    if semantic:
+    if semantic and len(semantic) <= 90:
         _append_query(values, seen, f"minecraft {semantic} mod")
         _append_query(values, seen, f"{semantic} fabric mod")
 
-    for raw in terms:
-        _append_query(values, seen, raw)
-
     limit = _query_variant_limit()
-    return tuple(values[:limit] or (capability,))
+    # Returning the first slice is deliberate: the plan can contain many
+    # capabilities, but each individual external search must stay bounded.
+    return tuple(values[:limit] or ("minecraft mod",))
 
 
 def _provider_query(provider: str, query: str) -> str:
