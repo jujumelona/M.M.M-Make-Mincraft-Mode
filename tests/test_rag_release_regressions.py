@@ -90,3 +90,32 @@ def test_authored_coverage_does_not_reject_real_gui_label(tmp_path) -> None:
         encoding="utf-8",
     )
     assert _authored_feature_semantic_findings(tmp_path, ()) == []
+
+
+
+def test_reuse_discovery_passes_resolved_target_to_search(monkeypatch) -> None:
+    from minecraft_mod_ai.reuse_discovery import discover_repositories_for_graph
+
+    monkeypatch.setenv("MMM_REUSE_QUERY_VARIANTS", "1")
+
+    class StubClient:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def search(self, provider, query, *, minecraft_version=None, loader=None, **kwargs):
+            self.calls.append((provider, minecraft_version, loader))
+            if provider == "github":
+                return {"candidates": [{
+                    "title": "author/spacecraft",
+                    "summary": "A Minecraft Fabric mod with planetary flight",
+                }]}
+            return {"candidates": []}
+
+    client = StubClient()
+    discovered = discover_repositories_for_graph(
+        ("minecraft fabric spacecraft",), client,
+        minecraft_version="1.21.1", loader="fabric",
+    )
+    assert "author/spacecraft" in discovered["minecraft fabric spacecraft"]
+    assert client.calls
+    assert all(version == "1.21.1" and loader == "fabric" for _, version, loader in client.calls)
