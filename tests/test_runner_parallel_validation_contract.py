@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
+from minecraft_mod_ai.runner import GradleRunner
 from minecraft_mod_ai.runner_parallel_validation_contract import (
     _executed_gametest_task,
     _host_gametest_contract,
@@ -56,11 +57,17 @@ class _FakeGradleRunner:
     run_calls: list[str] = []
     counter_lock = threading.Lock()
 
-    def __init__(self, cache_dir: Path) -> None:
+    def __init__(self, cache_dir: Path, *, eula_accepted: bool = False) -> None:
         self.cache_dir = cache_dir.resolve()
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.command_timeout_seconds = 10
+        self.eula_accepted = eula_accepted
         self.ensure_calls: list[tuple[str, str]] = []
+
+    _gametest_environment = GradleRunner._gametest_environment
+    _host_gametest_eula_preflight_error = staticmethod(
+        GradleRunner._host_gametest_eula_preflight_error
+    )
 
     def _ensure_gradle(self, gradle_version: str, gradle_sha256: str) -> Path:
         self.ensure_calls.append((gradle_version, gradle_sha256))
@@ -883,3 +890,60 @@ def test_wrapper_generation_uses_distinct_lock_namespace_from_gradle_run(
     assert result.exit_code == 0
     assert (project / "gradle/wrapper/gradle-wrapper.properties").is_file()
     assert not held
+
+
+def test_parallel_host_gametest_rejects_missing_eula_before_gradle_download(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _reset()
+    monkeypatch.delenv("MMM_ACCEPT_MINECRAFT_EULA", raising=False)
+    runner_module = _runner_module()
+    install(runner_module=runner_module, validation_module=_validation_module())
+    runner = _FakeGradleRunner(tmp_path / "cache")
+    project = _project(tmp_path, "parallel-eula-missing", "8.10.2", "f" * 64)
+    _install_host_gametest_fixture(project)
+    build_script = project / "build.gradle"
+    build_script.write_text(
+        build_script.read_text(encoding="utf-8")
+        + '\n// M.M.M host-owned server GameTest contract\n'
+        + 'eula = (System.getenv("MMM_ACCEPT_MINECRAFT_EULA") ?: "false").equalsIgnoreCase("true")\n',
+        encoding="utf-8",
+    )
+
+    report = runner.build(project, run_gametest=True)
+    assert report.status == "FAIL"
+    assert report.error_code == "GRADLE_GAMETEST_EULA_REQUIRED"
+    assert report.repairable is False
+    assert report.commands == ()
+    assert runner.ensure_calls == []
+    assert _FakeGradleRunner.run_calls == []
+
+
+def test_parallel_host_gametest_forwards_explicit_consent_to_subprocess(
+    tmp_path: Path, monkeypatch
+) -> None:
+    _reset()
+    monkeypatch.delenv("MMM_ACCEPT_MINECRAFT_EULA", raising=False)
+    runner_module = _runner_module()
+    install(runner_module=runner_module, validation_module=_validation_module())
+    runner = _FakeGradleRunner(tmp_path / "cache", eula_accepted=True)
+    project = _project(tmp_path, "parallel-eula-accepted", "8.10.2", "f" * 64)
+    _install_host_gametest_fixture(project)
+    build_script = project / "build.gradle"
+    build_script.write_text(
+        build_script.read_text(encoding="utf-8")
+        + '\n// M.M.M host-owned server GameTest contract\n'
+        + 'eula = (System.getenv("MMM_ACCEPT_MINECRAFT_EULA") ?: "false").equalsIgnoreCase("true")\n',
+        encoding="utf-8",
+    )
+    captured = []
+    original_run = runner._run
+
+    def checked_run(**kwargs):
+        captured.append(kwargs["env"].get("MMM_ACCEPT_MINECRAFT_EULA"))
+        return original_run(**kwargs)
+
+    runner._run = checked_run
+    runner.build(project, run_gametest=True)
+    assert captured and all(value == "true" for value in captured)
+    assert runner.ensure_calls
