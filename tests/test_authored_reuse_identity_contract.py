@@ -133,6 +133,28 @@ def test_resource_namespace_rewrite_rejects_target_collision():
     ]
 
 
+def test_mojang_resource_location_namespace_rewrite():
+    from minecraft_mod_ai.reuse_adapters import ModIdRewriteAdapter
+
+    files = {
+        "src/main/java/example/ItemIds.java": (
+            'package example;\n'
+            'class ItemIds {\n'
+            '  Object key = new ResourceLocation("donor", "fuel");\n'
+            '  Object loc = ResourceLocation.fromNamespaceAndPath("donor", "fuel");\n'
+            '}\n'
+        ),
+    }
+    receipt = ModIdRewriteAdapter().apply(
+        files, {"donor_modid": "donor", "target_modid": "spacemod"},
+    )
+    assert receipt.applied
+    source = files["src/main/java/example/ItemIds.java"]
+    assert 'new ResourceLocation("spacemod", "fuel")' in source
+    assert 'ResourceLocation.fromNamespaceAndPath("spacemod", "fuel")' in source
+    assert '"donor"' not in source
+
+
 def test_yarn_only_migration_fails_closed_for_mojang_mappings():
     from minecraft_mod_ai.reuse_adapters import FabricApiMigrationAdapter
 
