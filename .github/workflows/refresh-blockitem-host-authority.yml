@@ -1,0 +1,42 @@
+# One-time authoritative catalog migration for the reviewed BlockItem template.
+# Remove after its catalog/evidence commit has landed.
+name: Refresh BlockItem Host Authority
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'minecraft_mod_ai/templates/fabric/block/register_basic.yaml'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: refresh-blockitem-host-authority
+  cancel-in-progress: false
+jobs:
+  regenerate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install canonical catalog builder
+        run: python -m pip install --prefer-binary -e .
+      - name: Regenerate immutable HOST snapshots
+        run: python -m minecraft_mod_ai.populate_version_artifact_rules
+      - name: Commit generated HOST snapshots to main
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add minecraft_mod_ai/data/host_version_catalog.json minecraft_mod_ai/data/official_version_evidence.json
+          if git diff --cached --quiet; then
+            echo 'HOST catalog already current'
+            exit 0
+          fi
+          git commit -m 'fix(content): regenerate signed HOST template and version context receipts'
+          # Stop if main moved; never rewrite another developer's work.
+          git push origin HEAD:main
