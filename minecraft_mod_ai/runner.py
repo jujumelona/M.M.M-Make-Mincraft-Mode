@@ -307,6 +307,17 @@ class GradleRunner:
         run_gametest: bool,
     ) -> BuildReport:
         commands: list[CommandResult] = []
+        gametest_task = self._gametest_task(prepared.project_root) if run_gametest else None
+        eula_error = self._host_gametest_eula_preflight_error(prepared, gametest_task)
+        if eula_error is not None:
+            return self._failed_build(
+                prepared,
+                commands,
+                eula_error,
+                failure_class="configuration_error",
+                error_code="GRADLE_GAMETEST_EULA_REQUIRED",
+                repairable=False,
+            )
         if not self._wrapper_is_current(
             prepared.project_root,
             prepared.gradle_version,
@@ -342,17 +353,6 @@ class GradleRunner:
             if force_clean
             else ["--no-daemon", "build"]
         )
-        gametest_task = self._gametest_task(prepared.project_root) if run_gametest else None
-        eula_error = self._host_gametest_eula_preflight_error(prepared, gametest_task)
-        if eula_error is not None:
-            return self._failed_build(
-                prepared,
-                commands,
-                eula_error,
-                failure_class="configuration_error",
-                error_code="GRADLE_GAMETEST_EULA_REQUIRED",
-                repairable=False,
-            )
         if gametest_task == "runGameTest":
             build_arguments.extend(("-x", gametest_task))
         build_arguments.append("--stacktrace")
