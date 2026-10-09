@@ -1,3 +1,4 @@
+# A registered Block also exposes a registered BlockItem for inventory and recipes.
 id: fabric/block/register_basic
 artifact: java_fragment
 target:
