@@ -530,6 +530,7 @@ def generate_assets(
     proposal = _asset_execution_projection(proposal)
     from .model_adapters.image_diffusion import ImageGenerationConfig
     from .resource_image_pipeline import generate_candidate, validate_texture
+    from .model_adapters.image_diffusion import release_image_pipeline_for_segmentation
     if not proposal.assets:
         return {
             "schema_version": "mmm/resource-production-receipt-v2",
@@ -575,7 +576,8 @@ def generate_assets(
                             prompt=prompt, directory=candidate_root / asset_id / role / f"candidate-{index:02d}",
                             output=normalized,
                             resolution=profile.preferred_generation_resolution,
-                            seed=_candidate_seed(asset_id, role, index))
+                            seed=_candidate_seed(asset_id, role, index),
+                            before_segmentation=release_image_pipeline_for_segmentation)
                     except ValueError as exc:
                         failures.append({"candidate": index, "reason": str(exc)})
                         continue
