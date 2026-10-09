@@ -64,21 +64,34 @@ def _meminfo() -> tuple[int, int]:
 
 
 def _cgroup_memory() -> tuple[int, int, dict[str, int]]:
-    current = _read_int(Path("/sys/fs/cgroup/memory.current"))
-    max_path = Path("/sys/fs/cgroup/memory.max")
-    try:
-        raw_max = max_path.read_text(encoding="utf-8").strip()
-        maximum = 0 if raw_max == "max" else max(0, int(raw_max))
-    except (OSError, UnicodeError, ValueError):
-        maximum = 0
+    """Read container memory pressure on either cgroup v2 or legacy v1."""
     events: dict[str, int] = {}
-    try:
-        for line in Path("/sys/fs/cgroup/memory.events").read_text(encoding="utf-8").splitlines():
-            key, _, raw = line.partition(" ")
-            if key and raw:
-                events[key] = int(raw)
-    except (OSError, UnicodeError, ValueError):
-        pass
+    v2_limit = Path("/sys/fs/cgroup/memory.max")
+    if v2_limit.is_file():
+        current = _read_int(Path("/sys/fs/cgroup/memory.current"))
+        try:
+            raw_max = v2_limit.read_text(encoding="utf-8").strip()
+            maximum = 0 if raw_max == "max" else max(0, int(raw_max))
+        except (OSError, UnicodeError, ValueError):
+            maximum = 0
+        try:
+            for line in Path("/sys/fs/cgroup/memory.events").read_text(encoding="utf-8").splitlines():
+                key, _, raw = line.partition(" ")
+                if key and raw:
+                    events[key] = int(raw)
+        except (OSError, UnicodeError, ValueError):
+            pass
+        return current, maximum, events
+
+    v1_root = Path("/sys/fs/cgroup/memory")
+    current = _read_int(v1_root / "memory.usage_in_bytes")
+    maximum = _read_int(v1_root / "memory.limit_in_bytes")
+    # v1's huge sentinel encodes "unlimited", not a real container budget.
+    if maximum >= 1 << 60:
+        maximum = 0
+    failcnt = _read_int(v1_root / "memory.failcnt")
+    if failcnt:
+        events["failcnt"] = failcnt
     return current, maximum, events
 
 
