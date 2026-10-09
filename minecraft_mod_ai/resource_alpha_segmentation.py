@@ -259,11 +259,13 @@ def segment_foreground_isolated(image: Any) -> Any:
         env["OMP_THREAD_LIMIT"] = "1"
         from .runtime_memory_watchdog import _cgroup_memory
 
-        # Separate licensed CPU workers avoid simultaneous FLUX/ONNX residency.
-        # Only a SIGKILL permits recovery with the smaller Apache-2.0 U2NetP.
+        # Isolated licensed workers avoid simultaneous FLUX/ONNX residency.
+        # OOM and semantically unusable masks can try the next explicit model;
+        # API and other infrastructure errors remain fail-closed.
         failures = []
         chosen_model = None
         for model_name in model_order:
+            target.unlink(missing_ok=True)  # Never reuse a prior worker's mask.
             _used_before, _limit_before, memory_events_before = _cgroup_memory()
             env["MMM_ALPHA_WORKER_MODEL"] = model_name
             try:
@@ -283,8 +285,31 @@ def segment_foreground_isolated(image: Any) -> Any:
                     f"ALPHA_SEGMENTER_WORKER_TIMEOUT: model={model_name}; worker exceeded {timeout}s"
                 ) from exc
             if completed.returncode == 0:
-                chosen_model = model_name
-                break
+                if not target.is_file() or target.is_symlink():
+                    raise ValueError("ALPHA_SEGMENTER_WORKER_MISSING_OUTPUT")
+                with Image.open(target) as candidate:
+                    candidate.load()
+                    if candidate.mode != "RGBA" or candidate.size != image.size:
+                        raise ValueError("ALPHA_SEGMENTER_INVALID_IMAGE_OR_GEOMETRY")
+                    with candidate.getchannel("A") as alpha:
+                        histogram = alpha.histogram()
+                    visible_fraction = sum(histogram[128:]) / (image.width * image.height)
+                if 0 < visible_fraction < 0.98:
+                    chosen_model = model_name
+                    break
+                failures.append(
+                    f"ALPHA_SEGMENTER_UNUSABLE_MASK: model={model_name}; "
+                    f"native_threshold_coverage={visible_fraction:.6f}"
+                )
+                if model_name == model_order[-1]:
+                    raise ValueError(" | ".join(failures))
+                print(
+                    f"ALPHA_SEGMENTER_MASK_RECOVERY: model={model_name} "
+                    f"coverage={visible_fraction:.6f}; "
+                    f"trying={model_order[model_order.index(model_name) + 1]}",
+                    flush=True,
+                )
+                continue
 
             _used_after, _limit_after, memory_events_after = _cgroup_memory()
             oom_kill_delta = max(
@@ -300,6 +325,7 @@ def segment_foreground_isolated(image: Any) -> Any:
                 or "multiple values for argument 'sess_opts'" in stderr
             )
             possible_oom = completed.returncode in (-9, 137)
+            semantic_failure = "ALPHA_SEGMENTER_FAILED_TO_EXTRACT_SUBJECT" in stderr
             if possible_oom and model_name == ALPHA_SEGMENTATION_MODEL:
                 _LITE_WORKER_SIGKILLED = True
             if possible_oom and model_name == ALPHA_SEGMENTATION_MID_MODEL:
@@ -308,6 +334,8 @@ def segment_foreground_isolated(image: Any) -> Any:
                 kind = "ALPHA_SEGMENTER_INCOMPATIBLE_REMBG_API"
             elif possible_oom:
                 kind = "ALPHA_SEGMENTER_WORKER_OOM_SUSPECT"
+            elif semantic_failure:
+                kind = "ALPHA_SEGMENTER_UNUSABLE_MASK"
             else:
                 kind = "ALPHA_SEGMENTER_WORKER_FAILED"
             remediation = (
@@ -321,13 +349,13 @@ def segment_foreground_isolated(image: Any) -> Any:
                 f"stderr_tail={tail}{remediation}"
             )
             # SIGKILL alone is not proof of cgroup OOM when delta is zero.
-            # Only a killed primary can fall back to the next explicit model;
-            # API/backend faults remain fail-closed.
-            if not possible_oom or model_name == ALPHA_SEGMENTATION_FALLBACK_MODEL:
+            # Retry only resource exhaustion or a *recognized mask-quality*
+            # error. A broken ONNX/backend must not be silently concealed.
+            if (not possible_oom and not semantic_failure) or model_name == model_order[-1]:
                 raise ValueError(" | ".join(failures))
             print(
-                f"ALPHA_SEGMENTER_RECOVERY: killed worker={model_name}; "
-                f"trying fallback={ALPHA_SEGMENTATION_FALLBACK_MODEL}; "
+                f"ALPHA_SEGMENTER_RECOVERY: worker={model_name}; "
+                f"trying fallback={model_order[model_order.index(model_name) + 1]}; "
                 + failures[-1],
                 flush=True,
             )
