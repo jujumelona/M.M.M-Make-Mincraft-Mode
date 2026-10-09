@@ -27,6 +27,7 @@ jobs:
       test_files: ${{ steps.select.outputs.test_files }}
       run_python: ${{ steps.select.outputs.run_python }}
       run_tests: ${{ steps.select.outputs.run_tests }}
+      run_e2e: ${{ steps.select.outputs.run_e2e }}
     steps:
       - name: Publish pending status
         env:
@@ -170,16 +171,44 @@ jobs:
               ):
                   selected_tests.add(test_path.as_posix())
 
+          # A green unit-test selection must never certify the executable
+          # Colab -> generation -> real Gradle/GameTest pipeline by itself.
+          # Critical production and notebook changes require the full fixture.
+          e2e_inputs = {
+              "M.M.M_Make_Mincraft_Mode_Colab.ipynb",
+              "tools/colab_runtime_setup.py",
+              "tests/test_deterministic_debug_full_pipeline_e2e.py",
+              "tests/test_gametest_eula_consent_forwarding.py",
+              ".github/workflows/partial-ci.yml",
+              ".github/workflows/deterministic-debug-full-e2e.yml",
+          }
+          production_prefixes = (
+              "minecraft_mod_ai/runner",
+              "minecraft_mod_ai/complete_orchestrator",
+              "minecraft_mod_ai/colab_",
+              "minecraft_mod_ai/complete_preflight",
+              "minecraft_mod_ai/platform_live_execution",
+              "minecraft_mod_ai/fabric_official_template",
+              "minecraft_mod_ai/resource_asset_production",
+              "minecraft_mod_ai/resource_image_pipeline",
+              "minecraft_mod_ai/resource_alpha_segmentation",
+          )
+          run_e2e = any(
+              path in e2e_inputs or path.startswith(production_prefixes)
+              for path in changed
+          )
           output = Path(os.environ["GITHUB_OUTPUT"])
           with output.open("a", encoding="utf-8") as handle:
               handle.write("python_files=" + json.dumps(python_files, separators=(",", ":")) + "\n")
               handle.write("test_files=" + json.dumps(sorted(selected_tests), separators=(",", ":")) + "\n")
               handle.write("run_python=" + ("true" if python_files else "false") + "\n")
               handle.write("run_tests=" + ("true" if selected_tests else "false") + "\n")
+              handle.write("run_e2e=" + ("true" if run_e2e else "false") + "\n")
 
           print("changed:", *changed, sep="\n  ")
           print("python:", *python_files, sep="\n  ")
           print("tests:", *sorted(selected_tests), sep="\n  ")
+          print("production-e2e-required:", run_e2e)
           PY
 
   python:
@@ -241,10 +270,38 @@ jobs:
             audit/partial-tests.xml
           if-no-files-found: warn
 
+  production_e2e:
+    name: Real production Gradle + GameTest E2E
+    needs: impact
+    if: ${{ needs.impact.outputs.run_e2e == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with: {python-version: '3.11', cache: pip}
+      - uses: actions/setup-java@v5
+        with: {distribution: temurin, java-version: '21'}
+      - uses: gradle/actions/setup-gradle@v4
+      - run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Reproduce Colab EULA and actual Gradle pipeline
+        timeout-minutes: 20
+        run: |
+          python -m pytest -q tests/test_gametest_eula_consent_forwarding.py
+          python -m pytest -q tests/test_deterministic_debug_full_pipeline_e2e.py
+      - name: Upload production verification diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-e2e-${{ github.sha }}
+          path: |
+            audit/
+          if-no-files-found: ignore
+
   gate:
     name: Partial CI Gate
     if: ${{ always() }}
-    needs: [impact, python, tests]
+    needs: [impact, python, tests, production_e2e]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -252,12 +309,20 @@ jobs:
           IMPACT: ${{ needs.impact.result }}
           PYTHON: ${{ needs.python.result }}
           TESTS: ${{ needs.tests.result }}
+          PRODUCTION_E2E: ${{ needs.production_e2e.result }}
+          PRODUCTION_E2E_REQUIRED: ${{ needs.impact.outputs.run_e2e }}
           GH_TOKEN: ${{ github.token }}
         run: |
           conclusion=success
           test "$IMPACT" = success || conclusion=failure
           test "$PYTHON" = success -o "$PYTHON" = skipped || conclusion=failure
           test "$TESTS" = success -o "$TESTS" = skipped || conclusion=failure
+          # Never mark a required real Gradle/GameTest run as optional.
+          if [ "$PRODUCTION_E2E_REQUIRED" = true ]; then
+            test "$PRODUCTION_E2E" = success || conclusion=failure
+          else
+            test "$PRODUCTION_E2E" = skipped || conclusion=failure
+          fi
           export PARTIAL_CI_CONCLUSION="$conclusion"
           payload="$(python - <<'PY'
           import json
