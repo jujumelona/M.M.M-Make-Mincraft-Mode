@@ -141,7 +141,7 @@ def generate_candidate(
 ) -> dict[str, Any]:
     """Generate every source before segmentation to avoid simultaneous model residency."""
     from PIL import Image
-    from .resource_alpha_segmentation import segment_foreground
+    from .resource_alpha_segmentation import segment_foreground_isolated as segment_foreground
 
     contract = _contract(texture)
     directory.mkdir(parents=True, exist_ok=True)
