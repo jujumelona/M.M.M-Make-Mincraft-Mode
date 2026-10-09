@@ -152,3 +152,26 @@ def test_prebuilt_fact_graph_lowers_on_real_fabric_target_without_model() -> Non
         assert {job.owner_module for job in jobs} == {
             "crystal_fragment", "crystal_block", "crystal_block_recipe",
         }
+
+
+def test_debug_plan_path_does_not_overwrite_user_proposal(tmp_path: Path) -> None:
+    from minecraft_mod_ai.colab_run_modes import resolve_plan_path
+
+    regular = resolve_plan_path(run_mode=FULL_MODE, output_root=tmp_path)
+    regular.parent.mkdir(parents=True, exist_ok=True)
+    regular.write_text('{"kept":"user plan"}', encoding="utf-8")
+    for strategy in ("prebuilt", "host_smoke"):
+        separate = resolve_plan_path(
+            run_mode=FULL_MODE,
+            output_root=tmp_path,
+            configured_path=str(regular),
+            debug_strategy=strategy,
+        )
+        assert separate != regular
+        assert separate.parent == tmp_path / "debug"
+        assert separate.name == f"{strategy}-proposal.json"
+    debug_target = resolve_plan_path(
+        run_mode=FULL_MODE, output_root=tmp_path, debug_strategy="prebuilt",
+    )
+    write_prebuilt_debug_plan(debug_target)
+    assert regular.read_text(encoding="utf-8") == '{"kept":"user plan"}'
