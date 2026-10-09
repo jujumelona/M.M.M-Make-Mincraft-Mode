@@ -579,6 +579,19 @@ def generate_assets(
                             seed=_candidate_seed(asset_id, role, index),
                             before_segmentation=release_image_pipeline_for_segmentation)
                     except ValueError as exc:
+                        # Retrying with new image seeds cannot fix RAM exhaustion,
+                        # native ONNX crashes or a missing segmentation backend.
+                        if str(exc).startswith((
+                            "ALPHA_SEGMENTER_INSUFFICIENT_HOST_RAM:",
+                            "ALPHA_SEGMENTER_WORKER_OOM_SUSPECT:",
+                            "ALPHA_SEGMENTER_WORKER_FAILED:",
+                            "ALPHA_SEGMENTER_WORKER_TIMEOUT:",
+                            "ALPHA_SEGMENTER_WORKER_MISSING_OUTPUT",
+                        )):
+                            raise AssetProductionError(
+                                f"Foreground segmentation infrastructure failed "
+                                f"for {asset_id}:{role}: {exc}"
+                            ) from exc
                         failures.append({"candidate": index, "reason": str(exc)})
                         continue
                     # Successful candidates all have the same selection score in this
