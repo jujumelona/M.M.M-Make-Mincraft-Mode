@@ -170,3 +170,32 @@ def test_native_worker_timeout_becomes_diagnostic_error(monkeypatch):
     with Image.new("RGB", (32, 32)) as source:
         with pytest.raises(ValueError, match="ALPHA_SEGMENTER_WORKER_TIMEOUT"):
             alpha.segment_foreground_isolated(source)
+
+
+def test_alpha_checkpoint_is_prepared_outside_diffusion(monkeypatch):
+    calls = []
+    monkeypatch.setattr(alpha, "_available_host_ram_bytes", lambda: 8 * 1024**3)
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(alpha.subprocess, "run", fake_run)
+    alpha.prepare_foreground_model_isolated()
+    assert len(calls) == 1
+    assert calls[0][0][1:4] == [
+        "-m", "minecraft_mod_ai.resource_alpha_segmentation", "--prepare"
+    ]
+    assert calls[0][1]["timeout"] == 480
+
+
+def test_alpha_checkpoint_preparation_failure_is_not_silent(monkeypatch):
+    monkeypatch.setattr(alpha, "_available_host_ram_bytes", lambda: 8 * 1024**3)
+    monkeypatch.setattr(
+        alpha.subprocess, "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=-9, stderr="worker ended", stdout=""
+        ),
+    )
+    with pytest.raises(ValueError, match="ALPHA_SEGMENTER_PREPARE_FAILED"):
+        alpha.prepare_foreground_model_isolated()
