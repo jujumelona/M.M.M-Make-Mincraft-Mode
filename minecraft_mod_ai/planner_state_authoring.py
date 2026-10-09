@@ -225,7 +225,7 @@ def author_state_semantic_page(
             current: Mapping[str, Any],
             *,
             recover_transport: bool = False,
-        ) -> dict[str, Any>:
+        ) -> dict[str, Any]:
             projected_properties: dict[str, Any] = {}
             transport_properties: dict[str, Any] = {}
             for field in active_fields:
