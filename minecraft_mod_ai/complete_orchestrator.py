@@ -407,6 +407,15 @@ class CompleteProductionOrchestrator:
             bound = authored_reuse.get("bound_target")
             if not isinstance(bound, dict):
                 raise CompleteProductionError("SOURCE_REUSE_TARGET_RECEIPT_MISSING")
+            approved_target = {
+                "minecraft_version": str(spec.platform.minecraft_version),
+                "loader": str(spec.platform.loader),
+            }
+            if bound != approved_target:
+                raise CompleteProductionError(
+                    "SOURCE_REUSE_APPROVED_TARGET_MISMATCH: the donor proof must "
+                    "match the immutable approved Minecraft version and loader."
+                )
             installed_reuse = materialize_verified_authored_sources(
                 str(project_root),
                 authored_reuse,
