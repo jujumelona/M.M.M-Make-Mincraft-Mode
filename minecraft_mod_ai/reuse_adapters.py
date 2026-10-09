@@ -298,21 +298,27 @@ class FabricApiMigrationAdapter:
         files: Mapping[str, str],
         target_context: Mapping[str, Any],
     ) -> bool:
-        del target_context
-        return any(
+        needs_yarn_migration = any(
             "FabricItemSettings" in content
             or "Registry.ITEM" in content
             or "Registry.BLOCK" in content
             or "Registry.ENTITY_TYPE" in content
             for content in files.values()
         )
+        if needs_yarn_migration and target_context.get("mappings_kind") == "mojang":
+            raise ValueError(
+                "SOURCE_REUSE_MAPPING_ADAPTER_UNSUPPORTED: Yarn-only Fabric "
+                "migration cannot be applied to a Mojang-mapped target."
+            )
+        return needs_yarn_migration
 
     def apply(
         self,
         files: dict[str, str],
         target_context: Mapping[str, Any],
     ) -> AdapterReceipt:
-        del target_context
+        if target_context.get("mappings_kind") == "mojang":
+            raise ValueError("SOURCE_REUSE_MAPPING_ADAPTER_UNSUPPORTED")
         modified: list[str] = []
         pre_hashes: dict[str, str] = {}
         post_hashes: dict[str, str] = {}
