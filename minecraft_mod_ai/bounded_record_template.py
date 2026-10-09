@@ -119,6 +119,35 @@ def _record_key(record: dict[str, Any]) -> str:
     )
 
 
+def _validate_record_semantics(
+    record: dict[str, Any],
+    *,
+    identifier: str,
+    schema: dict[str, Any],
+    validator: Draft202012Validator,
+) -> None:
+    """Reject empty semantic fields even when JSON Schema minLength accepts spaces.
+
+    This must run on both newly authored records and cached checkpoints, before
+    acknowledging a completed record set. No malformed record may acquire a
+    validated checkpoint merely because its string contains whitespace.
+    """
+    validator.validate(record)
+    properties = schema.get("properties", {})
+    for field in schema.get("required", ()):
+        field_schema = properties.get(field, {})
+        value = record.get(field)
+        if (
+            isinstance(field_schema, dict)
+            and field_schema.get("type") == "string"
+            and isinstance(value, str)
+            and not value.strip()
+        ):
+            raise ValueError(
+                f"TEMPLATE_RECORD_EMPTY_SEMANTIC_FIELD: {identifier}.{field}"
+            )
+
+
 def run_bounded_record_template(
     router,
     identifier: str,
@@ -206,7 +235,7 @@ def run_bounded_record_template(
                 f"saved {len(records)} records"
             )
         for record in records:
-            record_validator.validate(record)
+            _validate_record_semantics(\n                record,\n                identifier=identifier,\n                schema=record_schema,\n                validator=record_validator,\n            )
     else:
         if isinstance(saved, dict) and type(saved.get("count")) is int:
             count = int(saved["count"])
@@ -272,7 +301,7 @@ def run_bounded_record_template(
                 f"received {len(records)}"
             )
         for record in records:
-            record_validator.validate(record)
+            _validate_record_semantics(\n                record,\n                identifier=identifier,\n                schema=record_schema,\n                validator=record_validator,\n            )
         if checkpoint is not None:
             checkpoint(
                 binding,
