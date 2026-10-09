@@ -813,6 +813,24 @@ def _authored_feature_semantic_findings(
             findings.append(
                 f"authored module {module_id} initialize() has no executable behavior"
             )
+
+    # A compiled GUI that displays its source requirement as a "Planned:"
+    # label is a mock-up, not the implementation of the requirement. These
+    # generator-owned registrations were not covered by the typed initialize()
+    # check above. Reject them before the authored v1 release is certified.
+    for java_path in root.glob("src/**/*Registration.java"):
+        if "generated" not in java_path.parts or not java_path.is_file():
+            continue
+        try:
+            java_text = java_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            findings.append(f"generated registration is unreadable: {java_path.name}")
+            continue
+        if re.search(r"Planned:\\s*Implement gameplay obligation", java_text):
+            findings.append(
+                f"generated registration is a nonfunctional requirement placeholder: "
+                f"{java_path.relative_to(root)}"
+            )
     return findings
 
 
