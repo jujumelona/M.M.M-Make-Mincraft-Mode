@@ -30,10 +30,15 @@ class _AtomicRouter:
         context = json.loads(str(user_message))
         self.calls.append(("planner-json", context))
         fields = response_schema["properties"]
-        if "property" in fields:
+        if "property" in fields or "value" in fields:
             requested = str(context["requested_property"])
             assert context["allowed_properties"] == [requested]
-            return json.dumps({"property": requested, "value": f"value_{requested}"})
+            # Current single_record_template projects one logical record into
+            # two independent finite schema pages, never a combined JSON call.
+            assert len(fields) == 1
+            if "property" in fields:
+                return json.dumps({"property": requested})
+            return json.dumps({"value": f"value_{requested}"})
         if "count" in fields:
             assert "source_entity" in context
             assert "target_entity" in context
@@ -65,9 +70,10 @@ def test_content_properties_are_one_property_atomic_calls():
     )
 
     assert [row["property"] for row in result["records"]] == properties
-    assert len(router.calls) == len(properties)
+    assert len(router.calls) == 2 * len(properties)
     assert all(name == "planner-json" for name, _ in router.calls)
-    assert [call[1]["requested_property"] for call in router.calls] == properties
+    observed = [context["requested_property"] for _, context in router.calls]
+    assert observed == [name for name in properties for _ in range(2)]
 
 
 def test_relations_use_host_owned_pair_cardinality_without_model_continuation():
