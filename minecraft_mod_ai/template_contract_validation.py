@@ -229,8 +229,9 @@ def runtime_consumer_roots():
         "minecraft/resource/workflow",
         "minecraft/generation_contract", "feature/discover", "feature/decompose",
         "feature/atomic_check", "design/content_capability", "design/content_entity",
-        "design/content_entity_count", "design/content_relation",
-        "design/content_relation_count", "design/content_property",
+        # Cardinality is now provided by the host bounded-record/selector
+        # schemas; the retired *_count templates are not runtime consumers.
+        "design/content_relation", "design/content_property",
         "design/decision", "design/research_fact",
         "asset/item_sprite",
         "asset/visual_spec",
