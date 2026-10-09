@@ -691,7 +691,7 @@ def _project_install_fingerprint(target: str) -> str:
 
 
 def _image_stack_preflight() -> tuple[bool, str]:
-    """Import the real FLUX.2/Qwen3 dependency chain in a clean interpreter.
+    """Import the real FLUX.2/Qwen3/rembg dependency chain in a clean interpreter.
 
     A successful package installation (or a cached install receipt) does not
     guarantee that NumPy's compiled extension and its Python files agree.
@@ -703,7 +703,11 @@ def _image_stack_preflight() -> tuple[bool, str]:
         "from scipy.sparse import csr_matrix\n"
         "from transformers import Qwen3ForCausalLM\n"
         "from diffusers import Flux2KleinPipeline\n"
-        "print('numpy=' + np.__version__ + ' FLUX.2 imports=OK')\n"
+        "import inspect\n"
+        "from rembg import new_session\n"
+        "if 'sess_opts' not in inspect.signature(new_session).parameters:\n"
+        "    raise RuntimeError('ALPHA_SEGMENTER_INCOMPATIBLE_REMBG_API: rembg[cpu]>=2.0.77 required')\n"
+        "print('numpy=' + np.__version__ + ' FLUX.2/rembg imports=OK')\n"
     )
     try:
         result = subprocess.run(
@@ -715,7 +719,7 @@ def _image_stack_preflight() -> tuple[bool, str]:
             timeout=120,
         )
     except subprocess.TimeoutExpired:
-        return False, "FLUX.2 dependency import timed out after 120 seconds"
+        return False, "FLUX.2/rembg dependency import timed out after 120 seconds"
     output = result.stdout.strip()
     if result.returncode:
         return False, output[-8000:]
@@ -828,7 +832,7 @@ def _install_project(*, local_profile: bool) -> None:
         healthy, detail = _image_stack_preflight()
     if not healthy:
         raise RuntimeError(
-            "FLUX.2 Klein dependency imports remain broken after installation. "
+            "FLUX.2 Klein/rembg dependency imports remain broken after installation. "
             "Fix the reported Python packages before running production. "
             f"Original import traceback:\\n{detail}"
         )
