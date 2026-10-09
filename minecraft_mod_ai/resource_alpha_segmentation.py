@@ -19,6 +19,10 @@ ALPHA_SEGMENTATION_FALLBACK_MODEL = "u2netp"
 ALPHA_SEGMENTATION_ENGINE = "rembg"
 ALPHA_SEGMENTATION_PROVIDER = "CPUExecutionProvider"
 ALPHA_SEGMENTATION_CONTRACT = "mmm/alpha-segmentation-birefnet-lite-u2netp-v2"
+# Once the primary was SIGKILLed, skip further risky ONNX attempts in this
+# Python kernel. The flag is not persisted between Colab sessions.
+_LITE_WORKER_SIGKILLED = False
+
 
 
 @lru_cache(maxsize=1)
@@ -203,7 +207,29 @@ def segment_foreground_isolated(image: Any) -> Any:
     """
     from PIL import Image
 
+    global _LITE_WORKER_SIGKILLED
     _preflight_worker_ram()
+    # Observed Colab cgroup headroom was ~6.5GiB when BiRefNet-Lite was
+    # repeatedly SIGKILLed. Prefer the smaller, real U2NetP ONNX model below
+    # 8GiB or after a previous kill. Do not attempt a fake/background mask.
+    headroom = _available_host_ram_bytes()
+    minimum_lite_mib = int(os.environ.get("MMM_ALPHA_LITE_MIN_AVAILABLE_MIB", "8192"))
+    if minimum_lite_mib < 3072:
+        raise ValueError("MMM_ALPHA_LITE_MIN_AVAILABLE_MIB must be >= 3072")
+    fallback_first = _LITE_WORKER_SIGKILLED or (
+        headroom is not None and headroom < minimum_lite_mib * 1048576
+    )
+    model_order = (
+        (ALPHA_SEGMENTATION_FALLBACK_MODEL,) if fallback_first
+        else (ALPHA_SEGMENTATION_MODEL, ALPHA_SEGMENTATION_FALLBACK_MODEL)
+    )
+    if fallback_first:
+        print(
+            f"ALPHA_SEGMENTER_LOW_RAM: using real u2netp ONNX; "
+            f"available_mib={headroom // 1048576 if headroom is not None else 'unknown'} "
+            f"lite_min_mib={minimum_lite_mib} previous_lite_kill={_LITE_WORKER_SIGKILLED}",
+            flush=True,
+        )
     with tempfile.TemporaryDirectory(prefix="mmm-alpha-") as temporary:
         source = Path(temporary) / "input.png"
         target = Path(temporary) / "output.png"
@@ -225,7 +251,7 @@ def segment_foreground_isolated(image: Any) -> Any:
         # Only a SIGKILL permits recovery with the smaller Apache-2.0 U2NetP.
         failures = []
         chosen_model = None
-        for model_name in (ALPHA_SEGMENTATION_MODEL, ALPHA_SEGMENTATION_FALLBACK_MODEL):
+        for model_name in model_order:
             _used_before, _limit_before, memory_events_before = _cgroup_memory()
             env["MMM_ALPHA_WORKER_MODEL"] = model_name
             try:
@@ -262,6 +288,8 @@ def segment_foreground_isolated(image: Any) -> Any:
                 or "multiple values for argument 'sess_opts'" in stderr
             )
             possible_oom = completed.returncode in (-9, 137)
+            if possible_oom and model_name == ALPHA_SEGMENTATION_MODEL:
+                _LITE_WORKER_SIGKILLED = True
             if incompatible_api:
                 kind = "ALPHA_SEGMENTER_INCOMPATIBLE_REMBG_API"
             elif possible_oom:
