@@ -223,7 +223,9 @@ def author_state_semantic_page(
         def author_fields(
             active_fields: tuple[str, ...],
             current: Mapping[str, Any],
-        ) -> dict[str, Any]:
+            *,
+            recover_transport: bool = False,
+        ) -> dict[str, Any>:
             projected_properties: dict[str, Any] = {}
             transport_properties: dict[str, Any] = {}
             for field in active_fields:
@@ -236,9 +238,15 @@ def author_state_semantic_page(
                     concern, field, raw_schema, current
                 )
                 projected_properties[field] = semantic_schema
-                transport_properties[field] = _state_scalar_transport_schema(
+                transport_schema = _state_scalar_transport_schema(
                     concern, field, semantic_schema
                 )
+                if recover_transport and "pattern" in transport_schema:
+                    # llama.cpp PEG may reject a legitimate JSON-schema regex.
+                    # Omit only that sampler constraint on bounded recovery;
+                    # the original semantic schema is still validated below.
+                    transport_schema.pop("pattern")
+                transport_properties[field] = transport_schema
 
             row_schema = {
                 "type": "object",
@@ -277,6 +285,11 @@ def author_state_semantic_page(
                     "Return exactly one JSON object containing only the requested fields for "
                     "this row. Do not emit any sibling field, concern array, or wrapper."
                     + (" " + name_instruction if name_instruction else "")
+                    + (
+                        " This is one final scalar retry: emit a short JSON value "
+                        "satisfying the exact field meaning, with no explanation."
+                        if recover_transport else ""
+                    )
                 ),
             )
             raw = generate_fixed_template_value(
@@ -321,28 +334,52 @@ def author_state_semantic_page(
                 result[field] = deepcopy(value)
             return result
 
+        def author_scalar(field: str, current: Mapping[str, Any]) -> dict[str, Any]:
+            try:
+                return author_fields((field,), current)
+            except Exception as scalar_exc:
+                boundary = completion_boundary_error(scalar_exc)
+                if boundary is None or boundary.kind != OUTPUT_EXHAUSTED:
+                    raise
+                if on_additional_call is not None:
+                    on_additional_call()
+                print(
+                    f"STATE_SCALAR_OUTPUT_EXHAUSTED: one bounded transport "
+                    f"retry for {concern}[{index}].{field}",
+                    flush=True,
+                )
+                return author_fields(
+                    (field,), current, recover_transport=True,
+                )
+
         try:
             row = author_fields(requested, fixed)
         except Exception as exc:
             boundary = completion_boundary_error(exc)
-            if (
-                boundary is None
-                or boundary.kind != OUTPUT_EXHAUSTED
-                or len(requested) < 2
-            ):
+            if boundary is None or boundary.kind != OUTPUT_EXHAUSTED:
                 raise
-            # Count the extra model calls through the caller's planning budget.
-            # Never quietly exceed the host's fixed call allowance.
-            print(
-                f"STATE_OUTPUT_EXHAUSTED: splitting {concern}[{index}] into "
-                f"{len(requested)} scalar projections",
-                flush=True,
-            )
-            row = {}
-            for field in requested:
+            if len(requested) == 1:
                 if on_additional_call is not None:
                     on_additional_call()
-                row.update(author_fields((field,), {**fixed, **row}))
+                print(
+                    f"STATE_SCALAR_OUTPUT_EXHAUSTED: one bounded transport "
+                    f"retry for {concern}[{index}].{requested[0]}",
+                    flush=True,
+                )
+                row = author_fields(
+                    requested, fixed, recover_transport=True,
+                )
+            else:
+                print(
+                    f"STATE_OUTPUT_EXHAUSTED: splitting {concern}[{index}] into "
+                    f"{len(requested)} scalar projections",
+                    flush=True,
+                )
+                row = {}
+                for field in requested:
+                    if on_additional_call is not None:
+                        on_additional_call()
+                    row.update(author_scalar(field, {**fixed, **row}))
         rows.append(row)
 
     return {concern: rows}
