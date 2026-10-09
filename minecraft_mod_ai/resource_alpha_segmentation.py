@@ -181,8 +181,13 @@ def segment_foreground_isolated(image: Any) -> Any:
         except ValueError as exc:
             raise ValueError("MMM_ALPHA_WORKER_TIMEOUT_SECONDS must be an integer") from exc
         env = os.environ.copy()
-        env.setdefault("OMP_NUM_THREADS", "2")
-        env.setdefault("OMP_THREAD_LIMIT", "2")
+        # A large global OMP setting must not override the isolated worker's
+        # low-memory ONNX session policy.
+        env["OMP_NUM_THREADS"] = "1"
+        env["OMP_THREAD_LIMIT"] = "1"
+        from .runtime_memory_watchdog import _cgroup_memory
+
+        _used_before, _limit_before, memory_events_before = _cgroup_memory()
         try:
             completed = subprocess.run(
                 [sys.executable, "-m", "minecraft_mod_ai.resource_alpha_segmentation",
@@ -200,11 +205,30 @@ def segment_foreground_isolated(image: Any) -> Any:
                 f"ALPHA_SEGMENTER_WORKER_TIMEOUT: BiRefNet exceeded {timeout}s"
             ) from exc
         if completed.returncode != 0:
-            tail = (completed.stderr or "")[-1600:]
+            # The kernel's OOM counter separates a confirmed cgroup OOM kill
+            # from a SIGKILL sent by some other process. Keep the original
+            # failure class for callers that must fail closed.
+            _used_after, _limit_after, memory_events_after = _cgroup_memory()
+            oom_kill_delta = max(
+                0,
+                memory_events_after.get("oom_kill", 0)
+                - memory_events_before.get("oom_kill", 0),
+            )
+            memory_headroom = _available_host_ram_bytes()
+            # Progress bars fill stderr with thousands of redraws; report
+            # diagnostics, not repeated download percentages.
+            stderr_lines = (completed.stderr or "").replace("\\r", "\\n").splitlines()
+            tail = " | ".join(stderr_lines[-3:])[-350:]
             possible_oom = completed.returncode in (-9, 137)
-            kind = "ALPHA_SEGMENTER_WORKER_OOM_SUSPECT" if possible_oom else "ALPHA_SEGMENTER_WORKER_FAILED"
+            kind = (
+                "ALPHA_SEGMENTER_WORKER_OOM_SUSPECT"
+                if possible_oom else "ALPHA_SEGMENTER_WORKER_FAILED"
+            )
             raise ValueError(
-                f"{kind}: exit={completed.returncode}; {tail}"
+                f"{kind}: exit={completed.returncode}; "
+                f"cgroup_oom_kill_delta={oom_kill_delta}; "
+                f"available_mib={memory_headroom // 1048576 if memory_headroom is not None else 'unknown'}; "
+                f"stderr_tail={tail}"
             )
         if not target.is_file():
             raise ValueError("ALPHA_SEGMENTER_WORKER_MISSING_OUTPUT")
