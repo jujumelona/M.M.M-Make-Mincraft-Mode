@@ -20,7 +20,7 @@ def _source_receipt(tmp_path):
     resource = tmp_path / "donor-en_us.json"
     resource.write_text('{"item.donor.fuel":"Fuel"}', encoding="utf-8")
     texture = tmp_path / "donor-fuel.png"
-    texture.write_bytes(b"\\x89PNG\\r\\n\\x1a\\n" + b"\\xff" * 24)
+    texture.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\xff" * 24)
     license_file = tmp_path / "donor-license.txt"
     license_file.write_text("MIT License\nTest attribution fixture", encoding="utf-8")
     donor = {
@@ -93,7 +93,7 @@ def test_authored_transplant_uses_actual_mod_package_and_mod_id(tmp_path, monkey
     assert 'Identifier.of("spacemod", "fuel")' in java
     assert (out / "src/main/resources/assets/spacemod/lang/en_us.json").is_file()
     texture_path = out / "src/main/resources/assets/spacemod/textures/item/fuel.png"
-    assert texture_path.read_bytes().startswith(b"\\x89PNG")
+    assert texture_path.read_bytes().startswith(b"\x89PNG")
     assert not (out / "src/main/resources/assets/donor/textures/item/fuel.png").exists()
     assert (out / "src/main/resources/META-INF/mmm-third-party").is_dir()
     assert (out / ".minecraft_ai/reuse/source_provenance.json").is_file()
