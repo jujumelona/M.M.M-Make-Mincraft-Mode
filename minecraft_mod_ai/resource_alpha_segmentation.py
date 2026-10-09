@@ -38,10 +38,17 @@ def _require_custom_session_options_api(new_session: Any) -> None:
         inspect.Parameter.KEYWORD_ONLY,
         inspect.Parameter.POSITIONAL_OR_KEYWORD,
     ):
+        from importlib.metadata import PackageNotFoundError, version
+
+        try:
+            installed = version("rembg")
+        except PackageNotFoundError:
+            installed = "not-installed"
         raise ValueError(
-            "ALPHA_SEGMENTER_INCOMPATIBLE_REMBG_API: installed rembg does not "
-            "support new_session(sess_opts=...). Install rembg[cpu]>=2.0.77,<3 "
-            "through the current project image extra before image generation."
+            "ALPHA_SEGMENTER_INCOMPATIBLE_REMBG_API: "
+            f"installed rembg={installed}; new_session(sess_opts=...) unavailable. "
+            "Rerun Colab setup cell 2 to install rembg[cpu]>=2.0.77,<3 "
+            "before image generation."
         )
 
 
@@ -265,18 +272,30 @@ def segment_foreground_isolated(image: Any) -> Any:
             memory_headroom = _available_host_ram_bytes()
             # Progress bars fill stderr with thousands of redraws; report
             # diagnostics, not repeated download percentages.
-            stderr_lines = (completed.stderr or "").replace("\r", "\n").splitlines()
-            tail = " | ".join(stderr_lines[-3:])[-350:]
+            stderr = completed.stderr or ""
+            stderr_lines = stderr.replace("\r", "\n").splitlines()
+            # Keep enough traceback context instead of just its final frames.
+            tail = " | ".join(stderr_lines[-20:])[-3000:]
+            incompatible_api = (
+                "ALPHA_SEGMENTER_INCOMPATIBLE_REMBG_API" in stderr
+                or "multiple values for argument 'sess_opts'" in stderr
+            )
             possible_oom = completed.returncode in (-9, 137)
-            kind = (
-                "ALPHA_SEGMENTER_WORKER_OOM_SUSPECT"
-                if possible_oom else "ALPHA_SEGMENTER_WORKER_FAILED"
+            if incompatible_api:
+                kind = "ALPHA_SEGMENTER_INCOMPATIBLE_REMBG_API"
+            elif possible_oom:
+                kind = "ALPHA_SEGMENTER_WORKER_OOM_SUSPECT"
+            else:
+                kind = "ALPHA_SEGMENTER_WORKER_FAILED"
+            remediation = (
+                " Rerun Colab setup cell 2 to upgrade rembg[cpu]>=2.0.77,<3."
+                if incompatible_api else ""
             )
             raise ValueError(
                 f"{kind}: exit={completed.returncode}; "
                 f"cgroup_oom_kill_delta={oom_kill_delta}; "
                 f"available_mib={memory_headroom // 1048576 if memory_headroom is not None else 'unknown'}; "
-                f"stderr_tail={tail}"
+                f"stderr_tail={tail}{remediation}"
             )
         if not target.is_file():
             raise ValueError("ALPHA_SEGMENTER_WORKER_MISSING_OUTPUT")
