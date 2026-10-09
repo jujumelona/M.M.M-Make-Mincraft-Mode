@@ -9,40 +9,37 @@ from minecraft_mod_ai import task_template_runner
 
 
 class _AtomicRouter:
+    """Replay current planner JSON transport rather than deprecated tool calls."""
+
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict]] = []
-        self.registry = SimpleNamespace(role=lambda *_args, **_kwargs: SimpleNamespace(adapter="llama_cpp"))
+        self.registry = SimpleNamespace(
+            role=lambda *_args, **_kwargs: SimpleNamespace(adapter="llama_cpp")
+        )
         self.profile = "test"
 
-    def generate_tool_decision(
-        self,
-        role,
-        messages,
-        *,
-        tool_name,
-        parameters,
-        description="",
-        **kwargs,
-    ):
-        del role, parameters, description, kwargs
-        context_message = next(
-            (
-                str(message.get("content", ""))
-                for message in messages
-                if message.get("role") == "user"
-            ),
+    def generate_text(self, role, messages, *, response_schema, **kwargs):
+        assert role == "planner"
+        assert kwargs.get("enable_tools") is False
+        assert kwargs.get("force_non_thinking") is True
+        user_message = next(
+            (message["content"] for message in messages if message.get("role") == "user"),
             None,
         )
-        assert context_message is not None
-        context = json.loads(context_message)
-        self.calls.append((tool_name, context))
-        if tool_name == "submit_one_design_content_property":
+        assert user_message is not None
+        context = json.loads(str(user_message))
+        self.calls.append(("planner-json", context))
+        fields = response_schema["properties"]
+        if "property" in fields:
             requested = str(context["requested_property"])
             assert context["allowed_properties"] == [requested]
-            return {"property": requested, "value": f"value_{requested}"}
-        if tool_name == "submit_one_design_content_relation_count":
-            return {"count": 0}
-        raise AssertionError(f"unexpected tool call: {tool_name}")
+            return json.dumps({"property": requested, "value": f"value_{requested}"})
+        if "count" in fields:
+            assert "source_entity" in context
+            assert "target_entity" in context
+            assert 0 in fields["count"]["enum"]
+            return '{"count":0}'
+        raise AssertionError(f"unexpected schema: {response_schema}")
 
 
 def test_content_properties_are_one_property_atomic_calls():
@@ -69,26 +66,36 @@ def test_content_properties_are_one_property_atomic_calls():
 
     assert [row["property"] for row in result["records"]] == properties
     assert len(router.calls) == len(properties)
-    assert all(name == "submit_one_design_content_property" for name, _ in router.calls)
+    assert all(name == "planner-json" for name, _ in router.calls)
     assert [call[1]["requested_property"] for call in router.calls] == properties
 
 
 def test_relations_use_host_owned_pair_cardinality_without_model_continuation():
     router = _AtomicRouter()
     entity_ids = ["alpha", "beta", "gamma", "delta", "epsilon"]
+    entities = [{"entity_id": name, "kind": "item"} for name in entity_ids]
 
     result = task_template_runner.run_record_template(
         router,
         "design/content_relation",
-        context={"entity_ids": entity_ids, "requirement": "No explicit relations."},
+        context={
+            "entity_ids": entity_ids,
+            "entities": entities,
+            "requirement": "No explicit relations.",
+        },
         allowed_refs=set(),
     )
 
     assert result["records"] == []
     expected_pairs = len(entity_ids) * (len(entity_ids) - 1)
     assert len(router.calls) == expected_pairs
-    assert all(name == "submit_one_design_content_relation_count" for name, _ in router.calls)
-    assert all(call[1]["source_id"] != call[1]["target_id"] for call in router.calls)
+    assert all(name == "planner-json" for name, _ in router.calls)
+    observed_pairs = {
+        (call["source_entity"]["entity_id"], call["target_entity"]["entity_id"])
+        for _, call in router.calls
+    }
+    expected = {(source, target) for source in entity_ids for target in entity_ids if source != target}
+    assert observed_pairs == expected
 
 
 def test_gradle_hot_path_is_incremental_parallel_and_process_isolated(monkeypatch):
