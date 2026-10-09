@@ -137,7 +137,9 @@ def generate_candidate(
     resolution: tuple[int, int],
     seed: int,
     segment_foreground_callback: Callable | None = None,
+    before_segmentation: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
+    """Generate every source before segmentation to avoid simultaneous model residency."""
     from PIL import Image
     from .resource_alpha_segmentation import segment_foreground
 
@@ -145,22 +147,19 @@ def generate_candidate(
     directory.mkdir(parents=True, exist_ok=True)
     canvas = Image.new("RGBA", (texture["width"], texture["height"]), (0, 0, 0, 0))
     sources = []
+    pending = []
     try:
+        # Finish all diffusion inference first: even animated/UV textures must
+        # not repeatedly reload FLUX between individual BiRefNet invocations.
         for index, region in enumerate(generation_regions(contract)):
-            x, y, width, height = region["box"]
             source = directory / f"region-{index:03d}.png"
             region_seed = int.from_bytes(
                 hashlib.sha256(f"{seed}:{index}".encode()).digest()[:8], "big"
             ) & ((1 << 63) - 1)
-            region_prompt = prompt + f", semantic region {region['name']}"
-            selected_resolution = resolution
-            kwargs = {
-                "prompt": region_prompt,
-                "output_path": source,
-                "seed": region_seed,
-            }
             generate(
-                **kwargs,
+                prompt=prompt + f", semantic region {region['name']}",
+                output_path=source,
+                seed=region_seed,
                 width=resolution[0],
                 height=resolution[1],
             )
@@ -168,7 +167,7 @@ def generate_candidate(
                 raise ValueError("Image backend produced no regular source PNG.")
             with Image.open(source) as raw:
                 raw.load()
-                if raw.format != "PNG" or raw.size != selected_resolution:
+                if raw.format != "PNG" or raw.size != resolution:
                     raise ValueError(
                         "Image backend output does not match generation profile geometry/PNG format."
                     )
@@ -180,10 +179,18 @@ def generate_candidate(
                         or raw.getchannel("A").getextrema() == (255, 255)
                     )
                 )
+            pending.append((region, source, needs_segmentation))
+
+        if any(needs for _, _, needs in pending) and before_segmentation is not None:
+            # Release the diffusion pipeline and its CPU offload weights before
+            # rembg allocates its large ONNX session on host RAM.
+            before_segmentation()
+
+        for region, source, needs_segmentation in pending:
+            x, y, width, height = region["box"]
+            with Image.open(source) as raw:
+                raw.load()
                 if needs_segmentation:
-                    # This stage, NOT FLUX or the old cube/cylinder geometry
-                    # shortcut, must supply the alpha channel. Run at diffusion
-                    # resolution before reducing the asset to Minecraft pixels.
                     matting = (
                         segment_foreground if segment_foreground_callback is None
                         else segment_foreground_callback
@@ -197,22 +204,19 @@ def generate_candidate(
                         extracted.close()
                     matte_method = "rembg:birefnet-general"
                 else:
-                    processed = postprocess_region(
-                        raw, contract, (width, height),
-                    )
+                    processed = postprocess_region(raw, contract, (width, height))
                     matte_method = "source_alpha_or_boundary_background"
 
-            canvas.paste(processed, (x, y))
-            processed.close()
-            sources.append(
-                {
-                    "region": region["name"],
-                    "resolution": list(selected_resolution),
-                    "sha256": "sha256:"
-                    + hashlib.sha256(source.read_bytes()).hexdigest(),
-                    "alpha_matte": matte_method or "source_or_boundary_background",
-                }
-            )
+            try:
+                canvas.paste(processed, (x, y))
+            finally:
+                processed.close()
+            sources.append({
+                "region": region["name"],
+                "resolution": list(resolution),
+                "sha256": "sha256:" + hashlib.sha256(source.read_bytes()).hexdigest(),
+                "alpha_matte": matte_method,
+            })
         if contract["gui"]:
             for region in contract["gui"]["protected_regions"]:
                 x, y, width, height = region["box"]
