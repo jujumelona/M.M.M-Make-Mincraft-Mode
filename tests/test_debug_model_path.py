@@ -1,0 +1,138 @@
+"""Debug's default must exercise real authored-plan ABI, not the old host fixture."""
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from minecraft_mod_ai.authored_plan import AuthoredPlan
+from minecraft_mod_ai.colab_run_modes import (
+    DEBUG_DEFAULT_PROMPT,
+    FULL_MODE,
+    run_plan_dialog,
+)
+from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
+
+
+def _plan(prompt: str) -> AuthoredPlan:
+    text = "# Behavior\nA crystal item with a crafting recipe.\n"
+    specification = {key: [] for key in DETAIL_RECORDS["verification"]}
+    specification["inapplicable_concerns"] = []
+    return AuthoredPlan(
+        requested_prompt=prompt,
+        text=text,
+        structured_sections={
+            "verification": {
+                "specification": specification,
+                "constraint_evidence_refs": [],
+            },
+        },
+        typed_plan_ir={
+            "schema_version": "mmm/typed-plan-ir-v1",
+            "source_sha256": "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            "functions": [],
+            "initialize": [],
+            "platform_modules": [],
+            "event_bindings": [],
+        },
+        content_design={
+            "modules": [
+                {
+                    "module_id": "crystal_fragment",
+                    "kind": "item",
+                    "config": {},
+                    "depends_on": [],
+                    "required_gates": [],
+                }
+            ],
+            "_implementation_facts": [
+                {
+                    "fact_id": "crystal_fragment.exists",
+                    "fact_type": "item_exists",
+                    "subject": "crystal_fragment",
+                }
+            ],
+        },
+    )
+
+
+class _ModelSession:
+    def __init__(self, *, corrupt_reload: bool = False) -> None:
+        self.prompts: list[str] = []
+        self.loads = 0
+        self.corrupt_reload = corrupt_reload
+        self.proposal: AuthoredPlan | None = None
+
+    def plan(self, prompt: str):
+        self.prompts.append(prompt)
+        self.proposal = _plan(prompt)
+        return SimpleNamespace(complete_proposal=self.proposal, message=self.proposal.text)
+
+    def save_plan(self, target: Path):
+        assert self.proposal is not None
+        path = Path(target)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(self.proposal.to_dict()), encoding="utf-8")
+        return path
+
+    def load_plan(self, path: Path):
+        self.loads += 1
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        if self.corrupt_reload:
+            data["text"] += "modified"
+        plan = AuthoredPlan.from_dict(data)
+        return SimpleNamespace(complete_proposal=plan, message=plan.text)
+
+
+def test_model_path_uses_real_authored_output_and_roundtrip(tmp_path: Path) -> None:
+    session = _ModelSession()
+    target = tmp_path / "proposal.json"
+    result = run_plan_dialog(
+        session=session,
+        run_mode=FULL_MODE,
+        prompt="custom user requested gameplay",
+        plan_path=target,
+        debug_mode=True,
+        print_fn=lambda *args, **kwargs: None,
+    )
+    assert session.prompts == ["custom user requested gameplay"]
+    assert session.loads == 1
+    assert result.plan_path == target
+    assert isinstance(result.reply.complete_proposal, AuthoredPlan)
+    assert result.reply.complete_proposal.content_design["modules"][0]["module_id"] == "crystal_fragment"
+    assert json.loads(target.read_text(encoding="utf-8"))["schema_version"] == "mmm/authored-plan-v2"
+
+
+def test_model_path_default_prompt_runs_model_not_host_fixture(tmp_path: Path) -> None:
+    session = _ModelSession()
+    run_plan_dialog(
+        session=session, run_mode=FULL_MODE, prompt="   ",
+        plan_path=tmp_path / "proposal.json", debug_mode=True,
+        print_fn=lambda *args, **kwargs: None,
+    )
+    assert session.prompts == [DEBUG_DEFAULT_PROMPT]
+
+
+def test_model_path_fails_closed_when_reload_changes_authored_plan(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="DEBUG_MODEL_PLAN_ROUNDTRIP_MISMATCH"):
+        run_plan_dialog(
+            session=_ModelSession(corrupt_reload=True),
+            run_mode=FULL_MODE, prompt="real gameplay",
+            plan_path=tmp_path / "proposal.json", debug_mode=True,
+            print_fn=lambda *args, **kwargs: None,
+        )
+
+
+def test_debug_rejects_unknown_strategy_before_planner(tmp_path: Path) -> None:
+    session = _ModelSession()
+    with pytest.raises(ValueError, match="지원하지 않는 Debug 전략"):
+        run_plan_dialog(
+            session=session, run_mode=FULL_MODE, prompt="test",
+            plan_path=tmp_path / "proposal.json", debug_mode=True,
+            debug_strategy="unverified_stub",
+            print_fn=lambda *args, **kwargs: None,
+        )
+    assert session.prompts == []
