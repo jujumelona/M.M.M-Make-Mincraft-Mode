@@ -1,0 +1,100 @@
+"""Authored plans must have the same fail-closed quality gate as v2 proposals."""
+from __future__ import annotations
+
+import pytest
+
+from minecraft_mod_ai.authored_production import _bind_authored_quality_contract
+from minecraft_mod_ai.complete_spec import ProductionModule
+from minecraft_mod_ai.production_contract import (
+    ProductionContractError,
+    evaluate_quality_contract,
+    quality_unresolved,
+    validate_production_contract,
+)
+from minecraft_mod_ai.quality_evidence import compile_quality_evidence
+
+
+def _fixture():
+    design = {
+        "authored_plan": {"requested_prompt": "Create a crystal item", "text": "Crystal item"},
+        "_authored_execution_manifest": {"schema_version": "mmm/authored-execution-manifest-v2"},
+    }
+    module = ProductionModule("crystal_item", "item", {"feature": "crystal"})
+    return design, (module,)
+
+
+def test_authored_production_binds_real_v2_quality_contract_before_approval():
+    design, modules = _fixture()
+    bound, acceptance = _bind_authored_quality_contract(
+        requested_prompt="Create a crystal item",
+        design=design,
+        modules=modules,
+        assets=(),
+        acceptance=("The crystal item is registered.",),
+    )
+    contract = bound["_production_contract"]
+    assert bound is not design
+    assert "_production_contract" not in design
+    assert contract["contract_sha256"].startswith("sha256:")
+    assert "The crystal item is registered." in acceptance
+    validate_production_contract(contract, modules, acceptance, ())
+
+
+def test_authored_quality_without_evidence_stays_blocked_not_self_certified():
+    design, modules = _fixture()
+    bound, acceptance = _bind_authored_quality_contract(
+        requested_prompt="Create a crystal item",
+        design=design,
+        modules=modules,
+        assets=(),
+        acceptance=("The crystal item is registered.",),
+    )
+    contract = bound["_production_contract"]
+    proposal_hash = "sha256:" + "a" * 64
+    receipts = compile_quality_evidence(
+        contract,
+        proposal_hash,
+        game_design=bound,
+        source_validation=None,
+        build_report=None,
+        jar_validation=None,
+    )
+    assert receipts == {}
+    report = evaluate_quality_contract(contract, receipts, proposal_hash)
+    assert report["overall_status"] == "MISSING"
+    assert quality_unresolved(report)
+    assert set(quality_unresolved(report)) >= {"correctness", "build"}
+
+
+def test_authored_design_mutation_breaks_content_addressed_quality_binding():
+    design, modules = _fixture()
+    bound, acceptance = _bind_authored_quality_contract(
+        requested_prompt="Create a crystal item",
+        design=design,
+        modules=modules,
+        assets=(),
+        acceptance=("The crystal item is registered.",),
+    )
+    assert acceptance
+    mutated = {**bound, "authored_plan": {**bound["authored_plan"], "text": "Different item"}}
+    with pytest.raises(ProductionContractError, match="game_design does not match"):
+        compile_quality_evidence(
+            bound["_production_contract"],
+            "sha256:" + "b" * 64,
+            game_design=mutated,
+            source_validation=None,
+            build_report=None,
+            jar_validation=None,
+        )
+
+
+def test_authored_contract_cannot_be_silently_overwritten():
+    design, modules = _fixture()
+    with pytest.raises(ValueError, match="AUTHORED_QUALITY_CONTRACT_ALREADY_BOUND"):
+        _bind_authored_quality_contract(
+            requested_prompt="Create a crystal item",
+            design={**design, "_production_contract": {}},
+            modules=modules,
+            assets=(),
+            acceptance=("The crystal item is registered.",),
+        )
