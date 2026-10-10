@@ -33,7 +33,7 @@ def test_packaged_jar_missing_required_runtime_resource_fails(
     jar_path = tmp_path / "pack-probe.jar"
     with zipfile.ZipFile(jar_path, "w") as archive:
         archive.writestr("fabric.mod.json", json.dumps(metadata, sort_keys=True))
-        archive.writestr("example/pack/PackProbeMod.class", b"\\xca\\xfe\\xba\\xbe")
+        archive.writestr("example/pack/PackProbeMod.class", b"\xca\xfe\xba\xbe")
         archive.writestr("assets/pack_probe/lang/en_us.json", "{}")
         # Deliberately omit assets/pack_probe/lang/ko_kr.json.
 
