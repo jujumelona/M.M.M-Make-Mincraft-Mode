@@ -52,6 +52,8 @@ jobs:
           tests/test_modern_block_item_resources.py
           tests/test_block_strength_lowering.py
           tests/test_acceptance_trailing_newline_regression.py
+          tests/test_full_ci_production_admission.py
+          tests/test_runtime_pipeline_trigger_coverage.py
       - name: Verify host capability preflight before model execution
         run: >-
           python -c
