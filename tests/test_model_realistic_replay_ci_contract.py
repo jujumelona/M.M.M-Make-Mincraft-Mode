@@ -44,7 +44,7 @@ def test_final_ci_gate_requires_replay_workflow() -> None:
     workflow = MAIN_WORKFLOW.read_text(encoding="utf-8")
     assert "model-realistic-replay:" in workflow
     assert "uses: ./.github/workflows/model-realistic-replay.yml" in workflow
-    assert "needs: [audit, tests, python313, model-realistic-replay, deterministic-production]" in workflow
+    assert "needs: [audit, tests, python313, model-realistic-replay, deterministic-production, workflow-static-check]" in workflow
     assert 'MODEL_REPLAY: ${{ needs.model-realistic-replay.result }}' in workflow
     assert 'test "$MODEL_REPLAY" = success' in workflow
     assert 'test "$PRODUCTION_PROOF" = success' in workflow
