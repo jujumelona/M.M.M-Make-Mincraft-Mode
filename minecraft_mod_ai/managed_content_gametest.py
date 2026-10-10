@@ -100,17 +100,27 @@ def _manifest(approved: Any, root: Path) -> dict[str, Any] | None:
                 return None
         except (OSError, UnicodeError, json.JSONDecodeError):
             return None
-    try:
-        facts = json.loads(spec.platform.host_facts_json)
-        symbols = facts["api_symbols"]
-        registry_owners = {
-            "item": symbols["builtin_item_registry"]["owner"],
-            "block": symbols["builtin_block_registry"]["owner"],
-        }
-    except (AttributeError, KeyError, TypeError, ValueError):
-        return None
-    if not all(isinstance(value, str) and value.startswith("net.minecraft.") for value in registry_owners.values()):
-        return None
+    # The final generated Java is more authoritative than a broad host facts
+    # symbol table: mixed-mapping catalogs can describe an alias that the
+    # actual compiled mod does not use. Lock verification to actual source.
+    registry_owners: dict[str, str] = {}
+    for kind, source_name in (("item", "ModItems.java"), ("block", "ModBlocks.java")):
+        path = _safe_file(
+            root / "src/main/java" / Path(*pkg.split(".")) / "registry" / source_name
+        )
+        if path is None:
+            return None
+        try:
+            source = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            return None
+        owners = set(re.findall(
+            r"net\\.minecraft(?:\\.[A-Za-z_][A-Za-z_0-9]*)+\\.BuiltInRegistries",
+            source,
+        ))
+        if len(owners) != 1:
+            return None
+        registry_owners[kind] = owners.pop()
     return {"mod_id": mod_id, "package": pkg, "content": content, "recipes": recipes,
             "registries": registry_owners}
 
