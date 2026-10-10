@@ -526,6 +526,47 @@ def compile_content_graph(
                     f"CONTENT_GAMEPLAY_GUI_ONLY: {rid}: repeated GUI-only "
                     "candidate for an executable gameplay step."
                 )
+        # A model-authored purchase/upgrade/state mutation cannot be satisfied
+        # by declaring a passive item or a screen. When the content graph owns
+        # an atomic mutation, it must author an executable interaction fact,
+        # or leave the mutation to an independently bound Typed PlanIR event.
+        # Re-author at the semantic record boundary, before generating Java.
+        if (
+            isinstance(gameplay_context, Mapping)
+            and gameplay_context.get("source_section") == "algorithm"
+            and gameplay_context.get("source_concern") == "atomic_mutations"
+            and nodes
+            and not any(node.get("kind") in {
+                "custom_item_behavior", "custom_block_behavior",
+            } for node in nodes)
+        ):
+            action_kinds = ["custom_item_behavior", "custom_block_behavior"]
+            original_nodes = deepcopy(nodes)
+            nodes = records("design/content_entity", {
+                **entity_context,
+                "allowed_content_kinds": action_kinds,
+                "rejected_passive_candidates": original_nodes,
+                "generation_feedback": (
+                    "The supplied atomic mutation is still unimplemented: "
+                    "ordinary items, blocks and GUI registrations do not "
+                    "execute the requested transaction or state change. "
+                    "Choose an actual item-use or block-interaction behavior "
+                    "only when it matches the authored player interaction. "
+                    "Never replace GUI-button or unrelated server mechanics "
+                    "with an invented item interaction. Return no content "
+                    "when this obligation must instead be executed by a "
+                    "separately bound server-side event."
+                ),
+            })
+            if nodes and not any(node.get("kind") in action_kinds for node in nodes):
+                raise SlotFillError(
+                    f"CONTENT_GAMEPLAY_PASSIVE_ONLY: {rid}: no executable "
+                    "interaction owner for the atomic mutation."
+                )
+            if not nodes:
+                # Preserve the original passive content as resource identities,
+                # but it must not be counted as a gameplay implementation.
+                nodes = original_nodes
         if len(nodes) < context.get("minimum_entity_count", 0):
             raise SlotFillError(f"CONTENT_REQUIREMENT_UNIMPLEMENTED: {rid}")
         # Generic behavioral requirements may still have no concrete content.
