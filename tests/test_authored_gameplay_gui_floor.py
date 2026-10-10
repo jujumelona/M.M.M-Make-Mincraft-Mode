@@ -151,7 +151,7 @@ def test_atomic_gameplay_writers_become_content_generation_inputs(monkeypatch) -
     ("concern", "expected_allowed"),
     [
         ("steps", None),
-        ("atomic_mutations", {"custom_item_behavior", "custom_block_behavior"}),
+        ("atomic_mutations", None),
     ],
 )
 def test_gameplay_gui_only_discovery_retries_with_executable_owner(
