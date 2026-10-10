@@ -2277,9 +2277,13 @@ class CompleteProductionOrchestrator:
                 remaining = max(0.0, deadline - time.monotonic())
                 if remaining <= 0.0 and not future.done():
                     future.cancel()
-                    raise CompleteProductionError(
-                        f'Blockbench review deadline exceeded: {module_id}'
+                    unresolved.append(f'blockbench:{module_id}:review-timeout')
+                    print(
+                        f'[BLOCKBENCH] REVIEW_UNRESOLVED entity={module_id} '
+                        'reason=deadline; verified release blocked.',
+                        flush=True,
                     )
+                    continue
                 try:
                     receipt = future.result(timeout=0 if future.done() else remaining)
                 except TimeoutError:
