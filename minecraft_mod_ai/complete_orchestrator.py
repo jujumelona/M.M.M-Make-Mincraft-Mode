@@ -407,6 +407,31 @@ class CompleteExecutionOptions:
         if type(self.resume) is not bool:
             raise CompleteProductionError('resume must be boolean.')
 
+def _mandatory_blockbench_execution_options(
+    proposal: Any,
+    options: CompleteExecutionOptions,
+) -> CompleteExecutionOptions:
+    """Bind required entity review even when an old Colab cell disables it.
+
+    This enables the actual Blockbench execution path; it does not manufacture
+    an attestation. A missing or failing review remains an unresolved gate.
+    """
+    if options.source_only or options.run_blockbench:
+        return options
+    if not any(
+        getattr(module, "kind", "") in {"entity", "boss", "npc"}
+        for module in getattr(proposal, "modules", ())
+    ):
+        return options
+    print(
+        "BLOCKBENCH_REQUIRED_AUTO_ENABLED: full entity/boss/NPC "
+        "production will run real UV/render verification; "
+        "stale run_blockbench=False ignored",
+        flush=True,
+    )
+    return replace(options, run_blockbench=True)
+
+
 @dataclass(frozen=True)
 class CompletePipelineResult:
     schema_version: str
@@ -521,25 +546,7 @@ class CompleteProductionOrchestrator:
                     f"{exc}"
                 ) from exc
 
-        # A stale Colab settings cell can override the current notebook's True
-        # default. Entity geometry verification is a mandatory full-build gate,
-        # not an opt-out flag: enable its actual review path rather than
-        # silently skipping evidence or aborting after costly preparation.
-        if (
-            not options.source_only
-            and not options.run_blockbench
-            and any(
-                getattr(module, "kind", "") in {"entity", "boss", "npc"}
-                for module in approved.modules
-            )
-        ):
-            options = replace(options, run_blockbench=True)
-            print(
-                "BLOCKBENCH_REQUIRED_AUTO_ENABLED: full entity/boss/NPC "
-                "production will run real UV/render verification; "
-                "stale run_blockbench=False ignored",
-                flush=True,
-            )
+        options = _mandatory_blockbench_execution_options(approved, options)
         _validate_external_execution_preflight(approved, options)
         run_root, ledger, run_resumed = self._open_run(
             run_name,
