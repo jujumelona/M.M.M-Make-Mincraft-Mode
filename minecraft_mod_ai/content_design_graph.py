@@ -475,13 +475,42 @@ def compile_content_graph(
         if grounded:
             context["research_facts"] = grounded
 
-        nodes = records(
-            "design/content_entity",
-            {**context, "existing_entities": [
-                {key: node[key] for key in ("entity_id", "kind", "role")}
-                for node in entities.values()
-            ]},
+        entity_context = {**context, "existing_entities": [
+            {key: node[key] for key in ("entity_id", "kind", "role")}
+            for node in entities.values()
+        ]}
+        nodes = records("design/content_entity", entity_context)
+        gameplay_context = context.get("design_context")
+        gameplay_step = (
+            isinstance(gameplay_context, Mapping)
+            and gameplay_context.get("source_section") == "algorithm"
+            and gameplay_context.get("source_concern") == "steps"
         )
+        if gameplay_step and nodes and all(
+            node.get("kind") == "gui" for node in nodes
+        ):
+            # Retry at the cheap planning boundary instead of compiling and
+            # GameTesting a Java screen that cannot perform the gameplay step.
+            # A distinct context binding prevents reuse of the rejected cached
+            # GUI-only result as if it had been corrected.
+            nodes = records("design/content_entity", {
+                **entity_context,
+                "rejected_gui_only_candidates": deepcopy(nodes),
+                "generation_feedback": (
+                    "The previous choice represented an executable gameplay "
+                    "step using only screens. Screens do not implement resource "
+                    "collection, crafting, purchasing, combat, or travel. "
+                    "Identify the concrete playable item/block/entity/dimension "
+                    "required by this exact step, or return no content entity "
+                    "only if the step is implemented entirely by real code. "
+                    "Never substitute a GUI placeholder for a gameplay handler."
+                ),
+            })
+            if nodes and all(node.get("kind") == "gui" for node in nodes):
+                raise SlotFillError(
+                    f"CONTENT_GAMEPLAY_GUI_ONLY: {rid}: repeated GUI-only "
+                    "candidate for an executable gameplay step."
+                )
         if len(nodes) < context.get("minimum_entity_count", 0):
             raise SlotFillError(f"CONTENT_REQUIREMENT_UNIMPLEMENTED: {rid}")
         # Generic behavioral requirements may still have no concrete content.
