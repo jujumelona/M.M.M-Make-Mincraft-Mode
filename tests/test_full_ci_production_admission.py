@@ -41,10 +41,12 @@ def test_full_ci_triggers_on_the_complete_production_change_surface():
         "requirements-colab.txt",
         "download_resources.py",
     } <= changed
-    # Rapid follow-up patches must not erase the previous SHA's failed logs.
+    # Full CI coalesces superseded *pending* revisions by branch to avoid
+    # starving the newest commit; running jobs retain their failure evidence.
     concurrency = workflow["concurrency"]
     assert concurrency["cancel-in-progress"] == "false"
-    assert "github.sha" in concurrency["group"]
+    assert "github.ref" in concurrency["group"]
+    assert "github.sha" not in concurrency["group"]
 
 
 def test_real_production_e2e_is_an_unskippable_main_ci_dependency():
