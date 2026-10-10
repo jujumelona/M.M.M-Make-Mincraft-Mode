@@ -98,7 +98,7 @@ def compile_quality_evidence(contract: Mapping[str, Any], proposal_hash: str, *,
             'correctness': (('source-validation receipt', source), ('clean Gradle build receipt', clean_build), ('passing structured GameTest report', gametest)),
             'build': (('clean Gradle build receipt', clean_build), ('verified JAR receipt', jar)),
             'research': (('complete technology radar, ecosystem discovery, and official technical evidence', research),),
-            'runtime': (('Minecraft interactive runtime/playtest or live content GameTest receipt', runtime),),
+            'runtime': (('Minecraft runtime and interactive playtest receipts (or independent live content GameTest)', runtime),),
             'visual_3d': (('runtime screenshots, visual review, and asset integrity receipts', candidates.get('visual_3d')),),
         }
         for dimension_id in routes:
