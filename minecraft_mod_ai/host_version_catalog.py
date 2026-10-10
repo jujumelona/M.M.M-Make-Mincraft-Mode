@@ -34,6 +34,9 @@ def _parse_catalog(content: bytes):
     from .host_loot_catalog_migration import migrate_published_loot_authority
 
     value = migrate_published_loot_authority(value)
+    from .host_block_item_catalog_migration import migrate_published_block_item_authority
+
+    value = migrate_published_block_item_authority(value)
     bundles = tuple(ResolvedVersionContext.from_dict(bundle) for bundle in value["bundles"])
     return bundles, value["auto_context_id"]
 
