@@ -78,24 +78,15 @@ class _Adapter:
                 "trusted verifier PASS must terminate in the host without another model turn"
             )
         names = [item["function"]["name"] for item in request.tools]
-        assert names == ["apply_source_edit"]
+        # This model role may inspect diagnostics but must not author files.
+        assert names == ["java_diagnostics"]
         return GenerationResponse(
             tool_calls=(
                 ToolCall(
-                    id="mutate_1",
-                    name="apply_source_edit",
-                    arguments={
-                        "path": "src/main/java/Example.java",
-                        "operation": "create_file",
-                        "content": "public final class Example {}",
-                    },
-                    raw_arguments=json.dumps(
-                        {
-                            "path": "src/main/java/Example.java",
-                            "operation": "create_file",
-                            "content": "public final class Example {}",
-                        }
-                    ),
+                    id="inspect_1",
+                    name="java_diagnostics",
+                    arguments={},
+                    raw_arguments="{}",
                 ),
             )
         )
@@ -145,8 +136,5 @@ def test_verifier_pass_finalizes_without_repeating_verifier(monkeypatch) -> None
     payload = json.loads(result)
     assert "summary" in payload
     assert "passed generation-time host verification" in payload["summary"]
-    assert [name for _, name, _ in runtime.calls] == [
-        "apply_source_edit",
-        "java_diagnostics",
-    ]
+    assert [name for _, name, _ in runtime.calls] == ["java_diagnostics"]
     assert len(adapter.requests) == 1
