@@ -299,7 +299,13 @@ def _validate_internal_engine_preflight() -> None:
 
     try:
         validate_internal_package_integrity()
-    except InternalPackagePreflightError as exc:
+        # Validate the packaged prompts before the first local-model request.
+        # Previously a YAML rule parsed as a dict failed only after many calls.
+        from .task_template_catalog import RUNTIME_TEMPLATE_ROOT
+        from .template_contract_validation import validate_catalog_rule_types
+
+        validate_catalog_rule_types(RUNTIME_TEMPLATE_ROOT)
+    except (InternalPackagePreflightError, ValueError) as exc:
         raise SpecValidationError(
             f"MMM internal package preflight failed before execution: {exc}"
         ) from exc
