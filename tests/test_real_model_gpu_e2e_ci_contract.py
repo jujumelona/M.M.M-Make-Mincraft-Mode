@@ -95,11 +95,24 @@ def test_gpu_evidence_must_be_uploaded_even_when_e2e_fails():
             assert expected in paths
 
 
-def test_main_ci_cannot_pass_without_real_gpu_e2e():
-    workflow = _workflow(MAIN_WORKFLOW)
-    jobs = workflow["jobs"]
-    assert jobs["real-t4-model-production"]["uses"] == "./.github/workflows/real-model-colab-e2e.yml"
-    assert "real-t4-model-production" in jobs["ci-gate"]["needs"]
-    gate = jobs["ci-gate"]["steps"][0]
-    assert gate["env"]["REAL_T4_E2E"] == "${{ needs.real-t4-model-production.result }}"
-    assert 'test "$REAL_T4_E2E" = success' in gate["run"]
+def test_real_gpu_e2e_remains_standalone_without_blocking_generic_ci():
+    gpu = _workflow(GPU_WORKFLOW)
+    # A self-hosted T4 is not a generally available CI prerequisite.
+    assert "workflow_dispatch" in gpu["on"]
+    assert "push" in gpu["on"]
+    assert "workflow_call" in gpu["on"]
+    assert _job()["runs-on"] == ["self-hosted", "linux", "x64", "t4"]
+
+    generic = _workflow(MAIN_WORKFLOW)
+    jobs = generic["jobs"]
+    gate = jobs["ci-gate"]
+    assert "real-t4-model-production" not in jobs
+    assert "real-t4-model-production" not in gate["needs"]
+    step = gate["steps"][0]
+    assert "REAL_T4_E2E" not in step["env"]
+    assert "REAL_T4_E2E" not in step["run"]
+    # Keep reproducible CPU-side verification mandatory.
+    assert jobs["deterministic-production"]["uses"] == (
+        "./.github/workflows/deterministic-debug-full-e2e.yml"
+    )
+    assert "deterministic-production" in gate["needs"]
