@@ -46,6 +46,10 @@ jobs:
           tests/test_colab_debug_fixture_path.py
           tests/test_debug_mode_fixture_roundtrip.py
           tests/test_authored_reuse_identity_contract.py
+          tests/test_published_block_item_catalog.py
+          tests/test_modern_block_item_resources.py
+          tests/test_block_strength_lowering.py
+          tests/test_acceptance_trailing_newline_regression.py
       - name: Verify host capability preflight before model execution
         run: >-
           python -c
