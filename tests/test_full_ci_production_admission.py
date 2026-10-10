@@ -55,12 +55,16 @@ def test_real_production_e2e_is_an_unskippable_main_ci_dependency():
     assert "if" not in proof and "continue-on-error" not in proof
     gate = jobs["ci-gate"]
     needs = gate["needs"]
-    assert {"audit", "tests", "python313", "model-realistic-replay", "deterministic-production"} <= set(needs)
+    assert {"audit", "tests", "python313", "model-realistic-replay", "deterministic-production", "workflow-static-check"} <= set(needs)
     assert gate["if"] == "${{ always() }}"
     assert "continue-on-error" not in gate
+    assert "workflow-static-check" in jobs
+    assert jobs["workflow-static-check"]["steps"][-1]["uses"] == "docker://rhysd/actionlint:1.7.12"
     step = gate["steps"][0]
     assert step["env"]["PRODUCTION_PROOF"] == "${{ needs.deterministic-production.result }}"
     assert 'test "$PRODUCTION_PROOF" = success' in step["run"]
+    assert step["env"]["WORKFLOW_LINT"] == "${{ needs.workflow-static-check.result }}"
+    assert 'test "$WORKFLOW_LINT" = success' in step["run"]
 
 
 @pytest.mark.parametrize("rejected", ["skipped", "cancelled", "failure", "pending", ""])
@@ -73,6 +77,7 @@ def test_ci_gate_rejects_all_non_success_production_results(rejected):
         "PY313": "success",
         "MODEL_REPLAY": "success",
         "PRODUCTION_PROOF": rejected,
+        "WORKFLOW_LINT": "success",
     }
     result = subprocess.run(
         ["bash", "-e", "-o", "pipefail", "-c", gate["run"]],
