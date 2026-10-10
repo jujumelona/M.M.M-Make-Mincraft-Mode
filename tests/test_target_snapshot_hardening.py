@@ -117,8 +117,11 @@ def test_fast_mode_does_not_reduce_model_context_or_completion_limits(
             self.registry = Registry()
 
     class Planner:
-        def __init__(self, router):
+        def __init__(self, router, *, adapter=None, deterministic_module_kinds=None):
+            # Match the current planner contract without modifying model limits.
             self.router = router
+            self.adapter = adapter
+            self.deterministic_module_kinds = deterministic_module_kinds
 
     class Orchestrator:
         def __init__(self, **_kwargs):
