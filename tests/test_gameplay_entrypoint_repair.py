@@ -227,7 +227,7 @@ def test_atomic_mutation_must_not_execute_on_player_join(monkeypatch):
 
 def test_algorithm_steps_are_not_collapsed_into_one_model_action(monkeypatch):
     import json
-    from minecraft_mod_ai import typed_plan_authoring, fixed_template_generation
+    from minecraft_mod_ai import typed_plan_authoring
 
     sections = _sections("command:launch_ship")
     steps = [
