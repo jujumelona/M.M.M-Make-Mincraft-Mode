@@ -99,14 +99,16 @@ def test_blockbench_review_scopes_client_to_the_run_root(
             seen["workspace_root"] = workspace_root
 
         def call(self, operation: str, arguments: dict[str, Any]) -> dict[str, Any]:
-            if operation == "validate_uv":
-                return {"status": "PASS"}
             if operation == "render_preview":
                 preview = Path(arguments["output_path"])
                 preview.parent.mkdir(parents=True, exist_ok=True)
                 Image.new("RGBA", (16, 16), "blue").save(preview)
-                return {"status": "PASS"}
-            return {"status": "OK"}
+            payload = {"status": "PASS" if operation in {"validate_uv", "render_preview"} else "OK"}
+            return {
+                "schema_version": "mmm/blockbench-call-result-v1",
+                "operation": operation,
+                "result": {"isError": False, "structuredContent": payload},
+            }
 
         def close(self) -> None:
             seen["closed"] = True
