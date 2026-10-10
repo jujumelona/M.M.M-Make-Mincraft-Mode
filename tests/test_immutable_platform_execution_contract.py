@@ -81,6 +81,10 @@ def test_generator_persists_full_approval_bound_platform_receipt(monkeypatch, tm
                 kind=ContentKind.ITEM,
                 display_name_en="Probe Item",
                 display_name_ko="프로브 아이템",
+                # This fixture intentionally admits only the item backend.
+                # Do not implicitly request a recipe (ContentSpec defaults True)
+                # from a target that does not declare that capability.
+                recipe=False,
             ),
         ),
         platform=lock,
