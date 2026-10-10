@@ -77,7 +77,10 @@ def _project(tmp_path: Path) -> tuple[Path, Path]:
         ("assets/mmm_debug_crystal/items", "crystal_fragment.json", {"model": {"type": "minecraft:model"}}),
         ("assets/mmm_debug_crystal/blockstates", "crystal_block.json", {"variants": {}}),
         ("data/mmm_debug_crystal/recipe", "crystal_block_recipe.json", {
-            "type": "minecraft:crafting_shaped", "result": {"id": "mmm_debug_crystal:crystal_block"}}),
+            "type": "minecraft:crafting_shaped",
+            "pattern": ["FF", "FF"],
+            "key": {"F": "mmm_debug_crystal:crystal_fragment"},
+            "result": {"id": "mmm_debug_crystal:crystal_block", "count": 1}}),
     ):
         dest = resources / directory / name
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -98,6 +101,10 @@ def test_generated_content_gametest_uses_target_host_facts_and_real_recipe_resou
     assert "GameTest missing live item" in source
     assert "GameTest missing live block" in source
     assert "GameTest RecipeManager did not load actual recipe: mmm_debug_crystal:crystal_block_recipe" in source
+    assert "createInput.invoke(null, 2, 2, craftedInputs)" in source
+    assert "getMethod(\"matches\", inputClass" in source
+    assert "getMethod(\"assemble\", inputClass)" in source
+    assert "GameTest crafted item or count incorrect" in source
     assert 'getMethod("byKey", resourceKeyClass)' in source
     assert source.count("MMM_MANAGED_CONTENT_GAMETEST_V1 START") == 1
     # Re-installing must not silently append old assertions.
