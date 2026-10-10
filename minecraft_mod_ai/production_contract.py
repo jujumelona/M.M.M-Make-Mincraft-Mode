@@ -902,19 +902,16 @@ def _infer_dimensions(*, requested_prompt: str, game_design: Any, research_brief
         research_brief is not None
         or (
             isinstance(game_design, Mapping)
-            and any(isinstance(game_design.get(key), Mapping)
-                    for key in ('_technology_radar', '_ecosystem_discovery', '_technical_evidence'))
-        )
-        or _text_triggers_dimension(requested_prompt, 'research')
-        if 'research' in _DIMENSIONS and 'terms' in _DIMENSIONS['research']
-        else (
-            research_brief is not None
-            or (
-                isinstance(game_design, Mapping)
-                and any(isinstance(game_design.get(key), Mapping)
-                        for key in ('_technology_radar', '_ecosystem_discovery', '_technical_evidence'))
+            and any(
+                isinstance(game_design.get(key), Mapping)
+                for key in ('_technology_radar', '_ecosystem_discovery', '_technical_evidence')
             )
         )
+        or bool(re.search(
+            r'(?i)\\b(?:research|technology radar|prior art|license audit)\\b'
+            r'|연구|선행기술|라이선스 검증',
+            requested_prompt,
+        ))
     )
     if not research_bound:
         active.remove('research')
