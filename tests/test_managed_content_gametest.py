@@ -97,7 +97,8 @@ def test_generated_content_gametest_uses_target_host_facts_and_real_recipe_resou
     assert 'Class.forName("net.minecraft.core.registries.BuiltInRegistries")' in source
     assert "GameTest missing live item" in source
     assert "GameTest missing live block" in source
-    assert "recipe/crystal_block_recipe.json" in source
+    assert "GameTest RecipeManager did not load actual recipe: mmm_debug_crystal:crystal_block_recipe" in source
+    assert 'getMethod("byKey", resourceKeyClass)' in source
     assert source.count("MMM_MANAGED_CONTENT_GAMETEST_V1 START") == 1
     # Re-installing must not silently append old assertions.
     assert install_managed_content_gametest(root, approved)
