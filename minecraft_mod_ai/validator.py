@@ -581,6 +581,55 @@ class ProjectValidator:
             complete,
             findings,
         )
+        # Authored content modules are owned by the canonical artifact graph,
+        # not by spec.contents. Validate their client resources explicitly so
+        # a 26.2 JAR cannot be marked source-PASS with an invisible BlockItem.
+        from packaging.version import Version
+
+        graph_jobs = complete.game_design.get("_artifact_jobs")
+        if (
+            isinstance(graph_jobs, list)
+            and graph_jobs
+            and Version(str(spec.platform.minecraft_version)) >= Version("1.21.4")
+        ):
+            graph_owners = {
+                job.get("owner_module")
+                for job in graph_jobs
+                if isinstance(job, dict) and job.get("template_id")
+            }
+            for module in complete.modules:
+                if module.module_id not in graph_owners or module.kind not in {"item", "block"}:
+                    continue
+                content_id = module.module_id
+                item_path = (
+                    root / "src/main/resources/assets" / spec.mod_id
+                    / "items" / f"{content_id}.json"
+                )
+                checks += 1
+                if not _regular_file(item_path):
+                    findings.append(Finding(
+                        "CANONICAL_CLIENT_ITEM_MISSING", "error",
+                        self._rel(root, item_path),
+                        f"Canonical {module.kind} {content_id} lacks a 1.21.4+ client item model.",
+                    ))
+                    continue
+                item_model = self._load_json(item_path, findings, root)
+                expected = (
+                    f"{spec.mod_id}:block/{content_id}"
+                    if module.kind == "block"
+                    else f"{spec.mod_id}:item/{content_id}"
+                )
+                declaration = item_model.get("model")
+                if (
+                    not isinstance(declaration, dict)
+                    or declaration.get("type") != "minecraft:model"
+                    or declaration.get("model") != expected
+                ):
+                    findings.append(Finding(
+                        "CANONICAL_CLIENT_ITEM_INVALID", "error",
+                        self._rel(root, item_path),
+                        f"Canonical {module.kind} {content_id} must reference {expected}.",
+                    ))
         return checks
 
     def _validate_local_ai_sidecar_sources(
