@@ -53,6 +53,7 @@ jobs:
           tests/test_block_strength_lowering.py
           tests/test_acceptance_trailing_newline_regression.py
           tests/test_full_ci_production_admission.py
+          tests/test_real_model_gpu_e2e_ci_contract.py
           tests/test_runtime_pipeline_trigger_coverage.py
       - name: Verify host capability preflight before model execution
         run: >-
