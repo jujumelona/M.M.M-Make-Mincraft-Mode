@@ -1705,11 +1705,26 @@ def author_semantic_game_dispatch(
             "state_model.transitions", "state_model.updates",
         }
         mutation_required = state_only or coverage_ref == "algorithm.atomic_mutations"
-        schema_key = (mutation_required, state_only)
+        rule_events = allowed_events
+        if coverage_ref == "algorithm.atomic_mutations" and active_events is not None:
+            # A launch, purchase or upgrade can never execute only on login.
+            # The extra command is model-authored during integration repair,
+            # not a guessed lifecycle substitution made by the IR compiler.
+            rule_events = tuple(
+                event for event in active_events
+                if event not in {"player_join", "server_started"}
+            )
+            if not rule_events:
+                raise ValueError(
+                    "TYPED_GAMEPLAY_MUTATION_EVENT_UNBOUND: atomic gameplay "
+                    "has only bootstrap entry points; repair the authored "
+                    "integration entry_points before executable PlanIR authoring."
+                )
+        schema_key = (mutation_required, state_only, tuple(rule_events or ()))
         if schema_key not in schemas:
             schema = semantic_dispatch_schema(
                 state_types, capabilities,
-                allowed_events=allowed_events,
+                allowed_events=rule_events,
                 mutation_only=mutation_required,
                 state_only=state_only,
             )
@@ -1733,7 +1748,7 @@ def author_semantic_game_dispatch(
                 structured_sections,
                 (coverage_ref,),
             ),
-            "bound_trigger_events": list(allowed_events or _SEMANTIC_TRIGGER_EVENTS),
+            "bound_trigger_events": list(rule_events or _SEMANTIC_TRIGGER_EVENTS),
             "available_states": {
                 name: state_types[name]
                 for name in sorted(state_types)
