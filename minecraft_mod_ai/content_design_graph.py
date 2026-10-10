@@ -100,40 +100,6 @@ def _collision_safe_entity_id(
     raise SlotFillError(f"CONTENT_ENTITY_ID_EXHAUSTED: {entity_id}")
 
 
-def _lower_drop_relation(
-    edge: Mapping[str, object],
-    capabilities: Mapping[str, FactType],
-    facts: list[ImplementationFact],
-) -> ImplementationFact:
-    """Bind a drops edge to its registered source and concrete item target."""
-
-    source = str(edge["source_id"])
-    target = str(edge["target_id"])
-    source_type = capabilities.get(source)
-    if capabilities.get(target) != FactType.ITEM_EXISTS or source_type not in {
-        FactType.BLOCK_EXISTS, FactType.ENTITY_EXISTS,
-    }:
-        raise SlotFillError(f"CONTENT_RELATION_UNSUPPORTED: {edge}")
-    if any(
-        fact.fact_type in {FactType.BLOCK_DROP, FactType.ENTITY_LOOT}
-        and fact.subject == source
-        for fact in facts
-    ):
-        raise SlotFillError(f"CONTENT_DROP_CONFLICT: {source}")
-    return ImplementationFact(
-        fact_id=f"{source}.drop",
-        fact_type=(
-            FactType.BLOCK_DROP
-            if source_type == FactType.BLOCK_EXISTS
-            else FactType.ENTITY_LOOT
-        ),
-        subject=source,
-        object=target,
-        provenance=FactProvenance.DESIGN,
-        parent_requirement=str(edge["parent_requirement"]),
-    )
-
-
 def _native_resource_module_config(
     fact_type,
     normalized_inputs: Mapping[str, object],
@@ -271,6 +237,40 @@ from .content_design_contract import (
 )
 from .implementation_fact import FactProvenance, FactType, ImplementationFact
 from .task_template_runner import run_record_template
+
+
+def _lower_drop_relation(
+    edge: Mapping[str, object],
+    capabilities: Mapping[str, FactType],
+    facts: list[ImplementationFact],
+) -> ImplementationFact:
+    """Bind a drops edge to its registered source and concrete item target."""
+
+    source = str(edge["source_id"])
+    target = str(edge["target_id"])
+    source_type = capabilities.get(source)
+    if capabilities.get(target) != FactType.ITEM_EXISTS or source_type not in {
+        FactType.BLOCK_EXISTS, FactType.ENTITY_EXISTS,
+    }:
+        raise SlotFillError(f"CONTENT_RELATION_UNSUPPORTED: {edge}")
+    if any(
+        fact.fact_type in {FactType.BLOCK_DROP, FactType.ENTITY_LOOT}
+        and fact.subject == source
+        for fact in facts
+    ):
+        raise SlotFillError(f"CONTENT_DROP_CONFLICT: {source}")
+    return ImplementationFact(
+        fact_id=f"{source}.drop",
+        fact_type=(
+            FactType.BLOCK_DROP
+            if source_type == FactType.BLOCK_EXISTS
+            else FactType.ENTITY_LOOT
+        ),
+        subject=source,
+        object=target,
+        provenance=FactProvenance.DESIGN,
+        parent_requirement=str(edge["parent_requirement"]),
+    )
 
 
 def _strip_semantic_content_build_dependencies(
