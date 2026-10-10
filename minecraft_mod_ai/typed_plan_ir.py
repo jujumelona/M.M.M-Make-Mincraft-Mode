@@ -661,6 +661,112 @@ def typed_plan_runtime_mutations(
     return tuple(sorted(operations))
 
 
+
+def typed_plan_mutating_events(
+    plan: Mapping[str, Any],
+) -> dict[str, tuple[str, ...]]:
+    """Prove which bound runtime events can reach an actual gameplay mutation.
+
+    A non-bootstrap event registration is not proof that it executes a writer:
+    the generated logic_dispatch may mutate only for player_join. Evaluate
+    host-authored event equality guards using the literal event passed by the
+    wrapper. Unknown runtime conditions are explored on both branches.
+    """
+    from .typed_host_capabilities import typed_host_capability_contracts
+
+    mutating_caps = {
+        key for key, contract in typed_host_capability_contracts().items()
+        if contract.get("gameplay_mutation") is True
+    }
+    functions = {
+        str(row.get("id") or ""): row
+        for row in plan.get("functions", ())
+        if isinstance(row, Mapping) and row.get("id")
+    }
+
+    def tested_event(condition: Any, event: str) -> bool | None:
+        if not isinstance(condition, Mapping) or condition.get("op") != "binary":
+            return None
+        op = condition.get("operator")
+        if op not in {"==", "!="}:
+            return None
+        left, right = condition.get("left"), condition.get("right")
+        for variable, constant in ((left, right), (right, left)):
+            if (
+                isinstance(variable, Mapping)
+                and variable.get("op") == "ref"
+                and variable.get("name") == "event"
+                and isinstance(constant, Mapping)
+                and constant.get("op") == "literal"
+                and constant.get("type") == "string"
+            ):
+                equal = constant.get("value") == event
+                return equal if op == "==" else not equal
+        return None
+
+    result: dict[str, tuple[str, ...]] = {}
+    for binding in plan.get("event_bindings", ()):
+        if not isinstance(binding, Mapping):
+            continue
+        bound_event = str(binding.get("event") or "")
+        function_id = str(binding.get("function") or "")
+        if not bound_event or function_id not in functions:
+            continue
+        operations: set[str] = set()
+
+        def visit(node: Any, event: str, stack: frozenset[str]) -> None:
+            if isinstance(node, (list, tuple)):
+                for child in node:
+                    visit(child, event, stack)
+                return
+            if not isinstance(node, Mapping):
+                return
+            op = node.get("op")
+            if op == "if":
+                selected = tested_event(node.get("condition"), event)
+                if selected is True:
+                    visit(node.get("then", ()), event, stack)
+                elif selected is False:
+                    visit(node.get("else", ()), event, stack)
+                else:
+                    visit(node.get("condition"), event, stack)
+                    visit(node.get("then", ()), event, stack)
+                    visit(node.get("else", ()), event, stack)
+                return
+            if op == "state_set":
+                operations.add("state_set")
+            elif op == "capability":
+                cap_id = str(node.get("id") or "")
+                if cap_id in mutating_caps:
+                    operations.add("capability:" + cap_id)
+            elif op == "call":
+                called = str(node.get("function") or "")
+                callee = functions.get(called)
+                if callee is not None and called not in stack:
+                    callee_event = event
+                    params = callee.get("parameters", ())
+                    args = node.get("args", ())
+                    if (
+                        isinstance(params, (list, tuple)) and params
+                        and isinstance(params[0], Mapping)
+                        and params[0].get("name") == "event"
+                        and isinstance(args, (list, tuple)) and args
+                        and isinstance(args[0], Mapping)
+                        and args[0].get("op") == "literal"
+                        and args[0].get("type") == "string"
+                    ):
+                        callee_event = str(args[0].get("value") or "")
+                    visit(callee.get("body", ()), callee_event, stack | {called})
+            for child in node.values():
+                if op == "call" and child is node.get("function"):
+                    continue
+                visit(child, event, stack)
+
+        visit(functions[function_id].get("body", ()), bound_event, frozenset({function_id}))
+        result[bound_event] = tuple(sorted(set(result.get(bound_event, ())) | operations))
+    return result
+
+
 def typed_plan_capability_ids(plan: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(
         str(node.get("id") or "")
@@ -674,6 +780,7 @@ __all__ = [
     "typed_plan_capability_ids",
     "typed_plan_reachable_function_ids",
     "typed_plan_runtime_mutations",
+    "typed_plan_mutating_events",
     "typed_plan_uses_state",
     "validate_typed_plan_ir",
 ]
