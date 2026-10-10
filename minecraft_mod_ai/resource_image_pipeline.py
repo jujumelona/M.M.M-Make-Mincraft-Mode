@@ -15,6 +15,31 @@ def _pixels(image: Any) -> Any:
     return reader() if callable(reader) else image.getdata()
 
 
+def assert_generated_gameplay_diversity(image: Any, resource_path: str) -> None:
+    """Reject flat gameplay image candidates, including cached production PNGs.
+
+    This is only a basic visual usability floor, not a semantic quality score.
+    GUI, model UV and other intentional flat-color resources are evaluated by
+    their separate canonical contracts.
+    """
+    path = str(resource_path).replace("\\", "/")
+    if not (
+        "/textures/block/" in "/" + path
+        or "/textures/item/" in "/" + path
+    ):
+        return
+    visible_colors: set[tuple[int, int, int]] = set()
+    for red, green, blue, alpha in _pixels(image.convert("RGBA")):
+        if alpha == 255:
+            visible_colors.add((red, green, blue))
+            if len(visible_colors) >= 2:
+                return
+    raise ValueError(
+        "VISUAL_TEXTURE_DEGENERATE: generated gameplay texture is "
+        "a single flat color; regenerate from another source candidate."
+    )
+
+
 def _contract(texture: Mapping[str, Any]) -> Mapping[str, Any]:
     contract = texture.get("resource_contract")
     if (
@@ -363,26 +388,8 @@ def validate_texture(
             raise ValueError(
                 "Sprite requires transparent alpha outside its silhouette."
             )
-        # A structurally valid PNG can still be an unusable generated asset.
-        # This must run for both candidate selection and final production checks,
-        # regardless of whether the image came from Debug or Full mode.
-        resource_path = str(contract["resource"]["path"]).replace("\\", "/")
-        gameplay_texture = (
-            "/textures/block/" in "/" + resource_path
-            or "/textures/item/" in "/" + resource_path
-        )
-        if gameplay_texture and not rendering["uv_schema"] and not contract["gui"]:
-            visible_colors: set[tuple[int, int, int]] = set()
-            for red, green, blue, alpha in _pixels(raw):
-                if alpha == 255:
-                    visible_colors.add((red, green, blue))
-                    if len(visible_colors) >= 2:
-                        break
-            if len(visible_colors) < 2:
-                raise ValueError(
-                    "VISUAL_TEXTURE_DEGENERATE: generated gameplay texture is "
-                    "a single flat color; regenerate from another source candidate."
-                )
+        if not rendering["uv_schema"] and not contract["gui"]:
+            assert_generated_gameplay_diversity(raw, contract["resource"]["path"])
         regions = generation_regions(contract)
         for region in regions:
             x, y, width, height = region["box"]
