@@ -94,3 +94,26 @@ def test_gui_does_not_block_proven_runtime_gameplay_handler(monkeypatch) -> None
         (ProductionModule("ship_screen", "gui", {}),),
         {"capabilities": []},
     )
+
+
+
+def test_gameplay_regeneration_schema_excludes_gui() -> None:
+    from minecraft_mod_ai.design_generation_schema import (
+        context_bound_record_schema,
+    )
+    from minecraft_mod_ai.content_design_contract import PRIMARY_CONTENT_KINDS
+    from minecraft_mod_ai.task_template_catalog import load_template
+
+    context = {
+        "requirement": "fabricate a physical ship hull component",
+        "allowed_content_kinds": [
+            kind for kind in PRIMARY_CONTENT_KINDS if kind != "gui"
+        ],
+    }
+    template = load_template("design/content_entity")
+    schema = context_bound_record_schema(
+        "design/content_entity", template["record_schema"], context,
+    )
+    assert "gui" not in schema["properties"]["kind"]["enum"]
+    assert "item" in schema["properties"]["kind"]["enum"]
+    assert "block" in schema["properties"]["kind"]["enum"]
