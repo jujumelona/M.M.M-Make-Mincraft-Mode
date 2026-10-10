@@ -563,10 +563,10 @@ def compile_content_graph(
                     f"CONTENT_GAMEPLAY_PASSIVE_ONLY: {rid}: no executable "
                     "interaction owner for the atomic mutation."
                 )
-            if not nodes:
-                # Preserve the original passive content as resource identities,
-                # but it must not be counted as a gameplay implementation.
-                nodes = original_nodes
+            # A newly bound behavior supplements, rather than replaces, the
+            # previously authored passive resource identities. Do not erase
+            # items or GUI visuals when repairing missing gameplay logic.
+            nodes = [*original_nodes, *nodes]
         if len(nodes) < context.get("minimum_entity_count", 0):
             raise SlotFillError(f"CONTENT_REQUIREMENT_UNIMPLEMENTED: {rid}")
         # Generic behavioral requirements may still have no concrete content.
