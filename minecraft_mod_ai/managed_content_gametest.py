@@ -38,8 +38,6 @@ def _eligible_modules(approved: Any) -> tuple[tuple[str, str], ...]:
     if (
         platform is None
         or str(getattr(platform, "loader", "")).casefold() != "fabric"
-        or str(getattr(platform, "mappings_kind", "")).casefold()
-           not in {"mojang", "official", "official_mojang"}
         or not re.fullmatch(r"2[6-9]\.\d+(?:\.\d+)?", str(getattr(platform, "minecraft_version", "")))
     ):
         return ()
@@ -102,32 +100,84 @@ def _manifest(approved: Any, root: Path) -> dict[str, Any] | None:
                 return None
         except (OSError, UnicodeError, json.JSONDecodeError):
             return None
-    return {"mod_id": mod_id, "package": pkg, "content": content, "recipes": recipes}
+    try:
+        facts = json.loads(spec.platform.host_facts_json)
+        symbols = facts["api_symbols"]
+        registry_owners = {
+            "item": symbols["builtin_item_registry"]["owner"],
+            "block": symbols["builtin_block_registry"]["owner"],
+        }
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return None
+    if not all(isinstance(value, str) and value.startswith("net.minecraft.") for value in registry_owners.values()):
+        return None
+    return {"mod_id": mod_id, "package": pkg, "content": content, "recipes": recipes,
+            "registries": registry_owners}
 
 
 def _java_assertions(manifest: Mapping[str, Any]) -> str:
+    """Emit executable Minecraft-side runtime checks, using locked host owners.
+
+    The approved host facts (not guessed Mojang/Yarn import paths) identify
+    the registry owner. Java reflection is limited to the public runtime
+    registry interface and fails the GameTest on any incompatible target.
+    """
     mod_id = str(manifest["mod_id"])
-    lines = [f"        {_START}"]
+    lines = [f"        {_START}", "        try {"]
     for name, kind in manifest["content"]:
         registry = "ITEM" if kind == "item" else "BLOCK"
-        name = str(name)
+        owner = str(manifest["registries"][kind])
         lines.extend((
-            "        if (!net.minecraft.core.registries.BuiltInRegistries."
-            + registry + ".containsKey("
-            + "net.minecraft.resources.ResourceLocation.fromNamespaceAndPath("
-            + f'"{mod_id}", "{name}"))) {{',
-            f'            throw new AssertionError("GameTest missing live {kind} registry entry: {mod_id}:{name}");',
-            "        }",
+            "            {",
+            "                Object registry = Class.forName("
+            + f'"{owner}").getField("{registry}").get(null);',
+            "                if (!(registry instanceof Iterable<?>)) {",
+            f'                    throw new AssertionError("Runtime {registry} registry is not iterable");',
+            "                }",
+            "                boolean present = false;",
+            "                for (Object entry : (Iterable<?>) registry) {",
+            "                    for (java.lang.reflect.Method getter : registry.getClass().getMethods()) {",
+            "                        if (getter.getParameterCount() != 1",
+            '                            || !(getter.getName().equals("getKey") || getter.getName().equals("getId"))) continue;',
+            "                        try {",
+            "                            Object key = getter.invoke(registry, entry);",
+            f'                            if ("{mod_id}:{name}".equals(String.valueOf(key))) present = true;',
+            "                        } catch (ReflectiveOperationException | IllegalArgumentException ignored) {",
+            "                            // This overload cannot address registered entries.",
+            "                        }",
+            "                        if (present) break;",
+            "                    }",
+            "                    if (present) break;",
+            "                }",
+            f'                if (!present) throw new AssertionError("GameTest missing live {kind}: {mod_id}:{name}");',
+            "            }",
         ))
-    for name in manifest["recipes"]:
+    if manifest["recipes"]:
         lines.extend((
-            "        if (context.getLevel().getServer().getResourceManager().getResource("
-            + "net.minecraft.resources.ResourceLocation.fromNamespaceAndPath("
-            + f'"{mod_id}", "recipe/{name}.json")).isEmpty()) {{',
-            f'            throw new AssertionError("GameTest missing live server recipe resource: {mod_id}:{name}");',
-            "        }",
+            "            {",
+            '                Object level = context.getClass().getMethod("getLevel").invoke(context);',
+            '                Object server = level.getClass().getMethod("getServer").invoke(level);',
+            '                Object resources = server.getClass().getMethod("getResourceManager").invoke(server);',
+            '                Class<?> keyClass = Class.forName("net.minecraft.resources.ResourceLocation");',
+            '                java.lang.reflect.Method keyFactory = keyClass.getMethod("fromNamespaceAndPath", String.class, String.class);',
         ))
-    lines.append(f"        {_END}")
+        for name in manifest["recipes"]:
+            lines.extend((
+                "                {",
+                f'                    Object key = keyFactory.invoke(null, "{mod_id}", "recipe/{name}.json");',
+                '                    Object resource = resources.getClass().getMethod("getResource", keyClass).invoke(resources, key);',
+                "                    if (!(resource instanceof java.util.Optional<?> optional) || optional.isEmpty()) {",
+                f'                        throw new AssertionError("GameTest server has no loaded recipe resource: {mod_id}:{name}");',
+                "                    }",
+                "                }",
+            ))
+        lines.append("            }")
+    lines.extend((
+        "        } catch (ReflectiveOperationException | ClassCastException error) {",
+        '            throw new AssertionError("GameTest target runtime API is incompatible", error);',
+        "        }",
+        f"        {_END}",
+    ))
     return "\n".join(lines)
 
 
