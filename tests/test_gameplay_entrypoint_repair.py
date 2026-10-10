@@ -36,7 +36,19 @@ def test_repair_adds_explicit_gameplay_command_without_losing_join(monkeypatch):
 
     captured = []
 
-    def fake_model(_router, _role, messages, *, response_schema, **_kwargs):
+    def fake_model(_router, _role, messages, *, response_schema, **kwargs):
+        from minecraft_mod_ai.model_output_atomicity_contract import (
+            structured_output_token_ceiling,
+        )
+        # Real production budget proof must execute here. The previous tests
+        # never covered the unbounded inherited boundary/owner fields.
+        assert all(
+            response_schema["properties"][field].get("maxLength")
+            for field in ("boundary", "owner", "trigger")
+        )
+        assert kwargs["output_token_ceiling"] == structured_output_token_ceiling(
+            response_schema,
+        )
         captured.append((messages, response_schema))
         assert response_schema["properties"]["trigger"]["pattern"].startswith("^command:")
         return {
