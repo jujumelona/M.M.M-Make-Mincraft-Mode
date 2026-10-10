@@ -157,3 +157,27 @@ def test_wrapped_valid_model_json_still_recovers() -> None:
         router, "planner", MESSAGES,
         response_schema=SCHEMA, enable_tools=False,
     ) == {"answer": "accepted"}
+
+
+def test_wrapped_valid_nested_json_is_checked_as_one_root() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "payload": {
+                "type": "object",
+                "properties": {"answer": {"type": "string", "maxLength": 64}},
+                "required": ["answer"],
+                "additionalProperties": False,
+            }
+        },
+        "required": ["payload"],
+        "additionalProperties": False,
+    }
+    class NestedRouter:
+        def generate_text(self, *_args, **_kwargs):
+            return 'preface\\n{"payload":{"answer":"valid"}}'
+
+    assert generate_fixed_template_value(
+        NestedRouter(), "planner", MESSAGES,
+        response_schema=schema, enable_tools=False,
+    ) == {"payload": {"answer": "valid"}}
