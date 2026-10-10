@@ -23,6 +23,7 @@ _BLOCK_ITEM_MODEL = "minecraft/resource/item/client_block_item"
 def migrate_published_block_item_authority(catalog: dict) -> dict:
     """Attach the registered modern BlockItem model to exact HOST block bindings."""
     from .task_template_catalog import load_template
+    from ._version_artifact_rules_core import ARTIFACT_SCHEMAS
 
     template_hash = "sha256:" + sha256(
         _encode(load_template(_BLOCK_ITEM_MODEL)).encode("utf-8")
@@ -52,7 +53,12 @@ def migrate_published_block_item_authority(catalog: dict) -> dict:
 
         bindings = facts.get("leaf_bindings")
         rules = facts.get("artifact_rules")
-        if not isinstance(bindings, dict) or not isinstance(rules, dict):
+        schemas = facts.get("schemas")
+        if (
+            not isinstance(bindings, dict)
+            or not isinstance(rules, dict)
+            or not isinstance(schemas, dict)
+        ):
             raise ValueError("HOST_BLOCK_ITEM_CATALOG_INVALID_SHAPE")
         # Allow small unrelated HOST fixtures with no block-model scope.
         if _BLOCK_LEAF not in bindings and _BLOCK_ITEM_MODEL not in rules:
@@ -71,12 +77,28 @@ def migrate_published_block_item_authority(catalog: dict) -> dict:
         ):
             raise ValueError("HOST_BLOCK_ITEM_BINDING_UNRECOGNIZED:" + str(version))
         extras = impl.get("extra_templates", [])
-        if extras == [_BLOCK_ITEM_MODEL]:
+        if extras not in ([], None, [_BLOCK_ITEM_MODEL]):
+            raise ValueError("HOST_BLOCK_ITEM_BINDING_UNRECOGNIZED:" + str(version))
+
+        # The previous migration only attached the template to the block-model
+        # leaf. That admitted job then failed during real rendering because the
+        # immutable published HOST snapshot had no JSON output schema for it.
+        # Migrate both required contracts atomically, without accepting an
+        # unknown or weakened schema as compatible.
+        expected_schema = ARTIFACT_SCHEMAS[_BLOCK_ITEM_MODEL]
+        existing_schema = schemas.get(_BLOCK_ITEM_MODEL)
+        if existing_schema is not None and existing_schema != expected_schema:
+            raise ValueError("HOST_BLOCK_ITEM_SCHEMA_UNRECOGNIZED:" + str(version))
+        missing_schema = existing_schema is None
+        missing_binding = extras != [_BLOCK_ITEM_MODEL]
+        if not missing_schema and not missing_binding:
             remap[old_id] = old_id
             continue
-        if extras not in ([], None):
-            raise ValueError("HOST_BLOCK_ITEM_BINDING_UNRECOGNIZED:" + str(version))
-        impl["extra_templates"] = [_BLOCK_ITEM_MODEL]
+
+        if missing_schema:
+            schemas[_BLOCK_ITEM_MODEL] = deepcopy(expected_schema)
+        if missing_binding:
+            impl["extra_templates"] = [_BLOCK_ITEM_MODEL]
         snapshot = {
             "target": target,
             "host_facts": facts,
