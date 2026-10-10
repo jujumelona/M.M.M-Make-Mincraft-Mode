@@ -21,6 +21,43 @@ from .task_template_catalog import load_template
 generate_assets._mmm_adaptive_image_gpu_session = True  # type: ignore[attr-defined]
 
 
+def _blockbench_tool_payload(call: dict[str, Any], operation: str) -> dict[str, Any]:
+    """Unwrap a reviewed MCP tools/call response; never self-certify success."""
+    if (
+        not isinstance(call, dict)
+        or call.get("schema_version") != "mmm/blockbench-call-result-v1"
+        or call.get("operation") != operation
+        or not isinstance(call.get("result"), dict)
+    ):
+        raise CompleteProductionError(f"Blockbench {operation} returned an invalid MCP receipt.")
+    result = call["result"]
+    if result.get("isError") is True:
+        raise CompleteProductionError(f"Blockbench {operation} tool returned isError=true.")
+    structured = result.get("structuredContent")
+    if isinstance(structured, dict):
+        return structured
+    content = result.get("content")
+    if isinstance(content, list):
+        parsed: list[dict[str, Any]] = []
+        for item in content:
+            if not isinstance(item, dict) or item.get("type") != "text":
+                continue
+            value = item.get("text")
+            if not isinstance(value, str):
+                continue
+            try:
+                decoded = json.loads(value)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(decoded, dict):
+                parsed.append(decoded)
+        if len(parsed) == 1:
+            return parsed[0]
+        if len(parsed) > 1:
+            raise CompleteProductionError(f"Blockbench {operation} returned ambiguous tool payloads.")
+    return result
+
+
 def blockbench_review(
     gecko_receipt: dict[str, Any], run_root: Path
 ) -> dict[str, Any]:
@@ -39,24 +76,28 @@ def blockbench_review(
     preview = run_root / "blockbench-previews" / (Path(geo).stem + ".png")
     preview.parent.mkdir(parents=True, exist_ok=True)
     client = BlockbenchMCPClient(workspace_root=run_root)
+    project_open = False
     try:
-        client.call("open_project", {"path": geo})
-        uv = client.call("validate_uv", {})
-        render = client.call(
-            "render_preview", {"output_path": str(preview)}
+        _blockbench_tool_payload(client.call("open_project", {"path": geo}), "open_project")
+        project_open = True
+        uv = _blockbench_tool_payload(client.call("validate_uv", {}), "validate_uv")
+        if uv.get("status") not in {"PASS", "OK"}:
+            raise CompleteProductionError("Blockbench UV validation did not return PASS/OK.")
+        render = _blockbench_tool_payload(
+            client.call("render_preview", {"output_path": str(preview)}), "render_preview"
         )
-        client.call("close_project", {})
     finally:
-        client.close()
-    if not isinstance(uv, dict) or uv.get("status") not in {"PASS", "OK"}:
-        raise CompleteProductionError(
-            "Blockbench UV validation did not return a passing receipt."
-        )
+        try:
+            if project_open:
+                _blockbench_tool_payload(client.call("close_project", {}), "close_project")
+        finally:
+            client.close()
     if not preview.is_file() or preview.is_symlink():
-        raise CompleteProductionError(
-            "Blockbench did not produce a regular preview image."
-        )
-    preview_sha256 = "sha256:" + hashlib.sha256(preview.read_bytes()).hexdigest()
+        raise CompleteProductionError("Blockbench did not produce a regular preview image.")
+    preview_bytes = preview.read_bytes()
+    if not preview_bytes.startswith(b"\\x89PNG\\r\\n\\x1a\\n"):
+        raise CompleteProductionError("Blockbench preview is not a valid PNG artifact.")
+    preview_sha256 = "sha256:" + hashlib.sha256(preview_bytes).hexdigest()
     return {
         "entity": gecko_receipt["entity_id"],
         "uv": uv,
