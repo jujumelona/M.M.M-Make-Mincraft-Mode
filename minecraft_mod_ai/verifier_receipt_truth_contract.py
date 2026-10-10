@@ -198,7 +198,7 @@ def _package_evidence(node_id: str, receipt: Mapping[str, Any]) -> dict[str, Any
             "status": "PASS",
             "build_bundle_zip": bundle,
             "release_ready": release_ready,
-            "unresolved_gates": tuple(unresolved),
+            "unresolved_gates": list(unresolved),
         }
     if node_id != "package-release":
         raise VerifierReceiptTruthError(
@@ -293,9 +293,15 @@ def _assert_reusable(node_id: str, expected: Mapping[str, Any], existing: Mappin
         "verifier_version_hash",
         "verifier_config_hash",
     )
-    if any(existing.get(key) != expected.get(key) for key in required):
+    # Compare the complete evidence, not only its shared fingerprints.
+    # Otherwise changing a receipt's artifact path, gate decision, check count,
+    # or JAR identity could leave a prior verifier signature attached to new
+    # contents and pass reuse validation.
+    if any(existing.get(key) != expected.get(key) for key in required) or (
+        _canonical_hash(dict(existing)) != _canonical_hash(dict(expected))
+    ):
         raise VerifierReceiptTruthError(
-            f"VERIFIER_RECEIPT_STALE: work node {node_id!r} verifier identity, version, configuration, or inputs changed."
+            f"VERIFIER_RECEIPT_STALE: work node {node_id!r} verifier identity, version, configuration, inputs, or attested facts changed."
         )
 
 
