@@ -3768,13 +3768,12 @@ class CompleteProductionOrchestrator:
             ):
                 continue
             name = str(command.get('name') or '')
-            if name in {'build', 'clean_build'}:
-                return True
-            if name != 'incremental_build':
+            if name not in {'build', 'clean_build', 'incremental_build'}:
                 continue
             argv = command.get('command')
             if not isinstance(argv, (list, tuple)):
                 continue
+            # A passing label does not prove the Gradle build task ran.
             if any(str(argument) == 'build' for argument in argv):
                 return True
         return False
