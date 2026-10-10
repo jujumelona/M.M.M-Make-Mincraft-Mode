@@ -365,6 +365,23 @@ def _assert_mimo_server_compatible(binary: str, config: Any) -> None:
             f"got {reported!r}. Reinstall the MMM native llama-server."
         )
 
+def _mimo_template_args(config: Any) -> list[str]:
+    """Resolve the packaged MiMo-specific Jinja template, not Qwen XML."""
+    extra = getattr(config, "extra", {})
+    if not isinstance(extra, dict) or str(extra.get("runtime_contract", "")).casefold() != "mimo":
+        return []
+    expected_name = "mimo_v2_6.jinja"
+    if extra.get("chat_template_file") != expected_name:
+        raise RuntimeError("MiMo requires its verified native chat template")
+    template = Path(__file__).resolve().parent / "templates" / expected_name
+    if template.is_symlink() or not template.is_file():
+        raise RuntimeError(f"MiMo Jinja template missing or unsafe: {template}")
+    source = template.read_text(encoding="utf-8")
+    if "<function=" in source or "<parameter=" in source or "<think>" not in source:
+        raise RuntimeError("MiMo native Jinja template has an incompatible parser signature")
+    return ["--chat-template-file", str(template)]
+
+
 def _base_args(binary: str, model_path: str, config: Any, port: int) -> list[str]:
     _assert_mimo_server_compatible(binary, config)
     parallel = _env_optional_int("MMM_LLAMA_PARALLEL")
@@ -410,6 +427,7 @@ def _base_args(binary: str, model_path: str, config: Any, port: int) -> list[str
     from .llama_lora_runtime import lora_launch_args
 
     args.extend(lora_launch_args(config))
+    args.extend(_mimo_template_args(config))
     if context is not None:
         args.extend(("--ctx-size", str(context)))
     if batch is not None:

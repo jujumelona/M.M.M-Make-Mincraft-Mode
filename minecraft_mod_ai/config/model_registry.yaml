@@ -98,6 +98,7 @@ _mimo26_9b: &mimo26_9b
   gguf_filename: MiMo-V2.6-Distill-Qwen-9B-Q4_K_M.gguf
   mmproj_filename: mmproj-MiMo-V2.6-Distill-Qwen-9B-f16.gguf
   runtime_contract: mimo
+  chat_template_file: mimo_v2_6.jinja
   supports_mtp: false
   agent_thinking: true
   dynamic_output_budget: true

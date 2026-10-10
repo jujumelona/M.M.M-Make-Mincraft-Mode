@@ -94,3 +94,29 @@ def test_mimo_old_server_fails_closed(monkeypatch) -> None:
         _assert_mimo_server_compatible("llama-server", config)
     monkeypatch.setattr(llama_server_autotune, "_server_version", lambda _: "version: 11429 (new)")
     _assert_mimo_server_compatible("llama-server", config)
+
+def test_mimo_uses_packaged_chat_template_in_real_server_args(monkeypatch) -> None:
+    from pathlib import Path
+    from minecraft_mod_ai import llama_server_autotune as runtime
+
+    config = ModelRegistry().role("t4_local", "planner")
+    monkeypatch.setattr(runtime, "_server_version", lambda _: "version: 11429 (test)")
+    args = runtime._base_args("llama-server", "/tmp/mimo.gguf", config, 8910)
+    assert "--jinja" in args
+    assert "--chat-template-file" in args
+    template = Path(args[args.index("--chat-template-file") + 1])
+    text = template.read_text(encoding="utf-8")
+    assert template.name == "mimo_v2_6.jinja"
+    assert "<function=" not in text
+    assert "<parameter=" not in text
+    assert "'<func' ~ 'tion='" in text
+    assert "<think>" in text
+    assert "--spec-draft-model" not in args
+
+
+def test_qwen38_does_not_use_mimo_template(monkeypatch) -> None:
+    from minecraft_mod_ai import llama_server_autotune as runtime
+
+    config = ModelRegistry().role("Qwen3.8-27B_18GB", "planner")
+    args = runtime._base_args("llama-server", "/tmp/qwen.gguf", config, 8911)
+    assert "--chat-template-file" not in args
