@@ -192,6 +192,84 @@ def _verified_donor_license_notice(
     return "src/main/resources/META-INF/mmm-third-party/" + filename, license_text
 
 
+def audit_authored_source_reuse(
+    reuse_plan: Mapping[str, Any],
+    *,
+    installed_donor_count: int | None = None,
+) -> dict[str, Any]:
+    """Distinguish search, verified reuse and fresh code in BOTH run modes.
+
+    An inspected repository or a successful Gradle build does not prove that
+    donor code was reused. Fresh selection is permitted, but must remain
+    explicitly visible as an independent implementation obligation.
+    """
+    if reuse_plan.get("schema_version") != "mmm/grounded-repository-reuse-plan-v2":
+        raise ValueError("SOURCE_REUSE_AUDIT_SCHEMA_INVALID")
+    graph = reuse_plan.get("capability_graph")
+    nodes = graph.get("nodes") if isinstance(graph, Mapping) else None
+    decisions = reuse_plan.get("capabilities")
+    if not isinstance(nodes, list) or not isinstance(decisions, list):
+        raise ValueError("SOURCE_REUSE_AUDIT_GRAPH_INVALID")
+    intended = [str(node) for node in nodes]
+    seen: set[str] = set()
+    verified: list[str] = []
+    fresh: list[str] = []
+    for row in decisions:
+        if not isinstance(row, Mapping):
+            raise ValueError("SOURCE_REUSE_AUDIT_DECISION_INVALID")
+        capability = str(row.get("capability") or "")
+        if capability not in intended or capability in seen:
+            raise ValueError("SOURCE_REUSE_AUDIT_CAPABILITY_MISMATCH")
+        seen.add(capability)
+        mode = row.get("mode")
+        if mode == "fresh":
+            if row.get("source_id"):
+                raise ValueError("SOURCE_REUSE_AUDIT_FRESH_HAS_DONOR")
+            fresh.append(capability)
+        elif mode == "source_transplant":
+            proof = row.get("proof_receipt")
+            if (
+                not isinstance(proof, Mapping)
+                or not proof.get("compile_passed")
+                or not str(row.get("source_id") or "").startswith("host-donor:")
+            ):
+                raise ValueError("SOURCE_REUSE_AUDIT_UNVERIFIED_TRANSPLANT")
+            verified.append(capability)
+        else:
+            raise ValueError("SOURCE_REUSE_AUDIT_MODE_INVALID")
+    if len(seen) != len(intended):
+        raise ValueError("SOURCE_REUSE_AUDIT_UNCOVERED_CAPABILITIES")
+    # One selected donor may cover several capabilities. Materialization
+    # operates on selected rows, so validate that count exactly.
+    if installed_donor_count is not None and installed_donor_count != len(verified):
+        raise ValueError("SOURCE_REUSE_AUDIT_DONOR_NOT_INSTALLED")
+    inspections = reuse_plan.get("inspection_receipts", ())
+    proofs = reuse_plan.get("proof_receipts", ())
+    return {
+        "schema_version": "mmm/authored-source-reuse-audit-v1",
+        "status": (
+            "VERIFIED_REUSE" if verified and not fresh
+            else "MIXED_REUSE_AND_FRESH" if verified
+            else "FRESH_IMPLEMENTATION_REQUIRED"
+        ),
+        "capability_count": len(intended),
+        "verified_transplant_count": len(verified),
+        "fresh_implementation_count": len(fresh),
+        "verified_transplant_capabilities": verified,
+        "fresh_implementation_capabilities": fresh,
+        "inspection_failure_count": sum(
+            isinstance(row, Mapping) and row.get("status") in {"inspection_error", "inspection_rejected"}
+            for row in inspections if isinstance(inspections, (list, tuple))
+        ),
+        "proof_failure_count": sum(
+            isinstance(row, Mapping) and row.get("status") in {"proof_error", "rejected"}
+            for row in proofs if isinstance(proofs, (list, tuple))
+        ),
+        "installed_donor_count": installed_donor_count,
+        "fresh_requires_independent_production_verification": bool(fresh),
+    }
+
+
 def materialize_verified_authored_sources(
     project_root: str,
     reuse_plan: Mapping[str, Any],
@@ -332,4 +410,5 @@ __all__ = [
     "resolve_authored_source_reuse",
     "verified_reuse_context",
     "materialize_verified_authored_sources",
+    "audit_authored_source_reuse",
 ]
