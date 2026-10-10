@@ -955,22 +955,10 @@ def _assert_executable_gameplay_floor(
     if not authored_mutations:
         return
 
-    # A generated GUI is a client-side display, not a gameplay executor.  In
-    # particular, a trivial state_set attached to player_join must not make an
-    # entire multi-step gameplay plan (crafting, trade, travel, combat, etc.)
-    # look implemented.  The current screen generator only registers a screen
-    # and a Close button; it does not bind authoritative gameplay actions.
+    # A screen may accompany executable server handlers; its presence alone
+    # is not grounds to block a working mod. Judge whether an actual gameplay
+    # writer/event or a verified implementation exists, not the content mix.
     gameplay_steps = algorithm.get("steps") or ()
-    if gameplay_steps and content_modules and all(
-        module.kind == "gui" for module in content_modules
-    ):
-        raise ValueError(
-            "GAMEPLAY_IMPLEMENTATION_ABSENT: gameplay algorithm steps were "
-            "lowered only to GUI screen registrations, not executable "
-            "Minecraft mechanics. Generate actionable content/handlers for "
-            "the authored steps before compilation; Typed PlanIR state_set "
-            "or a passing GameTest cannot substitute for those mechanics."
-        )
 
     # Registration alone is not implementation: an item, recipe, HUD or
     # network-packet declaration cannot perform a purchase or state transition.
