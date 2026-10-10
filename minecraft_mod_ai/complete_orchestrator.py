@@ -220,6 +220,61 @@ def _require_authored_quality_before_generation(
         )
 
 
+def _quality_execution_preflight_gaps(
+    approved: CompleteProposal,
+    options: CompleteExecutionOptions,
+) -> dict[str, str]:
+    """Detect known impossible v2 quality receipts before expensive generation.
+
+    This is diagnostic only: no receipt is synthesized and the quality evaluator
+    remains authoritative. A user can intentionally build an unverified JAR.
+    """
+    contract = approved.game_design.get('_production_contract')
+    if options.source_only or not isinstance(contract, dict):
+        return {}
+    dims = {
+        str(item.get('dimension_id'))
+        for item in contract.get('quality_dimension_catalog', ())
+        if isinstance(item, dict)
+    }
+    gaps: dict[str, str] = {}
+    if 'research' in dims:
+        from .quality_evidence import _research_evidence
+        if _research_evidence(approved.game_design) is None:
+            gaps['research'] = (
+                'No complete, independently checked technology radar, ecosystem '
+                'discovery, and official technical evidence bound to this proposal.'
+            )
+    if 'runtime' in dims:
+        missing = [
+            name for name, enabled in (
+                ('run_runtime', options.run_runtime),
+                ('run_mineflayer', options.run_mineflayer),
+                ('server_launcher', bool(options.server_launcher)),
+                ('playtest_actions', bool(options.playtest_actions)),
+            ) if not enabled
+        ]
+        if missing:
+            gaps['runtime'] = 'Required Minecraft runtime/playtest inputs disabled or absent: ' + ', '.join(missing)
+    if 'visual_3d' in dims:
+        missing = [
+            name for name, enabled in (
+                ('run_runtime', options.run_runtime),
+                ('run_visual_review', options.run_visual_review),
+                ('screenshot_paths', bool(options.screenshot_paths)),
+            ) if not enabled
+        ]
+        if missing:
+            gaps['visual_3d'] = 'Required runtime visual review inputs disabled or absent: ' + ', '.join(missing)
+    if 'accessibility' in dims:
+        gaps['accessibility'] = (
+            'An independent mmm/accessibility-validation-v1 receipt must '
+            'cover every declared accessibility/localization path; Gradle/GameTest '
+            'alone are not accessibility verification.'
+        )
+    return gaps
+
+
 def _debug_fixture_source_contract(
     approved: CompleteProposal,
 ) -> dict[str, Any] | None:
@@ -426,6 +481,19 @@ class CompleteProductionOrchestrator:
         _require_authored_quality_before_generation(
             approved, source_only=options.source_only,
         )
+        quality_preflight_gaps = _quality_execution_preflight_gaps(approved, options)
+        if quality_preflight_gaps:
+            print(
+                'QUALITY_EXECUTION_PREFLIGHT: verified release cannot pass with '
+                'current inputs; build artifact remains available. '
+                + json.dumps(quality_preflight_gaps, ensure_ascii=False, sort_keys=True),
+                flush=True,
+            )
+            if os.environ.get('MMM_REQUIRE_VERIFIED_RELEASE', '').strip().lower() in {'1', 'true', 'yes'}:
+                raise CompleteProductionError(
+                    'QUALITY_EXECUTION_PREREQUISITES_MISSING_BEFORE_GENERATION: '
+                    + json.dumps(quality_preflight_gaps, ensure_ascii=False, sort_keys=True)
+                )
         input_is_bound = bool(approved.existing_input_sha256)
         input_is_supplied = existing_input is not None
         if input_is_bound != input_is_supplied:
