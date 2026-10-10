@@ -756,8 +756,19 @@ def _normalize_tool_result(raw: Any) -> dict[str, Any]:
             parsed_text = json.loads(texts[0])
         except json.JSONDecodeError:
             pass
+    structured_content = _jsonable(structured)
+    # MCP transports often mirror structuredContent verbatim in a single
+    # text content block. Deduplicate ONLY if the decoded JSON values match:
+    # independent provider prose and nonidentical evidence must remain visible.
+    if (
+        structured is not None
+        and parsed_text is not None
+        and _jsonable(parsed_text) == structured_content
+    ):
+        texts = []
+        parsed_text = None
     return {
-        "structured_content": _jsonable(structured),
+        "structured_content": structured_content,
         "text": texts,
         "parsed_text": _jsonable(parsed_text),
         "resources": resources,
