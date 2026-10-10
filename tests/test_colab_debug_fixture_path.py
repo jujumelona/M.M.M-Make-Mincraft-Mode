@@ -133,6 +133,20 @@ def test_colab_notebook_wires_debug_dialog_reply_into_normal_session_build() -> 
     assert "BUILD_RESULT = session.build(reply, run_name=RUN_NAME, options=options)" in code
 
 
+def test_colab_debug_defaults_to_live_model_path() -> None:
+    notebook_path = Path(__file__).resolve().parents[1] / "M.M.M_Make_Mincraft_Mode_Colab.ipynb"
+    notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+    cells = {
+        cell["id"]: "".join(cell.get("source", ()))
+        for cell in notebook.get("cells", ())
+    }
+    assert 'DEBUG_STRATEGY = "Model path (slow)"' in cells["configuration"]
+    assert '"Model path (slow)": "model_path"' in cells["plan"]
+    assert 'prompt=PROMPT' in cells["plan"]
+    assert "reply = dialog.reply" in cells["plan"]
+    assert "BUILD_RESULT = session.build(reply, run_name=RUN_NAME, options=options)" in cells["build"]
+
+
 def test_colab_build_checks_setup_and_rembg_version_before_generation() -> None:
     """A rerun of only cell 6 cannot bypass the installed runtime contract."""
     notebook_path = Path(__file__).resolve().parents[1] / "M.M.M_Make_Mincraft_Mode_Colab.ipynb"
