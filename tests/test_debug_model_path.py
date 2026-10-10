@@ -138,6 +138,29 @@ def test_model_path_rejects_plan_for_different_user_prompt(tmp_path: Path) -> No
         )
 
 
+def test_api_model_plan_can_save_to_debug_without_overwriting_regular_plan(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    import minecraft_mod_ai.api as api
+
+    monkeypatch.setattr(api, "_validate_internal_engine_preflight", lambda: None)
+    session = api.CompleteModAISession.__new__(api.CompleteModAISession)
+    session.output_root = tmp_path
+    session.existing_input = None
+    session.brief = ""
+    session.complete_proposal = None
+    session.planner = SimpleNamespace(plan=lambda prompt, **_kwargs: _plan(prompt))
+    ordinary = tmp_path / "proposal.json"
+    ordinary.write_text("original user plan", encoding="utf-8")
+    target = tmp_path / "debug" / "model_path-proposal.json"
+
+    result = session.plan("an original user request", save_plan_path=target)
+
+    assert target.is_file()
+    assert result.complete_proposal.requested_prompt == "an original user request"
+    assert ordinary.read_text(encoding="utf-8") == "original user plan"
+
+
 def test_model_path_default_prompt_runs_model_not_host_fixture(tmp_path: Path) -> None:
     session = _ModelSession()
     run_plan_dialog(
