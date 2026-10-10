@@ -51,8 +51,10 @@ def test_source_edit_schema_is_scalar_semantic_action() -> None:
     } <= operations
     assert "append_file" not in operations
     assert "replace_file" not in operations
-    assert "maxLength" not in properties["new"]
-    assert "maxLength" not in properties["content"]
+    # Large source edits still require a finite model-visible argument
+    # budget; unbounded strings can exhaust the local decoder indefinitely.
+    assert 0 < properties["new"]["maxLength"] <= 16_384
+    assert 0 < properties["content"]["maxLength"] <= 16_384
 
 
 def test_partial_source_edit_materializes_one_exact_edit_and_host_hash(tmp_path) -> None:
