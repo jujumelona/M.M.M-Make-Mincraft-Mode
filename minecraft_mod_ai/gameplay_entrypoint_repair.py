@@ -61,9 +61,10 @@ def repair_missing_gameplay_entrypoint(
 ) -> dict[str, Any]:
     """Author a player command without discarding existing source-hook duties.
 
-    An overfilled integration page can hold duplicate player-join hooks. Merge
-    those duplicate declarations and retain all boundary/owner descriptions.
-    The command is not a substitute for the feature's required GUI.
+    Keep all four planned lifecycle hooks in the dedicated fifth entry-point
+    slot. If an imported/legacy design has even that reserved slot full,
+    coalesce only duplicate source-hook declarations while retaining their
+    boundary and owner descriptions. This does not wire GUI buttons.
     """
     sections = normalize_structured_sections(structured_sections)
     algorithm = active_concern_records(sections, "algorithm")
@@ -82,9 +83,10 @@ def repair_missing_gameplay_entrypoint(
         return sections
 
     from .execution_contract_policy import PLANNER_CONCERN_MAX_RECORDS
-    if len(existing) >= PLANNER_CONCERN_MAX_RECORDS:
+    reserved_limit = PLANNER_CONCERN_MAX_RECORDS + 1
+    if len(existing) >= reserved_limit:
         available = _compact_duplicate_bootstrap_entries(existing)
-        if len(available) >= PLANNER_CONCERN_MAX_RECORDS:
+        if len(available) >= reserved_limit:
             raise ValueError(
                 "GAMEPLAY_ENTRYPOINT_REAUTHOR_REQUIRED: all entry-point slots "
                 "describe distinct lifecycle hooks, none of which is a "
