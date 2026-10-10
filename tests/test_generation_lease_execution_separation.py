@@ -17,5 +17,8 @@ def test_generation_ownership_lease_does_not_cap_node_execution_lifetime() -> No
 def test_generation_scheduler_still_uses_renewable_ownership_lease() -> None:
     source = inspect.getsource(CompleteProductionOrchestrator._execute_generation_work)
     assert "lease_seconds = 900" in source
-    assert "ledger.claim_ready(worker_id='mmm-orchestrator'" in source
+    # The scheduler formats this as a multiline call; assert actual lease
+    # ownership and worker identity without depending on one-line formatting.
+    assert "ledger.claim_ready(" in source
+    assert "worker_id='mmm-orchestrator'" in source
     assert 'lease_seconds=lease_seconds' in source
