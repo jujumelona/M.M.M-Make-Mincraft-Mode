@@ -212,6 +212,34 @@ def _memory_reserve_bytes() -> int:
     return mib * 1024 * 1024
 
 
+def _bounded_colab_reserve_bytes(env_name: str, default_mib: int) -> int:
+    """Validate a stage-specific reserve without weakening the configured global cap."""
+    raw = os.environ.get(env_name, str(default_mib))
+    try:
+        mib = int(raw.strip())
+    except ValueError as exc:
+        raise ValueError(f"{env_name} must be an integer >=512") from exc
+    if mib < 512:
+        raise ValueError(f"{env_name} must be >=512")
+    return min(_memory_reserve_bytes(), mib * 1024 * 1024)
+
+
+def _preflight_reserve_bytes(stage: str) -> int:
+    # Loading a new model/starting a heavyweight stage still requires the full
+    # 2 GiB default. A completion on the *already loaded* native server only
+    # needs an allocation headroom, not a second model-loading allowance.
+    if stage == "llama_completion_preflight":
+        return _bounded_colab_reserve_bytes("MMM_COLAB_COMPLETION_RESERVE_MIB", 1024)
+    return _memory_reserve_bytes()
+
+
+def _llama_emergency_reserve_bytes() -> int:
+    # The watchdog is a kernel-survival backstop, not a 2 GiB model-admission
+    # guard. Killing the server at the admission watermark creates repeated
+    # 6+ GiB reloads during long planner conversations (observed in Colab).
+    return _bounded_colab_reserve_bytes("MMM_COLAB_LLAMA_EMERGENCY_MIB", 768)
+
+
 def assert_memory_headroom(stage: str, *, reserve_bytes: int | None = None) -> dict[str, Any]:
     """Reject new heavyweight allocations when cgroup memory is near exhausted.
 
@@ -219,8 +247,10 @@ def assert_memory_headroom(stage: str, *, reserve_bytes: int | None = None) -> d
     guarantee against allocations occurring between samples.
     """
     sample = _sample(_MANAGED_PID or 0)
+    reserve = _preflight_reserve_bytes(stage) if reserve_bytes is None else reserve_bytes
+    sample["preflight_stage"] = stage
+    sample["preflight_reserve_bytes"] = reserve
     _atomic_write(sample)
-    reserve = _memory_reserve_bytes() if reserve_bytes is None else reserve_bytes
     available = int(sample["effective_mem_available_bytes"])
     if available < reserve:
         raise MemoryError(
@@ -282,20 +312,32 @@ def _terminate_verified_managed_llama(
 
 def _watchdog_loop(stop: threading.Event, interval: float) -> None:
     global _MANAGED_PID
+    low_samples = 0
+    observed_pid = 0
     while not stop.is_set():
         pid = _MANAGED_PID or 0
+        if pid != observed_pid:
+            observed_pid = pid
+            low_samples = 0
         sample = _sample(pid)
-        _atomic_write(sample)
-        # A managed native subprocess is owned by MMM. If the cgroup gets
-        # critically low, stop *only* this verified child to protect Jupyter.
-        # The notebook kernel and unrelated services are never signaled.
-        if (
+        emergency_reserve = _llama_emergency_reserve_bytes()
+        sample["llama_emergency_reserve_bytes"] = emergency_reserve
+        # A soft 2 GiB admission threshold must never SIGKILL an otherwise
+        # healthy 9 GiB native server. Only sustained critical free-memory
+        # pressure may terminate the PID/start-ticks-verified child.
+        emergency = (
             pid > 0
             and bool(os.environ.get("MMM_COLAB_SETUP_RECEIPT", "").strip())
             and _process_start_ticks(pid) == sample["managed_start_ticks"]
             and sample["managed_start_ticks"] > 0
-            and int(sample["effective_mem_available_bytes"]) < _memory_reserve_bytes()
-        ):
+            and int(sample["effective_mem_available_bytes"]) < emergency_reserve
+        )
+        low_samples = low_samples + 1 if emergency else 0
+        sample["llama_emergency_consecutive_samples"] = low_samples
+        _atomic_write(sample)
+        # Require two consecutive low samples to avoid transient cold-cache
+        # jitter while retaining the kernel protection in actual emergencies.
+        if emergency and low_samples >= 2:
             outcome = _terminate_verified_managed_llama(
                 pid, int(sample["managed_start_ticks"])
             )
@@ -314,6 +356,7 @@ def _watchdog_loop(stop: threading.Event, interval: float) -> None:
                     with _LOCK:
                         if _MANAGED_PID == pid:
                             _MANAGED_PID = None
+                low_samples = 0
         stop.wait(interval)
 
 
