@@ -453,6 +453,25 @@ class CompleteProductionOrchestrator:
                     f"{exc}"
                 ) from exc
 
+        # A stale Colab settings cell can override the current notebook's True
+        # default. Entity geometry verification is a mandatory full-build gate,
+        # not an opt-out flag: enable its actual review path rather than
+        # silently skipping evidence or aborting after costly preparation.
+        if (
+            not options.source_only
+            and not options.run_blockbench
+            and any(
+                getattr(module, "kind", "") in {"entity", "boss", "npc"}
+                for module in approved.modules
+            )
+        ):
+            options = replace(options, run_blockbench=True)
+            print(
+                "BLOCKBENCH_REQUIRED_AUTO_ENABLED: full entity/boss/NPC "
+                "production will run real UV/render verification; "
+                "stale run_blockbench=False ignored",
+                flush=True,
+            )
         _validate_external_execution_preflight(approved, options)
         run_root, ledger, run_resumed = self._open_run(
             run_name,
