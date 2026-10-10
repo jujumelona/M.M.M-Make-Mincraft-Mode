@@ -54,12 +54,12 @@ class _FakeDiscovery:
             return {
                 "candidates": [
                     {
-                        "source_url": "https://github.com/example/shared-systems",
-                        "title": "example/shared-systems",
+                        "source_url": "https://github.com/example/shared-minecraft-mod",
+                        "title": "Minecraft Fabric mod shared systems",
                     },
                     {
-                        "source_url": f"https://github.com/example/{query.split()[0].lower()}-feature",
-                        "title": "feature",
+                        "source_url": f"https://github.com/example/{query.split()[0].lower()}-minecraft-mod",
+                        "title": "Minecraft Fabric mod feature",
                     },
                 ]
             }
@@ -84,8 +84,8 @@ def test_discovery_is_parallel_provider_aware_and_prefers_cross_capability_repos
         client,
         capability_graph=graph.to_dict(),
     )
-    assert result["economy.trade"][0] == "example/shared-systems"
-    assert result["cooking.recipe"][0] == "example/shared-systems"
+    assert result["economy.trade"][0] == "example/shared-minecraft-mod"
+    assert result["cooking.recipe"][0] == "example/shared-minecraft-mod"
     providers = {provider for provider, _, _ in client.calls}
     assert providers == {"github", "modrinth"}
 
