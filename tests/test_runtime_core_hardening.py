@@ -16,7 +16,8 @@ from minecraft_mod_ai import (
     validation_diagnostic_contract,
     validation_execution_contract,
 )
-from minecraft_mod_ai.java_lsp import JDTLanguageServerError, JavaLanguageService
+from minecraft_mod_ai.java_lsp import JDTLanguageServerError
+from minecraft_mod_ai.java_core import JavaCoreService
 from minecraft_mod_ai.trajectory_memory import memory_path, remote_cache_path
 from minecraft_mod_ai.validation_diagnostic_contract import (
     diagnostic_errors,
@@ -29,7 +30,7 @@ from tools import colab_runtime_setup
 def test_jdt_diagnostics_have_one_static_interpretation_authority() -> None:
     assert not hasattr(validation_execution_contract, "_diagnostic_errors")
     assert validation_diagnostic_contract.diagnostic_errors is diagnostic_errors
-    assert complete_orchestrator.JavaLanguageService is JavaLanguageService
+    assert complete_orchestrator.JavaCoreService is JavaCoreService
 
 
 def test_jdt_mapping_preserves_uri_and_only_errors_block() -> None:
