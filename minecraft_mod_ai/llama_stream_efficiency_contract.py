@@ -103,10 +103,19 @@ def _required_tool_repetition_detected(
     *,
     copies: int = 4,
 ) -> bool:
-    content = message.get("content")
-    if isinstance(content, str) and _repetitive_tail(content, copies=copies):
-        return True
     calls = message.get("tool_calls")
+    # Once a native function call is present, preceding assistant content is
+    # only a semantic preface. Repetition there is not proof that the function
+    # invocation is looping: the server may stream the real native call next.
+    # Still inspect the tool arguments below, where structural repetition can
+    # stall a bounded required-tool turn.
+    content = message.get("content")
+    if (
+        not (isinstance(calls, list) and calls)
+        and isinstance(content, str)
+        and _repetitive_tail(content, copies=copies)
+    ):
+        return True
     if not isinstance(calls, list):
         return False
     for call in calls:
