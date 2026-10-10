@@ -262,3 +262,33 @@ def test_algorithm_steps_are_not_collapsed_into_one_model_action(monkeypatch):
     )
     assert observed == ["step_0", "step_1", "step_2", "step_3"]
     assert sum(row["op"] == "if" for row in body) == 4
+
+
+def test_repair_executes_actual_planner_decoder_contract_without_model(monkeypatch):
+    """Exercise the real sampler projection and budget proof without an LLM."""
+    import json
+
+    class FakeRouter:
+        def __init__(self):
+            self.calls = []
+
+        def generate_text(self, role, messages, **kwargs):
+            assert role == "planner"
+            assert kwargs["response_format"] == "json"
+            assert kwargs["response_schema"] is not None
+            assert kwargs["output_token_ceiling"] <= 4096
+            self.calls.append(kwargs)
+            return json.dumps({
+                "boundary": "server-authoritative purchase",
+                "trigger": "command:purchase_upgrade",
+                "owner": "server",
+            })
+
+    router = FakeRouter()
+    sections = _sections()
+    rows = repair_missing_gameplay_entrypoint(
+        router, "buy an upgrade with credits", sections,
+    )["integration"]["specification"]["entry_points"]
+    assert len(router.calls) == 1
+    assert len(rows) == 2
+    assert rows[1]["trigger"] == "command:purchase_upgrade"
