@@ -221,7 +221,7 @@ def test_build_pass_cannot_be_invented_without_command_and_artifact_receipts():
             "build": {
                 "status": "PASS",
                 "commands": [
-                    {"name": "clean_build", "exit_code": 0, "timed_out": False}
+                    {"name": "clean_build", "command": ["gradle", "clean", "build"], "exit_code": 0, "timed_out": False}
                 ],
                 "artifact_receipt": {"sha256": "sha256:jar"},
             },
@@ -364,3 +364,26 @@ def test_cached_verifier_receipt_rejects_modified_source_check_count():
     altered = {**original, "checks_run": 1}
     with pytest.raises(VerifierReceiptTruthError, match="VERIFIER_RECEIPT_STALE"):
         _decorate_receipt(row, altered)
+
+
+
+@pytest.mark.parametrize("name", ("build", "clean_build", "incremental_build"))
+def test_gradle_build_name_without_executed_task_argv_cannot_certify_release(name):
+    from minecraft_mod_ai.complete_orchestrator import CompleteProductionOrchestrator
+    report = {
+        "status": "PASS",
+        "commands": [{"name": name, "exit_code": 0, "timed_out": False}],
+    }
+    assert not CompleteProductionOrchestrator._full_gradle_build_receipt_passed(report)
+    with pytest.raises(VerifierReceiptTruthError, match="VERIFIER_RECEIPT_MISSING"):
+        _decorate_receipt(
+            _row("build", "build-project"),
+            {
+                "status": "PASS",
+                "build": report,
+                "final_build_receipt": {
+                    "status": "PASS", "production_jar": "PASS",
+                    "artifact_sha256": "sha256:jar", "toolchain_attested": True,
+                },
+            },
+        )
