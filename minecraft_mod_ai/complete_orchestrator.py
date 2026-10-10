@@ -199,6 +199,26 @@ def _is_authored_coverage_proposal(approved: CompleteProposal) -> bool:
     )
 
 
+def _require_authored_quality_before_generation(
+    approved: CompleteProposal,
+    *,
+    source_only: bool,
+) -> None:
+    """Reject a stale full-build authored v1 plan before costly model loading."""
+    if (
+        not source_only
+        and _is_authored_coverage_proposal(approved)
+        and not isinstance(approved.game_design.get('_production_contract'), dict)
+    ):
+        raise CompleteProductionError(
+            'AUTHORED_QUALITY_CONTRACT_REQUIRED_BEFORE_GENERATION: '
+            'The saved authored plan predates v2 quality binding. '
+            'Regenerate and reapprove the authored plan using the current main '
+            'code before running the full Colab build. Old proposal approvals '
+            'cannot be silently changed or treated as passing quality evidence.'
+        )
+
+
 def _debug_fixture_source_contract(
     approved: CompleteProposal,
 ) -> dict[str, Any] | None:
@@ -402,6 +422,9 @@ class CompleteProductionOrchestrator:
         if approved.status is not CompleteProposalStatus.APPROVED:
             raise SpecValidationError('Complete proposal approval did not complete.')
         _validate_required_gate_contract(approved)
+        _require_authored_quality_before_generation(
+            approved, source_only=options.source_only,
+        )
         input_is_bound = bool(approved.existing_input_sha256)
         input_is_supplied = existing_input is not None
         if input_is_bound != input_is_supplied:
