@@ -1156,6 +1156,12 @@ class CompleteProductionOrchestrator:
             if runtime_manager is not None and options.cleanup_runtime:
                 cleanup = runtime_manager.cleanup()
                 runtime_receipt = {**(runtime_receipt or {}), 'cleanup': cleanup}
+        managed_game_test_runtime = (
+            independently_verified_managed_runtime(
+                project_root, approved, build,
+                gametest_passed=self._gametest_receipt_passed(build, spec),
+            ) if options.run_gametest else None
+        )
         runtime_verified = _runtime_verification_passed(
             required=approved.external_runtime_required,
             runtime_receipt=runtime_receipt,
@@ -1176,13 +1182,25 @@ class CompleteProductionOrchestrator:
             ),
             'playtest': playtest_receipt,
             'visual': visual_receipt,
+            # Explicitly separate the real GameTest server channel from a
+            # Mineflayer/browser/client session. No bot receipt is fabricated.
+            'managed_server_gametest': managed_game_test_runtime,
         }
         (metadata_root / 'runtime-receipt.json').write_text(
             json.dumps(persisted_runtime_receipt, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
             encoding='utf-8',
         )
         if runtime_verified:
-            self._succeed_work_node(ledger, 'runtime-playtest', {'schema_version': 'mmm/work-node-receipt-v1', 'status': 'NOT_REQUIRED' if not approved.external_runtime_required else 'PASS', 'runtime': runtime_receipt, 'playtest': playtest_receipt, 'visual': visual_receipt})
+            self._succeed_work_node(
+                ledger, 'runtime-playtest',
+                {'schema_version': 'mmm/work-node-receipt-v1',
+                 'status': 'PASS' if managed_game_test_runtime or approved.external_runtime_required
+                           else 'NOT_REQUIRED',
+                 'runtime': runtime_receipt,
+                 'playtest': playtest_receipt,
+                 'managed_server_gametest': managed_game_test_runtime,
+                 'visual': visual_receipt},
+            )
         else:
             unresolved.append('runtime:verification-incomplete')
             ledger.fail('runtime-playtest', 'Runtime, interaction, and visual evidence are still required.', input_required=True)
