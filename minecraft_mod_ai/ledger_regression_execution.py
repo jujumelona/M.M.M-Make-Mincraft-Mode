@@ -55,7 +55,7 @@ REGRESSION_EXECUTION_ROUTES: dict[str, RegressionExecutionRoute] = {
     "REG-018": RegressionExecutionRoute("tests/test_requirement_query_rewrite_contract.py"),
     "REG-019": RegressionExecutionRoute("tests/test_rag_index_reuse_efficiency.py"),
     "REG-020": RegressionExecutionRoute("tests/test_resource_asset_backend_contract.py"),
-    "REG-021": RegressionExecutionRoute("tests/test_space_progression_planner_and_verifier_regression.py"),
+    "REG-021": RegressionExecutionRoute("tests/test_semantic_prerequisite_edge_regression.py::test_space_progression_prerequisite_graph_cannot_collapse_to_zero_edges"),
     "REG-022": RegressionExecutionRoute(
         "tests/test_evidence_first_session_integration.py::test_one_requirement_can_bind_every_semantic_slice_without_fixed_ref_cap"
     ),
@@ -64,7 +64,7 @@ REGRESSION_EXECUTION_ROUTES: dict[str, RegressionExecutionRoute] = {
         evidence_scope="structural_harness",
     ),
     "REG-024": RegressionExecutionRoute("tests/test_qwen_parser_single_owner.py"),
-    "REG-025": RegressionExecutionRoute("tests/test_agent_context_window_contract.py"),
+    "REG-025": RegressionExecutionRoute("tests/test_semantic_source_partition_regression.py::test_empty_semantic_graph_cannot_claim_full_source_coverage"),
     "REG-026": RegressionExecutionRoute("tests/test_target_snapshot_hardening.py"),
     "REG-027": RegressionExecutionRoute("tests/test_verifier_receipt_truth_contract.py"),
     "REG-028": RegressionExecutionRoute("tests/test_platform_lock_naming_regime.py"),
@@ -88,7 +88,7 @@ REGRESSION_EXECUTION_ROUTES: dict[str, RegressionExecutionRoute] = {
         "test_source_owned_progress_loop_uses_same_active_exact_authority"
     ),
     "REG-SEM-001": RegressionExecutionRoute(
-        "tests/test_space_progression_planner_and_verifier_regression.py"
+        "tests/test_semantic_prerequisite_edge_regression.py::test_missing_space_progression_prerequisite_is_rejected_not_dropped"
     ),
     "REG-DESIGN-001": RegressionExecutionRoute(
         "tests/test_evidence_first_session_integration.py::test_one_requirement_can_bind_every_semantic_slice_without_fixed_ref_cap"
