@@ -175,8 +175,16 @@ def _build_evidence(node_id: str, receipt: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _package_evidence(node_id: str, receipt: Mapping[str, Any]) -> dict[str, Any]:
+    if node_id == "package-build-artifact":
+        if str(receipt.get("status") or "").upper() != "PASS":
+            raise VerifierReceiptTruthError(
+                "VERIFIER_RECEIPT_MISSING: build artifact package requires PASS status."
+            )
+        return {"verifier": "package_phase", "status": "PASS"}
     if node_id != "package-release":
-        return {"verifier": "package_phase", "status": str(receipt.get("status") or "")}
+        raise VerifierReceiptTruthError(
+            f"VERIFIER_RECEIPT_UNSUPPORTED_PACKAGE_NODE: {node_id!r}."
+        )
     release_zip = str(receipt.get("release_zip") or "")
     if str(receipt.get("status") or "").upper() != "PASS" or not release_zip:
         raise VerifierReceiptTruthError(
