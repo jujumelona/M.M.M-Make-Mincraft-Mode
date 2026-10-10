@@ -112,3 +112,42 @@ def test_atomic_mutation_must_not_execute_on_player_join():
             coverage_refs=("algorithm.atomic_mutations",),
             bound_events=("player_join",),
         )
+
+
+def test_algorithm_steps_are_not_collapsed_into_one_model_action(monkeypatch):
+    import json
+    from minecraft_mod_ai import typed_plan_authoring, fixed_template_generation
+
+    sections = _sections("command:launch_ship")
+    steps = [
+        {"operation": f"step_{i}", "input": "state",
+         "output": "state", "next_step": "next"}
+        for i in range(4)
+    ]
+    sections["algorithm"]["specification"]["steps"] = steps
+    from minecraft_mod_ai.typed_plan_authoring import author_semantic_game_dispatch
+
+    monkeypatch.setattr(
+        typed_plan_authoring, "_extract_state_variable_types",
+        lambda _sections: {"counter": "int"},
+    )
+    observed = []
+
+    def model(_router, _role, messages, **_kwargs):
+        payload = json.loads(messages[1]["content"])
+        observed.append(payload["focus_record"]["operation"])
+        return {
+            "trigger_event": "command", "action_kind": "increment_state",
+            "state_key": "counter", "value": 1,
+        }
+
+    monkeypatch.setattr(
+        fixed_template_generation, "generate_fixed_template_value", model,
+    )
+    body = author_semantic_game_dispatch(
+        object(), "four sequential gameplay steps", sections, {},
+        coverage_refs=("algorithm.steps",),
+        bound_events=("command",),
+    )
+    assert observed == ["step_0", "step_1", "step_2", "step_3"]
+    assert sum(row["op"] == "if" for row in body) == 4
