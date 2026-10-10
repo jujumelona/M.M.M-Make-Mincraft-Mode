@@ -95,7 +95,7 @@ def blockbench_review(
     if not preview.is_file() or preview.is_symlink():
         raise CompleteProductionError("Blockbench did not produce a regular preview image.")
     preview_bytes = preview.read_bytes()
-    if not preview_bytes.startswith(b"\\x89PNG\\r\\n\\x1a\\n"):
+    if not preview_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
         raise CompleteProductionError("Blockbench preview is not a valid PNG artifact.")
     preview_sha256 = "sha256:" + hashlib.sha256(preview_bytes).hexdigest()
     return {
