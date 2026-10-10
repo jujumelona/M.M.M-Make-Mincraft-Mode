@@ -1034,8 +1034,18 @@ def _post_completion(server_url: str, payload: Mapping[str, Any]) -> Any:
         if httpx.post is not _DEFAULT_HTTPX_POST:
             return httpx.post(endpoint, json=dict(payload), timeout=timeout)
         from ..llama_stream_efficiency_contract import _client
+        from uuid import uuid4
 
-        return _client(server_url).post(endpoint, json=dict(payload), timeout=timeout)
+        # Preserve an end-to-end request identity through the managed client.
+        # The fallback httpx.post seam above deliberately retains its original
+        # signature for injected test/transport clients.
+        request_id = "llama-" + uuid4().hex
+        return _client(server_url).post(
+            endpoint,
+            json=dict(payload),
+            timeout=timeout,
+            headers={"X-MMM-Request-Id": request_id},
+        )
     except httpx.TimeoutException as exc:
         raise RuntimeError(
             "native llama-server completion made no readable progress for "
