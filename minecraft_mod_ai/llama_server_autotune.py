@@ -994,6 +994,39 @@ def managed_server_generation_identity(server_url: str) -> str:
         )
 
 
+def release_managed_server_before_toolchain() -> bool:
+    """Free an idle Colab planner GGUF before RAM-heavy Gradle/JDT setup.
+
+    This runs at the sequential planning -> production boundary, not inside
+    model inference. Never touch external servers and never bypass the normal
+    watchdog during subsequent generation: ensure_tuned_server can relaunch
+    the owned GGUF when model work resumes.
+    """
+    if not os.environ.get("MMM_COLAB_SETUP_RECEIPT", "").strip():
+        return False
+
+    with _AUTOTUNE_LOCK:
+        process = _MANAGED_PROCESS
+        if process is None or process.poll() is not None:
+            return False
+        from .runtime_memory_watchdog import _sample
+
+        snapshot = _sample(int(getattr(process, "pid", 0) or 0))
+        headroom_mib = int(snapshot["effective_mem_available_bytes"]) // (1024 * 1024)
+        threshold_mib = _env_int("MMM_COLAB_TOOLCHAIN_HEADROOM_MIB", 4096, minimum=2048)
+        if headroom_mib >= threshold_mib:
+            return False
+
+        print(
+            "COLAB_TOOLCHAIN_MEMORY_HANDOFF: releasing idle managed llama-server "
+            f"before Gradle/JDT; headroom_mib={headroom_mib} "
+            f"threshold_mib={threshold_mib}",
+            flush=True,
+        )
+        _shutdown_managed_server()
+        return True
+
+
 def _shutdown_managed_server() -> None:
     global _MANAGED_KEY, _MANAGED_PROCESS, _MANAGED_URL
     with _AUTOTUNE_LOCK:
@@ -1027,6 +1060,7 @@ __all__ = [
     "ProbeResult",
     "ServerVariant",
     "_base_args",
+    "release_managed_server_before_toolchain",
     "recover_managed_server",
     "_benchmark",
     "_candidate_variants",
