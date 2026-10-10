@@ -350,10 +350,10 @@ def _insert_initializer_call(
     # under different markers.  A marker alone is not a deduplication key.
     # Check the actual onInitialize body before inserting another call.
     body_start = method.end()
-    close = re.search(r"(?m)^[ \\t]*\\}", text[body_start:])
+    close = re.search(r"(?m)^[ \t]*}", text[body_start:])
     body_end = body_start + close.start() if close else len(text)
     body = text[body_start:body_end]
-    if re.search(r"(?m)^[ \\t]*" + re.escape(call_line) + r"[ \\t]*$", body):
+    if re.search(r"(?m)^[ \t]*" + re.escape(call_line) + r"[ \\t]*$", body):
         return text, True
     indent = method.group("indent") + "    "
     rendered = f"\n{indent}// MMM:{marker}\n{indent}{call_line}"
