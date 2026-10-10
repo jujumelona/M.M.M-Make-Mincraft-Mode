@@ -363,6 +363,26 @@ def validate_texture(
             raise ValueError(
                 "Sprite requires transparent alpha outside its silhouette."
             )
+        # A structurally valid PNG can still be an unusable generated asset.
+        # This must run for both candidate selection and final production checks,
+        # regardless of whether the image came from Debug or Full mode.
+        resource_path = str(contract["resource"]["path"]).replace("\\", "/")
+        gameplay_texture = (
+            "/textures/block/" in "/" + resource_path
+            or "/textures/item/" in "/" + resource_path
+        )
+        if gameplay_texture and not rendering["uv_schema"] and not contract["gui"]:
+            visible_colors: set[tuple[int, int, int]] = set()
+            for red, green, blue, alpha in _pixels(raw):
+                if alpha == 255:
+                    visible_colors.add((red, green, blue))
+                    if len(visible_colors) >= 2:
+                        break
+            if len(visible_colors) < 2:
+                raise ValueError(
+                    "VISUAL_TEXTURE_DEGENERATE: generated gameplay texture is "
+                    "a single flat color; regenerate from another source candidate."
+                )
         regions = generation_regions(contract)
         for region in regions:
             x, y, width, height = region["box"]
