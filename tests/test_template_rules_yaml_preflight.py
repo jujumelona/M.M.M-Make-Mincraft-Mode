@@ -64,11 +64,11 @@ def test_yaml_colon_mapping_fails_preflight_with_named_record(tmp_path) -> None:
     broken = tmp_path / "design" / "content_entity.yaml"
     broken.parent.mkdir(parents=True)
     broken.write_text(
-        "id: design/content_entity\\nrules:\\n"
-        "  - A gameplay mechanic: identify the concrete item\\n",
+        "id: design/content_entity\nrules:\n"
+        "  - A gameplay mechanic: identify the concrete item\n",
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match=r"TEMPLATE_RULE_TYPE: design/content_entity rules\\[0\\]"):
+    with pytest.raises(ValueError, match=r"TEMPLATE_RULE_TYPE: design/content_entity rules\[0\]"):
         validate_catalog_rule_types(tmp_path)
 
 
