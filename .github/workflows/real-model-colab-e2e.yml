@@ -178,6 +178,8 @@ jobs:
           )
           proposal = dialog.reply.complete_proposal
           proposal.validate()
+          if not proposal.modules:
+              raise AssertionError('normal real-model planner produced zero implementation modules')
           if proposal.requested_prompt != prompt:
               raise AssertionError(
                   "normal planner changed the authoritative requested_prompt: "
@@ -315,6 +317,12 @@ jobs:
                   f"{build!r}"
               )
 
+          jar_validation = debug_result.jar_validation or {}
+          if jar_validation.get("status") != "PASS":
+              raise AssertionError(f"real-model JAR validation failed: {jar_validation!r}")
+          if not debug_result.jar_path or not Path(debug_result.jar_path).is_file():
+              raise AssertionError("real-model debug build produced no actual JAR")
+
           debug_evidence = {
               "schema_version": "mmm/debug-token-real-build-e2e-v1",
               "status": "PASS",
@@ -347,6 +355,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
           path: |
+            audit/real-model-colab-e2e/GPU_PREFLIGHT.json
             audit/real-model-colab-e2e/REAL_MODEL_COLAB_E2E.json
             audit/real-model-colab-e2e/proposal.json
             audit/real-model-colab-e2e/debug-fixture/**
