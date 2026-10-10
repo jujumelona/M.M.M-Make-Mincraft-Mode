@@ -39,7 +39,7 @@
         {%- elif tool_call.custom is defined -%}
             {%- set tool_call = tool_call.custom -%}
         {%- endif -%}
-        {{- '<tool_call><func' ~ 'tion=' ~ tool_call.name ~ '>' -}}
+        {{- '<tool_call>' ~ '<func' ~ 'tion=' ~ tool_call.name ~ '>' -}}
         {%- if tool_call.input is defined and tool_call.input is string -%}
             {{- tool_call.input -}}
         {%- elif tool_call.arguments is defined -%}
