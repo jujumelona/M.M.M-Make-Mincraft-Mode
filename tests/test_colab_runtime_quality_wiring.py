@@ -57,3 +57,17 @@ def test_colab_runtime_playtest_actions_flow_to_real_build_options() -> None:
 
 def test_colab_settings_cell_compiles_as_python() -> None:
     ast.parse(_cell("# @title 1. 실행 모드 및 설정"))
+
+
+def test_colab_planner_memory_is_handed_off_before_real_build() -> None:
+    cell = _cell("# @title 6. 제작 또는 Audit")
+    ast.parse(cell)
+    assert "prepare_production_memory_headroom" in cell
+    assert "_ram = prepare_production_memory_headroom()" in cell
+    assert "released_managed_llama_server" in cell
+    assert cell.index("_ram = prepare_production_memory_headroom()") < cell.index(
+        "BUILD_RESULT = session.build("
+    )
+    # Do not regress to the previous direct gate that rejected 1.7-GiB headroom
+    # while leaving a 9-GiB managed model idle in the very same kernel.
+    assert 'assert_memory_headroom("before_production_build")' not in cell
