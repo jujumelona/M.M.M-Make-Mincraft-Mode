@@ -1140,6 +1140,12 @@ def _normalize_acceptance_tests(values: Sequence[str]) -> list[str]:
     return result
 
 def _unique_acceptance_statement(statement: str, used: set[str]) -> str:
+    # A saved authored design commonly ends in a newline. Keep its exact
+    # original bytes in requirement/source bindings, but canonicalize the
+    # *derived public acceptance statement* before catalog insertion.
+    # validate_acceptance_catalog trims public statements on read; without
+    # this normalization it rejected a contract compiled by this function.
+    statement = statement.strip()
     if statement not in used:
         return statement
     suffix = hashlib.sha256(statement.encode('utf-8')).hexdigest()[:12]
