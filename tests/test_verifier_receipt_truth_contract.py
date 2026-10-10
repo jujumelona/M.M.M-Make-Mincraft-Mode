@@ -280,3 +280,57 @@ def test_build_artifact_package_rejects_nonpassing_receipt():
 def test_unknown_package_node_fails_closed():
     with pytest.raises(VerifierReceiptTruthError, match="VERIFIER_RECEIPT_UNSUPPORTED_PACKAGE_NODE"):
         _decorate_receipt(_row("package", "unexpected-package-node"), {"status": "PASS"})
+
+
+@pytest.mark.parametrize(
+    "receipt",
+    (
+        {"status": "PASS"},
+        {"status": "PASS", "build_bundle_zip": "/tmp/output.zip"},
+        {
+            "status": "PASS",
+            "build_bundle_zip": "/tmp/output.zip",
+            "release_ready": True,
+            "unresolved_gates": ["quality:runtime"],
+        },
+        {
+            "status": "PASS",
+            "build_bundle_zip": "/tmp/output.zip",
+            "release_ready": False,
+            "unresolved_gates": [""],
+        },
+    ),
+)
+def test_package_attestation_rejects_missing_or_inconsistent_bundle_evidence(receipt):
+    with pytest.raises(VerifierReceiptTruthError, match="VERIFIER_RECEIPT_MISSING"):
+        _decorate_receipt(_row("package", "package-build-artifact"), receipt)
+
+
+def test_unready_build_bundle_is_durable_but_never_a_verified_release():
+    receipt = _decorate_receipt(
+        _row("package", "package-build-artifact"),
+        {
+            "status": "PASS",
+            "build_bundle_zip": "/tmp/build-artifact.zip",
+            "release_ready": False,
+            "unresolved_gates": ["quality:runtime"],
+        },
+    )
+    proof = receipt["_mmm_completion_evidence"]
+    assert proof["completion_scope"] == "packaging_stage"
+    assert proof["build_bundle_zip"] == "/tmp/build-artifact.zip"
+    assert proof["release_ready"] is False
+    assert proof["unresolved_gates"] == ("quality:runtime",)
+
+
+def test_ready_build_bundle_requires_no_unresolved_gates():
+    receipt = _decorate_receipt(
+        _row("package", "package-build-artifact"),
+        {
+            "status": "PASS",
+            "build_bundle_zip": "/tmp/build-artifact.zip",
+            "release_ready": True,
+            "unresolved_gates": [],
+        },
+    )
+    assert receipt["_mmm_completion_evidence"]["release_ready"] is True
