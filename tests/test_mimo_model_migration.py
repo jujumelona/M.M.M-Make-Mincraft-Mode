@@ -120,3 +120,37 @@ def test_qwen38_does_not_use_mimo_template(monkeypatch) -> None:
     config = ModelRegistry().role("Qwen3.8-27B_18GB", "planner")
     args = runtime._base_args("llama-server", "/tmp/qwen.gguf", config, 8911)
     assert "--chat-template-file" not in args
+
+def test_mimo_participates_in_live_native_tool_calibration() -> None:
+    from minecraft_mod_ai.qwen_runtime_transport_contract import (
+        _family,
+        _raw_tool_probe_turn,
+        _tool_probe_payload,
+    )
+
+    config = ModelRegistry().role("t4_local", "planner")
+    assert _family(config) == "mimo"
+    request, payload = _tool_probe_payload(config)
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+    tool_name = request.tools[0]["function"]["name"]
+    response = {
+        "choices": [{
+            "message": {
+                "role": "assistant", "content": "",
+                "tool_calls": [{
+                    "id": "call_mimo",
+                    "type": "function",
+                    "function": {"name": tool_name, "arguments": '{"value":7}'},
+                }],
+            },
+        }],
+    }
+    turn = _raw_tool_probe_turn(response, request, runtime_contract="mimo")
+    assert len(turn.tool_calls) == 1
+    assert turn.tool_calls[0].name == tool_name
+    with pytest.raises(RuntimeError, match="structured message.tool_calls"):
+        _raw_tool_probe_turn(
+            {"choices": [{"message": {"content": "<tool_call><function="}}]},
+            request,
+            runtime_contract="mimo",
+        )

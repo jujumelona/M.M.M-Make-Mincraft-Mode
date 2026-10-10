@@ -29,7 +29,7 @@ from .qwen_family_capabilities import qwen_family_capabilities
 
 _TOOL_NAME = "mmm_transport_probe"
 _TOOL_VALUE = 7
-_TOOL_TRANSPORT_EPOCH = "qwen-family-native-tool-message-v4"
+_TOOL_TRANSPORT_EPOCH = "model-native-tool-message-v5-mimo"
 _BENCHMARK_MARKER = "_mmm_qwen_tool_calibration_benchmark_v1"
 _RUN_VARIANT_MARKER = "_mmm_qwen_tool_calibration_context_v2"
 _PROBE_MARKER = "_mmm_qwen_tool_calibration_probe_v2"
@@ -54,6 +54,10 @@ def _config_extra(config: Any) -> Mapping[str, Any]:
 
 
 def _family(config: Any) -> str | None:
+    # Shared native OpenAI tool validation: MiMo and Qwen use different
+    # model-side templates but must pass the same host-admission probe.
+    if str(_config_extra(config).get("runtime_contract", "")).strip().casefold() == "mimo":
+        return "mimo"
     capabilities = qwen_family_capabilities(config, required=True)
     return capabilities.family if capabilities is not None else None
 
@@ -254,8 +258,10 @@ def _tool_probe_payload(config: Any) -> tuple[Any, dict[str, Any]]:
     return request, payload
 
 
-def _raw_tool_probe_turn(data: Mapping[str, Any], request: Any) -> Any:
-    """Require llama-server's native Qwen parser during managed-runtime calibration."""
+def _raw_tool_probe_turn(
+    data: Mapping[str, Any], request: Any, *, runtime_contract: str = "",
+) -> Any:
+    """Require model-native llama-server tool_calls, never free-text markup."""
 
     choices = data.get("choices")
     if (
@@ -274,7 +280,9 @@ def _raw_tool_probe_turn(data: Mapping[str, Any], request: Any) -> Any:
         )
     from .model_adapters.llama_cpp_adapter import _native_tool_generation_response
 
-    return _native_tool_generation_response(message, request)
+    return _native_tool_generation_response(
+        message, request, runtime_contract=runtime_contract
+    )
 
 
 def _tool_probe(base_url: str, autotune: Any, config: Any) -> tuple[bool, str]:
@@ -293,7 +301,11 @@ def _tool_probe(base_url: str, autotune: Any, config: Any) -> tuple[bool, str]:
         data = response.json()
         if not isinstance(data, Mapping):
             return False, "native tool probe returned a non-object response"
-        turn = _raw_tool_probe_turn(data, request)
+        turn = _raw_tool_probe_turn(
+            data,
+            request,
+            runtime_contract=str(_config_extra(config).get("runtime_contract", "")),
+        )
         signature = _tool_call_signature(turn)
         if not signature:
             return False, "host parser returned no valid canonical tool call"
@@ -473,7 +485,9 @@ def _install_tool_equivalence_policy(autotune: Any) -> None:
 
         valid, error = _tool_probe(base_url, autotune, config)
         if not valid:
-            raise RuntimeError(f"Qwen native tool transport calibration failed: {error}")
+            raise RuntimeError(
+                f"{_family(config)} native tool transport calibration failed: {error}"
+            )
         return probe
 
     setattr(qwen_tool_probe, _PROBE_MARKER, True)
