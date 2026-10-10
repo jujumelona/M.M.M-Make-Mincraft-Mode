@@ -118,7 +118,10 @@ def test_jdt_timeout_reports_missing_and_mismatched_uris(capsys: pytest.CaptureF
         _collect_diagnostics_traced(
             rpc,
             expected_uris={expected},
-            timeout_seconds=0.02,
+            # Give the worker enough time to consume both queued diagnostic
+            # and progress events on a loaded CI host; the expected URI is
+            # deliberately never published, so the timeout remains mandatory.
+            timeout_seconds=0.5,
             quiet_seconds=0.0,
             page_index=0,
         )
