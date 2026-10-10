@@ -207,14 +207,18 @@ def test_server_tick_does_not_substitute_for_a_player_action(monkeypatch):
     ]
 
 
-def test_atomic_mutation_must_not_execute_on_player_join():
-    from minecraft_mod_ai.typed_plan_authoring import author_semantic_game_dispatch
+def test_atomic_mutation_must_not_execute_on_player_join(monkeypatch):
+    from minecraft_mod_ai import typed_plan_authoring
 
+    monkeypatch.setattr(
+        typed_plan_authoring, "_extract_state_variable_types",
+        lambda _sections: {"credits": "int"},
+    )
     with pytest.raises(ValueError, match="TYPED_GAMEPLAY_MUTATION_EVENT_UNBOUND"):
-        author_semantic_game_dispatch(
+        typed_plan_authoring.author_semantic_game_dispatch(
             object(),
             "credits purchase",
-            {},
+            _sections(),
             {},
             coverage_refs=("algorithm.atomic_mutations",),
             bound_events=("player_join",),
@@ -249,7 +253,7 @@ def test_algorithm_steps_are_not_collapsed_into_one_model_action(monkeypatch):
         }
 
     monkeypatch.setattr(
-        fixed_template_generation, "generate_fixed_template_value", model,
+        typed_plan_authoring, "generate_fixed_template_value", model,
     )
     body = author_semantic_game_dispatch(
         object(), "four sequential gameplay steps", sections, {},
