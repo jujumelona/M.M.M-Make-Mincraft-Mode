@@ -73,10 +73,12 @@ permissions:
   contents: read
 
 concurrency:
-  # A later patch must not cancel the diagnostic jobs for the commit that
-  # failed. The next iteration needs complete causal evidence for each SHA,
-  # not a queue of cancelled gates with no failure artifacts.
-  group: production-kill-gates-${{ github.event_name }}-${{ github.sha }}
+  # Every kill gate runs the WHOLE test suite. Retain the in-progress failure
+  # diagnostics, but coalesce obsolete pending commits to the newest HEAD.
+  # Per-SHA groups queued hundreds of redundant 8-lane runs and delayed the
+  # evidence needed for the next fix. Partial CI independently queues each
+  # commit's changed-file checks; whole-suite coverage is not dropped here.
+  group: production-kill-gates-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: false
 
 env:
