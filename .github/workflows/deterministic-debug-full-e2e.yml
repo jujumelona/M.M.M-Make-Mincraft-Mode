@@ -106,7 +106,7 @@ jobs:
         with:
           name: deterministic-production-proof-${{ github.sha }}-${{ github.run_id }}
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
           path: |
             audit/production-e2e/**
             .mmm/**/logs/**
