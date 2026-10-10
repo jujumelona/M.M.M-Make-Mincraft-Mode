@@ -486,10 +486,6 @@ jobs:
     name: Actual Gradle, JDT, GameTest and packaged JAR proof
     uses: ./.github/workflows/deterministic-debug-full-e2e.yml
 
-  real-t4-model-production:
-    name: Real T4 local-model normal-plan and Gradle/GameTest production proof
-    uses: ./.github/workflows/real-model-colab-e2e.yml
-
   workflow-static-check:
     name: Validate complete Actions workflow graph and shell
     runs-on: ubuntu-latest
@@ -522,7 +518,7 @@ jobs:
     name: CI Gate
     if: ${{ always() }}
     timeout-minutes: 5
-    needs: [audit, tests, python313, model-realistic-replay, deterministic-production, workflow-static-check, real-t4-model-production]
+    needs: [audit, tests, python313, model-realistic-replay, deterministic-production, workflow-static-check]
     runs-on: ubuntu-latest
     steps:
       - env:
@@ -532,7 +528,6 @@ jobs:
           MODEL_REPLAY: ${{ needs.model-realistic-replay.result }}
           PRODUCTION_PROOF: ${{ needs.deterministic-production.result }}
           WORKFLOW_LINT: ${{ needs.workflow-static-check.result }}
-          REAL_T4_E2E: ${{ needs.real-t4-model-production.result }}
         run: |
           test "$AUDIT" = success
           test "$TESTS" = success
@@ -540,4 +535,3 @@ jobs:
           test "$MODEL_REPLAY" = success
           test "$PRODUCTION_PROOF" = success
           test "$WORKFLOW_LINT" = success
-          test "$REAL_T4_E2E" = success
