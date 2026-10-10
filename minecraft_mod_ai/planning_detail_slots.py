@@ -133,7 +133,14 @@ def specification_schema(
             }
         properties[concern] = {
             "type": "array",
-            "maxItems": 4,
+            # Planning authors at most four records per concern. Integration
+            # alone reserves one extra executable-command slot, filled by the
+            # bounded gameplay entry-point repair when all four authored
+            # records are lifecycle hooks. Do not discard original hooks.
+            "maxItems": (
+                5 if section == "integration" and concern == "entry_points"
+                else 4
+            ),
             "items": item_schema,
         }
     properties["inapplicable_concerns"] = {
