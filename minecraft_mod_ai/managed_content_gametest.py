@@ -181,13 +181,14 @@ def _java_assertions(manifest: Mapping[str, Any]) -> str:
             f'                    throw new AssertionError("Runtime {registry} registry is not iterable");',
             "                }",
             "                boolean present = false;",
+            "                Object liveValue = null;",
             "                for (Object entry : (Iterable<?>) registry) {",
             "                    for (java.lang.reflect.Method getter : registry.getClass().getMethods()) {",
             "                        if (getter.getParameterCount() != 1",
             '                            || !(getter.getName().equals("getKey") || getter.getName().equals("getId"))) continue;',
             "                        try {",
             "                            Object key = getter.invoke(registry, entry);",
-            f'                            if ("{mod_id}:{name}".equals(String.valueOf(key))) present = true;',
+            f'                            if ("{mod_id}:{name}".equals(String.valueOf(key))) {{ present = true; liveValue = entry; }}',
             "                        } catch (ReflectiveOperationException | IllegalArgumentException ignored) {",
             "                            // This overload cannot address registered entries.",
             "                        }",
@@ -198,6 +199,16 @@ def _java_assertions(manifest: Mapping[str, Any]) -> str:
             f'                if (!present) throw new AssertionError("GameTest missing live {kind}: {mod_id}:{name}");',
             "            }",
         ))
+        if kind == "block":
+            # An actual disposable in-server world placement assertion;
+            # mere registration is not proof the block can occupy the world.
+            lines[-1:-1] = [
+                '                Class<?> blockClass = Class.forName("net.minecraft.world.level.block.Block");',
+                '                Class<?> blockPosClass = Class.forName("net.minecraft.core.BlockPos");',
+                '                Object position = blockPosClass.getConstructor(int.class, int.class, int.class).newInstance(1, 1, 1);',
+                '                context.getClass().getMethod("setBlock", blockPosClass, blockClass).invoke(context, position, liveValue);',
+                '                context.getClass().getMethod("assertBlockPresent", blockClass, blockPosClass).invoke(context, liveValue, position);',
+            ]
     if manifest["recipes"]:
         item_registry_owner = (
             manifest["registries"].get("item")
