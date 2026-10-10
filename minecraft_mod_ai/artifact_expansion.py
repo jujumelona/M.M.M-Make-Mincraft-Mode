@@ -681,7 +681,13 @@ def expand_facts_to_jobs(
 
             target_path = render_binding(template["target"]["file"])
             anchor = render_binding(template["target"].get("anchor", ""))
-            requires = [render_binding(value) for value in template["dependencies"]]
+            # The reviewed client BlockItem model has no implicit dependency
+            # array in its catalog mold. Bind it explicitly to the BlockItem
+            # registry port emitted by fabric/block/register_basic.
+            if template_id == "minecraft/resource/item/client_block_item":
+                requires = [f"{subject}.registry_id"]
+            else:
+                requires = [render_binding(value) for value in template["dependencies"]]
             expected_tag_port = {
                 "item": "registry_id",
                 "block": "block_registry_id",
@@ -691,6 +697,11 @@ def expand_facts_to_jobs(
                 render_binding(name): types
                 for name, types in template.get("dependency_types", {}).items()
             }
+            if template_id == "minecraft/resource/item/client_block_item":
+                required_types[f"{subject}.registry_id"] = {
+                    "kind": "REGISTRY_ID",
+                    "target_type": "Item",
+                }
             for ref in resource_values.get("resource_references", []):
                 namespace, local_subject = ref.split(":", 1)
                 if namespace != mod_id:
@@ -724,7 +735,11 @@ def expand_facts_to_jobs(
                     }[registry_suffix],
                 }
             produces = [
-                render_binding(port["binding"]) for port in template["produces"]
+                render_binding(port["binding"])
+                for port in (
+                    [] if template_id == "minecraft/resource/item/client_block_item"
+                    else template["produces"]
+                )
             ]
 
             binding = require_registered_leaf_binding(
