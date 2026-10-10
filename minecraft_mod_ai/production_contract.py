@@ -611,7 +611,28 @@ def quality_unresolved(report: Mapping[str, Any]) -> tuple[str, ...]:
 
 def _compile_requirements(requested_prompt: str, game_design: Any, research_brief: Any) -> list[dict[str, str]]:
     raw: list[tuple[str, str, str]] = [('requested_prompt', 'request:$', requested_prompt)]
-    raw.extend(_source_items('game_design', game_design))
+    # An authored_plan is a structured planner/IR snapshot, not a flat list of
+    # player requirements. Its nested execution statuses (for example,
+    # assembly_task_queued) must never become public acceptance tests. The
+    # authored design text is the user-facing requirement source; the original
+    # complete game_design still participates in source_bindings for integrity.
+    if isinstance(game_design, Mapping) and 'authored_plan' in game_design:
+        authored_plan = game_design['authored_plan']
+        if not isinstance(authored_plan, Mapping):
+            raise ProductionContractError('authored_plan must be an object')
+        authored_text = _nonempty_string(
+            authored_plan.get('text'), 'authored plan design text'
+        )
+        raw.append(
+            ('game_design', 'game_design:$.authored_plan.text', authored_text)
+        )
+        source_design = {
+            key: value for key, value in game_design.items()
+            if key != 'authored_plan'
+        }
+    else:
+        source_design = game_design
+    raw.extend(_source_items('game_design', source_design))
     if research_brief is not None:
         raw.extend(_source_items('research_brief', research_brief))
     seen: set[tuple[str, str, str]] = set()

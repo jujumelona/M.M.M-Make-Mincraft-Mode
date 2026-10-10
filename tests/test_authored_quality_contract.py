@@ -40,6 +40,57 @@ def test_authored_production_binds_real_v2_quality_contract_before_approval():
     validate_production_contract(contract, modules, acceptance, ())
 
 
+
+def test_internal_authored_plan_states_are_not_public_requirements():
+    design, modules = _fixture()
+    design["authored_plan"].update({
+        "structured_sections": {
+            "assembly": {"status": "assembly_task_queued"},
+        },
+        "typed_plan_ir": {
+            "scheduler": {"task_sha256": "sha256:" + "a" * 64},
+        },
+        "content_design": {
+            "workflow": {"done_predicate": "all declared provides"},
+        },
+    })
+    bound, acceptance = _bind_authored_quality_contract(
+        requested_prompt="Create a crystal item",
+        design=design,
+        modules=modules,
+        assets=(),
+        acceptance=("The crystal item is registered.",),
+    )
+    contract = bound["_production_contract"]
+    statements = [row["statement"] for row in contract["requirement_catalog"]]
+    assert any(row["source_ref"] == "game_design:$.authored_plan.text"
+               for row in contract["requirement_catalog"])
+    assert "Crystal item" in " ".join(statements)
+    assert not any("assembly_task_queued" in item for item in statements)
+    assert not any("task_" in item.casefold() for item in acceptance)
+    assert not any("done_predicate" in item for item in acceptance)
+    validate_production_contract(contract, modules, acceptance, ())
+
+    # Planner-only fields are excluded from *public* checks, but still
+    # content-addressed; changing them must invalidate the quality binding.
+    changed = {
+        **bound,
+        "authored_plan": {
+            **bound["authored_plan"],
+            "typed_plan_ir": {"scheduler": {"task_sha256": "sha256:" + "b" * 64}},
+        },
+    }
+    with pytest.raises(ProductionContractError, match="game_design does not match"):
+        compile_quality_evidence(
+            contract,
+            "sha256:" + "c" * 64,
+            game_design=changed,
+            source_validation=None,
+            build_report=None,
+            jar_validation=None,
+        )
+
+
 def test_authored_quality_without_evidence_stays_blocked_not_self_certified():
     design, modules = _fixture()
     bound, acceptance = _bind_authored_quality_contract(
