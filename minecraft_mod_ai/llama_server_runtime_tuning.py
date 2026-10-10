@@ -194,30 +194,15 @@ def _setup_receipt() -> Any:
 
 
 def _cgroup_memory_available_bytes() -> int:
-    """Return remaining cgroup memory when a hard container limit is active."""
+    """Use the same cgroup working-set accounting as the Colab RAM watchdog.
 
-    candidates = (
-        (Path("/sys/fs/cgroup/memory.current"), Path("/sys/fs/cgroup/memory.max")),
-        (
-            Path("/sys/fs/cgroup/memory/memory.usage_in_bytes"),
-            Path("/sys/fs/cgroup/memory/memory.limit_in_bytes"),
-        ),
-    )
-    for current_path, limit_path in candidates:
-        try:
-            current_raw = current_path.read_text(encoding="utf-8").strip()
-            limit_raw = limit_path.read_text(encoding="utf-8").strip()
-            if not current_raw or not limit_raw or limit_raw == "max":
-                continue
-            current = max(0, int(current_raw))
-            limit = max(0, int(limit_raw))
-            # Ignore effectively-unbounded sentinel limits used by cgroup v1.
-            if limit <= 0 or limit >= (1 << 60):
-                continue
-            return max(0, limit - current)
-        except (OSError, UnicodeError, ValueError):
-            continue
-    return 0
+    GGUF downloads leave inactive file cache that the kernel can reclaim.
+    Counting that cache as non-reclaimable host RAM falsely rejects a viable
+    server or creates inconsistent launch-vs-watchdog memory assessments.
+    """
+    from .runtime_memory_watchdog import cgroup_effective_headroom_bytes
+
+    return cgroup_effective_headroom_bytes()
 
 
 def _runtime_resources() -> RuntimeResources:
