@@ -42,10 +42,14 @@ CONTENT_KINDS = tuple(CONTENT_KIND_TO_FACT_TYPE)
 # The small model must never invent them during ordinary content-owner discovery.
 # They are materialized deterministically from authored data-resource records only
 # after concrete target entities already exist.
+# Entity loot is a dependent resource of a concrete entity -> item drops edge,
+# never a standalone content identity selected by the model. Its former inclusion
+# in PRIMARY_CONTENT_KINDS produced ENTITY_LOOT facts with object=None.
 RESOURCE_DEFINITION_KINDS = (
     "crafting_recipe",
     "smelting_recipe",
     "registry_tag",
+    "entity_loot",
 )
 PRIMARY_CONTENT_KINDS = tuple(
     kind for kind in CONTENT_KINDS
@@ -223,7 +227,7 @@ def relation_type_supported_for_content_pair(
             source == FactType.BLOCK_EXISTS and target == FactType.ITEM_EXISTS
         ) or (
             source == FactType.ENTITY_EXISTS
-            and target in {FactType.ITEM_EXISTS, FactType.ENTITY_LOOT}
+            and target == FactType.ITEM_EXISTS
         )
     if relation_type == "opens":
         return target == FactType.GUI_EXISTS
