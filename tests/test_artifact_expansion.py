@@ -4,10 +4,26 @@ import pytest
 
 from minecraft_mod_ai.artifact_expansion import (
     ArtifactExpansionError,
-    expand_facts_to_jobs,
+    expand_facts_to_jobs as _expand_facts_to_jobs,
     validate_expansion_catalog,
 )
+from minecraft_mod_ai.host_version_catalog import host_target
 from minecraft_mod_ai.prompt_fact_types import FactType, PromptFact
+
+
+def expand_facts_to_jobs(*args, **kwargs):
+    # Exercise lowering against a real, reviewed HOST binding, not an
+    # invented versionless template admission. The production guard stays on.
+    kwargs.setdefault("version_context", host_target("auto").version_context)
+    return _expand_facts_to_jobs(*args, **kwargs)
+
+
+def test_expansion_refuses_missing_resolved_version_context():
+    with pytest.raises(ArtifactExpansionError, match="RESOLVED_VERSION_CONTEXT_REQUIRED"):
+        _expand_facts_to_jobs(
+            [PromptFact(fact_id="item", fact_type=FactType.ITEM_EXISTS, subject="item")],
+            mod_id="space", package_name="com.foo.space",
+        )
 
 
 def test_expansion_catalog_contains_only_executable_tested_leaves():
