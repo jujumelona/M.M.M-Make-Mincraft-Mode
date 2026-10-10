@@ -320,7 +320,7 @@ def test_unready_build_bundle_is_durable_but_never_a_verified_release():
     assert proof["completion_scope"] == "packaging_stage"
     assert proof["build_bundle_zip"] == "/tmp/build-artifact.zip"
     assert proof["release_ready"] is False
-    assert proof["unresolved_gates"] == ("quality:runtime",)
+    assert proof["unresolved_gates"] == ["quality:runtime"]
 
 
 def test_ready_build_bundle_requires_no_unresolved_gates():
@@ -334,3 +334,33 @@ def test_ready_build_bundle_requires_no_unresolved_gates():
         },
     )
     assert receipt["_mmm_completion_evidence"]["release_ready"] is True
+
+
+def test_cached_package_evidence_rejects_swapped_bundle_path_or_gate_state():
+    row = _row("package", "package-build-artifact")
+    original = _decorate_receipt(
+        row,
+        {
+            "status": "PASS",
+            "build_bundle_zip": "/tmp/original.zip",
+            "release_ready": False,
+            "unresolved_gates": ["quality:runtime"],
+        },
+    )
+    assert _decorate_receipt(row, original) == original
+    for update in (
+        {"build_bundle_zip": "/tmp/other.zip"},
+        {"release_ready": True, "unresolved_gates": []},
+        {"unresolved_gates": ["quality:security"]},
+    ):
+        altered = {**original, **update}
+        with pytest.raises(VerifierReceiptTruthError, match="VERIFIER_RECEIPT_STALE"):
+            _decorate_receipt(row, altered)
+
+
+def test_cached_verifier_receipt_rejects_modified_source_check_count():
+    row = _row("validate:source", "validate-source")
+    original = _decorate_receipt(row, _source_receipt())
+    altered = {**original, "checks_run": 1}
+    with pytest.raises(VerifierReceiptTruthError, match="VERIFIER_RECEIPT_STALE"):
+        _decorate_receipt(row, altered)
