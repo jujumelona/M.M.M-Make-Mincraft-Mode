@@ -668,6 +668,26 @@ def expand_facts_to_jobs(
                         "path (no invented default or unregistered external item): "
                         f"{drop_item!r}"
                     )
+                # Reject unbound references in the plan, not just malformed
+                # strings. Otherwise a fabricated/absent item is discovered
+                # only when the generated loot table is loaded in game.
+                if registry_port_by_subject.get(drop_item) != "registry_id":
+                    raise ArtifactExpansionError(
+                        "ARTIFACT_DROP_TARGET_UNREGISTERED: "
+                        f"{fact.fact_type.value} {subject} -> {drop_item} "
+                        "requires an ITEM_EXISTS fact for the target"
+                    )
+                expected_owner = (
+                    "entity_registry_id"
+                    if fact.fact_type == FactType.ENTITY_LOOT
+                    else "block_registry_id"
+                )
+                if registry_port_by_subject.get(subject) != expected_owner:
+                    raise ArtifactExpansionError(
+                        "ARTIFACT_DROP_OWNER_UNREGISTERED: "
+                        f"{fact.fact_type.value} {subject} requires its "
+                        f"registered {'entity' if fact.fact_type == FactType.ENTITY_LOOT else 'block'} owner"
+                    )
                 deterministic_inputs["drop_item"] = drop_item
 
             template = load_template(template_id)
