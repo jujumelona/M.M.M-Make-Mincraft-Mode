@@ -28,7 +28,9 @@ def test_source_edit_inherits_patch_permission_without_new_policy_name() -> None
         "coder",
         (_schema("apply_source_edit"),),
     )
-    assert [item["function"]["name"] for item in tools] == ["apply_source_edit"]
+    # The coder role now collects evidence only. The canonical alias does
+    # not grant mutation rights when the reviewed role has no write Skill.
+    assert tools == ()
 
 
 def test_source_edit_does_not_escape_canonical_stage() -> None:
@@ -43,8 +45,7 @@ def test_source_edit_does_not_escape_canonical_stage() -> None:
 def test_source_edit_reports_the_same_skills_as_source_patch() -> None:
     edit_skills = skills_for_tool("generation", "apply_source_edit", model_role="coder")
     patch_skills = skills_for_tool("generation", "apply_source_patch", model_role="coder")
-    assert edit_skills
-    assert edit_skills == patch_skills
+    assert edit_skills == patch_skills == ()
 
 
 def test_capability_context_lists_alias_as_model_tool_not_host_permission() -> None:
@@ -61,5 +62,6 @@ def test_capability_context_lists_alias_as_model_tool_not_host_permission() -> N
         for skill in payload["eligible_skills"]
         if "apply_source_edit" in skill.get("model_tools", ())
     ]
-    assert matching
-    assert all("apply_source_patch" not in skill.get("host_owned_tools", ()) for skill in matching)
+    assert matching == []
+    assert all("apply_source_patch" not in skill.get("host_owned_tools", ())
+               for skill in payload["eligible_skills"])
