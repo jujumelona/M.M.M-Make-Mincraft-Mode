@@ -1,0 +1,55 @@
+name: Refresh reviewed HOST version catalog
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'minecraft_mod_ai/templates/fabric/**'
+      - 'minecraft_mod_ai/populate_version_artifact_rules.py'
+      - 'minecraft_mod_ai/_version_artifact_rules_core.py'
+      - '.github/workflows/refresh-host-version-catalog.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-host-version-catalog-main
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: true
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install the actual catalog publisher and test dependencies
+        run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Regenerate all immutable HOST contexts and version evidence together
+        run: python -m minecraft_mod_ai.populate_version_artifact_rules
+      - name: Verify template admission and official target locks before publication
+        run: |
+          python -m pytest -q tests/test_packaged_version_catalog.py tests/test_resolved_version_context.py tests/test_block_item_recipe_contract.py
+      - name: Publish coherent snapshot to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add minecraft_mod_ai/data/host_version_catalog.json minecraft_mod_ai/data/official_version_evidence.json
+          if git diff --cached --quiet; then
+            echo "HOST catalog is already in sync."
+            exit 0
+          fi
+          git commit -m "build: regenerate reviewed HOST bundle template admissions"
+          # Reject conflicting main updates; never force-push reviewed host evidence.
+          git push origin HEAD:main
