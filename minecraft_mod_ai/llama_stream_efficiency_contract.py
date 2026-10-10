@@ -77,6 +77,27 @@ def _repetitive_tail(text: str, *, copies: int = 4) -> bool:
     return False
 
 
+def _inside_json_string_at_end(text: str) -> bool:
+    """Recognize repeated *data* in an unfinished JSON string, not a loop.
+
+    Source-edit contents and other JSON string values can legitimately include
+    thousands of identical characters. The loop guard must not abort a live
+    tool call just because a structured argument contains that data.
+    """
+    if not text.lstrip().startswith(("{", "[")):
+        return False
+    quoted = False
+    escaped = False
+    for char in text:
+        if escaped:
+            escaped = False
+        elif quoted and char == "\\\\":
+            escaped = True
+        elif char == '"':
+            quoted = not quoted
+    return quoted
+
+
 def _required_tool_repetition_detected(
     message: Mapping[str, Any],
     *,
@@ -95,7 +116,11 @@ def _required_tool_repetition_detected(
         if not isinstance(function, Mapping):
             continue
         arguments = function.get("arguments")
-        if isinstance(arguments, str) and _repetitive_tail(arguments, copies=copies):
+        if (
+            isinstance(arguments, str)
+            and _repetitive_tail(arguments, copies=copies)
+            and not _inside_json_string_at_end(arguments)
+        ):
             return True
     return False
 
