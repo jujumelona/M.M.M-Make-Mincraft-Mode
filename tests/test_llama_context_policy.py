@@ -2,22 +2,6 @@ from types import SimpleNamespace
 
 from minecraft_mod_ai import llama_server_autotune as autotune
 from minecraft_mod_ai.llama_tuning_pipeline import NativeLlamaTuningPipeline
-from minecraft_mod_ai.qwen35_mtp_hotpath_contract import (
-    _context_size,
-    _install_measured_fast_base_args,
-)
-
-
-def _qwen_config(max_context: int = 262144):
-    return SimpleNamespace(
-        model_id="unsloth/Qwen3.5-9B-MTP-GGUF",
-        extra={
-            "gguf_filename": "Qwen3.5-9B-UD-Q4_K_XL.gguf",
-            "runtime_contract": "qwen",
-            "decode_hotpath": "t4_mtp",
-        },
-        max_context=max_context,
-    )
 
 
 def _generic_config(max_context: int = 131072):
@@ -85,60 +69,47 @@ def test_profile_authority_honors_explicit_generic_context_override(monkeypatch)
     assert args[args.index("--ctx-size") + 1] == "24576"
 
 
-def test_qwen_hotpath_alone_preserves_inherited_context_without_override(monkeypatch) -> None:
-    monkeypatch.delenv("MMM_QWEN35_MTP_CTX", raising=False)
-
-    def base(binary, model, config, port):
-        return [binary, "-m", model, "--port", str(port), "--ctx-size", "4096"]
-
-    holder = SimpleNamespace(_base_args=base)
-    _install_measured_fast_base_args(holder)
-    args = holder._base_args("server", "model", _qwen_config(), 8910)
-    assert args[args.index("--ctx-size") + 1] == "4096"
+def _mimo_config(max_context: int = 32768):
+    return SimpleNamespace(
+        model_id="MiMo-V2.6-9B",
+        extra={"gguf_filename": "MiMo-V2.6-9B.gguf"},
+        max_context=max_context,
+    )
 
 
-def test_final_profile_authority_restores_native_qwen_context(monkeypatch) -> None:
-    monkeypatch.delenv("MMM_QWEN35_MTP_CTX", raising=False)
+def test_native_context_authority_does_not_inherit_stale_small_ctx_for_mimo(monkeypatch):
     monkeypatch.delenv("MMM_LLAMA_SERVER_CTX", raising=False)
 
     def base(binary, model, config, port):
         return [binary, "-m", model, "--port", str(port), "--ctx-size", "4096"]
 
     holder = SimpleNamespace(_base_args=base)
-    _install_measured_fast_base_args(holder)
     _install_context_authority(holder)
-    args = holder._base_args("server", "model", _qwen_config(), 8910)
+    args = holder._base_args("server", "model", _mimo_config(), 8910)
     assert "--ctx-size" not in args
     assert "-c" not in args
 
 
-def test_qwen_context_helper_uses_only_explicit_override(monkeypatch) -> None:
-    monkeypatch.delenv("MMM_QWEN35_MTP_CTX", raising=False)
-    assert _context_size(_qwen_config()) is None
-    monkeypatch.setenv("MMM_QWEN35_MTP_CTX", "16384")
-    assert _context_size(_qwen_config()) == 16384
-
-
-def test_profile_authority_preserves_explicit_qwen_context(monkeypatch) -> None:
-    monkeypatch.setenv("MMM_QWEN35_MTP_CTX", "16384")
+def test_mimo_profile_context_only_uses_explicit_valid_override(monkeypatch):
+    monkeypatch.setenv("MMM_LLAMA_SERVER_CTX", "16384")
 
     def base(binary, model, config, port):
         return [binary, "-m", model, "--port", str(port), "--ctx-size", "4096"]
 
     holder = SimpleNamespace(_base_args=base)
     _install_context_authority(holder)
-    args = holder._base_args("server", "model", _qwen_config(), 8910)
+    args = holder._base_args("server", "model", _mimo_config(), 8910)
     assert args[args.index("--ctx-size") + 1] == "16384"
 
 
-def test_qwen_registry_capacity_is_not_forced_into_server_ctx(monkeypatch) -> None:
-    monkeypatch.delenv("MMM_QWEN35_MTP_CTX", raising=False)
+def test_mimo_registry_capacity_is_not_forced_into_server_ctx(monkeypatch):
+    monkeypatch.delenv("MMM_LLAMA_SERVER_CTX", raising=False)
 
     def base(binary, model, config, port):
         return [binary, "-m", model, "--port", str(port), "--ctx-size", "8192"]
 
     holder = SimpleNamespace(_base_args=base)
     _install_context_authority(holder)
-    args = holder._base_args("server", "model", _qwen_config(262144), 8910)
+    args = holder._base_args("server", "model", _mimo_config(32768), 8910)
     assert "--ctx-size" not in args
     assert "-c" not in args
