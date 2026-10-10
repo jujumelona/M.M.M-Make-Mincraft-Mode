@@ -3472,6 +3472,22 @@ class CompleteProductionOrchestrator:
                     or file_sha256(path) != expected
                 ):
                     return False
+        # Historical receipts may have been marked PASS before the pixel
+        # diversity gate existed. Resume must recheck actual image bytes,
+        # not only the old hash and structural validation receipt.
+        from .resource_image_pipeline import assert_generated_gameplay_diversity
+        try:
+            from PIL import Image
+
+            for asset in receipt['assets']:
+                target_path = asset.get('target_path')
+                if not isinstance(target_path, str):
+                    return False
+                with Image.open(asset['target']) as generated:
+                    generated.load()
+                    assert_generated_gameplay_diversity(generated, target_path)
+        except (OSError, ValueError, ImportError, KeyError, TypeError):
+            return False
         graph = receipt.get('resource_graph_validation')
         contract = receipt.get('resource_contract_validation')
         return (
