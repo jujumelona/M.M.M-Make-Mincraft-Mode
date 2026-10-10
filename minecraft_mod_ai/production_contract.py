@@ -908,7 +908,7 @@ def _infer_dimensions(*, requested_prompt: str, game_design: Any, research_brief
             )
         )
         or bool(re.search(
-            r'(?i)\\b(?:research|technology radar|prior art|license audit)\\b'
+            r'(?i)\b(?:research|technology radar|prior art|license audit)\b'
             r'|연구|선행기술|라이선스 검증',
             requested_prompt,
         ))
