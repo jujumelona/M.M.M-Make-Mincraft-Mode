@@ -1698,9 +1698,29 @@ def author_semantic_game_dispatch(
     else:
         allowed_events = None
     rules: list[Mapping[str, Any]] = []
-    schemas: dict[tuple[bool, bool], tuple[dict[str, Any], int]] = {}
+    schemas: dict[tuple[Any, ...], tuple[dict[str, Any], int]] = {}
 
-    for coverage_ref in refs:
+    from .authored_structured_design import active_concern_records
+
+    # One semantic action for one concern is insufficient when four authored
+    # algorithm steps describe four different game operations. Keep bounded
+    # model calls per host-authored record rather than collapsing the plan.
+    units: list[tuple[str, int | None, Mapping[str, Any] | None]] = []
+    for ref in refs:
+        if ref in {"algorithm.steps", "algorithm.atomic_mutations"}:
+            concern = ref.partition(".")[2]
+            records = active_concern_records(
+                structured_sections, "algorithm",
+            ).get(concern, ())
+            if records:
+                units.extend(
+                    (ref, index, record)
+                    for index, record in enumerate(records)
+                )
+                continue
+        units.append((ref, None, None))
+
+    for coverage_ref, record_index, focus_record in units:
         state_only = coverage_ref in {
             "state_model.transitions", "state_model.updates",
         }
@@ -1744,6 +1764,8 @@ def author_semantic_game_dispatch(
         payload = {
             "source_sha256": hashlib.sha256(source_text.encode("utf-8")).hexdigest(),
             "coverage_ref": coverage_ref,
+            "coverage_record_index": record_index,
+            "focus_record": dict(focus_record) if focus_record is not None else None,
             "semantic_context": _semantic_context_for_refs(
                 structured_sections,
                 (coverage_ref,),
@@ -1774,7 +1796,8 @@ def author_semantic_game_dispatch(
             },
             "instruction": (
                 "Choose exactly one host-bound runtime action implementing the supplied "
-                "coverage_ref. Only choose an event that is actually bound by "
+                "coverage_ref and its individual focus_record when present; do not "
+                "substitute an unrelated step. Only choose an event actually bound by "
                 "the host; no lifecycle substitutions for unrelated actions. "
                 "Every state_key and capability_id is closed by the schema; "
                 "do not invent identifiers, arrays, loops, Java, or extra actions. "
