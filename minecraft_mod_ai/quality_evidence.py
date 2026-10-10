@@ -47,7 +47,7 @@ def _contract_bound_game_design(contract: Mapping[str, Any], game_design: Mappin
         return undecorated
     return snapshot
 
-def compile_quality_evidence(contract: Mapping[str, Any], proposal_hash: str, *, game_design: Mapping[str, Any], source_validation: Mapping[str, Any] | None, build_report: Mapping[str, Any] | None, jar_validation: Mapping[str, Any] | None, module_receipts: Iterable[Mapping[str, Any]]=(), asset_receipt: Mapping[str, Any] | None=None, blockbench_receipts: Iterable[Mapping[str, Any]]=(), runtime_receipt: Mapping[str, Any] | None=None, playtest_receipt: Mapping[str, Any] | None=None, visual_receipt: Mapping[str, Any] | None=None, missing_reasons: MutableMapping[str, str] | None=None) -> dict[str, dict[str, Any]]:
+def compile_quality_evidence(contract: Mapping[str, Any], proposal_hash: str, *, game_design: Mapping[str, Any], source_validation: Mapping[str, Any] | None, build_report: Mapping[str, Any] | None, jar_validation: Mapping[str, Any] | None, module_receipts: Iterable[Mapping[str, Any]]=(), asset_receipt: Mapping[str, Any] | None=None, blockbench_receipts: Iterable[Mapping[str, Any]]=(), runtime_receipt: Mapping[str, Any] | None=None, playtest_receipt: Mapping[str, Any] | None=None, managed_runtime_receipt: Mapping[str, Any] | None=None, visual_receipt: Mapping[str, Any] | None=None, missing_reasons: MutableMapping[str, str] | None=None) -> dict[str, dict[str, Any]]:
     """Return independently checked ``PASS`` receipts keyed by dimension.
 
     Receipt IDs are hashes of the proposal binding, evidence route, and stable
@@ -74,6 +74,16 @@ def compile_quality_evidence(contract: Mapping[str, Any], proposal_hash: str, *,
     jar = _jar_evidence(build_report, jar_validation)
     research = _research_evidence(game_design)
     runtime = _runtime_evidence(runtime_receipt, playtest_receipt)
+    # A live Fabric GameTest that asserts exact item/block registries and the
+    # server-visible recipe resource may cover the content-only runtime dimension.
+    # It cannot substitute for client, multiplayer, persistence or custom script
+    # playtests. The independent orchestrator verifier binds executable source,
+    # the native Minecraft test report and the locked generated project.
+    if runtime is None:
+        runtime = _managed_content_runtime_evidence(
+            managed_runtime_receipt, gametest, clean_build, source, jar,
+            build_report,
+        )
     candidates: dict[str, EvidenceResult | None] = {'correctness': _combine(source, clean_build, gametest), 'build': _combine(clean_build, jar), 'research': research, 'runtime': runtime}
     if 'visual_3d' in routes:
         candidates['visual_3d'] = _visual_evidence(contract, asset_receipt, blockbench, visual_receipt)
@@ -88,7 +98,7 @@ def compile_quality_evidence(contract: Mapping[str, Any], proposal_hash: str, *,
             'correctness': (('source-validation receipt', source), ('clean Gradle build receipt', clean_build), ('passing structured GameTest report', gametest)),
             'build': (('clean Gradle build receipt', clean_build), ('verified JAR receipt', jar)),
             'research': (('complete technology radar, ecosystem discovery, and official technical evidence', research),),
-            'runtime': (('Minecraft runtime and interactive playtest receipts', runtime),),
+            'runtime': (('Minecraft interactive runtime/playtest or live content GameTest receipt', runtime),),
             'visual_3d': (('runtime screenshots, visual review, and asset integrity receipts', candidates.get('visual_3d')),),
         }
         for dimension_id in routes:
@@ -234,6 +244,59 @@ def _research_evidence(game_design: Mapping[str, Any]) -> EvidenceResult | None:
         return None
     refs = [_evidence_ref('technology-pagination', {'radar_sha256': _digest(technology['radar_sha256']), 'requirements': len(requirements), 'pages': pagination['pages_collected'], 'collection': technology_collection}), _evidence_ref('ecosystem-route-catalog', {'route_sha256': _digest(ecosystem['route_sha256']), 'routes': route_count, 'processed': processed, 'status': status, 'collection': ecosystem_collection}), _evidence_ref('official-rag', {'evidence_sha256': _digest(technical['evidence_sha256']), 'domain_count': len(domains), 'unresolved': []})]
     return (refs, [technology, ecosystem, technical])
+
+def _managed_content_runtime_evidence(
+    receipt: Mapping[str, Any] | None,
+    gametest: EvidenceResult | None,
+    clean_build: EvidenceResult | None,
+    source: EvidenceResult | None,
+    jar: EvidenceResult | None,
+    build_report: Mapping[str, Any] | None,
+) -> EvidenceResult | None:
+    """Require real, independently checked in-game assertions, not synthetic PASS."""
+    if (
+        not isinstance(receipt, Mapping)
+        or receipt.get('schema_version') != 'mmm/managed-content-gametest-runtime-v1'
+        or receipt.get('status') != 'PASS'
+        or receipt.get('runtime_kind') != 'live_minecraft_server_gametest'
+        or gametest is None or clean_build is None or source is None or jar is None
+        or not isinstance(build_report, Mapping)
+    ):
+        return None
+    report_path = build_report.get('gametest_report')
+    if not isinstance(report_path, str) or not report_path:
+        return None
+    report_digest = _regular_file_sha256(Path(report_path))
+    if report_digest != receipt.get('report_sha256'):
+        return None
+    source_digest = receipt.get('source_sha256')
+    content = receipt.get('content')
+    if not _valid_digest(source_digest) or not _is_sequence(content) or not content:
+        return None
+    if any(
+        not _is_sequence(entry) or len(entry) != 2
+        or not all(isinstance(value, str) and value for value in entry)
+        for entry in content
+    ):
+        return None
+    recipes = receipt.get('recipes')
+    if not _is_sequence(recipes) or not all(isinstance(x, str) for x in recipes):
+        return None
+    facts = {
+        'runtime_kind': receipt['runtime_kind'],
+        'mod_id': receipt.get('mod_id'),
+        'content': content,
+        'recipes': recipes,
+        'game_test_source_sha256': source_digest,
+        'minecraft_report_sha256': report_digest,
+    }
+    combined = _combine(gametest, clean_build, source, jar)
+    if combined is None:
+        return None
+    refs, sources = combined
+    return (refs + [_evidence_ref('live-content-gametest-runtime', facts)],
+            sources + [receipt])
+
 
 def _runtime_evidence(runtime: Mapping[str, Any] | None, playtest: Mapping[str, Any] | None) -> EvidenceResult | None:
     if not isinstance(runtime, Mapping) or not _objective_pass(playtest):
