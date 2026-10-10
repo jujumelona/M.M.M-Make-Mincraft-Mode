@@ -176,11 +176,30 @@ def _build_evidence(node_id: str, receipt: Mapping[str, Any]) -> dict[str, Any]:
 
 def _package_evidence(node_id: str, receipt: Mapping[str, Any]) -> dict[str, Any]:
     if node_id == "package-build-artifact":
-        if str(receipt.get("status") or "").upper() != "PASS":
+        # A PASS label alone is not a produced artifact: the current packaging
+        # node must identify its output and the release-gate decision.
+        bundle = str(receipt.get("build_bundle_zip") or "").strip()
+        release_ready = receipt.get("release_ready")
+        unresolved = receipt.get("unresolved_gates")
+        if (
+            str(receipt.get("status") or "").upper() != "PASS"
+            or not bundle
+            or type(release_ready) is not bool
+            or not isinstance(unresolved, list)
+            or any(not isinstance(gate, str) or not gate.strip() for gate in unresolved)
+            or (release_ready and unresolved)
+        ):
             raise VerifierReceiptTruthError(
-                "VERIFIER_RECEIPT_MISSING: build artifact package requires PASS status."
+                "VERIFIER_RECEIPT_MISSING: build artifact package requires PASS, "
+                "a bundle path, a boolean release decision, and consistent unresolved gates."
             )
-        return {"verifier": "package_phase", "status": "PASS"}
+        return {
+            "verifier": "package_phase",
+            "status": "PASS",
+            "build_bundle_zip": bundle,
+            "release_ready": release_ready,
+            "unresolved_gates": tuple(unresolved),
+        }
     if node_id != "package-release":
         raise VerifierReceiptTruthError(
             f"VERIFIER_RECEIPT_UNSUPPORTED_PACKAGE_NODE: {node_id!r}."
