@@ -28,7 +28,11 @@ GAMEPLAY_CONTENT_DRIVER_CONCERNS: dict[str, tuple[str, ...]] = {
     # Actors, limits and postconditions are context, not independent item
     # identities. Asking for entities for all of those was a call explosion.
     "integration": ("entry_points",),
-    "algorithm": ("steps",),
+    # A step can be a mere predicate ("is launch ready?"). The actual
+    # resource spending, assembly and combat state writers live in
+    # atomic_mutations. Dropping them produced four display-only GUIs for
+    # an authored space progression mod despite its transaction contract.
+    "algorithm": ("steps", "atomic_mutations"),
     # Only used when neither explicit entries nor steps were authored.
     "behavior_contract": ("outputs",),
 }
