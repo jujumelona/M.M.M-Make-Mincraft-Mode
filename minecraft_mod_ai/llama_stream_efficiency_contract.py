@@ -406,6 +406,16 @@ class _StreamingCompletionClient:
     def post(self, url: str, **kwargs: Any) -> Any:
         payload = kwargs.get("json")
         if (
+            isinstance(payload, Mapping)
+            and url.rstrip("/").endswith("/chat/completions")
+            and os.environ.get("MMM_COLAB_SETUP_RECEIPT", "").strip()
+        ):
+            # Fail with a stage/snapshot diagnosis before creating another large
+            # native prompt instead of racing the watchdog's emergency SIGTERM.
+            from .runtime_memory_watchdog import assert_memory_headroom
+
+            assert_memory_headroom("llama_completion_preflight")
+        if (
             not isinstance(payload, Mapping)
             or not url.rstrip("/").endswith("/chat/completions")
             or payload.get("stream") is True
