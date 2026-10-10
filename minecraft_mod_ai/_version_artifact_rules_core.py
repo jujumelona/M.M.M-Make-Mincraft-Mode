@@ -42,6 +42,29 @@ LEAF_TEMPLATES = (
 )
 
 ARTIFACT_SCHEMAS = {
+    # Minecraft 1.21.4+ client item definition for a registered BlockItem.
+    # This is a distinct JSON output contract from the legacy block model,
+    # and must be present in both newly built and shipped HOST snapshots.
+    "minecraft/resource/item/client_block_item": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["model"],
+        "properties": {
+            "model": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["type", "model"],
+                "properties": {
+                    "type": {"const": "minecraft:model"},
+                    "model": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9_.-]+:block/[a-z0-9_./-]+$",
+                    },
+                },
+            },
+        },
+    },
     "minecraft/resource/item/client_item": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
