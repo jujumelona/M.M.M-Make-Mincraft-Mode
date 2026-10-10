@@ -1626,6 +1626,7 @@ class CompleteProductionOrchestrator:
                 'artifact_sha256': str(artifact_receipt.get('sha256') or ''),
                 'coverage_sha256': str(coverage_receipt.get('coverage_sha256') or ''),
                 'reuse_manifest_sha256': _stable_payload_sha256(reuse_manifest),
+                'source_reuse_audit_sha256': _stable_payload_sha256(source_reuse_audit),
                 'build_receipt_sha256': _stable_payload_sha256(build_receipt),
                 'runtime_receipt_sha256': _stable_payload_sha256(persisted_runtime_receipt),
                 'resource_pack_sha256': str(
@@ -1657,6 +1658,16 @@ class CompleteProductionOrchestrator:
                         runtime_receipt=persisted_runtime_receipt,
                         proposal_hash=approved.calculate_hash(),
                         additional_artifacts={
+                            **(
+                                {
+                                    'source-reuse-audit.json': {
+                                        'path': str(metadata_root / 'source-reuse-audit.json'),
+                                        'sha256': file_sha256(metadata_root / 'source-reuse-audit.json'),
+                                    }
+                                }
+                                if source_reuse_audit is not None
+                                else {}
+                            ),
                             **(
                                 {
                                     'generated-resource-pack.zip': resource_pack_bundle
