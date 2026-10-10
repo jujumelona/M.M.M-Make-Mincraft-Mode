@@ -638,3 +638,47 @@ def test_alpha_preflight_failure_still_releases_image_session(tmp_path, monkeypa
     with pytest.raises(AssetProductionError, match="after text-model handoff"):
         generate_assets(router, proposal, tmp_path / "project", tmp_path / "run")
     assert events == ["shutdown", "preflight", "released"]
+
+
+def test_generated_block_cannot_pass_as_single_black_tile(tmp_path):
+    """Regression: a solid black texture previously passed all quality gates."""
+    from PIL import Image
+    from minecraft_mod_ai.resource_image_pipeline import validate_texture
+
+    texture = resolve_asset(
+        request("block", "block.cube_all"),
+        namespace="demo",
+        minecraft_version="1.21.4",
+    ).textures[0].to_dict()
+    output = tmp_path / "black.png"
+    Image.new("RGBA", (16, 16), (0, 0, 0, 255)).save(output)
+    with pytest.raises(ValueError, match="VISUAL_TEXTURE_DEGENERATE"):
+        validate_texture(output, texture, check_metadata=True)
+
+    with Image.open(output) as source:
+        nonuniform = source.copy()
+    nonuniform.putpixel((8, 8), (12, 22, 35, 255))
+    nonuniform.save(output)
+    validate_texture(output, texture, check_metadata=True)
+
+
+def test_generated_item_cannot_pass_as_flat_color_cutout(tmp_path):
+    """Alpha silhouette alone cannot prove an item texture was rendered."""
+    from PIL import Image
+    from minecraft_mod_ai.resource_image_pipeline import validate_texture
+
+    texture = resolve_asset(
+        request("item", "item.generated"),
+        namespace="demo",
+        minecraft_version="1.21.4",
+    ).textures[0].to_dict()
+    output = tmp_path / "cutout.png"
+    img = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
+    img.paste((34, 34, 34, 255), (3, 3, 13, 13))
+    img.save(output)
+    with pytest.raises(ValueError, match="VISUAL_TEXTURE_DEGENERATE"):
+        validate_texture(output, texture)
+    img.putpixel((8, 8), (80, 100, 140, 255))
+    img.save(output)
+    validate_texture(output, texture)
+
