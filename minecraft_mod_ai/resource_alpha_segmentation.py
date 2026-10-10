@@ -127,10 +127,13 @@ def _available_host_ram_bytes() -> int | None:
 
 
 def _preflight_worker_ram(*, model_name: str = ALPHA_SEGMENTATION_MODEL) -> None:
-    """Check the selected worker\'s RAM floor, not the largest model\'s floor."""
+    """Check the selected worker's RAM floor, not the largest model's floor."""
     if model_name not in {ALPHA_SEGMENTATION_MODEL, ALPHA_SEGMENTATION_MID_MODEL, ALPHA_SEGMENTATION_FALLBACK_MODEL}:
         raise ValueError(f"ALPHA_SEGMENTER_MODEL_NOT_ALLOWED: {model_name}")
     # Keep the full-model gate intact; U2NetP has a smaller ONNX footprint.
+    config_key = ("MMM_ALPHA_U2NETP_MIN_AVAILABLE_MB"
+                  if model_name == ALPHA_SEGMENTATION_FALLBACK_MODEL
+                  else "MMM_ALPHA_MIN_AVAILABLE_MB")
     raw = (
         os.environ.get("MMM_ALPHA_U2NETP_MIN_AVAILABLE_MB", "1536")
         if model_name == ALPHA_SEGMENTATION_FALLBACK_MODEL
@@ -139,9 +142,9 @@ def _preflight_worker_ram(*, model_name: str = ALPHA_SEGMENTATION_MODEL) -> None
     try:
         minimum_mb = int(raw)
     except ValueError as exc:
-        raise ValueError("MMM_ALPHA_MIN_AVAILABLE_MB must be an integer") from exc
+        raise ValueError(f"{config_key} must be an integer") from exc
     if minimum_mb < 0:
-        raise ValueError("MMM_ALPHA_MIN_AVAILABLE_MB cannot be negative")
+        raise ValueError(f"{config_key} cannot be negative")
     available = _available_host_ram_bytes()
     if available is not None and available < minimum_mb * 1024 * 1024:
         raise ValueError(
@@ -155,8 +158,8 @@ def _preflight_worker_ram(*, model_name: str = ALPHA_SEGMENTATION_MODEL) -> None
 def _preflight_checkpoint_download_ram() -> None:
     """A streaming checkpoint fetch is not an ONNX inference allocation.
 
-    The ONNX inference worker retains its stricter, separate 3 GiB
-    safety gate. Checkpoint preparation only needs room for the Python/pooch
+    The ONNX inference worker has a separate model-specific RAM gate
+    (3 GiB for full models; 1.5 GiB for U2NetP). Checkpoint preparation only needs room for the Python/pooch
     download subprocess and disk-backed streamed bytes.
     """
     raw = os.environ.get("MMM_ALPHA_PREPARE_MIN_AVAILABLE_MB", "512")
