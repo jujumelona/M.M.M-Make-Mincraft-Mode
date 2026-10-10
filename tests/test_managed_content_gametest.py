@@ -100,6 +100,8 @@ def test_generated_content_gametest_uses_target_host_facts_and_real_recipe_resou
     assert 'Class.forName("net.minecraft.core.registries.BuiltInRegistries")' in source
     assert "GameTest missing live item" in source
     assert "GameTest missing live block" in source
+    assert 'getMethod("setBlock", blockPosClass, blockClass)' in source
+    assert 'getMethod("assertBlockPresent", blockClass, blockPosClass)' in source
     assert "GameTest RecipeManager did not load actual recipe: mmm_debug_crystal:crystal_block_recipe" in source
     assert "createInput.invoke(null, 2, 2, craftedInputs)" in source
     assert "getMethod(\"matches\", inputClass" in source
