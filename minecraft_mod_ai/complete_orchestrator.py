@@ -260,8 +260,10 @@ def _quality_execution_preflight_gaps(
         missing = [
             name for name, enabled in (
                 ('run_runtime', options.run_runtime),
+                ('run_client', options.run_client),
                 ('run_visual_review', options.run_visual_review),
-                ('screenshot_paths', bool(options.screenshot_paths)),
+                # screenshot_paths may be empty: live-client screenshot discovery
+                # is supported by collect_runtime_screenshot_receipts().
             ) if not enabled
         ]
         if missing:
