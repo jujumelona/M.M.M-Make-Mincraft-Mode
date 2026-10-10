@@ -126,9 +126,16 @@ def _available_host_ram_bytes() -> int | None:
     return available or None
 
 
-def _preflight_worker_ram() -> None:
-    """Fail explicitly rather than asking the OOM killer to choose a process."""
-    raw = os.environ.get("MMM_ALPHA_MIN_AVAILABLE_MB", "3072")
+def _preflight_worker_ram(*, model_name: str = ALPHA_SEGMENTATION_MODEL) -> None:
+    """Check the selected worker\'s RAM floor, not the largest model\'s floor."""
+    if model_name not in {ALPHA_SEGMENTATION_MODEL, ALPHA_SEGMENTATION_MID_MODEL, ALPHA_SEGMENTATION_FALLBACK_MODEL}:
+        raise ValueError(f"ALPHA_SEGMENTER_MODEL_NOT_ALLOWED: {model_name}")
+    # Keep the full-model gate intact; U2NetP has a smaller ONNX footprint.
+    raw = (
+        os.environ.get("MMM_ALPHA_U2NETP_MIN_AVAILABLE_MB", "1536")
+        if model_name == ALPHA_SEGMENTATION_FALLBACK_MODEL
+        else os.environ.get("MMM_ALPHA_MIN_AVAILABLE_MB", "3072")
+    )
     try:
         minimum_mb = int(raw)
     except ValueError as exc:
@@ -140,7 +147,7 @@ def _preflight_worker_ram() -> None:
         raise ValueError(
             "ALPHA_SEGMENTER_INSUFFICIENT_HOST_RAM: "
             f"{available // (1024 * 1024)} MiB free; "
-            f"requires at least {minimum_mb} MiB before starting BiRefNet. "
+            f"requires at least {minimum_mb} MiB before starting {model_name}. "
             "Free host RAM, stop concurrent JVM builds, or increase Colab RAM."
         )
 
@@ -213,7 +220,6 @@ def segment_foreground_isolated(image: Any) -> Any:
     from PIL import Image
 
     global _LITE_WORKER_SIGKILLED, _U2NET_WORKER_SIGKILLED
-    _preflight_worker_ram()
     # BiRefNet-Lite exceeded the observed ~6 GiB Colab memory headroom.
     # Full U2Net is materially more capable than the tiny U2NetP and fits
     # intermediate memory budgets. Do not silently downgrade a 5-7 GiB
@@ -265,6 +271,21 @@ def segment_foreground_isolated(image: Any) -> Any:
         failures = []
         chosen_model = None
         for model_name in model_order:
+            # Recheck immediately before launch: JVM/FLUX allocations can
+            # consume RAM after model selection. A larger model cannot block
+            # the explicitly permitted U2NetP recovery path.
+            try:
+                _preflight_worker_ram(model_name=model_name)
+            except ValueError as exc:
+                if (
+                    str(exc).startswith("ALPHA_SEGMENTER_INSUFFICIENT_HOST_RAM:")
+                    and model_name != model_order[-1]
+                ):
+                    failures.append(str(exc))
+                    print(f"ALPHA_SEGMENTER_MEMORY_RECOVERY: skipping={model_name}; "
+                          f"trying={model_order[model_order.index(model_name) + 1]}; {exc}", flush=True)
+                    continue
+                raise
             target.unlink(missing_ok=True)  # Never reuse a prior worker's mask.
             _used_before, _limit_before, memory_events_before = _cgroup_memory()
             env["MMM_ALPHA_WORKER_MODEL"] = model_name
