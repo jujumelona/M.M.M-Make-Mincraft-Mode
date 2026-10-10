@@ -18,6 +18,7 @@ def test_qwen_mtp_models_keep_native_mtp_probes(monkeypatch) -> None:
     config = _config(
         "unsloth/Qwen3.8-27B-GGUF",
         gguf_filename="Qwen3.8-27B-UD-Q4_K_XL.gguf",
+        supports_mtp=True,
     )
     assert _model_supports_mtp(config) is True
     variants = _candidate_variants_for_config(autotune, config)
@@ -46,10 +47,23 @@ def test_fast_mode_does_not_bypass_mtp_correctness_candidates(monkeypatch) -> No
     config = _config(
         "unsloth/Qwen3.8-27B-GGUF",
         gguf_filename="Qwen3.8-27B-UD-Q4_K_XL.gguf",
+        supports_mtp=True,
     )
     variants = _candidate_variants_for_config(autotune, config)
     assert variants[0].spec_type == "none"
     assert any(value.spec_type == "draft-mtp" for value in variants[1:])
+
+
+def test_unverified_qwen_checkpoint_does_not_claim_mtp_from_name() -> None:
+    # Model names alone do not certify an MTP head; avoid pointless native
+    # server reloads until a model registry supplies explicit capability data.
+    config = _config(
+        "unsloth/Qwen3.8-27B-GGUF",
+        gguf_filename="Qwen3.8-27B-UD-Q4_K_XL.gguf",
+    )
+    assert _model_supports_mtp(config) is False
+    variants = _candidate_variants_for_config(autotune, config)
+    assert all(value.spec_type != "draft-mtp" for value in variants)
 
 
 def test_explicit_model_metadata_overrides_name_heuristic() -> None:
