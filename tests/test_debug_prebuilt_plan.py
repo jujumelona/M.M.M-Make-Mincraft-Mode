@@ -184,7 +184,7 @@ def test_debug_plan_path_does_not_overwrite_user_proposal(tmp_path: Path) -> Non
     regular = resolve_plan_path(run_mode=FULL_MODE, output_root=tmp_path)
     regular.parent.mkdir(parents=True, exist_ok=True)
     regular.write_text('{"kept":"user plan"}', encoding="utf-8")
-    for strategy in ("prebuilt", "host_smoke"):
+    for strategy in ("prebuilt", "host_smoke", "model_path"):
         separate = resolve_plan_path(
             run_mode=FULL_MODE,
             output_root=tmp_path,
