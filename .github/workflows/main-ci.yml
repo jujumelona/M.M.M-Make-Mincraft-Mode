@@ -486,6 +486,19 @@ jobs:
     name: Actual Gradle, JDT, GameTest and packaged JAR proof
     uses: ./.github/workflows/deterministic-debug-full-e2e.yml
 
+  workflow-static-check:
+    name: Validate complete Actions workflow graph and shell
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Lint every workflow and embedded shell
+        uses: docker://rhysd/actionlint:1.7.12
+        with:
+          args: -color
+
   audit:
     name: Aggregate granular audit gate
     if: ${{ always() }}
@@ -505,7 +518,7 @@ jobs:
     name: CI Gate
     if: ${{ always() }}
     timeout-minutes: 5
-    needs: [audit, tests, python313, model-realistic-replay, deterministic-production]
+    needs: [audit, tests, python313, model-realistic-replay, deterministic-production, workflow-static-check]
     runs-on: ubuntu-latest
     steps:
       - env:
@@ -514,9 +527,11 @@ jobs:
           PY313: ${{ needs.python313.result }}
           MODEL_REPLAY: ${{ needs.model-realistic-replay.result }}
           PRODUCTION_PROOF: ${{ needs.deterministic-production.result }}
+          WORKFLOW_LINT: ${{ needs.workflow-static-check.result }}
         run: |
           test "$AUDIT" = success
           test "$TESTS" = success
           test "$PY313" = success
           test "$MODEL_REPLAY" = success
           test "$PRODUCTION_PROOF" = success
+          test "$WORKFLOW_LINT" = success
