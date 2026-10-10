@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -158,3 +159,27 @@ def test_dynamic_features_or_wrong_platform_never_inherit_game_test_shortcut(tmp
     assert not eligible_for_managed_runtime(_approved(version="1.21.1"))
     assert not eligible_for_managed_runtime(_approved(modules=(("npc", "entity"),)))
     assert install_managed_content_gametest(root, _approved(version="1.21.1")) is None
+
+
+def test_emitted_server_gametest_java_compiles_with_real_javac(tmp_path):
+    root, path = _project(tmp_path)
+    assert install_managed_content_gametest(root, _approved())
+    source = path.read_text(encoding="utf-8")
+    body = source[source.index("// MMM_MANAGED_CONTENT_GAMETEST_V1 START"):
+                  source.index("// MMM_MANAGED_CONTENT_GAMETEST_V1 END")
+                  + len("// MMM_MANAGED_CONTENT_GAMETEST_V1 END")]
+    target = tmp_path / "ManagedGameTestSyntax.java"
+    target.write_text(
+        "class GameTestHelper { void succeed() {} }\n"
+        "public class ManagedGameTestSyntax {\n"
+        "  public void test(GameTestHelper context) {\n"
+        "    " + body + "\n"
+        "    context.succeed();\n"
+        "  }\n"
+        "}\n", encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["javac", "--release", "21", "-encoding", "UTF-8", str(target)],
+        cwd=tmp_path, check=False, capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
