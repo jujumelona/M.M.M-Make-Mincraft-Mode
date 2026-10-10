@@ -29,12 +29,12 @@ def test_debug_build_reports_all_unavailable_release_evidence() -> None:
         server_launcher=None, screenshot_paths=(), playtest_actions=(),
     )
     gaps = _quality_execution_preflight_gaps(proposal, options)
-    assert set(gaps) == {"research", "runtime", "visual_3d", "accessibility"}
+    assert set(gaps) == {"research", "runtime", "visual_3d"}
     assert "run_runtime" in gaps["runtime"]
     assert "run_mineflayer" in gaps["runtime"]
     assert "run_visual_review" in gaps["visual_3d"]
     assert "technology radar" in gaps["research"]
-    assert "accessibility-validation-v1" in gaps["accessibility"]
+    assert "accessibility" not in gaps  # Pending validators are not preflight-impossible.
 
 
 def test_quality_preflight_cannot_misreport_clean_build_or_gametest() -> None:
