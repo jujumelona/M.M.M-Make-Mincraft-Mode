@@ -39,6 +39,7 @@ def test_shared_index_failure_cannot_publish_succeeded_state(tmp_path) -> None:
             ledger,
             node,
             action=lambda: {
+                "schema_version": "mmm/extended-content-v2",
                 "status": "PASS",
                 "touched_paths": ["src/main/java/X.java"],
             },
