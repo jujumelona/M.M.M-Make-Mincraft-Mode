@@ -1193,6 +1193,19 @@ class CompleteProductionOrchestrator:
             details={
                 'unresolved_gates': list(normalized_unresolved),
                 'quality_passed': quality_passed,
+                'quality_diagnostics': [
+                    {
+                        'dimension': str(row.get('dimension_id') or ''),
+                        'status': str(row.get('status') or ''),
+                        'reason': str(row.get('reason') or '')[:180],
+                    }
+                    for row in (quality_report.get('dimensions', ()) if isinstance(quality_report, dict) else ())
+                    if isinstance(row, dict) and row.get('status') != 'PASS'
+                ],
+                'quality_report_path': (
+                    str(run_root / '.minecraft_ai/quality-convergence.json')
+                    if quality_report is not None else ''
+                ),
                 'coverage_status': coverage_receipt.get('status'),
                 'gametest_receipt_passed': self._gametest_receipt_passed(build, spec),
                 'gametest_mode': build.get('gametest_mode') if isinstance(build, dict) else None,
