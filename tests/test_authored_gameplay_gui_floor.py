@@ -117,3 +117,31 @@ def test_gameplay_regeneration_schema_excludes_gui() -> None:
     assert "gui" not in schema["properties"]["kind"]["enum"]
     assert "item" in schema["properties"]["kind"]["enum"]
     assert "block" in schema["properties"]["kind"]["enum"]
+
+
+
+def test_atomic_gameplay_writers_become_content_generation_inputs(monkeypatch) -> None:
+    from minecraft_mod_ai import authored_content_contract
+
+    def concerns(_sections: dict, section: str) -> dict:
+        if section == "algorithm":
+            return {
+                "steps": [{"operation": "fabricate_ship"}],
+                "atomic_mutations": [
+                    {"mutations": "deduct_ore_and_create_hull"},
+                ],
+            }
+        return {}
+
+    monkeypatch.setattr(
+        authored_content_contract, "active_concern_records", concerns,
+    )
+    requirements = authored_content_contract._gameplay_content_requirements(
+        {}, requested_prompt="build playable spacecraft",
+    )
+    sources = {
+        (r["design_context"]["source_section"], r["design_context"]["source_concern"])
+        for r in requirements
+    }
+    assert ("algorithm", "steps") in sources
+    assert ("algorithm", "atomic_mutations") in sources
