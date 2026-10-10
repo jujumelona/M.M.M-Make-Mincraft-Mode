@@ -1146,23 +1146,41 @@ def compile_authored_design(
             "manifest": manifest,
         },
     )
+    # Bind the authored execution manifest to the same immutable quality
+    # contract used by normal production. Previously this path emitted v1,
+    # while the release evaluator only handled v2; completed Gradle/GameTest
+    # runs were therefore blocked by authored-quality-contract-missing.
+    # Compile from the final, target-bound design and actual module/asset
+    # collection. Never synthesize PASS evidence or bypass missing gates.
+    from .production_contract import compile_production_contract
+
+    authored_acceptance = tuple(
+        dict.fromkeys(
+            (
+                *acceptance,
+                *(
+                    str(value)
+                    for value in content_design.get("acceptance_tests", ())
+                    if str(value).strip()
+                ),
+            )
+        )
+    )
+    compiled_quality = compile_production_contract(
+        requested_prompt=plan.requested_prompt,
+        game_design=design,
+        modules=modules,
+        assets=content_assets,
+        acceptance_tests=authored_acceptance,
+    )
+    design = {**design, "_production_contract": compiled_quality.contract}
+
     return complete_proposal_from_parts(
         requested_prompt=plan.requested_prompt,
         base_proposal=base,
         game_design=design,
         modules=modules,
         assets=content_assets,
-        acceptance_tests=tuple(
-            dict.fromkeys(
-                (
-                    *acceptance,
-                    *(
-                        str(value)
-                        for value in content_design.get("acceptance_tests", ())
-                        if str(value).strip()
-                    ),
-                )
-            )
-        ),
+        acceptance_tests=compiled_quality.acceptance_tests,
         existing_input_sha256=effective_existing,
     )
