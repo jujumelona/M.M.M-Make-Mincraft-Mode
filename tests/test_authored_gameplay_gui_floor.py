@@ -195,3 +195,71 @@ def test_gameplay_gui_only_discovery_retries_with_executable_owner(
             },
         )
     assert len(attempts) == 2
+
+
+def test_unrelated_server_tick_does_not_make_join_initialization_gameplay(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        authored_structured_design, "active_concern_records", _concerns,
+    )
+    plan = _plan(mutations=True)
+    plan.typed_plan_ir["event_bindings"].append({
+        "event": "server_tick", "function": "tick",
+    })
+    plan.typed_plan_ir["functions"].append({
+        "id": "tick",
+        "body": [{
+            "op": "expr",
+            "value": {"op": "capability", "id": "player.send_message", "args": []},
+        }],
+    })
+    with pytest.raises(ValueError, match="GAMEPLAY_IMPLEMENTATION_ABSENT.*non-bootstrap"):
+        _assert_executable_gameplay_floor(plan, (), {"capabilities": []})
+
+
+def test_dispatch_event_guard_does_not_misattribute_join_mutation() -> None:
+    from minecraft_mod_ai.typed_plan_ir import typed_plan_mutating_events
+
+    def literal(t, value):
+        return {"op": "literal", "type": t, "value": value}
+
+    def wrapper(event):
+        return {
+            "id": "on_" + event,
+            "body": [{
+                "op": "expr",
+                "value": {
+                    "op": "call", "function": "logic_dispatch",
+                    "args": [literal("string", event)],
+                },
+            }],
+        }
+
+    plan = {
+        "event_bindings": [
+            {"event": "player_join", "function": "on_player_join"},
+            {"event": "server_tick", "function": "on_server_tick"},
+        ],
+        "functions": [
+            wrapper("player_join"), wrapper("server_tick"),
+            {
+                "id": "logic_dispatch",
+                "parameters": [{"name": "event", "type": "string"}],
+                "body": [{
+                    "op": "if",
+                    "condition": {
+                        "op": "binary",
+                        "operator": "==",
+                        "left": {"op": "ref", "name": "event"},
+                        "right": literal("string", "player_join"),
+                    },
+                    "then": [{"op": "state_set", "key": literal("string", "initialized")}],
+                    "else": [],
+                }],
+            },
+        ],
+    }
+    mutations = typed_plan_mutating_events(plan)
+    assert mutations["player_join"] == ("state_set",)
+    assert mutations["server_tick"] == ()
