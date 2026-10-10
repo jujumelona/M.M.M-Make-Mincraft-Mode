@@ -916,13 +916,18 @@ def test_generation_executor_quiesces_mutating_workers_before_return() -> None:
 def test_asset_shard_cache_validates_asset_and_document_digests(tmp_path) -> None:
     texture = tmp_path / "texture.png"
     document = tmp_path / "model.json"
-    texture.write_bytes(b"png")
+    from PIL import Image
+
+    generated = Image.new("RGBA", (16, 16), (2, 3, 4, 255))
+    generated.putpixel((8, 8), (20, 30, 40, 255))
+    generated.save(texture)
     document.write_text("{}", encoding="utf-8")
     receipt = {
         "status": "TEXTURE_PRODUCTION_PASS",
         "assets": [
             {
                 "target": str(texture),
+                "target_path": "src/main/resources/assets/test/textures/block/texture.png",
                 "sha256": file_sha256(texture),
             }
         ],
