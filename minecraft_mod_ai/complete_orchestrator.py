@@ -96,6 +96,11 @@ from .local_ai_sidecar_generator import (
 )
 from .model_concurrency import run_with_model_execution_deadline
 from .model_router import ModelRouter
+from .managed_content_gametest import (
+    eligible_for_managed_runtime,
+    install_managed_content_gametest,
+    independently_verified_managed_runtime,
+)
 from .platform_backend_contract import (
     ENTITY_PIPELINE_KINDS,
     EXTENDED_CONTENT_KINDS,
@@ -245,7 +250,7 @@ def _quality_execution_preflight_gaps(
                 'No complete, independently checked technology radar, ecosystem '
                 'discovery, and official technical evidence bound to this proposal.'
             )
-    if 'runtime' in dims:
+    if 'runtime' in dims and not (options.run_gametest and eligible_for_managed_runtime(approved)):
         missing = [
             name for name, enabled in (
                 ('run_runtime', options.run_runtime),
@@ -619,6 +624,20 @@ class CompleteProductionOrchestrator:
             and f"org.gradle.workers.max={int(cached.get('gradle_workers') or 0)}" in (project_root / 'gradle.properties').read_text(encoding='utf-8')
         ))
         module_receipts.append({'schema_version': 'mmm/resource-tuning-v1', **heap_receipt})
+        # Install actual in-world registry/recipe-resource assertions before
+        # source validation and Gradle GameTest. Never manufacture a runtime
+        # PASS just because the user enabled GameTest.
+        if options.run_gametest:
+            managed_gametest_installation = install_managed_content_gametest(
+                project_root, approved
+            )
+            if managed_gametest_installation is not None:
+                module_receipts.append(managed_gametest_installation)
+                print(
+                    'MANAGED_CONTENT_GAMETEST_INSTALLED: '
+                    + json.dumps(managed_gametest_installation, ensure_ascii=False),
+                    flush=True,
+                )
         execution_project_index(ProjectIndex, project_root, policy=self.policy).write_manifest()
         generated_manifest_hash = self._project_manifest_hash(project_root)
         validation_manifest = generated_manifest_hash
@@ -1631,7 +1650,33 @@ class CompleteProductionOrchestrator:
             raise CompleteProductionError('Complete proposal v2 is missing its production contract.')
         proposal_hash = approved.calculate_hash()
         missing_reasons: dict[str, str] = {}
-        evidence = compile_quality_evidence(contract, proposal_hash, game_design=approved.game_design, source_validation=source_validation, build_report=build_report, jar_validation=jar_validation, module_receipts=module_receipts, asset_receipt=asset_receipt, blockbench_receipts=blockbench_receipts, runtime_receipt=runtime_receipt, playtest_receipt=playtest_receipt, visual_receipt=visual_receipt, missing_reasons=missing_reasons)
+        # Host-owned independent verification: the Minecraft server must have
+        # executed the exact generated GameTest assertions in its native XML.
+        managed_runtime_receipt = independently_verified_managed_runtime(
+            project_root,
+            approved,
+            build_report,
+            gametest_passed=(
+                self._gametest_receipt_passed(
+                    build_report,
+                    approved.base_proposal.spec,
+                )
+                if build_report is not None else False
+            ),
+        )
+        if managed_runtime_receipt is not None:
+            print('MANAGED_CONTENT_RUNTIME_VERIFIED: '
+                  + json.dumps(managed_runtime_receipt, ensure_ascii=False),
+                  flush=True)
+        evidence = compile_quality_evidence(
+            contract, proposal_hash, game_design=approved.game_design,
+            source_validation=source_validation, build_report=build_report,
+            jar_validation=jar_validation, module_receipts=module_receipts,
+            asset_receipt=asset_receipt, blockbench_receipts=blockbench_receipts,
+            runtime_receipt=runtime_receipt, playtest_receipt=playtest_receipt,
+            managed_runtime_receipt=managed_runtime_receipt,
+            visual_receipt=visual_receipt, missing_reasons=missing_reasons,
+        )
         gap_path = project_root / '.minecraft_ai/quality-evidence-missing.json'
         gap_path.parent.mkdir(parents=True, exist_ok=True)
         gap_path.write_text(json.dumps({
