@@ -153,7 +153,7 @@ def test_native_start_scales_total_context_per_slot_and_bounds_cache_ram(
     assert "--kv-unified" in args
 
 
-def test_qwen_hotpath_reuses_prompt_cache_without_reserving_cache_ram(monkeypatch) -> None:
+def test_native_hotpath_reuses_prompt_cache_with_bounded_cache_ram(monkeypatch) -> None:
     _clear_parallel_env(monkeypatch)
     seen: dict[str, list[str]] = {}
 
@@ -176,7 +176,8 @@ def test_qwen_hotpath_reuses_prompt_cache_without_reserving_cache_ram(monkeypatc
         8910,
     )
     assert "--cache-prompt" in seen["args"]
-    assert "--cache-ram" not in seen["args"]
+    args = seen["args"]
+    assert args[args.index("--cache-ram") + 1] == "1024"
 
 
 def test_parallel_context_fails_closed_when_total_overflows(monkeypatch) -> None:
