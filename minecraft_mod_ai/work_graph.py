@@ -217,20 +217,26 @@ def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolic
             quality_dependency = 'validate-jar' if dimension_id in {'correctness', 'build', 'research'} else 'runtime-playtest'
             nodes.append(_node(node_id, 'validate:quality', (quality_dependency,), {'kind': 'quality-validation', 'dimension_id': dimension_id, 'evidence_route_ref': dimension['evidence_route_ref'], 'contract_sha256': contract['contract_sha256']}))
             quality_nodes.append(node_id)
-    package_dependencies = tuple(quality_nodes or ['runtime-playtest'])
+    # Preserve the compiled JAR, diagnostics and unresolved-gate evidence even
+    # when one or more quality checks require additional input. Requiring every
+    # quality node to succeed here makes the evidence-only ZIP unreachable and
+    # raises WorkGraphError *after* a successful Gradle build/GameTest.
     nodes.append(
         _node(
             'package-build-artifact',
             'package:build-artifact',
-            package_dependencies,
+            ('runtime-playtest',),
             {'kind': 'build-artifact'},
         )
     )
+    # Only a verified release depends on all quality checks. The orchestrator
+    # never begins package-release unless release_ready is true; unresolved
+    # dimensions remain INPUT_REQUIRED rather than being marked successful.
     nodes.append(
         _node(
             'package-release',
             'package',
-            ('package-build-artifact',),
+            ('package-build-artifact', *quality_nodes),
             {'kind': 'release'},
         )
     )
