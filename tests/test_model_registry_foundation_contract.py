@@ -20,8 +20,8 @@ def _config(role: str, model_id: str, *, base_url: str = "") -> AdapterConfig:
     )
 
 
-@pytest.mark.parametrize("model_id", ["unsloth/Qwen3.5-9B-MTP-GGUF", "unsloth/Qwen3.8-27B-GGUF"])
-def test_qwen_profiles_may_use_one_selected_foundation_model_for_all_agent_roles(model_id: str):
+@pytest.mark.parametrize("model_id", ["bartowski/MiMo-V2.6-Distill-Qwen-9B-GGUF", "unsloth/Qwen3.8-27B-GGUF"])
+def test_selected_foundation_models_share_one_identity_across_roles(model_id: str):
     roles = {
         role: _config(role, model_id)
         for role in ("planner", "researcher", "coder", "coder_safe")
@@ -31,10 +31,10 @@ def test_qwen_profiles_may_use_one_selected_foundation_model_for_all_agent_roles
 
 def test_role_split_foundation_models_are_rejected():
     roles = {
-        "planner": _config("planner", "unsloth/Qwen3.5-9B-MTP-GGUF"),
-        "researcher": _config("researcher", "unsloth/Qwen3.5-9B-MTP-GGUF"),
+        "planner": _config("planner", "bartowski/MiMo-V2.6-Distill-Qwen-9B-GGUF"),
+        "researcher": _config("researcher", "bartowski/MiMo-V2.6-Distill-Qwen-9B-GGUF"),
         "coder": _config("coder", "unsloth/Qwen3.8-27B-GGUF"),
-        "coder_safe": _config("coder_safe", "unsloth/Qwen3.5-9B-MTP-GGUF"),
+        "coder_safe": _config("coder_safe", "bartowski/MiMo-V2.6-Distill-Qwen-9B-GGUF"),
     }
     with pytest.raises(ModelConfigurationError, match="one selected foundation model"):
         _validate_single_foundation_model("split", roles)
@@ -53,7 +53,7 @@ def test_role_split_remote_endpoints_are_rejected_even_with_same_model_name():
 
 def test_dedicated_embedding_or_image_models_do_not_create_foundation_split():
     roles = {
-        role: _config(role, "unsloth/Qwen3.5-9B-MTP-GGUF")
+        role: _config(role, "bartowski/MiMo-V2.6-Distill-Qwen-9B-GGUF")
         for role in ("planner", "researcher", "coder", "coder_safe")
     }
     roles["embedding"] = AdapterConfig(role="embedding", adapter="embedding", model_id="embed")

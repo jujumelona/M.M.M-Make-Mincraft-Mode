@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   plan:
-    name: Discover Qwen replay behaviors
+    name: Discover MiMo native tool behaviors
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -26,7 +26,7 @@ jobs:
           python -m tools.model_realistic_replay_matrix
 
   replay:
-    name: Qwen3.5-9B-Q4 / ${{ matrix.id }}
+    name: MiMo-V2.6-9B-Q4 / ${{ matrix.id }}
     needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 10
