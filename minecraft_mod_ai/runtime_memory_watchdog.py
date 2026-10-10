@@ -265,6 +265,23 @@ def assert_memory_headroom(stage: str, *, reserve_bytes: int | None = None) -> d
     return sample
 
 
+def prepare_production_memory_headroom() -> dict[str, Any]:
+    """Release an idle owned planner GGUF before the production RAM admission gate.
+
+    Planning and production share one Colab kernel. Running the 2-GiB production
+    preflight before handing off the already-resident native model deadlocks low
+    RAM runs even though the model can be safely stopped at this stage. Only the
+    native llama-server owned by MMM may be released; inference can relaunch it
+    later via its normal guarded startup path.
+    """
+    from .llama_server_autotune import release_managed_server_before_toolchain
+
+    released = release_managed_server_before_toolchain()
+    snapshot = assert_memory_headroom("before_production_build")
+    snapshot["released_managed_llama_server"] = released
+    return snapshot
+
+
 def _terminate_verified_managed_llama(
     pid: int,
     start_ticks: int,
@@ -523,5 +540,6 @@ __all__ = [
     "start_kernel_memory_watchdog",
     "shutdown_kernel_memory_watchdog",
     "assert_memory_headroom",
+    "prepare_production_memory_headroom",
     "stop_managed_process_watchdog",
 ]
