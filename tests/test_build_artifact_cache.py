@@ -162,12 +162,14 @@ def test_gametest_xml_requires_real_passing_tests(tmp_path: Path) -> None:
         assert _passing_gametest_xml(root, report) is False
 
 
+@pytest.mark.parametrize("require_clean_build", [False, True])
 def test_build_locked_preserves_clean_build_evidence_and_rejects_bad_xml(
     tmp_path: Path,
     monkeypatch,
+    require_clean_build: bool,
 ) -> None:
     root = _project(tmp_path / "project")
-    runner = GradleRunner(tmp_path / "cache")
+    runner = GradleRunner(tmp_path / "cache", require_clean_build=require_clean_build)
     executable = tmp_path / "cache/gradle-test/bin/gradle"
     executable.parent.mkdir(parents=True)
     executable.write_text("#!/bin/sh\n", encoding="utf-8")
@@ -231,14 +233,15 @@ def test_build_locked_preserves_clean_build_evidence_and_rejects_bad_xml(
     monkeypatch.setattr(runner, "_run", MethodType(fake_run, runner))
     result = runner._build_locked(root, run_gametest=True)
 
-    assert calls[0][0] == "incremental_build"
+    assert calls[0][0] == ("clean_build" if require_clean_build else "incremental_build")
     build_args = calls[0][1]
     assert "--no-daemon" in build_args
     assert "--daemon" not in build_args
     assert "--parallel" in build_args
     assert "build" in build_args
-    assert "clean" not in build_args
-    assert "--build-cache" in build_args
+    assert ("clean" in build_args) is require_clean_build
+    assert ("--no-build-cache" in build_args) is require_clean_build
+    assert ("--build-cache" in build_args) is not require_clean_build
     assert result.status == "FAIL"
     assert "GameTest report" in str(result.error)
 
