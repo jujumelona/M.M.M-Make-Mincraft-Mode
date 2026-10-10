@@ -498,7 +498,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Lint every workflow and embedded shell
-        uses: docker://rhysd/actionlint:1.7.12
+        uses: docker://ghcr.io/kjanat/actionlint:1.12.0
         with:
           args: -color
 
