@@ -235,6 +235,51 @@ def assert_memory_headroom(stage: str, *, reserve_bytes: int | None = None) -> d
     return sample
 
 
+def _terminate_verified_managed_llama(
+    pid: int,
+    start_ticks: int,
+    *,
+    grace_seconds: float = 1.0,
+) -> str:
+    """Terminate only the verified llama child; never signal a reused PID.
+
+    SIGTERM may not interrupt a native server blocked in allocation.  Escalate
+    after a short bounded grace so the HTTP client receives a disconnect instead
+    of waiting for the full 120-second socket read timeout.
+    """
+    def owned_and_alive() -> bool:
+        if pid <= 0 or start_ticks <= 0 or _process_start_ticks(pid) != start_ticks:
+            return False
+        try:
+            return b"llama-server" in Path(f"/proc/{pid}/cmdline").read_bytes()
+        except (OSError, PermissionError):
+            return False
+
+    if not owned_and_alive():
+        return "not_owned_or_already_exited"
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return "already_exited"
+    except (OSError, PermissionError):
+        return "sigterm_failed"
+
+    deadline = time.monotonic() + max(0.0, grace_seconds)
+    while time.monotonic() < deadline:
+        if not owned_and_alive():
+            return "sigterm_exited"
+        time.sleep(0.05)
+    if not owned_and_alive():
+        return "sigterm_exited"
+    try:
+        os.kill(pid, signal.SIGKILL)
+        return "sigkill_sent"
+    except ProcessLookupError:
+        return "sigterm_exited"
+    except (OSError, PermissionError):
+        return "sigkill_failed"
+
+
 def _watchdog_loop(stop: threading.Event, interval: float) -> None:
     global _MANAGED_PID
     while not stop.is_set():
@@ -251,23 +296,24 @@ def _watchdog_loop(stop: threading.Event, interval: float) -> None:
             and sample["managed_start_ticks"] > 0
             and int(sample["effective_mem_available_bytes"]) < _memory_reserve_bytes()
         ):
-            try:
-                cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
-                if b"llama-server" in cmdline:
-                    sample["protective_action"] = "terminate_managed_llama_server"
-                    _atomic_write(sample)
-                    os.kill(pid, signal.SIGTERM)
-                    print(
-                        "COLAB_RAM_GUARD: terminated managed llama-server before "
-                        "critical host memory exhaustion; snapshot="
-                        + str(_snapshot_path()),
-                        flush=True,
-                    )
+            outcome = _terminate_verified_managed_llama(
+                pid, int(sample["managed_start_ticks"])
+            )
+            if outcome not in {"not_owned_or_already_exited", "already_exited"}:
+                sample["protective_action"] = "terminate_managed_llama_server"
+                sample["protective_outcome"] = outcome
+                _atomic_write(sample)
+                print(
+                    "COLAB_RAM_GUARD: managed llama-server shutdown "
+                    f"outcome={outcome} available_mib="
+                    f"{int(sample['effective_mem_available_bytes']) // 1048576} "
+                    f"snapshot={_snapshot_path()}",
+                    flush=True,
+                )
+                if outcome in {"sigterm_exited", "sigkill_sent"}:
                     with _LOCK:
                         if _MANAGED_PID == pid:
                             _MANAGED_PID = None
-            except (OSError, ProcessLookupError, PermissionError):
-                pass
         stop.wait(interval)
 
 
