@@ -456,8 +456,7 @@ def _start_server(
 
     runtime._replace_option(args, ("--ctx-size", "-c"), str(total_context))
     runtime._replace_option(args, ("--parallel", "-np"), str(slots))
-    # A Qwen3.5 MTP server must not silently acquire the 1 GiB prompt-RAM
-    # cache that the runtime receipt explicitly reports as disabled.
+    # The active model owns the prompt-cache policy. MiMo has no MTP head.
     runtime._configure_prompt_cache(args, config)
 
     if getattr(variant, "ubatch", 0) > 0:

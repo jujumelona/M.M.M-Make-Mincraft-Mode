@@ -16,8 +16,8 @@ def _config(model_id: str, **extra):
 def test_qwen_mtp_models_keep_native_mtp_probes(monkeypatch) -> None:
     monkeypatch.setenv("MMM_LLAMA_AUTOTUNE_SEARCH", "full")
     config = _config(
-        "unsloth/Qwen3.5-9B-MTP-GGUF",
-        gguf_filename="Qwen3.5-9B-UD-Q4_K_XL.gguf",
+        "unsloth/Qwen3.8-27B-GGUF",
+        gguf_filename="Qwen3.8-27B-UD-Q4_K_XL.gguf",
     )
     assert _model_supports_mtp(config) is True
     variants = _candidate_variants_for_config(autotune, config)
@@ -44,8 +44,8 @@ def test_gemma_never_pays_for_impossible_mtp_server_reloads(monkeypatch) -> None
 def test_fast_mode_does_not_bypass_mtp_correctness_candidates(monkeypatch) -> None:
     monkeypatch.setenv("MMM_LLAMA_AUTOTUNE_SEARCH", "fast")
     config = _config(
-        "unsloth/Qwen3.5-9B-MTP-GGUF",
-        gguf_filename="Qwen3.5-9B-UD-Q4_K_XL.gguf",
+        "unsloth/Qwen3.8-27B-GGUF",
+        gguf_filename="Qwen3.8-27B-UD-Q4_K_XL.gguf",
     )
     variants = _candidate_variants_for_config(autotune, config)
     assert variants[0].spec_type == "none"

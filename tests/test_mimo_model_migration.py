@@ -6,7 +6,11 @@ import pytest
 
 from minecraft_mod_ai.model_registry import ModelRegistry
 from minecraft_mod_ai.llama_multimodal_contract import _requires_media_baseline
-from minecraft_mod_ai.model_adapters.qwen_tool_parser import parse_qwen_tool_markup
+from minecraft_mod_ai.model_adapters.base import GenerationRequest
+from minecraft_mod_ai.model_adapters.llama_cpp_adapter import _native_tool_generation_response
+from minecraft_mod_ai.llama_server_runtime_tuning import _candidate_variants_for_config
+from minecraft_mod_ai.llama_lora_runtime import configured_lora_specs
+from minecraft_mod_ai.llama_server_hardware_policy import _server_payload
 from minecraft_mod_ai.llama_server_autotune import _assert_mimo_server_compatible
 
 
@@ -22,20 +26,64 @@ def test_default_t4_mimo_has_no_legacy_qwen_lora_or_mtp() -> None:
             assert config.extra["supports_mtp"] is False
             assert "decode_hotpath" not in config.extra
             assert "lora_adapters" not in config.extra
+            assert configured_lora_specs(config) == ()
+            from minecraft_mod_ai import llama_server_autotune
+            variants = _candidate_variants_for_config(llama_server_autotune, config)
+            assert all(variant.spec_type != "draft-mtp" for variant in variants)
             assert "qwen_family" not in config.extra
             assert _requires_media_baseline(config)
 
 
-def test_mimo_tool_argument_markup_can_use_parameters_or_json() -> None:
-    for raw, expected in (
-        ("<tool_call><function=write_file><parameter=path>src/A.java</parameter></function></tool_call>", "src/A.java"),
-        ('<tool_call><function=write_file>{"path": "src/B.java"}</function></tool_call>', "src/B.java"),
-    ):
-        visible, calls = parse_qwen_tool_markup(raw)
-        assert not visible
-        assert len(calls) == 1
-        assert calls[0].name == "write_file"
-        assert calls[0].arguments["path"] == expected
+def _tool_request() -> GenerationRequest:
+    return GenerationRequest(
+        messages=({"role": "user", "content": "Look up the item"},),
+        tools=({
+            "type": "function",
+            "function": {
+                "name": "lookup",
+                "description": "Find an item",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"q": {"type": "string"}},
+                    "required": ["q"],
+                    "additionalProperties": False,
+                },
+            },
+        },),
+        tool_choice="required",
+        parallel_tool_calls=False,
+    )
+
+
+def test_mimo_uses_native_tool_calls_not_legacy_qwen_markup() -> None:
+    request = _tool_request()
+    message = {
+        "role": "assistant", "content": "",
+        "tool_calls": [{
+            "id": "call_mimo_1", "type": "function",
+            "function": {"name": "lookup", "arguments": '{"q":"diamond"}'},
+        }],
+    }
+    turn = _native_tool_generation_response(message, request, runtime_contract="mimo")
+    assert len(turn.tool_calls) == 1
+    assert turn.tool_calls[0].name == "lookup"
+    assert turn.tool_calls[0].arguments == {"q": "diamond"}
+    raw_xml = "<tool_call><function=lookup><parameter=q>diamond</parameter></function></tool_call>"
+    with pytest.raises(RuntimeError, match="MIMO_NATIVE_TOOL_CALLS_REQUIRED"):
+        _native_tool_generation_response({"content": raw_xml}, request, runtime_contract="mimo")
+
+
+def test_mimo_thinking_and_tool_payload_follow_native_template() -> None:
+    model = ModelRegistry().role("t4_local", "planner")
+    adapter = SimpleNamespace(config=model)
+    action = _server_payload(adapter, _tool_request())
+    assert action["chat_template_kwargs"] == {"enable_thinking": False}
+    assert action["tool_choice"] == "required"
+    plain = _server_payload(
+        adapter, GenerationRequest(messages=({"role": "user", "content": "Hello"},))
+    )
+    assert plain["chat_template_kwargs"] == {"enable_thinking": True}
+
 
 
 def test_mimo_old_server_fails_closed(monkeypatch) -> None:

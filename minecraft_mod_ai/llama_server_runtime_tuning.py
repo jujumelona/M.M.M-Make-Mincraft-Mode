@@ -279,49 +279,15 @@ def _config_extra(config: Any) -> dict[str, Any]:
     return dict(extra) if isinstance(extra, dict) else {}
 
 
-def _is_qwen35_mtp_config(config: Any) -> bool:
-    extra = _config_extra(config)
-    explicit = (
-        str(extra.get("runtime_contract", "")).strip().casefold() == "qwen"
-        and str(extra.get("decode_hotpath", "")).strip().casefold() == "t4_mtp"
-    )
-    identity = " ".join(
-        (
-            str(getattr(config, "model_id", "") or ""),
-            str(extra.get("gguf_filename", "") or ""),
-        )
-    ).casefold()
-    inferred = "qwen3.5" in identity
-    enabled = os.environ.get("MMM_QWEN35_MTP_HOTPATH", "1").strip().casefold()
-    return bool((explicit or inferred) and enabled not in {"0", "false", "no", "off"})
-
-
 def _configure_prompt_cache(args: list[str], config: Any) -> None:
-    """Make actual llama launch flags match the Qwen MTP cache receipt.
-
-    Qwen3.5's MTP hot path reports prompt_cache=False, but the previous
-    launch wrapper unconditionally injected a 1024 MiB --cache-ram allocation
-    and --cache-prompt. On Colab this pushes the managed server into the RAM
-    watchdog while processing hundreds of independently checkpointed records.
-    Remove both flags for MTP; keep the normal cache for other models.
-    """
-    if _is_qwen35_mtp_config(config):
-        while "--cache-prompt" in args:
-            args.remove("--cache-prompt")
-        _remove_option(args, ("--cache-ram",), takes_value=True)
-        _remove_option(args, ("--cache-reuse",), takes_value=True)
-        return
+    """Configure reusable prompt KV cache for the active GGUF runtime."""
     if "--cache-prompt" not in args:
         args.append("--cache-prompt")
     _replace_option(args, ("--cache-ram",), str(_cache_ram_mib()))
 
 
 def _per_request_context(config: Any) -> int:
-    names = (
-        ("MMM_QWEN35_MTP_CTX", "MMM_LLAMA_SERVER_CTX")
-        if _is_qwen35_mtp_config(config)
-        else ("MMM_LLAMA_SERVER_CTX",)
-    )
+    names = ("MMM_LLAMA_SERVER_CTX",)
     for name in names:
         raw = os.environ.get(name, "").strip()
         if not raw:
@@ -533,8 +499,6 @@ def _selection_inputs(config: Any) -> dict[str, Any]:
         "MMM_LLAMA_CONCURRENT_REQUESTS",
         "MMM_LLAMA_ACTIVE_CACHE_TYPE_K",
         "MMM_LLAMA_ACTIVE_CACHE_TYPE_V",
-        "MMM_QWEN35_MTP_TUNING",
-        "MMM_QWEN35_MTP_HOTPATH",
     )
     extra = _config_extra(config)
     return {
@@ -1018,7 +982,7 @@ def install(autotune_module: Any) -> None:
                     args.append("--kv-unified")
             _configure_prompt_cache(args, config)
             _remove_option(args, ("--cache-reuse",), takes_value=True)
-            if variant.cache_reuse > 0 and not _is_qwen35_mtp_config(config):
+            if variant.cache_reuse > 0:
                 args.extend(["--cache-reuse", str(variant.cache_reuse)])
             args.extend(autotune_module._variant_args(variant))
             process = subprocess.Popen(
@@ -1057,11 +1021,7 @@ def install(autotune_module: Any) -> None:
         def tuning_fingerprint(config: Any, binary: str, model_path: str) -> str:
             resources = _runtime_resources()
             parallel_candidates = _parallel_candidates(config, model_path, resources)
-            prompt_cache_enabled = not (
-                _is_qwen35_mtp_config(config)
-                and os.environ.get("MMM_QWEN35_MTP_HOTPATH", "1").strip().lower()
-                not in {"0", "false", "no", "off"}
-            )
+            prompt_cache_enabled = True
             payload = {
                 "schema": _SCHEMA_VERSION,
                 "base": current_fingerprint(config, binary, model_path),
@@ -1390,11 +1350,7 @@ def install(autotune_module: Any) -> None:
                 "MMM_LLAMA_ACTIVE_CACHE_TYPE_V",
                 os.environ.get("MMM_KV_CACHE_QUANT", "q4_0"),
             ).strip().lower()
-            prompt_cache_enabled = not (
-                _is_qwen35_mtp_config(config)
-                and os.environ.get("MMM_QWEN35_MTP_HOTPATH", "1").strip().lower()
-                not in {"0", "false", "no", "off"}
-            )
+            prompt_cache_enabled = True
             resources = _runtime_resources()
             receipt = {
                 "schema_version": "mmm/llama-runtime-receipt-v1",
