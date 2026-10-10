@@ -643,11 +643,27 @@ def generate_assets(
                     task["asset_id"], task["role"], task["texture"]
                 )
                 normalized = candidate_root / asset_id / role / f"normalized-{index:02d}.png"
+                # A monochrome failure from the previous real pixel validation
+                # must inform the next generation attempt, not just consume
+                # another random seed with identical prompting.
+                flat_failure = any(
+                    "VISUAL_TEXTURE_DEGENERATE" in str(failure.get("reason") or "")
+                    for failure in task["failures"]
+                )
+                candidate_prompt = task["prompt"]
+                if flat_failure:
+                    candidate_prompt += (
+                        ", clearly distinguishable material texture, visible"
+                        " colored midtones and contrasting edge highlights,"
+                        " recognizable Minecraft game icon or block surface,"
+                        " never solid black or a monochrome square"
+                    )
+                task["candidate_prompt"] = candidate_prompt
                 try:
                     pending = prepare_candidate_sources(
                         lambda **kwargs: router.generate_image("image_generator", **kwargs),
                         texture,
-                        prompt=task["prompt"],
+                        prompt=candidate_prompt,
                         directory=candidate_root / asset_id / role / f"candidate-{index:02d}",
                         resolution=profile.preferred_generation_resolution,
                         seed=_candidate_seed(asset_id, role, index),
@@ -697,6 +713,7 @@ def generate_assets(
                     task["failures"].append({"candidate": index, "reason": str(exc)})
                     continue
                 task["selected"] = (1000.0, index, normalized, evidence)
+                task["selected_prompt"] = task["candidate_prompt"]
 
         for task in tasks:
             selected = task["selected"]
@@ -724,6 +741,9 @@ def generate_assets(
                 "rejected_candidates": task["failures"],
                 "prompt_sha256": "sha256:" + hashlib.sha256(
                     task["prompt"].encode()
+                ).hexdigest(),
+                "selected_prompt_sha256": "sha256:" + hashlib.sha256(
+                    task["selected_prompt"].encode()
                 ).hexdigest(),
                 "sha256": "sha256:" + hashlib.sha256(target.read_bytes()).hexdigest(),
                 "placeholder": False,
