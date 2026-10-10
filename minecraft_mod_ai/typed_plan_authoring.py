@@ -1726,19 +1726,25 @@ def author_semantic_game_dispatch(
         }
         mutation_required = state_only or coverage_ref == "algorithm.atomic_mutations"
         rule_events = allowed_events
-        if coverage_ref == "algorithm.atomic_mutations" and active_events is not None:
-            # A launch, purchase or upgrade can never execute only on login.
-            # The extra command is model-authored during integration repair,
-            # not a guessed lifecycle substitution made by the IR compiler.
+        if (
+            coverage_ref in {"algorithm.steps", "algorithm.atomic_mutations"}
+            and active_events is not None
+            and active_concern_records(
+                structured_sections, "algorithm",
+            ).get("atomic_mutations")
+        ):
+            # An authored purchase/upgrade/launch workflow must not silently
+            # execute its ordered steps at login or server initialization.
+            # The dedicated command is authored before this IR stage.
             rule_events = tuple(
                 event for event in active_events
                 if event not in {"player_join", "server_started"}
             )
             if not rule_events:
                 raise ValueError(
-                    "TYPED_GAMEPLAY_MUTATION_EVENT_UNBOUND: atomic gameplay "
-                    "has only bootstrap entry points; repair the authored "
-                    "integration entry_points before executable PlanIR authoring."
+                    "TYPED_GAMEPLAY_MUTATION_EVENT_UNBOUND: executable game "
+                    "steps have only bootstrap entry points; repair integration "
+                    "entry_points before executable PlanIR authoring."
                 )
         schema_key = (mutation_required, state_only, tuple(rule_events or ()))
         if schema_key not in schemas:
