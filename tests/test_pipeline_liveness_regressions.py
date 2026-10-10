@@ -22,9 +22,16 @@ def test_resume_cache_tracks_touched_paths(tmp_path: Path) -> None:
     target.parent.mkdir(parents=True)
     target.write_text("class Example {}", encoding="utf-8")
     receipt = {"status": "SUCCEEDED", "touched_paths": ["src/Example.java"]}
-    assert CompleteProductionOrchestrator._receipt_outputs_exist(receipt, project_root=tmp_path)
-    target.unlink()
+    # A receipt without host-attested output hashes cannot authorize a resume.
     assert not CompleteProductionOrchestrator._receipt_outputs_exist(receipt, project_root=tmp_path)
+    bound = CompleteProductionOrchestrator._bind_receipt_output_hashes(
+        receipt, project_root=tmp_path
+    )
+    assert CompleteProductionOrchestrator._receipt_outputs_exist(bound, project_root=tmp_path)
+    target.write_text("class Example { int changed; }", encoding="utf-8")
+    assert not CompleteProductionOrchestrator._receipt_outputs_exist(bound, project_root=tmp_path)
+    target.unlink()
+    assert not CompleteProductionOrchestrator._receipt_outputs_exist(bound, project_root=tmp_path)
 
 
 def test_parallel_read_wave_has_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
