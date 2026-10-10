@@ -46,6 +46,65 @@ def _quality_plan(monkeypatch):
     return work_graph.build_production_work_plan(proposal)
 
 
+
+def _evidenced_receipt(node_id: str) -> dict:
+    """Use proof-shaped receipts so the dependency test never disables the verifier."""
+    if node_id in {"validate-source", "validate-source-final"}:
+        return {
+            "status": "PASS",
+            "checks_run": 2,
+            "project_manifest": "sha256:" + "a" * 64,
+        }
+    if node_id == "build-project":
+        return {
+            "status": "PASS",
+            "build": {
+                "status": "PASS",
+                "commands": [
+                    {"name": "build", "exit_code": 0, "timed_out": False}
+                ],
+                "artifact_receipt": {"sha256": "sha256:" + "b" * 64},
+            },
+            "final_build_receipt": {
+                "status": "PASS",
+                "production_jar": "PASS",
+                "artifact_sha256": "sha256:" + "b" * 64,
+                "toolchain_attested": True,
+            },
+        }
+    if node_id == "validate-jar":
+        return {
+            "status": "PASS",
+            "checks_run": 2,
+            "jar_sha256": "sha256:" + "b" * 64,
+        }
+    if node_id == "runtime-playtest":
+        return {
+            "status": "PASS",
+            "runtime": {"server": {"server_running": True}},
+            "playtest": {
+                "status": "PASS",
+                "interaction_count": 1,
+                "assertion_count": 1,
+            },
+            "visual": {"status": "PASS"},
+        }
+    if node_id.startswith("validate-quality-"):
+        dimension = node_id.removeprefix("validate-quality-")
+        return {
+            "status": "PASS",
+            "dimension_id": dimension,
+            "receipt_id": "test-" + dimension,
+            "receipt_sha256": "sha256:" + "c" * 64,
+        }
+    return {"status": "PASS"}
+
+
+def _succeed_with_evidence(ledger, node_id: str) -> None:
+    ledger.begin(node_id)
+    ledger.succeed(node_id, _evidenced_receipt(node_id))
+
+
 def test_build_artifact_has_no_quality_or_runtime_success_dependency(monkeypatch):
     plan = _quality_plan(monkeypatch)
     by_id = {node.node_id: node for node in plan.nodes}
@@ -75,8 +134,7 @@ def test_missing_quality_and_runtime_still_package_build_but_block_release(
         "validate-source-final",
         "validate-jar",
     ):
-        ledger.begin(node_id)
-        ledger.succeed(node_id, {"status": "PASS"})
+        _succeed_with_evidence(ledger, node_id)
     ledger.fail("runtime-playtest", "Needs real runtime", input_required=True)
     for name in ("correctness", "build", "research", "runtime"):
         ledger.fail(
@@ -114,6 +172,18 @@ def test_release_needs_runtime_and_all_quality_receipts(monkeypatch, tmp_path):
         "validate-quality-runtime",
         "package-build-artifact",
     ):
-        ledger.begin(node_id)
-        ledger.succeed(node_id, {"status": "PASS"})
+        _succeed_with_evidence(ledger, node_id)
     assert ledger.begin("package-release")["state"] == "running"
+
+
+def test_verified_nodes_reject_fake_pass_receipts(monkeypatch, tmp_path):
+    plan = _quality_plan(monkeypatch)
+    ledger = work_graph.DurableWorkLedger(
+        tmp_path / "fake-pass.sqlite", proposal_hash=plan.proposal_hash
+    )
+    ledger.sync_plan(plan)
+    _succeed_with_evidence(ledger, "prepare-project")
+    ledger.begin("validate-source")
+    from minecraft_mod_ai.verifier_receipt_truth_contract import VerifierReceiptTruthError
+    with pytest.raises(VerifierReceiptTruthError, match="VERIFIER_RECEIPT_MISSING"):
+        ledger.succeed("validate-source", {"status": "PASS"})
