@@ -66,3 +66,29 @@ def test_recipe_result_rejects_block_only_port_then_accepts_actual_item_port():
     )
     assert receipt["status"] == "PASS"
     assert "mmm_debug_crystal:crystal_block" in receipt["references"]
+
+
+def test_native_26_x_registry_templates_use_existing_identifier_methods():
+    """Regression: the exact generated symbols in the Colab compile failure."""
+    inputs = {
+        "mod_id": "mmm_debug_crystal",
+        "registry_path": "crystal_block",
+        "java_constant": "CRYSTAL_BLOCK",
+        "package_path": "ai/minecraft/generated/mmm_debug_crystal",
+        "subject": "crystal_block",
+    }
+    block_key = render_template(load_template("fabric/block/key"), inputs)
+    block_registry = render_template(load_template("fabric/block/register_basic"), inputs)
+    assert 'Identifier.fromNamespaceAndPath("mmm_debug_crystal", "crystal_block")' in block_key
+    assert "Identifier.of(" not in block_key
+    assert "ModBlockIds.CRYSTAL_BLOCK_KEY.identifier()" in block_registry
+    assert "ModBlockIds.CRYSTAL_BLOCK_KEY.location()" not in block_registry
+
+    item_key = render_template(load_template("fabric/item/key"), {
+        **inputs,
+        "registry_path": "crystal_fragment",
+        "java_constant": "CRYSTAL_FRAGMENT",
+        "subject": "crystal_fragment",
+    })
+    assert 'Identifier.fromNamespaceAndPath("mmm_debug_crystal", "crystal_fragment")' in item_key
+    assert "Identifier.of(" not in item_key
