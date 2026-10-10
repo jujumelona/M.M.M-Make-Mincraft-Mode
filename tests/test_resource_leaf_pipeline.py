@@ -164,13 +164,14 @@ def test_recipe_consumes_two_distinct_local_item_ports(tmp_path):
             },
         )
     )
+    ctx = host_target("1.21.1").version_context
     result = execute_artifact_graph(
         expand_facts_to_jobs(
             facts, mod_id="demo", package_name="org.demo",
-            minecraft_version="1.21.1",
-            version_context=host_target("1.21.1").version_context,
+            minecraft_version=ctx.minecraft, version_context=ctx,
         ),
         base_dir=tmp_path,
+        context={"resolved_version_context": ctx.to_dict()},
     )
     assert result["status"] == "PASS"
     parsed = json.loads(
