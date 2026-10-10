@@ -39,6 +39,7 @@ jobs:
           tests/test_typed_platform_ir.py
           tests/test_typed_plan_authoring.py
           tests/test_gameplay_entrypoint_repair.py
+          tests/test_debug_workflow_publication_audit.py
           tests/test_planner_state_authoring.py
           tests/test_state_provenance_contract.py
           tests/test_debug_fixture_epoch_contract.py
