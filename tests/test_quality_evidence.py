@@ -237,7 +237,7 @@ def test_baseline_receipts_are_objective_stable_and_evaluator_compatible(
     tmp_path: Path,
 ) -> None:
     design = _research_design()
-    compiled = _compile(design)
+    compiled = _compile(design, prompt="Research official Fabric compatibility, then add one independently tested item.")
     inputs = _baseline_inputs(tmp_path)
     first = _compile_call(compiled, design, inputs)
     assert set(first) == {"correctness", "build", "research", "runtime"}
@@ -285,7 +285,7 @@ def test_research_pass_requires_exhaustion_and_no_unresolved_evidence(
 ) -> None:
     design = _research_design()
     mutator(design)
-    compiled = _compile(design)
+    compiled = _compile(design, prompt="Research official Fabric compatibility, then add one independently tested item.")
     evidence = _compile_call(compiled, design, _baseline_inputs(tmp_path))
     assert "research" not in evidence
 
