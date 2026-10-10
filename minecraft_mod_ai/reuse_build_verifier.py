@@ -331,6 +331,26 @@ def _inspect_build_toolchain(workspace_root: Path) -> BuildToolchainReceipt:
             validate_scaffold_buildability(provider_adapter)
         except (ValueError, RuntimeError):
             provider_adapter = None
+    # The static checksum ledger predates newer provider Gradle releases.
+    # A target version with no ledger entry must still be proven against its
+    # exact official release, not rejected or implicitly trusted.
+    if provider_adapter and str(provider_adapter.gradle) == gradle_version:
+        if not expected_distribution:
+            distribution_verified = bool(
+                distribution_sha256
+                and str(provider_adapter.gradle_sha256).casefold() == distribution_sha256
+            )
+        if not expected_wrapper and wrapper_sha256:
+            from .verified_scaffold_registry import verified_wrapper_sha256
+
+            try:
+                wrapper_verified = (
+                    wrapper_sha256.casefold()
+                    == verified_wrapper_sha256(provider_adapter).casefold()
+                )
+            except (OSError, RuntimeError, ValueError):
+                wrapper_verified = False
+
     target_matrix_verified = bool(
         provider_adapter
         and str(provider_adapter.gradle) == gradle_version
