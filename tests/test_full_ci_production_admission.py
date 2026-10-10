@@ -132,6 +132,30 @@ def test_ci_gate_accepts_only_complete_success():
     assert process.returncode == 0, process.stderr
 
 
+@pytest.mark.parametrize(
+    "optional_gpu_status", ["unavailable", "skipped", "cancelled", "failure", ""],
+)
+def test_general_ci_is_not_blocked_by_missing_optional_gpu_runner(optional_gpu_status):
+    gate = _workflow(MAIN)["jobs"]["ci-gate"]["steps"][0]
+    env = {
+        **os.environ,
+        "AUDIT": "success",
+        "TESTS": "success",
+        "PY313": "success",
+        "MODEL_REPLAY": "success",
+        "PRODUCTION_PROOF": "success",
+        "WORKFLOW_LINT": "success",
+        "REAL_T4_E2E": optional_gpu_status,
+    }
+    result = subprocess.run(
+        ["bash", "-e", "-o", "pipefail", "-c", gate["run"]],
+        env=env, capture_output=True, text=True, timeout=10, check=False,
+    )
+    assert result.returncode == 0, (
+        optional_gpu_status, result.stdout, result.stderr
+    )
+
+
 def test_prior_failed_commit_logs_cannot_be_cancelled_by_new_push():
     for name in (
         "cumulative-regression-guard.yml",
