@@ -100,6 +100,40 @@ def _collision_safe_entity_id(
     raise SlotFillError(f"CONTENT_ENTITY_ID_EXHAUSTED: {entity_id}")
 
 
+def _lower_drop_relation(
+    edge: Mapping[str, object],
+    capabilities: Mapping[str, FactType],
+    facts: list[ImplementationFact],
+) -> ImplementationFact:
+    """Bind a drops edge to its registered source and concrete item target."""
+
+    source = str(edge["source_id"])
+    target = str(edge["target_id"])
+    source_type = capabilities.get(source)
+    if capabilities.get(target) != FactType.ITEM_EXISTS or source_type not in {
+        FactType.BLOCK_EXISTS, FactType.ENTITY_EXISTS,
+    }:
+        raise SlotFillError(f"CONTENT_RELATION_UNSUPPORTED: {edge}")
+    if any(
+        fact.fact_type in {FactType.BLOCK_DROP, FactType.ENTITY_LOOT}
+        and fact.subject == source
+        for fact in facts
+    ):
+        raise SlotFillError(f"CONTENT_DROP_CONFLICT: {source}")
+    return ImplementationFact(
+        fact_id=f"{source}.drop",
+        fact_type=(
+            FactType.BLOCK_DROP
+            if source_type == FactType.BLOCK_EXISTS
+            else FactType.ENTITY_LOOT
+        ),
+        subject=source,
+        object=target,
+        provenance=FactProvenance.DESIGN,
+        parent_requirement=str(edge["parent_requirement"]),
+    )
+
+
 def _native_resource_module_config(
     fact_type,
     normalized_inputs: Mapping[str, object],
@@ -983,28 +1017,10 @@ def compile_content_graph(
             continue
 
         if rel_type == "drops":
-            valid_drop = (
-                src_cap == FactType.BLOCK_EXISTS and tgt_cap == FactType.ITEM_EXISTS
-            ) or (
-                src_cap == FactType.ENTITY_EXISTS
-                and tgt_cap in {FactType.ITEM_EXISTS, FactType.ENTITY_LOOT}
-            )
-            if not valid_drop:
-                raise SlotFillError(f"CONTENT_RELATION_UNSUPPORTED: {edge}")
-            if any(
-                f.fact_type == FactType.BLOCK_DROP and f.subject == source for f in facts
-            ):
-                raise SlotFillError(f"CONTENT_DROP_CONFLICT: {source}")
-            facts.append(
-                ImplementationFact(
-                    fact_id=f"{source}.drop",
-                    fact_type=FactType.BLOCK_DROP,
-                    subject=source,
-                    object=target,
-                    provenance=FactProvenance.DESIGN,
-                    parent_requirement=edge["parent_requirement"],
-                )
-            )
+            # A loot resource is attached to an already registered entity; it
+            # cannot be authored as an independent identity without an item.
+            # Keep entity and block loot templates distinct.
+            facts.append(_lower_drop_relation(edge, capabilities, facts))
             if source in module_by_id:
                 module_by_id[source].config["drop"] = target
 
