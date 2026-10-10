@@ -157,7 +157,7 @@ def test_execute_uses_host_discovered_project_identity(
     # An existing-project route must inspect a coherent HOST target. A bare
     # directory cannot be treated as a pinned Fabric project.
     (project / "gradle.properties").write_text(
-        "\\n".join((
+        "\n".join((
             f"minecraft_version={target.minecraft_version}",
             "loader=fabric",
             f"loader_version={target.fabric_loader}",
@@ -165,7 +165,7 @@ def test_execute_uses_host_discovered_project_identity(
             f"loom_version={target.fabric_loom}",
             f"yarn_mappings={target.yarn_mappings}",
         )) + "\\n",
-        encoding="utf-8",
+        )) + "\n",
     )
     captured: dict[str, object] = {}
 
