@@ -19,11 +19,13 @@ class _FakeJsonRpcProcess:
         cwd: Path,
         configuration: dict[str, Any] | None = None,
         environment: dict[str, str] | None = None,
+        workspace_data_dir: Path | None = None,
     ) -> None:
         self.command = command
         self.cwd = cwd
         self.configuration = configuration
         self.environment = environment
+        self.workspace_data_dir = workspace_data_dir
         self.messages: queue.Queue[dict[str, Any]] = queue.Queue()
         self.stderr = ["stable fake stderr"]
         self.request_timeouts: list[float] = []
