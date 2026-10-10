@@ -183,10 +183,9 @@ def validate_external_execution_preflight(
     # have only external_runtime_required: they must remain valid inputs to
     # this *runtime-policy* check rather than crashing on a missing toolchain.
     # Actual production always passes the validated full proposal.
-    if getattr(proposal, "base_proposal", None) is not None:
-        _validate_java_toolchain_preflight(proposal, options)
-
     if bool(getattr(options, "source_only", False)):
+        if getattr(proposal, "base_proposal", None) is not None:
+            _validate_java_toolchain_preflight(proposal, options)
         return
 
     required = bool(getattr(proposal, "external_runtime_required", False))
@@ -296,6 +295,12 @@ def validate_external_execution_preflight(
         raise CompleteProductionError(
             "Visual verification requires the disposable runtime."
         )
+
+    # Evaluate all cheap policy conflicts before downloading Gradle or
+    # bootstrapping a second JDK. In particular, missing mandatory Blockbench
+    # validation must fail immediately, not after expensive toolchain setup.
+    if getattr(proposal, "base_proposal", None) is not None:
+        _validate_java_toolchain_preflight(proposal, options)
 
 
 __all__ = [
