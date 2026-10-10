@@ -111,7 +111,6 @@ def _enforce_required_tool_sampling(payload: dict[str, Any]) -> dict[str, Any]:
     # A modest native repeat penalty prevents small local models from getting trapped
     # in exact argument loops while preserving repeated JSON keys across record arrays.
     payload["repeat_penalty"] = 1.05
-    payload["reasoning_effort"] = "none"
     payload["chat_template_kwargs"] = {"enable_thinking": False}
     return payload
 
@@ -170,12 +169,10 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
         payload["parallel_tool_calls"] = bool(
             getattr(request, "parallel_tool_calls", False)
         )
-        payload["reasoning_effort"] = "none"
-        payload["chat_template_kwargs"] = {"enable_thinking": False}
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
 
     elif getattr(request, "response_format", None) == "json":
-        payload["reasoning_effort"] = "none"
-        payload["chat_template_kwargs"] = {"enable_thinking": False}
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
         response_schema = getattr(request, "response_schema", None)
         payload["response_format"] = {"type": "json_object"}
         metadata = getattr(request, "metadata", {})
