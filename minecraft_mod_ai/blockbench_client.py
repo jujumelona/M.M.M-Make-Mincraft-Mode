@@ -629,8 +629,16 @@ class BlockbenchMCPClient:
         }
         if self.session_id:
             headers["Mcp-Session-Id"] = self.session_id
-        response = self.client.post(self.url, json=payload, headers=headers)
-        response.raise_for_status()
+        try:
+            response = self.client.post(self.url, json=payload, headers=headers)
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise BlockbenchMCPError(
+                "BLOCKBENCH_MCP_UNAVAILABLE: local desktop Blockbench MCP plugin "
+                f"is not reachable at {self.url}: {type(exc).__name__}: {exc}. "
+                "Start Blockbench with its MCP plugin, or keep the resulting "
+                "JAR as an unverified build artifact."
+            ) from exc
         parsed = _parse_response(response)
         if "error" in parsed:
             raise BlockbenchMCPError(json.dumps(parsed["error"], ensure_ascii=False))
