@@ -40,6 +40,19 @@ def placeholders(value):
 
 def validate_template_contract(template):
     identifier = template.get("id", "<unknown>")
+    if "rules" in template:
+        rules = template["rules"]
+        if not isinstance(rules, list):
+            raise ValueError(
+                f"TEMPLATE_RULES_TYPE: {identifier} rules must be a list of strings"
+            )
+        for index, rule in enumerate(rules):
+            if not isinstance(rule, str) or not rule.strip():
+                raise ValueError(
+                    f"TEMPLATE_RULE_TYPE: {identifier} rules[{index}] must be a "
+                    f"non-empty string, got {type(rule).__name__}; quote YAML text "
+                    "containing a colon followed by a space"
+                )
     execution = template.get("execution")
     if execution == "sequence":
         steps = template.get("steps")
