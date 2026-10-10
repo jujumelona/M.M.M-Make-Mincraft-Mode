@@ -423,13 +423,13 @@ def run_plan_dialog(
     prompt: str,
     plan_path: str | Path,
     debug_mode: bool = False,
-    debug_strategy: str = "prebuilt",
+    debug_strategy: str = "model_path",
     minecraft_version: str = "Auto",
     loader: str = "Auto",
     input_fn: Callable[[str], str] = input,
     print_fn: Callable[..., None] = print,
 ) -> PlanDialogResult:
-    """Load a pre-authored debug plan by default, then use normal production.
+    """Use the real planner for Debug by default, then use normal production.
 
     prebuilt exercises the saved AuthoredPlan and canonical content graph with no
     planning LLM calls. Source-reuse donor proofs still belong to production.
@@ -459,8 +459,9 @@ def run_plan_dialog(
 
             write_prebuilt_debug_plan(target)
             print_fn(
-                "Debug prebuilt: 사전 작성한 다중 기능 AuthoredPlan 로드; "
-                "AI 계획 호출 없음. 실제 요청 프롬프트는 이 고정 시나리오에 사용하지 않습니다."
+                "DEBUG_FIXED_FIXTURE_WARNING: Prebuilt는 수정 아이템/블록/조합법 고정 사례만 생성합니다. "
+                "사용자 PROMPT와 모델 계획·선택 경로를 검증하지 않습니다. "
+                "실제 요청의 제작 검증에는 Model path를 선택하세요."
             )
         if debug_strategy == "host_smoke":
             write_debug_example_plan(
@@ -490,11 +491,17 @@ def run_plan_dialog(
             model_prompt = prompt.strip() or DEBUG_DEFAULT_PROMPT
             # The ordinary Full-mode planner owns structured sections, Typed
             # PlanIR, content discovery and candidate source retrieval.
+            print_fn(f"DEBUG_MODEL_PATH_PROMPT: {model_prompt}")
             reply = session.plan(model_prompt)
         authored = getattr(reply, "complete_proposal", None)
         if not isinstance(authored, AuthoredPlan):
             raise RuntimeError(
                 "DEBUG_MODEL_PLAN_TYPE_MISMATCH: planner must return AuthoredPlan"
+            )
+        if debug_strategy == "model_path" and authored.requested_prompt.strip() != model_prompt:
+            raise RuntimeError(
+                "DEBUG_MODEL_PROMPT_BINDING_MISMATCH: the generated plan does not "
+                "correspond to the requested prompt; refusing to build an unrelated mod"
             )
         if not normalize_structured_sections(authored.structured_sections):
             raise RuntimeError("DEBUG_MODEL_PLAN_STRUCTURED_SECTIONS_MISSING")
