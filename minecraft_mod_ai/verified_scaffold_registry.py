@@ -3,7 +3,6 @@ from __future__ import annotations
 """Provider-authoritative Gradle scaffolding for executable Minecraft targets."""
 
 import hashlib
-import json
 import os
 import re
 import shutil
