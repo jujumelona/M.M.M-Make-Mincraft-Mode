@@ -639,7 +639,21 @@ class BlockbenchMCPClient:
                 "Start Blockbench with its MCP plugin, or keep the resulting "
                 "JAR as an unverified build artifact."
             ) from exc
-        parsed = _parse_response(response)
+        # JSON-RPC notifications have no response object. MCP servers may
+        # acknowledge notifications/initialized with HTTP 202 and an empty
+        # body; parsing that as JSON makes a healthy server look broken.
+        if (
+            str(payload.get("method", "")).startswith("notifications/")
+            and response.status_code in {200, 202, 204}
+            and not response.content.strip()
+        ):
+            return {}, dict(response.headers)
+        try:
+            parsed = _parse_response(response)
+        except (ValueError, UnicodeError) as exc:
+            raise BlockbenchMCPError(
+                "Blockbench MCP returned malformed JSON-RPC response."
+            ) from exc
         if "error" in parsed:
             raise BlockbenchMCPError(json.dumps(parsed["error"], ensure_ascii=False))
         result = parsed.get("result", {})
