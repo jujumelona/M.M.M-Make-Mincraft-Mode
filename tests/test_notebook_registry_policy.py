@@ -121,11 +121,14 @@ def test_notebook_uses_setup_module_and_registry_selected_profile() -> None:
     assert "model_profile=MODEL_PROFILE" in cells["plan"]
 
 
-def test_qwen_fastpath_extra_is_linux_only_and_includes_fixed_fla() -> None:
+def test_retired_qwen_fastpath_is_not_reintroduced_as_a_dependency() -> None:
     pyproject = Path("pyproject.toml").read_text(encoding="utf-8")
-    assert "qwen-fastpath = [" in pyproject
-    assert "flash-linear-attention[cuda,conv1d]>=0.5.1,<0.6" in pyproject
-    assert "sys_platform == 'linux'" in pyproject
+    # Production owns one llama.cpp MiMo runtime; legacy Qwen/FLA extras must
+    # stay removed rather than imposing a second incompatible GPU stack.
+    assert "qwen-fastpath = [" not in pyproject
+    assert "flash-linear-attention" not in pyproject
+    assert "local-model = [" in pyproject
+    assert "image = [" in pyproject
 
 
 def test_notebook_code_cells_compile_top_to_bottom() -> None:
