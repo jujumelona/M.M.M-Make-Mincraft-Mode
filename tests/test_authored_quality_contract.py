@@ -98,3 +98,16 @@ def test_authored_contract_cannot_be_silently_overwritten():
             assets=(),
             acceptance=("The crystal item is registered.",),
         )
+
+
+def test_authored_behavioral_coverage_is_mandatory_for_v1_and_v2():
+    from types import SimpleNamespace
+    from minecraft_mod_ai.complete_orchestrator import _is_authored_coverage_proposal
+
+    design, _ = _fixture()
+    for version in ("mmm/complete-proposal-v1", "mmm/complete-proposal-v2"):
+        proposal = SimpleNamespace(schema_version=version, game_design=design)
+        assert _is_authored_coverage_proposal(proposal)
+    assert not _is_authored_coverage_proposal(
+        SimpleNamespace(game_design={"authored_plan": design["authored_plan"]})
+    )
