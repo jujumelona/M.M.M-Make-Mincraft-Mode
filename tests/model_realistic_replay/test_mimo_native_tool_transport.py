@@ -65,7 +65,15 @@ def test_mimo_reasoning_and_tool_call_are_separate():
     assert turn.tool_calls[0].name == "lookup"
 
 
-@pytest.mark.parametrize("args", ['{"q":7}', '{"x":"unexpected"}', '{"q":"ok","extra":1}', '{"q":'])
+@pytest.mark.parametrize("args", [
+    '{"q":7}',
+    '{"x":"unexpected"}',
+    '{"q":"ok","extra":1}',
+    '{"q":',
+    '[]',
+    'null',
+    '{"q":null}',
+])
 def test_mimo_invalid_argument_rejected_without_execution(args):
     turn = _parse({"content": "", "tool_calls": [_call(args)]})
     assert len(turn.tool_calls) == 1
