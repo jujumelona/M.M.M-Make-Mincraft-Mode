@@ -5,7 +5,7 @@ import json
 import math
 import re
 import xml.etree.ElementTree as ET
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -47,7 +47,7 @@ def _contract_bound_game_design(contract: Mapping[str, Any], game_design: Mappin
         return undecorated
     return snapshot
 
-def compile_quality_evidence(contract: Mapping[str, Any], proposal_hash: str, *, game_design: Mapping[str, Any], source_validation: Mapping[str, Any] | None, build_report: Mapping[str, Any] | None, jar_validation: Mapping[str, Any] | None, module_receipts: Iterable[Mapping[str, Any]]=(), asset_receipt: Mapping[str, Any] | None=None, blockbench_receipts: Iterable[Mapping[str, Any]]=(), runtime_receipt: Mapping[str, Any] | None=None, playtest_receipt: Mapping[str, Any] | None=None, visual_receipt: Mapping[str, Any] | None=None) -> dict[str, dict[str, Any]]:
+def compile_quality_evidence(contract: Mapping[str, Any], proposal_hash: str, *, game_design: Mapping[str, Any], source_validation: Mapping[str, Any] | None, build_report: Mapping[str, Any] | None, jar_validation: Mapping[str, Any] | None, module_receipts: Iterable[Mapping[str, Any]]=(), asset_receipt: Mapping[str, Any] | None=None, blockbench_receipts: Iterable[Mapping[str, Any]]=(), runtime_receipt: Mapping[str, Any] | None=None, playtest_receipt: Mapping[str, Any] | None=None, visual_receipt: Mapping[str, Any] | None=None, missing_reasons: MutableMapping[str, str] | None=None) -> dict[str, dict[str, Any]]:
     """Return independently checked ``PASS`` receipts keyed by dimension.
 
     Receipt IDs are hashes of the proposal binding, evidence route, and stable
@@ -80,6 +80,28 @@ def compile_quality_evidence(contract: Mapping[str, Any], proposal_hash: str, *,
     for dimension_id, key in _CONDITIONAL_KEYS.items():
         validators: dict[str, Callable[[Mapping[str, Any]], bool]] = {'state_save_migration': _valid_state_validation, 'multiplayer': _valid_multiplayer_validation, 'performance': _valid_performance_validation, 'accessibility': _valid_accessibility_validation}
         candidates[dimension_id] = _explicit_evidence(key, roots, validators[dimension_id])
+    # Report missing prerequisites at their actual evidence boundary. A single
+    # generic 'no fresh receipt' conceals failures such as an incremental build
+    # where a clean build is mandatory, or runtime review never being requested.
+    if missing_reasons is not None:
+        baseline = {
+            'correctness': (('source-validation receipt', source), ('clean Gradle build receipt', clean_build), ('passing structured GameTest report', gametest)),
+            'build': (('clean Gradle build receipt', clean_build), ('verified JAR receipt', jar)),
+            'research': (('complete technology radar, ecosystem discovery, and official technical evidence', research),),
+            'runtime': (('Minecraft runtime and interactive playtest receipts', runtime),),
+            'visual_3d': (('runtime screenshots, visual review, and asset integrity receipts', candidates.get('visual_3d')),),
+        }
+        for dimension_id in routes:
+            if candidates.get(dimension_id) is not None:
+                continue
+            if dimension_id in baseline:
+                missing = [label for label, value in baseline[dimension_id] if value is None]
+                missing_reasons[dimension_id] = 'Missing/invalid independently verified: ' + ', '.join(missing)
+            else:
+                missing_reasons[dimension_id] = (
+                    'Missing/invalid independent ' + dimension_id.replace('_', ' ')
+                    + ' validation receipt for the declared feature paths'
+                )
     output: dict[str, dict[str, Any]] = {}
     for dimension_id in routes:
         candidate = candidates.get(dimension_id)
