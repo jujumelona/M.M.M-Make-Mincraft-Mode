@@ -307,6 +307,7 @@ def independently_verified_managed_runtime(
         "runtime_kind": "live_minecraft_server_gametest",
         "mod_id": manifest["mod_id"],
         "content": [list(item) for item in manifest["content"]],
+        "recipes": list(manifest["recipes"]),
         "source_sha256": "sha256:" + hashlib.sha256(text.encode()).hexdigest(),
         "report_sha256": "sha256:" + hashlib.sha256(report.read_bytes()).hexdigest(),
     }
