@@ -506,6 +506,7 @@ class CompleteProductionOrchestrator:
         approved = parsed.approve(approval_hash)
         if approved.status is not CompleteProposalStatus.APPROVED:
             raise SpecValidationError('Complete proposal approval did not complete.')
+        options = _mandatory_blockbench_execution_options(approved, options)
         _validate_required_gate_contract(approved)
         _require_authored_quality_before_generation(
             approved, source_only=options.source_only,
@@ -550,7 +551,6 @@ class CompleteProductionOrchestrator:
                     f"{exc}"
                 ) from exc
 
-        options = _mandatory_blockbench_execution_options(approved, options)
         _validate_external_execution_preflight(approved, options)
         run_root, ledger, run_resumed = self._open_run(
             run_name,
