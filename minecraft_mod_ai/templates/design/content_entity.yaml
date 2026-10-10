@@ -31,6 +31,9 @@ rules:
   - minimum_entity_count is host-owned. This template is only for primary content owners. Engineering-only registry/data-resource obligations are not invoked here and cannot create primary content identities.
   - Emit only a host-allowed primary Minecraft content capability such as an item, block, entity, GUI, dimension, or supported behavior. Recipes and registry tags are graph-level resource definitions derived later by the host from explicit structured data-resource records.
   - System-level mechanics belong in design decisions and relations between concrete content entities.
+  - A gameplay event, unlock trigger, algorithm, system manager, or UI renderer class is not an entity loot table, a dimension, or a registry item by itself. Do not invent a loot owner or physical dimension to implement these events.
+  - Entity loot is never a standalone primary content owner; only an explicit registered entity dropping an explicit registered item may produce ENTITY_LOOT through a drops relation.
+  - A dimension means a concrete Minecraft world/dimension, not a game mode, menu, UI screen, ship upgrade, or generic gameplay stage. A GUI means an actual user-interactive screen, not an invisible event or internal method.
   - Code registries, definition catalogs, lookup tables, manager classes, and other implementation-only structures are not Minecraft content entities. Exclude those structures individually; still identify the concrete primary items, blocks, screens, or other content required by the gameplay they support.
   - A mixed requirement containing an implementation-only structure is not an empty content requirement. Return no entities only when the entire supplied gameplay requirement needs no concrete content from the allowed vocabulary.
   - Use block_entity only for runtime state physically attached to a placed block. Never use block_entity as a synonym for a code registry, data catalog, or general module registry.
