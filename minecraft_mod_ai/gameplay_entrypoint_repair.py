@@ -22,6 +22,36 @@ from .typed_event_ir import infer_event_type, is_mod_initialize_trigger
 _BOOTSTRAP = frozenset({"player_join", "server_started"})
 
 
+def _compact_duplicate_bootstrap_entries(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Coalesce identical source hooks, preserving every authored owner/boundary.
+
+    Multiple player_join records do not create multiple distinct invocation
+    mechanisms. Each uses the same event/dispatch. Combining their metadata
+    keeps the original obligations while releasing redundant record slots for
+    an executable player action. Do not merge unlike hooks.
+    """
+    result: list[dict[str, Any]] = []
+    by_trigger: dict[str, int] = {}
+    for row in rows:
+        trigger = str(row["trigger"])
+        key = "mod_initialize" if is_mod_initialize_trigger(trigger) else trigger
+        if key not in by_trigger:
+            by_trigger[key] = len(result)
+            result.append(deepcopy(row))
+            continue
+        prior = result[by_trigger[key]]
+        for field in ("boundary", "owner"):
+            previous = str(prior[field])
+            new = str(row[field])
+            if new != previous:
+                # Include the full original description, not just its event ID.
+                parts = previous.split(" | ")
+                if new not in parts:
+                    prior[field] = previous + " | " + new
+    return result
+
+
+
 def repair_missing_gameplay_entrypoint(
     router: Any,
     requested_prompt: str,
@@ -29,11 +59,11 @@ def repair_missing_gameplay_entrypoint(
     *,
     budget: Any = None,
 ) -> dict[str, Any]:
-    """Add one explicitly authored command when the gameplay has only init hooks.
+    """Author a player command without discarding existing source-hook duties.
 
-    All existing structured sections and entry points are preserved. The new
-    command is an additional invocation interface and is not a substitute for
-    the feature's required graphical user interface or other acceptance tests.
+    An overfilled integration page can hold duplicate player-join hooks. Merge
+    those duplicate declarations and retain all boundary/owner descriptions.
+    The command is not a substitute for the feature's required GUI.
     """
     sections = normalize_structured_sections(structured_sections)
     algorithm = active_concern_records(sections, "algorithm")
@@ -45,17 +75,24 @@ def repair_missing_gameplay_entrypoint(
         for row in existing if isinstance(row, Mapping)
         and not is_mod_initialize_trigger(row.get("trigger"))
     }
-    if any(event is not None and event not in _BOOTSTRAP for event in events):
+    # A server tick, shutdown or player respawn is not a purchase/upgrade
+    # invocation. Only an explicitly named command is a bound player action
+    # in this contract; non-command lifecycle events cannot satisfy it.
+    if "command" in events:
         return sections
 
     from .execution_contract_policy import PLANNER_CONCERN_MAX_RECORDS
     if len(existing) >= PLANNER_CONCERN_MAX_RECORDS:
-        raise ValueError(
-            "GAMEPLAY_ENTRYPOINT_CAPACITY_EXHAUSTED: authored gameplay has "
-            "no non-bootstrap event, and all integration entry-point slots "
-            "are used; re-author the integration section instead of "
-            "substituting a login event."
-        )
+        available = _compact_duplicate_bootstrap_entries(existing)
+        if len(available) >= PLANNER_CONCERN_MAX_RECORDS:
+            raise ValueError(
+                "GAMEPLAY_ENTRYPOINT_REAUTHOR_REQUIRED: all entry-point slots "
+                "describe distinct lifecycle hooks, none of which is a "
+                "player-invoked action. The authored integration section "
+                "needs bounded re-authoring rather than inserting a fake "
+                "hook or discarding an unrelated lifecycle obligation."
+            )
+        existing = available
 
     from .task_template_catalog import load_record_template
     from .fixed_template_generation import generate_fixed_template_value
@@ -123,7 +160,7 @@ def repair_missing_gameplay_entrypoint(
     spec = repaired["integration"].get("specification")
     if not isinstance(spec, dict):
         raise ValueError("GAMEPLAY_ENTRYPOINT_REPAIR_NO_SPEC")
-    spec.setdefault("entry_points", []).append(dict(record))
+    spec["entry_points"] = [*deepcopy(existing), dict(record)]
     return normalize_structured_sections(repaired)
 
 
