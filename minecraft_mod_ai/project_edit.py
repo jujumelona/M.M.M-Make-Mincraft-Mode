@@ -267,6 +267,7 @@ def ensure_fabric_main_entrypoints(
     )
 
 
+@_atomic_shared_edit
 def ensure_main_initializer_call(
     info: FabricProjectInfo,
     *,
