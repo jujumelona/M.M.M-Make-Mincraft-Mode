@@ -5,10 +5,16 @@ from threading import Event
 import pytest
 
 from minecraft_mod_ai.artifact_expansion import expand_facts_to_jobs as _expand_facts_to_jobs
+from minecraft_mod_ai.host_version_catalog import host_target
 from dataclasses import replace
 
 def expand_facts_to_jobs(*args, **kwargs):
-    """Exercise low-level renderer/port scheduling with explicitly unbound fixtures."""
+    """Use an admitted HOST binding to construct low-level executor fixtures.
+
+    The executor test deliberately clears only implementation ownership after
+    host-approved lowering so it can test its own port/ordering semantics.
+    """
+    kwargs.setdefault("version_context", host_target("auto").version_context)
     return [replace(job, canonical_leaf="", implementation_id="")
             for job in _expand_facts_to_jobs(*args, **kwargs)]
 from minecraft_mod_ai.artifact_graph_executor import (
