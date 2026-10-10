@@ -261,3 +261,36 @@ def test_bundle_loader_rejects_archive_path_traversal(tmp_path: Path) -> None:
         helper._safe_extract(archive, tmp_path / "out")
 
     assert not (tmp_path.parent / "escape").exists()
+
+
+@pytest.mark.parametrize(
+    ("reported", "accepted"),
+    [
+        ("version: 0.6.0-dev (build 1, commit d81235049)\nbuilt with GNU 11.4.0", True),
+        ("version: 11429 (test)", True),
+        ("llama-server b11102", True),
+        ("version: 11101 (old)", False),
+        ("version: 0.6.0-dev (build 1, commit 1d2869c6)", False),
+        ("version: 0.6.0-dev (build 1)", False),
+        ("version: unknown", False),
+    ],
+)
+def test_mimo_version_probe_uses_verified_commit_not_reset_build_number(
+    monkeypatch, tmp_path: Path, reported: str, accepted: bool,
+) -> None:
+    setup = _load_colab_setup()
+    root = tmp_path / "bin"
+    root.mkdir()
+    binary = root / "llama-server"
+    backend = root / "libggml-cuda.so.0"
+    binary.write_bytes(b"llama")
+    backend.write_bytes(b"cuda")
+    binary.chmod(0o755)
+    monkeypatch.setattr(
+        setup.subprocess, "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=reported),
+    )
+    ok, detail = setup._verify_native_server(binary)
+    assert ok is accepted, detail
+    if accepted and "commit d81235049" in reported:
+        assert "pinned-commit:d81235049" in detail

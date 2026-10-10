@@ -154,3 +154,26 @@ def test_mimo_participates_in_live_native_tool_calibration() -> None:
             request,
             runtime_contract="mimo",
         )
+
+
+@pytest.mark.parametrize(
+    ("reported", "accepted"),
+    [
+        ("version: 0.6.0-dev (build 1, commit d81235049)", True),
+        ("version: 11429 (new)", True),
+        ("version: 11101 (old)", False),
+        ("version: 0.6.0-dev (build 1, commit 1d2869c6)", False),
+        ("version: 0.6.0-dev (build 1)", False),
+    ],
+)
+def test_mimo_runtime_uses_same_commit_aware_version_contract(
+    monkeypatch, reported: str, accepted: bool,
+) -> None:
+    from minecraft_mod_ai import llama_server_autotune
+    cfg = SimpleNamespace(extra={"runtime_contract": "mimo"})
+    monkeypatch.setattr(llama_server_autotune, "_server_version", lambda _: reported)
+    if accepted:
+        _assert_mimo_server_compatible("llama-server", cfg)
+    else:
+        with pytest.raises(RuntimeError, match="b11102"):
+            _assert_mimo_server_compatible("llama-server", cfg)

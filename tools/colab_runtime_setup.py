@@ -446,21 +446,20 @@ def _verify_native_server(binary: Path) -> tuple[bool, str]:
         return False, f"version probe failed: {type(exc).__name__}: {exc}"
     if completed.returncode != 0:
         return False, "version probe failed: " + completed.stdout[-1000:]
-    # A cached Qwen-era server cannot serve MiMo native tool calls.
-    import re
-
-    match = re.search(
-        r"\b(?:version|build)\s*:\s*(\d{4,6})\b|\bb(\d{4,6})\b",
-        completed.stdout,
-        re.I,
+    from minecraft_mod_ai.llama_server_version_contract import (
+        mimo_server_version_compatible,
     )
-    build = int(next(v for v in match.groups() if v)) if match else 0
-    if build < 11102:
+
+    compatible, identity = mimo_server_version_compatible(
+        completed.stdout, pinned_commit=LLAMA_SERVER_SOURCE_REF
+    )
+    if not compatible:
         return False, (
-            "native llama-server lacks MiMo tool-call parser support "
-            f"(requires b11102+, reported {completed.stdout.strip()[:250]!r})"
+            "native llama-server lacks verified MiMo tool-call parser support "
+            f"({identity}; requires pinned source or legacy b11102+, "
+            f"reported {completed.stdout.strip()[:250]!r})"
         )
-    result = (True, f"binary={binary.name} cuda_backend={backend.name} build={build}")
+    result = (True, f"binary={binary.name} cuda_backend={backend.name} source={identity}")
     _NATIVE_VERIFY_CACHE[signature] = result
     while len(_NATIVE_VERIFY_CACHE) > _NATIVE_VERIFY_CACHE_LIMIT:
         _NATIVE_VERIFY_CACHE.pop(next(iter(_NATIVE_VERIFY_CACHE)))

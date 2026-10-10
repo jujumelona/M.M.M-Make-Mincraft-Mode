@@ -351,17 +351,17 @@ def _cap_ubatch_to_logical_batch(ubatch: int, batch: int | None) -> int:
 
 
 def _assert_mimo_server_compatible(binary: str, config: Any) -> None:
-    """Reject llama.cpp versions predating the MiMo tool parser fix."""
-    import re
+    """Reject old llama.cpp, including older binaries cached by Colab."""
     extra = getattr(config, "extra", {})
     if not isinstance(extra, dict) or str(extra.get("runtime_contract", "")).casefold() != "mimo":
         return
+    from .llama_server_version_contract import mimo_server_version_compatible
+
     reported = _server_version(binary)
-    match = re.search(r"\b(?:version|build)\s*:\s*(\d{4,6})\b|\bb(\d{4,6})\b", reported, re.I)
-    number = int(next(value for value in match.groups() if value)) if match else 0
-    if number < 11102:
+    compatible, identity = mimo_server_version_compatible(reported)
+    if not compatible:
         raise RuntimeError(
-            "MiMo tool calls require llama.cpp b11102 or newer; "
+            f"MiMo tool calls require pinned source or b11102+: {identity}; "
             f"got {reported!r}. Reinstall the MMM native llama-server."
         )
 
