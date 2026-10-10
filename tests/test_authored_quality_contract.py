@@ -111,3 +111,30 @@ def test_authored_behavioral_coverage_is_mandatory_for_v1_and_v2():
     assert not _is_authored_coverage_proposal(
         SimpleNamespace(game_design={"authored_plan": design["authored_plan"]})
     )
+
+
+def test_old_saved_authored_plan_is_rejected_before_expensive_full_build():
+    from types import SimpleNamespace
+    from minecraft_mod_ai.complete_orchestrator import (
+        CompleteProductionError,
+        _require_authored_quality_before_generation,
+    )
+
+    design, modules = _fixture()
+    old = SimpleNamespace(game_design=design)
+    with pytest.raises(CompleteProductionError, match="AUTHORED_QUALITY_CONTRACT_REQUIRED_BEFORE_GENERATION"):
+        _require_authored_quality_before_generation(old, source_only=False)
+    # Source-only remains useful for diagnosing historical plans; it does not
+    # turn a legacy plan into a verified releasable artifact.
+    _require_authored_quality_before_generation(old, source_only=True)
+
+    bound, _ = _bind_authored_quality_contract(
+        requested_prompt="Create a crystal item",
+        design=design,
+        modules=modules,
+        assets=(),
+        acceptance=("The crystal item is registered.",),
+    )
+    _require_authored_quality_before_generation(
+        SimpleNamespace(game_design=bound), source_only=False
+    )
