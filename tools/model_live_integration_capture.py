@@ -134,6 +134,9 @@ def _registry_runtime_identity(config: Any) -> dict[str, Any]:
         "foundation_model_id",
         "foundation_revision",
         "chat_template",
+        "runtime_contract",
+        "chat_template_file",
+        "supports_mtp",
         "qwen_family",
         "qwen_tool_markup",
         "request_policy",
@@ -177,13 +180,14 @@ def run_capture(
     config = registry.role(profile, role)
     if config.adapter != "llama_cpp":
         raise RuntimeError(
-            f"live Qwen capture requires llama_cpp, got {config.adapter!r} for {role!r}"
+            f"live model capture requires llama_cpp, got {config.adapter!r} for {role!r}"
         )
 
     request = _request_for_scenario(scenario, max_tokens=max_tokens)
     adapter = LlamaCppAdapter(config)
     tool_page = bool(request.tools)
-    if tool_page:
+    qwen_tool_page = tool_page and str(config.extra.get("runtime_contract", "")) == "qwen"
+    if qwen_tool_page:
         _ensure_tool_safe_runtime(config, request)
     server_url = ensure_tuned_server(config, request)
     runtime_receipt = _runtime_receipt()
@@ -202,7 +206,7 @@ def run_capture(
         )
     finally:
         _restore_capture_timeout(previous_timeout)
-        if tool_page:
+        if qwen_tool_page:
             restore_request = replace(
                 request,
                 tools=(),
@@ -217,7 +221,7 @@ def run_capture(
         scenario=scenario,
     )
     return {
-        "schema": "mmm/qwen-live-capture-v2",
+        "schema": "mmm/model-live-capture-v3",
         "provenance": "real_capture",
         "captured_at": datetime.now(timezone.utc).isoformat(),
         "profile": profile,
@@ -259,7 +263,7 @@ def run_capture(
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Capture one real Qwen/llama.cpp request through the production payload, "
+            "Capture one real model/llama.cpp request through the production payload, "
             "LoRA routing, response parser, and schema/tool admission boundary."
         )
     )

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from minecraft_mod_ai.model_adapters.base import GenerationResponse, ToolCall
-from tools.qwen_live_integration_capture import (
+from tools.model_live_integration_capture import (
     SOURCE_EDIT_NEW,
     SOURCE_EDIT_OLD,
     SOURCE_EDIT_TARGET,
