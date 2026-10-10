@@ -84,5 +84,5 @@ def test_independent_gpu_classes_remain_parallel_when_profile_does_not_share_dev
 
 
 def test_profile_detection_coalesces_only_local_exclusive_gpu_models() -> None:
-    assert safety._profile_uses_shared_local_gpu("Qwen3.5-9B_6GB") is True
+    assert safety._profile_uses_shared_local_gpu("MiMo-V2.6-9B_6GB") is True
     assert safety._profile_uses_shared_local_gpu("fast_test") is False
