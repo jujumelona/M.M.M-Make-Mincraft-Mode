@@ -85,13 +85,24 @@ def _manifest(approved: Any, root: Path) -> dict[str, Any] | None:
                 return None
         except (UnicodeError, json.JSONDecodeError, OSError):
             return None
-    # A recipe is a static artifact and must pass the separate resource
-    # validator; a registry GameTest cannot attest to crafting behavior.
-    # Recipes are *not* allowed on this limited runtime proof route.
-    kinds = {str(getattr(m, "kind", "")).casefold() for m in approved.modules}
-    if "recipe" in kinds:
-        return None
-    return {"mod_id": mod_id, "package": pkg, "content": content}
+    recipes = sorted(
+        str(getattr(module, "module_id", ""))
+        for module in approved.modules
+        if str(getattr(module, "kind", "")).casefold() == "recipe"
+    )
+    for recipe_id in recipes:
+        if not _IDENTIFIER.fullmatch(recipe_id):
+            return None
+        path = _safe_file(resources / "data" / mod_id / "recipe" / f"{recipe_id}.json")
+        if path is None:
+            return None
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(value, dict) or "result" not in value:
+                return None
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return None
+    return {"mod_id": mod_id, "package": pkg, "content": content, "recipes": recipes}
 
 
 def _java_assertions(manifest: Mapping[str, Any]) -> str:
@@ -108,14 +119,21 @@ def _java_assertions(manifest: Mapping[str, Any]) -> str:
             f'            throw new AssertionError("GameTest missing live {kind} registry entry: {mod_id}:{name}");',
             "        }",
         ))
+    for name in manifest["recipes"]:
+        lines.extend((
+            "        if (context.getLevel().getServer().getResourceManager().getResource("
+            + "net.minecraft.resources.ResourceLocation.fromNamespaceAndPath("
+            + f'"{mod_id}", "recipe/{name}.json")).isEmpty()) {{',
+            f'            throw new AssertionError("GameTest missing live server recipe resource: {mod_id}:{name}");',
+            "        }",
+        ))
     lines.append(f"        {_END}")
     return "\n".join(lines)
 
 
 def eligible_for_managed_runtime(approved: Any) -> bool:
     """May plan a content GameTest; full eligibility checks follow generation."""
-    kinds = {str(getattr(m, "kind", "")).casefold() for m in getattr(approved, "modules", ())}
-    return bool(_eligible_modules(approved)) and "recipe" not in kinds
+    return bool(_eligible_modules(approved))
 
 
 def install_managed_content_gametest(root: Path, approved: Any) -> dict[str, Any] | None:
@@ -150,6 +168,7 @@ def install_managed_content_gametest(root: Path, approved: Any) -> dict[str, Any
         "status": "INSTALLED",
         "source": str(path.relative_to(root)),
         "content": [list(item) for item in manifest["content"]],
+        "recipes": list(manifest["recipes"]),
         "source_sha256": "sha256:" + hashlib.sha256(changed.encode()).hexdigest(),
     }
 
