@@ -283,6 +283,25 @@ def test_loop_guard_preserves_repeated_source_text_inside_json_string() -> None:
     assert not _required_tool_repetition_detected(message, copies=4)
 
 
+def test_native_function_call_does_not_inherit_repetition_from_semantic_preface() -> None:
+    # A repeated text preface must not abort after the server begins a native
+    # function call. Structural repetition within tool arguments stays guarded.
+    native = {
+        "content": "x" * 1200,
+        "tool_calls": [{
+            "function": {
+                "name": "apply_source_edit",
+                "arguments": '{"operation":"write","path":"Demo.java"}',
+            },
+        }],
+    }
+    assert not _required_tool_repetition_detected(native, copies=8)
+
+    repeated_arguments = '{"operation":"write","path":"Demo.java"}' * 8
+    native["tool_calls"][0]["function"]["arguments"] = repeated_arguments
+    assert _required_tool_repetition_detected(native, copies=8)
+
+
 def test_loop_guard_still_rejects_repeated_structural_tool_json() -> None:
     fragment = '{"operation":"write","path":"Demo.java","content":"ok"}'
     repeated = fragment * 8
