@@ -91,7 +91,7 @@ def _inside_json_string_at_end(text: str) -> bool:
     for char in text:
         if escaped:
             escaped = False
-        elif quoted and char == "\\\\":
+        elif quoted and ord(char) == 92:
             escaped = True
         elif char == '"':
             quoted = not quoted
