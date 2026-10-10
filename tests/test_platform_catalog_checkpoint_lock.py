@@ -47,8 +47,11 @@ def test_checkpoint_project_inherits_authoritative_platform_lock(tmp_path, monke
 
     resolved = catalog.adapter_from_project(checkpoint_root)
 
-    assert resolved is adapter
-    assert calls == [("1.21.4", "fabric")]
+    # Checkpoints reconstruct a value-equivalent, identity-bound target from
+    # the pinned HOST lock; they must not call the live provider again.
+    assert resolved == adapter
+    assert resolved.version_context.context_id == adapter.version_context.context_id
+    assert calls == []
 
 
 def test_similar_non_checkpoint_path_does_not_inherit_parent_lock(tmp_path, monkeypatch):
