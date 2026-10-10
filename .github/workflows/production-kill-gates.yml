@@ -73,10 +73,11 @@ permissions:
   contents: read
 
 concurrency:
-  # During successive fixes, the latest main commit is authoritative.
-  # The complete failure artifacts from an earlier run remain retained.
-  group: production-kill-gates-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+  # A later patch must not cancel the diagnostic jobs for the commit that
+  # failed. The next iteration needs complete causal evidence for each SHA,
+  # not a queue of cancelled gates with no failure artifacts.
+  group: production-kill-gates-${{ github.event_name }}-${{ github.sha }}
+  cancel-in-progress: false
 
 env:
   PYTHONUTF8: "1"
