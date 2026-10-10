@@ -161,6 +161,7 @@ def test_anchor_fenced_runtime_keeps_fail_closed_stage_admission() -> None:
         "generate:content",
         "generate:system",
         "generate:entity",
+        "generate:host",
     )
 
 
@@ -368,6 +369,7 @@ def test_shared_index_commit_precedes_dependency_visible_success(tmp_path: Path)
         ledger,
         node,
         action=lambda: {
+            "schema_version": "mmm/extended-content-v2",
             "status": "PASS",
             "touched_paths": ["src/main/java/X.java"],
         },
@@ -376,5 +378,7 @@ def test_shared_index_commit_precedes_dependency_visible_success(tmp_path: Path)
     )
 
     assert receipt["status"] == "PASS"
-    assert events == ["index-update", "index-manifest"]
+    # The per-node commit refreshes the in-memory index before publishing
+    # success; the canonical manifest is persisted once at the phase boundary.
+    assert events == ["index-update"]
     assert ledger.task("node")["state"] == "succeeded"
