@@ -136,3 +136,24 @@ def test_nested_undeclared_model_fields_are_rejected() -> None:
             Router(), "planner", MESSAGES,
             response_schema=schema, enable_tools=False,
         )
+
+
+def test_wrapped_model_json_cannot_hide_extra_fields_during_recovery() -> None:
+    # llama.cpp may wrap a valid JSON object with thinking prose. The recovery
+    # parser may normalize its envelope, but cannot launder undeclared fields.
+    router = ScriptedRouter(
+        'analysis complete\\n{"answer":"ok","evidence_refs":["untrusted"]}'
+    )
+    with pytest.raises(Exception, match="evidence_refs"):
+        generate_fixed_template_value(
+            router, "planner", MESSAGES,
+            response_schema=SCHEMA, enable_tools=False,
+        )
+
+
+def test_wrapped_valid_model_json_still_recovers() -> None:
+    router = ScriptedRouter('preface\\n{"answer":"accepted"}')
+    assert generate_fixed_template_value(
+        router, "planner", MESSAGES,
+        response_schema=SCHEMA, enable_tools=False,
+    ) == {"answer": "accepted"}
