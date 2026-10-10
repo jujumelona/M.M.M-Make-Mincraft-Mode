@@ -70,6 +70,12 @@ def test_expand_facts_for_block_and_drop():
             source_clause="lunite ore block exists",
         ),
         PromptFact(
+            fact_id="item",
+            fact_type=FactType.ITEM_EXISTS,
+            subject="raw_lunite",
+            source_clause="raw lunite is a registered local item",
+        ),
+        PromptFact(
             fact_id="fact_002",
             fact_type=FactType.BLOCK_DROP,
             subject="lunite_ore",
