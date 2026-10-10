@@ -995,6 +995,30 @@ def _assert_executable_gameplay_floor(
     # gameplay mutations; messaging and UI-only capabilities are not.
     runtime_mutations = typed_plan_runtime_mutations(plan.typed_plan_ir)
 
+    # A joined-player initialization flag is executable Java, but it is not an
+    # implementation of an authored gameplay loop.  For multi-step gameplay,
+    # absent content actions or verified donor code, require a reachable
+    # mutating handler for a non-bootstrap Minecraft event.
+    runtime_events = {
+        str(binding.get("event") or "").strip()
+        for binding in plan.typed_plan_ir.get("event_bindings", ())
+        if isinstance(binding, Mapping)
+    }
+    bootstrap_events = {
+        "player_join", "server_start", "server_started", "world_load",
+    }
+    if (
+        gameplay_steps
+        and not (concrete_content or verified_donors)
+        and (not runtime_mutations or not (runtime_events - bootstrap_events))
+    ):
+        raise ValueError(
+            "GAMEPLAY_IMPLEMENTATION_ABSENT: algorithm steps have no "
+            "non-bootstrap executable Minecraft gameplay event or actionable "
+            "content module. Player-join state initialization and display "
+            "handlers are not gameplay implementations."
+        )
+
     if not (concrete_content or verified_donors or runtime_mutations):
         raise ValueError(
             "GAMEPLAY_IMPLEMENTATION_ABSENT: authored atomic mutations or state "
