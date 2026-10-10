@@ -106,6 +106,35 @@ def test_model_path_uses_real_authored_output_and_roundtrip(tmp_path: Path) -> N
     assert json.loads(target.read_text(encoding="utf-8"))["schema_version"] == "mmm/authored-plan-v2"
 
 
+def test_debug_default_routes_user_prompt_into_real_model(tmp_path: Path) -> None:
+    session = _ModelSession()
+    result = run_plan_dialog(
+        session=session, run_mode=FULL_MODE,
+        prompt="grow seasonal crops and cook recipes",
+        plan_path=tmp_path / "proposal.json",
+        debug_mode=True,
+        print_fn=lambda *args, **kwargs: None,
+    )
+    assert session.prompts == ["grow seasonal crops and cook recipes"]
+    assert result.reply.complete_proposal.requested_prompt == session.prompts[0]
+
+
+def test_model_path_rejects_plan_for_different_user_prompt(tmp_path: Path) -> None:
+    session = _ModelSession()
+
+    def wrong_plan(_prompt: str):
+        generated = _plan("unrelated canned crystal fixture")
+        return SimpleNamespace(complete_proposal=generated, message=generated.text)
+
+    session.plan = wrong_plan
+    with pytest.raises(RuntimeError, match="DEBUG_MODEL_PROMPT_BINDING_MISMATCH"):
+        run_plan_dialog(
+            session=session, run_mode=FULL_MODE, prompt="seasonal farming",
+            plan_path=tmp_path / "proposal.json",
+            debug_mode=True, print_fn=lambda *args, **kwargs: None,
+        )
+
+
 def test_model_path_default_prompt_runs_model_not_host_fixture(tmp_path: Path) -> None:
     session = _ModelSession()
     run_plan_dialog(
