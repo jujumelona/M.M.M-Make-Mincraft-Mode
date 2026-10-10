@@ -12,7 +12,7 @@ from minecraft_mod_ai import authored_structured_design
 def _plan(*, mutations: bool) -> SimpleNamespace:
     # The test is for the production binding contract, not worksheet syntax.
     return SimpleNamespace(
-        structured_sections={"test": True},
+        structured_sections={"_test_mutations": mutations},
         typed_plan_ir={
             "event_bindings": [{"event": "player_join", "function": "join"}],
             "functions": [{
@@ -20,16 +20,15 @@ def _plan(*, mutations: bool) -> SimpleNamespace:
                 "body": [{"op": "state_set", "key": {"op": "literal", "value": "started"}}],
             }],
         },
-        _test_mutations=mutations,
     )
 
 
-def _concerns(plan: SimpleNamespace, section: str) -> dict:
+def _concerns(sections: dict, section: str) -> dict:
     if section == "algorithm":
         return {
             "steps": [{"operation": "fabricate_ship_component"}],
             "atomic_mutations": [{"mutations": "deduct_resources"}]
-            if plan._test_mutations else [],
+            if sections["_test_mutations"] else [],
         }
     return {}
 
