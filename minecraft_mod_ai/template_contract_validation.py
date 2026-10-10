@@ -250,7 +250,6 @@ def runtime_consumer_roots():
     """Bind startup/CI to actual dispatch roots; sequence ownership stays in YAML."""
     from .artifact_expansion import FACT_EXPANSIONS
     from .content_design_graph import ALL_DESIGN_SLOTS
-    FEATURE_DETAIL_STEPS = ()
     from .minecraft_template_catalog import CANONICAL_ARTIFACT_KINDS
     from .populate_version_artifact_rules import HOST_TEMPLATE_CANDIDATES
     from .stage_template_pipeline import KNOWN_STAGES
@@ -259,7 +258,6 @@ def runtime_consumer_roots():
 
     roots = set(ALL_DESIGN_SLOTS) | set(TRANSLATION_SEQUENCE)
     roots.update(identifier for expansion in FACT_EXPANSIONS.values() for identifier in expansion)
-    roots.update(f"feature/{step}" for step in FEATURE_DETAIL_STEPS)
     roots.update(f"minecraft/{kind}" for kind in CANONICAL_ARTIFACT_KINDS)
     roots.update(f"criterion/{section}" for section in CRITERION_SECTIONS)
     roots.update(f"{stage}/workflow" for stage in KNOWN_STAGES)
