@@ -105,8 +105,11 @@ permissions:
   contents: read
 
 concurrency:
-  # Every SHA must finish its evidence, even when several patches arrive rapidly.
-  group: exhaustive-ci-${{ github.event_name }}-${{ github.sha }}
+  # Full CI covers all source/tests/Gradle/real-model contracts each time.
+  # Preserve in-flight diagnostic evidence, but replace superseded pending
+  # whole-suite runs with the latest HEAD to prevent an unbounded backlog.
+  # Partial CI still queues every commit's changed-file coverage separately.
+  group: exhaustive-ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
