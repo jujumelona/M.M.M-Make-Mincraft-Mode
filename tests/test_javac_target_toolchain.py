@@ -2,6 +2,7 @@
 import os
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -39,7 +40,10 @@ def test_bridge_uses_exact_target_jdk_for_parse_and_symbols(monkeypatch, tmp_pat
         launched.append(command)
         if command[0] != str(target / "bin" / ("java" + suffix)):
             return subprocess.CompletedProcess(command, 1, "", "release version 25 not supported")
-        return subprocess.CompletedProcess(command, 0, "[]", "")
+        # Compiler Tree owns a dedicated result.json path. stdout can contain
+        # unrelated JVM startup noise and must never be used as the API result.
+        Path(command[-1]).write_text("[]", encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, "JVM startup warning", "")
 
     monkeypatch.setattr(subprocess, "run", run)
     assert javac_bridge.analyze_java("class T {}", java_version="25", parse_only=parse_only) == []
