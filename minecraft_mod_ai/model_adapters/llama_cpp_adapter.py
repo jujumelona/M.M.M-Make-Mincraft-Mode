@@ -1,11 +1,9 @@
 """Direct OpenAI-compatible llama.cpp adapter.
 
-Tool turns use exactly one native ``/v1/chat/completions`` request. Native
-``message.tool_calls`` remain authoritative. When llama-server leaves Qwen's native
-``<tool_call>`` markup in ``message.content`` with no structured calls, the adapter
-recovers that markup once at the response boundary and validates it against the same
-host schema surface. The adapter never regenerates arguments, retries a semantic
-response, or turns ordinary prose into an executable tool call.
+MiMo tool turns require model-native Jinja parsing into message.tool_calls.
+Legacy Qwen-family XML recovery is retained only for the separate Qwen profiles.
+Every candidate is admitted against the same host-controlled schemas before
+execution; raw MiMo markup cannot bypass the llama.cpp native tool parser.
 """
 from __future__ import annotations
 
@@ -324,7 +322,11 @@ def _completion_exchange(
     message = _completion_message(server_url, payload)
     _report_server_connection(server_url)
     response = (
-        _native_tool_generation_response(message, prepared)
+        _native_tool_generation_response(
+            message,
+            prepared,
+            runtime_contract=str(getattr(adapter.config, "extra", {}).get("runtime_contract", "")),
+        )
         if prepared.tools
         else _plain_generation_response(message)
     )
@@ -384,6 +386,8 @@ def _qwen_markup_for_schema(
 def _native_tool_generation_response(
     message: Mapping[str, Any],
     request: GenerationRequest,
+    *,
+    runtime_contract: str = "",
 ) -> GenerationResponse:
     """Decode one assistant message and admit every model tool call through one boundary."""
 
@@ -401,6 +405,15 @@ def _native_tool_generation_response(
             for index, raw_call in enumerate(raw_native_calls)
         )
     elif _contains_qwen_tool_markup(content_text):
+        if runtime_contract.strip().casefold() == "mimo":
+            # MiMo's tag grammar is not Qwen3-Coder's. The modern llama.cpp
+            # parser must return structured tool_calls; never silently recover
+            # MiMo actions via the former Qwen-specific legacy parser.
+            raise RuntimeError(
+                "MIMO_NATIVE_TOOL_CALLS_REQUIRED: llama-server returned raw MiMo "
+                "tool markup instead of OpenAI message.tool_calls; upgrade the "
+                "MiMo-compatible llama.cpp server or verify its Jinja template."
+            )
         content_text, candidates = parse_qwen_tool_markup(
             _qwen_markup_for_schema(content_text, schemas),
             schemas,

@@ -93,14 +93,11 @@ _qwen38_27b_q4: &qwen38_27b_q4
   exclusive_gpu: true
 
 _mimo26_9b: &mimo26_9b
-  # Replaces the old T4 Qwen3.5 GGUF, LoRA and speculative-MTP profile.
   model_id: bartowski/MiMo-V2.6-Distill-Qwen-9B-GGUF
   adapter: llama_cpp
   gguf_filename: MiMo-V2.6-Distill-Qwen-9B-Q4_K_M.gguf
   mmproj_filename: mmproj-MiMo-V2.6-Distill-Qwen-9B-f16.gguf
   runtime_contract: mimo
-  model_license: MIT
-  foundation_base_model_id: XiaomiMiMo/MiMo-V2.6-Distill-Qwen-9B
   supports_mtp: false
   agent_thinking: true
   dynamic_output_budget: true

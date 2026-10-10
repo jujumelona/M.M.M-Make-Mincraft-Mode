@@ -190,29 +190,28 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
             # while retaining bounded JSON-object generation.
             payload["json_schema"] = deepcopy(dict(response_schema))
 
-    # Qwen family behavior is part of the direct request path now.  The legacy
-    # runtime bootstrap/wrapper stack is gone, so family-specific non-thinking
-    # controls and sampling must be applied here instead of by import-time mutation.
-    from .qwen_agent_family_contract import _apply_family_payload_policy
-
     config = getattr(adapter, "config", None)
-    payload = _apply_family_payload_policy(
-        payload,
-        config=config,
-        role=getattr(config, "role", ""),
-        request=request,
-    )
-    # MiMo uses its native chat template, not stock Qwen runtime controls.
     extra = getattr(config, "extra", {}) if config is not None else {}
-    if isinstance(extra, Mapping) and str(extra.get("runtime_contract", "")).casefold() == "mimo":
+    model_contract = str(extra.get("runtime_contract", "")).strip().casefold() if isinstance(extra, Mapping) else ""
+    if model_contract == "mimo":
+        # MiMo has its own Jinja/Thinking contract. Do not route it through
+        # Qwen3.5 request policies or reuse Qwen tool-call sampling.
         is_action = bool(tools) or getattr(request, "response_format", None) == "json"
         payload["chat_template_kwargs"] = {"enable_thinking": not is_action}
         payload.pop("reasoning_effort", None)
         if not is_action:
             payload["temperature"] = 0.6
             payload["top_p"] = 0.95
-    # Family sampling profiles may restore repeat_penalty=1.0; the host-required
-    # action boundary owns the final anti-loop sampling contract.
+    else:
+        from .qwen_agent_family_contract import _apply_family_payload_policy
+
+        payload = _apply_family_payload_policy(
+            payload,
+            config=config,
+            role=getattr(config, "role", ""),
+            request=request,
+        )
+    # Host-required tool choice always wins over model-specific sampling.
     return _enforce_required_tool_sampling(payload)
 
 
