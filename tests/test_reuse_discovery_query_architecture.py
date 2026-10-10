@@ -59,7 +59,10 @@ def test_provider_result_from_canonical_first_query_reaches_donor_frontier(
             if provider == "github" and query == "space travel":
                 return {
                     "candidates": [
-                        {"source_url": "https://github.com/example/space-donor"}
+                        {
+                            "source_url": "https://github.com/example/space-minecraft-mod",
+                            "title": "Minecraft Fabric mod for space travel",
+                        }
                     ]
                 }
             return {"candidates": []}
@@ -80,6 +83,6 @@ def test_provider_result_from_canonical_first_query_reaches_donor_frontier(
         },
     )
 
-    assert result["space.travel"] == ("example/space-donor",)
+    assert result["space.travel"] == ("example/space-minecraft-mod",)
     github_queries = [query for provider, query in client.calls if provider == "github"]
     assert github_queries[0] == "space travel"
