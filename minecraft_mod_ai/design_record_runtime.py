@@ -650,6 +650,74 @@ def _resource_source_relations(
     return records, resource_sources
 
 
+def _pair_relation_prompt_context(
+    normalized: dict[str, Any],
+    source_entity: dict[str, Any],
+    target_entity: dict[str, Any],
+    entity_by_id: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Scope relation evidence to its endpoints without dropping global clauses.
+
+    Older record callers without provenance retain the full context.  Authored
+    requirements that have no entity owner also remain visible to every pair.
+    Every relation decision therefore sees both endpoint clauses and all global
+    relation constraints, rather than repeatedly pre-filling the entire graph.
+    """
+
+    full = {
+        "requirements": normalized.get("requirements", []),
+        "design_contexts": normalized.get("design_contexts", []),
+    }
+    requirements = full["requirements"]
+    if not isinstance(requirements, list) or any(
+        not isinstance(row, dict) or not isinstance(row.get("requirement_id"), str)
+        for row in requirements
+    ):
+        return full
+    if any(
+        not isinstance(entity.get("requirement_refs"), list)
+        or any(not isinstance(ref, str) for ref in entity["requirement_refs"])
+        for entity in entity_by_id.values()
+    ):
+        return full
+
+    known_ids = {row["requirement_id"] for row in requirements}
+    owned_ids = {
+        ref
+        for entity in entity_by_id.values()
+        for ref in entity["requirement_refs"]
+    }
+    if not owned_ids.issubset(known_ids):
+        raise TemplateBlocked("TEMPLATE_RELATION_REQUIREMENT_REF_UNKNOWN")
+
+    # A clause without any entity owner can describe global world/progression
+    # rules and must remain visible even for a pair with no shared owner.
+    visible_ids = (
+        (known_ids - owned_ids)
+        | set(source_entity["requirement_refs"])
+        | set(target_entity["requirement_refs"])
+    )
+    selected = [
+        row for row in requirements if row["requirement_id"] in visible_ids
+    ]
+    links = normalized.get("requirement_design_contexts")
+    if not isinstance(links, list) or any(
+        not isinstance(link, dict)
+        or not isinstance(link.get("requirement_id"), str)
+        or "design_context" not in link
+        for link in links
+    ):
+        return {**full, "requirements": selected}
+
+    relevant_contexts: list[Any] = []
+    for link in links:
+        if link["requirement_id"] in visible_ids:
+            ctx = link["design_context"]
+            if ctx not in relevant_contexts:
+                relevant_contexts.append(ctx)
+    return {"requirements": selected, "design_contexts": relevant_contexts}
+
+
 def _run_relations(router, identifier, context, progress, checkpoint):
     template = load_record_template(identifier)
     normalized = task_context(template, context)
@@ -713,8 +781,12 @@ def _run_relations(router, identifier, context, progress, checkpoint):
             return []
 
         pair_context = {
-            "requirements": normalized.get("requirements", []),
-            "design_contexts": normalized.get("design_contexts", []),
+            **_pair_relation_prompt_context(
+                normalized,
+                entity_by_id[source_id],
+                entity_by_id[target_id],
+                entity_by_id,
+            ),
             "source_entity": entity_by_id[source_id],
             "target_entity": entity_by_id[target_id],
             "allowed_relation_types": list(allowed_relation_types),
