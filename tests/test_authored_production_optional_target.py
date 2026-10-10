@@ -5,17 +5,24 @@ import pytest
 from minecraft_mod_ai.authored_production import _bound_target
 
 
-def test_bound_target_allows_completely_absent_target() -> None:
-    assert _bound_target({"authored_plan": {"text": "saved"}}) == {}
+def test_bound_target_rejects_absent_platform_selection() -> None:
+    with pytest.raises(ValueError, match="TYPED_PLATFORM_SELECTION_REQUIRED"):
+        _bound_target({"authored_plan": {"text": "saved"}})
 
 
-def test_bound_target_preserves_complete_top_level_target() -> None:
+def test_bound_target_rejects_unverified_top_level_target() -> None:
     target = {
         "minecraft_version": "1.21.1",
         "loader": "fabric",
         "mappings": "1.21.1+build.3",
     }
-    assert _bound_target(target) == target
+    with pytest.raises(ValueError, match="TYPED_PLATFORM_SELECTION_REQUIRED"):
+        _bound_target(target)
+
+
+def test_bound_target_requires_selection_target() -> None:
+    with pytest.raises(ValueError, match="TYPED_PLATFORM_SELECTION_TARGET_REQUIRED"):
+        _bound_target({"_platform_selection": {}})
 
 
 def test_bound_target_reads_platform_selection_target() -> None:
@@ -30,7 +37,7 @@ def test_bound_target_reads_platform_selection_target() -> None:
 def test_bound_target_rejects_partial_target() -> None:
     with pytest.raises(ValueError, match="TARGET_MAPPINGS_REQUIRED"):
         _bound_target(
-            {"target": {"minecraft_version": "1.21.1", "loader": "fabric"}}
+            {"_platform_selection": {"target": {"minecraft_version": "1.21.1", "loader": "fabric"}}}
         )
 
 
