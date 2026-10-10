@@ -59,8 +59,15 @@ def test_validate_state_concern_transitions_with_symbols():
         [{
             "from_state": "dock",
             "trigger": "buy",
-            "guard": "player_currency >= trade_cost",
-            "mutation": "player_currency -= trade_cost",
+            "guard": {
+                "kind": "compare", "op": ">=",
+                "left": {"kind": "state_ref", "name": "player_currency"},
+                "right": {"kind": "state_ref", "name": "trade_cost"},
+            },
+            "mutation": [{
+                "target": "player_currency", "operator": "-=",
+                "value": {"kind": "state_ref", "name": "trade_cost"},
+            }],
             "to_state": "dock",
         }],
         symbols=symbols,
@@ -76,8 +83,11 @@ def test_validate_state_concern_transitions_with_symbols():
             [{
                 "from_state": "dock",
                 "trigger": "trade",
-                "guard": "true",
-                "mutation": "current_phase = 1",
+                "guard": {"kind": "literal", "value": True},
+                "mutation": [{
+                    "target": "current_phase", "operator": "=",
+                    "value": {"kind": "number", "value": "1"},
+                }],
                 "to_state": "dock",
             }],
             symbols=symbols,
@@ -88,15 +98,30 @@ def test_validate_state_concern_other_mutations():
     symbols = StateSymbolTable([{"name": "score"}])
 
     # Valid initialization
-    validate_state_concern("initialization", [{"initial_state": "score = 0"}], symbols=symbols)
+    validate_state_concern("initialization", [{
+        "initial_state": [{
+            "target": "score", "operator": "=",
+            "value": {"kind": "number", "value": "0"},
+        }]
+    }], symbols=symbols)
 
     # Undeclared in updates fails immediately
     with pytest.raises(ValueError, match="undeclared state variable 'ghost_var'"):
-        validate_state_concern("updates", [{"mutation": "ghost_var += 1"}], symbols=symbols)
+        validate_state_concern("updates", [{
+            "mutation": [{
+                "target": "ghost_var", "operator": "+=",
+                "value": {"kind": "number", "value": "1"},
+            }]
+        }], symbols=symbols)
 
     # Undeclared in cleanup fails immediately
     with pytest.raises(ValueError, match="undeclared state variable 'ghost_var'"):
-        validate_state_concern("cleanup", [{"action": "ghost_var = 0"}], symbols=symbols)
+        validate_state_concern("cleanup", [{
+            "action": [{
+                "target": "ghost_var", "operator": "=",
+                "value": {"kind": "number", "value": "0"},
+            }]
+        }], symbols=symbols)
 
 
 def test_structured_ir_validation_and_compilation():
@@ -168,8 +193,11 @@ def test_structured_ir_validation_and_compilation():
 
     # 5. Schema generates enum from symbol table
     schema_mut = mutations_schema(symbols)
-    target_enum = schema_mut["items"]["properties"]["target"]["enum"]
-    assert target_enum == ["player_currency", "ship_phase"]
+    target_values = [
+        branch["properties"]["target"]["const"]
+        for branch in schema_mut["items"]["oneOf"]
+    ]
+    assert target_values == ["player_currency", "ship_phase"]
 
     schema_expr = state_expr_schema(symbols)
     state_ref_branch = next(
