@@ -20,8 +20,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: workflow-lint-${{ github.ref }}
-  cancel-in-progress: true
+  # Every workflow change must retain its own actionlint result.
+  group: workflow-lint-${{ github.sha }}
+  cancel-in-progress: false
 
 jobs:
   actionlint:
