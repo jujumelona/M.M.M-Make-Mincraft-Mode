@@ -48,7 +48,8 @@ def test_every_model_facing_worksheet_chunk_is_closed() -> None:
             schema = worksheet_chunk_schema(
                 section,
                 concerns,
-                include_evidence=index == 1,
+                # Evidence provenance is now host-owned and assembled after
+                # field-page merge; it is not a model-authored page switch.
                 record_counts={concern: 1},
             )
             assert_atomic_model_schema(
