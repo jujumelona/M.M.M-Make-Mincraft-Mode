@@ -51,18 +51,18 @@ def test_expand_item_and_explicit_stack_limit_without_defaults():
 
     assert len(jobs) == 7
     template_ids = [j.template_id for j in jobs]
-    assert "fabric/item/key" in template_ids
-    assert "fabric/item/register_basic" in template_ids
+    assert "fabric/item/key_identifier" in template_ids
+    assert "fabric/item/register_keyed" in template_ids
     assert "minecraft/resource/item/client_item" in template_ids
     assert "minecraft/resource/item/model_generated" in template_ids
     assert "fabric/item/lang_en" in template_ids
     assert "fabric/item/initializer" in template_ids
     assert "fabric/item/settings_max_stack" in template_ids
 
-    key_job = next(j for j in jobs if j.template_id == "fabric/item/key")
+    key_job = next(j for j in jobs if j.template_id == "fabric/item/key_identifier")
     assert key_job.target_path == "src/main/java/com/foo/space/registry/ModItemIds.java"
 
-    register_job = next(j for j in jobs if j.template_id == "fabric/item/register_basic")
+    register_job = next(j for j in jobs if j.template_id == "fabric/item/register_keyed")
     assert register_job.target_path == "src/main/java/com/foo/space/registry/ModItems.java"
     assert register_job.produces == (
         "raw_lunite.registry_id",
@@ -174,14 +174,15 @@ def test_catalog_drives_targets_dependencies_and_scoped_ports(monkeypatch):
         return template
 
     monkeypatch.setattr(expansion, "load_template", load)
-    jobs = expand_facts_to_jobs(
-        [PromptFact(fact_id="one", fact_type=FactType.ITEM_EXISTS, subject="widget")],
-        mod_id="sample", package_name="org.sample",
-    )
-    model = next(job for job in jobs if job.template_id == "minecraft/resource/item/model_generated")
-    assert model.target_path.endswith("models/item/custom_widget.json")
-    assert model.requires == ("widget.java_symbol",)
-    assert model.produces == ("widget.custom_model",)
+    # A rewritten catalog template has a different digest; the immutable HOST
+    # admission MUST reject it rather than silently yielding a new target or port.
+    from minecraft_mod_ai.resolved_version_context import VersionContextError
+
+    with pytest.raises(VersionContextError, match="HOST_TEMPLATE_NOT_ADMITTED"):
+        expand_facts_to_jobs(
+            [PromptFact(fact_id="one", fact_type=FactType.ITEM_EXISTS, subject="widget")],
+            mod_id="sample", package_name="org.sample",
+        )
 
 
 def test_block_drop_cannot_invent_a_drop_target():
