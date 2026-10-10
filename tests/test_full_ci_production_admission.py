@@ -62,7 +62,7 @@ def test_real_production_e2e_is_an_unskippable_main_ci_dependency():
     assert "real-t4-model-production" not in jobs
     assert "real-t4-model-production" not in needs
     assert "workflow-static-check" in jobs
-    assert jobs["workflow-static-check"]["steps"][-1]["uses"] == "docker://rhysd/actionlint:1.7.12"
+    assert jobs["workflow-static-check"]["steps"][-1]["uses"] == "docker://ghcr.io/kjanat/actionlint:1.12.0"
     step = gate["steps"][0]
     assert step["env"]["PRODUCTION_PROOF"] == "${{ needs.deterministic-production.result }}"
     assert 'test "$PRODUCTION_PROOF" = success' in step["run"]
