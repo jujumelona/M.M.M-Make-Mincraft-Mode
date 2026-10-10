@@ -116,33 +116,64 @@ def test_full_page_with_duplicate_join_hooks_preserves_all_obligations(monkeypat
         object(), "buy upgrades", sections,
     )
     rows = repaired["integration"]["specification"]["entry_points"]
-    assert len(rows) == 2
-    assert [row["trigger"] for row in rows] == ["player_join", "command:purchase"]
-    assert all(f"startup_{i}" in rows[0]["boundary"] for i in range(4))
-    assert all(f"owner_{i}" in rows[0]["owner"] for i in range(4))
+    assert len(rows) == 5
+    assert rows[:4] == original
+    assert rows[4]["trigger"] == "command:purchase"
     assert sections["integration"]["specification"]["entry_points"] == original
     assert calls == [1]
 
 
-def test_full_page_with_distinct_hooks_fails_before_model_call(monkeypatch):
+def test_full_page_with_distinct_hooks_preserves_all_in_fifth_slot(monkeypatch):
     from minecraft_mod_ai import fixed_template_generation
 
     sections = _sections()
-    sections["integration"]["specification"]["entry_points"] = [
+    original = [
         {"boundary": str(i), "trigger": trigger, "owner": "host"}
         for i, trigger in enumerate((
             "player_join", "server_started", "server_stopping", "server_tick",
         ))
     ]
-
-    def no_model(*_args, **_kwargs):
-        raise AssertionError("do not conceal unrelated lifecycle obligations")
-
+    sections["integration"]["specification"]["entry_points"] = original
     monkeypatch.setattr(
-        fixed_template_generation, "generate_fixed_template_value", no_model,
+        fixed_template_generation, "generate_fixed_template_value",
+        lambda *_args, **_kwargs: {
+            "boundary": "buy an upgrade", "trigger": "command:buy_upgrade",
+            "owner": "server",
+        },
     )
-    with pytest.raises(ValueError, match="GAMEPLAY_ENTRYPOINT_REAUTHOR_REQUIRED"):
-        repair_missing_gameplay_entrypoint(object(), "buy upgrades", sections)
+    repaired = repair_missing_gameplay_entrypoint(
+        object(), "buy upgrades", sections,
+    )
+    rows = repaired["integration"]["specification"]["entry_points"]
+    assert rows[:4] == original
+    assert len(rows) == 5
+    assert rows[4]["trigger"] == "command:buy_upgrade"
+
+
+def test_overfilled_legacy_page_coalesces_only_duplicates(monkeypatch):
+    from minecraft_mod_ai import fixed_template_generation
+
+    sections = _sections()
+    original = [
+        {"boundary": f"join_{i}", "trigger": "player_join", "owner": f"init_{i}"}
+        for i in range(5)
+    ]
+    sections["integration"]["specification"]["entry_points"] = original
+    # This helper consumes a legacy record list before validating the result.
+    # Five rows are canonical; one duplicate can be coalesced before appending.
+    monkeypatch.setattr(
+        fixed_template_generation, "generate_fixed_template_value",
+        lambda *_args, **_kwargs: {
+            "boundary": "player purchase", "trigger": "command:buy",
+            "owner": "server",
+        },
+    )
+    output = repair_missing_gameplay_entrypoint(object(), "buy", sections)
+    rows = output["integration"]["specification"]["entry_points"]
+    assert len(rows) == 2
+    assert all(f"join_{i}" in rows[0]["boundary"] for i in range(5))
+    assert all(f"init_{i}" in rows[0]["owner"] for i in range(5))
+    assert rows[1]["trigger"] == "command:buy"
 
 
 def test_server_tick_does_not_substitute_for_a_player_action(monkeypatch):
