@@ -67,6 +67,17 @@ def test_mcp_mirrored_json_enters_transcript_once() -> None:
     assert result["parsed_text"] is None
 
 
+def test_mcp_independent_text_is_not_discarded_when_structured_content_exists() -> None:
+    payload = {"receipt": {"result_count": 1}, "hits": [{"path": "Example.java"}]}
+    raw = _RawToolResult(payload)
+    raw.content = (_TextContent("Provider caveat: search results are incomplete"),)
+    result = _normalize_tool_result(raw)
+
+    assert result["structured_content"] == payload
+    assert result["text"] == ["Provider caveat: search results are incomplete"]
+    assert result["parsed_text"] is None
+
+
 def test_default_observation_page_is_bounded_for_local_agent_context(monkeypatch) -> None:
     monkeypatch.delenv("MMM_AGENT_OBSERVATION_BYTES", raising=False)
 
