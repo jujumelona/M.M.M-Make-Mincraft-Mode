@@ -53,3 +53,15 @@ def test_explicit_authored_accessibility_path_remains_required():
     ).contract
     dimensions = {x["dimension_id"] for x in contract["quality_dimension_catalog"]}
     assert "accessibility" in dimensions
+
+
+def test_unbound_research_does_not_block_basic_content_build() -> None:
+    contract = _compile("Add a crystal fragment and block.").contract
+    dimensions = {x["dimension_id"] for x in contract["quality_dimension_catalog"]}
+    assert "research" not in dimensions
+
+
+def test_explicit_research_remains_mandatory() -> None:
+    contract = _compile("Research prior art, then add a crystal item.").contract
+    dimensions = {x["dimension_id"] for x in contract["quality_dimension_catalog"]}
+    assert "research" in dimensions
