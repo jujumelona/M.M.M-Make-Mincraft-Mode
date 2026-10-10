@@ -97,7 +97,7 @@ def test_ci_gate_rejects_all_non_success_production_results(rejected):
 
 @pytest.mark.parametrize(
     "dependency",
-    ["AUDIT", "TESTS", "PY313", "MODEL_REPLAY", "PRODUCTION_PROOF", "WORKFLOW_LINT", "REAL_T4_E2E", "REAL_T4_E2E"],
+    ["AUDIT", "TESTS", "PY313", "MODEL_REPLAY", "PRODUCTION_PROOF", "WORKFLOW_LINT", "REAL_T4_E2E"],
 )
 def test_ci_gate_rejects_skipped_mandatory_dependency(dependency):
     gate = _workflow(MAIN)["jobs"]["ci-gate"]["steps"][0]
