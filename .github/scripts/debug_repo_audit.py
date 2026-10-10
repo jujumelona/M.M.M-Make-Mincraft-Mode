@@ -314,6 +314,50 @@ def _top_level_mapping(node: yaml.Node) -> dict[str, yaml.Node]:
     return values
 
 
+def _is_scoped_host_catalog_publisher(relative: Path, source: str) -> bool:
+    """Admit only the two-file reviewed HOST catalog sync, never code pushes.
+
+    A generic self-mutation exception would turn the static audit into a
+    bypass. This narrowly recognizes a single data-only publisher with a
+    fixed allowlist and a non-force update to the canonical branch.
+    """
+
+    if relative.as_posix() != ".github/workflows/refresh-host-version-catalog.yml":
+        return False
+    import re
+
+    exact_add = (
+        "git add minecraft_mod_ai/data/host_version_catalog.json "
+        "minecraft_mod_ai/data/official_version_evidence.json"
+    )
+    expected = (
+        "python -m minecraft_mod_ai.populate_version_artifact_rules",
+        exact_add,
+        'git commit -m "build: regenerate reviewed HOST bundle template admissions"',
+        "git push origin HEAD:main",
+        "git diff --cached --quiet",
+    )
+    if not all(marker in source for marker in expected):
+        return False
+    # A new staging, committing, or push command is outside the permitted
+    # two-file scope even if the original safe commands remain present.
+    commands = source.splitlines()
+    for keyword, permitted in (
+        ("git add ", exact_add),
+        ("git push ", "git push origin HEAD:main"),
+        ("git commit ", expected[2]),
+    ):
+        observed = [
+            line.strip() for line in commands
+            if re.search(r"(?<![A-Za-z0-9_])" + re.escape(keyword), line)
+        ]
+        if observed != [permitted]:
+            return False
+    if any(flag in source for flag in ("--force", "--all", "git reset --hard")):
+        return False
+    return True
+
+
 def audit_workflow_definitions() -> list[str]:
     errors: list[str] = []
     for path in _workflow_paths():
@@ -322,7 +366,7 @@ def audit_workflow_definitions() -> list[str]:
         source = path.read_text(encoding="utf-8")
         if any(marker in normalized_name for marker in _TRANSIENT_WORKFLOW_MARKERS):
             errors.append(f"TRANSIENT_WORKFLOW_FORBIDDEN {relative}")
-        if "git push" in source:
+        if "git push" in source and not _is_scoped_host_catalog_publisher(relative, source):
             errors.append(f"SELF_MUTATING_WORKFLOW_FORBIDDEN {relative}")
         try:
             node = yaml.compose(source)
