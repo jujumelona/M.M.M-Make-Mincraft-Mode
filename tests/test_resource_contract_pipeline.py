@@ -279,6 +279,9 @@ def runtime():
         calls.append(kwargs)
         image = Image.new("RGBA", (kwargs["width"], kwargs["height"]), (0, 0, 0, 0))
         image.paste((20, 40, 80, 255), (128, 128, 384, 384))
+        # A gameplay icon is not a flat swatch: preserve the real production
+        # degeneracy gate while providing a minimal valid synthetic texture.
+        image.paste((100, 120, 160, 255), (192, 192, 256, 256))
         image.save(kwargs["output_path"])
         return kwargs["output_path"]
 
