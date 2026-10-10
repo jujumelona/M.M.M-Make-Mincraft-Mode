@@ -4,7 +4,11 @@ import json
 
 import httpx
 
-from minecraft_mod_ai.llama_stream_efficiency_contract import _StreamingCompletionClient
+from minecraft_mod_ai.llama_stream_efficiency_contract import (
+    _StreamingCompletionClient,
+    _required_tool_repetition_detected,
+    _inside_json_string_at_end,
+)
 from minecraft_mod_ai.model_adapters.base import GenerationRequest
 from minecraft_mod_ai.model_adapters.llama_cpp_adapter import _native_tool_generation_response
 
@@ -263,3 +267,25 @@ def test_explicit_function_choice_allows_preface_then_native_tool() -> None:
 
     assert response.saw_done is True
     assert data["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "apply_source_edit"
+
+
+def test_loop_guard_preserves_repeated_source_text_inside_json_string() -> None:
+    # The original streaming bug stopped legitimate large source edits while
+    # a JSON string field was still being generated.
+    partial = '{"path":"Demo.java","content":"' + ("A" * 6000)
+    message = {
+        "tool_calls": [
+            {"function": {"name": "apply_source_edit", "arguments": partial}}
+        ]
+    }
+    assert _inside_json_string_at_end(partial)
+    assert not _required_tool_repetition_detected(message, copies=8)
+    assert not _required_tool_repetition_detected(message, copies=4)
+
+
+def test_loop_guard_still_rejects_repeated_structural_tool_json() -> None:
+    fragment = '{"operation":"write","path":"Demo.java","content":"ok"}'
+    repeated = fragment * 8
+    message = {"tool_calls": [{"function": {"arguments": repeated}}]}
+    assert not _inside_json_string_at_end(repeated)
+    assert _required_tool_repetition_detected(message, copies=8)
