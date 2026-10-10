@@ -54,3 +54,12 @@ def test_quality_preflight_not_invoked_for_source_only_or_legacy() -> None:
         SimpleNamespace(game_design={"mode": "debug_fixture"}),
         CompleteExecutionOptions(),
     ) == {}
+
+
+def test_runtime_screenshot_autodiscovery_is_valid_preflight_input() -> None:
+    proposal = _proposal(("visual_3d",))
+    options = CompleteExecutionOptions(
+        run_runtime=True, run_client=True, run_visual_review=True,
+        screenshot_paths=(),
+    )
+    assert _quality_execution_preflight_gaps(proposal, options) == {}
