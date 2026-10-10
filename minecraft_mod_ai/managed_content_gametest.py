@@ -88,6 +88,7 @@ def _manifest(approved: Any, root: Path) -> dict[str, Any] | None:
         for module in approved.modules
         if str(getattr(module, "kind", "")).casefold() == "recipe"
     )
+    recipe_cases: list[dict[str, Any]] = []
     for recipe_id in recipes:
         if not _IDENTIFIER.fullmatch(recipe_id):
             return None
@@ -96,8 +97,41 @@ def _manifest(approved: Any, root: Path) -> dict[str, Any] | None:
             return None
         try:
             value = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(value, dict) or "result" not in value:
+            if not isinstance(value, dict) or value.get("type") != "minecraft:crafting_shaped":
                 return None
+            pattern = value.get("pattern")
+            ingredients = value.get("key")
+            result = value.get("result")
+            if (
+                not isinstance(pattern, list) or not (1 <= len(pattern) <= 3)
+                or not all(isinstance(row, str) and 1 <= len(row) <= 3 for row in pattern)
+                or len({len(row) for row in pattern}) != 1
+                or not isinstance(ingredients, dict) or not isinstance(result, dict)
+            ):
+                return None
+            used = {letter for row in pattern for letter in row if letter != " "}
+            if not used or used != set(ingredients):
+                return None
+            for item_id in ingredients.values():
+                if not isinstance(item_id, str) or not re.fullmatch(
+                    r"[a-z0-9_.-]+:[a-z0-9_./-]+", item_id
+                ):
+                    return None
+            output_id = result.get("id")
+            quantity = result.get("count", 1)
+            if (
+                not isinstance(output_id, str)
+                or not re.fullmatch(r"[a-z0-9_.-]+:[a-z0-9_./-]+", output_id)
+                or type(quantity) is not int or not (1 <= quantity <= 64)
+            ):
+                return None
+            recipe_cases.append({
+                "id": recipe_id,
+                "pattern": pattern,
+                "ingredients": ingredients,
+                "output_id": output_id,
+                "output_count": quantity,
+            })
         except (OSError, UnicodeError, json.JSONDecodeError):
             return None
     # The final generated Java is more authoritative than a broad host facts
@@ -124,7 +158,7 @@ def _manifest(approved: Any, root: Path) -> dict[str, Any] | None:
             return None
         registry_owners[kind] = owners.pop()
     return {"mod_id": mod_id, "package": pkg, "content": content, "recipes": recipes,
-            "registries": registry_owners}
+            "recipe_cases": recipe_cases, "registries": registry_owners}
 
 
 def _java_assertions(manifest: Mapping[str, Any]) -> str:
