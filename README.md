@@ -42,12 +42,9 @@ The notebook does not require an engine ZIP. The setup cell clones or fast-forwa
 
 The checked-in notebook currently exposes these model profiles:
 
-- `Qwen3.5-9B_6GB`
-- `Qwen3.6-35B_23GB`
-- `Qwen3.6-27B_18GB`
-- `Qwen3.6-27B_14GB`
-- `mini_mod`
-- `fast_test`
+- `MiMo-V2.6-9B_6GB` — T4 default (Q4_K_M, 5.84 GB)
+- `Qwen3.8-27B_18GB` — optional large model
+- `fast_test` — deterministic pipeline fixture
 
 The optional local CUDA llama-server cell uses the same resolved planner configuration. Google Drive storage is enabled by default, and resumable runs reuse completed work instead of rebuilding it unnecessarily.
 
@@ -197,9 +194,17 @@ On the actual Qwen/Colab runtime, evaluate positive, negative, partial, synonym 
 source-instruction cases using the configured model (this command loads that model):
 
 ```bash
-python -m minecraft_mod_ai.research_semantic_eval --profile Qwen3.5-9B_6GB
+python -m minecraft_mod_ai.research_semantic_eval --profile MiMo-V2.6-9B_6GB
 ```
 
 The evaluator rejects mock adapters and writes `.mmm/research-semantic-eval.json`.
 Unit tests and bounded-input tests do not establish real-model accuracy or complete
 planner/Minecraft runtime readiness; those require the real evaluation and full run.
+
+### MiMo V2.6 9B local foundation (default T4 model)
+
+The T4 profile uses the [Xiaomi MiMo V2.6 Distill Qwen 9B](https://huggingface.co/XiaomiMiMo/MiMo-V2.6-Distill-Qwen-9B) derivative and the [bartowski GGUF](https://huggingface.co/bartowski/MiMo-V2.6-Distill-Qwen-9B-GGUF) quantization `MiMo-V2.6-Distill-Qwen-9B-Q4_K_M.gguf`. Vision input uses the matching `mmproj-MiMo-V2.6-Distill-Qwen-9B-f16.gguf` projector. Both are resolved by the model registry.
+
+The old Qwen3.5 GGUF, optional coder LoRA, dedicated Qwen3.5 sampling override and MTP tuning metadata are **removed from the T4 production profile**. The model-specific behavior is replaced with MiMo's native Jinja template: ordinary assistant reasoning uses `enable_thinking=true`, tool calls and structured JSON use `enable_thinking=false`. Output tools are validated and admitted by the MMM host; text alone never authorizes execution. `llama.cpp` must be at least b11102 (the project now pins b11429).
+
+**License:** Xiaomi lists the fine-tuned checkpoint as MIT; the original Qwen3.5-9B is Apache-2.0. When redistributing the weights, preserve the applicable license and copyright notices. Minecraft/third-party assets retain their own licensing. Q4_K_M is an initial T4 target, not a proven MMM success-rate improvement; verify on actual model/driver hardware. Cache cleanup is intentionally non-destructive to avoid removing unrelated downloaded models.

@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 REGISTRY_PATH = config_path("model_registry.yaml")
 LEGACY_REGISTRY_PATH = ROOT / "config" / "model_registry.yaml"
 FOUNDATION_ROLES = ("planner", "researcher", "coder", "coder_safe")
-RELEASE_FAMILIES = frozenset({"qwen3.5", "qwen3.8"})
+RELEASE_FAMILIES = frozenset({"mimo", "qwen3.8"})
 
 
 def test_release_registry_has_one_packaged_canonical_source() -> None:
@@ -22,13 +22,15 @@ def test_release_registry_has_one_packaged_canonical_source() -> None:
 
 def test_removed_foundation_paths_cannot_reenter_release_registry() -> None:
     text = REGISTRY_PATH.read_text(encoding="utf-8")
+    assert "Qwen3.5-9B-MTP-GGUF" not in text
+    assert "Qwen3.5-9B_6GB" not in text
     assert "Qwen3.6" not in text
     assert "qwen3.6" not in text
     assert "remote_quality" not in text
     assert "Qwen3.8-9B" not in text
 
 
-def test_every_real_release_profile_uses_one_qwen35_or_qwen38_foundation() -> None:
+def test_every_real_release_profile_uses_one_mimo_or_qwen38_foundation() -> None:
     registry = ModelRegistry(REGISTRY_PATH)
     for name in registry.profile_names():
         profile = registry.load_profile(name)
@@ -41,6 +43,8 @@ def test_every_real_release_profile_uses_one_qwen35_or_qwen38_foundation() -> No
             for config in configs
         }
         assert len(identities) == 1, name
-        families = {str(config.extra.get("qwen_family", "")) for config in configs}
-        assert families <= RELEASE_FAMILIES
-        assert len(families) == 1, name
+        contracts = {str(config.extra.get("runtime_contract", "")) for config in configs}
+        assert contracts <= {"mimo", "qwen"}
+        assert len(contracts) == 1, name
+        if contracts == {"qwen"}:
+            assert {str(config.extra.get("qwen_family", "")) for config in configs} == {"qwen3.8"}
