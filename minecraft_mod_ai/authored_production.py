@@ -851,6 +851,17 @@ def _compile_content_artifact_graph(
     # to reconstruct it from a later model call. Enrich the fact-level contract
     # with the canonical module configuration and the normalized hard build deps.
     module_by_id = {module.module_id: module for module in modules}
+    from .block_strength_lowering import authored_block_strength
+
+    for job in jobs:
+        if job.template_id == "fabric/block/register_basic":
+            owner = module_by_id.get(job.owner_module)
+            if owner is None or owner.kind != "block":
+                raise ValueError("BLOCK_PROPERTY_OWNER_INVALID:" + job.owner_module)
+            strength = authored_block_strength(owner.config)
+            if strength is not None:
+                job.deterministic_inputs["authored_block_strength"] = list(strength)
+
     from .task_template_catalog import load_template
     for job in jobs:
         canonical_inputs = job.deterministic_inputs.get("_canonical_inputs")
