@@ -194,6 +194,46 @@ def _schema_repair_directives(parameters: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(directives)
 
 
+def _reject_undeclared_fields(
+    raw: str,
+    schema: Mapping[str, Any],
+) -> None:
+    """Fail closed before generic transport recovery projects away extra keys."""
+
+    from .structured_output import StructuredOutputValidationError
+
+    try:
+        candidate = json.loads(raw)
+    except json.JSONDecodeError:
+        # Wrapper/text recovery belongs to the transport parser.
+        return
+
+    def visit(value: Any, shape: Mapping[str, Any], path: str) -> list[str]:
+        errors: list[str] = []
+        if isinstance(value, Mapping):
+            properties = shape.get("properties")
+            if isinstance(properties, Mapping):
+                if shape.get("additionalProperties") is False:
+                    extras = set(value) - set(properties)
+                    errors.extend(
+                        f"{path}.{field}: field not declared by host schema"
+                        for field in sorted(extras)
+                    )
+                for field, child in properties.items():
+                    if field in value and isinstance(child, Mapping):
+                        errors.extend(visit(value[field], child, f"{path}.{field}"))
+        elif isinstance(value, list):
+            item_schema = shape.get("items")
+            if isinstance(item_schema, Mapping):
+                for index, item in enumerate(value):
+                    errors.extend(visit(item, item_schema, f"{path}[{index}]"))
+        return errors
+
+    errors = visit(candidate, schema, "$")
+    if errors:
+        raise StructuredOutputValidationError(output=raw, errors=tuple(errors))
+
+
 def _validate_native_arguments(
     arguments: Mapping[str, Any],
     parameters: Mapping[str, Any],
@@ -201,6 +241,7 @@ def _validate_native_arguments(
     """Run the exact host validator before a native call can leave the repair frontier."""
 
     encoded = json.dumps(dict(arguments), ensure_ascii=False, separators=(",", ":"))
+    _reject_undeclared_fields(encoded, parameters)
     validated = validate_structured_output(
         encoded,
         response_format=_JSON_FIXTURE_FORMAT,
@@ -390,6 +431,7 @@ def generate_fixed_template_value(
             output_token_ceiling=required_ceiling,
             force_non_thinking=True,
         )
+        _reject_undeclared_fields(raw, response_schema)
         validated = validate_structured_output(
             raw,
             response_format=_JSON_FIXTURE_FORMAT,
@@ -408,6 +450,7 @@ def generate_fixed_template_value(
             enable_tools=enable_tools,
             **({"tool_stage": tool_stage} if tool_stage is not None else {}),
         )
+        _reject_undeclared_fields(raw, response_schema)
         validated = validate_structured_output(
             raw,
             response_format=_JSON_FIXTURE_FORMAT,
@@ -451,6 +494,7 @@ def generate_fixed_template_value(
         raise ValueError("fixed-template function call omitted wrapped value")
 
     encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    _reject_undeclared_fields(encoded, response_schema)
     validated = validate_structured_output(
         encoded,
         response_format=_JSON_FIXTURE_FORMAT,
