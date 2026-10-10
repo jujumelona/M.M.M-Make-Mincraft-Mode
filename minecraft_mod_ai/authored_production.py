@@ -998,11 +998,34 @@ def _assert_executable_gameplay_floor(
         and not (concrete_content or verified_donors)
         and not gameplay_writers
     ):
+        from .root_cause_trace import emit_root_cause
+
+        observed_content = [
+            {"module_id": module.module_id, "kind": module.kind}
+            for module in content_modules
+        ]
+        emit_root_cause(
+            "gameplay_implementation_absent",
+            stage="production",
+            operation="authored_gameplay_floor",
+            result="FAIL",
+            details={
+                "algorithm_steps": len(gameplay_steps),
+                "runtime_mutations_by_event": mutating_events,
+                "content_modules": observed_content,
+                "verified_source_transplant": verified_donors,
+                "repair": "re-author actionable gameplay content or explicitly "
+                          "bound non-bootstrap gameplay event; never substitute "
+                          "a login flag or display callback",
+            },
+        )
         raise ValueError(
             "GAMEPLAY_IMPLEMENTATION_ABSENT: algorithm steps have no "
             "non-bootstrap executable Minecraft gameplay event or actionable "
             "content module. Player-join state initialization and display "
-            "handlers are not gameplay implementations."
+            "handlers are not gameplay implementations. "
+            f"runtime_mutations_by_event={mutating_events!r}; "
+            f"content_modules={observed_content!r}."
         )
 
     if not (concrete_content or verified_donors or runtime_mutations):
