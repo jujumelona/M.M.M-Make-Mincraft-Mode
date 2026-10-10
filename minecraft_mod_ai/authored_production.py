@@ -976,29 +976,27 @@ def _assert_executable_gameplay_floor(
         isinstance(row, Mapping) and row.get("mode") == "source_transplant"
         for row in source_reuse.get("capabilities", ())
     )
-    from .typed_plan_ir import typed_plan_runtime_mutations
+    from .typed_plan_ir import (
+        typed_plan_runtime_mutations, typed_plan_mutating_events,
+    )
 
-    # Detect only operations reachable from a bound Fabric runtime event.
-    # In addition to state_set, inventory grants and status effects are real
-    # gameplay mutations; messaging and UI-only capabilities are not.
+    # Runtime reachability alone is insufficient: a player-join-only state
+    # writer inside logic_dispatch can coexist with an unrelated server_tick
+    # display callback. Prove that a non-bootstrap event reaches the writer.
     runtime_mutations = typed_plan_runtime_mutations(plan.typed_plan_ir)
-
-    # A joined-player initialization flag is executable Java, but it is not an
-    # implementation of an authored gameplay loop.  For multi-step gameplay,
-    # absent content actions or verified donor code, require a reachable
-    # mutating handler for a non-bootstrap Minecraft event.
-    runtime_events = {
-        str(binding.get("event") or "").strip()
-        for binding in plan.typed_plan_ir.get("event_bindings", ())
-        if isinstance(binding, Mapping)
-    }
+    mutating_events = typed_plan_mutating_events(plan.typed_plan_ir)
     bootstrap_events = {
         "player_join", "server_start", "server_started", "world_load",
+    }
+    gameplay_writers = {
+        event: operations
+        for event, operations in mutating_events.items()
+        if event not in bootstrap_events and operations
     }
     if (
         gameplay_steps
         and not (concrete_content or verified_donors)
-        and (not runtime_mutations or not (runtime_events - bootstrap_events))
+        and not gameplay_writers
     ):
         raise ValueError(
             "GAMEPLAY_IMPLEMENTATION_ABSENT: algorithm steps have no "
