@@ -57,10 +57,10 @@ REGRESSION_EXECUTION_ROUTES: dict[str, RegressionExecutionRoute] = {
     "REG-020": RegressionExecutionRoute("tests/test_resource_asset_backend_contract.py"),
     "REG-021": RegressionExecutionRoute("tests/test_semantic_prerequisite_edge_regression.py::test_space_progression_prerequisite_graph_cannot_collapse_to_zero_edges"),
     "REG-022": RegressionExecutionRoute(
-        "tests/test_evidence_first_session_integration.py::test_one_requirement_can_bind_every_semantic_slice_without_fixed_ref_cap"
+        "tests/test_unapproved_design_requirement_regression.py::test_unapproved_numeric_default_cannot_be_promoted_to_requirement_identity"
     ),
     "REG-023": RegressionExecutionRoute(
-        "tests/test_agent_context_window_contract.py",
+        "tests/test_large_context_probe_regression.py::test_small_probe_does_not_certify_larger_context_without_recount",
         evidence_scope="structural_harness",
     ),
     "REG-024": RegressionExecutionRoute("tests/test_qwen_parser_single_owner.py"),
@@ -90,7 +90,7 @@ REGRESSION_EXECUTION_ROUTES: dict[str, RegressionExecutionRoute] = {
         "tests/test_semantic_prerequisite_edge_regression.py::test_missing_space_progression_prerequisite_is_rejected_not_dropped"
     ),
     "REG-DESIGN-001": RegressionExecutionRoute(
-        "tests/test_evidence_first_session_integration.py::test_one_requirement_can_bind_every_semantic_slice_without_fixed_ref_cap"
+        "tests/test_unapproved_design_requirement_regression.py::test_designer_choice_stays_under_original_requirement_without_inventing_an_id"
     ),
 }
 
