@@ -62,12 +62,14 @@ def _plan(prompt: str) -> AuthoredPlan:
 class _ModelSession:
     def __init__(self, *, corrupt_reload: bool = False) -> None:
         self.prompts: list[str] = []
+        self.save_targets: list[Path | None] = []
         self.loads = 0
         self.corrupt_reload = corrupt_reload
         self.proposal: AuthoredPlan | None = None
 
-    def plan(self, prompt: str):
+    def plan(self, prompt: str, *, save_plan_path: Path | None = None):
         self.prompts.append(prompt)
+        self.save_targets.append(save_plan_path)
         self.proposal = _plan(prompt)
         return SimpleNamespace(complete_proposal=self.proposal, message=self.proposal.text)
 
@@ -99,6 +101,7 @@ def test_model_path_uses_real_authored_output_and_roundtrip(tmp_path: Path) -> N
         print_fn=lambda *args, **kwargs: None,
     )
     assert session.prompts == ["custom user requested gameplay"]
+    assert session.save_targets == [target]
     assert session.loads == 1
     assert result.plan_path == target
     assert isinstance(result.reply.complete_proposal, AuthoredPlan)
@@ -122,7 +125,7 @@ def test_debug_default_routes_user_prompt_into_real_model(tmp_path: Path) -> Non
 def test_model_path_rejects_plan_for_different_user_prompt(tmp_path: Path) -> None:
     session = _ModelSession()
 
-    def wrong_plan(_prompt: str):
+    def wrong_plan(_prompt: str, *, save_plan_path=None):
         generated = _plan("unrelated canned crystal fixture")
         return SimpleNamespace(complete_proposal=generated, message=generated.text)
 
@@ -196,7 +199,7 @@ def test_model_replay_requires_original_recorded_plan(tmp_path: Path) -> None:
 def test_debug_rejects_empty_non_executable_model_plan(tmp_path: Path) -> None:
     session = _ModelSession()
 
-    def empty_plan(prompt: str):
+    def empty_plan(prompt: str, *, save_plan_path=None):
         original = _plan(prompt)
         value = original.to_dict()
         value["content_design"] = {}
