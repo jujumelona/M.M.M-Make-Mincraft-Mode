@@ -164,8 +164,8 @@ def test_execute_uses_host_discovered_project_identity(
             f"fabric_version={target.fabric_api}",
             f"loom_version={target.fabric_loom}",
             f"yarn_mappings={target.yarn_mappings}",
-        )) + "\\n",
         )) + "\n",
+        encoding="utf-8",
     )
     captured: dict[str, object] = {}
 
