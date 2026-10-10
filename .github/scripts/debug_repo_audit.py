@@ -331,7 +331,7 @@ def _is_scoped_host_catalog_publisher(relative: Path, source: str) -> bool:
         "minecraft_mod_ai/data/official_version_evidence.json"
     )
     expected = (
-        "python -m minecraft_mod_ai.populate_version_artifact_rules",
+        "run: python -m minecraft_mod_ai.populate_version_artifact_rules",
         exact_add,
         'git commit -m "build: regenerate reviewed HOST bundle template admissions"',
         "git push origin HEAD:main",
