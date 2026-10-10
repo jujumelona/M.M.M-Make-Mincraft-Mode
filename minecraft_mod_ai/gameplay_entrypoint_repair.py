@@ -110,6 +110,13 @@ def repair_missing_gameplay_entrypoint(
         "pattern": r"^command:[a-z0-9_]{1,64}$",
         "maxLength": 72,
     }
+    # Unlike the canonical worksheet's raw record schema, a model-output
+    # request MUST have a finite bound on every string leaf. The bounded
+    # decoder accounts for JSON escaping (up to six characters per byte).
+    # Constrain these two plain-language fields before proving the output
+    # token ceiling; never weaken the finite-output requirement itself.
+    for field_name in ("boundary", "owner"):
+        schema["properties"][field_name]["maxLength"] = 256
     if budget is not None:
         budget.consume("typed.gameplay_entrypoint_repair")
     inputs = {
