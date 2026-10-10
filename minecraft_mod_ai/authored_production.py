@@ -29,6 +29,39 @@ from .typed_host_generation_contract import (
 _TARGET_KEYS = ("minecraft_version", "loader", "mappings")
 _AUTHORED_EXECUTION_SCHEMA = "mmm/authored-execution-manifest-v2"
 
+def _bind_authored_quality_contract(
+    *,
+    requested_prompt: str,
+    design: Mapping[str, Any],
+    modules: Iterable[ProductionModule],
+    assets: Iterable[AssetRequest],
+    acceptance: Iterable[str],
+    extra_acceptance: Iterable[str] = (),
+) -> tuple[dict[str, Any], tuple[str, ...]]:
+    """Compile the final authored plan into the v2 release-quality contract.
+
+    A v1 authored plan could pass Gradle/GameTest but could never obtain the
+    v2 quality report. Build the content-addressed contract before proposal
+    approval; leave runtime/research/other evidence requirements fail-closed.
+    """
+    from .production_contract import compile_production_contract
+
+    if "_production_contract" in design:
+        raise ValueError("AUTHORED_QUALITY_CONTRACT_ALREADY_BOUND")
+    acceptance_tests = tuple(dict.fromkeys((
+        *(str(value) for value in acceptance if str(value).strip()),
+        *(str(value) for value in extra_acceptance if str(value).strip()),
+    )))
+    compiled = compile_production_contract(
+        requested_prompt=requested_prompt,
+        game_design=design,
+        modules=tuple(modules),
+        assets=tuple(assets),
+        acceptance_tests=acceptance_tests,
+    )
+    return {**design, "_production_contract": compiled.contract}, compiled.acceptance_tests
+
+
 def _sha256_json(value: Any) -> str:
     payload = json.dumps(
         value,
@@ -1146,34 +1179,14 @@ def compile_authored_design(
             "manifest": manifest,
         },
     )
-    # Bind the authored execution manifest to the same immutable quality
-    # contract used by normal production. Previously this path emitted v1,
-    # while the release evaluator only handled v2; completed Gradle/GameTest
-    # runs were therefore blocked by authored-quality-contract-missing.
-    # Compile from the final, target-bound design and actual module/asset
-    # collection. Never synthesize PASS evidence or bypass missing gates.
-    from .production_contract import compile_production_contract
-
-    authored_acceptance = tuple(
-        dict.fromkeys(
-            (
-                *acceptance,
-                *(
-                    str(value)
-                    for value in content_design.get("acceptance_tests", ())
-                    if str(value).strip()
-                ),
-            )
-        )
-    )
-    compiled_quality = compile_production_contract(
+    design, compiled_acceptance = _bind_authored_quality_contract(
         requested_prompt=plan.requested_prompt,
-        game_design=design,
+        design=design,
         modules=modules,
         assets=content_assets,
-        acceptance_tests=authored_acceptance,
+        acceptance=acceptance,
+        extra_acceptance=content_design.get("acceptance_tests", ()),
     )
-    design = {**design, "_production_contract": compiled_quality.contract}
 
     return complete_proposal_from_parts(
         requested_prompt=plan.requested_prompt,
@@ -1181,6 +1194,6 @@ def compile_authored_design(
         game_design=design,
         modules=modules,
         assets=content_assets,
-        acceptance_tests=compiled_quality.acceptance_tests,
+        acceptance_tests=compiled_acceptance,
         existing_input_sha256=effective_existing,
     )
