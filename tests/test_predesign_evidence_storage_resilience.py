@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from minecraft_mod_ai import pre_design_grounded_rag as rag
 from minecraft_mod_ai.pre_design_research_pipeline import _validate_document_grounding
 
@@ -148,11 +150,48 @@ def test_validate_document_grounding_resilience(tmp_path, monkeypatch):
     }
 
     # Normal validation passes
-    _validate_document_grounding(None, rag, note_with_card, document, domain_id="grounded_domain")
+    _validate_document_grounding(rag, note_with_card, document, domain_id="grounded_domain")
 
     # Now corrupt the disk file and remove _pages; self-healing should allow validation to still pass
     Path(document["pages_path"]).write_text('{"truncated', encoding="utf-8")
     disk_doc = dict(document)
     disk_doc.pop("_pages", None)
 
-    _validate_document_grounding(None, rag, note_with_card, disk_doc, domain_id="grounded_domain")
+    _validate_document_grounding(rag, note_with_card, disk_doc, domain_id="grounded_domain")
+
+
+def test_validate_document_grounding_rejects_unmaterialized_citations(tmp_path, monkeypatch):
+    from minecraft_mod_ai.pre_design_research_pipeline import PreDesignResearchFailure
+
+    monkeypatch.setenv("MMM_RESEARCH_DOCUMENT_DIR", str(tmp_path))
+    document = rag._materialize_domain_evidence_document(
+        "grounding_rejection",
+        {"grounded_rag": {"queries": [{"query": "evidence", "evidence_records": [{
+            "source_id": "source:test",
+            "source_type": "test",
+            "url": "https://example.invalid/test",
+            "title": "Test evidence",
+            "content": "verified content",
+        }]}]}},
+    )
+    valid_page = document["_pages"][0]["page_ref"]
+    with pytest.raises(PreDesignResearchFailure, match="outside host-owned"):
+        _validate_document_grounding(
+            rag,
+            {"grounded_evidence_cards": [{"page_ref": "foreign:unmaterialized"}]},
+            document,
+            domain_id="grounding_rejection",
+        )
+    with pytest.raises(PreDesignResearchFailure, match="outside host-owned pages"):
+        _validate_document_grounding(
+            rag,
+            {"claims": [{"claim": "wrong", "citations": ["foreign:unmaterialized"]}]},
+            document,
+            domain_id="grounding_rejection",
+        )
+    _validate_document_grounding(
+        rag,
+        {"claims": [{"claim": "verified", "citations": [valid_page]}]},
+        document,
+        domain_id="grounding_rejection",
+    )
