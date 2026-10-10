@@ -130,8 +130,8 @@ def _manifest(approved: Any, root: Path) -> dict[str, Any] | None:
 def _java_assertions(manifest: Mapping[str, Any]) -> str:
     """Emit executable Minecraft-side runtime checks, using locked host owners.
 
-    The approved host facts (not guessed Mojang/Yarn import paths) identify
-    the registry owner. Java reflection is limited to the public runtime
+    The generated, compiler-visible Java imports identify the registry owner.
+    Java reflection is limited to the public runtime
     registry interface and fails the GameTest on any incompatible target.
     """
     mod_id = str(manifest["mod_id"])
@@ -169,25 +169,20 @@ def _java_assertions(manifest: Mapping[str, Any]) -> str:
             "            {",
             '                Object level = context.getClass().getMethod("getLevel").invoke(context);',
             '                Object server = level.getClass().getMethod("getServer").invoke(level);',
-            "                Object recipeAccess;",
-            "                try {",
-            '                    recipeAccess = level.getClass().getMethod("recipeAccess").invoke(level);',
-            "                } catch (NoSuchMethodException missing) {",
-            '                    recipeAccess = server.getClass().getMethod("getRecipeManager").invoke(server);',
-            "                }",
-            '                Class<?> keyClass = Class.forName("net.minecraft.resources.ResourceLocation");',
+            '                Object recipeManager = server.getClass().getMethod("getRecipeManager").invoke(server);',
+            '                Class<?> keyClass = Class.forName("net.minecraft.resources.Identifier");',
             '                Class<?> resourceKeyClass = Class.forName("net.minecraft.resources.ResourceKey");',
             '                Object registryKey = Class.forName("net.minecraft.core.registries.Registries").getField("RECIPE").get(null);',
             '                java.lang.reflect.Method keyFactory = keyClass.getMethod("fromNamespaceAndPath", String.class, String.class);',
             '                java.lang.reflect.Method resourceKeyFactory = resourceKeyClass.getMethod("create", resourceKeyClass, keyClass);',
-            '                java.lang.reflect.Method findRecipe = recipeAccess.getClass().getMethod("byKey", resourceKeyClass);',
+            '                java.lang.reflect.Method findRecipe = recipeManager.getClass().getMethod("byKey", resourceKeyClass);',
         ))
         for name in manifest["recipes"]:
             lines.extend((
                 "                {",
                 f'                    Object key = keyFactory.invoke(null, "{mod_id}", "{name}");',
                 "                    Object typedKey = resourceKeyFactory.invoke(null, registryKey, key);",
-                "                    Object recipe = findRecipe.invoke(recipeAccess, typedKey);",
+                "                    Object recipe = findRecipe.invoke(recipeManager, typedKey);",
                 "                    if (!(recipe instanceof java.util.Optional<?> optional) || optional.isEmpty()) {",
                 f'                        throw new AssertionError("GameTest RecipeManager did not load actual recipe: {mod_id}:{name}");',
                 "                    }",
