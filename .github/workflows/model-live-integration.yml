@@ -15,22 +15,23 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {id: deterministic-long, seed: 7, temperature: 0.0, max_tokens: 128}
-          - {id: low-temp-long, seed: 11, temperature: 0.2, max_tokens: 128}
-          - {id: sampled-short, seed: 13, temperature: 0.7, max_tokens: 16}
-          - {id: sampled-stop, seed: 17, temperature: 0.8, max_tokens: 128}
+          - {id: deterministic-tool, seed: 7, temperature: 0.0, max_tokens: 1024, scenario: source-edit}
+          - {id: sampled-tool, seed: 11, temperature: 0.2, max_tokens: 1024, scenario: source-edit}
+          - {id: deterministic-json, seed: 13, temperature: 0.0, max_tokens: 256, scenario: json}
+          - {id: sampled-json, seed: 17, temperature: 0.2, max_tokens: 256, scenario: json}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with: {python-version: '3.11', cache: pip}
-      - run: python -m pip install --prefer-binary -e '.[dev,ui]'
+      - run: python -m pip install --prefer-binary -e '.[dev,ui,local-model]'
       - name: Run one real inference condition
         env:
           MMM_MODEL_AUTO_DOWNLOAD: '1'
         run: >-
           python -m tools.model_live_integration_capture
           --profile t4_local
-          --role planner
+          --role coder
+          --scenario "${{ matrix.scenario }}"
           --seed "${{ matrix.seed }}"
           --temperature "${{ matrix.temperature }}"
           --max-tokens "${{ matrix.max_tokens }}"
