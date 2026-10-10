@@ -481,12 +481,12 @@ def compile_content_graph(
         ]}
         nodes = records("design/content_entity", entity_context)
         gameplay_context = context.get("design_context")
-        gameplay_step = (
+        gameplay_obligation = (
             isinstance(gameplay_context, Mapping)
             and gameplay_context.get("source_section") == "algorithm"
-            and gameplay_context.get("source_concern") == "steps"
+            and gameplay_context.get("source_concern") in {"steps", "atomic_mutations"}
         )
-        if gameplay_step and nodes and all(
+        if gameplay_obligation and nodes and all(
             node.get("kind") == "gui" for node in nodes
         ):
             # Retry at the cheap planning boundary instead of compiling and
@@ -499,9 +499,18 @@ def compile_content_graph(
             # pass still permits an explicitly requested user interface.
             from .content_design_contract import PRIMARY_CONTENT_KINDS
 
-            playable_kinds = [
-                kind for kind in PRIMARY_CONTENT_KINDS if kind != "gui"
-            ]
+            # Atomic state writers need an executable interaction owner, not
+            # another passive registry or a screen with no server handler.
+            # A content-free obligation is still permitted when a separately
+            # bound Typed PlanIR event implements the same gameplay.
+            if gameplay_context.get("source_concern") == "atomic_mutations":
+                playable_kinds = [
+                    "custom_item_behavior", "custom_block_behavior",
+                ]
+            else:
+                playable_kinds = [
+                    kind for kind in PRIMARY_CONTENT_KINDS if kind != "gui"
+                ]
             nodes = records("design/content_entity", {
                 **entity_context,
                 "allowed_content_kinds": playable_kinds,
