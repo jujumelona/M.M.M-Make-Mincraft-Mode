@@ -44,9 +44,7 @@ GRADLE_SOURCE_TAGS = {
     "8.8": "v8.8.0",
     "8.10.2": "v8.10.2",
 }
-_FABRIC_WRAPPER_DIR = "scripts/src/lib/template/templates/gradle/wrapper/gradle/wrapper"
-_FABRIC_RAW = "https://raw.githubusercontent.com/FabricMC/fabricmc.net/main/"
-_FABRIC_API = "https://api.github.com/repos/FabricMC/fabricmc.net/contents/"
+_GRADLE_RELEASE_BASE = "https://services.gradle.org/distributions/"
 
 
 @dataclass(frozen=True)
@@ -121,22 +119,19 @@ def _validate_wrapper(path: Path) -> None:
 
 @lru_cache(maxsize=8)
 def _live_wrapper_pin(gradle: str) -> tuple[str, str, int]:
-    properties = _fetch_text(_FABRIC_RAW + _FABRIC_WRAPPER_DIR + "/gradle-wrapper.properties")
-    match = re.search(r"gradle-([0-9][0-9A-Za-z_.-]*)-bin\.zip", properties)
-    if not match or match.group(1) != gradle:
-        raise RuntimeError(f"Fabric wrapper does not match provider Gradle {gradle}")
-    rows = json.loads(_fetch_text(_FABRIC_API + _FABRIC_WRAPPER_DIR + "?ref=main"))
-    row = next((item for item in rows if item.get("name") == "gradle-wrapper.jar"), None)
-    if not isinstance(row, dict):
-        raise RuntimeError("Fabric template exposes no wrapper JAR")
-    url = str(row.get("download_url") or "")
-    sha = str(row.get("sha") or "").lower()
-    size = row.get("size")
-    if not url.startswith(_FABRIC_RAW) or not re.fullmatch(r"[0-9a-f]{40}", sha):
-        raise RuntimeError("Fabric wrapper metadata failed origin/integrity validation")
-    if type(size) is not int or size <= 0:
-        raise RuntimeError("Fabric wrapper metadata has invalid size")
-    return url, sha, size
+    """Verify the exact official Gradle release, not Fabric's mutable main.
+
+    The official release server publishes a wrapper JAR and its SHA-256.
+    The third tuple member is retained for the existing caller interface.
+    """
+    if not re.fullmatch(r"[0-9][0-9A-Za-z_.-]*", gradle):
+        raise RuntimeError("Invalid Gradle wrapper version")
+    url = f"{_GRADLE_RELEASE_BASE}gradle-{gradle}-wrapper.jar"
+    checksum_text = _fetch_text(url + ".sha256", timeout=30).strip()
+    digest = checksum_text.split()[0].casefold() if checksum_text else ""
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise RuntimeError(f"Official Gradle {gradle} wrapper checksum is invalid")
+    return url, digest, 0
 
 
 def _ensure_wrapper(adapter: PlatformAdapter) -> Path:
@@ -157,7 +152,7 @@ def _ensure_wrapper(adapter: PlatformAdapter) -> Path:
         live_pin = _live_wrapper_pin(gradle)
         url, sha, size = live_pin
         if target.is_file() and not target.is_symlink():
-            if target.stat().st_size == size and _git_blob_sha1(target) == sha:
+            if _sha256(target) == sha:
                 _validate_wrapper(target)
                 return target
         candidates = (url,)
@@ -173,14 +168,19 @@ def _ensure_wrapper(adapter: PlatformAdapter) -> Path:
                 raise RuntimeError("wrapper SHA-256 mismatch")
             if live_pin:
                 _, sha, size = live_pin
-                if temporary.stat().st_size != size or _git_blob_sha1(temporary) != sha:
-                    raise RuntimeError("wrapper Git object mismatch")
+                if _sha256(temporary) != sha:
+                    raise RuntimeError("official Gradle wrapper SHA-256 mismatch")
             _validate_wrapper(temporary)
             os.replace(temporary, target)
             return target
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{url}: {type(exc).__name__}: {exc}")
     raise RuntimeError(f"Verified Gradle wrapper {gradle} unavailable: " + " | ".join(errors))
+
+
+def verified_wrapper_sha256(adapter: PlatformAdapter) -> str:
+    """Attest the exact provider-version wrapper before using its digest."""
+    return _sha256(_ensure_wrapper(adapter))
 
 
 def _distribution_url(gradle: str) -> str:
