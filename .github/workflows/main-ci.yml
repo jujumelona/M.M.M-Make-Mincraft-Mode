@@ -5,6 +5,21 @@ on:
   push:
     branches: [main]
     paths:
+      # Full CI may not appear green if any executable source, test, notebook,
+      # config, template, CI script or workflow changed without being tested.
+      - 'minecraft_mod_ai/**'
+      - 'tests/**'
+      - 'tools/**'
+      - 'integrations/**'
+      - 'plugins/**'
+      - 'skills/**'
+      - 'schemas/**'
+      - '.github/**'
+      - 'M.M.M_Make_Mincraft_Mode_Colab.ipynb'
+      - 'pyproject.toml'
+      - 'requirements-colab.txt'
+      - 'download_resources.py'
+      - 'download_models.sh'
       - 'minecraft_mod_ai/llama_*.py'
       - 'minecraft_mod_ai/qwen*.py'
       - 'minecraft_mod_ai/generation_output_budget.py'
@@ -90,8 +105,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: exhaustive-ci-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Every SHA must finish its evidence, even when several patches arrive rapidly.
+  group: exhaustive-ci-${{ github.event_name }}-${{ github.sha }}
+  cancel-in-progress: false
 
 jobs:
   debug-audit:
@@ -466,6 +482,10 @@ jobs:
     name: Model-realistic replay
     uses: ./.github/workflows/model-realistic-replay.yml
 
+  deterministic-production:
+    name: Actual Gradle, JDT, GameTest and packaged JAR proof
+    uses: ./.github/workflows/deterministic-debug-full-e2e.yml
+
   audit:
     name: Aggregate granular audit gate
     if: ${{ always() }}
@@ -485,7 +505,7 @@ jobs:
     name: CI Gate
     if: ${{ always() }}
     timeout-minutes: 5
-    needs: [audit, tests, python313, model-realistic-replay]
+    needs: [audit, tests, python313, model-realistic-replay, deterministic-production]
     runs-on: ubuntu-latest
     steps:
       - env:
@@ -493,8 +513,10 @@ jobs:
           TESTS: ${{ needs.tests.result }}
           PY313: ${{ needs.python313.result }}
           MODEL_REPLAY: ${{ needs.model-realistic-replay.result }}
+          PRODUCTION_PROOF: ${{ needs.deterministic-production.result }}
         run: |
           test "$AUDIT" = success
           test "$TESTS" = success
           test "$PY313" = success
           test "$MODEL_REPLAY" = success
+          test "$PRODUCTION_PROOF" = success
