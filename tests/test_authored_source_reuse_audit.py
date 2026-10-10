@@ -37,3 +37,31 @@ def test_duplicate_capability_is_rejected():
     data["capabilities"].append(dict(data["capabilities"][0]))
     with pytest.raises(ValueError, match="CAPABILITY_MISMATCH"):
         audit_authored_source_reuse(data)
+
+
+def test_verified_donor_requires_actual_materialization():
+    data = _plan()
+    data["capabilities"][0] = {
+        "capability": "block",
+        "mode": "source_transplant",
+        "source_id": "host-donor:example/project@" + ("a" * 40),
+        "proof_receipt": {"compile_passed": True},
+    }
+    with pytest.raises(ValueError, match="DONOR_NOT_INSTALLED"):
+        audit_authored_source_reuse(data, installed_donor_count=0)
+
+    receipt = audit_authored_source_reuse(data, installed_donor_count=1)
+    assert receipt["status"] == "MIXED_REUSE_AND_FRESH"
+    assert receipt["verified_transplant_count"] == 1
+
+
+def test_reuse_claim_with_failed_proof_is_rejected():
+    data = _plan()
+    data["capabilities"][0] = {
+        "capability": "block",
+        "mode": "source_transplant",
+        "source_id": "host-donor:example/project@" + ("a" * 40),
+        "proof_receipt": {"compile_passed": False},
+    }
+    with pytest.raises(ValueError, match="UNVERIFIED_TRANSPLANT"):
+        audit_authored_source_reuse(data, installed_donor_count=1)
