@@ -173,7 +173,10 @@ jobs:
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: "17"
+          # The full discovered suite includes Java 21 compile fixtures.
+          # Java 21 can also compile targets using --release 17; Java 17
+          # cannot execute javac --release 21.
+          java-version: "21"
       - run: python -m pip install --prefer-binary -e '.[dev,ui]'
       - name: Run every lane file in its own pytest process
         shell: bash
