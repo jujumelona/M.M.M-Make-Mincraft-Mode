@@ -437,9 +437,12 @@ class CompleteModAISession:
         prompt: str,
         *,
         media_paths: tuple[str | Path, ...] = (),
+        save_plan_path: str | Path | None = None,
     ) -> CompleteChatReply:
         self.reset()
-        return self.chat(prompt, media_paths=media_paths)
+        return self.chat(
+            prompt, media_paths=media_paths, save_plan_path=save_plan_path,
+        )
 
     def revise(
         self,
@@ -454,6 +457,7 @@ class CompleteModAISession:
         message: str,
         *,
         media_paths: tuple[str | Path, ...] = (),
+        save_plan_path: str | Path | None = None,
     ) -> CompleteChatReply:
         _validate_internal_engine_preflight()
         try:
@@ -474,7 +478,7 @@ class CompleteModAISession:
         )
         self.brief = updated_brief
         self.complete_proposal = proposal
-        self.save_plan()
+        self.save_plan(save_plan_path)
         return CompleteChatReply(
             message=_loaded_proposal_message(proposal),
             approval_hash=proposal.calculate_hash(),
