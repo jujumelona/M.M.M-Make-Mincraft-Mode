@@ -1108,10 +1108,13 @@ class CompleteProductionOrchestrator:
                 unresolved_gates=normalized_unresolved,
             )
         elif (
-            approved.schema_version == 'mmm/complete-proposal-v1'
-            and isinstance(approved.game_design.get('_authored_execution_manifest'), dict)
+            isinstance(approved.game_design.get('_authored_execution_manifest'), dict)
             and isinstance(approved.game_design.get('authored_plan'), dict)
         ):
+            # Authored coverage is mandatory for both legacy v1 and contract-bound
+            # v2. Do not let adding a quality contract replace behavioral source
+            # coverage with the generic requirement catalog, which would miss
+            # incomplete or no-op authored feature implementations.
             coverage_receipt = build_authored_design_coverage_receipt(
                 proposal_hash=approved.calculate_hash(),
                 requested_prompt=approved.requested_prompt,
