@@ -189,6 +189,74 @@ def test_insufficient_ram_does_not_start_native_worker(monkeypatch):
             alpha.segment_foreground_isolated(source)
 
 
+
+
+def test_colab_2741_mib_selects_licensed_u2netp_instead_of_failing_preflight(monkeypatch):
+    """Regression: full-model 3072 MiB guard must not block smaller U2NetP."""
+    monkeypatch.setattr(alpha, "_available_host_ram_bytes", lambda: 2741 * 1048576)
+    monkeypatch.delenv("MMM_ALPHA_U2NETP_MIN_AVAILABLE_MB", raising=False)
+    attempts = []
+
+    def fake_run(command, **kwargs):
+        attempts.append(kwargs["env"]["MMM_ALPHA_WORKER_MODEL"])
+        source, target = Path(command[-2]), Path(command[-1])
+        with Image.open(source) as raw:
+            result = raw.convert("RGBA")
+        with Image.new("L", result.size, 0) as mask:
+            ImageDraw.Draw(mask).ellipse((8, 8, 24, 24), fill=255)
+            result.putalpha(mask)
+        result.save(target, "PNG")
+        result.close()
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(alpha.subprocess, "run", fake_run)
+    with Image.new("RGB", (32, 32), "grey") as source:
+        result = alpha.segment_foreground_isolated(source)
+    try:
+        assert result.info["mmm_alpha_matte"] == "rembg:u2netp"
+        assert result.getpixel((16, 16))[3] == 255
+        assert result.getpixel((0, 0))[3] == 0
+    finally:
+        result.close()
+    assert attempts == ["u2netp"]
+
+
+def test_host_ram_drop_between_selection_and_launch_skips_unsafe_u2net(monkeypatch):
+    available = iter([5900, 2741, 2741])
+    monkeypatch.setattr(
+        alpha, "_available_host_ram_bytes", lambda: next(available, 2741) * 1048576
+    )
+    monkeypatch.delenv("MMM_ALPHA_U2NETP_MIN_AVAILABLE_MB", raising=False)
+    attempts = []
+
+    def fake_run(command, **kwargs):
+        attempts.append(kwargs["env"]["MMM_ALPHA_WORKER_MODEL"])
+        source, target = Path(command[-2]), Path(command[-1])
+        with Image.open(source) as raw:
+            result = raw.convert("RGBA")
+        with Image.new("L", result.size, 0) as mask:
+            ImageDraw.Draw(mask).ellipse((8, 8, 24, 24), fill=255)
+            result.putalpha(mask)
+        result.save(target, "PNG")
+        result.close()
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(alpha.subprocess, "run", fake_run)
+    with Image.new("RGB", (32, 32), "grey") as source:
+        result = alpha.segment_foreground_isolated(source)
+    try:
+        assert result.info["mmm_alpha_matte"] == "rembg:u2netp"
+    finally:
+        result.close()
+    assert attempts == ["u2netp"]
+
+
+def test_u2netp_keeps_its_own_lower_ram_floor(monkeypatch):
+    monkeypatch.setattr(alpha, "_available_host_ram_bytes", lambda: 1024 * 1048576)
+    monkeypatch.delenv("MMM_ALPHA_U2NETP_MIN_AVAILABLE_MB", raising=False)
+    with pytest.raises(ValueError, match="ALPHA_SEGMENTER_INSUFFICIENT_HOST_RAM"):
+        alpha._preflight_worker_ram(model_name="u2netp")
+
 def test_native_worker_sigkill_becomes_diagnostic_error(monkeypatch):
     monkeypatch.setattr(alpha, "_available_host_ram_bytes", lambda: 8 * 1024**3)
     monkeypatch.setattr(
