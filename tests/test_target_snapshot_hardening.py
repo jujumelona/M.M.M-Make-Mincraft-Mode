@@ -84,7 +84,7 @@ def test_existing_report_inventory_and_proposal_share_one_observed_archive_sha(
     session.planner = Planner()
     session.brief = ""
     session.complete_proposal = None
-    monkeypatch.setattr(api.CompleteModAISession, "save_plan", lambda self: archive)
+    monkeypatch.setattr(api.CompleteModAISession, "save_plan", lambda self, target_path=None: archive)
     from minecraft_mod_ai import plan_render
 
     monkeypatch.setattr(plan_render, "render_complete_plan", lambda **_kwargs: "plan")
@@ -144,4 +144,6 @@ def test_retired_target_monkeypatch_owners_are_physically_absent() -> None:
     assert not (package / "platform_planning_contract.py").exists()
     assert not (package / "platform_optimizer.py").exists()
     assert (package / "platform_evidence_pipeline.py").exists()
-    assert (package / "live_module_lowering.py").exists()
+    # Retired lowering must stay absent; typed production is its current owner.
+    assert not (package / "live_module_lowering.py").exists()
+    assert (package / "typed_plan_production.py").is_file()
