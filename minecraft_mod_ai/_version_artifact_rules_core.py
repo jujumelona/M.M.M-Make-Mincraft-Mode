@@ -471,7 +471,8 @@ def build_version_facts(
             leaf_bindings[leaf] = {
                 "state": "admitted",
                 "implementation": make_implementation(
-                    leaf, minecraft_version, template_id="minecraft/resource/block/model_cube_all", executor_type="deterministic_renderer", validator_profile="json_schema", hashes=hashes
+                    leaf, minecraft_version, template_id="minecraft/resource/block/model_cube_all", executor_type="deterministic_renderer", validator_profile="json_schema", hashes=hashes,
+                    extra={"extra_templates": ["minecraft/resource/item/client_block_item"] if is_modern_item_model else []},
                 ),
             }
         elif leaf == "minecraft/language/key":
