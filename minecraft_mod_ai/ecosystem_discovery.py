@@ -481,6 +481,26 @@ class EcosystemDiscoveryClient:
             response = self._http_client.get(url, params=params, headers=headers)
         except httpx.HTTPError as exc:
             raise EcosystemDiscoveryUnavailable(f'{parsed.hostname} discovery request failed: {type(exc).__name__}.') from exc
+        # GitHub may issue a permanent redirect for repositories that have
+        # moved. Follow a single *same-origin HTTPS API* hop; never let
+        # an Authorization header escape to arbitrary redirect targets.
+        if provider == 'github' and parsed.hostname == 'api.github.com' and response.status_code in {301, 302, 307, 308}:
+            from urllib.parse import urljoin
+
+            redirected = urljoin(str(response.url), response.headers.get('location', ''))
+            destination = urlparse(redirected)
+            if (
+                destination.scheme != 'https'
+                or destination.hostname != 'api.github.com'
+                or destination.username is not None
+                or destination.password is not None
+                or not destination.path.startswith(('/repos/', '/repositories/'))
+            ):
+                raise EcosystemDiscoveryUnavailable('GitHub repository redirect escaped the API allowlist.')
+            try:
+                response = self._http_client.get(redirected, headers=headers)
+            except httpx.HTTPError as exc:
+                raise EcosystemDiscoveryUnavailable('GitHub repository redirect failed.') from exc
         if response.status_code != 200:
             raise EcosystemDiscoveryUnavailable(f'{parsed.hostname} discovery returned HTTP {response.status_code}.')
         if len(response.content) > _MAX_RESPONSE_BYTES:
