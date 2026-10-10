@@ -90,14 +90,78 @@ def test_no_atomic_mutations_needs_no_repair(monkeypatch):
     assert repair_missing_gameplay_entrypoint(object(), "view items", sections) == sections
 
 
-def test_repair_does_not_drop_existing_hooks_when_full():
+def test_full_page_with_duplicate_join_hooks_preserves_all_obligations(monkeypatch):
+    from minecraft_mod_ai import fixed_template_generation
+
     sections = _sections()
-    sections["integration"]["specification"]["entry_points"] = [
-        {"boundary": f"startup_{i}", "trigger": "player_join", "owner": "host"}
+    original = [
+        {"boundary": f"startup_{i}", "trigger": "player_join", "owner": f"owner_{i}"}
         for i in range(4)
     ]
-    with pytest.raises(ValueError, match="GAMEPLAY_ENTRYPOINT_CAPACITY_EXHAUSTED"):
+    sections["integration"]["specification"]["entry_points"] = original
+    calls = []
+
+    def model(*_args, **_kwargs):
+        calls.append(1)
+        return {
+            "boundary": "purchase invocation",
+            "trigger": "command:purchase",
+            "owner": "server",
+        }
+
+    monkeypatch.setattr(
+        fixed_template_generation, "generate_fixed_template_value", model,
+    )
+    repaired = repair_missing_gameplay_entrypoint(
+        object(), "buy upgrades", sections,
+    )
+    rows = repaired["integration"]["specification"]["entry_points"]
+    assert len(rows) == 2
+    assert [row["trigger"] for row in rows] == ["player_join", "command:purchase"]
+    assert all(f"startup_{i}" in rows[0]["boundary"] for i in range(4))
+    assert all(f"owner_{i}" in rows[0]["owner"] for i in range(4))
+    assert sections["integration"]["specification"]["entry_points"] == original
+    assert calls == [1]
+
+
+def test_full_page_with_distinct_hooks_fails_before_model_call(monkeypatch):
+    from minecraft_mod_ai import fixed_template_generation
+
+    sections = _sections()
+    sections["integration"]["specification"]["entry_points"] = [
+        {"boundary": str(i), "trigger": trigger, "owner": "host"}
+        for i, trigger in enumerate((
+            "player_join", "server_started", "server_stopping", "server_tick",
+        ))
+    ]
+
+    def no_model(*_args, **_kwargs):
+        raise AssertionError("do not conceal unrelated lifecycle obligations")
+
+    monkeypatch.setattr(
+        fixed_template_generation, "generate_fixed_template_value", no_model,
+    )
+    with pytest.raises(ValueError, match="GAMEPLAY_ENTRYPOINT_REAUTHOR_REQUIRED"):
         repair_missing_gameplay_entrypoint(object(), "buy upgrades", sections)
+
+
+def test_server_tick_does_not_substitute_for_a_player_action(monkeypatch):
+    from minecraft_mod_ai import fixed_template_generation
+
+    sections = _sections("server_tick")
+    monkeypatch.setattr(
+        fixed_template_generation,
+        "generate_fixed_template_value",
+        lambda *_args, **_kwargs: {
+            "boundary": "launch invocation",
+            "trigger": "command:launch",
+            "owner": "server",
+        },
+    )
+    repaired = repair_missing_gameplay_entrypoint(object(), "launch", sections)
+    assert [x["trigger"] for x in repaired["integration"]["specification"]["entry_points"]] == [
+        "server_tick", "command:launch",
+    ]
 
 
 def test_atomic_mutation_must_not_execute_on_player_join():
