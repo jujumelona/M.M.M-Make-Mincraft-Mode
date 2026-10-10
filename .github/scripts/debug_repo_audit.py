@@ -335,9 +335,11 @@ def _is_scoped_host_catalog_publisher(relative: Path, source: str) -> bool:
         exact_add,
         'git commit -m "build: regenerate reviewed HOST bundle template admissions"',
         "git push origin HEAD:main",
-        "git diff --cached --quiet",
+        "if git diff --cached --quiet; then",
     )
-    if not all(marker in source for marker in expected):
+    # Whole shell commands, not substring matches: a command with a different
+    # module suffix must never inherit publication permission.
+    if not all(command in {line.strip() for line in source.splitlines()} for command in expected):
         return False
     # A new staging, committing, or push command is outside the permitted
     # two-file scope even if the original safe commands remain present.
