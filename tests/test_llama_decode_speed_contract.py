@@ -182,12 +182,12 @@ def test_kv_autotune_can_be_explicitly_disabled(monkeypatch) -> None:
     assert _kv_autotune_enabled(autotune) is False
 
 
-def test_qwen35_structured_local_payload_keeps_json_validation_host_side_and_native_tools() -> None:
+def test_mimo_structured_payload_keeps_json_validation_host_side_and_native_tools() -> None:
     adapter = SimpleNamespace(
         config=SimpleNamespace(
             max_new_tokens=8192,
-            model_id="unsloth/Qwen3.5-9B-MTP-GGUF",
-            extra={"gguf_filename": "Qwen3.5-9B-UD-Q4_K_XL.gguf"},
+            model_id="bartowski/MiMo-V2.6-Distill-Qwen-9B-GGUF",
+            extra={"gguf_filename": "MiMo-V2.6-Distill-Qwen-9B-Q4_K_M.gguf", "runtime_contract": "mimo"},
         )
     )
     schema = {
@@ -228,7 +228,7 @@ def test_qwen35_structured_local_payload_keeps_json_validation_host_side_and_nat
     assert tool_payload["tools"] == [tool]
     assert tool_payload["tool_choice"] == "auto"
     assert tool_payload["parallel_tool_calls"] is True
-    assert tool_payload["reasoning_effort"] == "none"
+    assert "reasoning_effort" not in tool_payload
     assert tool_payload["chat_template_kwargs"] == {"enable_thinking": False}
     assert "response_format" not in tool_payload
     assert "json_schema" not in tool_payload
