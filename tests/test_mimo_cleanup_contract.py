@@ -61,7 +61,7 @@ def test_colab_and_readme_do_not_offer_deleted_default() -> None:
     assert 'MODEL_PROFILE = "MiMo-V2.6-9B_6GB"' in code
     assert "Qwen3.5-9B_6GB" not in code
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    assert "- \`MiMo-V2.6-9B_6GB\`".replace("\\", "") in readme
+    assert "- `MiMo-V2.6-9B_6GB`" in readme
     assert "Qwen3.5-9B_6GB" not in readme
 
 

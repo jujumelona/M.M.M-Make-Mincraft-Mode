@@ -42,9 +42,6 @@ local-model = [
 transformers-bnb = [
   "bitsandbytes>=0.45,<1; sys_platform == 'linux'",
 ]
-qwen-fastpath = [
-  "flash-linear-attention[cuda,conv1d]>=0.5.1,<0.6; sys_platform == 'linux'",
-]
 rag = [
   "numpy>=1.26,<2.4",
   "sentence-transformers>=3.0,<6",
