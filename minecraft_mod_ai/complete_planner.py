@@ -14,6 +14,7 @@ from .authored_plan import AuthoredPlan
 from .complete_spec import CompleteProposal
 from .model_router import ModelRouter
 from .planner_trace_artifacts import repository_revision
+from .planner_checkpoint import PlannerCheckpoint
 from .root_cause_trace import emit_root_cause, trace_scope
 
 
@@ -74,6 +75,7 @@ class CompleteGameDesignPlanner:
 
         from .authored_structured_design import (
             author_structured_sections,
+            normalize_structured_sections,
             render_structured_sections,
         )
         from .typed_host_capabilities import typed_host_capability_contracts
@@ -92,29 +94,55 @@ class CompleteGameDesignPlanner:
         # Keep one ledger for accounting, but do not impose a second unrelated
         # global call ceiling across later typed-plan stages.
         budget = PlannerBudget()
-        with planner_operation("author_structured_execution_contract"):
-            structured_sections = author_structured_sections(
-                self.router,
-                prompt,
-                media_paths=media_paths,
-                budget=budget,
-            )
-
-        text = render_structured_sections(structured_sections)
-
-        # Research/inspection happens before content identities are authored:
-        # verified source APIs are model-readable bounded facts, while unproved
-        # repository search results never enter the local model's prompt.
         target_adapter = adapter or self.adapter or getattr(
             self.router, "_mmm_target_adapter", None,
         )
-        reuse_receipt = None
         target_version = str(
             getattr(target_adapter, "minecraft_version", "") or ""
         ).strip()
         target_loader = str(
             getattr(target_adapter, "loader", "") or ""
         ).strip()
+        try:
+            role_config = self.router.registry.role(self.router.profile, "planner")
+            planner_model_id = str(getattr(role_config, "model_id", "") or "")
+        except (AttributeError, KeyError, ValueError, TypeError):
+            planner_model_id = str(getattr(self.router, "profile", "") or "")
+        checkpoint = PlannerCheckpoint(
+            prompt=prompt,
+            media_paths=media_paths,
+            existing_input_sha256=existing_input_sha256,
+            model_id=planner_model_id,
+            target_version=target_version,
+            target_loader=target_loader,
+            source_revision=str(repository_revision().get("git_commit", "")),
+        )
+        structured_sections = checkpoint.load_sections()
+        if structured_sections is not None:
+            try:
+                structured_sections = normalize_structured_sections(structured_sections)
+                print("PLAN_CHECKPOINT: restored structured design", flush=True)
+            except ValueError:
+                # Never resume from a stale or invalid authored design record.
+                checkpoint.clear_sections()
+                structured_sections = None
+        if structured_sections is None:
+            with planner_operation("author_structured_execution_contract"):
+                structured_sections = author_structured_sections(
+                    self.router,
+                    prompt,
+                    media_paths=media_paths,
+                    budget=budget,
+                )
+            structured_sections = normalize_structured_sections(structured_sections)
+            checkpoint.save_sections(structured_sections)
+
+        text = render_structured_sections(structured_sections)
+
+        # Research/inspection happens before content identities are authored:
+        # verified source APIs are model-readable bounded facts, while unproved
+        # repository search results never enter the local model's prompt.
+        reuse_receipt = None
         # A capability-only adapter is not an immutable platform lock.
         # The later production resolver owns AUTO-target binding. Never use a
         # partial adapter to fabricate target coordinates or trigger discovery.
@@ -165,15 +193,30 @@ class CompleteGameDesignPlanner:
             content_mod_id = (
                 "authored_" + hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:12]
             )
-            with planner_operation("author_content_design_graph"):
-                content_design = _serialize_content_design(
-                    compile_content_graph(
-                        prompt,
-                        self.router,
-                        request_catalog=content_catalog,
-                        mod_id=content_mod_id,
+            cached_design = checkpoint.load_content_design(content_catalog)
+            if cached_design is not None:
+                content_design = cached_design
+                print("PLAN_CHECKPOINT: restored completed content graph", flush=True)
+            else:
+                restored_progress = checkpoint.content_progress(content_catalog)
+                if restored_progress:
+                    print(
+                        "PLAN_CHECKPOINT: resumed content graph records="
+                        f"{len(restored_progress)}",
+                        flush=True,
                     )
-                )
+                with planner_operation("author_content_design_graph"):
+                    content_design = _serialize_content_design(
+                        compile_content_graph(
+                            prompt,
+                            self.router,
+                            request_catalog=content_catalog,
+                            mod_id=content_mod_id,
+                            progress=restored_progress,
+                            checkpoint=checkpoint.save_content_record,
+                        )
+                    )
+                checkpoint.save_content_design(content_catalog, content_design)
         external_content_refs = content_owned_refs(
             structured_sections,
             content_design,
