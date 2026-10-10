@@ -67,3 +67,12 @@ def test_passive_gui_can_still_be_authored_without_gameplay_mutations(monkeypatc
         plan, (ProductionModule("about_screen", "gui", {}),),
         {"capabilities": []},
     )
+
+
+def test_player_join_flag_does_not_count_as_a_gameplay_loop(monkeypatch) -> None:
+    monkeypatch.setattr(
+        authored_structured_design, "active_concern_records", _concerns,
+    )
+    plan = _plan(mutations=True)
+    with pytest.raises(ValueError, match="GAMEPLAY_IMPLEMENTATION_ABSENT.*non-bootstrap"):
+        _assert_executable_gameplay_floor(plan, (), {"capabilities": []})
