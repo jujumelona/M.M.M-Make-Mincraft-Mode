@@ -263,3 +263,44 @@ def test_dispatch_event_guard_does_not_misattribute_join_mutation() -> None:
     mutations = typed_plan_mutating_events(plan)
     assert mutations["player_join"] == ("state_set",)
     assert mutations["server_tick"] == ()
+
+
+def test_atomic_mutation_passive_item_requires_actionable_retry(monkeypatch) -> None:
+    from minecraft_mod_ai import content_design_graph
+
+    class InspectedMutationRetry(Exception):
+        pass
+
+    calls = []
+
+    def fake_records(_router, identifier, *, context, **_kwargs):
+        assert identifier == "design/content_entity"
+        calls.append(dict(context))
+        if "rejected_passive_candidates" in context:
+            assert set(context["allowed_content_kinds"]) == {
+                "custom_item_behavior", "custom_block_behavior",
+            }
+            assert context["rejected_passive_candidates"][0]["kind"] == "item"
+            raise InspectedMutationRetry()
+        return {"records": [{
+            "kind": "item", "entity_id": "ship_upgrade_material", "role": "stock",
+        }]}
+
+    monkeypatch.setattr(content_design_graph, "run_record_template", fake_records)
+    with pytest.raises(InspectedMutationRetry):
+        content_design_graph.compile_content_graph(
+            "buy an upgrade by spending credits",
+            object(),
+            request_catalog={
+                "requirements": [{
+                    "requirement_id": "gameplay_upgrade",
+                    "statement": "Deduct credits and grant the upgrade",
+                    "design_context": {
+                        "source_section": "algorithm",
+                        "source_concern": "atomic_mutations",
+                    },
+                }],
+                "host_constraints": {},
+            },
+        )
+    assert len(calls) == 2
