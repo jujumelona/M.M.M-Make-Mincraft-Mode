@@ -62,7 +62,7 @@ def test_empty_or_observation_only_playtest_cannot_pass() -> None:
 
 def test_builtin_quest_rejects_unimplemented_objective(tmp_path: Path) -> None:
     project = _project(tmp_path / "project")
-    with pytest.raises(ValueError, match="use custom_java"):
+    with pytest.raises(ValueError, match="no built-in deterministic backend"):
         generate_system_pack(
             project_root=project,
             pack_id="quest-system",
@@ -107,23 +107,16 @@ def test_builtin_shop_requires_server_owned_catalog(tmp_path: Path) -> None:
         )
 
 
-def test_explicit_custom_module_is_normalized_before_builtin_generators() -> None:
+def test_explicit_custom_module_is_rejected_before_builtin_generators() -> None:
     module = ProductionModule(
         module_id="escort_system",
         kind="quest",
-        config={
-            "implementation": "custom",
-            "objective": "escort",
-        },
+        config={"implementation": "custom", "objective": "escort"},
     )
-    normalized, receipts = _normalize_modules((module,), _spec())
-    assert len(normalized) == 1
-    assert normalized[0].kind == "custom_java"
-    assert normalized[0].config["requested_kind"] == "quest"
-    assert "implementation" not in normalized[0].config
-    assert _system_groups(normalized) == {}
-    assert normalized[0].module_id not in _handled_module_ids(normalized)
-    assert receipts[0]["status"] == "ROUTED_CUSTOM"
+    # The old model-backed custom_java route was retired. Never convert a
+    # request into an unsupported backend or claim ROUTED_CUSTOM success.
+    with pytest.raises(CompleteProductionError, match="CUSTOM_JAVA_BACKEND_REMOVED"):
+        _normalize_modules((module,), _spec())
 
 
 def test_gui_networking_generation_is_read_only_and_replay_safe(tmp_path: Path) -> None:
