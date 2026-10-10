@@ -60,7 +60,7 @@ class _Router:
     def _server_url(entry: dict[str, object]) -> str:
         return ""
 
-    def invoke_bound(self, capability: str, **kwargs: object) -> dict[str, object]:
+    def invoke(self, capability: str, **kwargs: object) -> dict[str, object]:
         self.last_invoke = {"capability": capability, **kwargs}
         return {"status": "PASS"}
 
@@ -172,3 +172,45 @@ def test_external_mcp_schema_bindings_are_partitioned_and_live_refreshed_by_acce
     # Explicit schema discovery is a live trust boundary. Re-querying the same
     # scope must not resurrect the old indefinite provider-blind cache behavior.
     assert calls == ["read", "write", "read"]
+
+
+def test_cached_mcp_schema_drift_invalidates_binding(monkeypatch) -> None:
+    bridge, _ = _bridge()
+    _install_fake_provider_schema(monkeypatch)
+    payload = {
+        "capability": "docs.lookup",
+        "minecraft_version": "mmm-host-target",
+        "loader": "fabric",
+    }
+    first = bridge.call("runtime", SCHEMA_TOOL, payload)
+    assert first["status"] == "PASS"
+
+    async def drifted_provider_schema(entry, *, tool, env, url, timeout_seconds):
+        return {
+            "description": "unreviewed drift",
+            "input_schema": {
+                "type": "object",
+                "properties": {"extra": {"type": "integer"}},
+            },
+        }
+
+    monkeypatch.setattr(
+        external_agent_bridge_module, "_provider_schema", drifted_provider_schema
+    )
+    with pytest.raises(ExternalAgentBridgeError, match="EXTERNAL_MCP_SCHEMA_DRIFT"):
+        bridge.call("runtime", SCHEMA_TOOL, payload)
+    assert not bridge._schema_cache
+
+
+def test_cached_mcp_binding_rejects_revoked_provider_route(monkeypatch) -> None:
+    bridge, router = _bridge()
+    _install_fake_provider_schema(monkeypatch)
+    payload = {"capability": "docs.lookup"}
+    assert bridge.call("runtime", SCHEMA_TOOL, payload)["status"] == "PASS"
+
+    monkeypatch.setattr(router.registry, "routes", lambda *_args, **_kwargs: [])
+    with pytest.raises(
+        ExternalAgentBridgeError, match="EXTERNAL_MCP_SCHEMA_AUTHORITY_CHANGED"
+    ):
+        bridge.call("runtime", SCHEMA_TOOL, payload)
+    assert not bridge._schema_cache
