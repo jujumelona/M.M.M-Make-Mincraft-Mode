@@ -211,6 +211,21 @@ def execute_artifact_template(
             )
 
     rendered_output = render_template(template, values)
+    if template_id == "fabric/block/register_basic" and "authored_block_strength" in det_inputs:
+        from .block_strength_lowering import lower_block_strength
+
+        strength = det_inputs["authored_block_strength"]
+        if (
+            not isinstance(strength, (tuple, list))
+            or len(strength) != 2
+            or any(isinstance(x, bool) or not isinstance(x, (float, int)) for x in strength)
+        ):
+            raise ValueError("BLOCK_PROPERTIES_TYPED_INPUT_INVALID")
+        rendered_output = lower_block_strength(
+            rendered_output,
+            str(values["registry_path"]),
+            (float(strength[0]), float(strength[1])),
+        )
     job.rendered_output = rendered_output
 
     target_spec = template.get("target") or {}
