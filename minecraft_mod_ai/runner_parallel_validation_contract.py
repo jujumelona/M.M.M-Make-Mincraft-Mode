@@ -252,6 +252,7 @@ def _build_cache_profile(self: Any) -> tuple[Any, ...]:
         int(getattr(self, "command_timeout_seconds", 0)),
         tuple((name, os.environ.get(name, "")) for name in _BUILD_POLICY_ENV),
         bool(getattr(self, "eula_accepted", False)),
+        bool(getattr(self, "require_clean_build", False)),
     )
 
 
@@ -619,10 +620,21 @@ def install(*, runner_module: Any, validation_module: Any) -> None:
                 error="Gradle wrapper generation failed.",
             )
 
+        # Quality-contract runs require a real clean build, not only a
+        # successful incremental compilation. Do not accept an incremental
+        # cached receipt as clean-build evidence.
+        clean_build = bool(getattr(self, "require_clean_build", False))
+        build_tasks = ("clean", "build") if clean_build else ("build",)
+        build_args = _gradle_execution_arguments(*build_tasks)
+        if clean_build:
+            build_args = tuple(
+                "--no-build-cache" if argument == "--build-cache" else argument
+                for argument in build_args
+            )
         build_result = self._run(
-            name="incremental_build",
+            name="clean_build" if clean_build else "incremental_build",
             executable=gradle,
-            arguments=_gradle_execution_arguments("build"),
+            arguments=build_args,
             cwd=root,
             env=environment,
             log_path=logs / "gradle-build.log",
