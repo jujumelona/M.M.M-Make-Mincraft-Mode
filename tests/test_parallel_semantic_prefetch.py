@@ -17,6 +17,13 @@ def test_discovery_prefetch_preserves_native_v2_target_semantics(monkeypatch) ->
         transport = None
         timeout_seconds = 1.0
 
+        def __enter__(self):
+            # Match the production discovery client's owned HTTP lifecycle.
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return None
+
         def search(
             self,
             provider: str,
