@@ -3,6 +3,14 @@ from minecraft_mod_ai.host_version_catalog import host_target
 from minecraft_mod_ai.artifact_expansion import expand_facts_to_jobs
 from minecraft_mod_ai.implementation_fact import ImplementationFact
 from minecraft_mod_ai.prompt_fact_types import FactType
+from minecraft_mod_ai.host_version_catalog import load_host_catalog
+from minecraft_mod_ai.task_template_catalog import load_template
+from minecraft_mod_ai.implementation_template_renderer import render_template
+from minecraft_mod_ai._version_artifact_rules_core import ARTIFACT_SCHEMAS
+from jsonschema import ValidationError
+from packaging.version import Version
+import json
+import pytest
 
 
 def test_published_minecraft_26_2_catalog_generates_inventory_visible_block():
@@ -41,3 +49,45 @@ def test_published_catalog_remains_stable_across_loads():
     first = host_target("26.2").version_context
     second = host_target("26.2").version_context
     assert first.context_id == second.context_id
+
+
+def test_shipped_modern_block_item_json_passes_its_actual_host_output_validator():
+    """Reproduces the former HOST_FACT_UNAVAILABLE failure at generation time."""
+    context = host_target("26.2").version_context
+    template = load_template("minecraft/resource/item/client_block_item")
+    facts = context.to_dict()["host_facts"]
+    assert facts["schemas"][template["id"]] == ARTIFACT_SCHEMAS[template["id"]]
+    rendered = render_template(template, {
+        "mod_id": "mmm_debug_crystal", "registry_path": "crystal_block",
+    })
+    assert json.loads(rendered) == {
+        "model": {
+            "type": "minecraft:model",
+            "model": "mmm_debug_crystal:block/crystal_block",
+        },
+    }
+    receipt = context.validate_artifact(template, rendered)
+    assert receipt["status"] == "PASS"
+
+    # The specific item type and block namespace must remain enforced.
+    with pytest.raises(ValidationError):
+        context.validate_artifact(template, json.dumps({
+            "model": {"type": "minecraft:condition",
+                      "model": "mmm_debug_crystal:item/crystal_block"},
+        }))
+
+
+def test_every_shipped_modern_host_bundle_admits_block_item_output_schema():
+    _, bundles = load_host_catalog()
+    client_id = "minecraft/resource/item/client_block_item"
+    checked = 0
+    for context in bundles:
+        if Version(context.minecraft) < Version("1.21.4"):
+            continue
+        host = context.to_dict()["host_facts"]
+        if "minecraft/block/model" not in host["leaf_bindings"]:
+            continue
+        assert host["schemas"][client_id] == ARTIFACT_SCHEMAS[client_id], context.minecraft
+        assert client_id in host["leaf_bindings"]["minecraft/block/model"]["implementation"]["extra_templates"]
+        checked += 1
+    assert checked > 0
