@@ -183,3 +183,29 @@ def test_emitted_server_gametest_java_compiles_with_real_javac(tmp_path):
         cwd=tmp_path, check=False, capture_output=True, text=True, timeout=60,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_colab_content_only_runtime_preflight_uses_real_gametest_route() -> None:
+    from minecraft_mod_ai.complete_orchestrator import (
+        CompleteExecutionOptions,
+        _quality_execution_preflight_gaps,
+    )
+    approved = _approved()
+    approved.game_design = {
+        "_production_contract": {
+            "quality_dimension_catalog": [{"dimension_id": "runtime"}],
+        },
+    }
+    options = CompleteExecutionOptions(
+        run_gametest=True, run_runtime=False, run_client=False,
+        run_mineflayer=False, server_launcher=None, playtest_actions=(),
+    )
+    assert _quality_execution_preflight_gaps(approved, options) == {}
+    without_real_server_test = CompleteExecutionOptions(
+        run_gametest=False, run_runtime=False, run_mineflayer=False,
+        server_launcher=None, playtest_actions=(),
+    )
+    assert "runtime" in _quality_execution_preflight_gaps(approved, without_real_server_test)
+    different_target = _approved(version="1.21.1")
+    different_target.game_design = approved.game_design
+    assert "runtime" in _quality_execution_preflight_gaps(different_target, options)
