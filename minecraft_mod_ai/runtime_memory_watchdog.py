@@ -95,6 +95,51 @@ def _cgroup_memory() -> tuple[int, int, dict[str, int]]:
     return current, maximum, events
 
 
+def _read_memory_stat(path: Path, key: str) -> int:
+    """Read a cgroup memory.stat counter without assuming all keys exist."""
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            name, _, raw = line.partition(" ")
+            if name == key:
+                return max(0, int(raw.strip()))
+    except (OSError, UnicodeError, ValueError):
+        pass
+    return 0
+
+
+def _reclaimable_cgroup_file_cache_bytes() -> int:
+    """Count only cold file-backed pages, never active cache or anonymous RSS."""
+    if Path("/sys/fs/cgroup/memory.max").is_file():
+        return _read_memory_stat(Path("/sys/fs/cgroup/memory.stat"), "inactive_file")
+    return _read_memory_stat(
+        Path("/sys/fs/cgroup/memory/memory.stat"), "total_inactive_file"
+    )
+
+
+def _cgroup_effective_headroom_bytes(
+    current: int, limit: int, inactive_file: int,
+) -> int:
+    """Conservative working-set estimate: current - reclaimable inactive_file.
+
+    memory.current includes page cache from GGUF/HF downloads.  Counting every
+    cold file page as irreclaimable triggers false low-RAM alarms; counting all
+    cache as reclaimable is equally unsafe.  The kernel's inactive_file counter
+    is the narrower standard working-set adjustment.
+    """
+    if limit <= 0:
+        return 0
+    working_set = max(0, int(current) - max(0, int(inactive_file)))
+    return max(0, min(int(limit), int(limit) - working_set))
+
+
+def cgroup_effective_headroom_bytes() -> int:
+    """Return effective free cgroup bytes; zero for absent/unlimited cgroups."""
+    current, limit, _events = _cgroup_memory()
+    return _cgroup_effective_headroom_bytes(
+        current, limit, _reclaimable_cgroup_file_cache_bytes()
+    )
+
+
 def _atomic_write(payload: dict[str, Any]) -> None:
     path = _snapshot_path()
     try:
@@ -114,10 +159,9 @@ def _sample(managed_pid: int) -> dict[str, Any]:
 
     total, available = _meminfo()
     cgroup_current, cgroup_max, cgroup_events = _cgroup_memory()
-    cgroup_available = (
-        max(0, cgroup_max - cgroup_current)
-        if cgroup_max > 0
-        else 0
+    reclaimable_cache = _reclaimable_cgroup_file_cache_bytes()
+    cgroup_available = _cgroup_effective_headroom_bytes(
+        cgroup_current, cgroup_max, reclaimable_cache
     )
     # A completely exhausted cgroup has ZERO free bytes. Never treat this
     # as a missing reading and fall back to /proc/meminfo's larger host total.
@@ -141,6 +185,8 @@ def _sample(managed_pid: int) -> dict[str, Any]:
         "system_mem_available_bytes": available,
         "cgroup_memory_current_bytes": cgroup_current,
         "cgroup_memory_max_bytes": cgroup_max,
+        "cgroup_reclaimable_inactive_file_bytes": reclaimable_cache,
+        "cgroup_effective_headroom_bytes": cgroup_available,
         "effective_mem_available_bytes": effective_available,
         "minimum_effective_mem_available_bytes": _MIN_AVAILABLE or 0,
         "cgroup_memory_events": cgroup_events,
