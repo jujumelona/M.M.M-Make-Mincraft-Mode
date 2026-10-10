@@ -139,6 +139,17 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          mkdir -p audit/real-model-colab-e2e
+          # Sample the native server's actual CUDA residency while inference runs.
+          (
+            while :; do
+              printf 'SAMPLE %s\n' "$(date -u +%FT%TZ)"
+              nvidia-smi --query-compute-apps=pid,process_name,used_gpu_memory --format=csv,noheader,nounits 2>&1 || echo GPU_PROCESS_PROBE_ERROR
+              sleep 2
+            done
+          ) > audit/real-model-colab-e2e/gpu-process-samples.log &
+          GPU_WATCH_PID=$!
+          trap 'kill "$GPU_WATCH_PID" 2>/dev/null || :' EXIT
           python - <<'PY' 2>&1 | tee audit/real-model-colab-e2e/normal-and-debug-e2e.log
           from __future__ import annotations
 
@@ -347,6 +358,28 @@ jobs:
           )
           print(json.dumps(debug_evidence, ensure_ascii=False, indent=2, sort_keys=True))
           PY
+          python - <<'PY'
+          import re
+          from pathlib import Path
+          log = Path("audit/real-model-colab-e2e/gpu-process-samples.log").read_text(
+              encoding="utf-8", errors="replace"
+          )
+          # A visible T4 is insufficient: the native llama-server itself must
+          # consume GPU memory during the model-generated production run.
+          active = []
+          for line in log.splitlines():
+              if "llama-server" not in line.casefold() and "llama_server" not in line.casefold():
+                  continue
+              memory = re.search(r",\\s*(\\d+)\\s*$", line)
+              if memory and int(memory.group(1)) >= 512:
+                  active.append(int(memory.group(1)))
+          if not active:
+              raise RuntimeError(
+                  "GPU_E2E_INFERENCE_OFFLOAD_NOT_PROVEN: no T4 llama-server "
+                  "process with >=512 MiB CUDA residency observed"
+              )
+          print("GPU_E2E_NATIVE_LLAMA_CUDA_RESIDENCY_MIB:", max(active))
+          PY
 
       - name: Upload E2E evidence
         if: ${{ always() }}
@@ -358,6 +391,7 @@ jobs:
           path: |
             audit/real-model-colab-e2e/GPU_PREFLIGHT.json
             audit/real-model-colab-e2e/normal-and-debug-e2e.log
+            audit/real-model-colab-e2e/gpu-process-samples.log
             audit/real-model-colab-e2e/REAL_MODEL_COLAB_E2E.json
             audit/real-model-colab-e2e/proposal.json
             audit/real-model-colab-e2e/debug-fixture/**
