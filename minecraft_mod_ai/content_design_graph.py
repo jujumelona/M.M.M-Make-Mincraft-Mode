@@ -499,18 +499,14 @@ def compile_content_graph(
             # pass still permits an explicitly requested user interface.
             from .content_design_contract import PRIMARY_CONTENT_KINDS
 
-            # Atomic state writers need an executable interaction owner, not
-            # another passive registry or a screen with no server handler.
-            # A content-free obligation is still permitted when a separately
-            # bound Typed PlanIR event implements the same gameplay.
-            if gameplay_context.get("source_concern") == "atomic_mutations":
-                playable_kinds = [
-                    "custom_item_behavior", "custom_block_behavior",
-                ]
-            else:
-                playable_kinds = [
-                    kind for kind in PRIMARY_CONTENT_KINDS if kind != "gui"
-                ]
+            # A GUI cannot replace an authored gameplay step or atomic
+            # mutation. Preserve the broad set of non-GUI content owners:
+            # forcing an item/block use action would invent a different
+            # interaction from the user's original gameplay contract.
+            # The production floor separately proves executable mutations.
+            playable_kinds = [
+                kind for kind in PRIMARY_CONTENT_KINDS if kind != "gui"
+            ]
             nodes = records("design/content_entity", {
                 **entity_context,
                 "allowed_content_kinds": playable_kinds,
