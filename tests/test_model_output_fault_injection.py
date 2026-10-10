@@ -98,13 +98,41 @@ def test_model_transport_failures_are_not_silently_converted_to_success(failure:
         )
 
 
-def test_untrusted_evidence_extension_is_separated_before_schema_validation() -> None:
+def test_undeclared_evidence_cannot_cross_fixed_host_schema() -> None:
+    # The schema declares only 'answer'. Silently preserving evidence_refs
+    # would grant an unvalidated model-owned extension host authority.
     router = ScriptedRouter(json.dumps({"answer": "ok", "evidence_refs": ["fixture:1"]}))
-    result = generate_fixed_template_value(
-        router,
-        "planner",
-        MESSAGES,
-        response_schema=SCHEMA,
-        enable_tools=False,
-    )
-    assert result == {"answer": "ok", "evidence_refs": ["fixture:1"]}
+    with pytest.raises(Exception, match="evidence_refs"):
+        generate_fixed_template_value(
+            router,
+            "planner",
+            MESSAGES,
+            response_schema=SCHEMA,
+            enable_tools=False,
+        )
+
+
+def test_nested_undeclared_model_fields_are_rejected() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "payload": {
+                "type": "object",
+                "properties": {"answer": {"type": "string"}},
+                "required": ["answer"],
+                "additionalProperties": False,
+            }
+        },
+        "required": ["payload"],
+        "additionalProperties": False,
+    }
+
+    class Router:
+        def generate_text(self, *_args, **_kwargs):
+            return '{"payload":{"answer":"ok","injected":true}}'
+
+    with pytest.raises(Exception, match="injected"):
+        generate_fixed_template_value(
+            Router(), "planner", MESSAGES,
+            response_schema=schema, enable_tools=False,
+        )
