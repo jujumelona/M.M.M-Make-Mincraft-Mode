@@ -446,6 +446,39 @@ def validate_expansion_catalog() -> None:
                     ) from exc
 
 
+def _require_declared_loot_binding(
+    fact: PromptFact | ImplementationFact,
+    registry_port_by_subject: Mapping[str, str],
+) -> str:
+    """Validate source and target of a drop fact against declared local registries."""
+    drop_item = str(fact.object or "").strip()
+    if not _REGISTRY_PATH.fullmatch(drop_item):
+        raise ArtifactExpansionError(
+            "ARTIFACT_DROP_TARGET_REQUIRED: "
+            f"{fact.fact_type.value} needs a declared local item registry "
+            "path (no invented default or unregistered external item): "
+            f"{drop_item!r}"
+        )
+    if registry_port_by_subject.get(drop_item) != "registry_id":
+        raise ArtifactExpansionError(
+            "ARTIFACT_DROP_TARGET_UNREGISTERED: "
+            f"{fact.fact_type.value} {fact.subject} -> {drop_item} "
+            "requires an ITEM_EXISTS fact for the target"
+        )
+    expected_owner = (
+        "entity_registry_id"
+        if fact.fact_type == FactType.ENTITY_LOOT
+        else "block_registry_id"
+    )
+    if registry_port_by_subject.get(fact.subject) != expected_owner:
+        raise ArtifactExpansionError(
+            "ARTIFACT_DROP_OWNER_UNREGISTERED: "
+            f"{fact.fact_type.value} {fact.subject} requires its "
+            f"registered {'entity' if fact.fact_type == FactType.ENTITY_LOOT else 'block'} owner"
+        )
+    return drop_item
+
+
 def expand_facts_to_jobs(
     facts: Iterable[PromptFact | ImplementationFact],
     *,
@@ -656,39 +689,9 @@ def expand_facts_to_jobs(
                     fact, "display_name", ""
                 ) or " ".join(part.capitalize() for part in subject.split("_"))
             if fact.fact_type in {FactType.BLOCK_DROP, FactType.ENTITY_LOOT}:
-                # Both block drops and entity loot need an explicit item
-                # reference. Earlier ENTITY_LOOT used the block mold without
-                # populating drop_item, producing RENDER_MISSING_VALUE after
-                # the entire production graph was already assembled.
-                drop_item = str(fact.object or "").strip()
-                if not _REGISTRY_PATH.fullmatch(drop_item):
-                    raise ArtifactExpansionError(
-                        "ARTIFACT_DROP_TARGET_REQUIRED: "
-                        f"{fact.fact_type.value} needs a declared local item registry "
-                        "path (no invented default or unregistered external item): "
-                        f"{drop_item!r}"
-                    )
-                # Reject unbound references in the plan, not just malformed
-                # strings. Otherwise a fabricated/absent item is discovered
-                # only when the generated loot table is loaded in game.
-                if registry_port_by_subject.get(drop_item) != "registry_id":
-                    raise ArtifactExpansionError(
-                        "ARTIFACT_DROP_TARGET_UNREGISTERED: "
-                        f"{fact.fact_type.value} {subject} -> {drop_item} "
-                        "requires an ITEM_EXISTS fact for the target"
-                    )
-                expected_owner = (
-                    "entity_registry_id"
-                    if fact.fact_type == FactType.ENTITY_LOOT
-                    else "block_registry_id"
+                deterministic_inputs["drop_item"] = _require_declared_loot_binding(
+                    fact, registry_port_by_subject
                 )
-                if registry_port_by_subject.get(subject) != expected_owner:
-                    raise ArtifactExpansionError(
-                        "ARTIFACT_DROP_OWNER_UNREGISTERED: "
-                        f"{fact.fact_type.value} {subject} requires its "
-                        f"registered {'entity' if fact.fact_type == FactType.ENTITY_LOOT else 'block'} owner"
-                    )
-                deterministic_inputs["drop_item"] = drop_item
 
             template = load_template(template_id)
             version_context.admit_template(template)
