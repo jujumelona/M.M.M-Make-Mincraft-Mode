@@ -627,17 +627,33 @@ class CompleteProductionOrchestrator:
         # Install actual in-world registry/recipe-resource assertions before
         # source validation and Gradle GameTest. Never manufacture a runtime
         # PASS just because the user enabled GameTest.
-        if options.run_gametest:
+        if options.run_gametest and eligible_for_managed_runtime(approved):
             managed_gametest_installation = install_managed_content_gametest(
                 project_root, approved
             )
-            if managed_gametest_installation is not None:
-                module_receipts.append(managed_gametest_installation)
-                print(
-                    'MANAGED_CONTENT_GAMETEST_INSTALLED: '
-                    + json.dumps(managed_gametest_installation, ensure_ascii=False),
-                    flush=True,
+            if managed_gametest_installation is None:
+                emit_root_cause(
+                    'managed_content_gametest_installation_failed',
+                    stage='verify',
+                    operation='prepare_gametest',
+                    gate='runtime_content_game_test',
+                    result='FAIL',
+                    reason='The approved content-only GameTest could not be '
+                           'bound to actual generated Minecraft sources, models, '
+                           'blockstates and recipe JSON.',
                 )
+                raise CompleteProductionError(
+                    'MANAGED_CONTENT_GAMETEST_NOT_INSTALLED: generated content '
+                    'or target bindings are incomplete; refusing another '
+                    'build-artifact-only release for a certifiable content-only '
+                    'scenario. See generated registry sources and assets.'
+                )
+            module_receipts.append(managed_gametest_installation)
+            print(
+                'MANAGED_CONTENT_GAMETEST_INSTALLED: '
+                + json.dumps(managed_gametest_installation, ensure_ascii=False),
+                flush=True,
+            )
         execution_project_index(ProjectIndex, project_root, policy=self.policy).write_manifest()
         generated_manifest_hash = self._project_manifest_hash(project_root)
         validation_manifest = generated_manifest_hash
