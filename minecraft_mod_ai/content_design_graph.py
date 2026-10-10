@@ -489,9 +489,23 @@ def compile_content_graph(
             for context in owned
         ],
         "design_contexts": shared_contexts,
+        # Keep provenance alongside shared contexts so relation selectors can
+        # use only clauses owned by their endpoint entities.  Clauses without
+        # entity owners remain global and must never disappear from a selector.
+        "requirement_design_contexts": [
+            {"requirement_id": context["requirement_id"],
+             "design_context": context["design_context"]}
+            for context in owned
+            if "design_context" in context
+        ],
         "entity_ids": list(entities),
         "entities": [
-            {key: node[key] for key in ("entity_id", "kind", "implementation_obligations")}
+            {
+                **{key: node[key] for key in (
+                    "entity_id", "kind", "implementation_obligations"
+                )},
+                "requirement_refs": list(dict.fromkeys(node["requirement_refs"])),
+            }
             for node in entities.values()
         ],
     }):
