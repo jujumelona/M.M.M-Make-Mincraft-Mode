@@ -89,6 +89,13 @@ def _evidenced_receipt(node_id: str) -> dict:
             },
             "visual": {"status": "PASS"},
         }
+    if node_id == "package-build-artifact":
+        return {
+            "status": "PASS",
+            "build_bundle_zip": "/tmp/fixture-build-artifact.zip",
+            "release_ready": False,
+            "unresolved_gates": ["quality:runtime"],
+        }
     if node_id.startswith("validate-quality-"):
         dimension = node_id.removeprefix("validate-quality-")
         return {
@@ -146,7 +153,7 @@ def test_missing_quality_and_runtime_still_package_build_but_block_release(
     ledger.begin("package-build-artifact")
     ledger.succeed(
         "package-build-artifact",
-        {"status": "PASS", "release_ready": False},
+        _evidenced_receipt("package-build-artifact"),
     )
     assert ledger.task("package-build-artifact")["state"] == "succeeded"
     with pytest.raises(work_graph.WorkGraphError, match="incomplete dependencies"):
