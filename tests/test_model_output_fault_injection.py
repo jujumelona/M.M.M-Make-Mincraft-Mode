@@ -118,7 +118,7 @@ def test_nested_undeclared_model_fields_are_rejected() -> None:
         "properties": {
             "payload": {
                 "type": "object",
-                "properties": {"answer": {"type": "string"}},
+                "properties": {"answer": {"type": "string", "maxLength": 256}},
                 "required": ["answer"],
                 "additionalProperties": False,
             }
