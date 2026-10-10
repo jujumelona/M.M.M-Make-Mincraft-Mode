@@ -893,16 +893,41 @@ def _infer_dimensions(*, requested_prompt: str, game_design: Any, research_brief
     text = ' '.join([primary_text, *([] if research_brief is None else _scalar_text(research_brief))])
     module_kinds = {str(item['kind']).casefold() for item in modules}
     asset_kinds = {str(item['kind']).casefold() for item in assets}
+    # Baseline resources created for every block/item are not equivalent to an
+    # explicit request for a runtime visual critique.  Likewise the words
+    # "localization" and "language" in generated host metadata must not turn a
+    # resource-only mod into an accessibility test suite.
+    authored = game_design.get('authored_plan', {}) if isinstance(game_design, Mapping) else {}
+    sections = authored.get('structured_sections', {}) if isinstance(authored, Mapping) else {}
+    resources = sections.get('resources_and_ui', {}) if isinstance(sections, Mapping) else {}
+    specification = resources.get('specification', {}) if isinstance(resources, Mapping) else {}
+    explicit_accessibility = (
+        specification.get('accessibility', ())
+        if isinstance(specification, Mapping) else ()
+    )
     for dimension_id in _CONDITIONAL_ORDER:
         definition = _DIMENSIONS[dimension_id]
         dimension_reasons: list[str] = []
-        trigger_text = primary_text if dimension_id == 'performance' else text
+        trigger_text = (
+            requested_prompt if dimension_id in {'visual_3d', 'accessibility'}
+            else primary_text if dimension_id == 'performance' else text
+        )
         if _text_triggers_dimension(trigger_text, dimension_id):
             dimension_reasons.append('request/design/research text')
         matching_module_kinds = sorted(module_kinds & set(definition.get('module_kinds', ())))
         if matching_module_kinds:
             dimension_reasons.append('module kinds: ' + ', '.join(matching_module_kinds[:4]))
+        if dimension_id == 'accessibility' and explicit_accessibility:
+            dimension_reasons.append('explicit authored accessibility paths')
         matching_asset_kinds = sorted(asset_kinds & set(definition.get('asset_kinds', ())))
+        if dimension_id == 'visual_3d':
+            # Basic generated item/block textures are verified by resource/JAR
+            # integrity; only a requested review or richer visual artifacts
+            # need a running game client with screenshot evidence.
+            matching_asset_kinds = [
+                kind for kind in matching_asset_kinds
+                if kind not in {'item', 'block', 'icon'}
+            ]
         if matching_asset_kinds:
             dimension_reasons.append('asset kinds: ' + ', '.join(matching_asset_kinds[:4]))
         if dimension_reasons:
