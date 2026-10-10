@@ -92,65 +92,25 @@ _qwen38_27b_q4: &qwen38_27b_q4
   min_free_vram_mb: 2000
   exclusive_gpu: true
 
-_qwen35_9b: &qwen35_9b
-  model_id: unsloth/Qwen3.5-9B-MTP-GGUF
+_mimo26_9b: &mimo26_9b
+  # Replaces the old T4 Qwen3.5 GGUF, LoRA and speculative-MTP profile.
+  model_id: bartowski/MiMo-V2.6-Distill-Qwen-9B-GGUF
   adapter: llama_cpp
-  gguf_filename: Qwen3.5-9B-UD-Q4_K_XL.gguf
-  mmproj_filename: mmproj-F16.gguf
-  runtime_contract: qwen
-  qwen_family: qwen3.5
-  qwen_tool_markup: qwen3_coder_xml
-  qwen_action_thinking_control: enable_thinking_false
-  qwen_preserve_thinking: false
-  qwen_reasoning_effort: false
-  qwen_assistant_prefill: true
+  gguf_filename: MiMo-V2.6-Distill-Qwen-9B-Q4_K_M.gguf
+  mmproj_filename: mmproj-MiMo-V2.6-Distill-Qwen-9B-f16.gguf
+  runtime_contract: mimo
+  model_license: MIT
+  foundation_base_model_id: XiaomiMiMo/MiMo-V2.6-Distill-Qwen-9B
+  supports_mtp: false
   agent_thinking: true
   dynamic_output_budget: true
-  request_policy: task_aware_sampling
-  decode_hotpath: t4_mtp
   runtime_context_default: 32768
-  mtp_widths: "1,2,3,4,5,6"
-  sampling_profiles:
-    general_thinking:
-      temperature: 1.0
-      top_p: 0.95
-      top_k: 20
-      min_p: 0.0
-      presence_penalty: 1.5
-      repeat_penalty: 1.0
-    precise_coding:
-      temperature: 0.6
-      top_p: 0.95
-      top_k: 20
-      min_p: 0.0
-      presence_penalty: 0.0
-      repeat_penalty: 1.0
-    non_thinking:
-      temperature: 0.7
-      top_p: 0.8
-      top_k: 20
-      min_p: 0.0
-      presence_penalty: 1.5
-      repeat_penalty: 1.0
   torch_dtype: float16
   max_context: 262144
   max_input_tokens: 0
   max_new_tokens: 8192
   min_free_vram_mb: 1000
   exclusive_gpu: true
-  foundation_base_model_id: Qwen/Qwen3.5-9B
-  lora_adapters:
-    coding_agentic:
-      enabled: true
-      base_model_id: Qwen/Qwen3.5-9B
-      repo_id: blackshell69/Qwen3.5-9B-distilled-coding-agentic
-      filename: Qwen3.5-9B-distilled-LoRA-F16.gguf
-      scale: 1.0
-      priority: 100
-      roles:
-        - coder
-        - coder_safe
-      when_tools: any
 
 profiles:
   fast_test:
@@ -177,38 +137,38 @@ profiles:
       reranker: *reranker
       image_generator: *image_gen
 
-  Qwen3.5-9B_6GB:
-    description: unsloth/Qwen3.5-9B-MTP-GGUF UD-Q4_K_XL (6.14GB); T4 production target.
+  MiMo-V2.6-9B_6GB:
+    description: Xiaomi MiMo V2.6 Distill Qwen 9B Q4_K_M (5.84GB); T4 production target.
     roles:
-      planner: *qwen35_9b
-      researcher: *qwen35_9b
-      coder: *qwen35_9b
-      coder_safe: *qwen35_9b
-      visual_critic: *qwen35_9b
+      planner: *mimo26_9b
+      researcher: *mimo26_9b
+      coder: *mimo26_9b
+      coder_safe: *mimo26_9b
+      visual_critic: *mimo26_9b
       embedding: *embedding
       reranker: *reranker
       image_generator: *image_gen
 
   t4_local:
-    description: Default T4 alias for Qwen3.5-9B_6GB.
+    description: Default T4 alias for MiMo-V2.6-9B_6GB.
     roles:
-      planner: *qwen35_9b
-      researcher: *qwen35_9b
-      coder: *qwen35_9b
-      coder_safe: *qwen35_9b
-      visual_critic: *qwen35_9b
+      planner: *mimo26_9b
+      researcher: *mimo26_9b
+      coder: *mimo26_9b
+      coder_safe: *mimo26_9b
+      visual_critic: *mimo26_9b
       embedding: *embedding
       reranker: *reranker
       image_generator: *image_gen
 
   t4_quality:
-    description: T4 quality alias for Qwen3.5-9B_6GB.
+    description: T4 quality alias for MiMo-V2.6-9B_6GB.
     roles:
-      planner: *qwen35_9b
-      researcher: *qwen35_9b
-      coder: *qwen35_9b
-      coder_safe: *qwen35_9b
-      visual_critic: *qwen35_9b
+      planner: *mimo26_9b
+      researcher: *mimo26_9b
+      coder: *mimo26_9b
+      coder_safe: *mimo26_9b
+      visual_critic: *mimo26_9b
       embedding: *embedding
       reranker: *reranker
       image_generator: *image_gen

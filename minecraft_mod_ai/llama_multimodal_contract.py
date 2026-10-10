@@ -55,7 +55,7 @@ def _requires_media_baseline(config: Any) -> bool:
 
     extra = _extra(config)
     return bool(
-        str(extra.get("runtime_contract", "")).strip().casefold() == "qwen"
+        str(extra.get("runtime_contract", "")).strip().casefold() in {"qwen", "mimo"}
         and _mmproj_filename(config)
         and not bool(extra.get("native_mtp", False))
     )

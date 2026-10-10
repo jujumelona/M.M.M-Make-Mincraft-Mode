@@ -350,7 +350,23 @@ def _cap_ubatch_to_logical_batch(ubatch: int, batch: int | None) -> int:
     return min(ubatch, batch) if batch is not None else ubatch
 
 
+def _assert_mimo_server_compatible(binary: str, config: Any) -> None:
+    """Reject llama.cpp versions predating the MiMo tool parser fix."""
+    import re
+    extra = getattr(config, "extra", {})
+    if not isinstance(extra, dict) or str(extra.get("runtime_contract", "")).casefold() != "mimo":
+        return
+    reported = _server_version(binary)
+    match = re.search(r"\b(?:version|build)\s*:\s*(\d{4,6})\b|\bb(\d{4,6})\b", reported, re.I)
+    number = int(next(value for value in match.groups() if value)) if match else 0
+    if number < 11102:
+        raise RuntimeError(
+            "MiMo tool calls require llama.cpp b11102 or newer; "
+            f"got {reported!r}. Reinstall the MMM native llama-server."
+        )
+
 def _base_args(binary: str, model_path: str, config: Any, port: int) -> list[str]:
+    _assert_mimo_server_compatible(binary, config)
     parallel = _env_optional_int("MMM_LLAMA_PARALLEL")
     context = _env_optional_int("MMM_LLAMA_SERVER_CTX")
     batch = _env_optional_int("MMM_LLAMA_BATCH")

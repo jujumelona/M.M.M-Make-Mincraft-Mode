@@ -117,6 +117,14 @@ def _parse_function(text: str, function_start: int, index: int) -> tuple[ToolCal
 
     arguments: dict[str, Any] = {}
     cursor = name_end + 1
+    # MiMo supports a direct JSON object body in addition to Qwen parameter tags.
+    body = text[cursor:function_close].strip()
+    if body and PARAMETER_OPEN not in body:
+        decoded = _decode_value(body)
+        if not isinstance(decoded, Mapping):
+            raise ValueError("tool function body is not an argument object")
+        arguments = dict(decoded)
+        cursor = function_close
     while cursor < function_close:
         parameter_start = text.find(PARAMETER_OPEN, cursor, function_close)
         if parameter_start < 0:

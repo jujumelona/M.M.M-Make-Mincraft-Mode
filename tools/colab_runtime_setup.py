@@ -52,7 +52,7 @@ _PROJECT_PIP_NETWORK_RETRIES = 2
 # native llama-server binary from the verified prebuilt bundle. Source compilation is
 # emergency-only and must be explicitly enabled; there is no Python binding fallback.
 LLAMA_SERVER_SOURCE_REPOSITORY = "https://github.com/ggml-org/llama.cpp.git"
-LLAMA_SERVER_SOURCE_REF = "1d2869c6e54d5003f3927a79efbca0fefa034a6d"
+LLAMA_SERVER_SOURCE_REF = "d81235049384534c167caea52b85a694f6103d14"
 LLAMA_SERVER_DEFAULT_SOURCE_DIR = Path("/content/llama.cpp")
 _NATIVE_VERIFY_CACHE: dict[tuple[object, ...], tuple[bool, str]] = {}
 _NATIVE_VERIFY_CACHE_LIMIT = 16

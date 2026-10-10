@@ -202,6 +202,15 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
         role=getattr(config, "role", ""),
         request=request,
     )
+    # MiMo uses its native chat template, not stock Qwen runtime controls.
+    extra = getattr(config, "extra", {}) if config is not None else {}
+    if isinstance(extra, Mapping) and str(extra.get("runtime_contract", "")).casefold() == "mimo":
+        is_action = bool(tools) or getattr(request, "response_format", None) == "json"
+        payload["chat_template_kwargs"] = {"enable_thinking": not is_action}
+        payload.pop("reasoning_effort", None)
+        if not is_action:
+            payload["temperature"] = 0.6
+            payload["top_p"] = 0.95
     # Family sampling profiles may restore repeat_penalty=1.0; the host-required
     # action boundary owns the final anti-loop sampling contract.
     return _enforce_required_tool_sampling(payload)
