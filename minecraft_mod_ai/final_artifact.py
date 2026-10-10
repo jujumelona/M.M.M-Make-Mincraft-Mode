@@ -756,9 +756,53 @@ def _authored_initialize_body(source: str, symbol: str) -> str | None:
     return None
 
 
+def _is_passive_content_only_authored_plan(plan: Mapping[str, Any]) -> bool:
+    """Identify typed no-ops that are *only* host-owned registry/data content.
+
+    This does not supply missing runtime/visual/research receipts. It prevents a
+    generated empty Typed PlanIR adapter from being misreported as missing
+    gameplay when the authored work consists solely of deterministic content
+    modules (items, blocks and recipes). Any active typed behavior, platform
+    module or unrecognized content field keeps the existing fail-closed check.
+    """
+    typed = plan.get("typed_plan_ir")
+    content = plan.get("content_design")
+    if not isinstance(typed, Mapping) or not isinstance(content, Mapping):
+        return False
+    if any(typed.get(key) != [] for key in (
+        "initialize", "functions", "event_bindings", "platform_modules"
+    )):
+        return False
+    sections = plan.get("structured_sections")
+    if isinstance(sections, Mapping) and any(
+        sections.get(key) for key in ("algorithm", "state_model")
+    ):
+        return False
+    modules = content.get("modules")
+    if not isinstance(modules, list) or not modules:
+        return False
+    passive_fields = {
+        "item": frozenset({"display_name", "stack_limit"}),
+        "block": frozenset({"display_name", "hardness", "resistance"}),
+        "recipe": frozenset({"recipe_kind", "result"}),
+    }
+    for module in modules:
+        if not isinstance(module, Mapping):
+            return False
+        allowed = passive_fields.get(module.get("kind"))
+        config = module.get("config")
+        if allowed is None or not isinstance(config, Mapping):
+            return False
+        if not set(config).issubset(allowed):
+            return False
+    return True
+
+
 def _authored_feature_semantic_findings(
     project_root: str | Path,
     units: Sequence[Any],
+    *,
+    passive_content_only: bool = False,
 ) -> list[str]:
     """Reject host scaffold/no-op authored features before release certification."""
 
@@ -809,7 +853,7 @@ def _authored_feature_semantic_findings(
         if (
             not normalized
             or re.fullmatch(r"(?:;|return;)+", normalized) is not None
-        ):
+        ) and not (passive_content_only and module_id == "authored_typed_plan"):
             findings.append(
                 f"authored module {module_id} initialize() has no executable behavior"
             )
@@ -1035,7 +1079,11 @@ def build_authored_design_coverage_receipt(
         )
 
     if authored_policy == "host_typed_plan_ir" and project_root is not None:
-        findings.extend(_authored_feature_semantic_findings(project_root, units))
+        findings.extend(_authored_feature_semantic_findings(
+            project_root,
+            units,
+            passive_content_only=_is_passive_content_only_authored_plan(plan),
+        ))
 
     unresolved = sorted(
         {str(item) for item in unresolved_gates if str(item).strip()}
