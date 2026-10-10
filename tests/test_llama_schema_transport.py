@@ -249,8 +249,16 @@ def test_integer_transport_schema_preserves_bounded_pattern():
     count_schema = effective["properties"]["count"]
     assert count_schema["type"] == "string"
     assert count_schema["maxLength"] == 20
-    # Integer pattern has no unbounded quantifiers — preserved unchanged.
-    assert count_schema["pattern"] == r"^-?(?:0|[1-9][0-9]{0,18})$"
+    # The transport may expand integer bounds into a stricter finite
+    # regex. Verify accepted values and exclusions rather than its spelling.
+    import re
+    pattern = re.compile(count_schema["pattern"])
+    assert pattern.fullmatch("0")
+    assert pattern.fullmatch("123")
+    assert pattern.fullmatch("-99")
+    assert not pattern.fullmatch("+1")
+    assert not pattern.fullmatch("01")
+    assert not pattern.fullmatch("1" * 21)
 
 
 def test_identifier_pattern_is_bounded_by_maxlength():
@@ -286,7 +294,12 @@ def test_llama_pattern_shorthand_is_normalized_before_transport():
     assert "[A-Za-z0-9_]" in pattern
     assert r"\x0B" in pattern
     assert "*" not in pattern
-    assert "+" not in pattern
+    # '+' inside the signed-number character class is legal and necessary.
+    # Confirm the normalized pattern still restricts lexical number syntax.
+    import re
+    assert re.fullmatch(pattern, "1.5e+8")
+    assert re.fullmatch(pattern, "-.5")
+    assert not re.fullmatch(pattern, "unbounded")
 
 
 def test_unsafe_regex_escape_drops_pattern_but_keeps_finite_bound():
