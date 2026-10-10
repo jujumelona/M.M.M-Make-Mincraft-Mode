@@ -28,6 +28,13 @@ def test_published_minecraft_26_2_catalog_generates_inventory_visible_block():
     paths = {job.target_path for job in jobs}
     assert "src/main/resources/assets/mmm_debug_crystal/items/crystal_block.json" in paths
     assert "src/main/resources/assets/mmm_debug_crystal/models/block/crystal_block.json" in paths
+    client_job = next(job for job in jobs if job.template_id == "minecraft/resource/item/client_block_item")
+    assert client_job.requires == ("crystal_block.registry_id",)
+    assert client_job.required_ports == ({
+        "name": "crystal_block.registry_id",
+        "kind": "REGISTRY_ID",
+        "target_type": "Item",
+    },)
 
 
 def test_published_catalog_remains_stable_across_loads():
