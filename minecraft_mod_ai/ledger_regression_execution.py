@@ -39,13 +39,13 @@ REGRESSION_EXECUTION_ROUTES: dict[str, RegressionExecutionRoute] = {
     ),
     "REG-008": RegressionExecutionRoute("tests/test_plan_collect_all_linker.py"),
     "REG-009": RegressionExecutionRoute("tests/test_root_cause_trace_durable.py"),
-    "REG-010": RegressionExecutionRoute("tests/test_minecraft_knowledge_request_completeness.py"),
+    "REG-010": RegressionExecutionRoute("tests/test_llama_completion_liveness_contract.py::test_second_semantic_progress_timeout_is_not_retried_forever"),
     "REG-011": RegressionExecutionRoute("tests/test_progress_loop_liveness_regression.py"),
     "REG-012": RegressionExecutionRoute(
         "tests/test_source_set_boundary_contract.py::test_common_source_cannot_import_project_client_source"
     ),
-    "REG-013": RegressionExecutionRoute("tests/test_validation_execution_contract.py"),
-    "REG-014": RegressionExecutionRoute("tests/test_validation_execution_contract.py"),
+    "REG-013": RegressionExecutionRoute("tests/test_resource_host_version_rules.py::test_missing_host_leaf_binding_fails_closed"),
+    "REG-014": RegressionExecutionRoute("tests/test_managed_content_gametest.py::test_runtime_receipt_rejects_mutated_test_source_and_recipe"),
     "REG-015": RegressionExecutionRoute("tests/test_runtime_json_gap_regression.py"),
     "REG-016": RegressionExecutionRoute("tests/test_structured_output_backend_json_recovery.py"),
     "REG-017": RegressionExecutionRoute(
@@ -70,22 +70,21 @@ REGRESSION_EXECUTION_ROUTES: dict[str, RegressionExecutionRoute] = {
     "REG-028": RegressionExecutionRoute("tests/test_platform_lock_naming_regime.py"),
     "REG-029": RegressionExecutionRoute("tests/test_target_semantics_boundary.py"),
     "REG-030": RegressionExecutionRoute(
-        "tests/test_reference_target_context_hardening.py::test_fresh_task_reuse_refs_do_not_erase_reserved_creation_target"
+        "tests/test_resolved_version_context.py::test_reuse_rejects_missing_or_different_context"
     ),
     "REG-031": RegressionExecutionRoute("tests/test_verifier_receipt_truth_contract.py"),
     "REG-032": RegressionExecutionRoute("tests/test_project_inventory_contract.py"),
     "REG-033": RegressionExecutionRoute(
-        "tests/test_progress_loop_planir_authority.py::"
-        "test_user_forged_planir_cannot_expand_writable_authority"
+        "tests/test_missing_creation_slot_regression.py::"
+        "test_fresh_production_binding_cannot_create_a_source_outside_owned_paths"
     ),
     "REG-034": RegressionExecutionRoute(
         "tests/test_packaged_jar_required_content_regression.py::test_packaged_jar_missing_required_runtime_resource_fails"
     ),
-    "REG-035": RegressionExecutionRoute("tests/test_final_architecture_contract.py"),
+    "REG-035": RegressionExecutionRoute("tests/test_ci_quality_regression_audit.py::test_new_function_hard_ceiling_is_rejected"),
     "REG-036": RegressionExecutionRoute("tests/test_agent_security_contract.py"),
     "REG-037": RegressionExecutionRoute(
-        "tests/test_direct_task_unified_mutation_authority.py::"
-        "test_source_owned_progress_loop_uses_same_active_exact_authority"
+        "tests/test_work_receipt_integrity.py::test_corrupt_task_receipt_is_invalidated_with_descendants_on_resume"
     ),
     "REG-SEM-001": RegressionExecutionRoute(
         "tests/test_semantic_prerequisite_edge_regression.py::test_missing_space_progression_prerequisite_is_rejected_not_dropped"
