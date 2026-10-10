@@ -161,7 +161,6 @@ def test_prior_failed_commit_logs_cannot_be_cancelled_by_new_push():
         "cumulative-regression-guard.yml",
         "workflow-lint.yml",
         "full-debug-gate.yml",
-        "production-kill-gates.yml",
     ):
         workflow = _workflow(ROOT / ".github" / "workflows" / name)
         concurrency = workflow["concurrency"]
@@ -171,6 +170,16 @@ def test_prior_failed_commit_logs_cannot_be_cancelled_by_new_push():
             assert "github.event.workflow_run.id" in group, name
         else:
             assert "github.sha" in group, name
+
+
+def test_production_kill_gates_prioritize_latest_head_without_stopping_running_jobs():
+    workflow = _workflow(ROOT / ".github" / "workflows" / "production-kill-gates.yml")
+    concurrency = workflow["concurrency"]
+    # Production Kill Gates runs the whole suite; obsolete queued commits can
+    # be coalesced, while already-running investigations retain their receipts.
+    assert "github.ref" in concurrency["group"]
+    assert "github.sha" not in concurrency["group"]
+    assert concurrency["cancel-in-progress"] == "false"
 
 
 def test_real_e2e_performs_actual_build_and_preserves_failure_artifacts():
