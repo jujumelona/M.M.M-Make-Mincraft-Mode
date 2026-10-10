@@ -493,17 +493,27 @@ def compile_content_graph(
             # GameTesting a Java screen that cannot perform the gameplay step.
             # A distinct context binding prevents reuse of the rejected cached
             # GUI-only result as if it had been corrected.
+            # Bind the retry to a *different JSON schema*, excluding GUI.
+            # Plain-language feedback did not prevent the small authoring model
+            # from selecting another screen; schema binding does.  The first
+            # pass still permits an explicitly requested user interface.
+            from .content_design_contract import PRIMARY_CONTENT_KINDS
+
+            playable_kinds = [
+                kind for kind in PRIMARY_CONTENT_KINDS if kind != "gui"
+            ]
             nodes = records("design/content_entity", {
                 **entity_context,
+                "allowed_content_kinds": playable_kinds,
                 "rejected_gui_only_candidates": deepcopy(nodes),
                 "generation_feedback": (
-                    "The previous choice represented an executable gameplay "
-                    "step using only screens. Screens do not implement resource "
-                    "collection, crafting, purchasing, combat, or travel. "
-                    "Identify the concrete playable item/block/entity/dimension "
-                    "required by this exact step, or return no content entity "
-                    "only if the step is implemented entirely by real code. "
-                    "Never substitute a GUI placeholder for a gameplay handler."
+                    "Regenerate this exact gameplay step with its concrete "
+                    "Minecraft gameplay owner (item, block, entity, etc.) "
+                    "instead of the rejected UI-only screen. Existing GUI "
+                    "can still be created by separate explicit screen "
+                    "requirements; it cannot replace the action or state "
+                    "mutation. Return no content only if no entity is "
+                    "actually needed, leaving execution to bound server code."
                 ),
             })
             if nodes and all(node.get("kind") == "gui" for node in nodes):
