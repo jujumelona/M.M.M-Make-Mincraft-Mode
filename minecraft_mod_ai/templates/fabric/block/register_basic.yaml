@@ -41,7 +41,7 @@ render:
             new Block(BlockBehaviour.Properties.of().setId(ModBlockIds.{{java_constant}}_KEY)/* MMM:block_properties:{{registry_path}} */)
         );
     public static final ResourceKey<Item> {{java_constant}}_ITEM_KEY =
-        ResourceKey.create(Registries.ITEM, ModBlockIds.{{java_constant}}_KEY.location());
+        ResourceKey.create(Registries.ITEM, ModBlockIds.{{java_constant}}_KEY.identifier());
     public static final Item {{java_constant}}_ITEM =
         Registry.register(
             BuiltInRegistries.ITEM,
