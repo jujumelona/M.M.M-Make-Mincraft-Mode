@@ -56,4 +56,8 @@ def test_orchestrator_generation_shutdown_quiesces_mutating_workers() -> None:
     assert "shutdown(wait=False" not in source
     assert "shutdown(wait=True, cancel_futures=True)" in source
     assert "for pool in (cpu_pool, llm_pool, image_pool, commit_pool, review_pool):" in source
-    assert "Blockbench review deadline exceeded" in source
+    # Timeout now produces a structured unresolved release gate rather than
+    # throwing a source-level error that would discard the compiled JAR.
+    assert "future.cancel()" in source
+    assert "blockbench:{module_id}:review-timeout" in source
+    assert "verified release blocked" in source
