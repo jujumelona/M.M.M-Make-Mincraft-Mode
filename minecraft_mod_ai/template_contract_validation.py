@@ -93,6 +93,33 @@ def validate_template_contract(template):
             raise ValueError(f"TEMPLATE_PLACEHOLDERS: {identifier} undeclared render fields {sorted(missing)}")
 
 
+
+def validate_catalog_rule_types(root: Path) -> int:
+    """Check every packaged YAML rule before scheduling any model inference.
+
+    YAML treats unquoted text containing ': ' as a mapping, which used to
+    surface only much later as a TypeError in single-record prompt assembly.
+    This fast pass validates those scalar contracts without compiling every
+    unrelated response schema.
+    """
+    checked = 0
+    for path in sorted(root.rglob("*.yaml")):
+        relative = path.relative_to(root).as_posix()
+        try:
+            template = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, yaml.YAMLError) as exc:
+            raise ValueError(f"TEMPLATE_YAML_PARSE: {relative}: {exc}") from exc
+        if not isinstance(template, Mapping):
+            raise ValueError(f"TEMPLATE_YAML_TYPE: {relative} must be a mapping")
+        if "rules" in template:
+            validate_template_contract({
+                "id": template.get("id", relative),
+                "rules": template["rules"],
+            })
+        checked += 1
+    return checked
+
+
 def _validate_response_contracts(root: Path) -> None:
     path = root / "response" / "contracts.json"
     if not path.is_file():
