@@ -41,7 +41,15 @@ def _approved(*, version="26.2", modules=None):
             ),
         ),
         modules=tuple(
-            SimpleNamespace(module_id=name, kind=kind)
+            SimpleNamespace(
+                module_id=name, kind=kind,
+                config=(
+                    {"typed_plan_ir": {
+                        "event_bindings": [], "functions": [],
+                        "initialize": [], "platform_modules": [],
+                    }} if kind == "typed_host" else {}
+                ),
+            )
             for name, kind in (modules if modules is not None else default)
         ),
     )
@@ -159,6 +167,14 @@ def test_dynamic_features_or_wrong_platform_never_inherit_game_test_shortcut(tmp
     assert not eligible_for_managed_runtime(_approved(version="1.21.1"))
     assert not eligible_for_managed_runtime(_approved(modules=(("npc", "entity"),)))
     assert install_managed_content_gametest(root, _approved(version="1.21.1")) is None
+    custom_item = _approved(modules=(("crystal_fragment", "item"),))
+    custom_item.modules[0].config["on_use_script"] = "grant_flight"
+    assert not eligible_for_managed_runtime(custom_item)
+    custom_typed = _approved()
+    custom_typed.modules[-1].config["typed_plan_ir"]["event_bindings"] = [
+        {"event": "on_tick"}
+    ]
+    assert not eligible_for_managed_runtime(custom_typed)
 
 
 def test_emitted_server_gametest_java_compiles_with_real_javac(tmp_path):
