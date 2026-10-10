@@ -52,13 +52,12 @@ def _command_is_full_gradle_build(item: Mapping[str, Any]) -> bool:
     if item.get("exit_code") != 0 or item.get("timed_out") is True:
         return False
     name = str(item.get("name") or "")
-    if name in {"build", "clean_build"}:
-        return True
-    if name != "incremental_build":
+    if name not in {"build", "clean_build", "incremental_build"}:
         return False
     argv = item.get("command")
     if not isinstance(argv, Sequence) or isinstance(argv, (str, bytes, bytearray)):
         return False
+    # A claimed task label is not an executed Gradle command.
     return any(str(argument) == "build" for argument in argv)
 
 
