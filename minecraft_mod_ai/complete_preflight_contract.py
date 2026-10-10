@@ -86,6 +86,14 @@ def validate_platform_toolchain_preflight(
             f"{type(exc).__name__}: {exc}"
         ) from exc
 
+    # The Colab planner can leave a 6 GB GGUF server resident. At the
+    # production boundary, yield that *owned* idle server before launching
+    # Gradle/JDT processes; later model work can restart it on demand.
+    if not source_only:
+        from .llama_server_autotune import release_managed_server_before_toolchain
+
+        release_managed_server_before_toolchain()
+
     from .java_lsp import (
         _java_major_version,
         _parse_java_major,
