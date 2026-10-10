@@ -158,6 +158,13 @@ def test_prebuilt_fact_graph_lowers_on_real_fabric_target_without_model() -> Non
             if job.template_id == "fabric/block/register_basic"
             and job.owner_module == "crystal_block"
         )
+        assert block_registration.deterministic_inputs["authored_block_strength"] == [2.0, 3.0]
+        client_model = next(
+            job for job in jobs
+            if job.template_id == "minecraft/resource/item/client_block_item"
+            and job.owner_module == "crystal_block"
+        )
+        assert client_model.requires == ("crystal_block.registry_id",)
         assert "crystal_block.block_registry_id" in block_registration.produces
         assert "crystal_block.registry_id" in block_registration.produces
         assert "crystal_block.registry_id" in recipe.requires
