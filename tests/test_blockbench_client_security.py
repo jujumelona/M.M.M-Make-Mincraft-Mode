@@ -268,3 +268,21 @@ def test_non_object_arguments_are_rejected_before_transport(
             client.call("validate_uv", [])  # type: ignore[arg-type]
     finally:
         client.close()
+
+
+def test_unavailable_mcp_server_is_actionable_not_raw_httpx(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import httpx
+
+    client = BlockbenchMCPClient(workspace_root=tmp_path, timeout_seconds=1)
+
+    def connection_refused(*_args, **_kwargs):
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(client.client, "post", connection_refused)
+    try:
+        with pytest.raises(BlockbenchMCPError, match="BLOCKBENCH_MCP_UNAVAILABLE"):
+            client.initialize()
+    finally:
+        client.close()
