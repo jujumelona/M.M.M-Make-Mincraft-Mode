@@ -11,10 +11,10 @@ from minecraft_mod_ai.source_edit_scalar_protocol_contract import (
 
 
 def test_dependency_query_has_one_runtime_owner() -> None:
-    wrapped = research_code_context.ResearchCodeContext._query_paths
-    base = getattr(wrapped, "__wrapped__", None)
-    assert base is not None
-    source = inspect.getsource(base)
+    # Query-path ownership is now native to ResearchCodeContext; no runtime
+    # decorator is required. Check the actual current owner, not __wrapped__.
+    owner = research_code_context.ResearchCodeContext._query_paths
+    source = inspect.getsource(owner)
     assert "research_coder_repair_reuse" not in source
     assert "_dependency_neighborhood_query" not in source
 
