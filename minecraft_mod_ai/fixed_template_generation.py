@@ -218,7 +218,11 @@ def _reject_undeclared_fields(
             except json.JSONDecodeError:
                 continue
             if isinstance(decoded, (dict, list)):
+                # A complete outer object already covers its nested children.
+                # Checking nested substrings as new *root* objects would reject
+                # valid wrapped nested JSON against the wrong schema level.
                 candidates.append(decoded)
+                break
 
     def visit(value: Any, shape: Mapping[str, Any], path: str) -> list[str]:
         errors: list[str] = []
