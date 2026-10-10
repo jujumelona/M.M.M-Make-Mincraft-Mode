@@ -254,7 +254,7 @@ def resolve_plan_path(
     debug_strategy: str | None = None,
 ) -> Path:
     mode = validate_run_mode(run_mode)
-    if debug_strategy in {"prebuilt", "host_smoke"}:
+    if debug_strategy in {"prebuilt", "host_smoke", "model_path"}:
         if mode != FULL_MODE:
             raise ValueError("Debug Mode는 RUN_MODE=Full에서만 사용할 수 있습니다.")
         # Never overwrite the user's ordinary proposal.json or replay input.
