@@ -442,13 +442,9 @@ def _start_server(
 
     runtime._replace_option(args, ("--ctx-size", "-c"), str(total_context))
     runtime._replace_option(args, ("--parallel", "-np"), str(slots))
-    if "--cache-prompt" not in args:
-        args.append("--cache-prompt")
-
-    if runtime._is_qwen35_mtp_config(config):
-        runtime._remove_option(args, ("--cache-ram",), takes_value=True)
-    else:
-        runtime._replace_option(args, ("--cache-ram",), str(runtime._cache_ram_mib()))
+    # A Qwen3.5 MTP server must not silently acquire the 1 GiB prompt-RAM
+    # cache that the runtime receipt explicitly reports as disabled.
+    runtime._configure_prompt_cache(args, config)
 
     if getattr(variant, "ubatch", 0) > 0:
         chosen_ubatch = int(variant.ubatch)
