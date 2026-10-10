@@ -338,3 +338,46 @@ def test_game_design_must_match_the_contract_binding(tmp_path: Path) -> None:
     changed["title"] = "Different design"
     with pytest.raises(ProductionContractError, match="game_design"):
         _compile_call(compiled, changed, _baseline_inputs(tmp_path))
+
+
+def test_quality_gap_diagnostics_identify_missing_clean_build_and_gametest(
+    tmp_path: Path,
+) -> None:
+    design = {"title": "Verified item"}
+    compiled = _compile(design)
+    inputs = _baseline_inputs(tmp_path)
+    # A passing Gradle build is not a clean-build receipt; GameTest is valid.
+    build = inputs["build_report"]
+    build["commands"] = [
+        {"name": "incremental_build", "command": ("gradle", "build"), "exit_code": 0, "timed_out": False},
+        {"name": "gametest", "exit_code": 0, "timed_out": False},
+    ]
+    reasons: dict[str, str] = {}
+    evidence = _compile_call(compiled, design, inputs, missing_reasons=reasons)
+    assert "build" not in evidence
+    assert "correctness" not in evidence
+    assert "clean Gradle build receipt" in reasons["build"]
+    assert "clean Gradle build receipt" in reasons["correctness"]
+    assert "passing structured GameTest report" not in reasons["correctness"]
+
+    # With a genuine clean-build command the baseline source/build/GameTest
+    # adapter can issue receipts; research is still absent, never auto-passed.
+    build["commands"][0]["name"] = "clean_build"
+    evidence = _compile_call(compiled, design, inputs)
+    assert "build" in evidence
+    assert "correctness" in evidence
+    assert "research" not in evidence
+
+
+def test_quality_gap_diagnostics_never_replace_missing_runtime_evidence(
+    tmp_path: Path,
+) -> None:
+    design = {"title": "Verified item"}
+    compiled = _compile(design)
+    inputs = _baseline_inputs(tmp_path)
+    inputs["runtime_receipt"] = None
+    inputs["playtest_receipt"] = None
+    reasons: dict[str, str] = {}
+    evidence = _compile_call(compiled, design, inputs, missing_reasons=reasons)
+    assert "runtime" not in evidence
+    assert "Minecraft runtime and interactive playtest" in reasons["runtime"]
