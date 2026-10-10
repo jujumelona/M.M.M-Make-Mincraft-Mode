@@ -135,7 +135,7 @@ def _preflight_worker_ram(*, model_name: str = ALPHA_SEGMENTATION_MODEL) -> None
                   if model_name == ALPHA_SEGMENTATION_FALLBACK_MODEL
                   else "MMM_ALPHA_MIN_AVAILABLE_MB")
     raw = (
-        os.environ.get("MMM_ALPHA_U2NETP_MIN_AVAILABLE_MB", "1536")
+        os.environ.get("MMM_ALPHA_U2NETP_MIN_AVAILABLE_MB", "2048")
         if model_name == ALPHA_SEGMENTATION_FALLBACK_MODEL
         else os.environ.get("MMM_ALPHA_MIN_AVAILABLE_MB", "3072")
     )
@@ -159,7 +159,7 @@ def _preflight_checkpoint_download_ram() -> None:
     """A streaming checkpoint fetch is not an ONNX inference allocation.
 
     The ONNX inference worker has a separate model-specific RAM gate
-    (3 GiB for full models; 1.5 GiB for U2NetP). Checkpoint preparation only needs room for the Python/pooch
+    (3 GiB for full models; 2 GiB for U2NetP). Checkpoint preparation only needs room for the Python/pooch
     download subprocess and disk-backed streamed bytes.
     """
     raw = os.environ.get("MMM_ALPHA_PREPARE_MIN_AVAILABLE_MB", "512")
