@@ -690,6 +690,7 @@ class CompleteProductionOrchestrator:
             build = GradleRunner(
                 gradle_cache,
                 eula_accepted=options.eula_accepted,
+                require_clean_build=(approved.schema_version == 'mmm/complete-proposal-v2'),
             ).build(
                 project_root,
                 run_gametest=options.run_gametest,
@@ -712,6 +713,7 @@ class CompleteProductionOrchestrator:
                 "graph_hash": work_plan.graph_hash,
                 "project_manifest": validation_manifest,
                 "run_gametest": options.run_gametest,
+                "require_clean_build": approved.schema_version == 'mmm/complete-proposal-v2',
             },
             action=run_build,
             encode=lambda value: value,
