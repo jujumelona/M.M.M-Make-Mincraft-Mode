@@ -1,6 +1,7 @@
 name: Real Model Colab E2E
 
 on:
+  workflow_call:
   workflow_dispatch:
     inputs:
       profile:
@@ -56,7 +57,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: real-model-colab-e2e-${{ github.ref }}
+  group: real-model-colab-e2e-${{ github.event_name }}-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
@@ -71,6 +72,8 @@ jobs:
       MMM_MODEL_PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.profile || 't4_quality' }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@v6
         with:
