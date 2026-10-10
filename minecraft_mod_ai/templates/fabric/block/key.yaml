@@ -21,7 +21,7 @@ render:
   language: java
   body: |
     public static final ResourceKey<Block> {{java_constant}}_KEY =
-        ResourceKey.create(Registries.BLOCK, Identifier.of("{{mod_id}}", "{{registry_path}}"));
+        ResourceKey.create(Registries.BLOCK, Identifier.fromNamespaceAndPath("{{mod_id}}", "{{registry_path}}"));
 validators:
   - java_parse
 fixture:
