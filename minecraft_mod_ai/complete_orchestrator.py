@@ -191,6 +191,14 @@ def _run_release_jdt_verification(
     )
 
 
+def _is_authored_coverage_proposal(approved: CompleteProposal) -> bool:
+    """Require behavioral authored-source coverage regardless of v1/v2 schema."""
+    return (
+        isinstance(approved.game_design.get('authored_plan'), dict)
+        and isinstance(approved.game_design.get('_authored_execution_manifest'), dict)
+    )
+
+
 def _debug_fixture_source_contract(
     approved: CompleteProposal,
 ) -> dict[str, Any] | None:
@@ -1039,10 +1047,7 @@ class CompleteProductionOrchestrator:
         # Previously None was interpreted as PASS, allowing a compiled GUI
         # placeholder to be certified without any quality evaluation. Treat
         # missing authored quality evidence as an unresolved release gate.
-        authored_plan_present = (
-            isinstance(approved.game_design.get('authored_plan'), dict)
-            and isinstance(approved.game_design.get('_authored_execution_manifest'), dict)
-        )
+        authored_plan_present = _is_authored_coverage_proposal(approved)
         if quality_report is None and authored_plan_present:
             unresolved.append('quality:authored-quality-contract-missing')
         quality_passed = (
@@ -1107,10 +1112,7 @@ class CompleteProductionOrchestrator:
                 observable_acceptance=debug_source_acceptance,
                 unresolved_gates=normalized_unresolved,
             )
-        elif (
-            isinstance(approved.game_design.get('_authored_execution_manifest'), dict)
-            and isinstance(approved.game_design.get('authored_plan'), dict)
-        ):
+        elif _is_authored_coverage_proposal(approved):
             # Authored coverage is mandatory for both legacy v1 and contract-bound
             # v2. Do not let adding a quality contract replace behavioral source
             # coverage with the generic requirement catalog, which would miss
