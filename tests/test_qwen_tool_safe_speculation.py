@@ -83,9 +83,12 @@ def test_tool_page_safety_is_direct_payload_policy_without_runtime_restart(monke
     assert payload["parallel_tool_calls"] is False
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     assert "reasoning_effort" not in payload
-    assert payload["temperature"] == 0.7
-    assert payload["top_p"] == 0.8
-    assert payload["top_k"] == 20
+    # A required single-tool call uses deterministic host sampling regardless
+    # of the family preset, so the model cannot stall in speculative decoding.
+    assert payload["temperature"] == 0.0
+    assert "top_p" not in payload
+    assert "top_k" not in payload
+    assert payload["repeat_penalty"] == 1.05
 
 
 def test_plain_coder_page_keeps_family_thinking_policy_without_server_mutation(
