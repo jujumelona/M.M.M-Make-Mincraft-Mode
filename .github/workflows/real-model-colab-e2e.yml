@@ -138,7 +138,8 @@ jobs:
         timeout-minutes: 40
         shell: bash
         run: |
-          python - <<'PY'
+          set -o pipefail
+          python - <<'PY' 2>&1 | tee audit/real-model-colab-e2e/normal-and-debug-e2e.log
           from __future__ import annotations
 
           import json
@@ -352,10 +353,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: real-model-colab-e2e-${{ github.sha }}
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
           path: |
             audit/real-model-colab-e2e/GPU_PREFLIGHT.json
+            audit/real-model-colab-e2e/normal-and-debug-e2e.log
             audit/real-model-colab-e2e/REAL_MODEL_COLAB_E2E.json
             audit/real-model-colab-e2e/proposal.json
             audit/real-model-colab-e2e/debug-fixture/**
