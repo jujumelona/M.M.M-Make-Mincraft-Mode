@@ -475,6 +475,13 @@ class CompleteProductionOrchestrator:
     def execute(self, proposal: CompleteProposal | dict[str, Any], *, approval_hash: str, run_name: str, options: CompleteExecutionOptions | None=None, existing_input: str | Path | None=None) -> CompletePipelineResult:
         options = options or CompleteExecutionOptions()
         options.validate(policy=self.policy)
+        # Plan construction/approval and production-work compilation can themselves
+        # bootstrap Gradle/JDT. Release an idle planner GGUF *before* those early
+        # steps, not only inside the later external-verification preflight.
+        if not options.source_only:
+            from .llama_server_autotune import release_managed_server_before_toolchain
+
+            release_managed_server_before_toolchain()
         # Old Colab notebooks can import the latest GitHub code while keeping
         # stale in-memory cell-1 variables. Catch the missing explicit consent
         # before loading Qwen/FLUX or performing any expensive generation.
