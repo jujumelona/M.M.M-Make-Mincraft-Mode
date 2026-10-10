@@ -982,6 +982,23 @@ def _github_client(token: str) -> httpx.Client:
 def _github_json(client: httpx.Client, url: str, *, params: Mapping[str, str] | None = None) -> Any:
     try:
         response = client.get(url, params=params)
+        if response.status_code in {301, 302, 307, 308}:
+            from urllib.parse import urljoin
+
+            redirect = urljoin(str(response.url), response.headers.get("location", ""))
+            origin = urlparse(url)
+            target = urlparse(redirect)
+            if (
+                origin.scheme != "https"
+                or origin.hostname != "api.github.com"
+                or target.scheme != "https"
+                or target.hostname != "api.github.com"
+                or target.username is not None
+                or target.password is not None
+                or not target.path.startswith(("/repos/", "/repositories/"))
+            ):
+                raise SourceTransplantError("GitHub donor redirect left the trusted API origin.")
+            response = client.get(redirect)
         response.raise_for_status()
     except httpx.HTTPError as exc:
         raise SourceTransplantError(f"GitHub donor request failed: {url}") from exc
