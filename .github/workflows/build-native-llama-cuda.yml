@@ -18,11 +18,11 @@ jobs:
     timeout-minutes: 120
     container: nvidia/cuda:12.4.1-devel-ubuntu22.04
     env:
-      LLAMA_SOURCE_REF: 1d2869c6e54d5003f3927a79efbca0fefa034a6d
+      LLAMA_SOURCE_REF: d81235049384534c167caea52b85a694f6103d14
       BUNDLE_SCHEMA: mmm/native-llama-cuda-bundle-v4-immutable
-      BUNDLE_PREFIX: llama-1d2869c-cuda12.4-max
+      BUNDLE_PREFIX: llama-d812350-cuda12.4-max
       BUNDLE_ARCH: ${{ inputs.cuda_arch }}
-      RELEASE_TAG: native-llama-1d2869c-cuda12.4-max-v4-immutable
+      RELEASE_TAG: native-llama-d812350-cuda12.4-max-v4-immutable
     steps:
       - name: Install build and release tools
         shell: bash
@@ -63,7 +63,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: llama.cpp
-          key: native-llama-linux-cuda12.4-sm${{ inputs.cuda_arch }}-1d2869c-v4
+          key: native-llama-linux-cuda12.4-sm${{ inputs.cuda_arch }}-d812350-v4
 
       - name: Prepare CUDA driver stubs for link-only build
         if: steps.release.outputs.published != 'true'
@@ -243,7 +243,7 @@ jobs:
             gh release create "$RELEASE_TAG" \
               --repo "$GITHUB_REPOSITORY" \
               --title "Native llama.cpp immutable CUDA bundles v4" \
-              --notes "Immutable verified native llama-server CUDA 12.4 bundles. Source: ggml-org/llama.cpp 1d2869c6e54d5003f3927a79efbca0fefa034a6d. Assets are append-only; this workflow never clobbers an existing architecture asset." \
+              --notes "Immutable verified native llama-server CUDA 12.4 bundles. Source: ggml-org/llama.cpp d81235049384534c167caea52b85a694f6103d14. Assets are append-only; this workflow never clobbers an existing architecture asset." \
             || gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
           fi
 

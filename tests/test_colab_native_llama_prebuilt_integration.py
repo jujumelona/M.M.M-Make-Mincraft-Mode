@@ -115,7 +115,7 @@ def test_bundle_loader_is_source_local_and_exposes_verified_installer() -> None:
     bundle = module._load_native_bundle_module()
     assert callable(bundle.ensure_prebuilt_native_server)
     assert bundle.BUNDLE_SCHEMA_VERSION == "mmm/native-llama-cuda-bundle-v4-immutable"
-    assert bundle.BUNDLE_RELEASE_TAG == "native-llama-1d2869c-cuda12.4-max-v4-immutable"
+    assert bundle.BUNDLE_RELEASE_TAG == "native-llama-d812350-cuda12.4-max-v4-immutable"
 
 def test_cuda_wheel_library_dirs_are_exported_before_prebuilt_linkage(
     monkeypatch,

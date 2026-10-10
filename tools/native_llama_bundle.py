@@ -13,12 +13,12 @@ from collections.abc import Callable
 from pathlib import Path
 
 BUNDLE_SCHEMA_VERSION = "mmm/native-llama-cuda-bundle-v4-immutable"
-BUNDLE_RELEASE_TAG = "native-llama-1d2869c-cuda12.4-max-v4-immutable"
+BUNDLE_RELEASE_TAG = "native-llama-d812350-cuda12.4-max-v4-immutable"
 BUNDLE_RELEASE_BASE = (
     "https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode/releases/download/"
     + BUNDLE_RELEASE_TAG
 )
-BUNDLE_NAME_PREFIX = "llama-1d2869c-cuda12.4-max"
+BUNDLE_NAME_PREFIX = "llama-d812350-cuda12.4-max"
 SUPPORTED_CUDA_ARCHES = frozenset({"75", "80", "89"})
 MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
 CACHE_RECEIPT_NAME = ".archive.sha256"
