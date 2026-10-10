@@ -40,10 +40,16 @@ def _cycle_modules() -> tuple[ProductionModule, ...]:
     )
 
 
-def test_semantic_requires_cycle_is_not_a_production_build_cycle() -> None:
+def test_explicit_requires_edges_are_not_erased_to_hide_a_build_cycle() -> None:
     normalized = _strip_semantic_content_build_dependencies(_cycle_modules())
 
-    assert [module.depends_on for module in normalized] == [(), (), ()]
+    # Explicit "requires" is a build prerequisite until independent evidence
+    # proves otherwise. Dropping a cycle here would mask a scheduler defect.
+    assert [module.depends_on for module in normalized] == [
+        ("ship_segment_item_block_entity_002",),
+        ("spaceport_planet_target_list_gui_economy_system_001",),
+        ("ship_construction_gui_screen_contract_ui_menu_unlock_001",),
+    ]
     assert normalized[0].config["requires"] == [
         "ship_segment_item_block_entity_002"
     ]
@@ -53,7 +59,10 @@ def test_semantic_requires_cycle_is_not_a_production_build_cycle() -> None:
     }]
 
 
-def test_saved_content_cycle_is_migrated_without_replanning() -> None:
-    normalized = _normalize_content_build_dependencies(_cycle_modules(), ())
+def test_saved_requires_cycle_remains_visible_to_scheduler_without_fact_proof() -> None:
+    original = _cycle_modules()
+    normalized = _normalize_content_build_dependencies(original, ())
 
-    assert [module.depends_on for module in normalized] == [(), (), ()]
+    assert [module.depends_on for module in normalized] == [
+        module.depends_on for module in original
+    ]
