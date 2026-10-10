@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import threading
 import time
-from contextlib import nullcontext
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 
@@ -18,13 +17,11 @@ from minecraft_mod_ai import (
     llama_server_hardware_policy,
 )
 from minecraft_mod_ai import llama_stream_efficiency_contract as streaming
-from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner
-from minecraft_mod_ai.model_adapters.base import AdapterConfig
+from minecraft_mod_ai.model_adapters.base import AdapterConfig, GenerationRequest
 from minecraft_mod_ai.model_adapters.llama_cpp_adapter import LlamaCppAdapter
-from minecraft_mod_ai.model_router import ModelRouter
 
 
-def test_complete_planner_finishes_healthy_8192_budget_stream_after_300_seconds(monkeypatch):
+def test_planner_role_sse_transport_finishes_healthy_8192_budget_stream_after_300_seconds(monkeypatch):
     for key in ("MMM_LLAMA_COMPLETION_WALL_TIMEOUT_SECONDS", "MMM_LLAMA_TOOL_COMPLETION_WALL_TIMEOUT_SECONDS"):
         monkeypatch.delenv(key, raising=False)
     # Only the liveness clock is accelerated. HTTPX and the local TCP server retain
@@ -32,9 +29,10 @@ def test_complete_planner_finishes_healthy_8192_budget_stream_after_300_seconds(
     real_monotonic = time.monotonic
     monkeypatch.setattr(liveness, "time", SimpleNamespace(monotonic=lambda: real_monotonic() * 100))
     requests = []
-    # This test exercises transport liveness, not plan-format repair. Replay
-    # canonical authored headings so the host does not have to invent or rewrite
-    # missing design sections after a successful long stream.
+    # Exercise the real adapter/HTTPX/SSE planner-role transport, not semantic
+    # plan construction. Production planning now authors a multi-call structured
+    # dependency graph, so a single legacy Markdown response is not a valid
+    # CompleteGameDesignPlanner.plan() fixture.
     chunks = [
         "## behavior_contract\n",
         "## authority_and_network\n",
@@ -82,28 +80,19 @@ def test_complete_planner_finishes_healthy_8192_budget_stream_after_300_seconds(
         "model": config.model_id, "messages": list(request.messages), "max_tokens": 8192,
     })
 
-    class Router(ModelRouter):
-        def __init__(self):
-            self._agent_require_fresh_evidence = False
-
-        def _generation_adapter(self, role):
-            return config, adapter
-
-        def _tools_enabled(self, **kwargs):
-            return False
-
-        def _generation_scope(self, config):
-            return nullcontext()
-
     try:
-        plan = CompleteGameDesignPlanner(Router()).plan("Write the space trading design.")
+        completion = adapter.generate(GenerationRequest(
+            messages=({"role": "user", "content": "Write the space trading design."},),
+        ))
+        assert completion == "".join(chunks).strip()
         for index in range(28):
-            assert f"Requirement {index}." in plan.text
-        assert "## behavior_contract" in plan.text
-        assert "## authority_and_network" in plan.text
-        assert "## persistence" in plan.text
+            assert f"Requirement {index}." in completion
+        assert "## behavior_contract" in completion
+        assert "## authority_and_network" in completion
+        assert "## persistence" in completion
         assert len(requests) == 1
         assert requests[0]["max_tokens"] == 8192
+        assert requests[0]["messages"][0]["role"] == "user"
         assert not requests[0].get("tools")
         assert requests[0]["return_progress"] is True
     finally:
