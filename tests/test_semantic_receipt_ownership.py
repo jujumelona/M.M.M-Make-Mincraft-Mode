@@ -145,3 +145,22 @@ def test_untracked_module_does_not_require_semantic_task_receipt():
         [],
         downstream_ids=lambda _module_id: (),
     ) == []
+
+
+@pytest.mark.parametrize(
+    "failed_status", ["FAIL", "FAILED", "ERROR", "BLOCKED", "UNAVAILABLE"]
+)
+def test_failed_generation_receipt_cannot_satisfy_semantic_coverage(failed_status):
+    with pytest.raises(CompleteProductionError, match="SEMANTIC_RECEIPT_FAILED"):
+        _semantic_execution_observations(
+            [_module("alpha")],
+            [
+                {
+                    "schema_version": "mmm/custom-module-result-v3",
+                    "module_id": "alpha",
+                    "status": failed_status,
+                    "touched_paths": ["src/possibly-stale.java"],
+                }
+            ],
+            downstream_ids=lambda _module_id: (),
+        )

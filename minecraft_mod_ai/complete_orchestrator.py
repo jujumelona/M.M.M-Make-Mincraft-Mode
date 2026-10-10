@@ -234,6 +234,15 @@ def _semantic_execution_observations(
     for receipt in receipts:
         if not isinstance(receipt, dict):
             continue
+        status = str(receipt.get("status") or "").strip().upper()
+        if status in {
+            "FAIL", "FAILED", "ERROR", "INVALID", "REJECTED",
+            "BLOCKED", "CANCELLED", "UNAVAILABLE",
+        }:
+            raise CompleteProductionError(
+                "SEMANTIC_RECEIPT_FAILED: "
+                + str(receipt.get("module_id") or receipt.get("module_ids") or "<unknown>")
+            )
         owner_ids = _receipt_owned_module_ids(receipt)
         if not owner_ids:
             if len(member_by_id) == 1:
