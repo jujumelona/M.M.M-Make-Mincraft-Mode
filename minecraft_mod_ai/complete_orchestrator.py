@@ -16,6 +16,7 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from .blockbench_client import BlockbenchMCPError
 from .artifact_graph_executor import execute_artifact_graph
 from .artifact_job import (
     ArtifactJob,
@@ -2281,11 +2282,28 @@ class CompleteProductionOrchestrator:
                     )
                 try:
                     receipt = future.result(timeout=0 if future.done() else remaining)
-                except TimeoutError as exc:
+                except TimeoutError:
                     future.cancel()
-                    raise CompleteProductionError(
-                        f'Blockbench review deadline exceeded: {module_id}'
-                    ) from exc
+                    unresolved.append(f'blockbench:{module_id}:review-timeout')
+                    print(
+                        f'[BLOCKBENCH] REVIEW_UNRESOLVED entity={module_id} reason=timeout; '
+                        'JAR may be built, but verified release remains blocked.',
+                        flush=True,
+                    )
+                    continue
+                except (BlockbenchMCPError, CompleteProductionError) as exc:
+                    # The external desktop MCP server is optional at build time,
+                    # NOT at verified-release time. Keep the reproducible JAR
+                    # and diagnostics instead of discarding hours of generation.
+                    # Mandatory Blockbench evidence remains missing/fail-closed.
+                    unresolved.append(f'blockbench:{module_id}:review-unavailable')
+                    print(
+                        f'[BLOCKBENCH] REVIEW_UNRESOLVED entity={module_id} '
+                        f'reason={type(exc).__name__}: {str(exc)[:300]}; '
+                        'verified release blocked.',
+                        flush=True,
+                    )
+                    continue
                 review_results.append((module_id, receipt))
             blockbench_receipts.extend(receipt for _, receipt in sorted(review_results, key=lambda item: item[0]))
         finally:
