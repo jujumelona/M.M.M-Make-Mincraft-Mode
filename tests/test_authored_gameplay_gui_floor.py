@@ -145,3 +145,53 @@ def test_atomic_gameplay_writers_become_content_generation_inputs(monkeypatch) -
     }
     assert ("algorithm", "steps") in sources
     assert ("algorithm", "atomic_mutations") in sources
+
+
+@pytest.mark.parametrize(
+    ("concern", "expected_allowed"),
+    [
+        ("steps", None),
+        ("atomic_mutations", {"custom_item_behavior", "custom_block_behavior"}),
+    ],
+)
+def test_gameplay_gui_only_discovery_retries_with_executable_owner(
+    monkeypatch, concern, expected_allowed,
+) -> None:
+    from minecraft_mod_ai import content_design_graph
+
+    class InspectedRetry(Exception):
+        pass
+
+    attempts = []
+
+    def fake_records(_router, identifier, *, context, **_kwargs):
+        assert identifier == "design/content_entity"
+        attempts.append(dict(context))
+        if "rejected_gui_only_candidates" in context:
+            allowed = set(context["allowed_content_kinds"])
+            if expected_allowed is None:
+                assert "gui" not in allowed
+                assert "item" in allowed
+            else:
+                assert allowed == expected_allowed
+            raise InspectedRetry()
+        return {"records": [{"kind": "gui", "entity_id": "display_only", "role": "screen"}]}
+
+    monkeypatch.setattr(content_design_graph, "run_record_template", fake_records)
+    with pytest.raises(InspectedRetry):
+        content_design_graph.compile_content_graph(
+            "implement a playable state transition",
+            object(),
+            request_catalog={
+                "requirements": [{
+                    "requirement_id": "gameplay_mutation_1",
+                    "statement": "Implement executable gameplay, not a GUI-only stub",
+                    "design_context": {
+                        "source_section": "algorithm",
+                        "source_concern": concern,
+                    },
+                }],
+                "host_constraints": {},
+            },
+        )
+    assert len(attempts) == 2
