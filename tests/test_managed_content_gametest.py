@@ -58,6 +58,20 @@ def _project(tmp_path: Path) -> tuple[Path, Path]:
         "}\n",
         encoding="utf-8",
     )
+    source_dir = tmp_path / "src/main/java" / package / "registry"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    # These are the compiler-visible registration owners; a host-facts catalog
+    # can contain a different alias and must not silently override them.
+    (source_dir / "ModItems.java").write_text(
+        "import net.minecraft.core.registries.BuiltInRegistries;\\n"
+        "class ModItems { void run() { var registry = BuiltInRegistries.ITEM; } }\\n",
+        encoding="utf-8",
+    )
+    (source_dir / "ModBlocks.java").write_text(
+        "import net.minecraft.core.registries.BuiltInRegistries;\\n"
+        "class ModBlocks { void run() { var registry = BuiltInRegistries.BLOCK; } }\\n",
+        encoding="utf-8",
+    )
     resources = tmp_path / "src/main/resources"
     for directory, name, payload in (
         ("assets/mmm_debug_crystal/items", "crystal_fragment.json", {"model": {"type": "minecraft:model"}}),
@@ -80,7 +94,7 @@ def test_generated_content_gametest_uses_target_host_facts_and_real_recipe_resou
     assert installed["recipes"] == ["crystal_block_recipe"]
     source = path.read_text(encoding="utf-8")
     assert 'Class.forName("net.minecraft.core.registries.BuiltInRegistries")' in source
-    assert 'Class.forName("net.minecraft.registry.BuiltInRegistries")' in source
+    assert 'Class.forName("net.minecraft.core.registries.BuiltInRegistries")' in source
     assert "GameTest missing live item" in source
     assert "GameTest missing live block" in source
     assert "recipe/crystal_block_recipe.json" in source
