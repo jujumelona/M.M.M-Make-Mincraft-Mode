@@ -11,8 +11,10 @@ permissions:
   actions: read
 
 concurrency:
-  group: full-debug-${{ github.event.workflow_run.head_sha || github.sha }}
-  cancel-in-progress: true
+  # Preserve one complete causal investigation per failing upstream run.
+  # Different workflows can fail on the same SHA for different reasons.
+  group: full-debug-${{ github.event.workflow_run.id || github.run_id }}
+  cancel-in-progress: false
 
 jobs:
   debug-gate:
