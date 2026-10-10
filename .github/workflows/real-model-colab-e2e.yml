@@ -370,7 +370,7 @@ jobs:
           for line in log.splitlines():
               if "llama-server" not in line.casefold() and "llama_server" not in line.casefold():
                   continue
-              memory = re.search(r",\\s*(\\d+)\\s*$", line)
+              memory = re.search(r",\s*(\d+)\s*$", line)
               if memory and int(memory.group(1)) >= 512:
                   active.append(int(memory.group(1)))
           if not active:
