@@ -1,155 +1,78 @@
+"""Current native llama.cpp T4 decode policy; no retired Qwen-specific hotpath shim."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 from types import SimpleNamespace
 
-from minecraft_mod_ai import llama_server_hardware_policy as hardware_policy
-from minecraft_mod_ai.llama_structured_decode_policy import (
-    bind_structured_decode_policy,
-)
-from minecraft_mod_ai.qwen35_mtp_hotpath_contract import (
-    _disable_decode_slot_polling,
-    _install_draft_kv_benchmark,
-    _install_measured_fast_base_args,
-    _install_measured_fast_variant_args,
-)
+from minecraft_mod_ai import llama_server_autotune as autotune
+from minecraft_mod_ai.llama_structured_decode_policy import bind_structured_decode_policy
 
 
-def _qwen_config():
+def _mimo_config():
     return SimpleNamespace(
-        model_id="unsloth/Qwen3.5-9B-MTP-GGUF",
-        extra={
-            "gguf_filename": "Qwen3.5-9B-UD-Q4_K_XL.gguf",
-            "runtime_contract": "qwen",
-            "decode_hotpath": "t4_mtp",
-        },
+        model_id="MiMo-V2.6-9B",
+        extra={"gguf_filename": "MiMo-V2.6-9B.gguf"},
         max_context=32768,
         max_new_tokens=8192,
     )
 
 
-def test_qwen_hotpath_removes_decode_slot_endpoint_and_polls(monkeypatch) -> None:
-    monkeypatch.delenv("MMM_QWEN35_MTP_HOTPATH", raising=False)
-    monkeypatch.delenv("MMM_QWEN35_MTP_CTX", raising=False)
-
-    autotune = SimpleNamespace(
-        _base_args=lambda *_: [
-            "llama-server",
-            "--slots",
-            "--gpu-layers",
-            "auto",
-            "--flash-attn",
-            "off",
-            "--ctx-size",
-            "16384",
-        ]
-    )
-    _install_measured_fast_base_args(autotune)
-    args = autotune._base_args("server", "model", _qwen_config(), 8910)
+def test_native_t4_server_launch_keeps_full_gpu_flash_attention_and_fit(monkeypatch):
+    monkeypatch.setattr(autotune, "_assert_mimo_server_compatible", lambda *_: None)
+    monkeypatch.delenv("MMM_LLAMA_SERVER_CTX", raising=False)
+    monkeypatch.delenv("MMM_LLAMA_PARALLEL", raising=False)
+    monkeypatch.delenv("MMM_LLAMA_BATCH", raising=False)
+    monkeypatch.delenv("MMM_LLAMA_UBATCH", raising=False)
+    monkeypatch.delenv("MMM_KV_CACHE_QUANT", raising=False)
+    args = autotune._base_args("llama-server", "/tmp/model.gguf", _mimo_config(), 8910)
+    for flag, expected in (
+        ("--gpu-layers", "all"),
+        ("--flash-attn", "on"),
+        ("--fit", "on"),
+        ("--load-mode", "none"),
+    ):
+        assert args[args.index(flag) + 1] == expected
     assert "--slots" not in args
-    assert args[args.index("--gpu-layers") + 1] == "all"
-    assert args[args.index("--flash-attn") + 1] == "on"
-
-    calls = []
-
-    def old_snapshot(*args, **kwargs):
-        calls.append((args, kwargs))
-        return {"output_tokens": 1}
-
-    monkeypatch.setattr(hardware_policy, "_slot_snapshot", old_snapshot)
-    _disable_decode_slot_polling()
-    assert hardware_policy._slot_snapshot(object(), "http://127.0.0.1:8910/v1") is None
-    assert calls == []
+    assert "--ctx-size" not in args
 
 
-def test_qwen_mtp_variant_keeps_draft_gpu_and_selected_draft_kv(monkeypatch) -> None:
-    monkeypatch.setenv("MMM_QWEN35_MTP_ACTIVE_TUNING", "1")
-    monkeypatch.delenv("MMM_QWEN35_MTP_DRAFT_NGL", raising=False)
-    monkeypatch.delenv("MMM_QWEN35_MTP_DRAFT_KV", raising=False)
-
-    autotune = SimpleNamespace(
-        _variant_args=lambda variant: [
-            "--spec-type",
-            variant.spec_type,
-            "--spec-draft-ngl",
-            "auto",
-        ]
-    )
-    _install_measured_fast_variant_args(autotune)
-    variant = SimpleNamespace(spec_type="draft-mtp", name="mtp-4|dkv-q8_0")
+def test_native_speculative_variant_keeps_draft_on_gpu():
+    variant = autotune.ServerVariant("mtp-4", "draft-mtp", 4)
     args = autotune._variant_args(variant)
-
+    assert args[args.index("--spec-type") + 1] == "draft-mtp"
     assert args[args.index("--spec-draft-ngl") + 1] == "all"
-    assert args[args.index("--spec-draft-type-k") + 1] == "q8_0"
-    assert args[args.index("--spec-draft-type-v") + 1] == "q8_0"
+    assert args[args.index("--spec-draft-n-max") + 1] == "4"
 
 
-@dataclass(frozen=True)
-class _Variant:
-    name: str
-    spec_type: str = "none"
-    draft_n_max: int = 0
-    ubatch: int = 0
-    parallel: int = 1
-    cache_reuse: int = 0
-    draft_p_min: float = 0.0
+def test_native_mtp_selection_requires_byte_identical_output():
+    baseline = autotune.ServerVariant("baseline")
+    good = autotune.ServerVariant("mtp-2", "draft-mtp", 2)
+    altered = autotune.ServerVariant("mtp-3", "draft-mtp", 3)
 
+    def probe(variant, sha, speed):
+        return autotune.ProbeResult(
+            variant=variant,
+            ok=True,
+            output_sha256=sha,
+            predicted_tokens=96,
+            predicted_tps=speed,
+            prompt_tps=10.0,
+            elapsed_seconds=1.0,
+        )
 
-@dataclass(frozen=True)
-class _Probe:
-    variant: _Variant
-    ok: bool
-    output_sha256: str
-    predicted_tps: float
-
-
-@dataclass(frozen=True)
-class _Decision:
-    fingerprint: str
-    selected: _Variant
-    baseline_tps: float
-    selected_tps: float
-    speedup: float
-    probes: tuple[object, ...]
-
-
-def test_qwen_draft_kv_stage_selects_fastest_identical_output(monkeypatch) -> None:
-    monkeypatch.delenv("MMM_QWEN35_MTP_DRAFT_KV", raising=False)
-    monkeypatch.setenv("MMM_QWEN35_MTP_DRAFT_KV_CANDIDATES", "f16,q8_0,q4_0")
-
-    initial = _Decision(
-        fingerprint="fp",
-        selected=_Variant("mtp-4", "draft-mtp", 4),
-        baseline_tps=8.0,
-        selected_tps=10.0,
-        speedup=1.25,
-        probes=(),
+    decision = autotune._choose_variant(
+        (
+            probe(baseline, "original-output", 10.0),
+            probe(good, "original-output", 12.0),
+            probe(altered, "different-output", 22.0),
+        ),
+        minimum_speedup=1.03,
     )
-    speed = {"f16": 10.0, "q8_0": 12.0, "q4_0": 11.0}
-
-    def run_variant(_binary, _model, _config, _request, variant, *, probe_tokens):
-        del probe_tokens
-        kv = variant.name.split("|dkv-", 1)[1]
-        return _Probe(variant, True, "same-output", speed[kv])
-
-    autotune = SimpleNamespace(
-        _benchmark=lambda *_: initial,
-        _mmm_run_tuning_variant=run_variant,
-        _compact_benchmark_request=lambda request: request,
-        _env_int=lambda _name, default: default,
-        _env_float=lambda _name, default: default,
-        _BENCHMARK_OUTPUT_TOKENS=128,
-        AutotuneDecision=_Decision,
-    )
-    _install_draft_kv_benchmark(autotune)
-    decision = autotune._benchmark("server", "model", _qwen_config(), object(), "fp")
-
-    assert decision.selected.name.endswith("|dkv-q8_0")
+    assert decision is not None
+    assert decision.selected == good
     assert decision.selected_tps == 12.0
-    assert len(decision.probes) == 3
 
 
-def test_qwen_game_design_schema_stays_host_owned() -> None:
+def test_structured_game_design_schema_remains_host_owned_for_mimo():
     module = SimpleNamespace(
         _server_payload=lambda _adapter, _request: {
             "response_format": {"type": "json_object", "schema": {}},
@@ -158,17 +81,14 @@ def test_qwen_game_design_schema_stays_host_owned() -> None:
         }
     )
     bind_structured_decode_policy(module)
-    adapter = SimpleNamespace(config=_qwen_config())
+    adapter = SimpleNamespace(config=_mimo_config())
     schema = {"type": "object", "properties": {"game_design": {}}}
     request = SimpleNamespace(
         response_format="json",
         response_schema=schema,
+        metadata={"mmm_force_non_thinking": True},
     )
-
     payload = module._server_payload(adapter, request)
-    # The server owns only structural sampling; the host still validates the
-    # complete schema after decoding. Stripping these constraints made Qwen
-    # emit unconstrained JSON and invalidated the bounded output contract.
     assert payload["response_format"] == {"type": "json_object"}
     assert payload["json_schema"]["type"] == "object"
     assert "game_design" in payload["json_schema"]["properties"]
