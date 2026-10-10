@@ -90,6 +90,59 @@ def test_ci_gate_rejects_all_non_success_production_results(rejected):
     assert result.returncode != 0, rejected
 
 
+@pytest.mark.parametrize(
+    "dependency",
+    ["AUDIT", "TESTS", "PY313", "MODEL_REPLAY", "PRODUCTION_PROOF", "WORKFLOW_LINT"],
+)
+def test_ci_gate_rejects_skipped_mandatory_dependency(dependency):
+    gate = _workflow(MAIN)["jobs"]["ci-gate"]["steps"][0]
+    env = {
+        **os.environ,
+        "AUDIT": "success",
+        "TESTS": "success",
+        "PY313": "success",
+        "MODEL_REPLAY": "success",
+        "PRODUCTION_PROOF": "success",
+        "WORKFLOW_LINT": "success",
+    }
+    env[dependency] = "skipped"
+    process = subprocess.run(
+        ["bash", "-e", "-o", "pipefail", "-c", gate["run"]],
+        env=env, capture_output=True, text=True, timeout=10, check=False,
+    )
+    assert process.returncode != 0, dependency
+
+
+def test_ci_gate_accepts_only_complete_success():
+    gate = _workflow(MAIN)["jobs"]["ci-gate"]["steps"][0]
+    env = {**os.environ}
+    env.update({key: "success" for key in (
+        "AUDIT", "TESTS", "PY313", "MODEL_REPLAY",
+        "PRODUCTION_PROOF", "WORKFLOW_LINT",
+    )})
+    process = subprocess.run(
+        ["bash", "-e", "-o", "pipefail", "-c", gate["run"]],
+        env=env, capture_output=True, text=True, timeout=10, check=False,
+    )
+    assert process.returncode == 0, process.stderr
+
+
+def test_prior_failed_commit_logs_cannot_be_cancelled_by_new_push():
+    for name in (
+        "cumulative-regression-guard.yml",
+        "workflow-lint.yml",
+        "full-debug-gate.yml",
+    ):
+        workflow = _workflow(ROOT / ".github" / "workflows" / name)
+        concurrency = workflow["concurrency"]
+        assert concurrency["cancel-in-progress"] == "false", name
+        group = concurrency["group"]
+        if name == "full-debug-gate.yml":
+            assert "github.event.workflow_run.id" in group, name
+        else:
+            assert "github.sha" in group, name
+
+
 def test_real_e2e_performs_actual_build_and_preserves_failure_artifacts():
     workflow = _workflow(E2E)
     assert "workflow_call" in workflow["on"]
