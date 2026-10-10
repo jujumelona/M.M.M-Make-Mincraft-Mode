@@ -34,7 +34,7 @@ REGRESSION_EXECUTION_ROUTES: dict[str, RegressionExecutionRoute] = {
     "REG-005": RegressionExecutionRoute("tests/test_agent_capability_manifest_degradation.py"),
     "REG-006": RegressionExecutionRoute("tests/test_task_artifact_contract.py"),
     "REG-007": RegressionExecutionRoute(
-        "tests/test_direct_task_mutation_authority_contract.py::"
+        "tests/test_missing_creation_slot_regression.py::"
         "test_fresh_host_reserved_task_cannot_silently_fall_back_without_binding"
     ),
     "REG-008": RegressionExecutionRoute("tests/test_plan_collect_all_linker.py"),
