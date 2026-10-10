@@ -199,6 +199,10 @@ def _java_assertions(manifest: Mapping[str, Any]) -> str:
             "            }",
         ))
     if manifest["recipes"]:
+        item_registry_owner = (
+            manifest["registries"].get("item")
+            or manifest["registries"].get("block")
+        )
         lines.extend((
             "            {",
             '                Object level = context.getClass().getMethod("getLevel").invoke(context);',
@@ -210,8 +214,35 @@ def _java_assertions(manifest: Mapping[str, Any]) -> str:
             '                java.lang.reflect.Method keyFactory = keyClass.getMethod("fromNamespaceAndPath", String.class, String.class);',
             '                java.lang.reflect.Method resourceKeyFactory = resourceKeyClass.getMethod("create", resourceKeyClass, keyClass);',
             '                java.lang.reflect.Method findRecipe = recipeManager.getClass().getMethod("byKey", resourceKeyClass);',
+            '                Class<?> inputClass = Class.forName("net.minecraft.world.item.crafting.CraftingInput");',
+            '                Class<?> stackClass = Class.forName("net.minecraft.world.item.ItemStack");',
+            '                Class<?> itemLikeClass = Class.forName("net.minecraft.world.level.ItemLike");',
+            '                java.lang.reflect.Constructor<?> stackFactory = stackClass.getConstructor(itemLikeClass);',
+            '                java.lang.reflect.Method createInput = inputClass.getMethod("of", int.class, int.class, java.util.List.class);',
+            '                Object emptyStack = stackClass.getField("EMPTY").get(null);',
+            "                Object itemRegistry = Class.forName("
+            + f'"{item_registry_owner}").getField("ITEM").get(null);',
+            '                java.util.Map<String, Object> itemsByKey = new java.util.HashMap<>();',
+            "                for (Object candidate : (Iterable<?>) itemRegistry) {",
+            "                    for (java.lang.reflect.Method method : itemRegistry.getClass().getMethods()) {",
+            '                        if (!method.getName().equals("getKey") || method.getParameterCount() != 1) continue;',
+            "                        try {",
+            "                            Object id = method.invoke(itemRegistry, candidate);",
+            "                            if (id != null) itemsByKey.put(String.valueOf(id), candidate);",
+            "                        } catch (ReflectiveOperationException | IllegalArgumentException ignored) {",
+            "                            // The overload does not accept this registry value.",
+            "                        }",
+            "                    }",
+            "                }",
         ))
-        for name in manifest["recipes"]:
+        for test_case in manifest["recipe_cases"]:
+            name = str(test_case["id"])
+            rows = test_case["pattern"]
+            ingredients = test_case["ingredients"]
+            width = len(rows[0])
+            height = len(rows)
+            expected_item = str(test_case["output_id"])
+            expected_count = int(test_case["output_count"])
             lines.extend((
                 "                {",
                 f'                    Object key = keyFactory.invoke(null, "{mod_id}", "{name}");',
@@ -219,6 +250,43 @@ def _java_assertions(manifest: Mapping[str, Any]) -> str:
                 "                    Object recipe = findRecipe.invoke(recipeManager, typedKey);",
                 "                    if (!(recipe instanceof java.util.Optional<?> optional) || optional.isEmpty()) {",
                 f'                        throw new AssertionError("GameTest RecipeManager did not load actual recipe: {mod_id}:{name}");',
+                "                    }",
+                '                    Object recipeValue = optional.get().getClass().getMethod("value").invoke(optional.get());',
+                "                    java.util.List<Object> craftedInputs = new java.util.ArrayList<>();",
+            ))
+            for row in rows:
+                for symbol in row:
+                    if symbol == " ":
+                        lines.append("                    craftedInputs.add(emptyStack);")
+                        continue
+                    item_id = str(ingredients[symbol])
+                    lines.extend((
+                        f'                    if (!itemsByKey.containsKey("{item_id}")) {{',
+                        f'                        throw new AssertionError("GameTest ingredient not in live item registry: {item_id}");',
+                        "                    }",
+                        f'                    craftedInputs.add(stackFactory.newInstance(itemsByKey.get("{item_id}")));',
+                    ))
+            lines.extend((
+                f'                    Object input = createInput.invoke(null, {width}, {height}, craftedInputs);',
+                '                    Object matching = recipeValue.getClass().getMethod("matches", inputClass, Class.forName("net.minecraft.world.level.Level")).invoke(recipeValue, input, level);',
+                "                    if (!Boolean.TRUE.equals(matching)) {",
+                f'                        throw new AssertionError("GameTest 2D crafting inputs do not match recipe: {mod_id}:{name}");',
+                "                    }",
+                '                    Object product = recipeValue.getClass().getMethod("assemble", inputClass).invoke(recipeValue, input);',
+                '                    Object item = stackClass.getMethod("getItem").invoke(product);',
+                '                    int count = ((Number) stackClass.getMethod("getCount").invoke(product)).intValue();',
+                "                    boolean resultMatched = false;",
+                "                    for (java.lang.reflect.Method method : itemRegistry.getClass().getMethods()) {",
+                '                        if (!method.getName().equals("getKey") || method.getParameterCount() != 1) continue;',
+                "                        try {",
+                "                            Object productId = method.invoke(itemRegistry, item);",
+                f'                            if ("{expected_item}".equals(String.valueOf(productId))) resultMatched = true;',
+                "                        } catch (ReflectiveOperationException | IllegalArgumentException ignored) {",
+                "                            // Unrelated key overload.",
+                "                        }",
+                "                    }",
+                f"                    if (!resultMatched || count != {expected_count}) {{",
+                f'                        throw new AssertionError("GameTest crafted item or count incorrect: {mod_id}:{name}");',
                 "                    }",
                 "                }",
             ))
