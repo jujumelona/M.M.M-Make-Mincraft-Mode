@@ -1,0 +1,136 @@
+"""Server GameTest runtime route: positive and adversarial evidence tests."""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+from minecraft_mod_ai.managed_content_gametest import (
+    eligible_for_managed_runtime,
+    install_managed_content_gametest,
+    independently_verified_managed_runtime,
+)
+from minecraft_mod_ai.quality_evidence import _managed_content_runtime_evidence
+
+
+def _approved(*, version="26.2", modules=None):
+    facts = {
+        "api_symbols": {
+            "builtin_item_registry": {
+                "owner": "net.minecraft.core.registries.BuiltInRegistries",
+                "name": "ITEM",
+            },
+            "builtin_block_registry": {
+                "owner": "net.minecraft.registry.BuiltInRegistries",
+                "name": "BLOCK",
+            },
+        },
+    }
+    default = (("crystal_fragment", "item"), ("crystal_block", "block"),
+               ("crystal_block_recipe", "recipe"), ("authored_typed_plan", "typed_host"))
+    return SimpleNamespace(
+        base_proposal=SimpleNamespace(
+            spec=SimpleNamespace(
+                mod_id="mmm_debug_crystal",
+                package_name="ai.minecraft.generated.mmm_debug_crystal",
+                platform=SimpleNamespace(
+                    loader="fabric", minecraft_version=version,
+                    mappings_kind="", host_facts_json=json.dumps(facts),
+                ),
+            ),
+        ),
+        modules=tuple(
+            SimpleNamespace(module_id=name, kind=kind)
+            for name, kind in (modules if modules is not None else default)
+        ),
+    )
+
+
+def _project(tmp_path: Path) -> tuple[Path, Path]:
+    package = "ai/minecraft/generated/mmm_debug_crystal"
+    path = (tmp_path / "src/gametest/java" / package / "MmmDebugCrystalModGameTests.java")
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "public final class MmmDebugCrystalModGameTests {\n"
+        "    public void generatedRegistriesAreLive(Object context) {\n"
+        "        context.succeed();\n"
+        "    }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    resources = tmp_path / "src/main/resources"
+    for directory, name, payload in (
+        ("assets/mmm_debug_crystal/items", "crystal_fragment.json", {"model": {"type": "minecraft:model"}}),
+        ("assets/mmm_debug_crystal/blockstates", "crystal_block.json", {"variants": {}}),
+        ("data/mmm_debug_crystal/recipe", "crystal_block_recipe.json", {
+            "type": "minecraft:crafting_shaped", "result": {"id": "mmm_debug_crystal:crystal_block"}}),
+    ):
+        dest = resources / directory / name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(json.dumps(payload), encoding="utf-8")
+    return tmp_path, path
+
+
+def test_generated_content_gametest_uses_target_host_facts_and_real_recipe_resource(tmp_path):
+    root, path = _project(tmp_path)
+    approved = _approved()
+    assert eligible_for_managed_runtime(approved)
+    installed = install_managed_content_gametest(root, approved)
+    assert installed and installed["status"] == "INSTALLED"
+    assert installed["recipes"] == ["crystal_block_recipe"]
+    source = path.read_text(encoding="utf-8")
+    assert 'Class.forName("net.minecraft.core.registries.BuiltInRegistries")' in source
+    assert 'Class.forName("net.minecraft.registry.BuiltInRegistries")' in source
+    assert "GameTest missing live item" in source
+    assert "GameTest missing live block" in source
+    assert "recipe/crystal_block_recipe.json" in source
+    assert source.count("MMM_MANAGED_CONTENT_GAMETEST_V1 START") == 1
+    # Re-installing must not silently append old assertions.
+    assert install_managed_content_gametest(root, approved)
+    assert path.read_text(encoding="utf-8").count("MMM_MANAGED_CONTENT_GAMETEST_V1 START") == 1
+
+
+def test_runtime_receipt_requires_matching_executed_native_testcase(tmp_path):
+    root, path = _project(tmp_path)
+    approved = _approved()
+    assert install_managed_content_gametest(root, approved)
+    report = root / "build/gametest-report.xml"
+    report.parent.mkdir(parents=True)
+    report.write_text(
+        '<testsuite tests="1" failures="0" errors="0" skipped="0">'
+        '<testcase classname="MmmDebugCrystalModGameTests" name="generatedRegistriesAreLive"/>'
+        '</testsuite>', encoding="utf-8",
+    )
+    build = {"gametest_report": str(report)}
+    assert independently_verified_managed_runtime(root, approved, build, gametest_passed=False) is None
+    receipt = independently_verified_managed_runtime(root, approved, build, gametest_passed=True)
+    assert receipt and receipt["runtime_kind"] == "live_minecraft_server_gametest"
+    assert receipt["recipes"] == ["crystal_block_recipe"]
+    good = (["fabric-test"], [{"status": "PASS"}])
+    assert _managed_content_runtime_evidence(receipt, good, good, good, good, build)
+    report.write_text('<testsuite><testcase name="fake"/></testsuite>', encoding="utf-8")
+    assert independently_verified_managed_runtime(root, approved, build, gametest_passed=True) is None
+    assert _managed_content_runtime_evidence(receipt, good, good, good, good, build) is None
+
+
+def test_runtime_receipt_rejects_mutated_test_source_and_recipe(tmp_path):
+    root, path = _project(tmp_path)
+    approved = _approved()
+    assert install_managed_content_gametest(root, approved)
+    report = root / "build/gametest-report.xml"
+    report.parent.mkdir(parents=True)
+    report.write_text(
+        '<testsuite><testcase name="MmmDebugCrystalModGameTests.generatedRegistriesAreLive"/></testsuite>',
+        encoding="utf-8",
+    )
+    build = {"gametest_report": str(report)}
+    path.write_text(path.read_text().replace('GameTest missing live item', 'fake success'), encoding="utf-8")
+    assert independently_verified_managed_runtime(root, approved, build, gametest_passed=True) is None
+    assert not install_managed_content_gametest(root, _approved(modules=(("extra_entity", "entity"),)))
+
+
+def test_dynamic_features_or_wrong_platform_never_inherit_game_test_shortcut(tmp_path):
+    root, _ = _project(tmp_path)
+    assert not eligible_for_managed_runtime(_approved(version="1.21.1"))
+    assert not eligible_for_managed_runtime(_approved(modules=(("npc", "entity"),)))
+    assert install_managed_content_gametest(root, _approved(version="1.21.1")) is None
