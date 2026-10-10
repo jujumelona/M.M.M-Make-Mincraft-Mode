@@ -265,6 +265,31 @@ def audit_authored_source_reuse(
             isinstance(row, Mapping) and row.get("status") in {"proof_error", "rejected"}
             for row in proofs if isinstance(proofs, (list, tuple))
         ),
+        # Preserve the actual rejected candidates and their stage-specific
+        # reasons so a final download can reveal where reuse stopped.
+        "inspection_failures": [
+            {
+                "capability": str(row.get("capability") or ""),
+                "repository": str(row.get("repository") or ""),
+                "status": str(row.get("status") or ""),
+                "error": str(row.get("error") or ""),
+            }
+            for row in inspections
+            if isinstance(row, Mapping)
+            and row.get("status") in {"inspection_error", "inspection_rejected"}
+        ] if isinstance(inspections, (list, tuple)) else [],
+        "proof_failures": [
+            {
+                "capability": str(row.get("capability") or ""),
+                "candidate_id": str(row.get("candidate_id") or ""),
+                "status": str(row.get("status") or ""),
+                "error": str(row.get("error") or row.get("failure_message") or ""),
+                "failure_code": str(row.get("failure_code") or ""),
+            }
+            for row in proofs
+            if isinstance(row, Mapping)
+            and row.get("status") in {"proof_error", "rejected"}
+        ] if isinstance(proofs, (list, tuple)) else [],
         "installed_donor_count": installed_donor_count,
         "fresh_requires_independent_production_verification": bool(fresh),
     }
