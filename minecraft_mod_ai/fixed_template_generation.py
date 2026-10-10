@@ -203,10 +203,22 @@ def _reject_undeclared_fields(
     from .structured_output import StructuredOutputValidationError
 
     try:
-        candidate = json.loads(raw)
+        candidates = [json.loads(raw)]
     except json.JSONDecodeError:
-        # Wrapper/text recovery belongs to the transport parser.
-        return
+        # A llama.cpp transport may wrap one JSON response in harmless prose
+        # or a thinking delimiter. Inspect embedded candidates BEFORE the
+        # generic recovery parser can drop unrecognized keys from them.
+        decoder = json.JSONDecoder()
+        candidates = []
+        for offset, character in enumerate(raw):
+            if character not in "{[":
+                continue
+            try:
+                decoded, _ = decoder.raw_decode(raw[offset:])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(decoded, (dict, list)):
+                candidates.append(decoded)
 
     def visit(value: Any, shape: Mapping[str, Any], path: str) -> list[str]:
         errors: list[str] = []
@@ -229,9 +241,10 @@ def _reject_undeclared_fields(
                     errors.extend(visit(item, item_schema, f"{path}[{index}]"))
         return errors
 
-    errors = visit(candidate, schema, "$")
-    if errors:
-        raise StructuredOutputValidationError(output=raw, errors=tuple(errors))
+    for candidate in candidates:
+        errors = visit(candidate, schema, "$")
+        if errors:
+            raise StructuredOutputValidationError(output=raw, errors=tuple(errors))
 
 
 def _validate_native_arguments(
