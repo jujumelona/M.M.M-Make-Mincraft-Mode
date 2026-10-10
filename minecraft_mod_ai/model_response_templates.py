@@ -68,9 +68,27 @@ def parse_response_text(name, text):
 
     if not isinstance(text, str):
         raise ValueError(f"RESPONSE_TEMPLATE: {name} output must be text")
-    from .structured_output import validate_structured_output
+    from .structured_output import (
+        StructuredOutputValidationError,
+        validate_structured_output,
+    )
 
     schema = response_schema(name)
+    # Fixed response contracts are exact output artifacts, not broad parser-
+    # owned discovery envelopes. A syntactically valid JSON response with
+    # undeclared fields must be rejected, not silently projected onto the
+    # schema, because doing so conceals a malformed model response.
+    try:
+        raw = json.loads(text)
+    except json.JSONDecodeError:
+        pass  # Wrapper recovery remains the structured transport owner's job.
+    else:
+        try:
+            Draft202012Validator(schema).validate(raw)
+        except ValidationError as exc:
+            raise StructuredOutputValidationError(
+                output=text, errors=(f"$: {exc.message}",),
+            ) from exc
     validated = validate_structured_output(
         text,
         response_format="json",
