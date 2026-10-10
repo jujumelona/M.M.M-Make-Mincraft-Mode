@@ -55,9 +55,11 @@ def test_real_production_e2e_is_an_unskippable_main_ci_dependency():
     assert "if" not in proof and "continue-on-error" not in proof
     gate = jobs["ci-gate"]
     needs = gate["needs"]
-    assert {"audit", "tests", "python313", "model-realistic-replay", "deterministic-production", "workflow-static-check"} <= set(needs)
+    assert {"audit", "tests", "python313", "model-realistic-replay", "deterministic-production", "workflow-static-check", "real-t4-model-production"} <= set(needs)
     assert gate["if"] == "${{ always() }}"
     assert "continue-on-error" not in gate
+    assert jobs["real-t4-model-production"]["uses"] == "./.github/workflows/real-model-colab-e2e.yml"
+    assert "if" not in jobs["real-t4-model-production"]
     assert "workflow-static-check" in jobs
     assert jobs["workflow-static-check"]["steps"][-1]["uses"] == "docker://rhysd/actionlint:1.7.12"
     step = gate["steps"][0]
@@ -65,6 +67,8 @@ def test_real_production_e2e_is_an_unskippable_main_ci_dependency():
     assert 'test "$PRODUCTION_PROOF" = success' in step["run"]
     assert step["env"]["WORKFLOW_LINT"] == "${{ needs.workflow-static-check.result }}"
     assert 'test "$WORKFLOW_LINT" = success' in step["run"]
+    assert step["env"]["REAL_T4_E2E"] == "${{ needs.real-t4-model-production.result }}"
+    assert 'test "$REAL_T4_E2E" = success' in step["run"]
 
 
 @pytest.mark.parametrize("rejected", ["skipped", "cancelled", "failure", "pending", ""])
@@ -78,6 +82,7 @@ def test_ci_gate_rejects_all_non_success_production_results(rejected):
         "MODEL_REPLAY": "success",
         "PRODUCTION_PROOF": rejected,
         "WORKFLOW_LINT": "success",
+        "REAL_T4_E2E": "success",
     }
     result = subprocess.run(
         ["bash", "-e", "-o", "pipefail", "-c", gate["run"]],
@@ -92,7 +97,7 @@ def test_ci_gate_rejects_all_non_success_production_results(rejected):
 
 @pytest.mark.parametrize(
     "dependency",
-    ["AUDIT", "TESTS", "PY313", "MODEL_REPLAY", "PRODUCTION_PROOF", "WORKFLOW_LINT"],
+    ["AUDIT", "TESTS", "PY313", "MODEL_REPLAY", "PRODUCTION_PROOF", "WORKFLOW_LINT", "REAL_T4_E2E", "REAL_T4_E2E"],
 )
 def test_ci_gate_rejects_skipped_mandatory_dependency(dependency):
     gate = _workflow(MAIN)["jobs"]["ci-gate"]["steps"][0]
@@ -104,6 +109,7 @@ def test_ci_gate_rejects_skipped_mandatory_dependency(dependency):
         "MODEL_REPLAY": "success",
         "PRODUCTION_PROOF": "success",
         "WORKFLOW_LINT": "success",
+        "REAL_T4_E2E": "success",
     }
     env[dependency] = "skipped"
     process = subprocess.run(
@@ -118,7 +124,7 @@ def test_ci_gate_accepts_only_complete_success():
     env = {**os.environ}
     env.update({key: "success" for key in (
         "AUDIT", "TESTS", "PY313", "MODEL_REPLAY",
-        "PRODUCTION_PROOF", "WORKFLOW_LINT",
+        "PRODUCTION_PROOF", "WORKFLOW_LINT", "REAL_T4_E2E",
     )})
     process = subprocess.run(
         ["bash", "-e", "-o", "pipefail", "-c", gate["run"]],
