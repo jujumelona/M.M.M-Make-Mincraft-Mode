@@ -230,6 +230,7 @@ def _semantic_execution_observations(
     member_by_id = {module.module_id: module for module in members}
     member_ids = set(member_by_id)
     observations: list[dict[str, Any]] = []
+    covered_ids: set[str] = set()
     for receipt in receipts:
         if not isinstance(receipt, dict):
             continue
@@ -255,7 +256,21 @@ def _semantic_execution_observations(
                 dependent_ids=downstream_ids(module_id),
             )
             if observation is not None:
+                covered_ids.add(module_id)
                 observations.append(observation)
+    # A shard is not successfully observed while even one tracked evidence
+    # task lacks a real, explicitly owned generation receipt.
+    uncovered = sorted(
+        module_id
+        for module_id, module in member_by_id.items()
+        if isinstance(module.config, Mapping)
+        and isinstance(module.config.get("evidence_task"), Mapping)
+        and module_id not in covered_ids
+    )
+    if uncovered:
+        raise CompleteProductionError(
+            "SEMANTIC_RECEIPT_COVERAGE_MISSING: " + ", ".join(uncovered)
+        )
     return observations
 
 @dataclass(frozen=True)

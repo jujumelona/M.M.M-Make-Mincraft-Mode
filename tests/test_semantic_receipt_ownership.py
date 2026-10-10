@@ -32,12 +32,14 @@ def _by_task(observations):
 def test_grouped_receipt_uses_explicit_module_ownership_not_position():
     members = [_module("alpha"), _module("beta"), _module("gamma")]
     grouped = {
+        "schema_version": "mmm/custom-module-result-v3",
         "module_ids": ["beta", "alpha"],
         "operation_count": 2,
         "touched_paths": ["src/grouped.java"],
         "patch_receipt": "grouped",
     }
     solo = {
+        "schema_version": "mmm/custom-module-result-v3",
         "module_id": "gamma",
         "operation_count": 1,
         "touched_paths": ["src/gamma.java"],
@@ -111,6 +113,7 @@ def test_single_module_receipt_without_owner_uses_unambiguous_member():
         [_module("alpha")],
         [
             {
+                "schema_version": "mmm/custom-module-result-v3",
                 "operation_count": 1,
                 "touched_paths": ["src/alpha.java"],
                 "patch_receipt": "single",
@@ -121,3 +124,24 @@ def test_single_module_receipt_without_owner_uses_unambiguous_member():
     assert _by_task(observations) == {
         "alpha": ("single", ("src/alpha.java",)),
     }
+
+
+def test_empty_receipts_cannot_complete_tracked_generation_tasks():
+    with pytest.raises(
+        CompleteProductionError,
+        match="SEMANTIC_RECEIPT_COVERAGE_MISSING.*alpha",
+    ):
+        _semantic_execution_observations(
+            [_module("alpha")],
+            [],
+            downstream_ids=lambda _module_id: (),
+        )
+
+
+def test_untracked_module_does_not_require_semantic_task_receipt():
+    untracked = ProductionModule(module_id="auxiliary", kind="item", config={})
+    assert _semantic_execution_observations(
+        [untracked],
+        [],
+        downstream_ids=lambda _module_id: (),
+    ) == []
