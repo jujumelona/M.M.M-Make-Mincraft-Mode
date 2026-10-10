@@ -105,6 +105,8 @@ def _manifest(approved: Any, root: Path) -> dict[str, Any] | None:
     # actual compiled mod does not use. Lock verification to actual source.
     registry_owners: dict[str, str] = {}
     for kind, source_name in (("item", "ModItems.java"), ("block", "ModBlocks.java")):
+        if kind not in {entry_kind for _, entry_kind in content}:
+            continue
         path = _safe_file(
             root / "src/main/java" / Path(*pkg.split(".")) / "registry" / source_name
         )
