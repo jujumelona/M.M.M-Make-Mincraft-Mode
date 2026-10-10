@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from minecraft_mod_ai.artifact_expansion import expand_facts_to_jobs
+from minecraft_mod_ai.host_version_catalog import host_target
 from minecraft_mod_ai.implementation_fact import (
     FactProvenance,
     ImplementationFact,
@@ -78,6 +79,7 @@ def test_expand_facts_to_jobs_with_implementation_facts():
         mod_id="cosmic",
         package_name="com.example.cosmic",
         main_class="CosmicMod",
+        version_context=host_target("auto").version_context,
     )
 
     assert len(jobs) == 7
