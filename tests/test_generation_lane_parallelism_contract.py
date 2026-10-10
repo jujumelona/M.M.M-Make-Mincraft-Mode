@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 import minecraft_mod_ai.complete_orchestrator as orchestrator_module
 import minecraft_mod_ai.scheduler_parallel_safety_contract as safety
 import minecraft_mod_ai.work_graph as work_graph_module
@@ -46,13 +48,14 @@ def test_deterministic_generation_domains_use_cpu_lane() -> None:
     assert entity.resource_class == "cpu_io"
 
 
-def test_unknown_integration_routes_to_custom_llm_stage() -> None:
+def test_unknown_integration_is_rejected_before_generation() -> None:
     module = ProductionModule(
         module_id="third_party_bridge",
         kind="integration",
         config={"integration_type": "unknown_custom_bridge"},
     )
-    assert work_graph_module._module_stage(module) == "custom"
+    with pytest.raises(work_graph_module.WorkGraphError, match="DETERMINISTIC_BACKEND_REQUIRED"):
+        work_graph_module._module_stage(module)
 
 
 def test_builtin_sidecar_integration_is_deterministic_cpu_work() -> None:
@@ -85,7 +88,7 @@ def test_anchor_fencing_is_additive_to_fail_closed_stage_admission() -> None:
     )
 
 
-def test_custom_modules_keep_dependency_aware_bounded_shards(monkeypatch) -> None:
+def test_custom_java_cannot_enter_generation_shards(monkeypatch) -> None:
     monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "1")
     modules = tuple(
         ProductionModule(
@@ -96,8 +99,18 @@ def test_custom_modules_keep_dependency_aware_bounded_shards(monkeypatch) -> Non
         for index in range(100)
     )
     policy = SimpleNamespace(entity_shard_size=24, java_shard_size=48)
+    with pytest.raises(work_graph_module.WorkGraphError, match="DETERMINISTIC_BACKEND_REQUIRED"):
+        list(work_graph_module._module_shards(modules, policy=policy))
+
+
+def test_admitted_content_modules_retain_bounded_shards() -> None:
+    modules = tuple(
+        ProductionModule(module_id=f"block_{index}", kind="block", config={})
+        for index in range(100)
+    )
+    policy = SimpleNamespace(entity_shard_size=24, java_shard_size=48)
     shards = list(work_graph_module._module_shards(modules, policy=policy))
-    assert [stage for stage, _ in shards] == ["custom", "custom", "custom"]
+    assert [stage for stage, _ in shards] == ["content", "content", "content"]
     assert [len(members) for _, members in shards] == [48, 48, 4]
 
 
