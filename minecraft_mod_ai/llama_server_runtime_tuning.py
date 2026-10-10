@@ -296,6 +296,26 @@ def _is_qwen35_mtp_config(config: Any) -> bool:
     return bool((explicit or inferred) and enabled not in {"0", "false", "no", "off"})
 
 
+def _configure_prompt_cache(args: list[str], config: Any) -> None:
+    """Make actual llama launch flags match the Qwen MTP cache receipt.
+
+    Qwen3.5's MTP hot path reports prompt_cache=False, but the previous
+    launch wrapper unconditionally injected a 1024 MiB --cache-ram allocation
+    and --cache-prompt. On Colab this pushes the managed server into the RAM
+    watchdog while processing hundreds of independently checkpointed records.
+    Remove both flags for MTP; keep the normal cache for other models.
+    """
+    if _is_qwen35_mtp_config(config):
+        while "--cache-prompt" in args:
+            args.remove("--cache-prompt")
+        _remove_option(args, ("--cache-ram",), takes_value=True)
+        _remove_option(args, ("--cache-reuse",), takes_value=True)
+        return
+    if "--cache-prompt" not in args:
+        args.append("--cache-prompt")
+    _replace_option(args, ("--cache-ram",), str(_cache_ram_mib()))
+
+
 def _per_request_context(config: Any) -> int:
     names = (
         ("MMM_QWEN35_MTP_CTX", "MMM_LLAMA_SERVER_CTX")
@@ -942,9 +962,7 @@ def install(autotune_module: Any) -> None:
         def tuned_base_args(binary: str, model_path: str, config: Any, port: int) -> list[str]:
             args = list(current_base(binary, model_path, config, port))
             _replace_option(args, ("--load-mode", "-lm"), "auto")
-            if "--cache-prompt" not in args:
-                args.append("--cache-prompt")
-            _replace_option(args, ("--cache-ram",), str(_cache_ram_mib()))
+            _configure_prompt_cache(args, config)
             return args
 
         for tag in (
@@ -998,10 +1016,9 @@ def install(autotune_module: Any) -> None:
                     args.append("--cont-batching")
                 if "--kv-unified" not in args and "-kvu" not in args:
                     args.append("--kv-unified")
-            if "--cache-prompt" not in args:
-                _remove_option(args, ("--cache-ram",), takes_value=True)
+            _configure_prompt_cache(args, config)
             _remove_option(args, ("--cache-reuse",), takes_value=True)
-            if variant.cache_reuse > 0:
+            if variant.cache_reuse > 0 and not _is_qwen35_mtp_config(config):
                 args.extend(["--cache-reuse", str(variant.cache_reuse)])
             args.extend(autotune_module._variant_args(variant))
             process = subprocess.Popen(
