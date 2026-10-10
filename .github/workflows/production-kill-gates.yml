@@ -78,10 +78,10 @@ concurrency:
   # Per-SHA groups queued hundreds of redundant 8-lane runs and delayed the
   # evidence needed for the next fix. Partial CI independently queues each
   # commit's changed-file checks; whole-suite coverage is not dropped here.
-  # Each revision must retain its own complete kill-gate evidence.
-  # GitHub normally replaces the older *pending* run in a shared group,
-  # even when cancel-in-progress is false.
-  group: production-kill-gates-${{ github.event_name }}-${{ github.sha }}
+  # Coalesce obsolete pending full-suite runs to the latest branch HEAD.
+  # An in-progress run is retained by cancel-in-progress: false.
+  # GitHub can cancel an older pending run even when running jobs are preserved.
+  group: production-kill-gates-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: false
 
 env:
