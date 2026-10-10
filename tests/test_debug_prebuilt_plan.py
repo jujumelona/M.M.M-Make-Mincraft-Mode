@@ -1,4 +1,4 @@
-"""Default Debug exercises a pre-authored multi-artifact plan without model planning."""
+"""Explicit prebuilt Debug exercises a fixed multi-artifact plan without model planning."""
 from __future__ import annotations
 
 import json
@@ -36,7 +36,7 @@ class _NoPlannerSession:
         return SimpleNamespace(message=plan.text, complete_proposal=plan)
 
 
-def test_debug_default_is_prebuilt_and_never_calls_model(tmp_path: Path) -> None:
+def test_explicit_debug_prebuilt_never_calls_model(tmp_path: Path) -> None:
     session = _NoPlannerSession()
     path = tmp_path / "proposal.json"
     result = run_plan_dialog(
@@ -45,6 +45,7 @@ def test_debug_default_is_prebuilt_and_never_calls_model(tmp_path: Path) -> None
         prompt="an unrelated request must not be substituted into a canned plan",
         plan_path=path,
         debug_mode=True,
+        debug_strategy="prebuilt",
         minecraft_version="1.21.8",
         loader="fabric",
         print_fn=lambda *args, **kwargs: None,
