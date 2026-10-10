@@ -11,10 +11,12 @@ on:
 permissions:
   contents: read
 
-# A new commit must not cancel checks of the previous commit: contract
-# regressions should remain individually observable during incremental patches.
+# Keep running ABI diagnostics intact, but coalesce superseded pending
+# commits to the latest HEAD. The per-SHA group accumulated hundreds of
+# queued runs and prevented the newest contract fix from getting feedback.
+# Partial CI separately retains per-commit diff coverage.
 concurrency:
-  group: cross-stage-contract-${{ github.event_name }}-${{ github.sha }}
+  group: cross-stage-contract-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
