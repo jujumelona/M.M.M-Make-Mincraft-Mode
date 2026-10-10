@@ -603,6 +603,21 @@ class CompleteModAISession:
             validate_platform_toolchain_preflight(bound_platform, selected)
 
         proposal = _production_proposal(self, proposal)
+        # Colab's reusable launch options may have been created before the
+        # approved plan was compiled. A plan with entity/boss/NPC geometry must
+        # not silently disable host-mandatory Blockbench verification.
+        required_entity_ids = tuple(
+            str(module.module_id)
+            for module in proposal.modules
+            if module.kind in {"entity", "boss", "npc"}
+        )
+        if required_entity_ids and not selected.source_only and not selected.run_blockbench:
+            selected = replace(selected, run_blockbench=True)
+            print(
+                "BLOCKBENCH_REQUIRED_AUTO_ENABLED: modules="
+                + ",".join(required_entity_ids[:12]),
+                flush=True,
+            )
         result = self.orchestrator.execute(
             proposal,
             approval_hash=proposal.calculate_hash(),
