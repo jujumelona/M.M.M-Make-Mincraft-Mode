@@ -979,6 +979,26 @@ def compile_content_graph(
                 display_name=props["display_name"],
             )
         )
+        # An item/block interaction fragment needs a real registered owner
+        # with the SAME subject. An interaction fact alone is only a dangling
+        # Java fragment, not an interactable Minecraft item or block.
+        if fact_type in {
+            FactType.CUSTOM_ITEM_BEHAVIOR, FactType.CUSTOM_BLOCK_BEHAVIOR,
+        }:
+            base_fact_type = (
+                FactType.ITEM_EXISTS
+                if fact_type == FactType.CUSTOM_ITEM_BEHAVIOR
+                else FactType.BLOCK_EXISTS
+            )
+            facts.append(ImplementationFact(
+                fact_id=f"{eid}.interaction_owner",
+                fact_type=base_fact_type,
+                subject=eid,
+                provenance=FactProvenance.DESIGN,
+                parent_requirement=node["requirement_refs"][0],
+                source_clause=node["source_clauses"][0],
+                display_name=props["display_name"],
+            ))
         kind = CONTENT_FACT_TO_PRODUCTION_KIND[fact_type]
         config = {
             "name": props["display_name"],
