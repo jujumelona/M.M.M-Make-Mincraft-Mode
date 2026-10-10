@@ -161,6 +161,7 @@ def test_prior_failed_commit_logs_cannot_be_cancelled_by_new_push():
         "cumulative-regression-guard.yml",
         "workflow-lint.yml",
         "full-debug-gate.yml",
+        "production-kill-gates.yml",
     ):
         workflow = _workflow(ROOT / ".github" / "workflows" / name)
         concurrency = workflow["concurrency"]
