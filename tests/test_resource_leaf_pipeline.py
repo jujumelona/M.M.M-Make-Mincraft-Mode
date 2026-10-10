@@ -9,6 +9,8 @@ from minecraft_mod_ai.artifact_materializer import (
     ensure_artifact_scaffolding,
 )
 from minecraft_mod_ai.prompt_fact_types import FactType, PromptFact
+from minecraft_mod_ai.host_version_catalog import host_target
+from minecraft_mod_ai.resolved_version_context import VersionContextError
 
 
 def resource_fact(kind, value):
@@ -18,13 +20,16 @@ def resource_fact(kind, value):
 
 
 def run(tmp_path, fact):
+    ctx = host_target("1.21.1").version_context
     jobs = expand_facts_to_jobs(
-        [fact], mod_id="demo", package_name="org.demo", minecraft_version="1.21.2"
+        [fact], mod_id="demo", package_name="org.demo",
+        minecraft_version=ctx.minecraft, version_context=ctx,
     )
     return execute_artifact_graph(
         jobs,
         base_dir=tmp_path,
         context={
+            "resolved_version_context": ctx.to_dict(),
             "known_registry_ids": {
                 "item": ["minecraft:iron_ingot", "minecraft:iron_nugget"]
             }
@@ -137,7 +142,8 @@ def test_shaped_recipe_rejects_unbound_pattern():
             ],
             mod_id="demo",
             package_name="org.demo",
-            minecraft_version="1.21.2",
+            minecraft_version="1.21.1",
+            version_context=host_target("1.21.1").version_context,
         )
 
 
@@ -160,7 +166,9 @@ def test_recipe_consumes_two_distinct_local_item_ports(tmp_path):
     )
     result = execute_artifact_graph(
         expand_facts_to_jobs(
-            facts, mod_id="demo", package_name="org.demo", minecraft_version="1.21.2"
+            facts, mod_id="demo", package_name="org.demo",
+            minecraft_version="1.21.1",
+            version_context=host_target("1.21.1").version_context,
         ),
         base_dir=tmp_path,
     )
@@ -172,12 +180,16 @@ def test_recipe_consumes_two_distinct_local_item_ports(tmp_path):
     assert parsed["result"]["id"] == "demo:gem"
 
 
-def test_resource_template_rejects_unsupported_target():
+def test_resource_template_rejects_target_context_mismatch():
     fact = resource_fact(
         FactType.REGISTRY_TAG,
         {"registry_kind": "item", "members": ["minecraft:iron_ingot"]},
     )
-    with pytest.raises(ValueError, match="TARGET_UNSUPPORTED"):
+    # An explicitly resolved 1.21.1 binding must never silently lower a
+    # requested 1.20.1 resource using the wrong registry/recipe API.
+    ctx = host_target("1.21.1").version_context
+    with pytest.raises(VersionContextError, match="VERSION_CONTEXT_MISMATCH"):
         expand_facts_to_jobs(
-            [fact], mod_id="demo", package_name="org.demo", minecraft_version="1.20.1"
+            [fact], mod_id="demo", package_name="org.demo",
+            minecraft_version="1.20.1", version_context=ctx,
         )
