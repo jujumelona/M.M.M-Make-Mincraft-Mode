@@ -57,6 +57,29 @@ def _eligible_modules(approved: Any) -> tuple[tuple[str, str], ...]:
     # block or recipe artifacts.
     if any(kind == "typed_host" and name != "authored_typed_plan" for name, kind in entries):
         return ()
+    static_config_keys = {
+        "item": {"display_name", "stack_limit"},
+        "block": {"display_name", "hardness", "resistance"},
+        "recipe": {"recipe_kind", "result"},
+    }
+    for module in modules:
+        kind = str(getattr(module, "kind", "")).casefold()
+        config = getattr(module, "config", {})
+        if not isinstance(config, Mapping):
+            return ()
+        if kind == "typed_host":
+            # Do not certify arbitrary authored code just because it has the
+            # reserved host-module identifier. Event, state and function
+            # programs need actual interactive tests, not this static route.
+            typed_ir = config.get("typed_plan_ir")
+            if not isinstance(typed_ir, Mapping):
+                return ()
+            if any(typed_ir.get(key) not in ([], ()) for key in
+                   ("event_bindings", "functions", "initialize", "platform_modules")):
+                return ()
+            continue
+        if set(config) - static_config_keys[kind]:
+            return ()
     return tuple(content)
 
 
