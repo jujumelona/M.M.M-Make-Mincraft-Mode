@@ -450,7 +450,7 @@ def _verify_native_server(binary: Path) -> tuple[bool, str]:
     import re
 
     match = re.search(
-        r"\\b(?:version|build)\\s*:\\s*(\\d{4,6})\\b|\\bb(\\d{4,6})\\b",
+        r"\b(?:version|build)\s*:\s*(\d{4,6})\b|\bb(\d{4,6})\b",
         completed.stdout,
         re.I,
     )
