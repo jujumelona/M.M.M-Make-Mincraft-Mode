@@ -1323,6 +1323,19 @@ class CompleteProductionOrchestrator:
             encoding='utf-8',
         )
         reuse_manifest = load_or_empty_reuse_manifest(project_root, spec.mod_id)
+        source_reuse_audit = None
+        if isinstance(authored_reuse, dict):
+            from .authored_reuse_bridge import audit_authored_source_reuse
+
+            source_reuse_audit = audit_authored_source_reuse(
+                authored_reuse,
+                installed_donor_count=int(installed_reuse["donor_count"]),
+            )
+            (metadata_root / "source-reuse-audit.json").write_text(
+                json.dumps(source_reuse_audit, ensure_ascii=False, indent=2, sort_keys=True)
+                + "\n",
+                encoding="utf-8",
+            )
         if not (project_root / 'reuse-manifest.json').is_file() and not (
             project_root / '.minecraft_ai/reuse-manifest.json'
         ).is_file():
@@ -1430,6 +1443,7 @@ class CompleteProductionOrchestrator:
                         'jar-validation.json': jar_validation,
                         'requirement-coverage.json': coverage_receipt,
                         'quality-report.json': quality_report,
+                        'source-reuse-audit.json': source_reuse_audit,
                     },
                 ),
             ),
