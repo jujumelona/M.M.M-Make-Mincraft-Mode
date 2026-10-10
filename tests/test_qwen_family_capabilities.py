@@ -75,7 +75,6 @@ def _tool_request() -> GenerationRequest:
 @pytest.mark.parametrize(
     ("profile", "family"),
     [
-        ("Qwen3.5-9B_6GB", "qwen3.5"),
         ("Qwen3.8-27B_18GB", "qwen3.8"),
     ],
 )
@@ -197,13 +196,12 @@ def test_fully_composed_qwen38_tool_payload_never_leaks_reasoning_none() -> None
 
 @pytest.mark.parametrize(
     "profile",
-    ("Qwen3.5-9B_6GB", "Qwen3.8-27B_18GB"),
+    ("MiMo-V2.6-9B_6GB", "Qwen3.8-27B_18GB"),
 )
 @pytest.mark.parametrize("request_kind", ("plain", "json", "tool"))
-def test_all_local_qwen_families_use_finite_dynamic_completion(
+def test_all_local_foundation_models_use_finite_dynamic_completion(
     monkeypatch, profile: str, request_kind: str
 ) -> None:
-    monkeypatch.delenv("MMM_QWEN35_MAX_OUTPUT_TOKENS", raising=False)
     monkeypatch.delenv("MMM_GENERATION_MAX_TOKENS", raising=False)
     monkeypatch.delenv("MMM_LLAMA_TEXT_MAX_TOKENS", raising=False)
     config = ModelRegistry(REGISTRY_PATH).role(profile, "coder")
@@ -266,3 +264,12 @@ def test_fully_composed_qwen38_required_and_json_pages_remove_generic_none() -> 
             "preserve_thinking": False,
         }
         assert "reasoning_effort" not in payload
+
+def test_mimo_does_not_use_qwen_family_payload_policy() -> None:
+    config = ModelRegistry(REGISTRY_PATH).role("MiMo-V2.6-9B_6GB", "coder")
+    assert qwen_family_capabilities(config, required=False) is None
+    request = _tool_request()
+    payload = llama_server_hardware_policy._server_payload(
+        SimpleNamespace(config=config), request
+    )
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
