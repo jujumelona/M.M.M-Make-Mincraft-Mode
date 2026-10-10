@@ -3,7 +3,7 @@ from __future__ import annotations
 """Fail-closed lowering of atomic PromptFacts into concrete ArtifactJobs."""
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any
 from packaging.version import Version
 
