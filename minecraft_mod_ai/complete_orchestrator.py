@@ -1247,6 +1247,9 @@ class CompleteProductionOrchestrator:
                     if quality_report is not None else ''
                 ),
                 'coverage_status': coverage_receipt.get('status'),
+                'coverage_verification': coverage_receipt.get('verification'),
+                'coverage_findings': list(coverage_receipt.get('findings', ()))[:20],
+                'coverage_blocked_by_unresolved_gates': list(coverage_receipt.get('unresolved_gates', ()))[:20],
                 'gametest_receipt_passed': self._gametest_receipt_passed(build, spec),
                 'gametest_mode': build.get('gametest_mode') if isinstance(build, dict) else None,
                 'gametest_task': build.get('gametest_task') if isinstance(build, dict) else None,
