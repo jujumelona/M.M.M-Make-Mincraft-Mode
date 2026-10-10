@@ -64,3 +64,37 @@ def test_public_acceptance_with_newline_is_canonicalized_without_discading_test(
     assert len(result.acceptance_tests) >= 2
     assert all(row["statement"] == row["statement"].strip()
                for row in result.contract["acceptance_catalog"] if row["visibility"] == "public")
+
+
+
+def test_real_prebuilt_crystal_plan_binds_same_public_tests_to_proposal():
+    from minecraft_mod_ai.authored_production import _bind_authored_quality_contract
+    from minecraft_mod_ai.debug_prebuilt_plan import build_prebuilt_debug_plan
+
+    plan = build_prebuilt_debug_plan()
+    modules = tuple(ProductionModule(
+        module_id=entry["module_id"],
+        kind=entry["kind"],
+        config=entry["config"],
+        depends_on=tuple(entry["depends_on"]),
+    ) for entry in plan.content_design["modules"]) + (
+        ProductionModule("authored_typed_plan", "typed_host", {
+            "typed_plan_ir": plan.typed_plan_ir,
+        }),
+    )
+    bound, acceptance = _bind_authored_quality_contract(
+        requested_prompt=plan.requested_prompt,
+        design={"authored_plan": plan.to_dict()},
+        modules=modules,
+        assets=(),
+        acceptance=(
+            "Implement the behaviors in the saved authored design and exercise them in Minecraft.",
+            "Build the project and verify that the mod loads and runs without errors.",
+        ),
+        extra_acceptance=plan.content_design["acceptance_tests"],
+    )
+    assert acceptance == tuple(public_acceptance_values(
+        bound["_production_contract"]["acceptance_catalog"]
+    ))
+    assert any("Crafting recipe produces crystal_block" in value for value in acceptance)
+    validate_production_contract(bound["_production_contract"], modules, acceptance)
