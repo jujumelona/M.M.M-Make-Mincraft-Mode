@@ -267,3 +267,16 @@ def test_quality_pass_requires_verification_receipt_hash():
         },
     )
     assert receipt["_mmm_completion_evidence"]["receipt_sha256"] == "sha256:quality"
+
+
+def test_build_artifact_package_rejects_nonpassing_receipt():
+    with pytest.raises(VerifierReceiptTruthError, match="VERIFIER_RECEIPT_MISSING"):
+        _decorate_receipt(
+            _row("package", "package-build-artifact"),
+            {"status": "FAIL", "release_ready": False},
+        )
+
+
+def test_unknown_package_node_fails_closed():
+    with pytest.raises(VerifierReceiptTruthError, match="VERIFIER_RECEIPT_UNSUPPORTED_PACKAGE_NODE"):
+        _decorate_receipt(_row("package", "unexpected-package-node"), {"status": "PASS"})
