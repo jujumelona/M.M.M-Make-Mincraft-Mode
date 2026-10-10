@@ -123,3 +123,122 @@ def test_guard_does_not_kill_unowned_process_or_without_colab(monkeypatch, tmp_p
     monkeypatch.setattr(watchdog, "_MANAGED_PID", 12345)
     watchdog._watchdog_loop(stop, 0.1)
     assert killed == []
+
+
+def test_planner_completion_reuses_loaded_model_without_reapplying_loading_reserve(
+    monkeypatch, tmp_path,
+):
+    import pytest
+
+    monkeypatch.setenv("MMM_RUNTIME_MEMORY_SNAPSHOT", str(tmp_path / "mem.json"))
+    monkeypatch.setenv("MMM_COLAB_RAM_RESERVE_MIB", "2048")
+    monkeypatch.delenv("MMM_COLAB_COMPLETION_RESERVE_MIB", raising=False)
+
+    def available(mib):
+        return {
+            "effective_mem_available_bytes": mib * 1024**2,
+            "kernel_rss_bytes": 1099 * 1024**2,
+            "managed_rss_bytes": 9133 * 1024**2,
+            "cgroup_memory_events": {"oom_kill": 0},
+        }
+
+    monkeypatch.setattr(watchdog, "_sample", lambda pid: available(2047))
+    assert watchdog.assert_memory_headroom("llama_completion_preflight")[
+        "preflight_reserve_bytes"
+    ] == 1024 * 1024**2
+
+    # A *new* heavyweight allocation still needs the full 2-GiB guard.
+    with pytest.raises(MemoryError, match="reserve_mib=2048"):
+        watchdog.assert_memory_headroom("before_production_build")
+
+    monkeypatch.setattr(watchdog, "_sample", lambda pid: available(900))
+    with pytest.raises(MemoryError, match="reserve_mib=1024"):
+        watchdog.assert_memory_headroom("llama_completion_preflight")
+
+
+def test_watchdog_does_not_kill_reused_llama_at_soft_2_gib_watermark(monkeypatch):
+    import threading
+
+    monkeypatch.setenv("MMM_COLAB_SETUP_RECEIPT", "colab")
+    monkeypatch.setenv("MMM_COLAB_RAM_RESERVE_MIB", "2048")
+    monkeypatch.delenv("MMM_COLAB_LLAMA_EMERGENCY_MIB", raising=False)
+    monkeypatch.setattr(watchdog, "_MANAGED_PID", 33333)
+    monkeypatch.setattr(watchdog, "_process_start_ticks", lambda pid: 20)
+    monkeypatch.setattr(
+        watchdog, "_sample",
+        lambda pid: {
+            "managed_start_ticks": 20,
+            "effective_mem_available_bytes": 1906 * 1024**2,
+        },
+    )
+    snapshots = []
+    monkeypatch.setattr(watchdog, "_atomic_write", lambda value: snapshots.append(dict(value)))
+    killed = []
+    monkeypatch.setattr(
+        watchdog, "_terminate_verified_managed_llama",
+        lambda *args, **kwargs: killed.append(args) or "sigkill_sent",
+    )
+    stop = threading.Event()
+    rounds = [0]
+
+    def stop_after_three(_interval):
+        rounds[0] += 1
+        if rounds[0] == 3:
+            stop.set()
+
+    monkeypatch.setattr(stop, "wait", stop_after_three)
+    watchdog._watchdog_loop(stop, 0.01)
+
+    assert not killed
+    assert len(snapshots) == 3
+    assert all(item["llama_emergency_consecutive_samples"] == 0 for item in snapshots)
+    assert all(item["llama_emergency_reserve_bytes"] == 768 * 1024**2 for item in snapshots)
+
+
+def test_watchdog_kills_only_after_sustained_emergency_pressure(monkeypatch):
+    import threading
+
+    monkeypatch.setenv("MMM_COLAB_SETUP_RECEIPT", "colab")
+    monkeypatch.setenv("MMM_COLAB_RAM_RESERVE_MIB", "2048")
+    monkeypatch.setattr(watchdog, "_MANAGED_PID", 33333)
+    monkeypatch.setattr(watchdog, "_process_start_ticks", lambda pid: 20)
+    monkeypatch.setattr(
+        watchdog, "_sample",
+        lambda pid: {
+            "managed_start_ticks": 20,
+            "effective_mem_available_bytes": 700 * 1024**2,
+        },
+    )
+    snapshots = []
+    monkeypatch.setattr(watchdog, "_atomic_write", lambda value: snapshots.append(dict(value)))
+    killed = []
+    monkeypatch.setattr(
+        watchdog, "_terminate_verified_managed_llama",
+        lambda *args, **kwargs: killed.append(args) or "sigkill_sent",
+    )
+    stop = threading.Event()
+    rounds = [0]
+
+    def stop_after_three(_interval):
+        rounds[0] += 1
+        if rounds[0] == 3:
+            stop.set()
+
+    monkeypatch.setattr(stop, "wait", stop_after_three)
+    watchdog._watchdog_loop(stop, 0.01)
+
+    assert killed == [(33333, 20)]
+    assert snapshots[0]["llama_emergency_consecutive_samples"] == 1
+    assert snapshots[1]["llama_emergency_consecutive_samples"] == 2
+    assert watchdog._MANAGED_PID is None
+
+
+def test_stage_reserves_fail_closed_on_invalid_overrides(monkeypatch):
+    import pytest
+
+    monkeypatch.setenv("MMM_COLAB_COMPLETION_RESERVE_MIB", "400")
+    with pytest.raises(ValueError, match="MMM_COLAB_COMPLETION_RESERVE_MIB"):
+        watchdog._preflight_reserve_bytes("llama_completion_preflight")
+    monkeypatch.setenv("MMM_COLAB_LLAMA_EMERGENCY_MIB", "invalid")
+    with pytest.raises(ValueError, match="MMM_COLAB_LLAMA_EMERGENCY_MIB"):
+        watchdog._llama_emergency_reserve_bytes()
