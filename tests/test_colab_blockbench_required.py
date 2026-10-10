@@ -37,6 +37,7 @@ def test_session_autoselects_mandatory_blockbench_review_for_entity_plan(
     )
     session = api.CompleteModAISession.__new__(api.CompleteModAISession)
     session.output_root = tmp_path
+    session.workspace_root = tmp_path.resolve()
     session.existing_input = None
     calls: list[CompleteExecutionOptions] = []
     session.orchestrator = SimpleNamespace(
