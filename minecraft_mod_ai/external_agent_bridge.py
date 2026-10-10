@@ -204,8 +204,21 @@ class ExternalAgentBridge:
             )
             with self._lock:
                 cached = self._schema_cache.get(key)
-                if cached is not None:
-                    return cached
+            if cached is not None:
+                # A cached schema fixes the reviewed provider owner, but the
+                # provider's *live* schema and authorization must still match
+                # before the model can reuse that binding.
+                try:
+                    self._run_async(
+                        self._revalidate_cached_schema_async,
+                        router, capability, stage, target, max_access,
+                        allowed_servers, cached,
+                    )
+                except Exception:
+                    with self._lock:
+                        self._schema_cache.pop(key, None)
+                    raise
+                return cached
             result = self._run_async(
                 self._describe_async,
                 stage,
@@ -214,8 +227,9 @@ class ExternalAgentBridge:
                 max_access,
                 allowed_servers,
             )
-            with self._lock:
-                self._schema_cache[key] = result
+            if result.get("status") == "PASS":
+                with self._lock:
+                    self._schema_cache[key] = result
             return result
 
         raw_arguments = payload.get("arguments", {})
@@ -249,6 +263,61 @@ class ExternalAgentBridge:
             max_access=max_access,
             disposable_runtime=disposable_runtime,
             allowed_server_ids=allowed_servers,
+        )
+
+    async def _revalidate_cached_schema_async(
+        self,
+        router: Any,
+        capability: str,
+        stage: str,
+        target: Mapping[str, str],
+        max_access: str,
+        allowed_server_ids: Collection[str] | None,
+        cached: Mapping[str, Any],
+    ) -> None:
+        """Recheck the exact live provider before returning a cached schema."""
+
+        routes = router.registry.routes(
+            capability,
+            stage=stage,
+            minecraft_version=target["minecraft_version"],
+            loader=target["loader"],
+            max_access=max_access,
+        )
+        for route in routes:
+            server = str(route["server"])
+            tool = str(route["route"]["tool"])
+            if allowed_server_ids is not None and server not in allowed_server_ids:
+                continue
+            if server != cached.get("server") or tool != cached.get("tool"):
+                continue
+            entry = route["entry"]
+            if not router._configured(entry):
+                break
+            if (
+                route["route"].get("access", "read") != cached.get("access")
+                or entry.get("trust", "unknown") != cached.get("trust")
+                or dict(route["route"].get("target_args", {}))
+                != cached.get("target_args_injected_by_router")
+            ):
+                break
+            live = await _provider_schema(
+                entry,
+                tool=tool,
+                env=router._child_env(entry),
+                url=router._server_url(entry),
+                timeout_seconds=min(self.timeout_seconds, 120.0),
+            )
+            if (
+                live["input_schema"] != cached.get("input_schema")
+                or live["description"] != cached.get("description")
+            ):
+                raise ExternalAgentBridgeError(
+                    "EXTERNAL_MCP_SCHEMA_DRIFT: cached provider schema changed"
+                )
+            return
+        raise ExternalAgentBridgeError(
+            "EXTERNAL_MCP_SCHEMA_AUTHORITY_CHANGED: cached provider route is no longer authorized"
         )
 
     @staticmethod
