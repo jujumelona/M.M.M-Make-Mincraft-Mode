@@ -2464,7 +2464,6 @@ class CompleteProductionOrchestrator:
                     index_error_type=CompleteProductionError,
                 )
             else:
-                ledger.succeed(node.node_id, receipt)
                 if shared_index is not None:
                     from .scheduler_parallel_safety_contract import (
                         _receipt_touched_paths,
@@ -2472,7 +2471,16 @@ class CompleteProductionOrchestrator:
 
                     touched = _receipt_touched_paths(receipt)
                     if touched:
-                        shared_index.update_files(touched)
+                        try:
+                            # Do not publish dependency-visible success until the
+                            # source snapshot reflects this node's mutations.
+                            shared_index.update_files(touched)
+                        except Exception as exc:
+                            raise CompleteProductionError(
+                                f"Shared ProjectIndex commit failed for {node.node_id}: "
+                                f"{type(exc).__name__}: {exc}"
+                            ) from exc
+                ledger.succeed(node.node_id, receipt)
             committed = True
             if on_commit is not None:
                 on_commit(receipt)
