@@ -45,7 +45,9 @@ def test_large_explicit_resource_preserves_final_dimensions_after_backend_normal
 
     source = tmp_path / "source.png"
     normalized = tmp_path / "normalized.png"
-    Image.new("RGBA", (512, 512), (12, 34, 56, 255)).save(source)
+    sample = Image.new("RGBA", (512, 512), (12, 34, 56, 255))
+    sample.paste((90, 105, 125, 255), (128, 128, 384, 384))
+    sample.save(source)
 
     score = _prepare(texture.to_dict(), source, normalized)
 
@@ -63,7 +65,9 @@ def test_small_explicit_resource_uses_backend_minimum_but_exact_final_dimensions
 
     source = tmp_path / "source.png"
     normalized = tmp_path / "normalized.png"
-    Image.new("RGBA", (256, 256), (1, 2, 3, 255)).save(source)
+    sample = Image.new("RGBA", (256, 256), (1, 2, 3, 255))
+    sample.paste((45, 67, 89, 255), (64, 64, 192, 192))
+    sample.save(source)
 
     _prepare(texture.to_dict(), source, normalized)
 
