@@ -66,7 +66,8 @@ permissions:
 
 concurrency:
   group: cumulative-regression-${{ github.ref }}
-  cancel-in-progress: true
+  # Never discard the regression baseline and raw failure evidence for a SHA.
+  cancel-in-progress: false
 
 jobs:
   cumulative-regression:
