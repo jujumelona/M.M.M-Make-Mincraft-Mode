@@ -225,7 +225,7 @@ def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolic
         _node(
             'package-build-artifact',
             'package:build-artifact',
-            ('runtime-playtest',),
+            ('validate-jar',),
             {'kind': 'build-artifact'},
         )
     )
@@ -236,7 +236,7 @@ def build_production_work_plan(proposal: CompleteProposal, *, policy: ScalePolic
         _node(
             'package-release',
             'package',
-            ('package-build-artifact', *quality_nodes),
+            ('package-build-artifact', 'runtime-playtest', *quality_nodes),
             {'kind': 'release'},
         )
     )
