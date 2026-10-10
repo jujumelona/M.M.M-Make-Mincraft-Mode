@@ -115,7 +115,7 @@ def _manifest(approved: Any, root: Path) -> dict[str, Any] | None:
         except (OSError, UnicodeError):
             return None
         owners = set(re.findall(
-            r"net\\.minecraft(?:\\.[A-Za-z_][A-Za-z_0-9]*)+\\.BuiltInRegistries",
+            r"net\.minecraft(?:\.[A-Za-z_][A-Za-z_0-9]*)+\.BuiltInRegistries",
             source,
         ))
         if len(owners) != 1:
