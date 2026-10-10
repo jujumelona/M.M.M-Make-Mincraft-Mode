@@ -1181,6 +1181,24 @@ class CompleteProductionOrchestrator:
             and quality_passed
             and coverage_receipt.get('status') == 'PASS'
         )
+        quality_gap_reasons: dict[str, str] = {}
+        if quality_report is not None:
+            gap_path = metadata_root / 'quality-evidence-missing.json'
+            if gap_path.is_file() and not gap_path.is_symlink():
+                try:
+                    gaps_payload = json.loads(gap_path.read_text(encoding='utf-8'))
+                    if (
+                        isinstance(gaps_payload, dict)
+                        and gaps_payload.get('proposal_hash') == approved.calculate_hash()
+                        and gaps_payload.get('contract_sha256') == contract.get('contract_sha256')
+                        and isinstance(gaps_payload.get('missing_reasons'), dict)
+                    ):
+                        quality_gap_reasons = {
+                            str(key): str(value)[:220]
+                            for key, value in gaps_payload['missing_reasons'].items()
+                        }
+                except (OSError, UnicodeError, ValueError):
+                    pass
         emit_root_cause(
             'release_gate_evaluation',
             stage='verify',
@@ -1199,7 +1217,7 @@ class CompleteProductionOrchestrator:
                     {
                         'dimension': str(row.get('dimension_id') or ''),
                         'status': str(row.get('status') or ''),
-                        'reason': str(row.get('reason') or '')[:180],
+                        'reason': quality_gap_reasons.get(str(row.get('dimension_id') or ''), str(row.get('reason') or ''))[:220],
                     }
                     for row in (quality_report.get('dimensions', ()) if isinstance(quality_report, dict) else ())
                     if isinstance(row, dict) and row.get('status') != 'PASS'
@@ -1508,7 +1526,16 @@ class CompleteProductionOrchestrator:
         if not isinstance(contract, dict):
             raise CompleteProductionError('Complete proposal v2 is missing its production contract.')
         proposal_hash = approved.calculate_hash()
-        evidence = compile_quality_evidence(contract, proposal_hash, game_design=approved.game_design, source_validation=source_validation, build_report=build_report, jar_validation=jar_validation, module_receipts=module_receipts, asset_receipt=asset_receipt, blockbench_receipts=blockbench_receipts, runtime_receipt=runtime_receipt, playtest_receipt=playtest_receipt, visual_receipt=visual_receipt)
+        missing_reasons: dict[str, str] = {}
+        evidence = compile_quality_evidence(contract, proposal_hash, game_design=approved.game_design, source_validation=source_validation, build_report=build_report, jar_validation=jar_validation, module_receipts=module_receipts, asset_receipt=asset_receipt, blockbench_receipts=blockbench_receipts, runtime_receipt=runtime_receipt, playtest_receipt=playtest_receipt, visual_receipt=visual_receipt, missing_reasons=missing_reasons)
+        gap_path = project_root / '.minecraft_ai/quality-evidence-missing.json'
+        gap_path.parent.mkdir(parents=True, exist_ok=True)
+        gap_path.write_text(json.dumps({
+            'schema_version': 'mmm/quality-evidence-gaps-v1',
+            'proposal_hash': proposal_hash,
+            'contract_sha256': contract['contract_sha256'],
+            'missing_reasons': missing_reasons,
+        }, ensure_ascii=False, indent=2, sort_keys=True) + '\\n', encoding='utf-8')
         report_path = run_root / '.minecraft_ai/quality-convergence.json'
         previous = self._read_quality_report(report_path)
         current_ids = {dimension_id: str(receipt.get('receipt_id', '')) for dimension_id, receipt in evidence.items()}
