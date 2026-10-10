@@ -492,7 +492,7 @@ def run_plan_dialog(
             # The ordinary Full-mode planner owns structured sections, Typed
             # PlanIR, content discovery and candidate source retrieval.
             print_fn(f"DEBUG_MODEL_PATH_PROMPT: {model_prompt}")
-            reply = session.plan(model_prompt)
+            reply = session.plan(model_prompt, save_plan_path=target)
         authored = getattr(reply, "complete_proposal", None)
         if not isinstance(authored, AuthoredPlan):
             raise RuntimeError(
