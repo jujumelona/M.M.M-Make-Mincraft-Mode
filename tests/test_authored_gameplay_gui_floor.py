@@ -42,7 +42,7 @@ def test_gui_only_space_gameplay_rejected_before_build(monkeypatch) -> None:
         ProductionModule("ship_construction", "gui", {"name": "Ship Construction"}),
         ProductionModule("planet_travel", "gui", {"name": "Planet Travel"}),
     )
-    with pytest.raises(ValueError, match="GAMEPLAY_IMPLEMENTATION_ABSENT.*GUI"):
+    with pytest.raises(ValueError, match="GAMEPLAY_IMPLEMENTATION_ABSENT.*non-bootstrap"):
         _assert_executable_gameplay_floor(plan, modules, {"capabilities": []})
 
 
@@ -76,3 +76,21 @@ def test_player_join_flag_does_not_count_as_a_gameplay_loop(monkeypatch) -> None
     plan = _plan(mutations=True)
     with pytest.raises(ValueError, match="GAMEPLAY_IMPLEMENTATION_ABSENT.*non-bootstrap"):
         _assert_executable_gameplay_floor(plan, (), {"capabilities": []})
+
+
+
+def test_gui_does_not_block_proven_runtime_gameplay_handler(monkeypatch) -> None:
+    # A GUI can be a presentation layer for a real server command.  Do not
+    # reject it when the typed host owns a reachable authoritative writer.
+    monkeypatch.setattr(
+        authored_structured_design, "active_concern_records", _concerns,
+    )
+    plan = _plan(mutations=True)
+    plan.typed_plan_ir["event_bindings"] = [
+        {"event": "command", "function": "join"},
+    ]
+    _assert_executable_gameplay_floor(
+        plan,
+        (ProductionModule("ship_screen", "gui", {}),),
+        {"capabilities": []},
+    )
