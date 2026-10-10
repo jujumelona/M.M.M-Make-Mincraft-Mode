@@ -286,3 +286,31 @@ def test_unavailable_mcp_server_is_actionable_not_raw_httpx(
             client.initialize()
     finally:
         client.close()
+
+
+def test_mcp_initialize_accepts_empty_202_notification_response(tmp_path: Path) -> None:
+    import httpx
+    import json
+
+    def server(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        if payload.get("method") == "notifications/initialized":
+            return httpx.Response(202, content=b"")
+        assert payload["method"] == "initialize"
+        return httpx.Response(
+            200,
+            json={"jsonrpc": "2.0", "id": payload["id"], "result": {"protocolVersion": "2025-06-18"}},
+            headers={"Mcp-Session-Id": "test-session"},
+        )
+
+    client = BlockbenchMCPClient(workspace_root=tmp_path, timeout_seconds=1)
+    client.client.close()
+    client.client = httpx.Client(
+        transport=httpx.MockTransport(server), timeout=1, trust_env=False
+    )
+    try:
+        result = client.initialize()
+        assert result["protocolVersion"] == "2025-06-18"
+        assert client.session_id == "test-session"
+    finally:
+        client.close()
