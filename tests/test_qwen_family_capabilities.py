@@ -253,16 +253,20 @@ def test_fully_composed_qwen38_required_and_json_pages_remove_generic_none() -> 
         adapter, structured
     )
 
-    assert required_payload["temperature"] == 0.7
-    assert required_payload["top_p"] == 0.8
-    assert required_payload["top_k"] == 20
-    assert required_payload["presence_penalty"] == 1.5
+    # A forced single-tool request has stronger deterministic sampling
+    # requirements than a family-wide Qwen non-thinking default.
+    assert required_payload["temperature"] == 0.0
     assert required_payload["tool_choice"] == "required"
+    assert required_payload["repeat_penalty"] == 1.05
+    assert all(key not in required_payload for key in (
+        "top_p", "top_k", "min_p", "presence_penalty", "repetition_penalty",
+    ))
+    assert required_payload["chat_template_kwargs"] == {"enable_thinking": False}
+    assert structured_payload["chat_template_kwargs"] == {
+        "enable_thinking": False,
+        "preserve_thinking": False,
+    }
     for payload in (required_payload, structured_payload):
-        assert payload["chat_template_kwargs"] == {
-            "enable_thinking": False,
-            "preserve_thinking": False,
-        }
         assert "reasoning_effort" not in payload
 
 def test_mimo_does_not_use_qwen_family_payload_policy() -> None:
