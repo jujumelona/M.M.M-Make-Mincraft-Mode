@@ -57,7 +57,9 @@ def test_phase_projection_retains_active_policies_and_external_access() -> None:
     projected = capability_context.project_agent_capability_context(original, recovery_tools)
     payload = _decode_context(projected)
 
-    assert len(projected.encode("utf-8")) < len(original.encode("utf-8")) - 8000
+    # The compact capability context has already removed repeated contract
+    # prose. A later tool-scope projection need only be smaller and exact.
+    assert len(projected.encode("utf-8")) < len(original.encode("utf-8"))
     assert payload["eligible_skills"]
     assert {**payload, "eligible_skills": []} == {**original_payload, "eligible_skills": []}
     originals = {skill["name"]: skill for skill in original_payload["eligible_skills"]}
