@@ -437,5 +437,9 @@ def test_generate_turn_keeps_detailed_schema_host_side(monkeypatch) -> None:
 
     assert turn.content == '{"value":"ok"}'
     assert request.response_schema == schema
-    for forbidden in ("response_format", "json_schema", "grammar"):
-        assert forbidden not in captured["payload"]
+    payload = captured["payload"]
+    # A JSON-only generation turn may use server-side structural constraints
+    # as an optimization; the original host schema remains authoritative.
+    assert payload["response_format"] == {"type": "json_object"}
+    assert payload["json_schema"] == schema
+    assert "grammar" not in payload
