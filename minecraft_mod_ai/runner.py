@@ -96,11 +96,15 @@ class GradleRunner:
         download_timeout_seconds: int = 300,
         command_timeout_seconds: int = 1200,
         eula_accepted: bool = False,
+        require_clean_build: bool = False,
     ) -> None:
         self.cache_dir = cache_dir.resolve()
         self.download_timeout_seconds = download_timeout_seconds
         self.command_timeout_seconds = command_timeout_seconds
         self.eula_accepted = bool(eula_accepted)
+        # A v2 quality contract requires a real clean Gradle build receipt.
+        # Keep this per-runner to avoid mutating process-wide environment flags.
+        self.require_clean_build = bool(require_clean_build)
 
     def _gametest_environment(self, environment: dict[str, str]) -> dict[str, str]:
         """Forward an explicitly accepted EULA to the actual Gradle process.
@@ -355,7 +359,7 @@ class GradleRunner:
             commands.append(wrapper_result)
             if wrapper_result.exit_code != 0:
                 return self._failed_build(prepared, commands, "Gradle wrapper generation failed.")
-        force_clean = os.environ.get("MMM_GRADLE_FORCE_CLEAN", "").strip().lower() in {
+        force_clean = self.require_clean_build or os.environ.get("MMM_GRADLE_FORCE_CLEAN", "").strip().lower() in {
             "1",
             "true",
             "yes",
