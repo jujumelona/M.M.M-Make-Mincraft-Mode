@@ -1,8 +1,6 @@
 """Regression tests for executable gameplay entrypoint recovery."""
 from __future__ import annotations
 
-from copy import deepcopy
-
 import pytest
 
 from minecraft_mod_ai.gameplay_entrypoint_repair import (
@@ -26,9 +24,9 @@ def _sections(trigger="player_join"):
             ],
         }),
         "algorithm": _section("algorithm", {
-            "steps": [{"operation": "upgrade", "precondition": "credits available",
-                       "inputs": "credits", "outputs": "upgrade"}],
-            "atomic_mutations": [{"mutations": "spend credits; grant part"}],
+            "steps": [{"operation": "upgrade", "input": "credits",
+                       "output": "upgrade", "next_step": "finish"}],
+            "atomic_mutations": [{"mutations": "spend credits; grant part", "commit": "purchase succeeds", "rollback": "restore previous state"}],
         }),
     }
 
