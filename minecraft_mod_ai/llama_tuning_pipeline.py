@@ -105,26 +105,14 @@ class NativeLlamaTuningPipeline:
 
         extra = getattr(config, "extra", {})
         metadata = extra if isinstance(extra, dict) else {}
-        qwen_t4_hotpath = (
-            str(metadata.get("runtime_contract", "")).strip().casefold() == "qwen"
-            and str(metadata.get("decode_hotpath", "")).strip().casefold() == "t4_mtp"
-        )
-
-        if qwen_t4_hotpath:
-            raw = os.environ.get("MMM_QWEN35_MTP_CTX", "").strip()
-            if raw:
-                from .qwen35_mtp_hotpath_contract import _context_size
-
-                return _context_size(config)
-        else:
-            raw = os.environ.get("MMM_LLAMA_SERVER_CTX", "").strip()
-            if raw:
-                try:
-                    value = int(raw)
-                except ValueError:
-                    value = -1
-                if value > 0:
-                    return value
+        raw = os.environ.get("MMM_LLAMA_SERVER_CTX", "").strip()
+        if raw:
+            try:
+                value = int(raw)
+            except ValueError:
+                value = -1
+            if value > 0:
+                return value
 
         configured_default = metadata.get("runtime_context_default")
         if configured_default not in (None, ""):
@@ -255,11 +243,6 @@ class NativeLlamaTuningPipeline:
         from .llama_server_runtime_tuning import install as install_runtime_tuning
         from .llama_structured_decode_policy import bind_structured_decode_policy
         from .llama_vram_parallel_policy import install as install_vram_parallel
-        from .qwen35_mtp_hotpath_contract import install as install_qwen35_hotpath
-        from .qwen35_request_policy import install as install_qwen35_request_policy
-        from .qwen35_runtime_efficiency_contract import (
-            install as install_qwen35_runtime_efficiency,
-        )
         from .qwen_runtime_transport_contract import (
             install as install_qwen_runtime_transport,
         )
@@ -274,13 +257,6 @@ class NativeLlamaTuningPipeline:
                 self.runtime_tuning,
                 self.hardware_policy,
             )
-            install_qwen35_hotpath(self.autotune)
-            install_qwen35_runtime_efficiency(
-                self.autotune,
-                self.hardware_policy,
-                self.runtime_tuning,
-            )
-            install_qwen35_request_policy(self.autotune, self.hardware_policy)
 
         def install_kernel_stage() -> None:
             original_ubatch_candidates = self.runtime_tuning._ubatch_candidates
