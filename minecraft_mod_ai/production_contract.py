@@ -186,7 +186,7 @@ def compile_production_contract(requested_prompt: str, game_design: Mapping[str,
             )
         )
         matched_input_tests = _bounded_matches(requirement_ref, requirement['statement'], input_test_search, input_test_index, 2, fallback=False)
-        relevant_dimensions = list(_BASELINE_DIMENSIONS)
+        relevant_dimensions = [item for item in _BASELINE_DIMENSIONS if item in active_set]
         if requirement['source'] == 'requested_prompt':
             relevant_dimensions.extend(item for item in _CONDITIONAL_ORDER if item in active_set)
         else:
@@ -453,11 +453,16 @@ def validate_production_contract(
         if item['evidence_route_ref'] != f'evidence:{dimension_id}':
             raise ProductionContractError(f'quality evidence binding mismatch: {dimension_id}')
         route_for_dimension[dimension_ref] = item['evidence_route_ref']
-    if tuple(dimension_ids[:len(_BASELINE_DIMENSIONS)]) != _BASELINE_DIMENSIONS:
-        raise ProductionContractError('baseline quality dimensions are missing or reordered')
+    # Existing v1 contracts with research remain valid. New simple content
+    # plans may omit the research gate when no independent research or donor
+    # reuse was requested; correctness, build and runtime stay mandatory.
+    required_baseline = {'correctness', 'build', 'runtime'}
+    if not required_baseline.issubset(dimension_ids):
+        raise ProductionContractError('mandatory quality dimensions are missing')
     if len(dimension_ids) != len(set(dimension_ids)):
         raise ProductionContractError('quality dimensions must be unique')
-    expected_dimension_order = list(_BASELINE_DIMENSIONS) + [value for value in _CONDITIONAL_ORDER if value in set(dimension_ids)]
+    selected_baseline = [value for value in _BASELINE_DIMENSIONS if value in dimension_ids]
+    expected_dimension_order = selected_baseline + [value for value in _CONDITIONAL_ORDER if value in set(dimension_ids)]
     if dimension_ids != expected_dimension_order:
         raise ProductionContractError('quality dimensions are not in code-owned order')
     route_refs: set[str] = set()
@@ -889,6 +894,31 @@ def _scalar_text(value: Any) -> Iterable[str]:
 def _infer_dimensions(*, requested_prompt: str, game_design: Any, research_brief: Any, modules: Sequence[Mapping[str, Any]], assets: Sequence[Mapping[str, Any]]) -> tuple[list[str], dict[str, list[str]]]:
     active = list(_BASELINE_DIMENSIONS)
     reasons: dict[str, list[str]] = {value: ['code-owned baseline'] for value in _BASELINE_DIMENSIONS}
+    # A version-locked Fabric item/block/recipe build does not require an
+    # exhaustive technology radar unless research itself is bound to the plan.
+    # Do not treat host-generated reference-only donor search hints as source
+    # reuse evidence or as a mandatory research feature.
+    research_bound = (
+        research_brief is not None
+        or (
+            isinstance(game_design, Mapping)
+            and any(isinstance(game_design.get(key), Mapping)
+                    for key in ('_technology_radar', '_ecosystem_discovery', '_technical_evidence'))
+        )
+        or _text_triggers_dimension(requested_prompt, 'research')
+        if 'research' in _DIMENSIONS and 'terms' in _DIMENSIONS['research']
+        else (
+            research_brief is not None
+            or (
+                isinstance(game_design, Mapping)
+                and any(isinstance(game_design.get(key), Mapping)
+                        for key in ('_technology_radar', '_ecosystem_discovery', '_technical_evidence'))
+            )
+        )
+    )
+    if not research_bound:
+        active.remove('research')
+        reasons.pop('research')
     primary_text = ' '.join([requested_prompt, *_scalar_text(game_design), *_scalar_text(modules), *_scalar_text(assets)])
     text = ' '.join([primary_text, *([] if research_brief is None else _scalar_text(research_brief))])
     module_kinds = {str(item['kind']).casefold() for item in modules}
