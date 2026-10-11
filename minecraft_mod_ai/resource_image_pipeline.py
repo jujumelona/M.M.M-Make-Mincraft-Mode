@@ -138,6 +138,59 @@ def postprocess_region(
     return quantized
 
 
+def recover_block_surface_detail(
+    source: Any, processed: Any, contract: Mapping[str, Any], size: tuple[int, int],
+) -> tuple[Any, bool]:
+    """Recover *existing* surface detail lost by a 512px -> native-grid sample.
+
+    The canonical nearest-neighbour/palette/edge contracts remain unchanged.
+    Never paint synthetic noise or accept a genuinely monochrome source.
+    Only an opaque full-face block may be recropped (not sprites or UV atlases).
+    """
+    from PIL import Image
+
+    rendering = contract["rendering"]
+    if (
+        rendering["alpha"] != "opaque"
+        or contract["geometry"]["layout"] in {"fixed_uv", "gui_sprite"}
+        or rendering["uv_schema"]
+        or processed.convert("RGB").getcolors(maxcolors=1) is None
+    ):
+        return processed, False
+
+    width, height = source.size
+    best = None
+    best_colors = 1
+    # Reframe portions of the *generated source*. Cropping retains existing
+    # colors/texture features and does not bypass the canonical pixel contract.
+    for fraction in (0.75, 0.5, 0.25):
+        crop_width = max(1, round(width * fraction))
+        crop_height = max(1, round(height * fraction))
+        for center_x, center_y in ((0.5, 0.5), (0.25, 0.25), (0.75, 0.25),
+                                   (0.25, 0.75), (0.75, 0.75)):
+            left = max(0, min(width - crop_width, round(width * center_x - crop_width / 2)))
+            top = max(0, min(height - crop_height, round(height * center_y - crop_height / 2)))
+            with source.crop((left, top, left + crop_width, top + crop_height)) as crop:
+                candidate = postprocess_region(crop, contract, size)
+            # Counts *visible source-derived* palette entries, not alpha colors.
+            rgb = candidate.convert("RGB")
+            try:
+                colors = rgb.getcolors(maxcolors=size[0] * size[1])
+                count = len(colors) if colors is not None else size[0] * size[1]
+            finally:
+                rgb.close()
+            if count > best_colors:
+                if best is not None:
+                    best.close()
+                best, best_colors = candidate, count
+            else:
+                candidate.close()
+    if best is None or best_colors < 2:
+        return processed, False
+    processed.close()
+    return best, True
+
+
 def frame_segmented_foreground(source: Any, *, alpha_threshold: int = 128) -> Any:
     """Fit an ONNX-produced, visible subject to the native sprite canvas.
 
@@ -303,6 +356,14 @@ def finalize_candidate_sources(
                         extracted.close()
                 else:
                     processed = postprocess_region(raw, contract, (width, height))
+                    recovered_detail = False
+                    if (
+                        "/textures/block/" in "/" + str(texture["target_path"])
+                        and contract["rendering"]["alpha"] == "opaque"
+                    ):
+                        processed, recovered_detail = recover_block_surface_detail(
+                            raw, processed, contract, (width, height)
+                        )
                     matte_method = "source_alpha_or_boundary_background"
             try:
                 canvas.paste(processed, (x, y))
@@ -313,6 +374,7 @@ def finalize_candidate_sources(
                 "resolution": list(resolution),
                 "sha256": "sha256:" + hashlib.sha256(source.read_bytes()).hexdigest(),
                 "alpha_matte": matte_method,
+                "native_detail_recovered": recovered_detail if not needs_segmentation else False,
             })
         if contract["gui"]:
             for region in contract["gui"]["protected_regions"]:
