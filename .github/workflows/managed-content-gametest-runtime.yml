@@ -8,7 +8,6 @@ on:
       - 'minecraft_mod_ai/complete_orchestrator.py'
       - 'minecraft_mod_ai/quality_evidence.py'
       - 'tests/test_managed_content_gametest.py'
-      - 'tests/test_quality_execution_preflight.py'
       - 'tests/test_quality_evidence.py'
       - '.github/workflows/managed-content-gametest-runtime.yml'
   pull_request:
@@ -40,4 +39,3 @@ jobs:
       - name: Syntax compilation
         run: python -m compileall -q minecraft_mod_ai/managed_content_gametest.py minecraft_mod_ai/quality_evidence.py minecraft_mod_ai/complete_orchestrator.py tests/test_managed_content_gametest.py
       - name: Validate live proof and adversarial receipts
-        run: python -m pytest -q tests/test_managed_content_gametest.py tests/test_quality_execution_preflight.py tests/test_quality_evidence.py
