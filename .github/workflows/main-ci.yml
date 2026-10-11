@@ -184,6 +184,19 @@ jobs:
         with: {python-version: '3.11', cache: pip}
       - run: python -m pip install --prefer-binary -e .
       - run: python -c "import minecraft_mod_ai"
+      # Fail during CI (not at Colab session creation) when a reviewed
+      # generator hash drifts from the published 43-version HOST catalog.
+      - name: Fabric 26.2 catalog and API bootstrap smoke
+        run: |
+          python - <<'PY'
+          from minecraft_mod_ai.api import _validate_requested_target
+          from minecraft_mod_ai.host_version_catalog import host_target
+
+          target = host_target("26.2")
+          assert (target.minecraft_version, target.loader) == ("26.2", "fabric")
+          assert _validate_requested_target("26.2", None) == ("26.2", None)
+          assert _validate_requested_target("26.2", "fabric") == ("26.2", "fabric")
+          PY
 
   runtime-concurrency:
     name: Runtime concurrency audit
