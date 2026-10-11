@@ -6,6 +6,11 @@ on:
     branches: [main]
     paths:
       - "minecraft_mod_ai/typed_plan_ir.py"
+      - "minecraft_mod_ai/typed_plan_authoring.py"
+      - "minecraft_mod_ai/typed_plan_support.py"
+      - "minecraft_mod_ai/typed_plan_java.py"
+      - "minecraft_mod_ai/authored_ui_action_repair.py"
+      - "minecraft_mod_ai/authored_ui_action_bindings.py"
       - "minecraft_mod_ai/typed_platform_ir.py"
       - "minecraft_mod_ai/typed_event_ir.py"
       - "minecraft_mod_ai/typed_plan_production.py"
@@ -35,6 +40,11 @@ on:
   pull_request:
     paths:
       - "minecraft_mod_ai/typed_plan_ir.py"
+      - "minecraft_mod_ai/typed_plan_authoring.py"
+      - "minecraft_mod_ai/typed_plan_support.py"
+      - "minecraft_mod_ai/typed_plan_java.py"
+      - "minecraft_mod_ai/authored_ui_action_repair.py"
+      - "minecraft_mod_ai/authored_ui_action_bindings.py"
       - "minecraft_mod_ai/typed_platform_ir.py"
       - "minecraft_mod_ai/typed_event_ir.py"
       - "minecraft_mod_ai/typed_plan_production.py"
@@ -77,6 +87,11 @@ jobs:
         run: >-
           python -m py_compile
           minecraft_mod_ai/typed_plan_ir.py
+          minecraft_mod_ai/typed_plan_authoring.py
+          minecraft_mod_ai/typed_plan_support.py
+          minecraft_mod_ai/typed_plan_java.py
+          minecraft_mod_ai/authored_ui_action_repair.py
+          minecraft_mod_ai/authored_ui_action_bindings.py
           minecraft_mod_ai/typed_platform_ir.py
           minecraft_mod_ai/typed_event_ir.py
           minecraft_mod_ai/typed_plan_production.py
