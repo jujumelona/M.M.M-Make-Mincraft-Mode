@@ -382,7 +382,7 @@ jobs:
           PY
 
       - name: Upload E2E evidence
-        if: ${{ always() }}
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: real-model-colab-e2e-${{ github.sha }}
