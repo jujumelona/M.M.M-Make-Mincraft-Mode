@@ -163,37 +163,42 @@ def recover_block_surface_detail(
             # searching fifteen crops, particularly for large HOST textures.
             return processed, False
 
+    best = _recover_real_block_crop(source, contract, size)
+    if best is None:
+        return processed, False
+    processed.close()
+    return best, True
+
+
+def _recover_real_block_crop(
+    source: Any, contract: Mapping[str, Any], size: tuple[int, int],
+) -> Any | None:
+    """Select the highest-diversity source crop without creating any new pixels."""
     width, height = source.size
     best = None
     best_colors = 1
-    # Reframe portions of the *generated source*. Cropping retains existing
-    # colors/texture features and does not bypass the canonical pixel contract.
+    # Reframe portions of the generated source, preserving the native contract.
     for fraction in (0.75, 0.5, 0.25):
         crop_width = max(1, round(width * fraction))
         crop_height = max(1, round(height * fraction))
-        for center_x, center_y in ((0.5, 0.5), (0.25, 0.25), (0.75, 0.25),
-                                   (0.25, 0.75), (0.75, 0.75)):
+        for center_x, center_y in (
+            (0.5, 0.5), (0.25, 0.25), (0.75, 0.25),
+            (0.25, 0.75), (0.75, 0.75),
+        ):
             left = max(0, min(width - crop_width, round(width * center_x - crop_width / 2)))
             top = max(0, min(height - crop_height, round(height * center_y - crop_height / 2)))
             with source.crop((left, top, left + crop_width, top + crop_height)) as crop:
                 candidate = postprocess_region(crop, contract, size)
-            # Counts *visible source-derived* palette entries, not alpha colors.
-            rgb = candidate.convert("RGB")
-            try:
+            with candidate.convert("RGB") as rgb:
                 colors = rgb.getcolors(maxcolors=size[0] * size[1])
                 count = len(colors) if colors is not None else size[0] * size[1]
-            finally:
-                rgb.close()
             if count > best_colors:
                 if best is not None:
                     best.close()
                 best, best_colors = candidate, count
             else:
                 candidate.close()
-    if best is None or best_colors < 2:
-        return processed, False
-    processed.close()
-    return best, True
+    return best
 
 
 def frame_segmented_foreground(source: Any, *, alpha_threshold: int = 128) -> Any:
