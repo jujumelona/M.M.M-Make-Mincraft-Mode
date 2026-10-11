@@ -257,6 +257,77 @@ def test_semantic_game_dispatch_lowers_deterministically():
     assert validated["functions"][0]["id"] == "logic_dispatch"
 
 
+def test_purchase_action_is_balanced_and_grant_guarded():
+    """A failed inventory grant cannot charge the player's persistent balance."""
+    from minecraft_mod_ai.typed_plan_authoring import (
+        lower_semantic_game_dispatch_to_ir,
+        semantic_dispatch_schema,
+    )
+    from minecraft_mod_ai.typed_host_capabilities import typed_host_capability_contracts
+    from minecraft_mod_ai.typed_plan_ir import validate_typed_plan_ir
+
+    caps = typed_host_capability_contracts()
+    schema = semantic_dispatch_schema(
+        {"credits": "int", "resources": "string"}, caps,
+        allowed_events=("command",), mutation_only=True,
+        purchase_only=True,
+    )
+    assert all(
+        branch["properties"]["action_kind"]["const"] == "purchase_item"
+        for branch in schema["oneOf"]
+    )
+    rule = {
+        "trigger_event": "command",
+        "action_guard": "ship_part_purchase",
+        "action_kind": "purchase_item",
+        "state_key": "credits",
+        "price": 25,
+        "item_id": "minecraft:iron_ingot",
+        "quantity": 2,
+    }
+    statements = lower_semantic_game_dispatch_to_ir(
+        [rule], {"credits": "int"}, caps,
+    )
+    action = statements[0]
+    assert action["condition"]["right"]["value"] == "ship_part_purchase"
+    balance_test = action["then"][0]
+    assert balance_test["condition"]["operator"] == ">="
+    assert balance_test["condition"]["left"]["op"] == "state_get"
+    granted = balance_test["then"][0]
+    assert granted["condition"]["id"] == "player.grant_item"
+    assert granted["else"] == []
+    assert granted["then"][0]["op"] == "state_set"
+    assert granted["then"][0]["value"]["operator"] == "-"
+    assert balance_test["else"] == []
+
+    plan = {
+        "schema_version": "mmm/typed-plan-ir-v1",
+        "source_sha256": "0" * 64,
+        "functions": [{
+            "id": "ui_action_dispatch",
+            "parameters": [
+                {"name": "event", "type": "string"},
+                {"name": "primary", "type": "object"},
+                {"name": "secondary", "type": "object"},
+                {"name": "flag", "type": "boolean"},
+            ],
+            "return_type": "int", "body": statements,
+            "covers": ["resources_and_ui.interactions"],
+        }],
+        "initialize": [], "platform_modules": [], "event_bindings": [],
+    }
+    assert validate_typed_plan_ir(plan, capabilities=caps)["functions"]
+
+    with pytest.raises(ValueError, match="TYPED_PLAN_PURCHASE_PRICE_INVALID"):
+        lower_semantic_game_dispatch_to_ir(
+            [{**rule, "price": 0}], {"credits": "int"}, caps,
+        )
+    with pytest.raises(ValueError, match="TYPED_PLAN_SEMANTIC_CAPABILITY_ARG_PATTERN"):
+        lower_semantic_game_dispatch_to_ir(
+            [{**rule, "item_id": "not_an_item_id"}], {"credits": "int"}, caps,
+        )
+
+
 def test_planner_budget_enforces_limit_and_tracks_stages():
     from minecraft_mod_ai.planner_budget import PlannerBudget
 
