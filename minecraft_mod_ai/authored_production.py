@@ -1067,8 +1067,25 @@ def _assert_executable_gameplay_floor(
                     yield from walk(child)
 
         def mutates(nodes: Any) -> bool:
+            def effective_state_set(node: Mapping[str, Any]) -> bool:
+                if node.get("op") != "state_set":
+                    return False
+                key, value = node.get("key"), node.get("value")
+                if isinstance(key, Mapping) and isinstance(value, Mapping):
+                    if (key.get("op") == "literal"
+                            and key.get("type") == "string"
+                            and value.get("op") == "literal"
+                            and value.get("type") == "string"
+                            and str(value.get("value") or "") in {
+                                str(key.get("value") or ""), "string",
+                            }):
+                        # A literal echo (resources = "resources") or a
+                        # schema-type placeholder is not gameplay evidence.
+                        return False
+                return True
+
             return any(
-                node.get("op") == "state_set"
+                effective_state_set(node)
                 or (
                     node.get("op") == "capability"
                     and str(node.get("id") or "") in mutating_caps
