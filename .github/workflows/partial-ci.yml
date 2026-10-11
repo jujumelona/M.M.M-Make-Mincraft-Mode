@@ -195,6 +195,7 @@ jobs:
               "minecraft_mod_ai/typed_plan_",
               "minecraft_mod_ai/authored_production",
               "minecraft_mod_ai/complete_orchestrator",
+              "minecraft_mod_ai/canonical_generators",
               "minecraft_mod_ai/colab_",
               "minecraft_mod_ai/complete_preflight",
               "minecraft_mod_ai/platform_live_execution",
