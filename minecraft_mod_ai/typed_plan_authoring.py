@@ -1280,6 +1280,8 @@ def semantic_dispatch_schema(
     state_only: bool = False,
     purchase_only: bool = False,
     purchase_funds_keys: Sequence[str] | None = None,
+    excluded_set_state_keys: Sequence[str] = (),
+    excluded_increment_state_keys: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Build semantic actions only from host-known, actually bound events."""
 
@@ -1295,26 +1297,30 @@ def semantic_dispatch_schema(
     branches: list[dict[str, Any]] = []
     for state_key, state_type in sorted(state_types.items()):
         value_schema = _semantic_state_value_schema(state_type)
-        branches.append({
-            "type": "object",
-            "properties": {
-                "trigger_event": {
-                    "type": "string",
-                    "enum": list(trigger_events),
+        if state_key not in excluded_set_state_keys:
+            branches.append({
+                "type": "object",
+                "properties": {
+                    "trigger_event": {
+                        "type": "string",
+                        "enum": list(trigger_events),
+                    },
+                    "action_kind": {"const": "set_state"},
+                    "state_key": {"const": state_key},
+                    "value": value_schema,
                 },
-                "action_kind": {"const": "set_state"},
-                "state_key": {"const": state_key},
-                "value": value_schema,
-            },
-            "required": [
-                "trigger_event",
-                "action_kind",
-                "state_key",
-                "value",
-            ],
-            "additionalProperties": False,
-        })
-        if state_type in {"int", "long", "double"}:
+                "required": [
+                    "trigger_event",
+                    "action_kind",
+                    "state_key",
+                    "value",
+                ],
+                "additionalProperties": False,
+            })
+        if (
+            state_type in {"int", "long", "double"}
+            and state_key not in excluded_increment_state_keys
+        ):
             branches.append({
                 "type": "object",
                 "properties": {
@@ -1442,7 +1448,12 @@ def semantic_dispatch_schema(
                 ],
                 "additionalProperties": False,
             })
-    if purchase_only and purchase_branches:
+    if purchase_only:
+        if not purchase_branches:
+            raise ValueError(
+                "TYPED_PLAN_PURCHASE_CONTRACT_UNAVAILABLE: purchase requires a "
+                "persisted currency state and the host item-grant capability"
+            )
         branches = purchase_branches
     elif not state_only:
         branches.extend(purchase_branches)
@@ -1454,6 +1465,29 @@ def semantic_dispatch_schema(
         )
 
     return {"oneOf": branches}
+
+
+
+def _semantic_placeholder_reason(
+    rule: Mapping[str, Any], state_types: Mapping[str, str],
+) -> str | None:
+    """Reject operations that have no gameplay effect by construction."""
+
+    kind = str(rule.get("action_kind") or "")
+    key = str(rule.get("state_key") or "").strip()
+    state_type = state_types.get(key)
+    value = rule.get("value")
+    if kind == "set_state" and state_type == "string" and isinstance(value, str):
+        if value.strip().casefold() in {key.casefold(), "string"}:
+            return "string_self_assignment"
+    if kind == "increment_state" and state_type in {"int", "long", "double"}:
+        try:
+            increment = float(value)
+        except (ValueError, TypeError, OverflowError):
+            return None
+        if math.isfinite(increment) and increment == 0:
+            return "zero_increment"
+    return None
 
 
 def lower_semantic_game_dispatch_to_ir(
@@ -1472,6 +1506,12 @@ def lower_semantic_game_dispatch_to_ir(
                 f"TYPED_PLAN_SEMANTIC_RULE_INVALID: rule[{rule_idx}] must be an object"
             )
         kind = str(rule.get("action_kind") or "").strip()
+        no_op_reason = _semantic_placeholder_reason(rule, state_types)
+        if no_op_reason:
+            raise ValueError(
+                "TYPED_PLAN_SEMANTIC_PLACEHOLDER_REJECTED: "
+                f"rule[{rule_idx}] {no_op_reason}"
+            )
         action_statements: list[dict[str, Any]] = []
 
         if kind in {"increment_state", "set_state"}:
@@ -1869,6 +1909,39 @@ def author_semantic_game_dispatch(
         )
     }
 
+
+    def is_purchase_record(ref: str, focus: Mapping[str, Any] | None) -> bool:
+        if ref != "resources_and_ui.interactions":
+            return False
+        context = " ".join(
+            str((focus or {}).get(field) or "")
+            for field in ("server_action", "trigger", "description", "label")
+        ).casefold()
+        return any(term in context for term in ("purchase", "buy", "구매"))
+
+    # Validate executable purchase dependencies before authoring any rules.
+    purchase_units = [
+        (ref, index) for ref, index, focus in units
+        if is_purchase_record(ref, focus)
+    ]
+    if purchase_units:
+        if not currency_keys:
+            raise ValueError(
+                "TYPED_PLAN_PURCHASE_FUNDS_STATE_UNBOUND: "
+                f"units={purchase_units!r} need a numeric currency state"
+            )
+        grant = (capabilities or {}).get("player.grant_item")
+        if (
+            not isinstance(grant, Mapping)
+            or grant.get("gameplay_mutation") is not True
+            or tuple(grant.get("parameters", ())) != ("object", "string", "int")
+            or grant.get("return_type") != "boolean"
+        ):
+            raise ValueError(
+                "TYPED_PLAN_PURCHASE_GRANT_CAPABILITY_UNBOUND: "
+                f"units={purchase_units!r} need the host item grant ABI"
+            )
+
     for coverage_ref, record_index, focus_record in units:
         state_only = coverage_ref in {
             "state_model.transitions", "state_model.updates",
@@ -1904,19 +1977,7 @@ def author_semantic_game_dispatch(
                     "steps have only bootstrap entry points; repair integration "
                     "entry_points before executable PlanIR authoring."
                 )
-        action_description = " ".join(
-            str((focus_record or {}).get(field) or "")
-            for field in ("server_action", "trigger", "description", "label")
-        ).casefold()
-        is_purchase = (
-            coverage_ref == "resources_and_ui.interactions"
-            and any(word in action_description for word in (
-                "buy", "purchase", "market", "shop", "recruit",
-                "구매", "거래", "상점", "고용",
-            ))
-            and bool(currency_keys)
-            and isinstance((capabilities or {}).get("player.grant_item"), Mapping)
-        )
+        is_purchase = is_purchase_record(coverage_ref, focus_record)
         schema_key = (
             mutation_required, state_only, tuple(rule_events or ()), is_purchase,
         )
@@ -1998,7 +2059,35 @@ def author_semantic_game_dispatch(
         # state change. The observed resources = "resources" action did not
         # implement buying, building or launching anything.
         rule: dict[str, Any] = {}
+        rejected_kind = ""
+        rejected_key = ""
         for attempt in range(2):
+            current_schema, current_ceiling = schema, token_ceiling
+            if attempt and rejected_key:
+                try:
+                    candidate = semantic_dispatch_schema(
+                        state_types, capabilities,
+                        allowed_events=rule_events,
+                        mutation_only=mutation_required,
+                        state_only=state_only,
+                        purchase_only=is_purchase,
+                        purchase_funds_keys=tuple(sorted(currency_keys)),
+                        excluded_set_state_keys=(rejected_key,)
+                        if rejected_kind == "set_state" else (),
+                        excluded_increment_state_keys=(rejected_key,)
+                        if rejected_kind == "increment_state" else (),
+                    )
+                except ValueError as exc:
+                    if "TYPED_PLAN_SEMANTIC_ACTION_UNAVAILABLE" not in str(exc):
+                        raise
+                else:
+                    assert_model_atomic_decision_schema(
+                        candidate, field="semantic_dispatch_rule",
+                    )
+                    current_schema = candidate
+                    current_ceiling = structured_output_token_ceiling(
+                        effective_model_transport_schema(candidate)
+                    )
             if budget is not None:
                 budget.consume("typed.semantic_dispatch")
             raw = generate_fixed_template_value(
@@ -2024,31 +2113,27 @@ def author_semantic_game_dispatch(
                         "content": json.dumps(payload, ensure_ascii=False),
                     },
                 ),
-                response_schema=schema,
+                response_schema=current_schema,
                 enable_tools=False,
                 description=(
                     "Author one atomic semantic game rule for a host-owned coverage unit."
                 ),
-                output_token_ceiling=token_ceiling,
+                output_token_ceiling=current_ceiling,
             )
             if not isinstance(raw, Mapping):
                 raise ValueError(
                     "TYPED_PLAN_SEMANTIC_RESPONSE_INVALID: rule must be an object"
                 )
             rule = dict(raw)
-            if not (
-                rule.get("action_kind") == "set_state"
-                and state_types.get(str(rule.get("state_key") or "")) == "string"
-                and str(rule.get("value") or "").strip() in {
-                    str(rule.get("state_key") or "").strip(), "string",
-                }
-            ):
+            if not _semantic_placeholder_reason(rule, state_types):
                 break
+            rejected_kind = str(rule.get("action_kind") or "")
+            rejected_key = str(rule.get("state_key") or "").strip()
         else:
             raise ValueError(
-                "TYPED_PLAN_SEMANTIC_PLACEHOLDER_REJECTED: the model repeatedly "
-                "returned an ineffective state self-assignment instead of "
-                "implementing the required gameplay operation"
+                "TYPED_PLAN_SEMANTIC_PLACEHOLDER_REJECTED: "
+                f"coverage_ref={coverage_ref!r} record_index={record_index!r} "
+                f"state_key={rejected_key!r}: no effective gameplay action"
             )
         if coverage_ref == "resources_and_ui.interactions":
             action = str((focus_record or {}).get("server_action") or "").strip()
