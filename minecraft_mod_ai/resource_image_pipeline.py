@@ -91,8 +91,49 @@ def _clear_boundary_background(image: Any) -> None:
 
 
 
+
+def _preserve_segmented_native_coverage(
+    source: Any, native: Any, *, alpha_threshold: int,
+) -> None:
+    """Retain real matte pixels that nearest-neighbor native sampling misses.
+
+    A thin segmented foreground can occupy source cells while every native
+    sample point falls on transparent background. Use thresholded source alpha
+    as the *only* authority for coverage, and retrieve RGB from an actual
+    foreground pixel in each occupied cell. Never invent a silhouette or
+    alter an already-covered native pixel.
+    """
+    from PIL import Image
+
+    width, height = native.size
+    with source.convert("RGBA") as rgba:
+        with rgba.getchannel("A") as alpha:
+            with alpha.point(
+                lambda value: 255 if value >= alpha_threshold else 0
+            ) as strong:
+                with strong.resize(native.size, Image.Resampling.BOX) as occupancy:
+                    for y in range(height):
+                        for x in range(width):
+                            if (
+                                native.getpixel((x, y))[3] >= alpha_threshold
+                                or occupancy.getpixel((x, y)) == 0
+                            ):
+                                continue
+                            left = x * rgba.width // width
+                            top = y * rgba.height // height
+                            right = max(left + 1, (x + 1) * rgba.width // width)
+                            bottom = max(top + 1, (y + 1) * rgba.height // height)
+                            with strong.crop((left, top, right, bottom)) as cell:
+                                hit = cell.getbbox()
+                            if hit is None:
+                                continue
+                            rgb = rgba.getpixel((left + hit[0], top + hit[1]))[:3]
+                            native.putpixel((x, y), (*rgb, 255))
+
+
 def postprocess_region(
     source: Any, contract: Mapping[str, Any], size: tuple[int, int],
+    *, preserve_alpha_coverage: bool = False,
 ) -> Any:
     from PIL import Image
 
@@ -104,6 +145,10 @@ def postprocess_region(
     layout = contract["geometry"]["layout"]
     if policy in {"transparent", "cutout"} and layout not in {"fixed_uv", "gui_sprite"}:
         _clear_boundary_background(image)
+        if preserve_alpha_coverage:
+            _preserve_segmented_native_coverage(
+                source, image, alpha_threshold=int(rules["alpha_threshold"]),
+            )
     pixels = []
     for r, g, b, a in _pixels(image):
         a = 255 if policy == "opaque" or a >= rules["alpha_threshold"] else 0
@@ -361,6 +406,7 @@ def finalize_candidate_sources(
                         ) as framed:
                             processed = postprocess_region(
                                 framed, contract, (width, height),
+                                preserve_alpha_coverage=True,
                             )
                     finally:
                         extracted.close()
@@ -466,9 +512,17 @@ def validate_texture(
         ):
             raise ValueError("PNG format/geometry/alpha channel mismatch.")
         rendering, animation = contract["rendering"], contract["animation"]
-        all_alpha = set(_pixels(raw.getchannel("A")))
+        with raw.getchannel("A") as alpha_channel:
+            alpha_histogram = alpha_channel.histogram()
+        all_alpha = {value for value, count in enumerate(alpha_histogram) if count}
         if not all_alpha <= {0, 255} or 255 not in all_alpha:
-            raise ValueError("Invalid alpha/pixel-grid coverage.")
+            raise ValueError(
+                "Invalid alpha/pixel-grid coverage. "
+                f"opaque_pixels={alpha_histogram[255]} "
+                f"transparent_pixels={alpha_histogram[0]} "
+                f"partial_pixels={sum(alpha_histogram[1:255])} "
+                f"native_size={raw.size}"
+            )
         if rendering["alpha"] == "opaque" and all_alpha != {255}:
             raise ValueError("Opaque texture has transparent alpha.")
         if (
