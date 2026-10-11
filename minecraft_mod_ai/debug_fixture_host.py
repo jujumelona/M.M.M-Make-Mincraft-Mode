@@ -183,6 +183,17 @@ def render_debug_fixture_source(
             )
         )
 
+    # The reviewed Mojang-mapped 1.20.1 registration template constructs an
+    # Item directly, but the legacy host symbol set lists only registry-method
+    # owners. Close this exact debug-only import gap without changing the
+    # pinned production template or guessing imports for future epochs.
+    if (
+        minecraft_version == "1.20.1"
+        and "new Item(" in register_body
+        and "net.minecraft.world.item.Item" not in owners
+    ):
+        owners.append("net.minecraft.world.item.Item")
+
     body_lines: list[str] = []
     for fragment in (key_body, register_body):
         if not fragment:
