@@ -13,6 +13,8 @@ from .authored_structured_design import active_concern_records
 
 
 def _mutating_ui_actions(sections: Mapping[str, Any]) -> tuple[str, ...]:
+    from .authored_structured_design import active_concern_records
+
     algorithm = active_concern_records(sections, "algorithm")
     state = active_concern_records(sections, "state_model")
     if not (
@@ -76,7 +78,81 @@ def repair_authored_ui_action_ir(
     if len(actions) < 2:
         raise ValueError("AUTHORED_UI_ACTION_REPAIR_NOT_REQUIRED")
 
-    repaired = deepcopy(dict(typed_plan_ir))
+    repaired, synthetic_first_index = _validate_repair_target(
+        structured_sections, typed_plan_ir, actions,
+    )
+
+    rules = author_semantic_game_dispatch(
+        router, source_text, structured_sections, capabilities,
+        coverage_refs=("resources_and_ui.interactions",),
+        budget=budget, bound_events=("command",),
+    )
+    if not rules or rules[-1].get("op") != "return":
+        raise ValueError("AUTHORED_UI_ACTION_DISPATCH_INVALID")
+
+    _assert_action_mutation_guards(rules, actions)
+    _append_repaired_ui_bindings(repaired, rules, actions, synthetic_first_index)
+
+
+    return validate_typed_plan_ir(repaired, capabilities=capabilities)
+
+
+__all__ = [
+    "authored_ui_action_repair_needed", "repair_authored_ui_action_ir",
+]
+
+def _append_ui_action_bindings(
+    *, actions: tuple[str, ...], entry_points: Any,
+    specs: list[dict[str, Any]], bindings: list[dict[str, Any]],
+    known_ids: set[str],
+) -> dict[str, str]:
+    """Bind distinct generated player commands to authored action identities."""
+    from .typed_event_ir import EVENT_PARAMETERS, EVENT_SIGNATURES
+
+    if not any(binding["event"] == "command" for binding in bindings):
+        raise ValueError(
+            "TYPED_UI_ACTION_COMMAND_UNBOUND: repair a player command "
+            "entry point before authoring UI action handlers"
+        )
+    used_literals = {
+        str(binding["config"]["literal"])
+        for binding in bindings if binding["event"] == "command"
+    }
+    action_by_function: dict[str, str] = {}
+    for ordinal, action in enumerate(actions, start=1):
+        command_literal = f"mmm_action_{ordinal}"
+        while command_literal in used_literals:
+            command_literal += "_ui"
+        used_literals.add(command_literal)
+        function_id = f"uiAction{ordinal}_command"
+        if function_id in known_ids:
+            raise ValueError("TYPED_UI_ACTION_FUNCTION_COLLISION")
+        known_ids.add(function_id)
+        specs.append({
+            "id": function_id,
+            "parameters": [
+                {"name": name, "type": type_name}
+                for name, type_name in EVENT_PARAMETERS["command"]
+            ],
+            "return_type": EVENT_SIGNATURES["command"][1],
+            "covers": ["resources_and_ui.interactions"],
+        })
+        bindings.append({
+            "event": "command",
+            "function": function_id,
+            "entry_point_index": len(entry_points) + ordinal - 1,
+            "config": {"literal": command_literal, "permission_level": 0},
+        })
+        action_by_function[function_id] = action
+    return action_by_function
+
+
+def _validate_repair_target(
+    sections: Mapping[str, Any], ir: Mapping[str, Any],
+    actions: tuple[str, ...],
+) -> tuple[dict[str, Any], int]:
+    """Reject missing command bindings and collisions before model authoring."""
+    repaired = deepcopy(dict(ir))
     functions = repaired.get("functions", [])
     bindings = repaired.get("event_bindings", [])
     if not isinstance(functions, list) or not isinstance(bindings, list):
@@ -109,7 +185,7 @@ def repair_authored_ui_action_ir(
     }
     # The persisted design already indexes its authored integration hooks.
     integration = active_concern_records(
-        structured_sections, "integration",
+        sections, "integration",
     ).get("entry_points", ())
     synthetic_first_index = len(integration)
     if any(
@@ -118,14 +194,13 @@ def repair_authored_ui_action_ir(
     ):
         raise ValueError("AUTHORED_UI_ACTION_INDEX_COLLISION")
 
-    rules = author_semantic_game_dispatch(
-        router, source_text, structured_sections, capabilities,
-        coverage_refs=("resources_and_ui.interactions",),
-        budget=budget, bound_events=("command",),
-    )
-    if not rules or rules[-1].get("op") != "return":
-        raise ValueError("AUTHORED_UI_ACTION_DISPATCH_INVALID")
+    return repaired, synthetic_first_index
 
+
+def _assert_action_mutation_guards(
+    rules: list[dict[str, Any]], actions: tuple[str, ...],
+) -> None:
+    """Demand an action-specific mutating command branch for every UI action."""
     # Require a distinct guarded *mutation* for every action, not just a GUI
     # registration or the unrelated generic command state counter.
     from .typed_host_capabilities import typed_host_capability_contracts
@@ -168,6 +243,13 @@ def repair_authored_ui_action_ir(
             + ", ".join(sorted(missing))
         )
 
+
+def _append_repaired_ui_bindings(
+    repaired: dict[str, Any], rules: list[dict[str, Any]],
+    actions: tuple[str, ...], synthetic_first_index: int,
+) -> None:
+    functions = repaired["functions"]
+    bindings = repaired["event_bindings"]
     params = [
         {"name": "event", "type": "string"},
         {"name": "primary", "type": "object"},
@@ -187,9 +269,6 @@ def repair_authored_ui_action_ir(
         and binding.get("event") == "command"
     }
 
-    def literal(kind: str, value: Any) -> dict[str, Any]:
-        return {"op": "literal", "type": kind, "value": value}
-
     for index, action in enumerate(actions, start=1):
         name = f"uiAction{index}_command"
         command = f"mmm_action_{index}"
@@ -207,10 +286,10 @@ def repair_authored_ui_action_ir(
                     "op": "call",
                     "function": "ui_action_dispatch",
                     "args": [
-                        literal("string", action),
+                        {"op": "literal", "type": "string", "value": action},
                         {"op": "ref", "name": "source"},
-                        literal("object", None),
-                        literal("boolean", False),
+                        {"op": "literal", "type": "object", "value": None},
+                        {"op": "literal", "type": "boolean", "value": False},
                     ],
                 },
             }],
@@ -220,9 +299,29 @@ def repair_authored_ui_action_ir(
             "entry_point_index": synthetic_first_index + index - 1,
             "config": {"literal": command, "permission_level": 0},
         })
-    return validate_typed_plan_ir(repaired, capabilities=capabilities)
 
+def repair_authored_ui_action_plan(
+    router: Any, plan: Any, source_reuse: Mapping[str, Any],
+) -> Any:
+    """Retain saved design but add missing executable UI action bindings."""
+    from dataclasses import replace
+    from .typed_host_capabilities import typed_host_capability_contracts
+    from .root_cause_trace import emit_root_cause
 
-__all__ = [
-    "authored_ui_action_repair_needed", "repair_authored_ui_action_ir",
-]
+    if not authored_ui_action_repair_needed(plan, source_reuse=source_reuse):
+        return plan
+    updated = repair_authored_ui_action_ir(
+        router, plan.text, plan.structured_sections, plan.typed_plan_ir,
+        capabilities=typed_host_capability_contracts(),
+    )
+    repaired_plan = replace(plan, typed_plan_ir=updated)
+    emit_root_cause(
+        "authored_ui_action_ir_repaired",
+        stage="production", operation="repair_missing_ui_handlers",
+        result="PASS",
+        details={
+            "policy": "add_only_action_handlers",
+            "typed_functions": len(updated.get("functions", ())),
+        },
+    )
+    return repaired_plan

@@ -1301,32 +1301,10 @@ def compile_authored_design(
         raise ValueError("AUTHORED_SOURCE_REUSE_CONTRACT_INVALID")
     design["_host_source_reuse"] = deepcopy(dict(source_reuse))
 
-    # Legacy saved plans can contain a real generic command but no handlers
-    # for their separately authored purchase/upgrade actions. Repair only the
-    # missing action command overlay, retaining the rest of the persisted IR.
-    from .authored_ui_action_repair import (
-        authored_ui_action_repair_needed, repair_authored_ui_action_ir,
-    )
-    if authored_ui_action_repair_needed(plan, source_reuse=source_reuse):
-        from dataclasses import replace
-        from .typed_host_capabilities import typed_host_capability_contracts
-        from .root_cause_trace import emit_root_cause
-
-        repaired_ir = repair_authored_ui_action_ir(
-            router, plan.text, plan.structured_sections, plan.typed_plan_ir,
-            capabilities=typed_host_capability_contracts(),
-        )
-        plan = replace(plan, typed_plan_ir=repaired_ir)
-        design["authored_plan"] = plan.to_dict()
-        emit_root_cause(
-            "authored_ui_action_ir_repaired",
-            stage="production", operation="repair_missing_ui_handlers",
-            result="PASS",
-            details={
-                "policy": "add_only_action_handlers",
-                "typed_functions": len(repaired_ir.get("functions", ())),
-            },
-        )
+    # Repair saved plans without re-authoring unrelated gameplay semantics.
+    from .authored_ui_action_repair import repair_authored_ui_action_plan
+    plan = repair_authored_ui_action_plan(router, plan, source_reuse)
+    design["authored_plan"] = plan.to_dict()
 
     production_state_section = compile_production_state_section(plan)
     modules, manifest = _compile_new_authored_modules(

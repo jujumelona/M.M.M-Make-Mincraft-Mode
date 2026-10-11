@@ -2492,20 +2492,9 @@ def author_typed_plan_ir(
 
     coverage_refs = _active_concern_refs(structured_sections)
     entry_points = _integration_entry_points(structured_sections)
-    from .authored_structured_design import active_concern_records
-
-    authored_algorithm = active_concern_records(structured_sections, "algorithm")
-    authored_state = active_concern_records(structured_sections, "state_model")
-    authored_ui = active_concern_records(structured_sections, "resources_and_ui")
-    requested_actions = tuple(dict.fromkeys(
-        str(row.get("server_action") or "").strip()
-        for row in authored_ui.get("interactions", ())
-        if isinstance(row, Mapping) and str(row.get("server_action") or "").strip()
-    ))
-    bind_ui_actions = bool(requested_actions and (
-        authored_algorithm.get("atomic_mutations")
-        or authored_state.get("transitions") or authored_state.get("updates")
-    ))
+    from .authored_ui_action_repair import _mutating_ui_actions
+    requested_actions = _mutating_ui_actions(structured_sections)
+    bind_ui_actions = bool(requested_actions)
     author = TypedOperationAuthor(
         router,
         source_text,
@@ -2592,45 +2581,11 @@ def author_typed_plan_ir(
             "config": config,
         })
 
-    # Each authored mutating UI operation receives a separate executable
-    # server command. The command name is host-owned and collision-free; the
-    # underlying mutation is still authored from that exact UI record.
-    action_by_function: dict[str, str] = {}
-    if bind_ui_actions:
-        if not any(binding["event"] == "command" for binding in event_bindings):
-            raise ValueError(
-                "TYPED_UI_ACTION_COMMAND_UNBOUND: repair a player command "
-                "entry point before authoring UI action handlers"
-            )
-        used_literals = {
-            str(binding["config"]["literal"])
-            for binding in event_bindings if binding["event"] == "command"
-        }
-        for ordinal, action in enumerate(requested_actions, start=1):
-            command_literal = f"mmm_action_{ordinal}"
-            while command_literal in used_literals:
-                command_literal += "_ui"
-            used_literals.add(command_literal)
-            function_id = f"uiAction{ordinal}_command"
-            if function_id in known_ids:
-                raise ValueError("TYPED_UI_ACTION_FUNCTION_COLLISION")
-            known_ids.add(function_id)
-            specs.append({
-                "id": function_id,
-                "parameters": [
-                    {"name": name, "type": type_name}
-                    for name, type_name in EVENT_PARAMETERS["command"]
-                ],
-                "return_type": EVENT_SIGNATURES["command"][1],
-                "covers": ["resources_and_ui.interactions"],
-            })
-            event_bindings.append({
-                "event": "command",
-                "function": function_id,
-                "entry_point_index": len(entry_points) + ordinal - 1,
-                "config": {"literal": command_literal, "permission_level": 0},
-            })
-            action_by_function[function_id] = action
+    from .authored_ui_action_repair import _append_ui_action_bindings
+    action_by_function = _append_ui_action_bindings(
+        actions=requested_actions, entry_points=entry_points,
+        specs=specs, bindings=event_bindings, known_ids=known_ids,
+    ) if bind_ui_actions else {}
 
     logic_refs = sorted(
         ref
@@ -2716,12 +2671,14 @@ def author_typed_plan_ir(
         flag: dict[str, Any] | None = None,
         target: str = logic_dispatch_id,
     ) -> dict[str, Any]:
-        if target == logic_dispatch_id and logic_dispatch_spec is None:
-            raise ValueError("TYPED_PLAN_INTERNAL: logic dispatcher is unavailable")
-        if target == ui_dispatch_id and ui_dispatch_spec is None:
-            raise ValueError("TYPED_PLAN_INTERNAL: UI dispatcher is unavailable")
-        if target not in {logic_dispatch_id, ui_dispatch_id}:
-            raise ValueError("TYPED_PLAN_INTERNAL: unknown dispatcher")
+        available = {
+            name for name, spec in (
+                (logic_dispatch_id, logic_dispatch_spec),
+                (ui_dispatch_id, ui_dispatch_spec),
+            ) if spec is not None
+        }
+        if target not in available:
+            raise ValueError("TYPED_PLAN_INTERNAL: unavailable dispatcher")
         return {
             "op": "call",
             "function": target,
