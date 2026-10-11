@@ -382,7 +382,27 @@ def finalize_candidate_sources(
         canvas.save(output, format="PNG", optimize=False)
     finally:
         canvas.close()
-    validate_texture(output, texture)
+    try:
+        validate_texture(output, texture)
+    except ValueError as exc:
+        if "VISUAL_TEXTURE_DEGENERATE" not in str(exc):
+            raise
+        # The next Colab log must distinguish a truly monochrome FLUX render
+        # from high-resolution detail lost by the native Minecraft reduction.
+        source_nonuniform = []
+        for _region, source_path, _needs_segmentation in pending:
+            with Image.open(source_path) as original:
+                rgb = original.convert("RGB")
+                try:
+                    source_nonuniform.append(rgb.getcolors(maxcolors=1) is None)
+                finally:
+                    rgb.close()
+        raise ValueError(
+            f"{exc} SOURCE_COLOR_DIAGNOSTICS: "
+            f"source_nonuniform={source_nonuniform} "
+            f"native_detail_recovered="
+            f"{[row['native_detail_recovered'] for row in sources]}"
+        ) from exc
     return {
         "sources": sources,
         "resource_contract_sha256": "sha256:"
