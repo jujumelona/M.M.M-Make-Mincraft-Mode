@@ -11,7 +11,7 @@ from minecraft_mod_ai import fixed_template_generation
 from minecraft_mod_ai import implementation_template_renderer
 
 
-_PACKAGE_AND_CLASS = r"(?s)\\bpackage\\s+p\\s*;.*\\bclass\\s+Good\\b"
+_PACKAGE_AND_CLASS = r"(?s)\bpackage\s+p\s*;.*\bclass\s+Good\b"
 _VALID_JAVA = "package p; public class Good { public static int value() { return 42; } }"
 
 
