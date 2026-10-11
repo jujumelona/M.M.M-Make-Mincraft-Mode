@@ -1907,9 +1907,6 @@ def author_semantic_game_dispatch(
                 ),
             )
         schema, token_ceiling = schemas[schema_key]
-        if budget is not None:
-            budget.consume("typed.semantic_dispatch")
-
         payload = {
             "source_sha256": hashlib.sha256(source_text.encode("utf-8")).hexdigest(),
             "coverage_ref": coverage_ref,
@@ -1964,34 +1961,63 @@ def author_semantic_game_dispatch(
                 )
             ),
         }
-        raw = generate_fixed_template_value(
-            router,
-            "planner",
-            (
-                {
-                    "role": "system",
-                    "content": (
-                        "Author one bounded game-logic action for the exact canonical "
-                        "coverage unit supplied by the host."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": json.dumps(payload, ensure_ascii=False),
-                },
-            ),
-            response_schema=schema,
-            enable_tools=False,
-            description=(
-                "Author one atomic semantic game rule for a host-owned coverage unit."
-            ),
-            output_token_ceiling=token_ceiling,
-        )
-        if not isinstance(raw, Mapping):
-            raise ValueError(
-                "TYPED_PLAN_SEMANTIC_RESPONSE_INVALID: rule must be an object"
+        # Reject trivial state echo/placeholder choices at the authoring
+        # boundary, then give the planner a bounded chance to select an actual
+        # state change. The observed resources = "resources" action did not
+        # implement buying, building or launching anything.
+        rule: dict[str, Any] = {}
+        for attempt in range(2):
+            if budget is not None:
+                budget.consume("typed.semantic_dispatch")
+            raw = generate_fixed_template_value(
+                router,
+                "planner",
+                (
+                    {
+                        "role": "system",
+                        "content": (
+                            "Author one bounded game-logic action for the exact canonical "
+                            "coverage unit supplied by the host. "
+                            + (
+                                "PREVIOUS ACTION REJECTED: a state self-assignment "
+                                "or placeholder literal performs no gameplay. "
+                                "Choose a real operation against the actual "
+                                "declared state and host capabilities."
+                                if attempt else ""
+                            )
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": json.dumps(payload, ensure_ascii=False),
+                    },
+                ),
+                response_schema=schema,
+                enable_tools=False,
+                description=(
+                    "Author one atomic semantic game rule for a host-owned coverage unit."
+                ),
+                output_token_ceiling=token_ceiling,
             )
-        rule = dict(raw)
+            if not isinstance(raw, Mapping):
+                raise ValueError(
+                    "TYPED_PLAN_SEMANTIC_RESPONSE_INVALID: rule must be an object"
+                )
+            rule = dict(raw)
+            if not (
+                rule.get("action_kind") == "set_state"
+                and state_types.get(str(rule.get("state_key") or "")) == "string"
+                and str(rule.get("value") or "").strip() in {
+                    str(rule.get("state_key") or "").strip(), "string",
+                }
+            ):
+                break
+        else:
+            raise ValueError(
+                "TYPED_PLAN_SEMANTIC_PLACEHOLDER_REJECTED: the model repeatedly "
+                "returned an ineffective state self-assignment instead of "
+                "implementing the required gameplay operation"
+            )
         if coverage_ref == "resources_and_ui.interactions":
             action = str((focus_record or {}).get("server_action") or "").strip()
             if not action:
