@@ -81,6 +81,7 @@ def test_debug_fixture_uses_real_host_grounding_on_integrity_target():
     )
     assert "Registry.register(" in source
     assert "DEBUG_TOKEN" in source
+    assert "import net.minecraft.world.item.Item;" in source
     assert "{{" not in source
 
 
