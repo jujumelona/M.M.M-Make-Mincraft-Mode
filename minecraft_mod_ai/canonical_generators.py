@@ -75,7 +75,7 @@ def generate_canonical_leaf(inputs, *, leaf_id, router, authority):
                     "Yarn-era net.minecraft.util.Identifier, net.minecraft.text.Text, "
                     "net.minecraft.client.gui.screen.Screen, or other pre-26 "
                     "mapping namespaces. The resource identifier type is "
-                    "net.minecraft.resources.ResourceLocation; text components "
+                    "net.minecraft.resources.Identifier; text components "
                     "use net.minecraft.network.chat.Component. Verify method "
                     "signatures against the bound target, not older tutorials. "
                     "A syntactically valid obsolete Yarn import will be rejected."
