@@ -1763,9 +1763,7 @@ def author_semantic_game_dispatch(
         state_only = coverage_ref in {
             "state_model.transitions", "state_model.updates",
         }
-        mutation_required = state_only or coverage_ref in {
-            "algorithm.atomic_mutations", "resources_and_ui.interactions",
-        }
+        mutation_required = state_only or coverage_ref == "algorithm.atomic_mutations"
         rule_events = allowed_events
         if coverage_ref == "resources_and_ui.interactions":
             if active_events is None or "command" not in active_events:
