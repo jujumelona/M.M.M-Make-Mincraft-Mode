@@ -1278,8 +1278,6 @@ def semantic_dispatch_schema(
     allowed_events: Sequence[str] | None = None,
     mutation_only: bool = False,
     state_only: bool = False,
-    purchase_only: bool = False,
-    purchase_funds_keys: Sequence[str] | None = None,
     excluded_set_state_keys: Sequence[str] = (),
     excluded_increment_state_keys: Sequence[str] = (),
 ) -> dict[str, Any]:
@@ -1401,62 +1399,6 @@ def semantic_dispatch_schema(
             "required": required,
             "additionalProperties": False,
         })
-
-    # A purchase is not a status message or a literal state assignment.
-    # The host can perform the complete minimal purchase as one typed action:
-    # check persisted funds, grant a registered Minecraft item, then debit
-    # ONLY on successful inventory insertion. A failed grant leaves funds intact.
-    purchase_branches: list[dict[str, Any]] = []
-    eligible_funds = (
-        set(purchase_funds_keys)
-        if purchase_funds_keys is not None
-        else {
-            key for key in state_types
-            if any(word in key.casefold() for word in (
-                "balance", "credits", "currency", "coins", "money",
-                "funds", "wallet", "cash", "잔액", "크레딧", "화폐",
-            ))
-        }
-    )
-    grant = (capabilities or {}).get("player.grant_item")
-    if not state_only and isinstance(grant, Mapping) and (
-        grant.get("gameplay_mutation") is True
-        and tuple(grant.get("parameters", ())) == ("object", "string", "int")
-        and grant.get("return_type") == "boolean"
-    ):
-        constraints = _capability_parameter_constraints(
-            grant, grant["parameters"], capability_id="player.grant_item",
-        )
-        for funds_key, funds_type in sorted(state_types.items()):
-            if funds_key not in eligible_funds or funds_type not in {"int", "long", "double"}:
-                continue
-            price_schema = dict(_semantic_state_value_schema(funds_type))
-            price_schema["minimum"] = 1
-            purchase_branches.append({
-                "type": "object",
-                "properties": {
-                    "trigger_event": {"type": "string", "enum": list(trigger_events)},
-                    "action_kind": {"const": "purchase_item"},
-                    "state_key": {"const": funds_key},
-                    "price": price_schema,
-                    "item_id": _semantic_capability_arg_schema("string", constraints[1]),
-                    "quantity": _semantic_capability_arg_schema("int", constraints[2]),
-                },
-                "required": [
-                    "trigger_event", "action_kind", "state_key",
-                    "price", "item_id", "quantity",
-                ],
-                "additionalProperties": False,
-            })
-    if purchase_only:
-        if not purchase_branches:
-            raise ValueError(
-                "TYPED_PLAN_PURCHASE_CONTRACT_UNAVAILABLE: purchase requires a "
-                "persisted currency state and the host item-grant capability"
-            )
-        branches = purchase_branches
-    elif not state_only:
-        branches.extend(purchase_branches)
 
     if not branches:
         raise ValueError(
@@ -1595,79 +1537,6 @@ def lower_semantic_game_dispatch_to_ir(
                 "key": {"op": "literal", "type": "string", "value": key},
                 "value": value_expr,
                 "context": {"op": "map", "entries": []},
-            })
-
-        elif kind == "purchase_item":
-            key = str(rule.get("state_key") or "").strip()
-            currency_type = state_types.get(key)
-            grant = (capabilities or {}).get("player.grant_item")
-            if currency_type not in {"int", "long", "double"} or not isinstance(grant, Mapping):
-                raise ValueError("TYPED_PLAN_PURCHASE_CONTRACT_UNAVAILABLE")
-            if (tuple(grant.get("parameters", ())) != ("object", "string", "int")
-                    or grant.get("return_type") != "boolean"
-                    or grant.get("gameplay_mutation") is not True):
-                raise ValueError("TYPED_PLAN_PURCHASE_GRANT_ABI_MISMATCH")
-            raw_price = rule.get("price")
-            if currency_type == "int":
-                price = _decode_int_literal(raw_price, scope=f"rule[{rule_idx}].price")
-            elif currency_type == "long":
-                price = _decode_long_literal(raw_price, scope=f"rule[{rule_idx}].price")
-            else:
-                price = _decode_double_literal(raw_price, scope=f"rule[{rule_idx}].price")
-            if price <= 0:
-                raise ValueError("TYPED_PLAN_PURCHASE_PRICE_INVALID")
-            item_id = rule.get("item_id")
-            quantity = _decode_int_literal(
-                rule.get("quantity"), scope=f"rule[{rule_idx}].quantity",
-            )
-            constraints = _capability_parameter_constraints(
-                grant, grant["parameters"], capability_id="player.grant_item",
-            )
-            if not isinstance(item_id, str):
-                raise ValueError("TYPED_PLAN_PURCHASE_ITEM_INVALID")
-            _validate_capability_scalar_constraint(
-                item_id, type_name="string", constraints=constraints[1],
-                scope="player.grant_item.item_id",
-            )
-            _validate_capability_scalar_constraint(
-                quantity, type_name="int", constraints=constraints[2],
-                scope="player.grant_item.quantity",
-            )
-            funds_get = {
-                "op": "state_get",
-                "key": {"op": "literal", "type": "string", "value": key},
-                "type": currency_type,
-                "context": {"op": "map", "entries": []},
-            }
-            price_expr = {"op": "literal", "type": currency_type, "value": price}
-            action_statements.append({
-                "op": "if",
-                "condition": {
-                    "op": "binary", "operator": ">=",
-                    "left": funds_get, "right": price_expr,
-                },
-                "then": [{
-                    "op": "if",
-                    "condition": {
-                        "op": "capability", "id": "player.grant_item",
-                        "args": [
-                            {"op": "ref", "name": "primary"},
-                            {"op": "literal", "type": "string", "value": item_id},
-                            {"op": "literal", "type": "int", "value": quantity},
-                        ],
-                    },
-                    "then": [{
-                        "op": "state_set",
-                        "key": {"op": "literal", "type": "string", "value": key},
-                        "value": {
-                            "op": "binary", "operator": "-",
-                            "left": funds_get, "right": price_expr,
-                        },
-                        "context": {"op": "map", "entries": []},
-                    }],
-                    "else": [],
-                }],
-                "else": [],
             })
 
         elif kind == "call_capability":
@@ -1890,58 +1759,6 @@ def author_semantic_game_dispatch(
                 continue
         units.append((ref, None, None))
 
-    currency_keys = {
-        str(record.get("name") or "").strip()
-        for record in active_concern_records(
-            structured_sections, "state_model",
-        ).get("variables", ())
-        if isinstance(record, Mapping)
-        and state_types.get(str(record.get("name") or "").strip())
-        in {"int", "long", "double"}
-        and any(
-            word in " ".join(
-                str(record.get(field) or "") for field in ("name", "unit", "domain")
-            ).casefold()
-            for word in (
-                "balance", "credits", "currency", "coins", "money",
-                "funds", "wallet", "cash", "잔액", "크레딧", "화폐",
-            )
-        )
-    }
-
-
-    def is_purchase_record(ref: str, focus: Mapping[str, Any] | None) -> bool:
-        if ref != "resources_and_ui.interactions":
-            return False
-        context = " ".join(
-            str((focus or {}).get(field) or "")
-            for field in ("server_action", "trigger", "description", "label")
-        ).casefold()
-        return any(term in context for term in ("purchase", "buy", "구매"))
-
-    # Validate executable purchase dependencies before authoring any rules.
-    purchase_units = [
-        (ref, index) for ref, index, focus in units
-        if is_purchase_record(ref, focus)
-    ]
-    if purchase_units:
-        if not currency_keys:
-            raise ValueError(
-                "TYPED_PLAN_PURCHASE_FUNDS_STATE_UNBOUND: "
-                f"units={purchase_units!r} need a numeric currency state"
-            )
-        grant = (capabilities or {}).get("player.grant_item")
-        if (
-            not isinstance(grant, Mapping)
-            or grant.get("gameplay_mutation") is not True
-            or tuple(grant.get("parameters", ())) != ("object", "string", "int")
-            or grant.get("return_type") != "boolean"
-        ):
-            raise ValueError(
-                "TYPED_PLAN_PURCHASE_GRANT_CAPABILITY_UNBOUND: "
-                f"units={purchase_units!r} need the host item grant ABI"
-            )
-
     for coverage_ref, record_index, focus_record in units:
         state_only = coverage_ref in {
             "state_model.transitions", "state_model.updates",
@@ -1977,9 +1794,8 @@ def author_semantic_game_dispatch(
                     "steps have only bootstrap entry points; repair integration "
                     "entry_points before executable PlanIR authoring."
                 )
-        is_purchase = is_purchase_record(coverage_ref, focus_record)
         schema_key = (
-            mutation_required, state_only, tuple(rule_events or ()), is_purchase,
+            mutation_required, state_only, tuple(rule_events or ()),
         )
         if schema_key not in schemas:
             schema = semantic_dispatch_schema(
@@ -1987,8 +1803,7 @@ def author_semantic_game_dispatch(
                 allowed_events=rule_events,
                 mutation_only=mutation_required,
                 state_only=state_only,
-                purchase_only=is_purchase,
-                purchase_funds_keys=tuple(sorted(currency_keys)),
+
             )
             assert_model_atomic_decision_schema(
                 schema, field="semantic_dispatch_rule",
@@ -2034,13 +1849,7 @@ def author_semantic_game_dispatch(
                 )
             },
             "instruction": (
-                ("This action is a PURCHASE. Use purchase_item to guard persisted "
-                 "funds, give an actually registered item and debit only after "
-                 "the grant succeeds. The state_key MUST be a currency balance "
-                 "and item_id MUST identify the intended purchase, not a dummy "
-                 "item or arbitrary registered unrelated reward. "
-                 if is_purchase else "")
-                + "Choose exactly one host-bound runtime action implementing the supplied "
+                "Choose exactly one host-bound runtime action implementing the supplied "                + "Choose exactly one host-bound runtime action implementing the supplied "
                 "coverage_ref and its individual focus_record when present; do not "
                 "substitute an unrelated step. Only choose an event actually bound by "
                 "the host; no lifecycle substitutions for unrelated actions. "
@@ -2056,8 +1865,7 @@ def author_semantic_game_dispatch(
         }
         # Reject trivial state echo/placeholder choices at the authoring
         # boundary, then give the planner a bounded chance to select an actual
-        # state change. The observed resources = "resources" action did not
-        # implement buying, building or launching anything.
+        # state change without imposing an unrelated gameplay mechanic.
         rule: dict[str, Any] = {}
         rejected_kind = ""
         rejected_key = ""
@@ -2070,8 +1878,7 @@ def author_semantic_game_dispatch(
                         allowed_events=rule_events,
                         mutation_only=mutation_required,
                         state_only=state_only,
-                        purchase_only=is_purchase,
-                        purchase_funds_keys=tuple(sorted(currency_keys)),
+
                         excluded_set_state_keys=(rejected_key,)
                         if rejected_kind == "set_state" else (),
                         excluded_increment_state_keys=(rejected_key,)
