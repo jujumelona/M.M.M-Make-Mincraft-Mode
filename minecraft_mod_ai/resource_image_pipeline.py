@@ -93,7 +93,7 @@ def _clear_boundary_background(image: Any) -> None:
 
 
 def _preserve_segmented_native_coverage(
-    source: Any, native: Any, *, alpha_threshold: int,
+    source: Any, native: Any, *, alpha_threshold: int, enabled: bool,
 ) -> None:
     """Retain real matte pixels that nearest-neighbor native sampling misses.
 
@@ -105,6 +105,8 @@ def _preserve_segmented_native_coverage(
     """
     from PIL import Image
 
+    if not enabled:
+        return
     width, height = native.size
     with source.convert("RGBA") as rgba:
         with rgba.getchannel("A") as alpha:
@@ -145,10 +147,10 @@ def postprocess_region(
     layout = contract["geometry"]["layout"]
     if policy in {"transparent", "cutout"} and layout not in {"fixed_uv", "gui_sprite"}:
         _clear_boundary_background(image)
-        if preserve_alpha_coverage:
-            _preserve_segmented_native_coverage(
-                source, image, alpha_threshold=int(rules["alpha_threshold"]),
-            )
+        _preserve_segmented_native_coverage(
+            source, image, alpha_threshold=int(rules["alpha_threshold"]),
+            enabled=preserve_alpha_coverage,
+        )
     pixels = []
     for r, g, b, a in _pixels(image):
         a = 255 if policy == "opaque" or a >= rules["alpha_threshold"] else 0
@@ -495,6 +497,18 @@ def generate_candidate(
     )
 
 
+def _invalid_alpha_coverage_details(image: Any) -> str:
+    """Calculate actionable diagnostics only on an invalid PNG, not on the hot path."""
+    with image.getchannel("A") as alpha:
+        histogram = alpha.histogram()
+    return (
+        f"opaque_pixels={histogram[255]} "
+        f"transparent_pixels={histogram[0]} "
+        f"partial_pixels={sum(histogram[1:255])} "
+        f"native_size={image.size}"
+    )
+
+
 def validate_texture(
     path: Path, texture: Mapping[str, Any], *, check_metadata: bool = False
 ) -> dict[str, Any]:
@@ -512,16 +526,11 @@ def validate_texture(
         ):
             raise ValueError("PNG format/geometry/alpha channel mismatch.")
         rendering, animation = contract["rendering"], contract["animation"]
-        with raw.getchannel("A") as alpha_channel:
-            alpha_histogram = alpha_channel.histogram()
-        all_alpha = {value for value, count in enumerate(alpha_histogram) if count}
+        all_alpha = set(_pixels(raw.getchannel("A")))
         if not all_alpha <= {0, 255} or 255 not in all_alpha:
             raise ValueError(
                 "Invalid alpha/pixel-grid coverage. "
-                f"opaque_pixels={alpha_histogram[255]} "
-                f"transparent_pixels={alpha_histogram[0]} "
-                f"partial_pixels={sum(alpha_histogram[1:255])} "
-                f"native_size={raw.size}"
+                + _invalid_alpha_coverage_details(raw)
             )
         if rendering["alpha"] == "opaque" and all_alpha != {255}:
             raise ValueError("Opaque texture has transparent alpha.")
