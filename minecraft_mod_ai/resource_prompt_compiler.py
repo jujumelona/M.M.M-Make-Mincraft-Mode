@@ -68,6 +68,16 @@ def compile_texture_prompt(*, visual_description: str = "", texture: TextureSpec
         # BiRefNet segments the output before native-pixel-grid reduction;
         # a simple isolated foreground makes this reliably distinguishable.
         topology += ", one centered complete foreground object on a plain contrasting background, no scene, no cast shadow"
+    if texture.topology in {"single_face", "seamless_tile"} and texture.alpha_policy == "opaque":
+        # The registry's generic LoRA trigger mentions transparent sprites;
+        # block-face textures require the opposite geometry and alpha coverage.
+        topology += (
+            ", entire image filled by a close-up material surface,"
+            " visible repeating pixel clusters, facets, grains and seams,"
+            " shaded multicolor details at a readable 16x16 scale,"
+            " no isolated floating cube, no empty background,"
+            " absolutely no transparent or single-color surface"
+        )
     parts = [p.lora_trigger.strip(), "Minecraft Java resource texture", "pixel art", topology, alpha,
              f"texture role {texture.role}", visual_bible, feature_purpose, description, *p.prompt_requirements,
              "simple native-grid silhouette, avoid subpixel detail", "no text", "no numbers", "no watermark", "no screenshot", "no 3D scene"]
