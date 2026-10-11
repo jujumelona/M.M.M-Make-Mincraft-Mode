@@ -149,18 +149,6 @@ class CompleteGameDesignPlanner:
         if repaired_sections != structured_sections:
             structured_sections = repaired_sections
             checkpoint.save_sections(structured_sections)
-
-        # Purchase actions require a named numeric balance in the canonical
-        # state model. Repair it now, before potentially hundreds of model
-        # calls for asset/content design; never synthesize funds in PlanIR.
-        from .purchase_funds_contract import repair_missing_purchase_funds
-
-        repaired_sections = repair_missing_purchase_funds(
-            self.router, prompt, structured_sections, budget=budget,
-        )
-        if repaired_sections != structured_sections:
-            structured_sections = repaired_sections
-            checkpoint.save_sections(structured_sections)
         text = render_structured_sections(structured_sections)
 
         # Research/inspection happens before content identities are authored:
