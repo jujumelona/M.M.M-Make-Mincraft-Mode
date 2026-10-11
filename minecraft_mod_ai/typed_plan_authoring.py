@@ -1279,6 +1279,7 @@ def semantic_dispatch_schema(
     mutation_only: bool = False,
     state_only: bool = False,
     purchase_only: bool = False,
+    purchase_funds_keys: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Build semantic actions only from host-known, actually bound events."""
 
@@ -1400,6 +1401,17 @@ def semantic_dispatch_schema(
     # check persisted funds, grant a registered Minecraft item, then debit
     # ONLY on successful inventory insertion. A failed grant leaves funds intact.
     purchase_branches: list[dict[str, Any]] = []
+    eligible_funds = (
+        set(purchase_funds_keys)
+        if purchase_funds_keys is not None
+        else {
+            key for key in state_types
+            if any(word in key.casefold() for word in (
+                "balance", "credits", "currency", "coins", "money",
+                "funds", "wallet", "cash", "잔액", "크레딧", "화폐",
+            ))
+        }
+    )
     grant = (capabilities or {}).get("player.grant_item")
     if not state_only and isinstance(grant, Mapping) and (
         grant.get("gameplay_mutation") is True
@@ -1410,7 +1422,7 @@ def semantic_dispatch_schema(
             grant, grant["parameters"], capability_id="player.grant_item",
         )
         for funds_key, funds_type in sorted(state_types.items()):
-            if funds_type not in {"int", "long", "double"}:
+            if funds_key not in eligible_funds or funds_type not in {"int", "long", "double"}:
                 continue
             price_schema = dict(_semantic_state_value_schema(funds_type))
             price_schema["minimum"] = 1
@@ -1838,6 +1850,25 @@ def author_semantic_game_dispatch(
                 continue
         units.append((ref, None, None))
 
+    currency_keys = {
+        str(record.get("name") or "").strip()
+        for record in active_concern_records(
+            structured_sections, "state_model",
+        ).get("variables", ())
+        if isinstance(record, Mapping)
+        and state_types.get(str(record.get("name") or "").strip())
+        in {"int", "long", "double"}
+        and any(
+            word in " ".join(
+                str(record.get(field) or "") for field in ("name", "unit", "domain")
+            ).casefold()
+            for word in (
+                "balance", "credits", "currency", "coins", "money",
+                "funds", "wallet", "cash", "잔액", "크레딧", "화폐",
+            )
+        )
+    }
+
     for coverage_ref, record_index, focus_record in units:
         state_only = coverage_ref in {
             "state_model.transitions", "state_model.updates",
@@ -1883,7 +1914,7 @@ def author_semantic_game_dispatch(
                 "buy", "purchase", "market", "shop", "recruit",
                 "구매", "거래", "상점", "고용",
             ))
-            and any(kind in {"int", "long", "double"} for kind in state_types.values())
+            and bool(currency_keys)
             and isinstance((capabilities or {}).get("player.grant_item"), Mapping)
         )
         schema_key = (
@@ -1896,6 +1927,7 @@ def author_semantic_game_dispatch(
                 mutation_only=mutation_required,
                 state_only=state_only,
                 purchase_only=is_purchase,
+                purchase_funds_keys=tuple(sorted(currency_keys)),
             )
             assert_model_atomic_decision_schema(
                 schema, field="semantic_dispatch_rule",
