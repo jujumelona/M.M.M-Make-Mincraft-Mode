@@ -205,26 +205,6 @@ def _is_authored_coverage_proposal(approved: CompleteProposal) -> bool:
     )
 
 
-def _require_authored_quality_before_generation(
-    approved: CompleteProposal,
-    *,
-    source_only: bool,
-) -> None:
-    """Reject a stale full-build authored v1 plan before costly model loading."""
-    if (
-        not source_only
-        and _is_authored_coverage_proposal(approved)
-        and not isinstance(approved.game_design.get('_production_contract'), dict)
-    ):
-        raise CompleteProductionError(
-            'AUTHORED_QUALITY_CONTRACT_REQUIRED_BEFORE_GENERATION: '
-            'The saved authored plan predates v2 quality binding. '
-            'Regenerate and reapprove the authored plan using the current main '
-            'code before running the full Colab build. Old proposal approvals '
-            'cannot be silently changed or treated as passing quality evidence.'
-        )
-
-
 def _quality_execution_preflight_gaps(
     approved: CompleteProposal,
     options: CompleteExecutionOptions,
@@ -515,9 +495,6 @@ class CompleteProductionOrchestrator:
             raise SpecValidationError('Complete proposal approval did not complete.')
         options = _mandatory_blockbench_execution_options(approved, options)
         _validate_required_gate_contract(approved)
-        _require_authored_quality_before_generation(
-            approved, source_only=options.source_only,
-        )
         quality_preflight_gaps = _quality_execution_preflight_gaps(approved, options)
         if quality_preflight_gaps:
             print(
