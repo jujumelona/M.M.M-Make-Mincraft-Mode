@@ -152,9 +152,16 @@ def recover_block_surface_detail(
         rendering["alpha"] != "opaque"
         or contract["geometry"]["layout"] in {"fixed_uv", "gui_sprite"}
         or rendering["uv_schema"]
-        or processed.convert("RGB").getcolors(maxcolors=1) is None
     ):
         return processed, False
+    with processed.convert("RGB") as native_rgb:
+        if native_rgb.getcolors(maxcolors=1) is None:
+            return processed, False
+    with source.convert("RGB") as source_rgb:
+        if source_rgb.getcolors(maxcolors=1) is not None:
+            # A truly flat source has no recoverable pixels; don't burn CPU
+            # searching fifteen crops, particularly for large HOST textures.
+            return processed, False
 
     width, height = source.size
     best = None
