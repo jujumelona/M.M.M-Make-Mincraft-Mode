@@ -35,11 +35,6 @@ def _append_ui_action_bindings(
     """Bind distinct generated player commands to authored action identities."""
     from .typed_event_ir import EVENT_PARAMETERS, EVENT_SIGNATURES
 
-    if not any(binding["event"] == "command" for binding in bindings):
-        raise ValueError(
-            "TYPED_UI_ACTION_COMMAND_UNBOUND: repair a player command "
-            "entry point before authoring UI action handlers"
-        )
     used_literals = {
         str(binding["config"]["literal"])
         for binding in bindings if binding["event"] == "command"
