@@ -147,8 +147,6 @@ def recover_block_surface_detail(
     Never paint synthetic noise or accept a genuinely monochrome source.
     Only an opaque full-face block may be recropped (not sprites or UV atlases).
     """
-    from PIL import Image
-
     rendering = contract["rendering"]
     if (
         rendering["alpha"] != "opaque"
