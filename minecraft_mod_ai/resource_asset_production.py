@@ -631,34 +631,33 @@ def generate_assets(
             "ALPHA_SEGMENTER_WORKER_MISSING_OUTPUT",
             "COLAB_RAM_HEADROOM_EXHAUSTED:",
         )
+        # Generate all alternative source PNGs while FLUX is resident once.
+        # ONNX starts only after image weights and CPU-offload hooks are gone.
+        # A failed matte/pixel contract must not trigger another 16 GB load.
+        source_batches = []
         for index in range(profile.candidate_count):
-            active = [task for task in tasks if task["selected"] is None]
-            if not active:
-                break
-
-            source_batches = []
-            # Pure diffusion pass: NEVER instantiate an ONNX segmenter here.
-            for task in active:
+            for task in tasks:
                 asset_id, role, texture = (
                     task["asset_id"], task["role"], task["texture"]
                 )
                 normalized = candidate_root / asset_id / role / f"normalized-{index:02d}.png"
-                # A monochrome failure from the previous real pixel validation
-                # must inform the next generation attempt, not just consume
-                # another random seed with identical prompting.
-                flat_failure = any(
-                    "VISUAL_TEXTURE_DEGENERATE" in str(failure.get("reason") or "")
-                    for failure in task["failures"]
-                )
                 candidate_prompt = task["prompt"]
-                if flat_failure:
-                    candidate_prompt += (
-                        ", clearly distinguishable material texture, visible"
-                        " colored midtones and contrasting edge highlights,"
-                        " recognizable Minecraft game icon or block surface,"
-                        " never solid black or a monochrome square"
-                    )
-                task["candidate_prompt"] = candidate_prompt
+                if index:
+                    # Distinct prompts, not merely another seed for a failed
+                    # monochrome surface. Preserve the original approved plan.
+                    if "/textures/block/" in "/" + str(texture["target_path"]):
+                        candidate_prompt += (
+                            ", full-frame detailed material surface, distinct"
+                            " mineral facets or grain clusters, multiple visible"
+                            " midtone colors, highlights and dark joints,"
+                            " textured edge-to-edge, not a solid color"
+                        )
+                    else:
+                        candidate_prompt += (
+                            ", clearly distinguishable foreground material"
+                            " colors and contrast, readable fine pixel-art"
+                            " details on the actual object, not monochrome"
+                        )
                 try:
                     pending = prepare_candidate_sources(
                         lambda **kwargs: router.generate_image("image_generator", **kwargs),
@@ -675,27 +674,29 @@ def generate_assets(
                         ) from exc
                     task["failures"].append({"candidate": index, "reason": str(exc)})
                     continue
-                source_batches.append((task, normalized, pending))
+                source_batches.append((task, index, normalized, pending, candidate_prompt))
 
-            needs_mask = any(
-                needs for _, _, pending in source_batches
-                for _, _, needs in pending
+        needs_mask = any(
+            needs for _task, _index, _normalized, pending, _prompt in source_batches
+            for _region, _source, needs in pending
+        )
+        if needs_mask:
+            print(
+                f"ASSET_PHASE_HANDOFF: generated_sources={len(source_batches)} "
+                "releasing_FLUX_once_before_ONNX",
+                flush=True,
             )
-            if needs_mask:
-                print(
-                    f"ASSET_PHASE_HANDOFF: generated_sources={len(source_batches)} "
-                    f"candidate_round={index}; releasing_FLUX_once_before_ONNX",
-                    flush=True,
-                )
-                release_image_pipeline_for_segmentation()
-                # Memory preflight must be checked AFTER FLUX leaves CPU RAM.
-                from .runtime_memory_watchdog import assert_memory_headroom
-                if os.environ.get("MMM_COLAB_SETUP_RECEIPT", "").strip():
-                    assert_memory_headroom("before_alpha_segmentation")
+            release_image_pipeline_for_segmentation()
+            from .runtime_memory_watchdog import assert_memory_headroom
+            if os.environ.get("MMM_COLAB_SETUP_RECEIPT", "").strip():
+                assert_memory_headroom("before_alpha_segmentation")
 
-            # Segmentation pass: one isolated ONNX worker at a time, and no
-            # FLUX reload unless a failed candidate requires another round.
-            for task, normalized, pending in source_batches:
+        # Evaluate candidates in priority order. Keep the first actual
+        # contract-passing PNG; any failures retain their exact reason.
+        for task in tasks:
+            for source_task, index, normalized, pending, candidate_prompt in source_batches:
+                if source_task is not task:
+                    continue
                 asset_id, role, texture = (
                     task["asset_id"], task["role"], task["texture"]
                 )
@@ -713,7 +714,8 @@ def generate_assets(
                     task["failures"].append({"candidate": index, "reason": str(exc)})
                     continue
                 task["selected"] = (1000.0, index, normalized, evidence)
-                task["selected_prompt"] = task["candidate_prompt"]
+                task["selected_prompt"] = candidate_prompt
+                break
 
         for task in tasks:
             selected = task["selected"]
