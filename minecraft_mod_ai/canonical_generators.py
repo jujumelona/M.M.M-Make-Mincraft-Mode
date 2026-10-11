@@ -40,7 +40,7 @@ def generate_canonical_leaf(inputs, *, leaf_id, router, authority):
         assert_atomic_model_schema(schema, surface=f"canonical slot {leaf_id}:{name}")
         model_schemas[name] = schema
 
-    def generate_slot(slot):
+    def generate_slot(slot, *, repair_note: str = ""):
         from jsonschema.exceptions import ValidationError
 
         from .execution_contract_policy import SOURCE_REPAIR_HARD_ATTEMPTS
@@ -65,6 +65,27 @@ def generate_canonical_leaf(inputs, *, leaf_id, router, authority):
                 system_message += (
                     "\nThe complete source MUST match this host-owned source "
                     f"declaration contract: {slot_schema['pattern']}"
+                )
+            if spec.get("language") == "java" and str(
+                spec.get("bindings", {}).get("minecraft_version", "")
+            ).startswith("26."):
+                system_message += (
+                    "\nCRITICAL MINECRAFT 26.x API CONTRACT: use ONLY official "
+                    "Mojang names for this bound target. NEVER import or reference "
+                    "Yarn-era net.minecraft.util.Identifier, net.minecraft.text.Text, "
+                    "net.minecraft.client.gui.screen.Screen, or other pre-26 "
+                    "mapping namespaces. The resource identifier type is "
+                    "net.minecraft.resources.ResourceLocation; text components "
+                    "use net.minecraft.network.chat.Component. Verify method "
+                    "signatures against the bound target, not older tutorials. "
+                    "A syntactically valid obsolete Yarn import will be rejected."
+                )
+            if repair_note:
+                system_message += (
+                    "\nThe previous complete rendered Java artifact failed this "
+                    "host-owned target check: " + repair_note
+                    + "\nRegenerate this slot using only the bound target's "
+                    "official Mojang API; preserve the stated behavior."
                 )
 
         messages = [
@@ -132,21 +153,42 @@ def generate_canonical_leaf(inputs, *, leaf_id, router, authority):
             return value
         raise AssertionError("unreachable: canonical slot repair has no validated result")
 
-    generated = deterministic_model_map(
-        router,
-        slots,
-        generate_slot,
-        role="coder",
-        thread_name_prefix="canonical-slot",
-    )
-    for slot, value in zip(slots, generated):
-        validate_json_schema(value, slot["schema"])
-        values[slot["name"]] = value
+    # Validate the COMPLETE rendered compilation unit as well as individual
+    # model slots. A mold can introduce imports absent from an isolated slot.
+    from .execution_contract_policy import SOURCE_REPAIR_HARD_ATTEMPTS
+    from .canonical_java_target_contract import assert_canonical_java_target
 
-    source = render_template({"render": spec["render_mold"]}, values)
-    validate_semantic_contract(
-        source, contract=spec, context_id=spec["context_id"], leaf_id=leaf_id
-    )
+    java_target = spec.get("language") == "java"
+    attempts = max(1, SOURCE_REPAIR_HARD_ATTEMPTS) if java_target else 1
+    repair_note = ""
+    for render_attempt in range(attempts):
+        generated = deterministic_model_map(
+            router,
+            slots,
+            lambda slot: generate_slot(slot, repair_note=repair_note),
+            role="coder",
+            thread_name_prefix="canonical-slot",
+        )
+        for slot, value in zip(slots, generated):
+            validate_json_schema(value, slot["schema"])
+            values[slot["name"]] = value
+
+        source = render_template({"render": spec["render_mold"]}, values)
+        validate_semantic_contract(
+            source, contract=spec, context_id=spec["context_id"], leaf_id=leaf_id
+        )
+        if java_target:
+            try:
+                assert_canonical_java_target(source, spec)
+            except ValueError as exc:
+                if not str(exc).startswith((
+                    "CANONICAL_MOJANG_API_REQUIRED:",
+                    "CANONICAL_SCREEN_REGISTRATION_CLASS_INVALID:",
+                )) or render_attempt + 1 >= attempts or not slots:
+                    raise
+                repair_note = str(exc)
+                continue
+        break
     result = {}
     for port in manifest["outputs"]:
         if port["type"] == "code_fragment":
