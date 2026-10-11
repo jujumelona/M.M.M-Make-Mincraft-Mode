@@ -371,3 +371,43 @@ def test_individually_guarded_gameplay_actions_pass_coverage(monkeypatch) -> Non
         (ProductionModule("farm_screen", "gui", {}),),
         {"capabilities": []},
     )
+
+
+def test_empty_atomic_mutation_discovery_gets_actionable_retry(monkeypatch) -> None:
+    """An empty first model response must not silently discard a transaction."""
+    from minecraft_mod_ai import content_design_graph
+
+    class RetryObserved(Exception):
+        pass
+
+    calls = []
+
+    def fake_records(_router, identifier, *, context, **_kwargs):
+        assert identifier == "design/content_entity"
+        calls.append(dict(context))
+        if "rejected_passive_candidates" in context:
+            assert context["rejected_passive_candidates"] == []
+            assert set(context["allowed_content_kinds"]) == {
+                "custom_item_behavior", "custom_block_behavior",
+            }
+            raise RetryObserved()
+        return {"records": []}
+
+    monkeypatch.setattr(content_design_graph, "run_record_template", fake_records)
+    with pytest.raises(RetryObserved):
+        content_design_graph.compile_content_graph(
+            "implement planting and harvesting",
+            object(),
+            request_catalog={
+                "requirements": [{
+                    "requirement_id": "gameplay_mutation_empty",
+                    "statement": "Plant a crop when the player chooses a crop",
+                    "design_context": {
+                        "source_section": "algorithm",
+                        "source_concern": "atomic_mutations",
+                    },
+                }],
+                "host_constraints": {},
+            },
+        )
+    assert len(calls) == 2
