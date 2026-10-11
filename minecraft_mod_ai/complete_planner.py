@@ -78,17 +78,7 @@ class CompleteGameDesignPlanner:
             normalize_structured_sections,
             render_structured_sections,
         )
-        from .typed_host_capabilities import typed_host_capability_contracts
-        from .typed_plan_ir import validate_typed_host_capability_contracts
-        from .typed_plan_authoring import author_typed_plan_ir
-
         from .planner_budget import PlannerBudget
-
-        # This must run BEFORE expensive local-model calls and external source
-        # discovery. Otherwise a Python-side ABI mismatch would discard the
-        # entire authored plan only at the final PlanIR validation step.
-        capability_contracts = typed_host_capability_contracts()
-        validate_typed_host_capability_contracts(capability_contracts)
 
         # Every planner loop is host-bounded at its own structural boundary.
         # Keep one ledger for accounting, but do not impose a second unrelated
@@ -136,6 +126,66 @@ class CompleteGameDesignPlanner:
                 )
             structured_sections = normalize_structured_sections(structured_sections)
             checkpoint.save_sections(structured_sections)
+
+        # A plan is the authored design, not a partially compiled runtime.
+        # RAG reuse, implementation selection, Typed PlanIR and build checks
+        # belong to production after the plan has been saved.
+        text = render_structured_sections(structured_sections)
+        return AuthoredPlan(
+            requested_prompt=prompt,
+            text=text,
+            existing_input_sha256=existing_input_sha256,
+            media_paths=tuple(str(path) for path in media_paths),
+            structured_sections=structured_sections,
+        )
+
+    def _author_for_production(self, plan: AuthoredPlan) -> AuthoredPlan:
+        """Use the saved design to select reusable code and author execution.
+
+        Do not gate creation of the user-facing plan on availability of a
+        specific state, currency, gameplay capability or Java backend.
+        """
+        from .planner_operation import planner_operation
+        from .planner_budget import PlannerBudget
+        from .authored_structured_design import (
+            render_structured_sections,
+        )
+        from .typed_host_capabilities import typed_host_capability_contracts
+        from .typed_plan_ir import validate_typed_host_capability_contracts
+        from .typed_plan_authoring import author_typed_plan_ir
+
+        prompt = plan.requested_prompt
+        media_paths = plan.media_paths
+        existing_input_sha256 = plan.existing_input_sha256
+        structured_sections = plan.structured_sections
+        adapter = self.adapter
+        deterministic_module_kinds = self.deterministic_module_kinds
+        budget = PlannerBudget()
+        capability_contracts = typed_host_capability_contracts()
+        validate_typed_host_capability_contracts(capability_contracts)
+        target_adapter = adapter or getattr(
+            self.router, "_mmm_target_adapter", None,
+        )
+        target_version = str(
+            getattr(target_adapter, "minecraft_version", "") or ""
+        ).strip()
+        target_loader = str(
+            getattr(target_adapter, "loader", "") or ""
+        ).strip()
+        try:
+            role_config = self.router.registry.role(self.router.profile, "planner")
+            planner_model_id = str(getattr(role_config, "model_id", "") or "")
+        except (AttributeError, KeyError, ValueError, TypeError):
+            planner_model_id = str(getattr(self.router, "profile", "") or "")
+        checkpoint = PlannerCheckpoint(
+            prompt=prompt,
+            media_paths=media_paths,
+            existing_input_sha256=existing_input_sha256,
+            model_id=planner_model_id,
+            target_version=target_version,
+            target_loader=target_loader,
+            source_revision=str(repository_revision().get("git_commit", "")),
+        )
 
         # A login-only authored event graph cannot execute player purchases,
         # upgrades or launch actions. Repair the integration entry-point design
@@ -330,6 +380,8 @@ class CompleteGameDesignPlanner:
         if not isinstance(prompt, AuthoredPlan):
             raise TypeError("compile_for_production requires AuthoredPlan")
         plan = prompt
+        if not plan.typed_plan_ir:
+            plan = self._author_for_production(plan)
         with trace_scope("production_preparation", trace_id=uuid.uuid4().hex):
             emit_root_cause(
                 "production_preparation_start", stage="production", result="START",
