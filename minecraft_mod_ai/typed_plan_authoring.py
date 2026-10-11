@@ -1890,34 +1890,17 @@ def author_semantic_game_dispatch(
                 continue
         units.append((ref, None, None))
 
-    currency_keys = {
-        str(record.get("name") or "").strip()
-        for record in active_concern_records(
-            structured_sections, "state_model",
-        ).get("variables", ())
-        if isinstance(record, Mapping)
-        and state_types.get(str(record.get("name") or "").strip())
-        in {"int", "long", "double"}
-        and any(
-            word in " ".join(
-                str(record.get(field) or "") for field in ("name", "unit", "domain")
-            ).casefold()
-            for word in (
-                "balance", "credits", "currency", "coins", "money",
-                "funds", "wallet", "cash", "잔액", "크레딧", "화폐",
-            )
-        )
-    }
+    from .purchase_funds_contract import (
+        currency_state_keys, is_purchase_interaction,
+    )
 
+    currency_keys = currency_state_keys(structured_sections)
 
     def is_purchase_record(ref: str, focus: Mapping[str, Any] | None) -> bool:
-        if ref != "resources_and_ui.interactions":
-            return False
-        context = " ".join(
-            str((focus or {}).get(field) or "")
-            for field in ("server_action", "trigger", "description", "label")
-        ).casefold()
-        return any(term in context for term in ("purchase", "buy", "구매"))
+        return (
+            ref == "resources_and_ui.interactions"
+            and is_purchase_interaction(focus)
+        )
 
     # Validate executable purchase dependencies before authoring any rules.
     purchase_units = [
