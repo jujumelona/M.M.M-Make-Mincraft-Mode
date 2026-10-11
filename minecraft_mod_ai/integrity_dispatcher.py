@@ -115,8 +115,18 @@ def verify_job_binding(job, resolved, context):
         "input_schema_sha256": authority.types.get_schema_hash(leaf + ":input"),
         "output_schema_sha256": authority.types.get_schema_hash(leaf + ":output"),
     }
-    if any(impl.get(k) != v for k, v in checks.items()) or job.implementation_id != actual.implementation_id:
-        raise ValueError("RUNTIME_INTEGRITY_BINDING_MISMATCH")
+    drift = [key for key, value in checks.items() if impl.get(key) != value]
+    if job.implementation_id != actual.implementation_id:
+        drift.append("job_implementation_id")
+    if drift:
+        raise ValueError(
+            "RUNTIME_INTEGRITY_BINDING_MISMATCH: "
+            f"leaf={leaf} job={job.job_id} "
+            f"binding_state={registered_binding.get('state')} "
+            f"fields={','.join(drift)} "
+            f"registered_impl={actual.implementation_id} "
+            f"job_impl={job.implementation_id}"
+        )
     allowed_templates = {
         template_id
         for template_id in (
