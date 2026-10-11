@@ -8,9 +8,7 @@ import pytest
 from minecraft_mod_ai.complete_orchestrator_services import run_playtest
 from minecraft_mod_ai.complete_orchestrator_support import (
     CompleteProductionError,
-    _handled_module_ids,
     _normalize_modules,
-    _system_groups,
 )
 from minecraft_mod_ai.complete_spec import ProductionModule
 from minecraft_mod_ai.extended_content_generator import generate_extended_content
