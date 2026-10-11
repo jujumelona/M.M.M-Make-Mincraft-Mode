@@ -1278,8 +1278,6 @@ def semantic_dispatch_schema(
     allowed_events: Sequence[str] | None = None,
     mutation_only: bool = False,
     state_only: bool = False,
-    excluded_set_state_keys: Sequence[str] = (),
-    excluded_increment_state_keys: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Build semantic actions only from host-known, actually bound events."""
 
@@ -1295,30 +1293,26 @@ def semantic_dispatch_schema(
     branches: list[dict[str, Any]] = []
     for state_key, state_type in sorted(state_types.items()):
         value_schema = _semantic_state_value_schema(state_type)
-        if state_key not in excluded_set_state_keys:
-            branches.append({
-                "type": "object",
-                "properties": {
-                    "trigger_event": {
-                        "type": "string",
-                        "enum": list(trigger_events),
-                    },
-                    "action_kind": {"const": "set_state"},
-                    "state_key": {"const": state_key},
-                    "value": value_schema,
+        branches.append({
+            "type": "object",
+            "properties": {
+                "trigger_event": {
+                    "type": "string",
+                    "enum": list(trigger_events),
                 },
-                "required": [
-                    "trigger_event",
-                    "action_kind",
-                    "state_key",
-                    "value",
-                ],
-                "additionalProperties": False,
-            })
-        if (
-            state_type in {"int", "long", "double"}
-            and state_key not in excluded_increment_state_keys
-        ):
+                "action_kind": {"const": "set_state"},
+                "state_key": {"const": state_key},
+                "value": value_schema,
+            },
+            "required": [
+                "trigger_event",
+                "action_kind",
+                "state_key",
+                "value",
+            ],
+            "additionalProperties": False,
+        })
+        if state_type in {"int", "long", "double"}:
             branches.append({
                 "type": "object",
                 "properties": {
@@ -1410,28 +1404,6 @@ def semantic_dispatch_schema(
 
 
 
-def _semantic_placeholder_reason(
-    rule: Mapping[str, Any], state_types: Mapping[str, str],
-) -> str | None:
-    """Reject operations that have no gameplay effect by construction."""
-
-    kind = str(rule.get("action_kind") or "")
-    key = str(rule.get("state_key") or "").strip()
-    state_type = state_types.get(key)
-    value = rule.get("value")
-    if kind == "set_state" and state_type == "string" and isinstance(value, str):
-        if value.strip().casefold() in {key.casefold(), "string"}:
-            return "string_self_assignment"
-    if kind == "increment_state" and state_type in {"int", "long", "double"}:
-        try:
-            increment = float(value)
-        except (ValueError, TypeError, OverflowError):
-            return None
-        if math.isfinite(increment) and increment == 0:
-            return "zero_increment"
-    return None
-
-
 def lower_semantic_game_dispatch_to_ir(
     raw_rules: Sequence[Mapping[str, Any]],
     state_types: Mapping[str, str],
@@ -1448,12 +1420,6 @@ def lower_semantic_game_dispatch_to_ir(
                 f"TYPED_PLAN_SEMANTIC_RULE_INVALID: rule[{rule_idx}] must be an object"
             )
         kind = str(rule.get("action_kind") or "").strip()
-        no_op_reason = _semantic_placeholder_reason(rule, state_types)
-        if no_op_reason:
-            raise ValueError(
-                "TYPED_PLAN_SEMANTIC_PLACEHOLDER_REJECTED: "
-                f"rule[{rule_idx}] {no_op_reason}"
-            )
         action_statements: list[dict[str, Any]] = []
 
         if kind in {"increment_state", "set_state"}:
@@ -1843,85 +1809,38 @@ def author_semantic_game_dispatch(
                 )
             ),
         }
-        # Reject trivial state echo/placeholder choices at the authoring
-        # boundary, then give the planner a bounded chance to select an actual
-        # state change without imposing an unrelated gameplay mechanic.
-        rule: dict[str, Any] = {}
-        rejected_kind = ""
-        rejected_key = ""
-        for attempt in range(2):
-            current_schema, current_ceiling = schema, token_ceiling
-            if attempt and rejected_key:
-                try:
-                    candidate = semantic_dispatch_schema(
-                        state_types, capabilities,
-                        allowed_events=rule_events,
-                        mutation_only=mutation_required,
-                        state_only=state_only,
-
-                        excluded_set_state_keys=(rejected_key,)
-                        if rejected_kind == "set_state" else (),
-                        excluded_increment_state_keys=(rejected_key,)
-                        if rejected_kind == "increment_state" else (),
-                    )
-                except ValueError as exc:
-                    if "TYPED_PLAN_SEMANTIC_ACTION_UNAVAILABLE" not in str(exc):
-                        raise
-                else:
-                    assert_model_atomic_decision_schema(
-                        candidate, field="semantic_dispatch_rule",
-                    )
-                    current_schema = candidate
-                    current_ceiling = structured_output_token_ceiling(
-                        effective_model_transport_schema(candidate)
-                    )
-            if budget is not None:
-                budget.consume("typed.semantic_dispatch")
-            raw = generate_fixed_template_value(
-                router,
-                "planner",
-                (
-                    {
-                        "role": "system",
-                        "content": (
-                            "Author one bounded game-logic action for the exact canonical "
-                            "coverage unit supplied by the host. "
-                            + (
-                                "PREVIOUS ACTION REJECTED: a state self-assignment "
-                                "or placeholder literal performs no gameplay. "
-                                "Choose a real operation against the actual "
-                                "declared state and host capabilities."
-                                if attempt else ""
-                            )
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": json.dumps(payload, ensure_ascii=False),
-                    },
-                ),
-                response_schema=current_schema,
-                enable_tools=False,
-                description=(
-                    "Author one atomic semantic game rule for a host-owned coverage unit."
-                ),
-                output_token_ceiling=current_ceiling,
-            )
-            if not isinstance(raw, Mapping):
-                raise ValueError(
-                    "TYPED_PLAN_SEMANTIC_RESPONSE_INVALID: rule must be an object"
-                )
-            rule = dict(raw)
-            if not _semantic_placeholder_reason(rule, state_types):
-                break
-            rejected_kind = str(rule.get("action_kind") or "")
-            rejected_key = str(rule.get("state_key") or "").strip()
-        else:
+        # The schema binds executable operations and their types. Preserve the
+        # authored values instead of judging intent from literals or numbers.
+        if budget is not None:
+            budget.consume("typed.semantic_dispatch")
+        raw = generate_fixed_template_value(
+            router,
+            "planner",
+            (
+                {
+                    "role": "system",
+                    "content": (
+                        "Author one bounded game-logic action for the exact canonical "
+                        "coverage unit supplied by the host."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(payload, ensure_ascii=False),
+                },
+            ),
+            response_schema=schema,
+            enable_tools=False,
+            description=(
+                "Author one atomic semantic game rule for a host-owned coverage unit."
+            ),
+            output_token_ceiling=token_ceiling,
+        )
+        if not isinstance(raw, Mapping):
             raise ValueError(
-                "TYPED_PLAN_SEMANTIC_PLACEHOLDER_REJECTED: "
-                f"coverage_ref={coverage_ref!r} record_index={record_index!r} "
-                f"state_key={rejected_key!r}: no effective gameplay action"
+                "TYPED_PLAN_SEMANTIC_RESPONSE_INVALID: rule must be an object"
             )
+        rule = dict(raw)
         if coverage_ref == "resources_and_ui.interactions":
             action = str((focus_record or {}).get("server_action") or "").strip()
             if not action:

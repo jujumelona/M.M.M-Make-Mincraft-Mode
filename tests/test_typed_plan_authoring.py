@@ -257,7 +257,21 @@ def test_semantic_game_dispatch_lowers_deterministically():
     assert validated["functions"][0]["id"] == "logic_dispatch"
 
 
-def test_semantic_dispatch_reauthors_string_self_assignment(monkeypatch):
+@pytest.mark.parametrize("value", ["shipyard", "SHIPYARD", " shipyard ", "string"])
+def test_string_state_literals_are_real_writes_even_when_they_match_names(value):
+    from minecraft_mod_ai.typed_plan_authoring import lower_semantic_game_dispatch_to_ir
+
+    body = lower_semantic_game_dispatch_to_ir([{
+        "trigger_event": "command", "action_kind": "set_state",
+        "state_key": "shipyard", "value": value,
+    }], {"shipyard": "string"}, {})
+    write = body[0]["then"][0]
+    assert write["op"] == "state_set"
+    assert write["key"]["value"] == "shipyard"
+    assert write["value"] == {"op": "literal", "type": "string", "value": value}
+
+
+def test_semantic_dispatch_accepts_literal_state_write_without_reauthoring(monkeypatch):
     from minecraft_mod_ai import typed_plan_authoring, authored_structured_design
 
     def concerns(_sections, section):
@@ -270,16 +284,11 @@ def test_semantic_dispatch_reauthors_string_self_assignment(monkeypatch):
         return {}
 
     monkeypatch.setattr(authored_structured_design, "active_concern_records", concerns)
-    responses = iter([
-        {"trigger_event": "command", "action_kind": "set_state",
-         "state_key": "resources", "value": "resources"},
-        {"trigger_event": "command", "action_kind": "set_state",
-         "state_key": "resources", "value": "updated"},
-    ])
     attempts = []
     def fake_generate(*_args, **_kwargs):
         attempts.append(1)
-        return next(responses)
+        return {"trigger_event": "command", "action_kind": "set_state",
+                "state_key": "resources", "value": "resources"}
 
     monkeypatch.setattr(
         typed_plan_authoring, "generate_fixed_template_value", fake_generate,
@@ -289,22 +298,36 @@ def test_semantic_dispatch_reauthors_string_self_assignment(monkeypatch):
         coverage_refs=("resources_and_ui.interactions",),
         bound_events=("command",),
     )
-    assert len(attempts) == 2
-    assert rules[0]["then"][0]["value"]["value"] == "updated"
+    assert len(attempts) == 1
+    assert rules[0]["then"][0]["value"]["value"] == "resources"
 
-    monkeypatch.setattr(
-        typed_plan_authoring, "generate_fixed_template_value",
-        lambda *_args, **_kwargs: {
-            "trigger_event": "command", "action_kind": "set_state",
-            "state_key": "resources", "value": "resources",
-        },
+
+def test_atomic_string_mutation_lowers_without_discarding_state(monkeypatch):
+    from minecraft_mod_ai import typed_plan_authoring, authored_structured_design
+
+    def concerns(_sections, section):
+        if section == "state_model":
+            return {"variables": [{"name": "shipyard", "type": "string"}]}
+        if section == "algorithm":
+            return {"atomic_mutations": [{"mutations": "update shipyard state"}]}
+        return {}
+
+    monkeypatch.setattr(authored_structured_design, "active_concern_records", concerns)
+    calls = []
+
+    def model(*_args, **kwargs):
+        calls.append(kwargs["response_schema"])
+        return {"trigger_event": "command", "action_kind": "set_state",
+                "state_key": "shipyard", "value": "shipyard"}
+
+    monkeypatch.setattr(typed_plan_authoring, "generate_fixed_template_value", model)
+    body = typed_plan_authoring.author_semantic_game_dispatch(
+        None, "update shipyard state", {}, {},
+        coverage_refs=("algorithm.atomic_mutations",), bound_events=("command",),
     )
-    with pytest.raises(ValueError, match="TYPED_PLAN_SEMANTIC_PLACEHOLDER_REJECTED"):
-        typed_plan_authoring.author_semantic_game_dispatch(
-            None, "make a working purchase", {}, {},
-            coverage_refs=("resources_and_ui.interactions",),
-            bound_events=("command",),
-        )
+    assert len(calls) == 1
+    assert body[0]["then"][0]["key"]["value"] == "shipyard"
+    assert body[0]["then"][0]["value"]["value"] == "shipyard"
 
 
 def test_planner_budget_enforces_limit_and_tracks_stages():
@@ -979,14 +1002,14 @@ def test_existing_saved_plan_repairs_only_missing_ui_action_handlers(monkeypatch
     )
 
 
-def test_semantic_repair_removes_rejected_state_branch(monkeypatch):
+def test_semantic_dispatch_preserves_zero_increment_without_reauthoring(monkeypatch):
     from minecraft_mod_ai import typed_plan_authoring, authored_structured_design
 
     def concerns(_sections, section):
         if section == "state_model":
             return {"variables": [
-                {"name": "resources", "type": "string"},
                 {"name": "energy", "type": "int"},
+                {"name": "ship_hull", "type": "int"},
             ]}
         if section == "resources_and_ui":
             return {"interactions": [{"server_action": "change_status"}]}
@@ -994,10 +1017,10 @@ def test_semantic_repair_removes_rejected_state_branch(monkeypatch):
 
     monkeypatch.setattr(authored_structured_design, "active_concern_records", concerns)
     answers = iter([
-        {"trigger_event": "command", "action_kind": "set_state",
-         "state_key": "resources", "value": "resources"},
         {"trigger_event": "command", "action_kind": "increment_state",
-         "state_key": "energy", "value": 2},
+         "state_key": "energy", "value": 0},
+        {"trigger_event": "command", "action_kind": "increment_state",
+         "state_key": "ship_hull", "value": 2},
     ])
     schemas = []
 
@@ -1013,28 +1036,28 @@ def test_semantic_repair_removes_rejected_state_branch(monkeypatch):
         coverage_refs=("resources_and_ui.interactions",),
         bound_events=("command",),
     )
-    assert len(schemas) == 2
-    assert not any(
-        branch["properties"].get("state_key", {}).get("const") == "resources"
-        and branch["properties"]["action_kind"]["const"] == "set_state"
-        for branch in schemas[1]["oneOf"]
-    )
+    assert len(schemas) == 1
     assert result[0]["then"][0]["op"] == "state_set"
     assert result[0]["then"][0]["value"]["operator"] == "+"
+    assert result[0]["then"][0]["key"]["value"] == "energy"
+    assert result[0]["then"][0]["value"]["right"]["value"] == 0
 
 
-def test_zero_increment_is_not_accepted_as_effective_gameplay_logic():
+def test_zero_increment_remains_a_valid_typed_state_operation():
     from minecraft_mod_ai.typed_plan_authoring import (
         lower_semantic_game_dispatch_to_ir,
     )
 
-    with pytest.raises(ValueError, match="TYPED_PLAN_SEMANTIC_PLACEHOLDER_REJECTED"):
-        lower_semantic_game_dispatch_to_ir([{
-            "trigger_event": "command",
-            "action_kind": "increment_state",
-            "state_key": "energy",
-            "value": 0,
-        }], {"energy": "int"}, {})
+    body = lower_semantic_game_dispatch_to_ir([{
+        "trigger_event": "command",
+        "action_kind": "increment_state",
+        "state_key": "energy",
+        "value": 0,
+    }], {"energy": "int"}, {})
+    write = body[0]["then"][0]
+    assert write["op"] == "state_set"
+    assert write["value"]["left"]["op"] == "state_get"
+    assert write["value"]["right"]["value"] == 0
 
 def test_generic_semantic_dispatch_does_not_special_case_purchase_keywords(monkeypatch):
     from minecraft_mod_ai import typed_plan_authoring, authored_structured_design
