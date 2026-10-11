@@ -53,3 +53,38 @@ def test_live_runtime_candidate_matches_catalog_for_modular_gui():
         implementation_id=impl["implementation_id"],
     )
     assert verify_job_binding(job, resolved, {}) is not None
+
+
+def test_published_generator_migration_pin_matches_live_executor():
+    """A generator source edit must invalidate CI before Colab session startup."""
+    from minecraft_mod_ai.host_generator_catalog_migration import _REVIEWED_GENERATOR
+
+    authority = bootstrap_integrity()
+    live = authority.implementations.get_implementation(
+        "python_generator:minecraft/screen/registration"
+    )
+    assert live.content_sha256 == _REVIEWED_GENERATOR
+
+
+def test_fabric_26_2_target_selectable_at_session_entry():
+    """Exercise the exact version-only and version+loader API preflight paths."""
+    from minecraft_mod_ai.api import _validate_requested_target
+
+    assert _validate_requested_target("26.2", None) == ("26.2", None)
+    assert _validate_requested_target("26.2", "fabric") == ("26.2", "fabric")
+
+
+def test_corrupted_host_catalog_is_not_misreported_as_missing_provider(monkeypatch):
+    from minecraft_mod_ai import platform_catalog
+    from minecraft_mod_ai.api import _validate_requested_target
+    from minecraft_mod_ai.resolved_version_context import VersionContextError
+
+    def broken_catalog(_version, _loader):
+        raise VersionContextError(
+            "HOST_BUNDLE_CATALOG_INVALID",
+            reason="HOST_GENERATOR_MIGRATION_REVISION_UNREVIEWED",
+        )
+
+    monkeypatch.setattr(platform_catalog, "adapter_for_target", broken_catalog)
+    with pytest.raises(VersionContextError, match="HOST_GENERATOR_MIGRATION_REVISION_UNREVIEWED"):
+        _validate_requested_target("26.2", None)
