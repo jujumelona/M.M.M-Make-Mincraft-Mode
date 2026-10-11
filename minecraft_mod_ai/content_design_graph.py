@@ -535,7 +535,9 @@ def compile_content_graph(
             isinstance(gameplay_context, Mapping)
             and gameplay_context.get("source_section") == "algorithm"
             and gameplay_context.get("source_concern") == "atomic_mutations"
-            and nodes
+            # Empty output is also a dropped atomic transaction. Give the
+            # action-specific generator one constrained recovery attempt instead
+            # of treating an empty node list as successful implementation.
             and not any(node.get("kind") in {
                 "custom_item_behavior", "custom_block_behavior",
             } for node in nodes)
@@ -547,7 +549,7 @@ def compile_content_graph(
                 "allowed_content_kinds": action_kinds,
                 "rejected_passive_candidates": original_nodes,
                 "generation_feedback": (
-                    "The supplied atomic mutation is still unimplemented: "
+                    "The supplied atomic mutation is still unimplemented "
                     "ordinary items, blocks and GUI registrations do not "
                     "execute the requested transaction or state change. "
                     "Choose an actual item-use or block-interaction behavior "
