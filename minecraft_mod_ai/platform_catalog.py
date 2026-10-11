@@ -199,7 +199,17 @@ def adapters_for_version(minecraft_version: str) -> tuple[TargetContract, ...]:
     for loader in executable_loaders():
         try:
             result.append(adapter_for_target(version, loader))
-        except ValueError:
+        except ValueError as exc:
+            # An invalid HOST catalog is an integrity failure, not evidence
+            # that this Minecraft version has no platform provider. Preserve
+            # its diagnostic when the caller omitted the loader (Colab API).
+            from .resolved_version_context import VersionContextError
+
+            if (
+                isinstance(exc, VersionContextError)
+                and exc.diagnostic.get("code") == "HOST_BUNDLE_CATALOG_INVALID"
+            ):
+                raise
             continue
     return tuple(result)
 
