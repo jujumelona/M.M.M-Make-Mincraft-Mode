@@ -223,7 +223,7 @@ def typed_plan_support_issues(
             and first.get("op") == "return"
             and isinstance(call, Mapping)
             and call.get("op") == "call"
-            and call.get("function") == "logic_dispatch"
+            and call.get("function") == "ui_action_dispatch"
             and isinstance(forwarded, Mapping)
             and forwarded.get("op") == "literal"
             and forwarded.get("type") == "string"

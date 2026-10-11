@@ -848,3 +848,80 @@ def test_ui_mutation_action_guard_uses_exact_action_and_java_value_equality():
     java = render_typed_plan_java(plan)
     assert "java.util.Objects.equals(event, " in java
     assert "if ((event ==" not in java
+
+
+def test_existing_saved_plan_repairs_only_missing_ui_action_handlers(monkeypatch):
+    from types import SimpleNamespace
+    from minecraft_mod_ai import authored_structured_design
+    from minecraft_mod_ai import authored_ui_action_repair, typed_plan_authoring
+    from minecraft_mod_ai.typed_plan_ir import validate_typed_plan_ir
+
+    actions = ("buy_part", "upgrade_part")
+
+    def concerns(_sections, section):
+        if section == "algorithm":
+            return {"atomic_mutations": [{"mutations": "spend_credits"}]}
+        if section == "resources_and_ui":
+            return {"interactions": [
+                {"server_action": action, "trigger": action} for action in actions
+            ]}
+        if section == "integration":
+            return {"entry_points": [
+                {"trigger": "command:shipyard", "owner": "market", "boundary": "server"}
+            ]}
+        return {}
+
+    monkeypatch.setattr(authored_structured_design, "active_concern_records", concerns)
+    monkeypatch.setattr(authored_ui_action_repair, "active_concern_records", concerns)
+    monkeypatch.setattr(typed_plan_authoring, "author_semantic_game_dispatch",
+                        lambda *_a, **_k: [
+                            *[{
+                                "op": "if",
+                                "condition": {
+                                    "op": "binary", "operator": "==",
+                                    "left": {"op": "ref", "name": "event"},
+                                    "right": {"op": "literal", "type": "string", "value": action},
+                                },
+                                "then": [{
+                                    "op": "state_set",
+                                    "key": {"op": "literal", "type": "string", "value": "credits"},
+                                    "value": {"op": "literal", "type": "int", "value": index},
+                                    "context": {"op": "map", "entries": []},
+                                }],
+                                "else": [],
+                            } for index, action in enumerate(actions, start=1)],
+                            {"op": "return", "value": {"op": "literal", "type": "int", "value": 1}},
+                        ])
+    original = {
+        "schema_version": "mmm/typed-plan-ir-v1",
+        "source_sha256": "0" * 64,
+        "functions": [{
+            "id": "existing_command",
+            "parameters": [{"name": "source", "type": "object"}],
+            "return_type": "int",
+            "covers": ["integration.entry_points"],
+            "body": [{"op": "return", "value": {"op": "literal", "type": "int", "value": 1}}],
+        }],
+        "initialize": [], "platform_modules": [],
+        "event_bindings": [{
+            "event": "command", "function": "existing_command",
+            "entry_point_index": 0,
+            "config": {"literal": "shipyard", "permission_level": 0},
+        }],
+    }
+    original = validate_typed_plan_ir(original)
+    before = deepcopy(original)
+    planned = SimpleNamespace(structured_sections={}, typed_plan_ir=original)
+    assert authored_ui_action_repair.authored_ui_action_repair_needed(planned)
+    repaired = authored_ui_action_repair.repair_authored_ui_action_ir(
+        None, "purchase and upgrade ships", {}, original, capabilities={},
+    )
+    assert original == before
+    assert repaired["functions"][0] == before["functions"][0]
+    assert repaired["event_bindings"][0] == before["event_bindings"][0]
+    assert len(repaired["event_bindings"]) == 3
+    assert repaired["functions"][1]["id"] == "ui_action_dispatch"
+    assert repaired["functions"][2]["body"][0]["value"]["function"] == "ui_action_dispatch"
+    assert not authored_ui_action_repair.authored_ui_action_repair_needed(
+        SimpleNamespace(structured_sections={}, typed_plan_ir=repaired)
+    )

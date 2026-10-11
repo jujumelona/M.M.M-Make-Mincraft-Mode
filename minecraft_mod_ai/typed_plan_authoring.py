@@ -2641,7 +2641,6 @@ def author_typed_plan_ir(
             "failure_and_limits.",
         ))
         or ref in {"state_model.transitions", "state_model.updates"}
-        or (bind_ui_actions and ref == "resources_and_ui.interactions")
     )
     has_mod_initialize = any(
         is_mod_initialize_trigger(row.get("trigger"))
@@ -2680,6 +2679,29 @@ def author_typed_plan_ir(
             ),
         )
 
+    # UI actions have a dedicated dispatcher: existing generic 'any' rules
+    # must not run as an accidental side effect of a purchase or upgrade.
+    ui_dispatch_id = "ui_action_dispatch"
+    ui_dispatch_spec: dict[str, Any] | None = None
+    ui_dispatch_body: list[dict[str, Any]] = []
+    if bind_ui_actions:
+        ui_dispatch_spec = {
+            "id": ui_dispatch_id,
+            "parameters": [
+                {"name": "event", "type": "string"},
+                {"name": "primary", "type": "object"},
+                {"name": "secondary", "type": "object"},
+                {"name": "flag", "type": "boolean"},
+            ],
+            "return_type": "int",
+            "covers": ["resources_and_ui.interactions"],
+        }
+        ui_dispatch_body = author_semantic_game_dispatch(
+            router, source_text, structured_sections, capabilities,
+            coverage_refs=("resources_and_ui.interactions",),
+            budget=budget, bound_events=("command",),
+        )
+
     def literal(kind: str, value: Any) -> dict[str, Any]:
         return {"op": "literal", "type": kind, "value": value}
 
@@ -2692,14 +2714,17 @@ def author_typed_plan_ir(
         primary: dict[str, Any],
         secondary: dict[str, Any] | None = None,
         flag: dict[str, Any] | None = None,
+        target: str = logic_dispatch_id,
     ) -> dict[str, Any]:
-        if logic_dispatch_spec is None:
-            raise ValueError(
-                "TYPED_PLAN_INTERNAL: logic dispatcher is unavailable"
-            )
+        if target == logic_dispatch_id and logic_dispatch_spec is None:
+            raise ValueError("TYPED_PLAN_INTERNAL: logic dispatcher is unavailable")
+        if target == ui_dispatch_id and ui_dispatch_spec is None:
+            raise ValueError("TYPED_PLAN_INTERNAL: UI dispatcher is unavailable")
+        if target not in {logic_dispatch_id, ui_dispatch_id}:
+            raise ValueError("TYPED_PLAN_INTERNAL: unknown dispatcher")
         return {
             "op": "call",
-            "function": logic_dispatch_id,
+            "function": target,
             "args": [
                 literal("string", event),
                 primary,
@@ -2751,6 +2776,8 @@ def author_typed_plan_ir(
                 call = dispatch_call(
                     action_by_function.get(function_id, event),
                     primary=ref("source"),
+                    target=(ui_dispatch_id if function_id in action_by_function
+                            else logic_dispatch_id),
                 )
             else:
                 raise ValueError(
@@ -2767,6 +2794,11 @@ def author_typed_plan_ir(
         functions.append({
             **logic_dispatch_spec,
             "body": logic_dispatch_body,
+        })
+    if ui_dispatch_spec is not None:
+        functions.append({
+            **ui_dispatch_spec,
+            "body": ui_dispatch_body,
         })
 
     signature_map = {
