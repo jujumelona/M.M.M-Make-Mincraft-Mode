@@ -277,14 +277,11 @@ def test_purchase_action_is_balanced_and_grant_guarded():
         for branch in schema["oneOf"]
     )
     # Hull/health/counters are not legal currencies simply because numeric.
-    noncurrency = semantic_dispatch_schema(
-        {"ship_hull": "int"}, caps, allowed_events=("command",),
-        purchase_only=True,
-    )
-    assert not any(
-        branch["properties"].get("action_kind", {}).get("const") == "purchase_item"
-        for branch in noncurrency["oneOf"]
-    )
+    with pytest.raises(ValueError, match="TYPED_PLAN_PURCHASE_CONTRACT_UNAVAILABLE"):
+        semantic_dispatch_schema(
+            {"ship_hull": "int"}, caps, allowed_events=("command",),
+            purchase_only=True,
+        )
     rule = {
         "trigger_event": "command",
         "action_guard": "ship_part_purchase",
@@ -345,7 +342,7 @@ def test_semantic_dispatch_reauthors_string_self_assignment(monkeypatch):
             return {"variables": [{"name": "resources", "type": "string"}]}
         if section == "resources_and_ui":
             return {"interactions": [{
-                "server_action": "purchase_part", "trigger": "button",
+                "server_action": "change_status", "trigger": "button",
             }]}
         return {}
 
@@ -1055,3 +1052,107 @@ def test_existing_saved_plan_repairs_only_missing_ui_action_handlers(monkeypatch
     assert not authored_ui_action_repair.authored_ui_action_repair_needed(
         SimpleNamespace(structured_sections={}, typed_plan_ir=repaired)
     )
+
+
+def test_purchase_preflight_rejects_missing_currency_without_model(monkeypatch):
+    from minecraft_mod_ai import typed_plan_authoring, authored_structured_design
+
+    def concerns(_sections, section):
+        if section == "state_model":
+            return {"variables": [{"name": "resources", "type": "string"}]}
+        if section == "resources_and_ui":
+            return {"interactions": [{"server_action": "ship_part_purchase"}]}
+        return {}
+
+    monkeypatch.setattr(authored_structured_design, "active_concern_records", concerns)
+    monkeypatch.setattr(
+        typed_plan_authoring, "generate_fixed_template_value",
+        lambda *_args, **_kwargs: pytest.fail("must fail before the model call"),
+    )
+    with pytest.raises(ValueError, match="TYPED_PLAN_PURCHASE_FUNDS_STATE_UNBOUND"):
+        typed_plan_authoring.author_semantic_game_dispatch(
+            None, "buy a ship part", {}, {},
+            coverage_refs=("resources_and_ui.interactions",),
+            bound_events=("command",),
+        )
+
+
+def test_purchase_preflight_rejects_missing_item_grant_without_model(monkeypatch):
+    from minecraft_mod_ai import typed_plan_authoring, authored_structured_design
+
+    def concerns(_sections, section):
+        if section == "state_model":
+            return {"variables": [{"name": "credits", "type": "int"}]}
+        if section == "resources_and_ui":
+            return {"interactions": [{"server_action": "ship_part_purchase"}]}
+        return {}
+
+    monkeypatch.setattr(authored_structured_design, "active_concern_records", concerns)
+    monkeypatch.setattr(
+        typed_plan_authoring, "generate_fixed_template_value",
+        lambda *_args, **_kwargs: pytest.fail("must fail before the model call"),
+    )
+    with pytest.raises(ValueError, match="TYPED_PLAN_PURCHASE_GRANT_CAPABILITY_UNBOUND"):
+        typed_plan_authoring.author_semantic_game_dispatch(
+            None, "buy a ship part", {}, {},
+            coverage_refs=("resources_and_ui.interactions",),
+            bound_events=("command",),
+        )
+
+
+def test_semantic_repair_removes_rejected_state_branch(monkeypatch):
+    from minecraft_mod_ai import typed_plan_authoring, authored_structured_design
+
+    def concerns(_sections, section):
+        if section == "state_model":
+            return {"variables": [
+                {"name": "resources", "type": "string"},
+                {"name": "energy", "type": "int"},
+            ]}
+        if section == "resources_and_ui":
+            return {"interactions": [{"server_action": "change_status"}]}
+        return {}
+
+    monkeypatch.setattr(authored_structured_design, "active_concern_records", concerns)
+    answers = iter([
+        {"trigger_event": "command", "action_kind": "set_state",
+         "state_key": "resources", "value": "resources"},
+        {"trigger_event": "command", "action_kind": "increment_state",
+         "state_key": "energy", "value": 2},
+    ])
+    schemas = []
+
+    def fake_generate(*_args, **kwargs):
+        schemas.append(kwargs["response_schema"])
+        return next(answers)
+
+    monkeypatch.setattr(
+        typed_plan_authoring, "generate_fixed_template_value", fake_generate,
+    )
+    result = typed_plan_authoring.author_semantic_game_dispatch(
+        None, "increase energy", {}, {},
+        coverage_refs=("resources_and_ui.interactions",),
+        bound_events=("command",),
+    )
+    assert len(schemas) == 2
+    assert not any(
+        branch["properties"].get("state_key", {}).get("const") == "resources"
+        and branch["properties"]["action_kind"]["const"] == "set_state"
+        for branch in schemas[1]["oneOf"]
+    )
+    assert result[0]["then"][0]["op"] == "state_set"
+    assert result[0]["then"][0]["value"]["operator"] == "+"
+
+
+def test_zero_increment_is_not_accepted_as_effective_gameplay_logic():
+    from minecraft_mod_ai.typed_plan_authoring import (
+        lower_semantic_game_dispatch_to_ir,
+    )
+
+    with pytest.raises(ValueError, match="TYPED_PLAN_SEMANTIC_PLACEHOLDER_REJECTED"):
+        lower_semantic_game_dispatch_to_ir([{
+            "trigger_event": "command",
+            "action_kind": "increment_state",
+            "state_key": "energy",
+            "value": 0,
+        }], {"energy": "int"}, {})
