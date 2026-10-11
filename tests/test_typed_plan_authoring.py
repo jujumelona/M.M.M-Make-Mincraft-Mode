@@ -647,7 +647,7 @@ def test_author_typed_plan_ir_filters_by_deterministic_module_kinds() -> None:
     assert any(b.get("event") == "command" for b in plan["event_bindings"])
 
 
-def test_complete_planner_threads_deterministic_module_kinds(monkeypatch: Any) -> None:
+def test_complete_planner_does_not_compile_execution_at_plan_time(monkeypatch: Any) -> None:
     from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner
     from minecraft_mod_ai.model_router import ModelRouter
 
@@ -686,11 +686,12 @@ def test_complete_planner_threads_deterministic_module_kinds(monkeypatch: Any) -
 
     router = ModelRouter(profile="fast_test")
     planner = CompleteGameDesignPlanner(router, adapter=DummyAdapter())
-    planner.plan("test prompt")
+    planned = planner.plan("test prompt")
 
-    assert received_kinds == ("block", "item")
+    assert planned.typed_plan_ir == {}
+    assert received_kinds is None
 
-def test_complete_planner_unbound_auto_does_not_pre_filter_platform_kinds(
+def test_complete_planner_unbound_auto_defers_ir_to_production(
     monkeypatch: Any,
 ) -> None:
     from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner
@@ -730,10 +731,11 @@ def test_complete_planner_unbound_auto_does_not_pre_filter_platform_kinds(
 
     router = ModelRouter(profile="fast_test")
     planner = CompleteGameDesignPlanner(router)
-    planner.plan("test prompt")
+    planned = planner.plan("test prompt")
 
-    assert received_kinds is None
-    assert received_allowed is None
+    assert planned.typed_plan_ir == {}
+    assert received_kinds == "unset"
+    assert received_allowed == "unset"
 
 
 def test_permission_capability_schema_exposes_host_range_to_model():
