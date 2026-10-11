@@ -1602,7 +1602,10 @@ def lower_semantic_game_dispatch_to_ir(
             )
 
         semantic_action_count += len(action_statements)
-        trigger = str(rule["trigger_event"])
+        # UI actions use their own host-bound command dispatch key. Merely
+        # reacting to the generic 'command' event would execute purchases for
+        # unrelated commands and could not distinguish individual actions.
+        trigger = str(rule.get("action_guard") or rule["trigger_event"])
         if trigger != "any":
             statements.append({
                 "op": "if",
@@ -1707,10 +1710,11 @@ def author_semantic_game_dispatch(
     # model calls per host-authored record rather than collapsing the plan.
     units: list[tuple[str, int | None, Mapping[str, Any] | None]] = []
     for ref in refs:
-        if ref in {"algorithm.steps", "algorithm.atomic_mutations"}:
-            concern = ref.partition(".")[2]
+        if ref in {"algorithm.steps", "algorithm.atomic_mutations",
+                   "resources_and_ui.interactions"}:
+            section, _, concern = ref.partition(".")
             records = active_concern_records(
-                structured_sections, "algorithm",
+                structured_sections, section,
             ).get(concern, ())
             if records:
                 units.extend(
@@ -1724,8 +1728,17 @@ def author_semantic_game_dispatch(
         state_only = coverage_ref in {
             "state_model.transitions", "state_model.updates",
         }
-        mutation_required = state_only or coverage_ref == "algorithm.atomic_mutations"
+        mutation_required = state_only or coverage_ref in {
+            "algorithm.atomic_mutations", "resources_and_ui.interactions",
+        }
         rule_events = allowed_events
+        if coverage_ref == "resources_and_ui.interactions":
+            if active_events is None or "command" not in active_events:
+                raise ValueError(
+                    "TYPED_UI_ACTION_COMMAND_UNBOUND: individual UI mutations "
+                    "must have a host-bound player command"
+                )
+            rule_events = ("command",)
         if (
             coverage_ref in {"algorithm.steps", "algorithm.atomic_mutations"}
             and active_events is not None
@@ -1842,7 +1855,13 @@ def author_semantic_game_dispatch(
             raise ValueError(
                 "TYPED_PLAN_SEMANTIC_RESPONSE_INVALID: rule must be an object"
             )
-        rules.append(raw)
+        rule = dict(raw)
+        if coverage_ref == "resources_and_ui.interactions":
+            action = str((focus_record or {}).get("server_action") or "").strip()
+            if not action:
+                raise ValueError("TYPED_UI_ACTION_EMPTY: missing server_action")
+            rule["action_guard"] = action
+        rules.append(rule)
 
     return lower_semantic_game_dispatch_to_ir(
         rules,
@@ -2473,6 +2492,20 @@ def author_typed_plan_ir(
 
     coverage_refs = _active_concern_refs(structured_sections)
     entry_points = _integration_entry_points(structured_sections)
+    from .authored_structured_design import active_concern_records
+
+    authored_algorithm = active_concern_records(structured_sections, "algorithm")
+    authored_state = active_concern_records(structured_sections, "state_model")
+    authored_ui = active_concern_records(structured_sections, "resources_and_ui")
+    requested_actions = tuple(dict.fromkeys(
+        str(row.get("server_action") or "").strip()
+        for row in authored_ui.get("interactions", ())
+        if isinstance(row, Mapping) and str(row.get("server_action") or "").strip()
+    ))
+    bind_ui_actions = bool(requested_actions and (
+        authored_algorithm.get("atomic_mutations")
+        or authored_state.get("transitions") or authored_state.get("updates")
+    ))
     author = TypedOperationAuthor(
         router,
         source_text,
@@ -2559,6 +2592,46 @@ def author_typed_plan_ir(
             "config": config,
         })
 
+    # Each authored mutating UI operation receives a separate executable
+    # server command. The command name is host-owned and collision-free; the
+    # underlying mutation is still authored from that exact UI record.
+    action_by_function: dict[str, str] = {}
+    if bind_ui_actions:
+        if not any(binding["event"] == "command" for binding in event_bindings):
+            raise ValueError(
+                "TYPED_UI_ACTION_COMMAND_UNBOUND: repair a player command "
+                "entry point before authoring UI action handlers"
+            )
+        used_literals = {
+            str(binding["config"]["literal"])
+            for binding in event_bindings if binding["event"] == "command"
+        }
+        for ordinal, action in enumerate(requested_actions, start=1):
+            command_literal = f"mmm_action_{ordinal}"
+            while command_literal in used_literals:
+                command_literal += "_ui"
+            used_literals.add(command_literal)
+            function_id = f"uiAction{ordinal}_command"
+            if function_id in known_ids:
+                raise ValueError("TYPED_UI_ACTION_FUNCTION_COLLISION")
+            known_ids.add(function_id)
+            specs.append({
+                "id": function_id,
+                "parameters": [
+                    {"name": name, "type": type_name}
+                    for name, type_name in EVENT_PARAMETERS["command"]
+                ],
+                "return_type": EVENT_SIGNATURES["command"][1],
+                "covers": ["resources_and_ui.interactions"],
+            })
+            event_bindings.append({
+                "event": "command",
+                "function": function_id,
+                "entry_point_index": len(entry_points) + ordinal - 1,
+                "config": {"literal": command_literal, "permission_level": 0},
+            })
+            action_by_function[function_id] = action
+
     logic_refs = sorted(
         ref
         for ref in coverage_refs
@@ -2568,6 +2641,7 @@ def author_typed_plan_ir(
             "failure_and_limits.",
         ))
         or ref in {"state_model.transitions", "state_model.updates"}
+        or (bind_ui_actions and ref == "resources_and_ui.interactions")
     )
     has_mod_initialize = any(
         is_mod_initialize_trigger(row.get("trigger"))
@@ -2674,7 +2748,10 @@ def author_typed_plan_ir(
                     flag=ref("alive"),
                 )
             elif event == "command":
-                call = dispatch_call(event, primary=ref("source"))
+                call = dispatch_call(
+                    action_by_function.get(function_id, event),
+                    primary=ref("source"),
+                )
             else:
                 raise ValueError(
                     f"TYPED_PLAN_INTERNAL: unsupported event {event!r}"

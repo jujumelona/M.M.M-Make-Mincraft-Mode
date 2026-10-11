@@ -179,11 +179,58 @@ def typed_plan_support_issues(
                     f"integration.entry_points[{index}].command_literal_mismatch"
                 )
 
+    # Additional player commands are host-generated from individual UI records,
+    # not fictitious authored integration entry points. Validate their exact
+    # deterministic identity and forwarded action so arbitrary extra bindings
+    # cannot escape the integration contract.
+    algorithm = active_concern_records(normalized, "algorithm")
+    state = active_concern_records(normalized, "state_model")
+    mutating_ui = bool(
+        algorithm.get("atomic_mutations") or state.get("transitions")
+        or state.get("updates")
+    )
+    ui_rows = active_concern_records(normalized, "resources_and_ui").get(
+        "interactions", ()
+    )
+    ui_actions = tuple(dict.fromkeys(
+        str(row.get("server_action") or "").strip()
+        for row in ui_rows
+        if isinstance(row, Mapping) and str(row.get("server_action") or "").strip()
+    )) if mutating_ui else ()
+    functions_by_id = {
+        str(fn.get("id") or ""): fn
+        for fn in (typed_plan_ir or {}).get("functions", ())
+        if isinstance(fn, Mapping)
+    }
     valid_entry_points = set(range(len(entry_points)))
     for index in sorted(bound_entry_points - valid_entry_points):
-        issues.append(
-            f"event.binding_without_entry_point:{index}"
-        )
+        ordinal = index - len(entry_points) + 1
+        binding = bindings_by_entry[index]
+        function_id = f"uiAction{ordinal}_command"
+        fn = functions_by_id.get(function_id, {})
+        body = fn.get("body", ())
+        first = body[0] if isinstance(body, (list, tuple)) and body else {}
+        call = first.get("value") if isinstance(first, Mapping) else None
+        args = call.get("args", ()) if isinstance(call, Mapping) else ()
+        forwarded = args[0] if isinstance(args, (list, tuple)) and args else {}
+        command_literal = str(binding.get("config", {}).get("literal") or "")
+        if (
+            1 <= ordinal <= len(ui_actions)
+            and binding.get("event") == "command"
+            and binding.get("function") == function_id
+            and command_literal.startswith(f"mmm_action_{ordinal}")
+            and str(fn.get("id") or "") in reachable_functions
+            and first.get("op") == "return"
+            and isinstance(call, Mapping)
+            and call.get("op") == "call"
+            and call.get("function") == "logic_dispatch"
+            and isinstance(forwarded, Mapping)
+            and forwarded.get("op") == "literal"
+            and forwarded.get("type") == "string"
+            and forwarded.get("value") == ui_actions[ordinal - 1]
+        ):
+            continue
+        issues.append(f"event.binding_without_entry_point:{index}")
 
     return tuple(dict.fromkeys(issues))
 

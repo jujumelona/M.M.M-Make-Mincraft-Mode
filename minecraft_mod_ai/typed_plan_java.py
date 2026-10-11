@@ -88,6 +88,24 @@ class _Renderer:
         self.plan = plan
         self.capabilities = dict(capabilities or {})
         self.counter = 0
+        self.string_names: set[str] = set()
+
+    def _string_value(self, node: Mapping[str, Any]) -> bool:
+        op = node.get("op")
+        if op == "literal":
+            return node.get("type") == "string"
+        if op == "ref":
+            return node.get("name") in self.string_names
+        if op == "state_get":
+            return node.get("type") == "string"
+        if op == "binary" and node.get("operator") == "+":
+            return self._string_value(node["left"]) and self._string_value(node["right"])
+        if op == "call":
+            return any(
+                fn.get("id") == node.get("function") and fn.get("return_type") == "string"
+                for fn in self.plan.get("functions", ())
+            )
+        return False
 
     def unique(self, stem: str) -> str:
         self.counter += 1
@@ -128,7 +146,16 @@ class _Renderer:
         if op == "unary":
             return f"({node['operator']}{self.expr(node['value'])})"
         if op == "binary":
-            return f"({self.expr(node['left'])} {node['operator']} {self.expr(node['right'])})"
+            operator = node["operator"]
+            if operator in {"==", "!="} and (
+                self._string_value(node["left"]) or self._string_value(node["right"])
+            ):
+                equality = (
+                    "java.util.Objects.equals("
+                    + self.expr(node["left"]) + ", " + self.expr(node["right"]) + ")"
+                )
+                return equality if operator == "==" else f"(!{equality})"
+            return f"({self.expr(node['left'])} {operator} {self.expr(node['right'])})"
         if op == "list":
             return "java.util.List.of(" + ", ".join(self.expr(item) for item in node["items"]) + ")"
         if op == "map":
@@ -156,6 +183,8 @@ class _Renderer:
             op = statement["op"]
             if op == "let":
                 lines.append(f"{indent}{_java_type(statement['type'])} {statement['name']} = {self.expr(statement['value'])};")
+                if statement["type"] == "string":
+                    self.string_names.add(statement["name"])
             elif op == "set":
                 lines.append(f"{indent}{statement['name']} = {self.expr(statement['value'])};")
             elif op == "return":
@@ -346,6 +375,10 @@ class _Renderer:
             lines.extend(self.event_registration(binding))
         lines.extend(["    }", ""])
         for fn in self.plan["functions"]:
+            self.string_names = {
+                str(param["name"]) for param in fn["parameters"]
+                if param["type"] == "string"
+            }
             params = ", ".join(
                 f"{_java_type(param['type'])} {param['name']}" for param in fn["parameters"]
             )

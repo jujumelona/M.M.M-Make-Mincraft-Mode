@@ -741,3 +741,110 @@ def test_permission_capability_lowering_rejects_semantically_invalid_level():
             typed_host_capability_contracts(),
         )
 
+
+
+def test_mutating_ui_commands_are_individually_executable(monkeypatch):
+    """Host binds separate commands and forwards each exact authored action."""
+    from minecraft_mod_ai import typed_plan_authoring, authored_structured_design
+    from minecraft_mod_ai.typed_plan_support import typed_plan_support_issues
+
+    actions = ("ship_part_purchase", "ship_part_upgrade")
+
+    def concerns(_sections, section):
+        if section == "algorithm":
+            return {"atomic_mutations": [{"mutations": "spend_and_apply"}]}
+        if section == "resources_and_ui":
+            return {"interactions": [
+                {"server_action": action, "trigger": "player_click"}
+                for action in actions
+            ]}
+        if section == "integration":
+            return {"entry_points": [{
+                "trigger": "command:shipyard", "boundary": "server", "owner": "ship"
+            }]}
+        return {}
+
+    monkeypatch.setattr(authored_structured_design, "active_concern_records", concerns)
+    monkeypatch.setattr(typed_plan_authoring, "_active_concern_refs", lambda _s: (
+        "algorithm.atomic_mutations", "resources_and_ui.interactions",
+        "integration.entry_points",
+    ))
+    monkeypatch.setattr(typed_plan_authoring, "_integration_entry_points",
+                        lambda _s: tuple(concerns({}, "integration")["entry_points"]))
+    def semantic(_router, _source, _sections, _caps, **_kwargs):
+        statements = []
+        for action in actions:
+            statements.append({
+                "op": "if",
+                "condition": {
+                    "op": "binary", "operator": "==",
+                    "left": {"op": "ref", "name": "event"},
+                    "right": {"op": "literal", "type": "string", "value": action},
+                },
+                "then": [{
+                    "op": "state_set",
+                    "key": {"op": "literal", "type": "string", "value": "credits"},
+                    "value": {"op": "literal", "type": "int", "value": 1},
+                    "context": {"op": "map", "entries": []},
+                }],
+                "else": [],
+            })
+        statements.append({"op": "return", "value": {
+            "op": "literal", "type": "int", "value": 1,
+        }})
+        return statements
+
+    monkeypatch.setattr(typed_plan_authoring, "author_semantic_game_dispatch", semantic)
+    plan = author_typed_plan_ir(None, "purchase and upgrade ships", {}, {})
+    bindings = [b for b in plan["event_bindings"] if b["event"] == "command"]
+    assert len(bindings) == 3
+    assert [b["config"]["literal"] for b in bindings] == [
+        "shipyard", "mmm_action_1", "mmm_action_2",
+    ]
+    functions = {f["id"]: f for f in plan["functions"]}
+    for ordinal, action in enumerate(actions, start=1):
+        fn = functions[f"uiAction{ordinal}_command"]
+        assert fn["body"][0]["value"]["args"][0]["value"] == action
+
+    # Check strict typed support, including synthetic action entry point indexes.
+    from minecraft_mod_ai import typed_plan_support
+    monkeypatch.setattr(typed_plan_support, "normalize_structured_sections", lambda s: s)
+    monkeypatch.setattr(typed_plan_support, "active_concern_records", concerns)
+    assert typed_plan_support_issues({}, plan) == ()
+
+
+def test_ui_mutation_action_guard_uses_exact_action_and_java_value_equality():
+    from minecraft_mod_ai.typed_plan_authoring import lower_semantic_game_dispatch_to_ir
+    from minecraft_mod_ai.typed_plan_java import render_typed_plan_java
+
+    action = "market_exchange_service exposes ship_part_purchase and ship_part"
+    body = lower_semantic_game_dispatch_to_ir([{
+        "trigger_event": "command",
+        "action_guard": action,
+        "action_kind": "set_state",
+        "state_key": "credits",
+        "value": 3,
+    }], {"credits": "int"}, {})
+    assert body[0]["condition"]["right"]["value"] == action
+    plan = {
+        "schema_version": "mmm/typed-plan-ir-v1",
+        "source_sha256": "0" * 64,
+        "functions": [{
+            "id": "logic_dispatch",
+            "parameters": [
+                {"name": "event", "type": "string"},
+                {"name": "primary", "type": "object"},
+                {"name": "secondary", "type": "object"},
+                {"name": "flag", "type": "boolean"},
+            ],
+            "return_type": "int",
+            "body": body,
+            "covers": ["resources_and_ui.interactions"],
+        }],
+        "initialize": [],
+        "platform_modules": [],
+        "event_bindings": [],
+    }
+    java = render_typed_plan_java(plan)
+    assert "java.util.Objects.equals(event, " in java
+    assert "if ((event ==" not in java
