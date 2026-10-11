@@ -187,18 +187,8 @@ class CompleteGameDesignPlanner:
             source_revision=str(repository_revision().get("git_commit", "")),
         )
 
-        # A login-only authored event graph cannot execute player purchases,
-        # upgrades or launch actions. Repair the integration entry-point design
-        # BEFORE content discovery and Typed PlanIR authoring, so the latter
-        # can bind its gameplay writer to a real, player-invokable event.
-        from .gameplay_entrypoint_repair import repair_missing_gameplay_entrypoint
-
-        repaired_sections = repair_missing_gameplay_entrypoint(
-            self.router, prompt, structured_sections, budget=budget,
-        )
-        if repaired_sections != structured_sections:
-            structured_sections = repaired_sections
-            checkpoint.save_sections(structured_sections)
+        # Production consumes the authored plan without injecting new features,
+        # commands, resources or gameplay mechanics into the user's design.
         text = render_structured_sections(structured_sections)
 
         # Research/inspection happens before content identities are authored:
