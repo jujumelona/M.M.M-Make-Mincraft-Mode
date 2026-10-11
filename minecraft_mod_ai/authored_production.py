@@ -1028,6 +1028,116 @@ def _assert_executable_gameplay_floor(
             f"content_modules={observed_content!r}."
         )
 
+
+    # A single command that increments a state counter is not a substitute for
+    # multiple independently authored server actions (plant/harvest/cook, etc.).
+    # Demand a reachable, action-specific witness for *each* UI interaction.
+    # Generic "state_set" reachability proves only that something was written,
+    # not that any requested gameplay transaction was implemented.
+    interaction_rows = active_concern_records(
+        plan.structured_sections, "resources_and_ui",
+    ).get("interactions", ())
+    required_actions = {
+        str(row.get("server_action") or "").strip(): str(
+            row.get("trigger") or ""
+        ).strip()
+        for row in interaction_rows
+        if isinstance(row, Mapping) and str(row.get("server_action") or "").strip()
+    }
+    if len(required_actions) >= 2 and not verified_donors:
+        from .typed_plan_ir import typed_plan_reachable_function_ids
+        from .typed_host_capabilities import typed_host_capability_contracts
+
+        mutating_caps = {
+            name
+            for name, contract in typed_host_capability_contracts().items()
+            if contract.get("gameplay_mutation") is True
+        }
+        reachable = set(typed_plan_reachable_function_ids(
+            plan.typed_plan_ir, runtime_only=True,
+        ))
+
+        def walk(node: Any):
+            if isinstance(node, (tuple, list)):
+                for child in node:
+                    yield from walk(child)
+            elif isinstance(node, Mapping):
+                yield node
+                for child in node.values():
+                    yield from walk(child)
+
+        def mutates(nodes: Any) -> bool:
+            return any(
+                node.get("op") == "state_set"
+                or (
+                    node.get("op") == "capability"
+                    and str(node.get("id") or "") in mutating_caps
+                )
+                for node in walk(nodes)
+            )
+
+        guarded_actions: set[str] = set()
+        for function in plan.typed_plan_ir.get("functions", ()):
+            if not isinstance(function, Mapping) or function.get("id") not in reachable:
+                continue
+            for node in walk(function.get("body", ())):
+                if node.get("op") != "if" or not mutates(node.get("then", ())):
+                    continue
+                # Only a mutation under an action-specific condition is proof.
+                literals = {
+                    str(part.get("value") or "")
+                    for part in walk(node.get("condition", {}))
+                    if part.get("op") == "literal"
+                    and part.get("type") == "string"
+                }
+                guarded_actions.update(literals)
+
+        observed_actions: set[str] = set()
+        for action, trigger in required_actions.items():
+            if (
+                any(
+                    event in mutating_events and bool(mutating_events[event])
+                    for event in (action, trigger, "command:" + action)
+                )
+                or action in guarded_actions
+                or trigger in guarded_actions
+                or any(
+                    module.kind in {"item", "block", "custom_item_behavior",
+                                    "custom_block_behavior"}
+                    and any(
+                        str(module.config.get(field) or "").strip()
+                        in {action, trigger}
+                        for field in ("action", "interaction", "trigger")
+                    )
+                    for module in content_modules
+                )
+            ):
+                observed_actions.add(action)
+        missing_actions = sorted(set(required_actions) - observed_actions)
+        if missing_actions:
+            from .root_cause_trace import emit_root_cause
+
+            emit_root_cause(
+                "authored_gameplay_action_coverage_missing",
+                stage="production",
+                operation="authored_gameplay_floor",
+                result="FAIL",
+                details={
+                    "required_actions": sorted(required_actions),
+                    "observed_actions": sorted(observed_actions),
+                    "missing_actions": missing_actions,
+                    "mutating_events": mutating_events,
+                    "repair": "Bind each UI server_action to a reachable "
+                              "mutating event, guarded command branch, or "
+                              "matching actionable content owner.",
+                },
+            )
+            raise ValueError(
+                "GAMEPLAY_ACTION_COVERAGE_MISSING: no executable "
+                "action-specific writer for " + ", ".join(missing_actions)
+                + "; a generic state counter or GUI is insufficient."
+            )
+
     if not (concrete_content or verified_donors or runtime_mutations):
         raise ValueError(
             "GAMEPLAY_IMPLEMENTATION_ABSENT: authored atomic mutations or state "
