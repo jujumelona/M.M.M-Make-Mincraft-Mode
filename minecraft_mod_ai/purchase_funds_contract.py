@@ -110,7 +110,7 @@ def repair_missing_purchase_funds(
             "type": {"type": "string", "enum": ["int", "long", "double"]},
             "default": {
                 "type": "string", "minLength": 1, "maxLength": 32,
-                "pattern": r"^(?:[0-9]+(?:\\.[0-9]+)?)$",
+                "pattern": r"^(?:[0-9]+(?:\.[0-9]+)?)$",
             },
         },
         "required": ["name", "type", "default"],
@@ -164,7 +164,7 @@ def repair_missing_purchase_funds(
     default = str(identity.get("default") or "")
     if name in {str(record.get("name") or "") for record in existing}:
         raise ValueError("PURCHASE_FUNDS_STATE_REPAIR_DUPLICATE: " + name)
-    if kind not in _NUMERIC or not re.fullmatch(r"[0-9]+(?:\\.[0-9]+)?", default):
+    if kind not in _NUMERIC or not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", default):
         raise ValueError("PURCHASE_FUNDS_STATE_REPAIR_INVALID: non-numeric default")
     if kind in {"int", "long"} and not default.isdecimal():
         raise ValueError("PURCHASE_FUNDS_STATE_REPAIR_INVALID: integer default required")
