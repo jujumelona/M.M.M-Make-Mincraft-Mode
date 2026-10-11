@@ -1849,7 +1849,7 @@ def author_semantic_game_dispatch(
                 )
             },
             "instruction": (
-                "Choose exactly one host-bound runtime action implementing the supplied "                + "Choose exactly one host-bound runtime action implementing the supplied "
+                "Choose exactly one host-bound runtime action implementing the supplied "
                 "coverage_ref and its individual focus_record when present; do not "
                 "substitute an unrelated step. Only choose an event actually bound by "
                 "the host; no lifecycle substitutions for unrelated actions. "
