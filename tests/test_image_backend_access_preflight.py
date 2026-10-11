@@ -65,8 +65,8 @@ def test_preflight_fails_closed_when_hub_access_fails(monkeypatch) -> None:
         preflight.validate_image_backend_access(_router())
 
 
-def test_build_preflight_runs_before_authored_plan_compilation() -> None:
+def test_build_does_not_require_image_backend_for_every_authored_mod() -> None:
+    # Image-access checks belong to actual image work, not all mod builds.
     source = inspect.getsource(api_module.CompleteModAISession.build)
-    assert source.index("validate_image_backend_access(self.router)") < source.index(
-        "_production_proposal(self, proposal)"
-    )
+    assert "validate_image_backend_access(self.router)" not in source
+    assert "_production_proposal(self, proposal)" in source
