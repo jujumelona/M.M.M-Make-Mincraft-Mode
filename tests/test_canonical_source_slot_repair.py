@@ -25,7 +25,7 @@ def _generate(monkeypatch, candidates, *, source=True):
         "pattern": _PACKAGE_AND_CLASS,
         "x-mmm-contract-profile": "source_repair",
         "x-mmm-string-class": "source",
-    } if source else {"type": "string", "pattern": "^good$"}
+    } if source else {"type": "string", "minLength": 5}
     manifest = {
         "task": "Generate Minecraft implementation",
         "rules": [],
@@ -41,7 +41,7 @@ def _generate(monkeypatch, candidates, *, source=True):
         "slots": [{"name": "code", "description": "Complete Java registry source", "schema": slot_schema}],
         "render_mold": "{{code}}",
         "output_schema": {"type": "string", "pattern": _PACKAGE_AND_CLASS} if source else
-                         {"type": "string", "pattern": "^good$"},
+                         {"type": "string", "minLength": 5},
     }
     monkeypatch.setattr(canonical_generators, "load_template", lambda _leaf: manifest)
     monkeypatch.setattr(
@@ -92,8 +92,8 @@ def test_persistent_placeholder_never_publishes_an_artifact(monkeypatch):
 
 
 def test_non_source_slot_does_not_retry_invalid_scalar(monkeypatch):
-    run, seen = _generate(monkeypatch, ["placeholder", "good"], source=False)
-    with pytest.raises(ValidationError, match="does not match"):
+    run, seen = _generate(monkeypatch, ["bad", "complete"], source=False)
+    with pytest.raises(ValidationError, match="too short"):
         run()
     assert len(seen) == 1
 
