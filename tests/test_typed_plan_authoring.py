@@ -328,6 +328,56 @@ def test_purchase_action_is_balanced_and_grant_guarded():
         )
 
 
+def test_semantic_dispatch_reauthors_string_self_assignment(monkeypatch):
+    from minecraft_mod_ai import typed_plan_authoring, authored_structured_design
+
+    def concerns(_sections, section):
+        if section == "state_model":
+            return {"variables": [{"name": "resources", "type": "string"}]}
+        if section == "resources_and_ui":
+            return {"interactions": [{
+                "server_action": "purchase_part", "trigger": "button",
+            }]}
+        return {}
+
+    monkeypatch.setattr(authored_structured_design, "active_concern_records", concerns)
+    responses = iter([
+        {"trigger_event": "command", "action_kind": "set_state",
+         "state_key": "resources", "value": "resources"},
+        {"trigger_event": "command", "action_kind": "set_state",
+         "state_key": "resources", "value": "updated"},
+    ])
+    attempts = []
+    def fake_generate(*_args, **_kwargs):
+        attempts.append(1)
+        return next(responses)
+
+    monkeypatch.setattr(
+        typed_plan_authoring, "generate_fixed_template_value", fake_generate,
+    )
+    rules = typed_plan_authoring.author_semantic_game_dispatch(
+        None, "make a working purchase", {}, {},
+        coverage_refs=("resources_and_ui.interactions",),
+        bound_events=("command",),
+    )
+    assert len(attempts) == 2
+    assert rules[0]["then"][0]["value"]["value"] == "updated"
+
+    monkeypatch.setattr(
+        typed_plan_authoring, "generate_fixed_template_value",
+        lambda *_args, **_kwargs: {
+            "trigger_event": "command", "action_kind": "set_state",
+            "state_key": "resources", "value": "resources",
+        },
+    )
+    with pytest.raises(ValueError, match="TYPED_PLAN_SEMANTIC_PLACEHOLDER_REJECTED"):
+        typed_plan_authoring.author_semantic_game_dispatch(
+            None, "make a working purchase", {}, {},
+            coverage_refs=("resources_and_ui.interactions",),
+            bound_events=("command",),
+        )
+
+
 def test_planner_budget_enforces_limit_and_tracks_stages():
     from minecraft_mod_ai.planner_budget import PlannerBudget
 
