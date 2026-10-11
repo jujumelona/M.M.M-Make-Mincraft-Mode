@@ -96,16 +96,35 @@ def generate_canonical_leaf(inputs, *, leaf_id, router, authority):
             )
             try:
                 validate_json_schema(value, slot_schema)
-            except ValidationError as exc:
+                if is_source and spec.get("language") == "java":
+                    # A valid package/class declaration is not sufficient:
+                    # the Minecraft 26.x target must reject obsolete Yarn API
+                    # names *inside* the bounded source-repair loop. The
+                    # dispatcher repeats this check before materialization.
+                    from .canonical_java_target_contract import assert_canonical_java_target
+
+                    assert_canonical_java_target(value, spec)
+            except (ValidationError, ValueError) as exc:
+                # Retry only candidate-level source violations. Misconfigured
+                # target paths/bindings and unrelated ValueErrors are not
+                # fixable by asking the model to regenerate source.
+                if isinstance(exc, ValueError) and not str(exc).startswith((
+                    "CANONICAL_MOJANG_API_REQUIRED:",
+                    "CANONICAL_SCREEN_REGISTRATION_CLASS_INVALID:",
+                )):
+                    raise
                 if attempt + 1 >= attempts:
                     raise
+                diagnostic = exc.message if isinstance(exc, ValidationError) else str(exc)
                 messages.append({
                     "role": "system",
                     "content": (
                         "The host REJECTED the previous source candidate. "
-                        f"Validation error: {exc.message}. "
-                        "Regenerate the entire source string, satisfying the exact "
-                        "package/type declaration and original implementation requirement. "
+                        f"Validation error: {diagnostic}. "
+                        "Regenerate the entire source string for the supplied Minecraft "
+                        "target and canonical API namespace; do not reuse obsolete "
+                        "mappings or guess signatures. Satisfy the exact package/type "
+                        "declaration and original implementation requirement. "
                         "Do not repeat a placeholder; the host schema is unchanged."
                     ),
                 })

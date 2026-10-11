@@ -15,7 +15,7 @@ _PACKAGE_AND_CLASS = r"(?s)\bpackage\s+p\s*;.*\bclass\s+Good\b"
 _VALID_JAVA = "package p; public class Good { public static int value() { return 42; } }"
 
 
-def _generate(monkeypatch, candidates, *, source=True):
+def _generate(monkeypatch, candidates, *, source=True, minecraft_version=None):
     seen = []
     candidates = iter(candidates)
     slot_schema = {
@@ -37,7 +37,11 @@ def _generate(monkeypatch, candidates, *, source=True):
         "context_id": "ctx",
         "language": "java",
         "requirement": "Create functional registry logic",
-        "bindings": {"package_name": "p", "class_name": "Good"},
+        "bindings": {
+            "package_name": "p",
+            "class_name": "Good",
+            "minecraft_version": minecraft_version,
+        },
         "slots": [{"name": "code", "description": "Complete Java registry source", "schema": slot_schema}],
         "render_mold": "{{code}}",
         "output_schema": {"type": "string", "pattern": _PACKAGE_AND_CLASS} if source else
@@ -101,4 +105,41 @@ def test_non_source_slot_does_not_retry_invalid_scalar(monkeypatch):
 def test_valid_source_does_not_consume_repair_attempt(monkeypatch):
     run, seen = _generate(monkeypatch, [_VALID_JAVA, "placeholder"])
     assert run()["artifact"] == _VALID_JAVA
+    assert len(seen) == 1
+
+
+def test_obsolete_26x_yarn_api_is_repaired_before_canonical_publication(monkeypatch):
+    invalid = (
+        "package p; import net.minecraft.util.Identifier; "
+        "public class Good { public static int value() { return 42; } }"
+    )
+    repaired = (
+        "package p; import net.minecraft.resources.ResourceLocation; "
+        "public class Good { public static int value() { return 42; } }"
+    )
+    run, seen = _generate(monkeypatch, [invalid, repaired], minecraft_version="26.2")
+
+    assert run()["artifact"] == repaired
+    assert len(seen) == 2
+    feedback = seen[1][0][-1]["content"]
+    assert "CANONICAL_MOJANG_API_REQUIRED" in feedback
+    assert "net.minecraft.util.Identifier" in feedback
+    assert "26.2" in feedback
+    assert "canonical API namespace" in feedback
+
+
+def test_persistent_obsolete_26x_yarn_api_fails_without_publication(monkeypatch):
+    invalid = "package p; import net.minecraft.util.Identifier; public class Good {}"
+    run, seen = _generate(monkeypatch, [invalid, invalid], minecraft_version="26.2")
+
+    with pytest.raises(ValueError, match="CANONICAL_MOJANG_API_REQUIRED"):
+        run()
+    assert len(seen) == 2  # Never publish an invalid candidate or run an unbounded loop.
+
+
+def test_older_minecraft_epoch_is_not_rejected_by_26x_only_guard(monkeypatch):
+    legacy = "package p; import net.minecraft.util.Identifier; public class Good {}"
+    run, seen = _generate(monkeypatch, [legacy], minecraft_version="1.21.5")
+
+    assert run()["artifact"] == legacy
     assert len(seen) == 1
