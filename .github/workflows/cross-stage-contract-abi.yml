@@ -36,6 +36,7 @@ jobs:
         run: >-
           python -m pytest -q
           tests/test_cross_stage_contract_abi.py
+          tests/test_canonical_source_slot_repair.py
           tests/test_typed_plan_ir.py
           tests/test_typed_event_ir.py
           tests/test_typed_platform_ir.py
