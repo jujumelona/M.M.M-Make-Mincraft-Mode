@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import shutil
+from dataclasses import asdict
 from functools import wraps
 from pathlib import Path
 from typing import Any
@@ -45,7 +48,7 @@ def prepare_official_fabric_project(
     base.approve(base.calculate_hash())
     project_root = run_root / "base/workspaces" / base.spec.mod_id
     if project_root.exists():
-        if _matches_live_target(self, project_root, base.spec, adapter):
+        if _matches_live_target(self, project_root, base.spec, adapter) or _matches_prepared_scaffold(project_root, base.spec, adapter):
             self._write_base_proposal(project_root, base)
             return project_root.resolve()
         self._preserve_partial_project(project_root)
@@ -53,6 +56,15 @@ def prepare_official_fabric_project(
     staging = project_root.with_name(f".{project_root.name}.staging")
     if staging.exists():
         self._preserve_partial_project(staging)
+    prepared = getattr(self, "_prepared_fabric_project", None)
+    if prepared is not None and Path(prepared).resolve() != project_root.resolve():
+        prepared = Path(prepared).resolve()
+        if _matches_prepared_scaffold(prepared, base.spec, adapter):
+            staging.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(prepared, staging)
+            self._write_base_proposal(staging, base)
+            staging.replace(project_root)
+            return project_root.resolve()
     try:
         receipt = bootstrap_fabric_project(
             project_root=staging,
@@ -63,6 +75,7 @@ def prepare_official_fabric_project(
     except FabricTemplateProviderError as exc:
         raise error_type("Official Fabric project bootstrap failed: " + str(exc)) from exc
 
+    receipt["prepared_scaffold_sha256"] = _fresh_scaffold_hash(staging)
     self._write_base_proposal(staging, base)
     metadata = staging / ".minecraft_ai"
     metadata.mkdir(parents=True, exist_ok=True)
@@ -231,6 +244,37 @@ def _write_approved_target_lock(metadata: Path, adapter: Any, receipt: dict[str,
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+
+
+def _fresh_scaffold_hash(root: Path) -> str:
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root)
+        if ".minecraft_ai" in relative.parts or ".gradle" in relative.parts:
+            continue
+        if path.is_file():
+            digest.update(relative.as_posix().encode("utf-8"))
+            digest.update(b"\0")
+            digest.update(hashlib.sha256(path.read_bytes()).digest())
+    return "sha256:" + digest.hexdigest()
+
+
+def _matches_prepared_scaffold(root: Path, spec: Any, adapter: Any) -> bool:
+    """A fresh scaffold has no generated Java yet; compare its original bytes."""
+    if not root.is_dir() or root.is_symlink():
+        return False
+    try:
+        metadata = root / ".minecraft_ai"
+        base = json.loads((metadata / "base-proposal.json").read_text(encoding="utf-8"))
+        receipt = json.loads((metadata / "fabric-template-receipt.json").read_text(encoding="utf-8"))
+        if json.dumps(base["spec"], sort_keys=True) != json.dumps(asdict(spec), sort_keys=True):
+            return False
+        if receipt.get("prepared_scaffold_sha256") != _fresh_scaffold_hash(root):
+            return False
+        actual = adapter_from_project(root)
+        return actual == adapter
+    except (OSError, ValueError, TypeError, KeyError):
+        return False
 
 
 def _matches_live_target(self: Any, root: Path, spec: Any, adapter: Any) -> bool:

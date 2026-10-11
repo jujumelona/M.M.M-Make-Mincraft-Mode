@@ -299,11 +299,11 @@ def install() -> None:
         )
 
         if receipt is None:
-            deno = provider._ensure_deno(Path(cache_root).expanduser().resolve())
+            _command, cli_runtime = provider._ensure_fabric_cli(Path(cache_root).expanduser().resolve())
             receipt = {
                 "schema_version": "mmm/fabric-official-template-v3",
-                "provider": "fabricmc.net/cli",
-                "provider_url": provider._FABRIC_CLI,
+                "provider": provider._FABRIC_CLI,
+                "provider_url": provider._FABRIC_CLI_DOCS,
                 "minecraft_version": adapter.minecraft_version,
                 "loader": adapter.loader,
                 "loader_version": adapter.fabric_loader,
@@ -312,7 +312,7 @@ def install() -> None:
                 "gradle": adapter.gradle,
                 "java": adapter.java_version,
                 "mappings": adapter.mappings_kind,
-                "deno": provider._deno_version(deno),
+                "cli": cli_runtime,
                 "scaffold_rebind_reason": str(scaffold_error or ""),
             }
         else:

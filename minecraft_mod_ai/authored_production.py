@@ -939,45 +939,22 @@ def _compile_content_artifact_graph(
         )
     return modules, assets, jobs
 
-def compile_authored_design(
-    router: Any, plan: AuthoredPlan, *, existing_input_sha256: str = ""
-) -> CompleteProposal:
-    from .authored_structured_design import normalize_structured_sections
-    from .production_state_compiler import compile_production_state_section
-
-    if not isinstance(plan, AuthoredPlan):
-        raise TypeError("compile_authored_design requires AuthoredPlan")
-    if not getattr(plan, "typed_plan_ir", {}):
-        raise ValueError(
-            "TYPED_PLAN_REQUIRED: AuthoredPlan must contain Typed PlanIR."
-        )
-
-    structured = normalize_structured_sections(plan.structured_sections)
-    if not structured:
-        raise ValueError(
-            "TYPED_STRUCTURED_AUTHORITY_REQUIRED: canonical structured design is required."
-        )
-    if structured != plan.structured_sections:
-        raise ValueError(
-            "TYPED_STRUCTURED_AUTHORITY_NONCANONICAL: planning must persist canonical records."
-        )
-
-    effective_existing = str(
-        existing_input_sha256 or plan.existing_input_sha256 or ""
-    ).strip()
-
+def authored_base_proposal(plan: AuthoredPlan) -> Proposal:
+    """Bind project identity before the model adds content and executable IR."""
     content_design = (
         plan.content_design
         if isinstance(getattr(plan, "content_design", None), Mapping)
         else {}
     )
     content_mod_id = str(content_design.get("_mod_id") or "").strip()
-    mod_id = content_mod_id or ("authored_" + plan.calculate_hash()[:12])
+    mod_id = content_mod_id or (
+        "authored_" + hashlib.sha256(plan.requested_prompt.encode("utf-8")).hexdigest()[:12]
+    )
     acceptance = (
         "Implement the behaviors in the saved authored design and exercise them in Minecraft.",
         "Build the project and verify that the mod loads and runs without errors.",
     )
-    base = Proposal(
+    return Proposal(
         schema_version="minecraft-mod-ai/proposal-v1",
         proposal_version=1,
         status=ProposalStatus.AWAITING_APPROVAL,
@@ -997,6 +974,25 @@ def compile_authored_design(
         evidence_sources=(),
     )
 
+def compile_authored_design(
+    router: Any, plan: AuthoredPlan, *, existing_input_sha256: str = ""
+) -> CompleteProposal:
+    from .authored_structured_design import normalize_structured_sections
+    from .production_state_compiler import compile_production_state_section
+
+    if not isinstance(plan, AuthoredPlan):
+        raise TypeError("compile_authored_design requires AuthoredPlan")
+    if not getattr(plan, "typed_plan_ir", {}):
+        raise ValueError("TYPED_PLAN_REQUIRED: AuthoredPlan must contain Typed PlanIR.")
+    structured = normalize_structured_sections(plan.structured_sections)
+    if not structured:
+        raise ValueError("TYPED_STRUCTURED_AUTHORITY_REQUIRED: canonical structured design is required.")
+    if structured != plan.structured_sections:
+        raise ValueError("TYPED_STRUCTURED_AUTHORITY_NONCANONICAL: planning must persist canonical records.")
+    effective_existing = str(existing_input_sha256 or plan.existing_input_sha256 or "").strip()
+    content_design = plan.content_design if isinstance(plan.content_design, Mapping) else {}
+    base = authored_base_proposal(plan)
+    acceptance = base.acceptance_tests
     design = {"authored_plan": plan.to_dict()}
     design = bind_existing_project(router, design)
     from .typed_platform_ir import PLATFORM_HOST_KINDS

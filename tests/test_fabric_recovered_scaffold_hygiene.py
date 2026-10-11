@@ -34,8 +34,7 @@ def _install_recovery(monkeypatch, *, safety_failure=False):
     monkeypatch.setattr(rebind, "_write_full_platform_lock", lambda *args: None)
     monkeypatch.setattr(provider, "_gradle_wrapper_version", lambda *args: "9.5.1")
     monkeypatch.setattr(provider, "_java_release", lambda *args: "25")
-    monkeypatch.setattr(provider, "_ensure_deno", lambda *args: Path("deno"))
-    monkeypatch.setattr(provider, "_deno_version", lambda *args: "test")
+    monkeypatch.setattr(provider, "_ensure_fabric_cli", lambda *args: (["node", "fabric.mjs"], {"node": "test"}))
     rebind.install()
     return SimpleNamespace(minecraft_version="26.2", java_version="25", loader="fabric",
         fabric_loader="loader", fabric_api="api", fabric_loom="loom", gradle="9.5.1",

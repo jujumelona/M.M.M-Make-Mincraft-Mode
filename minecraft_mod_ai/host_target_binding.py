@@ -110,14 +110,23 @@ def bind_platform(
         )
 
     target_research = target_research_callback(research_brief)
-    selection = resolve_platform_fail_closed(
-        effective_prompt,
-        design=dict(design),
-        module_kinds=module_kinds,
-        existing_version=existing_version,
-        existing_loader=existing_loader,
-        target_research_fn=target_research,
-    )
+    selection = getattr(router, "_mmm_production_platform_selection", None)
+    if selection is not None:
+        from .platform_resolver import PlatformSelection, _require_supported_kinds
+
+        if not isinstance(selection, PlatformSelection):
+            raise SpecValidationError("Prepared production target must be a PlatformSelection receipt.")
+        selection.adapter.validate()
+        _require_supported_kinds(selection.adapter, module_kinds, explicit=True)
+    else:
+        selection = resolve_platform_fail_closed(
+            effective_prompt,
+            design=dict(design),
+            module_kinds=module_kinds,
+            existing_version=existing_version,
+            existing_loader=existing_loader,
+            target_research_fn=target_research,
+        )
     proposal = retarget_proposal(base_proposal, selection)
     proposal.validate()
 

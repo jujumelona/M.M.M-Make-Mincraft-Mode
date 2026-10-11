@@ -8,7 +8,6 @@ import re
 import shutil
 import subprocess
 import urllib.request
-import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -23,9 +22,9 @@ class FabricTemplateSafetyError(FabricTemplateProviderError):
     """An unsafe scaffold cannot be repaired by rebinding toolchain versions."""
 
 
-_FABRIC_CLI = "https://fabricmc.net/cli"
-_DENO_LATEST = "https://dl.deno.land/release-latest.txt"
-_DENO_RELEASE = "https://dl.deno.land/release/{version}/{asset}"
+_FABRIC_CLI = "@fabricmc/cli"
+_FABRIC_CLI_VERSION = "0.1.482"
+_FABRIC_CLI_DOCS = "https://fabricmc.net/develop/cli/"
 
 
 def bootstrap_fabric_project(
@@ -50,13 +49,10 @@ def bootstrap_fabric_project(
     root.parent.mkdir(parents=True, exist_ok=True)
     cache = Path(cache_root).expanduser().resolve()
     cache.mkdir(parents=True, exist_ok=True)
-    deno = _ensure_deno(cache)
+    cli_command, cli_runtime = _ensure_fabric_cli(cache)
 
     command = [
-        str(deno),
-        "run",
-        "-A",
-        _FABRIC_CLI,
+        *cli_command,
         "init",
         str(root),
         "-n",
@@ -73,16 +69,22 @@ def bootstrap_fabric_project(
         "-o",
         "mojangMappings",
     ]
-    completed = subprocess.run(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=int(os.environ.get("MMM_FABRIC_TEMPLATE_TIMEOUT", "240")),
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=int(os.environ.get("MMM_FABRIC_TEMPLATE_TIMEOUT", "240")),
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise FabricTemplateProviderError("Fabric official CLI timed out during project creation.") from exc
+    except OSError as exc:
+        raise FabricTemplateProviderError(f"Fabric official CLI could not start: {exc}") from exc
     if completed.returncode != 0:
         raise FabricTemplateProviderError(
             "Fabric official CLI failed for the selected target.\n"
@@ -150,8 +152,8 @@ def bootstrap_fabric_project(
 
     receipt = {
         "schema_version": "mmm/fabric-official-template-v2",
-        "provider": "fabricmc.net/cli",
-        "provider_url": _FABRIC_CLI,
+        "provider": _FABRIC_CLI,
+        "provider_url": _FABRIC_CLI_DOCS,
         "minecraft_version": adapter.minecraft_version,
         "loader": adapter.loader,
         "loader_version": adapter.fabric_loader,
@@ -160,7 +162,7 @@ def bootstrap_fabric_project(
         "gradle": adapter.gradle,
         "java": adapter.java_version,
         "mappings": "mojang",
-        "deno": _deno_version(deno),
+        "cli": cli_runtime,
         "provider_defaults_before_pin": provider_defaults,
         "verified_generated_toolchain": {
             "minecraft_version": actual_mc,
@@ -178,74 +180,97 @@ def bootstrap_fabric_project(
     return receipt
 
 
-def _ensure_deno(cache_root: Path) -> Path:
-    configured = os.environ.get("MMM_DENO_CMD", "").strip()
-    if configured:
-        path = Path(configured).expanduser()
-        if path.is_file():
-            return path.resolve()
-        found = shutil.which(configured)
-        if found:
-            return Path(found).resolve()
-        raise FabricTemplateProviderError(f"MMM_DENO_CMD is not executable: {configured}")
-
-    found = shutil.which("deno")
+def _ensure_node(cache_root: Path) -> Path:
+    """Use Node >=22, bootstrapping official Node 22 on older Colab hosts."""
+    found = shutil.which("node")
     if found:
-        return Path(found).resolve()
-
+        version = _runtime_version(Path(found))
+        match = re.match(r"v(\d+)\.", version)
+        if match and int(match.group(1)) >= 22:
+            return Path(found).resolve()
     system = platform.system().lower()
     machine = platform.machine().lower()
     if system != "linux":
         raise FabricTemplateProviderError(
-            "Deno is required for Fabric's official template provider on this host. "
-            "Install Deno or set MMM_DENO_CMD."
+            "Fabric's official npm CLI requires Node.js 22 or newer on this host."
         )
     if machine in {"x86_64", "amd64"}:
-        target = "x86_64-unknown-linux-gnu"
+        architecture = "x64"
     elif machine in {"aarch64", "arm64"}:
-        target = "aarch64-unknown-linux-gnu"
+        architecture = "arm64"
     else:
         raise FabricTemplateProviderError(
-            f"Automatic Deno bootstrap does not support architecture {machine!r}."
+            f"Automatic Node bootstrap does not support architecture {machine!r}."
         )
-
-    version = _download_text(_DENO_LATEST).strip()
-    if not re.fullmatch(r"v\d+\.\d+\.\d+(?:[-+][A-Za-z0-9._-]+)?", version):
-        raise FabricTemplateProviderError(
-            f"Deno latest-release endpoint returned an invalid version: {version!r}"
-        )
-    install_dir = cache_root / "deno" / version
-    binary = install_dir / "deno"
+    install_dir = cache_root / "node22"
+    binary = install_dir / "bin/node"
     if binary.is_file():
-        binary.chmod(0o755)
         return binary
-
-    asset = f"deno-{target}.zip"
-    archive = install_dir / asset
-    install_dir.mkdir(parents=True, exist_ok=True)
-    archive.write_bytes(_download_bytes(_DENO_RELEASE.format(version=version, asset=asset)))
-    checksum_text = _download_text(
-        _DENO_RELEASE.format(version=version, asset=asset + ".sha256sum")
+    base_url = "https://nodejs.org/dist/latest-v22.x/"
+    checksums = _download_text(base_url + "SHASUMS256.txt")
+    match = re.search(
+        rf"^([0-9a-f]{{64}})\s+(node-v22\.\d+\.\d+-linux-{architecture}\.tar\.xz)$",
+        checksums, re.MULTILINE,
     )
-    expected = checksum_text.strip().split()[0].lower()
-    if not re.fullmatch(r"[0-9a-f]{64}", expected):
-        raise FabricTemplateProviderError("Deno release checksum was invalid.")
-    actual = hashlib.sha256(archive.read_bytes()).hexdigest()
-    if actual != expected:
-        raise FabricTemplateProviderError("Downloaded Deno release failed SHA-256 verification.")
+    if match is None:
+        raise FabricTemplateProviderError("Official Node release checksum was unavailable.")
+    expected, asset = match.groups()
+    archive = cache_root / asset
+    archive.write_bytes(_download_bytes(base_url + asset))
+    if hashlib.sha256(archive.read_bytes()).hexdigest() != expected:
+        raise FabricTemplateProviderError("Downloaded Node release failed SHA-256 verification.")
+    install_dir.mkdir(parents=True, exist_ok=True)
     try:
-        with zipfile.ZipFile(archive) as bundle:
-            names = bundle.namelist()
-            if names != ["deno"]:
-                raise FabricTemplateProviderError(
-                    f"Unexpected Deno release archive members: {names[:8]}"
-                )
-            bundle.extract("deno", install_dir)
-    except zipfile.BadZipFile as exc:
-        raise FabricTemplateProviderError("Downloaded Deno archive is invalid.") from exc
-    binary.chmod(0o755)
-    archive.unlink(missing_ok=True)
+        subprocess.run(
+            ["tar", "-xJf", str(archive), "--strip-components=1", "--no-same-owner", "-C", str(install_dir)],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60, check=True,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise FabricTemplateProviderError(f"Official Node bootstrap failed: {exc}") from exc
+    finally:
+        archive.unlink(missing_ok=True)
+    if not binary.is_file() or not _runtime_version(binary).startswith("v22."):
+        raise FabricTemplateProviderError("Official Node bootstrap did not produce Node 22.")
     return binary
+
+
+def _ensure_fabric_cli(cache_root: Path) -> tuple[list[str], dict[str, str]]:
+    """Install the official, pinned npm package locally once; never use Deno."""
+    cache_root.mkdir(parents=True, exist_ok=True)
+    node = _ensure_node(cache_root)
+    prefix = cache_root / "fabric-cli"
+    package = prefix / "node_modules/@fabricmc/cli"
+    module = package / "bundled.mjs"
+    try:
+        installed_version = json.loads((package / "package.json").read_text(encoding="utf-8"))["version"]
+    except (OSError, ValueError, KeyError, TypeError):
+        installed_version = ""
+    if installed_version != _FABRIC_CLI_VERSION or not module.is_file():
+        npm = node.parent / "npm"
+        if not npm.is_file():
+            located = shutil.which("npm")
+            if not located:
+                raise FabricTemplateProviderError("Fabric official CLI requires npm alongside Node.js.")
+            npm = Path(located)
+        env = dict(os.environ)
+        env["PATH"] = str(node.parent) + os.pathsep + env.get("PATH", "")
+        env["npm_config_cache"] = str(cache_root / "npm")
+        try:
+            completed = subprocess.run(
+                [str(node), str(npm.resolve()), "install", "--prefix", str(prefix),
+                 "--no-audit", "--no-fund", "--ignore-scripts", f"{_FABRIC_CLI}@{_FABRIC_CLI_VERSION}"],
+                env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, encoding="utf-8", errors="replace", timeout=240, check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise FabricTemplateProviderError(f"Fabric official npm CLI installation failed: {exc}") from exc
+        if completed.returncode or not module.is_file():
+            raise FabricTemplateProviderError(
+                "Fabric official npm CLI installation failed.\n" + (completed.stdout or "")[-8000:]
+            )
+    return [str(node), str(module)], {
+        "package": _FABRIC_CLI, "version": _FABRIC_CLI_VERSION, "node": _runtime_version(node),
+    }
 
 
 def _download_bytes(url: str) -> bytes:
@@ -826,7 +851,7 @@ def _java_release(root: Path) -> str:
     raise FabricTemplateProviderError("Could not determine generated Java target release.")
 
 
-def _deno_version(command: Path) -> str:
+def _runtime_version(command: Path) -> str:
     completed = subprocess.run(
         [str(command), "--version"],
         stdout=subprocess.PIPE,

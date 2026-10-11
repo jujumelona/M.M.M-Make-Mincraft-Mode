@@ -8,6 +8,7 @@ import os
 import shutil
 import threading
 from concurrent.futures import Future
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -355,6 +356,104 @@ def _production_proposal(
     return compiled
 
 
+@contextmanager
+def _production_target_scope(session: "CompleteModAISession"):
+    """Keep inferred production bindings local to one build, including failures."""
+    missing = object()
+    snapshots = []
+    for owner, names in (
+        (getattr(session, "router", None), (
+            "_mmm_requested_minecraft_version", "_mmm_requested_loader",
+            "_mmm_target_adapter", "_mmm_deterministic_module_kinds",
+            "_mmm_production_platform_selection",
+        )),
+        (getattr(session, "planner", None), ("adapter", "deterministic_module_kinds")),
+    ):
+        if owner is None:
+            continue
+        snapshots.extend((owner, name, getattr(owner, name, missing)) for name in names)
+    try:
+        yield
+    finally:
+        for owner, name, value in snapshots:
+            if value is missing:
+                if hasattr(owner, name):
+                    delattr(owner, name)
+            else:
+                setattr(owner, name, value)
+
+
+def _prepare_production_scaffold(
+    session: "CompleteModAISession", proposal: Any, platform: Any | None,
+) -> Any | None:
+    """Create the real fresh-project scaffold before any production model work."""
+    if session.existing_input is not None or getattr(proposal, "existing_input_sha256", ""):
+        return platform
+    from .platform_catalog import adapter_for_lock_values
+    from .target_contract import TargetContract
+    from .platform_live_execution_contract import _uses_official_scaffold, prepare_official_fabric_project
+    from .complete_orchestrator_support import CompleteProductionError
+
+    if isinstance(proposal, AuthoredPlan):
+        from .authored_production import authored_base_proposal
+
+        base = authored_base_proposal(proposal)
+        if platform is None:
+            from .host_target_binding import bind_platform
+            from .typed_platform_ir import PLATFORM_HOST_KINDS
+
+            _design, base = bind_platform(
+                session.router, proposal.requested_prompt,
+                {"authored_plan": proposal.to_dict()}, base,
+                module_kinds=tuple(
+                    str(row["kind"]) for row in proposal.typed_plan_ir.get("platform_modules", ())
+                    if isinstance(row, dict) and row.get("kind")
+                    and row["kind"] not in PLATFORM_HOST_KINDS
+                ),
+            )
+            platform = base.spec.platform
+        adapter = platform if isinstance(platform, TargetContract) else adapter_for_lock_values(platform)
+        from .platform_resolver import PlatformSelection, retarget_proposal
+
+        selection = PlatformSelection(
+            adapter=adapter, source="production_scaffold",
+            reason="Prepare the selected target before production model work.",
+            explicit_version=True, explicit_loader=True,
+        )
+        base = retarget_proposal(base, selection)
+        # AUTO binds once before authoring. Later compilation must use the same
+        # complete receipt for which the scaffold and model backend were prepared.
+        session.router._mmm_production_platform_selection = selection
+        session.router._mmm_requested_minecraft_version = adapter.minecraft_version
+        session.router._mmm_requested_loader = adapter.loader
+        session.router._mmm_target_adapter = adapter
+        session.router._mmm_deterministic_module_kinds = deterministic_backend_capabilities(adapter)
+        session.planner.adapter = adapter
+        session.planner.deterministic_module_kinds = deterministic_backend_capabilities(adapter)
+    else:
+        if platform is None:
+            return None
+        base = proposal.base_proposal
+        adapter = platform if isinstance(platform, TargetContract) else adapter_for_lock_values(platform)
+    if not _uses_official_scaffold(adapter):
+        return platform
+
+    cache_key = hashlib.sha256(json.dumps(
+        base.to_dict()["spec"], sort_keys=True, ensure_ascii=False,
+    ).encode("utf-8")).hexdigest()
+    from types import SimpleNamespace
+
+    print(f"FABRIC_PROJECT_PREPARE: minecraft={adapter.minecraft_version} before production model work", flush=True)
+    root = prepare_official_fabric_project(
+        session.orchestrator, SimpleNamespace(base_proposal=base),
+        run_root=session.workspace_root / ".cache/fabric-scaffolds" / cache_key,
+        adapter=adapter, error_type=CompleteProductionError,
+    )
+    session.orchestrator._prepared_fabric_project = root
+    print(f"FABRIC_PROJECT_READY: minecraft={adapter.minecraft_version} project={root}", flush=True)
+    return base.spec.platform
+
+
 @dataclass(frozen=True)
 class CompleteChatReply:
     """Natural-language complete-production plan with hidden execution state."""
@@ -583,15 +682,17 @@ class CompleteModAISession:
                 **{**selected.__dict__, "source_only": True}
             )
 
-        bound_platform = _bound_platform_for_preflight(self, proposal)
-        if bound_platform is not None:
-            from .complete_preflight_contract import (
-                validate_platform_toolchain_preflight,
-            )
+        with _production_target_scope(self):
+            bound_platform = _bound_platform_for_preflight(self, proposal)
+            bound_platform = _prepare_production_scaffold(self, proposal, bound_platform)
+            if bound_platform is not None:
+                from .complete_preflight_contract import (
+                    validate_platform_toolchain_preflight,
+                )
 
-            validate_platform_toolchain_preflight(bound_platform, selected)
+                validate_platform_toolchain_preflight(bound_platform, selected)
 
-        proposal = _production_proposal(self, proposal)
+            proposal = _production_proposal(self, proposal)
         # Colab's reusable launch options may have been created before the
         # approved plan was compiled. A plan with entity/boss/NPC geometry must
         # not silently disable host-mandatory Blockbench verification.
