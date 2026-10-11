@@ -13,6 +13,7 @@ on:
       - "minecraft_mod_ai/generation_verifier_resilience.py"
       - "minecraft_mod_ai/java_generation_policy.py"
       - "minecraft_mod_ai/canonical_generators.py"
+      - "minecraft_mod_ai/host_generator_catalog_migration.py"
       - "minecraft_mod_ai/canonical_java_target_contract.py"
       - "tests/test_canonical_source_slot_repair.py"
       - "tests/test_canonical_java_target_contract.py"
@@ -33,6 +34,7 @@ on:
       - "minecraft_mod_ai/execution_contract_policy.py"
       - "minecraft_mod_ai/java_generation_policy.py"
       - "minecraft_mod_ai/canonical_generators.py"
+      - "minecraft_mod_ai/host_generator_catalog_migration.py"
       - "minecraft_mod_ai/canonical_java_target_contract.py"
       - "tests/test_canonical_source_slot_repair.py"
       - "tests/test_canonical_java_target_contract.py"
@@ -87,6 +89,7 @@ jobs:
           tests/test_execution_contract_policy.py
           tests/test_canonical_source_slot_repair.py
           tests/test_canonical_java_target_contract.py
+          tests/test_host_runtime_integrity_drift.py
           tests/test_typed_plan_authoring.py
           tests/test_typed_plan_production.py
           tests/test_authored_direct_lowering.py
