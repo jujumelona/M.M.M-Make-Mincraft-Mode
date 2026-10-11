@@ -41,30 +41,77 @@ def generate_canonical_leaf(inputs, *, leaf_id, router, authority):
         model_schemas[name] = schema
 
     def generate_slot(slot):
-        return generate_fixed_template_value(
-            router,
-            "coder",
-            [
-                {
-                    "role": "system",
-                    "content": manifest["task"] + "\n" + "\n".join(manifest.get("rules", ())),
-                },
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {
-                            "identity": inputs[manifest["inputs"][0]["name"]],
-                            "requirement": spec["requirement"],
-                            "slot": slot["description"],
-                            "bindings": spec["bindings"],
-                        },
-                        sort_keys=True,
-                    ),
-                },
-            ],
-            response_schema=model_schemas[slot["name"]],
-            enable_tools=False,
+        from jsonschema.exceptions import ValidationError
+
+        from .execution_contract_policy import SOURCE_REPAIR_HARD_ATTEMPTS
+
+        slot_schema = slot["schema"]
+        is_source = (
+            slot_schema.get("type") == "string"
+            and slot_schema.get(SCHEMA_STRING_CLASS_KEY) == STRING_CLASS_SOURCE
         )
+        system_message = manifest["task"] + "\n" + "\n".join(manifest.get("rules", ()))
+        if is_source:
+            # The llama.cpp transport cannot enforce the host's package/class regex.
+            # Give the coder the exact obligation rather than allowing arbitrary
+            # scalar text to pass until a later artifact-graph boundary.
+            source_kind = "Java compilation unit" if spec.get("language") == "java" else "source artifact"
+            system_message += (
+                f"\nProduce a COMPLETE {source_kind} as the string value. "
+                "Implement the stated requirement. Never return a placeholder, TODO, "
+                "example label, Markdown fence, or explanation instead of source."
+            )
+            if slot_schema.get("pattern"):
+                system_message += (
+                    "\nThe complete source MUST match this host-owned source "
+                    f"declaration contract: {slot_schema['pattern']}"
+                )
+
+        messages = [
+            {"role": "system", "content": system_message},
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "identity": inputs[manifest["inputs"][0]["name"]],
+                        "requirement": spec["requirement"],
+                        "slot": slot["description"],
+                        "bindings": spec["bindings"],
+                    },
+                    sort_keys=True,
+                ),
+            },
+        ]
+        # Source-only repair is bounded and never changes the host schema or
+        # invents code. Every candidate must validate before the graph can
+        # publish a receipt, write a file, or cache the result.
+        attempts = max(1, SOURCE_REPAIR_HARD_ATTEMPTS) if is_source else 1
+        for attempt in range(attempts):
+            value = generate_fixed_template_value(
+                router,
+                "coder",
+                messages,
+                response_schema=model_schemas[slot["name"]],
+                enable_tools=False,
+            )
+            try:
+                validate_json_schema(value, slot_schema)
+            except ValidationError as exc:
+                if attempt + 1 >= attempts:
+                    raise
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        "The host REJECTED the previous source candidate. "
+                        f"Validation error: {exc.message}. "
+                        "Regenerate the entire source string, satisfying the exact "
+                        "package/type declaration and original implementation requirement. "
+                        "Do not repeat a placeholder; the host schema is unchanged."
+                    ),
+                })
+                continue
+            return value
+        raise AssertionError("unreachable: canonical slot repair has no validated result")
 
     generated = deterministic_model_map(
         router,
