@@ -304,3 +304,70 @@ def test_atomic_mutation_passive_item_requires_actionable_retry(monkeypatch) -> 
             },
         )
     assert len(calls) == 2
+
+
+def test_multiple_authored_actions_reject_command_counter_stub(monkeypatch) -> None:
+    """A runnable command writing one flag cannot implement a farm/harvest/cook loop."""
+    def concerns(sections: dict, section: str) -> dict:
+        if section == "resources_and_ui":
+            return {"interactions": [
+                {"server_action": "plant_crop", "trigger": "player_plant_crop"},
+                {"server_action": "harvest_crop", "trigger": "player_harvest_crop"},
+                {"server_action": "cook_dish", "trigger": "player_cook_dish"},
+            ]}
+        return _concerns(sections, section)
+
+    monkeypatch.setattr(authored_structured_design, "active_concern_records", concerns)
+    plan = _plan(mutations=True)
+    plan.typed_plan_ir["event_bindings"] = [{"event": "command", "function": "join"}]
+    plan.typed_plan_ir["functions"][0]["body"] = [{
+        "op": "state_set",
+        "key": {"op": "literal", "type": "string", "value": "generic_counter"},
+        "value": {"op": "literal", "type": "int", "value": 1},
+    }]
+    with pytest.raises(ValueError, match="GAMEPLAY_ACTION_COVERAGE_MISSING.*plant_crop"):
+        _assert_executable_gameplay_floor(
+            plan,
+            (ProductionModule("farm_screen", "gui", {}),),
+            {"capabilities": []},
+        )
+
+
+def test_individually_guarded_gameplay_actions_pass_coverage(monkeypatch) -> None:
+    """One command can legitimately dispatch multiple *proven* mutating actions."""
+    actions = ("plant_crop", "harvest_crop", "cook_dish")
+
+    def concerns(sections: dict, section: str) -> dict:
+        if section == "resources_and_ui":
+            return {"interactions": [
+                {"server_action": action, "trigger": "player_" + action}
+                for action in actions
+            ]}
+        return _concerns(sections, section)
+
+    monkeypatch.setattr(authored_structured_design, "active_concern_records", concerns)
+    plan = _plan(mutations=True)
+    plan.typed_plan_ir["event_bindings"] = [{"event": "command", "function": "join"}]
+    plan.typed_plan_ir["functions"][0]["body"] = [
+        {
+            "op": "if",
+            "condition": {
+                "op": "binary",
+                "operator": "==",
+                "left": {"op": "ref", "name": "action"},
+                "right": {"op": "literal", "type": "string", "value": action},
+            },
+            "then": [{
+                "op": "state_set",
+                "key": {"op": "literal", "type": "string", "value": action},
+                "value": {"op": "literal", "type": "int", "value": 1},
+            }],
+            "else": [],
+        }
+        for action in actions
+    ]
+    _assert_executable_gameplay_floor(
+        plan,
+        (ProductionModule("farm_screen", "gui", {}),),
+        {"capabilities": []},
+    )
