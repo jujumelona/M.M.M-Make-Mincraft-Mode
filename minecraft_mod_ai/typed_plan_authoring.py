@@ -2492,7 +2492,7 @@ def author_typed_plan_ir(
 
     coverage_refs = _active_concern_refs(structured_sections)
     entry_points = _integration_entry_points(structured_sections)
-    from .authored_ui_action_repair import _mutating_ui_actions
+    from .authored_ui_action_bindings import _mutating_ui_actions
     requested_actions = _mutating_ui_actions(structured_sections)
     bind_ui_actions = bool(requested_actions)
     author = TypedOperationAuthor(
@@ -2581,7 +2581,7 @@ def author_typed_plan_ir(
             "config": config,
         })
 
-    from .authored_ui_action_repair import _append_ui_action_bindings
+    from .authored_ui_action_bindings import _append_ui_action_bindings
     action_by_function = _append_ui_action_bindings(
         actions=requested_actions, entry_points=entry_points,
         specs=specs, bindings=event_bindings, known_ids=known_ids,
