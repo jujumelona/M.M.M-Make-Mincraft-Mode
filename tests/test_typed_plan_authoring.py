@@ -276,6 +276,15 @@ def test_purchase_action_is_balanced_and_grant_guarded():
         branch["properties"]["action_kind"]["const"] == "purchase_item"
         for branch in schema["oneOf"]
     )
+    # Hull/health/counters are not legal currencies simply because numeric.
+    noncurrency = semantic_dispatch_schema(
+        {"ship_hull": "int"}, caps, allowed_events=("command",),
+        purchase_only=True,
+    )
+    assert not any(
+        branch["properties"].get("action_kind", {}).get("const") == "purchase_item"
+        for branch in noncurrency["oneOf"]
+    )
     rule = {
         "trigger_event": "command",
         "action_guard": "ship_part_purchase",
