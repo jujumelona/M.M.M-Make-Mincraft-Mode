@@ -107,6 +107,13 @@ class CompleteGameDesignPlanner:
             target_loader=target_loader,
             source_revision=str(repository_revision().get("git_commit", "")),
         )
+        from .request_scope import author_request_scope, request_scope_context
+
+        request_scope = checkpoint.load_request_scope()
+        if request_scope is None:
+            request_scope = author_request_scope(self.router, prompt, budget=budget)
+            checkpoint.save_request_scope(request_scope)
+        planning_prompt = prompt + request_scope_context(request_scope)
         structured_sections = checkpoint.load_sections()
         if structured_sections is not None:
             try:
@@ -120,7 +127,7 @@ class CompleteGameDesignPlanner:
             with planner_operation("author_structured_execution_contract"):
                 structured_sections = author_structured_sections(
                     self.router,
-                    prompt,
+                    planning_prompt,
                     media_paths=media_paths,
                     budget=budget,
                 )
@@ -130,13 +137,14 @@ class CompleteGameDesignPlanner:
         # A plan is the authored design, not a partially compiled runtime.
         # RAG reuse, implementation selection, Typed PlanIR and build checks
         # belong to production after the plan has been saved.
-        text = render_structured_sections(structured_sections)
+        text = request_scope_context(request_scope).strip() + "\n\n" + render_structured_sections(structured_sections)
         return AuthoredPlan(
             requested_prompt=prompt,
             text=text,
             existing_input_sha256=existing_input_sha256,
             media_paths=tuple(str(path) for path in media_paths),
             structured_sections=structured_sections,
+            request_scope=request_scope,
         )
 
     def _author_for_production(self, plan: AuthoredPlan) -> AuthoredPlan:
@@ -158,6 +166,9 @@ class CompleteGameDesignPlanner:
         media_paths = plan.media_paths
         existing_input_sha256 = plan.existing_input_sha256
         structured_sections = plan.structured_sections
+        from .request_scope import request_scope_context
+
+        request_scope = plan.request_scope
         adapter = self.adapter
         deterministic_module_kinds = self.deterministic_module_kinds
         budget = PlannerBudget()
@@ -189,7 +200,7 @@ class CompleteGameDesignPlanner:
 
         # Production consumes the authored plan without injecting new features,
         # commands, resources or gameplay mechanics into the user's design.
-        text = render_structured_sections(structured_sections)
+        text = request_scope_context(request_scope) + render_structured_sections(structured_sections)
 
         # Research/inspection happens before content identities are authored:
         # verified source APIs are model-readable bounded facts, while unproved
@@ -207,12 +218,14 @@ class CompleteGameDesignPlanner:
                 prompt, structured_sections,
                 minecraft_version=target_version,
                 loader=target_loader,
+                request_scope=request_scope,
             )
             text += verified_reuse_context(reuse_receipt)
 
         content_catalog = content_request_catalog(
             structured_sections,
             requested_prompt=prompt,
+            request_scope=request_scope,
         )
         if reuse_receipt is not None:
             from copy import deepcopy
@@ -356,6 +369,7 @@ class CompleteGameDesignPlanner:
             structured_sections=structured_sections,
             content_design=content_design,
             typed_plan_ir=typed_plan_ir,
+            request_scope=request_scope,
         )
 
     def compile_for_production(

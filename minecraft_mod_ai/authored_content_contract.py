@@ -134,6 +134,7 @@ def content_request_catalog(
     structured_sections: Mapping[str, Any],
     *,
     requested_prompt: str = "",
+    request_scope: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Bind resource/UI constraints to the gameplay requirement they implement."""
 
@@ -149,6 +150,19 @@ def content_request_catalog(
     gameplay_requirements = _gameplay_content_requirements(
         structured_sections, requested_prompt=requested_prompt,
     )
+    if request_scope and request_scope.get("requirements"):
+        peers = [{"requirement_id": row["requirement_id"], "statement": row["statement"]}
+                 for row in request_scope["requirements"]]
+        gameplay_requirements = [{
+            "requirement_id": row["requirement_id"], "statement": row["statement"],
+            "source_span": deepcopy(row.get("source_span", {})),
+            "design_context": {
+                "requested_prompt": requested_prompt, "source_section": "request_scope",
+                "source_concern": "features", "source_feature": deepcopy(row),
+                "peer_features": peers,
+                "scope_policy": "Implement this original feature; supporting worksheet rows cannot narrow it.",
+            },
+        } for row in request_scope["requirements"]]
     if not any(records.get(concern) for concern in CONTENT_GRAPH_DRIVER_CONCERNS):
         return {
             "requirements": gameplay_requirements,

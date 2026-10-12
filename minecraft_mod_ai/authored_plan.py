@@ -19,6 +19,7 @@ class AuthoredPlan:
     structured_sections: dict[str, Any] = field(default_factory=dict)
     content_design: dict[str, Any] = field(default_factory=dict)
     typed_plan_ir: dict[str, Any] = field(default_factory=dict)
+    request_scope: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.schema_version != "mmm/authored-plan-v2":
@@ -44,13 +45,14 @@ class AuthoredPlan:
             ("structured_sections", self.structured_sections),
             ("content_design", self.content_design),
             ("typed_plan_ir", self.typed_plan_ir),
+            ("request_scope", self.request_scope),
         ):
             if not isinstance(value, dict):
                 raise TypeError(f"AUTHORED_PLAN_OBJECT_REQUIRED: {field_name}")
             object.__setattr__(self, field_name, deepcopy(value))
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "schema_version": self.schema_version,
             "requested_prompt": self.requested_prompt,
             "text": self.text,
@@ -60,6 +62,9 @@ class AuthoredPlan:
             "content_design": deepcopy(getattr(self, "content_design", {})),
             "typed_plan_ir": deepcopy(getattr(self, "typed_plan_ir", {})),
         }
+        if self.request_scope:
+            result["request_scope"] = deepcopy(self.request_scope)
+        return result
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AuthoredPlan:
@@ -75,6 +80,10 @@ class AuthoredPlan:
             "content_design",
             "typed_plan_ir",
         }
+        data = deepcopy(data)
+        request_scope = data.pop("request_scope", {})
+        if not isinstance(request_scope, dict):
+            raise TypeError("AUTHORED_PLAN_OBJECT_REQUIRED: request_scope")
         schema_version = data.get("schema_version")
         if schema_version == "mmm/authored-plan-v1":
             unknown = set(data) - expected
@@ -123,6 +132,7 @@ class AuthoredPlan:
             content_design=deepcopy(data["content_design"]),
             typed_plan_ir=deepcopy(data["typed_plan_ir"]),
             schema_version=data["schema_version"],
+            request_scope=request_scope,
         )
 
     def calculate_hash(self) -> str:
@@ -132,8 +142,11 @@ class AuthoredPlan:
         return hashlib.sha256(encoded).hexdigest()
 
     def production_prompt(self) -> str:
+        from .request_scope import request_scope_context
+
         return (
             self.requested_prompt
+            + request_scope_context(self.request_scope)
             + "\n\nAuthored game design to implement (preserve its mechanics and details):\n"
             + self.text
         )

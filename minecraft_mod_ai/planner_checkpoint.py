@@ -83,6 +83,7 @@ class PlannerCheckpoint:
             "schema": _SCHEMA,
             "identity_sha256": self._key,
             "structured_sections": None,
+            "request_scope": None,
             "catalog_sha256": None,
             "content_progress": {},
             "content_design": None,
@@ -120,6 +121,15 @@ class PlannerCheckpoint:
     def load_sections(self) -> dict[str, Any] | None:
         value = self._data.get("structured_sections")
         return deepcopy(value) if isinstance(value, dict) else None
+
+    def load_request_scope(self) -> dict[str, Any] | None:
+        value = self._data.get("request_scope")
+        return deepcopy(value) if isinstance(value, dict) else None
+
+    def save_request_scope(self, scope: Mapping[str, Any]) -> None:
+        with self._lock:
+            self._data["request_scope"] = deepcopy(dict(scope))
+            self._write()
 
     def save_sections(self, sections: Mapping[str, Any]) -> None:
         with self._lock:

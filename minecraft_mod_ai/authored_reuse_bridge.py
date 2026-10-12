@@ -21,7 +21,20 @@ def _sha(payload: Any) -> str:
 def authored_capability_graph(
     requested_prompt: str,
     structured_sections: Mapping[str, Any],
+    *, request_scope: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if request_scope and request_scope.get("requirements"):
+        nodes = list(dict.fromkeys(row["search_query"] for row in request_scope["requirements"]))
+        return {
+            "nodes": nodes,
+            "search_terms": [{"capability": node, "terms": [f"minecraft {node} mod", node]}
+                             for node in nodes],
+            "requirement_bindings": [{"requirement_id": row["requirement_id"],
+                                      "capability": row["search_query"]}
+                                     for row in request_scope["requirements"]],
+            "retrieval_policy_version": "request-features-v3",
+            "coverage_policy": "original request features remain authoritative",
+        }
     from .minecraft_knowledge_nodes import detect_features
 
     # Known taxonomy only supplies search keywords, never the request's scope.
@@ -95,10 +108,11 @@ def resolve_authored_source_reuse(
     minecraft_version: str,
     loader: str,
     reference_repositories: Sequence[str] = (),
+    request_scope: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     from .grounded_source_reuse import build_repository_reuse_plan
 
-    graph = authored_capability_graph(requested_prompt, structured_sections)
+    graph = authored_capability_graph(requested_prompt, structured_sections, request_scope=request_scope)
     frozen = {
         "plan_sha256": "sha256:" + _sha(graph),
         "capability_graph": graph,

@@ -1042,6 +1042,7 @@ def compile_authored_design(
     }
     expected_reuse_graph = authored_capability_graph(
         plan.requested_prompt, plan.structured_sections,
+        request_scope=plan.request_scope,
     )
     cached_graph = (
         source_reuse.get("capability_graph")
@@ -1084,6 +1085,7 @@ def compile_authored_design(
             minecraft_version=exact_reuse_target["minecraft_version"],
             loader=exact_reuse_target["loader"],
             reference_repositories=tuple(reference_repositories),
+            request_scope=plan.request_scope,
         )
     if source_reuse.get("schema_version") != "mmm/grounded-repository-reuse-plan-v2":
         raise ValueError("AUTHORED_SOURCE_REUSE_CONTRACT_INVALID")
