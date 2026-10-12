@@ -60,27 +60,25 @@ _MEMBER_SCHEMA: dict[str, Any] = {
 
 
 _QUALIFIED_JAVA_IMPORT = re.compile(
-    r"(?:[A-Za-z_$][A-Za-z0-9_$]*\\.)+[A-Za-z_$][A-Za-z0-9_$]*|"
-    r"(?:[A-Za-z_$][A-Za-z0-9_$]*\\.)+\\*"
+    r"(?:[A-Za-z_$][A-Za-z0-9_$]*\.)+[A-Za-z_$][A-Za-z0-9_$]*|"
+    r"(?:[A-Za-z_$][A-Za-z0-9_$]*\.)+\*"
 )
 
 
 def _assemble_java_imports(entries: Sequence[str]) -> str:
-    """Create legal Java import statements from model-supplied type references.
+    """Create Java import statements from model-supplied qualified type names.
 
-    A model need not serialize import keywords, semicolons or line layout.
-    Tolerate legacy complete import statements and collapsed lines as input,
-    but never copy arbitrary model text into the Java compilation-unit header.
-    Syntax-irrelevant or unusable suggestions are omitted, leaving semantic
-    dependency errors to the real Java compiler rather than a formatting gate.
+    The model supplies dependency references, not Java declaration syntax.
+    Legacy import statements are accepted as suggestions, but arbitrary prose
+    and executable fragments never enter the generated source header.
     """
     statements: list[str] = []
     for suggestion in entries:
         if not isinstance(suggestion, str):
             continue
-        for fragment in re.split(r"[;\\r\\n,]", suggestion):
+        for fragment in re.split(r"[;\r\n,]", suggestion):
             reference = fragment.strip()
-            reference = re.sub(r"^import\\s+", "", reference).strip()
+            reference = re.sub(r"^import\s+", "", reference).strip()
             is_static = reference.startswith("static ")
             if is_static:
                 reference = reference[len("static "):].strip()
@@ -89,7 +87,7 @@ def _assemble_java_imports(entries: Sequence[str]) -> str:
             statements.append(
                 "import " + ("static " if is_static else "") + reference + ";"
             )
-    return "\\n".join(dict.fromkeys(statements))
+    return "\n".join(dict.fromkeys(statements))
 
 
 def _one_structured_action(
@@ -182,9 +180,9 @@ def compose_first_pass_java(
                 "behavior and integration, including constructors and registration "
                 "when required; never simplify the gameplay specification. "
                 "List Java imports as an array of fully-qualified type references, "
-                "for example [\\\"java.util.List\\\", \\\"java.util.Map\\\"]. "
+                "for example ['java.util.List', 'java.util.Map']. "
                 "Do not include import keywords, semicolons or package lines. "
-                "Use \\\"static package.Type.member\\\" only for a static import. "
+                "Use 'static package.Type.member' only for a static import. "
                 "The HOST writes the package and class header using the exact "
                 f"class name {class_name}; do not generate those declarations. "
                 "Provide superclass as just the optional Java type name (no "
