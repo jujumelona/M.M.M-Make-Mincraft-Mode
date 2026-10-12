@@ -122,27 +122,20 @@ def declaration_header(kind: str, name: str, parts: Mapping[str, Any]) -> str:
     return header
 
 
-def declaration_frame(kind: str, name: str, parts: Mapping[str, Any], *, minimum: int = 0,
-                      allow_uninitialized: bool = True):
+def declaration_frame(kind: str, name: str, parts: Mapping[str, Any], *, allow_uninitialized: bool = True):
     """One complete Java declaration with a sampler-owned literal signature."""
     header = declaration_header(kind, name, parts)
     if kind == "field":
         prefix, suffix = header + " = ", ";"
         empty = header + ";" if allow_uninitialized else None
-        minimum = 1
     elif kind in {"method", "constructor"}:
         prefix, suffix, empty = header + " {\n", "\n}", None
     else:
         raise ValueError("JAVA_SOURCE_FRAME_REQUIRES_FIELD_METHOD_OR_CONSTRUCTOR")
-    frame = {"field": "source", "prefix": prefix, "suffix": suffix,
-             "min_length": minimum, "max_length": BODY["maxLength"]}
+    frame = {"kind": kind, "prefix": prefix, "suffix": suffix}
     if empty is not None:
         frame["empty_value"] = empty
-    source_schema = {"type": "string",
-                     "minLength": len(empty) if empty is not None else len(prefix) + minimum + len(suffix),
-                     "maxLength": len(prefix) + BODY["maxLength"] + len(suffix)}
-    return frame, {"type": "object", "properties": {"source": source_schema},
-                   "required": ["source"], "additionalProperties": False}
+    return frame
 
 
 def validate_declaration_metadata(kind: str, name: str, parts: Mapping[str, Any], *, owner: str) -> None:
@@ -174,7 +167,8 @@ def _record_source_failure(source: str, *, kind: str, name: str, owner: str, pha
     from .planner_trace_artifacts import save_trace_artifact
     from .root_cause_trace import durable_trace_path, emit_root_cause
 
-    details = {"kind": kind, "member": name, "owner": owner, "phase": phase}
+    details: dict[str, Any] = {"kind": kind, "member": name, "owner": owner, "phase": phase,
+                               "source_chars": len(source), "member_preview": source[:1024]}
     try:
         details["source_artifact"] = save_trace_artifact(
             {**details, "member_source": source, "parser_source": f"class {owner} {{\n{source}\n}}",
@@ -182,8 +176,8 @@ def _record_source_failure(source: str, *, kind: str, name: str, owner: str, pha
         )
     except Exception as artifact_error:
         details["source_artifact_error"] = type(artifact_error).__name__
-    # Only identity/path metadata reaches the console. The complete source is in
-    # the existing downloadable failure ZIP, not copied into browser output.
+    # The console receives a bounded member preview and the artifact path. The
+    # complete parser input stays in the existing downloadable failure ZIP.
     emit_root_cause("java_declaration_failure", stage="generate:content",
                     operation=name, gate="java_declaration", result="FAIL",
                     reason=str(exc), details=details, exc=exc)
@@ -221,7 +215,7 @@ def render_declaration(kind: str, name: str, parts: Mapping[str, Any], *, owner:
     header = declaration_header(kind, name, parts)
     if "source" in parts:
         source = parts["source"]
-        frame, _ = declaration_frame(kind, name, parts)
+        frame = declaration_frame(kind, name, parts)
         if source != frame.get("empty_value") and not (
             source.startswith(frame["prefix"]) and source.endswith(frame["suffix"])
         ):

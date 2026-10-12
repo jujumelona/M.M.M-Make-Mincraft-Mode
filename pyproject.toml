@@ -20,7 +20,7 @@ dependencies = [
   "mcp==2.0.0",
   "packaging>=24,<27",
   "tree-sitter>=0.26,<0.27",
-  "tree-sitter-java>=0.23.5,<0.24",
+  "tree-sitter-java==0.23.5",
 ]
 
 [project.optional-dependencies]
@@ -102,6 +102,7 @@ minecraft_mod_ai = [
   "packaged_skills.json",
   "integrations/mineflayer/*",
   "data/host_version_catalog.json",
+  "data/java_source_grammar.json",
   "data/official_version_evidence.json",
   "jvm_owner/*.gradle",
   "jvm_owner/gradle.lockfile",

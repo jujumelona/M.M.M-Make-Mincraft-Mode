@@ -88,7 +88,6 @@ def _one_structured_action(
     name: str,
     schema: Mapping[str, Any],
     page_structure: bool = True,
-    string_frame: Mapping[str, Any] | None = None,
 ) -> Mapping[str, Any]:
     """One attempt for one small action. No schema-repair or source regeneration."""
     assert_atomic_model_schema(schema, surface=f"first-pass Java {name}")
@@ -144,7 +143,6 @@ def _one_structured_action(
     response = router.generate_structured_data(
         "coder", messages, data_name=name,
         parameters=dict(schema),
-        **({"string_frame": string_frame} if string_frame is not None else {}),
     )
     if not isinstance(response, Mapping):
         raise ValueError(f"JAVA_FIRST_PASS_ACTION_MISSING: {name}")
@@ -260,8 +258,8 @@ def compose_first_pass_java(
                 "supporting members; do not plan a second lifecycle method. The host "
                 "assigns internal helper names and later authors the required lifecycle body. "
                 "Plan only real necessary supporting members, at most ten; "
-                "each planned unit must fit in 2600 Java source characters, "
-                "including complete method/field bodies. No code in the plan units."
+                "each planned unit is one complete declaration with one coherent "
+                "responsibility. No code in the plan units."
             ),
         },
         {"role": "user", "content": json.dumps(task, ensure_ascii=False, default=str)},
@@ -382,8 +380,7 @@ def compose_first_pass_java(
                 for member in signature_index
             )
         )
-        frame, source_schema = declaration_frame(kind, name, parts,
-                                                 allow_uninitialized=allow_uninitialized)
+        frame = declaration_frame(kind, name, parts, allow_uninitialized=allow_uninitialized)
         body_task = {**task, "imports": imports, "current_unit_purpose": purpose,
                      "class_declaration": declaration, "owner_type": owner_types[owner],
                      "owner": owner, "declaration_metadata": parts,
@@ -392,7 +389,7 @@ def compose_first_pass_java(
                      "declared_member_api": signature_index, "previous_complete_members": finished}
         body_messages = [
             {"role": "system", "content": (
-                "Return one COMPLETE Java field/method/constructor declaration in source. "
+                "Return one COMPLETE raw Java field/method/constructor declaration. "
                 "Start with response_source_frame.prefix and end with its suffix; the "
                 "sampler fixes this signature. For an uninitialized field its exact "
                 "empty_value is also allowed. Complete the expression or statements "
@@ -406,9 +403,8 @@ def compose_first_pass_java(
             )},
             {"role": "user", "content": json.dumps(body_task, ensure_ascii=False, default=str)},
         ]
-        result = _one_structured_action(router, body_messages, name=action,
-            schema=source_schema, string_frame=frame)
-        parts["source"] = result["source"]
+        parts["source"] = router.generate_java_source("coder", body_messages,
+            data_name=action, source_frame=frame)
     for index, (unit, parts) in enumerate(declarations, 1):
         kind, member_name = unit["kind"], unit["name"]
         implement(kind, member_name, parts, owner=class_name,
@@ -421,10 +417,10 @@ def compose_first_pass_java(
         lifecycle = {"visibility": "public", "static": False, "return_type": "void",
                      "parameters": [], "throws": [], "annotations": ["Override"],
                      "type_parameters": ""}
-        frame, source_schema = declaration_frame("method", entrypoint_method, lifecycle, minimum=1)
+        frame = declaration_frame("method", entrypoint_method, lifecycle)
         lifecycle_messages = [
             {"role": "system", "content": (
-                "Return the COMPLETE supplied initialization method in source, starting "
+                "Return the COMPLETE raw Java initialization method, starting "
                 "with response_source_frame.prefix and ending with its suffix. The sampler "
                 "fixes its signature; complete its body without repeating that signature. "
                 "Register and implement the exact original feature using the "
@@ -438,10 +434,8 @@ def compose_first_pass_java(
                 "response_source_frame": frame,
                 "complete_members": finished}, ensure_ascii=False, default=str)},
         ]
-        result = _one_structured_action(router, lifecycle_messages,
-            name="submit_java_entrypoint_body",
-            schema=source_schema, string_frame=frame)
-        lifecycle["source"] = result["source"]
+        lifecycle["source"] = router.generate_java_source("coder", lifecycle_messages,
+            data_name="submit_java_entrypoint_source", source_frame=frame)
         finished.append(render_declaration("method", entrypoint_method, lifecycle, owner=class_name))
 
     return (

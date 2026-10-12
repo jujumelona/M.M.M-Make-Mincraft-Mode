@@ -201,7 +201,9 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
     if model_contract == "mimo":
         # MiMo has its own Jinja/Thinking contract. Do not route it through
         # Qwen3.5 request policies or reuse Qwen tool-call sampling.
-        is_action = bool(tools) or getattr(request, "response_format", None) == "json"
+        metadata = getattr(request, "metadata", {})
+        is_action = (bool(tools) or getattr(request, "response_format", None) == "json"
+                     or bool(isinstance(metadata, Mapping) and metadata.get("mmm_strict_source_data")))
         payload["chat_template_kwargs"] = {"enable_thinking": not is_action}
         payload.pop("reasoning_effort", None)
         if not is_action:
@@ -219,10 +221,13 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
     from .generation_output_budget import apply_request_generation_budget
 
     metadata = getattr(request, "metadata", {})
-    if isinstance(metadata, Mapping) and isinstance(metadata.get("mmm_data_string_frame"), Mapping):
-        from .llama_structured_decode_policy import _apply_llama_json_schema
+    if isinstance(metadata, Mapping) and isinstance(metadata.get("mmm_java_source_frame"), Mapping):
+        from .java_source_grammar import native_java_source_grammar
 
-        _apply_llama_json_schema(payload, request, adapter=adapter)
+        payload.pop("response_format", None)
+        payload.pop("json_schema", None)
+        payload["grammar"] = native_java_source_grammar(metadata["mmm_java_source_frame"])
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
     payload = _enforce_required_tool_sampling(payload)
     return apply_request_generation_budget(payload, config=adapter.config, request=request)
 

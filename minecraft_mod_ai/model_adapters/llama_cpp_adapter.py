@@ -173,7 +173,8 @@ class LlamaCppAdapter(ModelAdapter):
         active_request = request
         strict_data = bool(
             isinstance(request.metadata, Mapping)
-            and request.metadata.get("mmm_strict_structured_data")
+            and (request.metadata.get("mmm_strict_structured_data")
+                 or request.metadata.get("mmm_strict_source_data"))
         )
         try:
             return _generate_one_turn(self, server_url, request)

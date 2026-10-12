@@ -70,18 +70,6 @@ def _apply_llama_json_schema(
         return
 
     schema = getattr(request, "response_schema", None)
-    metadata = getattr(request, "metadata", {})
-    frame = metadata.get("mmm_data_string_frame") if isinstance(metadata, Mapping) else None
-    if isinstance(frame, Mapping):
-        from .structured_string_frame import constrained_string_grammar
-
-        # JSON Schema constrains JSON shape, not a Java string's continuation.
-        # This one-string grammar owns its literal source prefix/suffix and JSON
-        # escaping. Never combine it with the server's separate schema grammar.
-        payload.pop("json_schema", None)
-        payload.pop("response_format", None)
-        payload["grammar"] = constrained_string_grammar(schema, frame)
-        return
     projected = project_llama_transport_schema(schema)
 
     payload.pop("grammar", None)

@@ -344,13 +344,11 @@ class ModelRouter:
         *,
         data_name: str,
         parameters: Mapping[str, Any],
-        string_frame: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Generate one bounded data page using the backend's constrained sampler.
+        """Generate one bounded data page using the backend's schema sampler.
 
-        Data pages do not execute tools. Ordinary pages use response_schema;
-        an optional string_frame uses a literal-prefix JSON grammar instead.
-        The original response_schema still validates the exact returned data.
+        Data pages do not execute tools. Their schema belongs in response_schema,
+        and must remain active throughout this single inference request.
         """
         from .model_output_atomicity_contract import assert_atomic_model_schema
         from .fixed_template_generation import _validate_native_arguments
@@ -383,7 +381,6 @@ class ModelRouter:
                 "mmm_data_page": data_name,
                 "mmm_strict_structured_data": True,
                 "mmm_force_non_thinking": True,
-                **({"mmm_data_string_frame": dict(string_frame)} if string_frame is not None else {}),
             },
         )
         with self._generation_scope(config):
@@ -394,6 +391,31 @@ class ModelRouter:
         if not isinstance(value, Mapping):
             raise ModelConfigurationError("STRUCTURED_DATA_OBJECT_REQUIRED")
         return dict(_validate_native_arguments(value, schema))
+
+    def generate_java_source(
+        self, role: str, messages: Sequence[Mapping[str, Any]], *,
+        data_name: str, source_frame: Mapping[str, Any],
+    ) -> str:
+        """One raw Java declaration, constrained by native Java productions."""
+        from .model_context_budget import fit_messages_to_context
+
+        config, adapter = self._generation_adapter(role)
+        request_messages = fit_messages_to_context(
+            [*messages, {"role": "system", "content": (
+                "Return ONLY the complete raw Java declaration selected by "
+                "response_source_frame. No JSON, Markdown, reasoning, tool call "
+                "or package/import wrapper. Use ASCII identifiers and preserve "
+                "Unicode string values. The native Java grammar owns syntax."
+            )}], config=config, tools=(),
+        )
+        request = GenerationRequest(
+            messages=request_messages, response_format="text", tools=(),
+            metadata={"role": role, "mmm_data_page": data_name,
+                      "mmm_java_source_frame": dict(source_frame),
+                      "mmm_strict_source_data": True, "mmm_force_non_thinking": True},
+        )
+        with self._generation_scope(config):
+            return adapter.generate(request)
 
     def generate_tool_decision(
         self,

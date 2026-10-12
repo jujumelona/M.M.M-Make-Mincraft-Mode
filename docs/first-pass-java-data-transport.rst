@@ -1,7 +1,7 @@
 Java 생성 데이터와 실행 도구의 전송 경로
 =========================
 
-Java 클래스 계획, import 항목, 선언 메타데이터와 구현 소스는 실행할 도구가 아니라 호스트가 조립할 데이터다. 이 값들은 ``ModelRouter.generate_structured_data``를 통해 ``tools=()``와 ``response_schema``를 사용한다. 계획·메타데이터에는 서버의 JSON Schema 샘플러를 적용한다. 구현 소스에는 고정 Java 서명과 끝 구분자를 가진 단일 JSON 문자열의 GBNF 문법을 적용한다. 호스트는 반환한 정확한 JSON을 읽는다.
+Java 클래스 계획, import 항목, 선언 메타데이터는 ``ModelRouter.generate_structured_data``로 JSON을 받는다. 구현은 ``generate_java_source``로 완전한 Java 선언 하나를 직접 받는다. 두 경로 모두 실행 도구를 요청하지 않는다. 메타데이터에는 JSON Schema를, 구현에는 Java 구문의 GBNF를 서버 샘플러에 적용한다. Java 소스를 JSON 문자열 안의 자유 문자로 다루지 않는다.
 
 출력 예산과 작업 분할
 --------------------
@@ -17,7 +17,7 @@ Java 생성 데이터에는 출력 최소 예약량을 지정하지 않는다. �
 선언과 구현의 소유권
 ------------------
 
-먼저 필드·메서드·생성자·중첩 클래스·record·enum의 종류와 필요한 역할을 계획하고, 타입·매개변수·가시성 등 선언 데이터를 확정한다. 이 선언 구문을 Java 파서로 읽은 다음에 구현을 요청하므로, 뒤에 선언되는 메서드도 실제 매개변수와 반환 타입을 보고 호출한다. 구현 응답의 ``source``는 완전한 Java 선언 하나다. GBNF가 해당 선언의 고정 서명과 끝 구분자를 먼저 출력하도록 하며, 나머지 Java 내용을 JSON 문자열로 올바르게 이스케이프한다. 응답을 다시 ``=`` 뒤나 다른 메서드 본문 안에 넣지 않는다. 패키지·클래스·메서드 서명과 바깥 괄호의 소유권은 호스트에 있다.
+먼저 필드·메서드·생성자·중첩 클래스·record·enum의 종류와 필요한 역할을 계획하고, 타입·매개변수·가시성 등 선언 데이터를 확정한다. 이 선언 구문을 Java 파서로 읽은 다음에 구현을 요청하므로, 뒤에 선언되는 메서드도 실제 매개변수와 반환 타입을 보고 호출한다. 응답은 완전한 Java 선언 하나다. GBNF가 고정 서명과 끝 구분자를 소유하며, 안쪽 구현도 해당 Java 시작 규칙을 따라 생성한다. 응답을 다시 ``=`` 뒤나 다른 메서드 본문 안에 넣지 않는다. 패키지·클래스·메서드 서명과 바깥 괄호의 소유권은 호스트에 있다.
 
 공통 request-feature의 ``request_feature_entrypoint`` 역할은 ``net.fabricmc.api.ModInitializer``와 ``public void onInitialize()``에 바인딩한다. 기존 CLIENT canonical 역할은 ``net.fabricmc.api.ClientModInitializer``와 ``public void onInitializeClient()``에 바인딩한다. 이러한 초기화 클래스에서 모델이 상속, 생성자 또는 초기화 메서드 이름을 다시 선택하지 않는다. 내부 helper 이름도 호스트가 선택하고, 필수 초기화 본문은 helper 구현 이후 별도로 생성한다. 이 경로는 저장된 기존 역할 필드로 결정한다.
 
@@ -25,13 +25,22 @@ Java 생성 데이터에는 출력 최소 예약량을 지정하지 않는다. �
 
 ``first_pass_java_declarations``는 기존 Tree-sitter Java 파서로 선택한 종류·이름의 선언 하나를 구성한다. 구현 문자열이 다른 선언이나 클래스 범위로 빠져나오면 그 문자열을 소스에 붙이지 않는다. 반환된 전체 클래스를 정규식으로 잘라 쓰거나 메서드 이름을 바꿔 복구하지 않는다. 소스 슬롯의 기존 계약과 실제 빌드 경로는 유지한다.
 
-단일 문자열 GBNF는 ``structured_string_frame``에서 작성하며, 서버 요청에는 ``grammar``만 적용하고 별도의 ``json_schema``·``response_format`` 문법과 혼합하지 않는다. 이는 고정 선언의 소유권과 JSON 인코딩을 제한하며, 내부 Java 문장 전체의 구문·API 정확성을 보장하는 Java 언어 문법은 아니다.
+서명 뒤에 자유 ``char{...}`` 문자열을 붙이던 ``structured_string_frame``은 제거했다. 필드는 ``_variable_initializer``, 메서드는 ``block`` 내부, 생성자는 ``constructor_body`` 내부를 시작 규칙으로 사용한다. 서버에는 ``grammar``만 적용하고 JSON 형식 문법과 혼합하지 않는다. 구현 응답의 2,600자 제한도 사용하지 않는다. 완성 파일의 기존 슬롯 계약과 실제 문맥 한도는 유지한다.
+
+Java 문법 리소스
+----------------
+
+``tools/grammars/tree-sitter-java-0.23.5.json``은 MIT 라이선스의 ``tree-sitter/tree-sitter-java`` v0.23.5 원문이다. admission parser도 같은 버전으로 고정한다. ``tools/compile_java_source_grammar.py``는 nullable·unit production을 제거하고 좌재귀가 있는 SCC에 selective left-corner 변환을 적용해 재사용 가능한 native GBNF를 만든다. 리소스에는 원본 commit·blob SHA와 라이선스를 포함한다. 이는 모델 응답의 복구나 재생성이 아니다.
+
+구문 토큰 사이에는 공백을 넣어 키워드·식별자의 잘못된 결합을 방지한다. 문자열·문자·text block은 하나의 lexeme으로 생성해 공백 삽입으로 문자열 값을 바꾸지 않는다. 식별자는 기존 선언 계약과 같은 ASCII 문자 집합을 사용하고, 문자열 값은 Unicode 원문으로 출력한다. Java의 토큰화 전에 따옴표·개행을 만들 수 있는 Unicode escape는 생성하지 않으며, 표준 escape와 8진 escape를 사용한다. package/import/module 선언은 본문 범위에서 제외한다. 현재 비-preview Java 대상에 없는 string template도 생성하지 않는다. 이 문법은 Java 파서의 구조적 계약을 생성기에 전달하며, 타입·Minecraft/Fabric API·게임 동작의 정확성까지 보장하지 않는다.
+
+원본 파서의 느슨한 숫자 어휘도 생성 시에는 Java 규칙으로 좁힌다. 8진수는 ``0``으로 시작하며 ``0o``·``0O``는 허용하지 않는다. 16진 부동소수점에는 ``p``·``P`` 지수를 필수로 둔다.
 
 생성 제약
 ---------
 
-- llama.cpp의 JSON Schema → GBNF 제약을 생성 단계에 적용한다.
-- 서버에 적용하는 스키마를 모델의 프롬프트에도 명시한다.
+- 메타데이터에는 JSON Schema → GBNF, 구현에는 Java GBNF 제약을 생성 단계에 적용한다.
+- 서버에 적용하는 메타데이터 스키마와 Java 응답 프레임을 모델의 프롬프트에도 명시한다.
 - 호스트가 클래스 정체성, 바깥 괄호, 조립을 담당한다.
 - 데이터 응답의 스키마를 해제하는 재생성과 설명문 안의 JSON 추출을 사용하지 않는다.
 
@@ -55,7 +64,7 @@ Java 생성 데이터에는 출력 최소 예약량을 지정하지 않는다. �
 
 Colab의 계획 또는 모델 제작 단계가 실패하면 root-cause 저널, 요청별 원문, 진단 JSON과 오류 traceback을 ``OUTPUT_ROOT/diagnostics/planning-logs.zip`` 또는 ``production-logs.zip``으로 압축하고 자동 다운로드한다. 다운로드가 안 되더라도 원문 폴더와 ZIP 경로를 화면에 남긴다. 결과 다운로드 셀에서도 실패 로그 ZIP을 다시 받을 수 있다.
 
-Java 선언 파싱에 실패하면 ``java_declaration_failure`` 이벤트에 종류·이름·metadata/implementation 단계와 소스 파일 경로를 남긴다. 파서에 실제로 전달한 전체 소스는 ``.mmm/traces/artifacts/*.json``에 저장되고 기존 실패 ZIP에 포함된다. 전체 소스는 콘솔에 복사하지 않는다.
+Java 선언 파싱에 실패하면 ``java_declaration_failure`` 이벤트에 종류·이름·metadata/implementation 단계, 최대 1,024자의 실패 멤버 미리보기와 소스 파일 경로를 남긴다. 파서에 실제로 전달한 전체 소스는 ``.mmm/traces/artifacts/*.json``에 저장되고 기존 실패 ZIP에 포함된다. 모델의 토큰별 출력과 전체 원문은 콘솔에 복사하지 않는다.
 
 실행 범위
 ---------
