@@ -1,7 +1,7 @@
 Java 생성 데이터와 실행 도구의 전송 경로
 =========================
 
-Java 클래스 계획, import 항목, 클래스 멤버는 실행할 도구가 아니라 호스트가 조립할 데이터다. 이 값들은 ``ModelRouter.generate_structured_data``를 통해 ``tools=()``와 ``response_schema``를 사용한다. 생성 서버가 스키마를 토큰 샘플링에 적용하고, 호스트가 반환한 정확한 JSON을 읽는다.
+Java 클래스 계획, import 항목, 선언 메타데이터와 구현 본문은 실행할 도구가 아니라 호스트가 조립할 데이터다. 이 값들은 ``ModelRouter.generate_structured_data``를 통해 ``tools=()``와 ``response_schema``를 사용한다. 생성 서버가 스키마를 토큰 샘플링에 적용하고, 호스트가 반환한 정확한 JSON을 읽는다.
 
 출력 예산과 작업 분할
 --------------------
@@ -12,7 +12,18 @@ Java 클래스 계획, import 항목, 클래스 멤버는 실행할 도구가 �
 
 Java 생성 데이터에는 출력 최소 예약량을 지정하지 않는다. 스키마가 허용하는 최대 직렬화 크기는 실제 응답에 반드시 필요한 최소 크기가 아니기 때문이다. 이 둘을 동일하게 취급해 ``required=14949 available=8192``로 막던 데이터 생성 경로를 제거했다.
 
-계획의 객체와 배열은 토큰 숫자에 따라 뒤늦게 분리하지 않는다. 호스트가 처음부터 필드와 배열 항목 단위로 요청하고 조립한다. Java 멤버는 완결된 메서드/필드 단위로 생성한다. 실패한 출력의 재시도나 잘린 코드 이어 붙이기를 작업 분할로 사용하지 않는다.
+계획과 중첩 타입의 객체·배열은 토큰 숫자에 따라 뒤늦게 분리하지 않는다. 호스트가 처음부터 필드와 배열 항목 단위로 요청하고 조립한다. 작은 선언 메타데이터는 한 요청으로 받고, 구현 본문은 그 선언 안의 완결된 문장·제어 흐름 단위로 받는다. 실패한 출력의 재시도나 잘린 코드 이어 붙이기를 작업 분할로 사용하지 않는다.
+
+선언과 구현의 소유권
+------------------
+
+기존 ``member`` 자유 문자열 출력은 사용하지 않는다. 먼저 필드·메서드·생성자·중첩 클래스·record·enum의 종류와 필요한 역할을 계획하고, 타입·매개변수·가시성 등 선언 데이터를 확정한다. 모든 선언의 서명을 확정한 다음에 구현을 요청하므로, 뒤에 선언되는 메서드도 실제 매개변수와 반환 타입을 보고 호출한다. 필드 구현은 초기화 표현식이며, 메서드 구현은 호스트 서명 안의 본문이다. 패키지·클래스·메서드 서명과 바깥 괄호는 호스트가 렌더링한다.
+
+공통 request-feature의 ``request_feature_entrypoint`` 역할은 ``net.fabricmc.api.ModInitializer``와 ``public void onInitialize()``에 바인딩한다. 기존 CLIENT canonical 역할은 ``net.fabricmc.api.ClientModInitializer``와 ``public void onInitializeClient()``에 바인딩한다. 이러한 초기화 클래스에서 모델이 상속, 생성자 또는 초기화 메서드 이름을 다시 선택하지 않는다. 내부 helper 이름도 호스트가 선택하고, 필수 초기화 본문은 helper 구현 이후 별도로 생성한다. 이 경로는 저장된 기존 역할 필드로 결정한다.
+
+각 구현 요청에는 원래 슬롯의 전체 소스 요구사항, COMMON/CLIENT 구분, 대상 파일, 실제 선행 소스와 선언된 helper API를 전달한다. 초기화 계약을 전체 소스 요청에만 넣고 멤버 요청에서 누락하던 경로를 제거했다.
+
+``first_pass_java_declarations``는 기존 Tree-sitter Java 파서로 선택한 종류·이름의 선언 하나를 구성한다. 구현 문자열이 다른 선언이나 클래스 범위로 빠져나오면 그 문자열을 소스에 붙이지 않는다. 반환된 전체 클래스를 정규식으로 잘라 쓰거나 메서드 이름을 바꿔 복구하지 않는다. 소스 슬롯의 기존 계약과 실제 빌드 경로는 유지한다.
 
 생성 제약
 ---------
@@ -29,7 +40,7 @@ Java 생성 데이터에는 출력 최소 예약량을 지정하지 않는다. �
 3. `Outlines 공식 구현과 Phi-3-mini 적용 예제 <https://github.com/dottxt-ai/outlines>`_
 4. `Generating Structured Outputs from Language Models: Benchmark and Studies <https://arxiv.org/abs/2501.10868>`_
 
-이 방식은 출력 형식의 안정성을 다룬다. Java API 선택과 기능 구현의 정확성까지 스키마로 보장되는 것은 아니다.
+이 방식은 선언 소유권과 출력 구조를 다룬다. Java API 선택과 기능 구현의 정확성까지 스키마로 보장되는 것은 아니다. Fabric 초기화 API의 원문은 `ModInitializer <https://github.com/FabricMC/fabric-loader/blob/master/src/main/java/net/fabricmc/api/ModInitializer.java>`_ 와 `ClientModInitializer <https://github.com/FabricMC/fabric-loader/blob/master/src/main/java/net/fabricmc/api/ClientModInitializer.java>`_ 를 따른다.
 
 모델 원문 진단 로그
 ------------------

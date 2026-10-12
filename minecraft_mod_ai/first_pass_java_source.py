@@ -2,22 +2,26 @@
 
 This is a first-pass production protocol, not an output-exhaustion retry.  The
 host owns the package boundary, final closing brace, and source assembly.  The
-model authors a brief API-aware class plan followed by complete class members;
-it is never asked to serialize a complete multi-kilobyte source file at once.
+model authors typed declaration metadata and implementation bodies. Required
+Fabric entrypoint declarations are immutable host data, not model suggestions.
 """
 from __future__ import annotations
 
 import json
 import re
+from copy import deepcopy
 from collections.abc import Mapping, Sequence
 from pathlib import PurePosixPath
 from typing import Any
 
 from .fixed_template_generation import (
-    _model_transport_schema,
     _validate_native_arguments,
 )
 from .model_output_atomicity_contract import assert_atomic_model_schema
+from .first_pass_java_declarations import (
+    BODY, IDENTIFIER, MEMBER_KINDS, declaration_header,
+    metadata_schema, render_declaration,
+)
 
 
 _PLAN_SCHEMA: dict[str, Any] = {
@@ -33,10 +37,11 @@ _PLAN_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "maxLength": 80},
+                    "kind": {"type": "string", "enum": list(MEMBER_KINDS)},
+                    "name": IDENTIFIER,
                     "purpose": {"type": "string", "maxLength": 160},
                 },
-                "required": ["name", "purpose"],
+                "required": ["kind", "name", "purpose"],
                 "additionalProperties": False,
             },
         },
@@ -44,20 +49,6 @@ _PLAN_SCHEMA: dict[str, Any] = {
     "required": ["imports", "superclass", "interfaces", "units"],
     "additionalProperties": False,
 }
-
-_MEMBER_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "member": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 2600,
-        },
-    },
-    "required": ["member"],
-    "additionalProperties": False,
-}
-
 
 _QUALIFIED_JAVA_IMPORT = re.compile(
     r"(?:[A-Za-z_$][A-Za-z0-9_$]*\.)+[A-Za-z_$][A-Za-z0-9_$]*|"
@@ -96,6 +87,7 @@ def _one_structured_action(
     *,
     name: str,
     schema: Mapping[str, Any],
+    page_structure: bool = True,
 ) -> Mapping[str, Any]:
     """One attempt for one small action. No schema-repair or source regeneration."""
     assert_atomic_model_schema(schema, surface=f"first-pass Java {name}")
@@ -105,7 +97,7 @@ def _one_structured_action(
     # Select page boundaries from the data structure, not an invented token cap.
     # Arrays are planned once by count and authored one entry at a time. Every
     # page is an independent first-pass request, never a failed-output replay.
-    if len(properties) > 1:
+    if page_structure and len(properties) > 1:
         merged: dict[str, Any] = {}
         for field, child in properties.items():
             page = {"type": "object", "properties": {field: child},
@@ -118,12 +110,12 @@ def _one_structured_action(
         return _validate_native_arguments(merged, schema)
 
     field, child = next(iter(properties.items()))
-    if child.get("type") == "object":
+    if page_structure and child.get("type") == "object":
         value = _one_structured_action(
             router, messages, name=f"{name}_{field}", schema=child,
         )
         return _validate_native_arguments({field: value}, schema)
-    if child.get("type") == "array":
+    if page_structure and child.get("type") == "array":
         maximum = int(child["maxItems"])
         minimum = int(child.get("minItems", 0))
         count_schema = {"type": "object", "properties": {"count": {
@@ -150,7 +142,7 @@ def _one_structured_action(
 
     response = router.generate_structured_data(
         "coder", messages, data_name=name,
-        parameters=_model_transport_schema(dict(schema)),
+        parameters=dict(schema),
     )
     if not isinstance(response, Mapping):
         raise ValueError(f"JAVA_FIRST_PASS_ACTION_MISSING: {name}")
@@ -212,14 +204,43 @@ def compose_first_pass_java(
         "requirement": spec.get("requirement", ""),
         "bindings": spec.get("bindings", {}),
         "prerequisite_source": source_context,
+        "side": spec.get("side"),
+        "target_path": spec.get("target_path"),
+        "source_contracts": [slot.get("description", "") for slot in spec.get("slots", ())],
     }
+    bindings = task["bindings"]
+    # Use the persisted owner roles which already select Fabric entrypoints.
+    # COMMON request-feature jobs and CLIENT canonical jobs have fixed loader APIs.
+    if bindings.get("request_feature_entrypoint"):
+        entrypoint_interface = "net.fabricmc.api.ModInitializer"
+        entrypoint_method = "onInitialize"
+    elif str(spec.get("side") or "").upper() == "CLIENT":
+        entrypoint_interface = "net.fabricmc.api.ClientModInitializer"
+        entrypoint_method = "onInitializeClient"
+    else:
+        entrypoint_interface = entrypoint_method = ""
+    plan_schema = deepcopy(_PLAN_SCHEMA)
+    if entrypoint_interface:
+        # Initializer inheritance, constructor and lifecycle are already selected
+        # by the source contract. Do not ask the model to select them again.
+        for field in ("superclass", "interfaces"):
+            plan_schema["properties"].pop(field)
+        unit_schema = plan_schema["properties"]["units"]["items"]
+        unit_schema["properties"].pop("name")
+        unit_schema["properties"]["kind"]["enum"] = [kind for kind in MEMBER_KINDS if kind != "constructor"]
+        unit_schema["required"] = list(unit_schema["properties"])
+        plan_schema["properties"]["units"]["minItems"] = 0
+        plan_schema["required"] = list(plan_schema["properties"])
+        task["host_entrypoint"] = {"interface": entrypoint_interface, "method": entrypoint_method}
     plan_messages = [
         *messages,
         {
             "role": "system",
             "content": (
-                "Design the COMPLETE Java compilation unit as small, independently "
-                "finishable class-member responsibilities. Account for every required "
+                "Plan typed Java field/method/constructor/nested-type responsibilities. "
+                "The host renders every declaration from typed metadata; implement only "
+                "expressions or method-body statements in the subsequent body requests. "
+                "Account for every required "
                 "behavior and integration, including constructors and registration "
                 "when required; never simplify the gameplay specification. "
                 "List Java imports as an array of fully-qualified type references, "
@@ -232,7 +253,11 @@ def compose_first_pass_java(
                 "'extends' keyword), and interfaces as optional comma-separated "
                 "Java type names (no 'implements' keyword). Empty strings mean "
                 "none. Preserve actual API inheritance/interface requirements. "
-                "Plan only real necessary members, at most ten; "
+                "When host_entrypoint is present, its public constructor, interface and "
+                "initialization method are already owned by the host. Plan only needed "
+                "supporting members; do not plan a second lifecycle method. The host "
+                "assigns internal helper names and later authors the required lifecycle body. "
+                "Plan only real necessary supporting members, at most ten; "
                 "each planned unit must fit in 2600 Java source characters, "
                 "including complete method/field bodies. No code in the plan units."
             ),
@@ -243,12 +268,12 @@ def compose_first_pass_java(
         router,
         plan_messages,
         name="submit_java_construction_plan",
-        schema=_PLAN_SCHEMA,
+        schema=plan_schema,
     )
 
     imports = _assemble_java_imports(plan["imports"])
-    superclass = str(plan["superclass"]).strip()
-    interfaces = str(plan["interfaces"]).strip()
+    superclass = str(plan.get("superclass") or "").strip()
+    interfaces = entrypoint_interface or str(plan.get("interfaces") or "").strip()
     # The model never authors identity, scope, or outer braces. It supplies only
     # optional Java type references used in a deterministic host-owned header.
     # Reject executable fragments, not legitimate inheritance relationships.
@@ -256,44 +281,151 @@ def compose_first_pass_java(
         if any(marker in type_clause for marker in ("{", "}", ";", chr(10), chr(13), "/*", "//")):
             raise ValueError("JAVA_FIRST_PASS_TYPE_REFERENCE_INVALID")
     declaration = (
-        f"public class {class_name}"
+        f"public {'final ' if entrypoint_interface else ''}class {class_name}"
         + (f" extends {superclass}" if superclass else "")
         + (f" implements {interfaces}" if interfaces else "")
         + " {"
     )
-    finished: list[str] = []
-    for index, unit in enumerate(plan["units"], 1):
+    units = []
+    for index, item in enumerate(plan["units"], 1):
+        unit = dict(item)
+        if entrypoint_interface:
+            # These helpers have no preexisting public API. Select their names
+            # before inference, outside the reserved entrypoint namespace.
+            unit["name"] = ("MmmMember" if unit["kind"] in {"class", "record", "enum"} else "mmmMember") + str(index)
+        elif unit["kind"] == "constructor":
+            unit["name"] = class_name
+        units.append(unit)
+    declarations: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for index, unit in enumerate(units, 1):
         unit_task = {
             **task,
             "imports": imports,
-            "declaration": declaration,
-            "all_units": plan["units"],
+            "class_declaration": declaration,
+            "all_units": units,
             "current_unit": unit,
-            "previous_complete_members": finished,
+            "previous_declaration_metadata": declarations,
         }
-        member_messages = [
+        metadata_messages = [
             {
                 "role": "system",
                 "content": (
-                    "Write ONLY the complete Java class-body field/constructor/method "
-                    "declarations needed for current_unit. No package, imports, "
-                    "outer class braces, prose, Markdown fences, stubs, TODOs, "
-                    "or dangling partial methods. Use the listed import and class "
-                    "API and the previously authored members as context. "
-                    "Never rewrite or duplicate previous members. Implement actual "
-                    "behavior rather than a placeholder. Keep this self-contained "
-                    "member page within 2600 characters; the host assembles all pages."
+                    "Supply only typed declaration metadata for current_unit. The host "
+                    "owns its kind and exact name. Types are Java types, parameters are "
+                    "type/name records, and annotations are annotation names with optional "
+                    "arguments. Do not place a complete declaration or class in a scalar. "
+                    "Use the source contracts, side and verified prerequisite APIs. "
+                    "Preserve exact override names for nested API implementations. "
+                    "For a nested type supply typed field/constructor/method metadata. "
+                    "Implementation is requested only after every signature is available."
                 ),
             },
             {"role": "user", "content": json.dumps(unit_task, ensure_ascii=False, default=str)},
         ]
-        result = _one_structured_action(
+        kind, member_name = unit["kind"], unit["name"]
+        nested_type = kind in {"class", "record", "enum"}
+        parts = dict(_one_structured_action(
             router,
-            member_messages,
-            name=f"submit_java_member_{index}",
-            schema=_MEMBER_SCHEMA,
-        )
-        finished.append(str(result["member"]).strip())
+            metadata_messages,
+            name=f"submit_java_declaration_{index}",
+            schema=metadata_schema(kind, member_name),
+            page_structure=nested_type,
+        ))
+        declarations.append((unit, parts))
+
+    # All method/field signatures are fixed before any body is authored. Forward
+    # calls therefore use actual parameter/return types rather than guessed APIs.
+    signature_index: list[dict[str, str]] = []
+    owner_types: dict[str, dict[str, Any]] = {
+        class_name: {"kind": "class", "name": class_name, "declaration": declaration},
+    }
+    def index_declaration(kind, name, parts, owner):
+        header = declaration_header(kind, name, parts)
+        signature_index.append({"owner": owner, "kind": kind, "name": name,
+                                "signature": header})
+        if kind in {"class", "record", "enum"}:
+            owner_types[name] = {"kind": kind, "name": name, "declaration": header}
+            if kind == "enum":
+                owner_types[name]["constants"] = deepcopy(parts["constants"])
+                for constant in parts["constants"]:
+                    signature_index.append({"owner": name, "kind": "enum_constant",
+                                            "name": constant["name"], "signature": constant["name"]})
+            elif kind == "record":
+                owner_types[name]["components"] = deepcopy(parts["components"])
+            for child in parts["fields"]:
+                index_declaration("field", child["name"], child, name)
+            for child in parts["constructors"]:
+                index_declaration("constructor", name, child, name)
+            for child in parts["methods"]:
+                index_declaration("method", child["name"], child, name)
+    for unit, parts in declarations:
+        index_declaration(unit["kind"], unit["name"], parts, class_name)
+
+    finished: list[str] = []
+    def implement(kind, name, parts, *, owner, action, purpose):
+        if kind in {"class", "record", "enum"}:
+            for index, child in enumerate(parts["fields"], 1):
+                implement("field", child["name"], child, owner=name, action=f"{action}_field_{index}", purpose=purpose)
+            for index, child in enumerate(parts["constructors"], 1):
+                implement("constructor", name, child, owner=name, action=f"{action}_constructor_{index}", purpose=purpose)
+            for index, child in enumerate(parts["methods"], 1):
+                implement("method", child["name"], child, owner=name, action=f"{action}_method_{index}", purpose=purpose)
+            return
+        field = "initializer" if kind == "field" else "body"
+        body_task = {**task, "imports": imports, "current_unit_purpose": purpose,
+                     "class_declaration": declaration, "owner_type": owner_types[owner],
+                     "owner": owner, "declaration_metadata": parts,
+                     "host_signature": declaration_header(kind, name, parts),
+                     "declared_member_api": signature_index, "previous_complete_members": finished}
+        body_messages = [
+            {"role": "system", "content": (
+                "Implement only the fixed host_signature. For a field return its "
+                "initializer expression without a semicolon. For a method/constructor "
+                "return only statements INSIDE its body, without the signature or "
+                "surrounding method braces. Never return package/import directives, "
+                "a class or another method declaration. Respect source_contracts, "
+                "side, current_unit_purpose and actual prerequisite/member APIs. "
+                "declared_member_api contains the exact signatures of all helpers, "
+                "including forward references. Implement the requested behavior "
+                "without placeholders or TODOs."
+            )},
+            {"role": "user", "content": json.dumps(body_task, ensure_ascii=False, default=str)},
+        ]
+        result = _one_structured_action(router, body_messages, name=action,
+            schema={"type": "object", "properties": {field: BODY},
+                    "required": [field], "additionalProperties": False})
+        parts[field] = result[field]
+    for index, (unit, parts) in enumerate(declarations, 1):
+        kind, member_name = unit["kind"], unit["name"]
+        implement(kind, member_name, parts, owner=class_name,
+                  action=f"submit_java_implementation_{index}", purpose=unit["purpose"])
+        finished.append(render_declaration(kind, member_name, parts, owner=class_name))
+
+    if entrypoint_interface:
+        # The lifecycle body is generated after helpers exist, against the exact
+        # assigned COMMON/CLIENT contract. Neither its name nor signature is AI data.
+        lifecycle = {"visibility": "public", "static": False, "return_type": "void",
+                     "parameters": [], "throws": [], "annotations": ["Override"],
+                     "type_parameters": ""}
+        lifecycle_messages = [
+            {"role": "system", "content": (
+                "Implement only the statements inside the supplied host initialization "
+                "method. Register and implement the exact original feature using the "
+                "verified APIs and completed helper declarations. Respect the assigned "
+                "side and source_contracts; retain existing typed behavior without "
+                "duplicating its effects. Return no method signature, package/import "
+                "directives, class declaration or outer method braces."
+            )},
+            {"role": "user", "content": json.dumps({**task, "imports": imports,
+                "host_signature": declaration_header("method", entrypoint_method, lifecycle),
+                "complete_members": finished}, ensure_ascii=False, default=str)},
+        ]
+        result = _one_structured_action(router, lifecycle_messages,
+            name="submit_java_entrypoint_body",
+            schema={"type": "object", "properties": {"body": {**BODY, "minLength": 1}},
+                    "required": ["body"], "additionalProperties": False})
+        lifecycle["body"] = result["body"]
+        finished.append(render_declaration("method", entrypoint_method, lifecycle, owner=class_name))
 
     return (
         f"package {package_name};\n\n"
