@@ -330,7 +330,14 @@ def _completion_exchange(
             )
         payload.update(dict(payload_overrides))
 
-    message = _completion_message(server_url, payload)
+    from ..model_completion_trace import completion_trace_context
+
+    with completion_trace_context(
+        role=adapter.config.role,
+        model_id=adapter.config.model_id,
+        action=prepared.metadata.get("mmm_data_page") or prepared.task or "completion",
+    ):
+        message = _completion_message(server_url, payload)
     _report_server_connection(server_url)
     response = (
         _native_tool_generation_response(

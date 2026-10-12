@@ -17,6 +17,7 @@ from .model_concurrency import (
     planning_work_unit_timeout_seconds,
     run_with_model_execution_deadline,
 )
+from .model_completion_trace import completion_trace_context, report_active_completions
 from .task_template_runner import execute_artifact_template
 
 
@@ -71,14 +72,15 @@ def _execute_one(
     registry: PortRegistry,
     base_dir: Any,
 ) -> dict[str, Any]:
-    return execute_checkpointed_job(
-        job,
-        context=context,
-        router=router,
-        registry=registry,
-        base_dir=base_dir,
-        execute=execute_artifact_template,
-    )
+    with completion_trace_context(job_id=job.job_id, canonical_leaf=job.canonical_leaf):
+        return execute_checkpointed_job(
+            job,
+            context=context,
+            router=router,
+            registry=registry,
+            base_dir=base_dir,
+            execute=execute_artifact_template,
+        )
 
 
 def _validate_completed_job(
@@ -320,6 +322,7 @@ def execute_artifact_graph(
                     else validation_futures[future][0].job_id
                     for future in expired
                 ]
+                report_active_completions(owners, reason="ARTIFACT_GRAPH_WORK_TIMEOUT")
                 for future in expired:
                     future.cancel()
                 raise ArtifactGraphError(f"ARTIFACT_GRAPH_WORK_TIMEOUT: {owners}")

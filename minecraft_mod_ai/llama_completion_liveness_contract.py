@@ -26,6 +26,7 @@ from .llama_sse_protocol import (
     sse_error_from_line,
 )
 from .model_concurrency import refresh_model_execution_deadline
+from .model_completion_trace import CompletionTrace
 
 _MARKER = "_mmm_progress_aware_completion_transport_v1"
 _STREAM_MARKER = "_mmm_progress_aware_completion_stream_v1"
@@ -383,8 +384,10 @@ class _ProgressCheckedResponse:
         request_id: str,
         started_at: float,
         wall_seconds: float | None = None,
+        trace: CompletionTrace | None = None,
     ) -> None:
         self._response = response
+        self._trace = trace
         self._idle_seconds = idle_seconds
         self._request_id = request_id
         self._started_at = started_at
@@ -401,6 +404,12 @@ class _ProgressCheckedResponse:
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._response, name)
+
+    def read(self, *args: Any, **kwargs: Any) -> Any:
+        body = self._response.read(*args, **kwargs)
+        if self._trace is not None:
+            self._trace.observe_body(body, status_code=getattr(self._response, "status_code", None))
+        return body
 
     def _finalize(self, exc: BaseException | None = None) -> None:
         if self._finalized:
@@ -446,6 +455,8 @@ class _ProgressCheckedResponse:
         watchdog = _SemanticProgressWatchdog(self._idle_seconds, clock=time.monotonic)
         try:
             for raw_line in self._response.iter_lines(*args, **kwargs):
+                if self._trace is not None:
+                    self._trace.observe_line(raw_line)
                 now = time.monotonic()
                 if self._wall_seconds is not None and now - self._started_at >= self._wall_seconds:
                     raise LlamaCompletionDeadlineExceeded(
@@ -508,8 +519,10 @@ class _ProgressCheckedStream:
         request_id: str,
         started_at: float,
         wall_seconds: float | None = None,
+        trace: CompletionTrace | None = None,
     ) -> None:
         self._stream = stream
+        self._trace = trace
         self._idle_seconds = idle_seconds
         self._request_id = request_id
         self._started_at = started_at
@@ -523,6 +536,8 @@ class _ProgressCheckedStream:
         try:
             response = self._stream.__enter__()
         except Exception as exc:
+            if self._trace is not None:
+                self._trace.finish(exc=exc)
             print(
                 "llama server: lifecycle connect failure",
                 f" request_id={self._request_id}",
@@ -552,6 +567,7 @@ class _ProgressCheckedStream:
             request_id=self._request_id,
             started_at=self._started_at,
             wall_seconds=self._wall_seconds,
+            trace=self._trace,
         )
         self._checked_response = checked
         return checked
@@ -566,6 +582,11 @@ class _ProgressCheckedStream:
             # Do not convert normal generator cancellation/close into request failure.
             reported_exc = exc if isinstance(exc, Exception) else None
             self._checked_response._finalize(reported_exc)
+            if self._trace is not None:
+                # The consumer can fail after iter_lines yields, and closing that
+                # iterator runs its finally before this context receives the error.
+                # Record the terminal result here so that error is not discarded.
+                self._trace.finish(saw_done=self._checked_response._saw_done, exc=reported_exc)
         return self._stream.__exit__(exc_type, exc, tb)
 
 
@@ -585,14 +606,13 @@ class _SemanticProgressClient:
         return self._client.close()
 
     def stream(self, method: str, url: str, **kwargs: Any) -> Any:
-        stream = self._client.stream(method, url, **kwargs)
         payload = kwargs.get("json")
         if (
             not isinstance(payload, Mapping)
             or not url.rstrip("/").endswith("/chat/completions")
             or payload.get("return_progress") is not True
         ):
-            return stream
+            return self._client.stream(method, url, **kwargs)
         idle_seconds = _semantic_idle_timeout_seconds(
             self._stream_module,
             payload,
@@ -600,6 +620,12 @@ class _SemanticProgressClient:
         wall_seconds = _completion_wall_timeout_seconds(payload)
         request_id = _request_id_from_headers(kwargs.get("headers"))
         started_at = time.monotonic()
+        trace = CompletionTrace(request_id, payload, started_at=started_at)
+        try:
+            stream = self._client.stream(method, url, **kwargs)
+        except Exception as exc:
+            trace.finish(exc=exc)
+            raise
         _log_lifecycle_detail(
             "llama server: lifecycle start",
             f" request_id={request_id}",
@@ -616,6 +642,7 @@ class _SemanticProgressClient:
             request_id=request_id,
             started_at=started_at,
             wall_seconds=wall_seconds,
+            trace=trace,
         )
 
 

@@ -31,6 +31,15 @@ Java 생성 데이터에는 출력 최소 예약량을 지정하지 않는다. �
 
 이 방식은 출력 형식의 안정성을 다룬다. Java API 선택과 기능 구현의 정확성까지 스키마로 보장되는 것은 아니다.
 
+모델 원문 진단 로그
+------------------
+
+기본 실행 로그에 ``MODEL COMPLETION TRACE:`` 레코드를 출력한다. 별도의 디버그 옵션을 켤 필요가 없다. 같은 ``request_id``로 실제 요청 본문, 스키마, 출력 예산, 응답 스트림 원문, 종료 사유, 서버의 usage/timings를 연결한다. ``context``에는 생성 중인 ``job_id``, canonical leaf, 모델 역할과 모델 ID, 데이터 페이지 ``action``이 들어간다.
+
+``response_delta``는 파서와 스트림 감시기에 전달하기 전에 기록한다. 출력에 포함된 공백, 추론 채널, 부분 도구 인자와 잘못된 JSON을 생략하거나 길이로 자르지 않는다. ``response_finished``에는 그때까지 조립한 응답 전체를 남기며, 정상 종료와 미완료, 오류를 구분한다. Artifact graph의 바깥 시간 제한이 만료되면 해당 작업의 활성 요청을 찾아 ``response_snapshot``에 부분 응답 전체와 ``ARTIFACT_GRAPH_WORK_TIMEOUT`` 사유를 출력한다.
+
+같은 레코드는 요청별 JSONL에도 즉시 기록하고 flush한다. 기본 위치는 ``.mmm/traces/model_completions/<request_id>.jsonl``이며, 기존 root-cause trace 경로를 지정한 실행에서는 해당 저널과 같은 디렉터리의 ``model_completions``에 저장한다. 실제 경로는 각 로그의 ``journal_path``에 표시한다. 파일 기록이 실패하면 ``recording_error``를 로그에 표시한다. HTTP 인증 헤더는 기록하지 않는다.
+
 실행 범위
 ---------
 
