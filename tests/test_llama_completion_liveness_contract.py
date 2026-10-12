@@ -15,6 +15,33 @@ from minecraft_mod_ai.llama_sse_protocol import (
 from minecraft_mod_ai.model_adapters import llama_cpp_adapter
 
 
+def test_successful_call_emits_one_completion_line_by_default(monkeypatch, capsys):
+    monkeypatch.delenv("MMM_LLAMA_LIFECYCLE_VERBOSE", raising=False)
+    response = SimpleNamespace(iter_lines=lambda: iter([
+        'data: {"choices":[{"delta":{"content":"ok"}}]}', "data: [DONE]",
+    ]))
+    wrapped = contract._ProgressCheckedResponse(
+        response, 120, request_id="concise", started_at=contract.time.monotonic(),
+    )
+    list(wrapped.iter_lines())
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 1
+    assert "lifecycle complete" in lines[0]
+
+
+def test_failures_are_visible_without_verbose_logging(monkeypatch, capsys):
+    monkeypatch.delenv("MMM_LLAMA_LIFECYCLE_VERBOSE", raising=False)
+    response = SimpleNamespace(iter_lines=lambda: iter([
+        'data: {"error":{"code":400,"message":"context overflow"}}',
+    ]))
+    wrapped = contract._ProgressCheckedResponse(
+        response, 120, request_id="failed", started_at=contract.time.monotonic(),
+    )
+    with pytest.raises(LlamaSseServerError):
+        list(wrapped.iter_lines())
+    assert "lifecycle failure" in capsys.readouterr().out
+
+
 def test_progress_payload_requests_prompt_events_and_bounded_ping() -> None:
     stream_module = SimpleNamespace(
         _tool_idle_timeout_seconds=lambda: 120.0,
@@ -333,6 +360,7 @@ def test_second_protocol_disconnect_is_not_retried_forever() -> None:
 
 
 def test_active_decode_reports_periodic_semantic_progress(monkeypatch, capsys) -> None:
+    monkeypatch.setenv("MMM_LLAMA_LIFECYCLE_VERBOSE", "1")
     clock = [0.0]
     monkeypatch.setattr(contract.time, "monotonic", lambda: clock[0])
     monkeypatch.setenv("MMM_LLAMA_PROGRESS_LOG_INTERVAL_SECONDS", "15")

@@ -34,6 +34,13 @@ _CLIENT_INIT_MARKER = "_mmm_semantic_progress_client_v1"
 _REQUEST_ID_HEADER = "X-MMM-Request-Id"
 
 
+def _log_lifecycle_detail(*args: Any, **kwargs: Any) -> None:
+    if os.environ.get("MMM_LLAMA_LIFECYCLE_VERBOSE", "").strip().casefold() in {
+        "1", "true", "yes", "on",
+    }:
+        print(*args, **kwargs)
+
+
 class LlamaSemanticProgressTimeout(TimeoutError):
     """A live SSE connection produced no prompt/decode/tool progress in time."""
 
@@ -429,7 +436,7 @@ class _ProgressCheckedResponse:
                 sep="",
                 flush=True,
             )
-        print(
+        _log_lifecycle_detail(
             "llama server: lifecycle finalized",
             f" request_id={self._request_id}",
             flush=True,
@@ -462,7 +469,7 @@ class _ProgressCheckedResponse:
                     if not self._first_progress and not _done_line(raw_line):
                         self._first_progress = True
                         self._last_progress_log_at = now
-                        print(
+                        _log_lifecycle_detail(
                             "llama server: first semantic progress",
                             f" request_id={self._request_id}",
                             f" elapsed={now - self._started_at:.1f}s",
@@ -525,13 +532,13 @@ class _ProgressCheckedStream:
                 sep="",
                 flush=True,
             )
-            print(
+            _log_lifecycle_detail(
                 "llama server: lifecycle finalized",
                 f" request_id={self._request_id}",
                 flush=True,
             )
             raise
-        print(
+        _log_lifecycle_detail(
             "llama server: lifecycle accepted",
             f" request_id={self._request_id}",
             f" status={getattr(response, 'status_code', 'unknown')}",
@@ -593,7 +600,7 @@ class _SemanticProgressClient:
         wall_seconds = _completion_wall_timeout_seconds(payload)
         request_id = _request_id_from_headers(kwargs.get("headers"))
         started_at = time.monotonic()
-        print(
+        _log_lifecycle_detail(
             "llama server: lifecycle start",
             f" request_id={request_id}",
             f" max_tokens={payload.get('max_tokens', '?')}",
