@@ -109,6 +109,7 @@ def generate_canonical_leaf(inputs, *, leaf_id, router, authority, source_contex
                     messages,
                     response_schema=model_schemas[slot["name"]],
                     enable_tools=False,
+                    single_pass=True,
                 )
         else:
             value = generate_fixed_template_value(
@@ -117,6 +118,7 @@ def generate_canonical_leaf(inputs, *, leaf_id, router, authority, source_contex
                 messages,
                 response_schema=model_schemas[slot["name"]],
                 enable_tools=False,
+                single_pass=True,
             )
 
         # One authored candidate only. Production checks the assembled source;
