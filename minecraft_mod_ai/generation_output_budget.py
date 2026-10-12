@@ -99,6 +99,11 @@ def dynamic_output_budget_enabled(config: Any) -> bool:
     return bool(value)
 
 
+def use_full_runtime_output_context(config: Any) -> bool:
+    """Dynamic profiles use live context unless an explicit env cap was set."""
+    return dynamic_output_budget_enabled(config) and _positive_override("MMM_GENERATION_MAX_TOKENS") is None
+
+
 def _configured_output_ceiling(config: Any) -> int | None:
     override = _positive_override("MMM_GENERATION_MAX_TOKENS")
     if override is not None:
@@ -356,11 +361,34 @@ def apply_payload_generation_budget(
     return bounded
 
 
+def apply_request_generation_budget(
+    payload: Mapping[str, Any], *, config: Any, request: Any,
+) -> dict[str, Any]:
+    """Use one output policy for every direct transport.
+
+    Dynamic profiles use the available context. Their configured max_new_tokens
+    and internally chosen page ceilings are packing estimates, not decode caps.
+    Explicit static profiles retain their requested output cap.
+    """
+    bounded = apply_payload_generation_budget(
+        payload, config=config,
+        structured_output=getattr(request, "response_format", None) == "json",
+    )
+    metadata = getattr(request, "metadata", {})
+    if not dynamic_output_budget_enabled(config) and isinstance(metadata, Mapping):
+        ceiling = int(metadata.get("mmm_output_token_ceiling") or 0)
+        if ceiling > 0:
+            bounded["max_tokens"] = min(bounded["max_tokens"], ceiling)
+    return bounded
+
+
 __all__ = [
     "GenerationOutputBudgetError",
     "apply_payload_generation_budget",
+    "apply_request_generation_budget",
     "dynamic_output_budget_enabled",
     "generation_output_token_budget",
+    "use_full_runtime_output_context",
     "payload_input_token_estimate",
     "tools_require_expansive_output",
 ]

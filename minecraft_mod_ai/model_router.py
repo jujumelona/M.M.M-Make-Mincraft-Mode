@@ -344,8 +344,6 @@ class ModelRouter:
         *,
         data_name: str,
         parameters: Mapping[str, Any],
-        output_token_ceiling: int,
-        output_token_floor: int,
     ) -> dict[str, Any]:
         """Generate one bounded data page using the backend's schema sampler.
 
@@ -383,8 +381,6 @@ class ModelRouter:
                 "mmm_data_page": data_name,
                 "mmm_strict_structured_data": True,
                 "mmm_force_non_thinking": True,
-                "mmm_output_token_ceiling": int(output_token_ceiling),
-                "mmm_output_token_floor": int(output_token_floor),
             },
         )
         with self._generation_scope(config):

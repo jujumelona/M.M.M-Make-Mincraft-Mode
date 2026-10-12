@@ -294,6 +294,7 @@ def _completion_exchange(
     """Run the exact production payload/parser path and optionally expose capture data."""
 
     from ..llama_exact_context import capacity_safe_payload
+    from ..generation_output_budget import use_full_runtime_output_context
     from ..llama_server_hardware_policy import _server_payload
     from ..llama_stream_efficiency_contract import _report_server_connection
 
@@ -303,12 +304,14 @@ def _completion_exchange(
             server_url,
             _tool_server_payload(adapter, prepared),
             structured_output=False,
+            use_full_context=use_full_runtime_output_context(adapter.config),
         )
     else:
         payload = capacity_safe_payload(
             server_url,
             _server_payload(adapter, prepared),
             structured_output=prepared.response_format == "json",
+            use_full_context=use_full_runtime_output_context(adapter.config),
         )
 
     from ..generation_output_budget import assert_request_output_capacity

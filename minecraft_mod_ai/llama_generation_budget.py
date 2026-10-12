@@ -240,68 +240,13 @@ def install(hardware_module: Any) -> None:
 
     @wraps(current)
     def bounded_server_payload(adapter: Any, request: Any) -> dict[str, Any]:
-        raw_payload = current(adapter, request)
-        bounded = apply_generation_budget(
-            raw_payload, config=adapter.config,
-            structured_output=getattr(request, "response_format", None) == "json",
+        # Compatibility entry point: the direct payload core owns the policy.
+        # Do not reintroduce planner/action-specific token caps from an installer.
+        from .generation_output_budget import apply_request_generation_budget
+
+        return apply_request_generation_budget(
+            current(adapter, request), config=adapter.config, request=request,
         )
-        if _atomic_output_recovery_requested(request) and getattr(request, "tools", ()):
-            try:
-                configured_recovery_page = int(raw_payload.get("max_tokens", 0) or 0)
-            except (TypeError, ValueError):
-                configured_recovery_page = 0
-            if configured_recovery_page > 0:
-                bounded["max_tokens"] = max(
-                    max(1, int(bounded.get("max_tokens", 1) or 1)),
-                    configured_recovery_page,
-                )
-
-        request_ceiling = _request_output_ceiling(request)
-        if request_ceiling is not None:
-            bounded["max_tokens"] = min(
-                max(1, int(bounded.get("max_tokens", 1) or 1)),
-                request_ceiling,
-            )
-
-        decision_kind = _planning_decision_json_fallback(request)
-        if decision_kind:
-            common_budget = max(1, int(bounded.get("max_tokens", 1) or 1))
-            page_budget = max(1, int(tool_action_token_budget(adapter.config)))
-            effective = min(common_budget, page_budget)
-            bounded["max_tokens"] = effective
-            print(
-                "llama server: planner decision fallback output budget",
-                f" kind={decision_kind}",
-                f" common={common_budget}",
-                f" tool_page={page_budget}",
-                f" effective={effective}",
-                sep="",
-                flush=True,
-            )
-            return bounded
-
-        derived = structured_response_token_ceiling(request)
-        if derived is None:
-            return bounded
-        structured_ceiling, metrics = derived
-        try:
-            requested = int(raw_payload.get("max_tokens", 0) or 0)
-        except (TypeError, ValueError):
-            requested = 0
-        common_budget = max(1, int(bounded.get("max_tokens", 1) or 1))
-        effective = min(common_budget, structured_ceiling)
-        bounded["max_tokens"] = max(1, effective)
-        print(
-            "llama server: planner section output budget",
-            f" requested={requested if requested > 0 else 'dynamic'}",
-            f" common={common_budget}",
-            f" schema_ceiling={structured_ceiling}",
-            f" effective={effective}",
-            *(f" {key}={value}" for key, value in metrics.items()),
-            sep="",
-            flush=True,
-        )
-        return bounded
 
     setattr(bounded_server_payload, _MARKER, True)
     hardware_module._server_payload = bounded_server_payload

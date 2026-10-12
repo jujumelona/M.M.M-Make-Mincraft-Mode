@@ -17,13 +17,7 @@ from .fixed_template_generation import (
     _model_transport_schema,
     _validate_native_arguments,
 )
-from .model_output_atomicity_contract import (
-    assert_atomic_model_schema,
-    structured_output_token_ceiling,
-)
-
-_JAVA_ACTION_CAPACITY = 16_384
-_DATA_PAGE_MARGIN_TOKENS = 256
+from .model_output_atomicity_contract import assert_atomic_model_schema
 
 
 _PLAN_SCHEMA: dict[str, Any] = {
@@ -105,30 +99,31 @@ def _one_structured_action(
 ) -> Mapping[str, Any]:
     """One attempt for one small action. No schema-repair or source regeneration."""
     assert_atomic_model_schema(schema, surface=f"first-pass Java {name}")
-    parameters = _model_transport_schema(dict(schema))
-    output_tokens = structured_output_token_ceiling(
-        parameters, absolute_ceiling=None,
-    ) + _DATA_PAGE_MARGIN_TOKENS
-    if output_tokens > _JAVA_ACTION_CAPACITY:
-        # Page the declared structure BEFORE inference. Never truncate a completed
-        # value or replay a failed action. Later pages see the completed prefix.
-        properties = schema.get("properties")
-        if not isinstance(properties, Mapping) or len(properties) != 1:
-            if not isinstance(properties, Mapping) or not properties:
-                raise ValueError("JAVA_DATA_PAGE_NOT_DECOMPOSABLE")
-            merged: dict[str, Any] = {}
-            for field, child in properties.items():
-                page = {"type": "object", "properties": {field: child},
-                        "required": [field], "additionalProperties": False}
-                merged.update(_one_structured_action(
-                    router, [*messages, {"role": "user", "content": json.dumps(
-                        {"current_field": field, "completed_plan_fields": merged},
-                        ensure_ascii=False)}], name=f"{name}_{field}", schema=page,
-                ))
-            return _validate_native_arguments(merged, schema)
-        field, child = next(iter(properties.items()))
-        if child.get("type") != "array":
-            raise ValueError("JAVA_DATA_PAGE_NOT_DECOMPOSABLE")
+    properties = schema.get("properties")
+    if not isinstance(properties, Mapping) or not properties:
+        raise ValueError("JAVA_DATA_PAGE_REQUIRES_DECLARED_FIELDS")
+    # Select page boundaries from the data structure, not an invented token cap.
+    # Arrays are planned once by count and authored one entry at a time. Every
+    # page is an independent first-pass request, never a failed-output replay.
+    if len(properties) > 1:
+        merged: dict[str, Any] = {}
+        for field, child in properties.items():
+            page = {"type": "object", "properties": {field: child},
+                    "required": [field], "additionalProperties": False}
+            merged.update(_one_structured_action(
+                router, [*messages, {"role": "user", "content": json.dumps(
+                    {"current_field": field, "completed_plan_fields": merged},
+                    ensure_ascii=False)}], name=f"{name}_{field}", schema=page,
+            ))
+        return _validate_native_arguments(merged, schema)
+
+    field, child = next(iter(properties.items()))
+    if child.get("type") == "object":
+        value = _one_structured_action(
+            router, messages, name=f"{name}_{field}", schema=child,
+        )
+        return _validate_native_arguments({field: value}, schema)
+    if child.get("type") == "array":
         maximum = int(child["maxItems"])
         minimum = int(child.get("minItems", 0))
         count_schema = {"type": "object", "properties": {"count": {
@@ -152,13 +147,10 @@ def _one_structured_action(
             )
             values.append(item["value"])
         return _validate_native_arguments({field: values}, schema)
+
     response = router.generate_structured_data(
-        "coder",
-        messages,
-        data_name=name,
-        parameters=parameters,
-        output_token_ceiling=output_tokens,
-        output_token_floor=output_tokens,
+        "coder", messages, data_name=name,
+        parameters=_model_transport_schema(dict(schema)),
     )
     if not isinstance(response, Mapping):
         raise ValueError(f"JAVA_FIRST_PASS_ACTION_MISSING: {name}")

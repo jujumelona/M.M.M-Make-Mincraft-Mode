@@ -117,7 +117,15 @@ def _enforce_required_tool_sampling(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _request_max_tokens(adapter: Any, request: Any) -> int:
     """Return the host-owned decode allowance for one request."""
+    from .generation_output_budget import (
+        dynamic_output_budget_enabled, generation_output_token_budget,
+    )
 
+    if dynamic_output_budget_enabled(adapter.config):
+        return generation_output_token_budget(
+            adapter.config, tools=tuple(getattr(request, "tools", ()) or ()),
+            structured_output=getattr(request, "response_format", None) == "json",
+        )
     configured = max(1, int(adapter.config.max_new_tokens))
     metadata = getattr(request, "metadata", {})
     if isinstance(metadata, Mapping):
@@ -135,8 +143,8 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
     """Build the base OpenAI-compatible llama-server chat payload.
 
     Tool-capable turns keep the model's native Jinja tools prompt and host-validated raw
-    markup. Final finite token budgets and structured JSON-schema constraints are added
-    by the single llama generation payload contract during runtime bootstrap.
+    markup. The source-owned output policy applies directly here, independently
+    of optional runtime installers or the chosen ModelRouter entry point.
     """
 
     payload: dict[str, Any] = {
@@ -208,8 +216,10 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
             role=getattr(config, "role", ""),
             request=request,
         )
-    # Host-required tool choice always wins over model-specific sampling.
-    return _enforce_required_tool_sampling(payload)
+    from .generation_output_budget import apply_request_generation_budget
+
+    payload = _enforce_required_tool_sampling(payload)
+    return apply_request_generation_budget(payload, config=adapter.config, request=request)
 
 
 

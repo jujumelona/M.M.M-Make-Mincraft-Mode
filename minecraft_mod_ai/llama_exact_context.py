@@ -157,6 +157,7 @@ def capacity_safe_payload(
     payload: Mapping[str, Any],
     *,
     structured_output: bool = False,
+    use_full_context: bool = False,
 ) -> dict[str, Any]:
     result = dict(payload)
     accounting = live_context_accounting(server_url, result)
@@ -171,7 +172,7 @@ def capacity_safe_payload(
     has_tools = bool(isinstance(raw_tools, (list, tuple)) and raw_tools)
     from .generation_output_budget import payload_requires_structured_output
 
-    if (has_tools or structured_output or payload_requires_structured_output(result)) and remaining < _MIN_TOOL_OUTPUT_RESERVE:
+    if not use_full_context and (has_tools or structured_output or payload_requires_structured_output(result)) and remaining < _MIN_TOOL_OUTPUT_RESERVE:
         # This is context pressure, not output exhaustion. Raising the canonical typed
         # boundary here lets the progress-aware owner compact observations *before*
         # inference instead of sending max_tokens=1, receiving finish_reason=length,
@@ -192,7 +193,7 @@ def capacity_safe_payload(
         )
 
     requested = int(result.get("max_tokens", 0) or 0)
-    if requested <= 0 or requested > remaining:
+    if use_full_context or requested <= 0 or requested > remaining:
         result["max_tokens"] = remaining
     return result
 

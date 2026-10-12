@@ -10,7 +10,6 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from ..generation_output_budget import apply_payload_generation_budget
 from ..model_concurrency import ModelExecutionDeadlineExceeded, remaining_model_execution_seconds
 from .base import (
     GenerationRequest,
@@ -159,15 +158,9 @@ class OpenAICompatibleAdapter(ModelAdapter):
                 payload["tool_choice"] = request.tool_choice or "auto"
                 payload["parallel_tool_calls"] = bool(request.parallel_tool_calls)
 
-            payload = apply_payload_generation_budget(payload, config=cfg)
-            # Dynamic backend budgeting may expand ordinary free-text requests, but an
-            # explicit host request ceiling (structured JSON/tool decision) is absolute.
-            metadata = request.metadata if isinstance(request.metadata, Mapping) else {}
-            if metadata.get("mmm_output_token_ceiling") is not None:
-                payload["max_tokens"] = min(
-                    int(payload.get("max_tokens", 1) or 1),
-                    request_output_token_limit(cfg, request),
-                )
+            from ..generation_output_budget import apply_request_generation_budget
+
+            payload = apply_request_generation_budget(payload, config=cfg, request=request)
             from ..generation_output_budget import assert_request_output_capacity
 
             assert_request_output_capacity(request, payload)
