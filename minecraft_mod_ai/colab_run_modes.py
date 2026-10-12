@@ -59,6 +59,46 @@ def should_build(run_mode: str) -> bool:
     return validate_run_mode(run_mode) not in {PLAN_MODE, AUDIT_MODE}
 
 
+def download_failure_logs(
+    output_root: str | Path,
+    *,
+    stage: str,
+    extra_paths: tuple[str | Path | None, ...] = (),
+) -> Path | None:
+    """Keep full diagnostics off the notebook page and download them on failure."""
+    from .root_cause_trace import durable_trace_path
+
+    trace_path = durable_trace_path()
+    trace_dir = trace_path.parent
+    target = Path(output_root) / "diagnostics" / f"{stage}-logs.zip"
+    print("원문 로그 폴더:", trace_dir.resolve(), flush=True)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            paths = [trace_path]
+            paths.extend((trace_dir / "model_completions").glob("*.jsonl"))
+            paths.extend((trace_dir / "artifacts").glob("*.json"))
+            for path in paths:
+                if path.is_file():
+                    archive.write(path, arcname="traces/" + path.relative_to(trace_dir).as_posix())
+            for raw_path in extra_paths:
+                if raw_path is not None and (path := Path(raw_path)).is_file():
+                    archive.write(path, arcname="failure/" + path.name)
+    except (OSError, zipfile.BadZipFile, ValueError) as exc:
+        print("로그 ZIP 저장 실패:", type(exc).__name__, "; 원문 로그 폴더:", trace_dir.resolve(), flush=True)
+        return None
+    print("로그 ZIP:", target.resolve(), flush=True)
+    try:
+        from google.colab import files as colab_files
+
+        colab_files.download(str(target))
+    except ImportError:
+        pass
+    except Exception as exc:
+        print("자동 다운로드 실패:", type(exc).__name__, "; 로그 ZIP:", target.resolve(), flush=True)
+    return target
+
+
 def _user_download_zip(build_result: Any) -> Path | None:
     """Package only end-user mod artifacts from the verified downloadable bundle."""
 
@@ -602,6 +642,7 @@ __all__ = [
     "EXISTING_PLAN_MODE",
     "FULL_MODE",
     "PLAN_MODE",
+    "download_failure_logs",
     "RUN_MODES",
     "PlanDialogResult",
     "audit_path",

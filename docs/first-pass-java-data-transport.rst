@@ -34,11 +34,13 @@ Java 생성 데이터에는 출력 최소 예약량을 지정하지 않는다. �
 모델 원문 진단 로그
 ------------------
 
-기본 실행 로그에 ``MODEL COMPLETION TRACE:`` 레코드를 출력한다. 별도의 디버그 옵션을 켤 필요가 없다. 같은 ``request_id``로 실제 요청 본문, 스키마, 출력 예산, 응답 스트림 원문, 종료 사유, 서버의 usage/timings를 연결한다. ``context``에는 생성 중인 ``job_id``, canonical leaf, 모델 역할과 모델 ID, 데이터 페이지 ``action``이 들어간다.
+실제 요청 본문, 스키마, 출력 예산, 응답 스트림 원문, 종료 사유, 서버의 usage/timings는 요청별 JSONL 파일에 기록한다. 별도의 디버그 옵션을 켤 필요가 없다. 같은 ``request_id``로 기록을 연결한다. ``context``에는 생성 중인 ``job_id``, canonical leaf, 모델 역할과 모델 ID, 데이터 페이지 ``action``이 들어간다. 화면의 ``MODEL COMPLETION TRACE:``에는 요청 시작과 종료 상태, 파일 경로만 짧게 표시한다. 원문과 토큰별 응답 조각을 화면에 출력하지 않는다.
 
-``response_delta``는 파서와 스트림 감시기에 전달하기 전에 기록한다. 출력에 포함된 공백, 추론 채널, 부분 도구 인자와 잘못된 JSON을 생략하거나 길이로 자르지 않는다. ``response_finished``에는 그때까지 조립한 응답 전체를 남기며, 정상 종료와 미완료, 오류를 구분한다. Artifact graph의 바깥 시간 제한이 만료되면 해당 작업의 활성 요청을 찾아 ``response_snapshot``에 부분 응답 전체와 ``ARTIFACT_GRAPH_WORK_TIMEOUT`` 사유를 출력한다.
+``response_delta``는 파서와 스트림 감시기에 전달하기 전에 파일에 기록한다. 출력에 포함된 공백, 추론 채널, 부분 도구 인자와 잘못된 JSON을 생략하거나 길이로 자르지 않는다. ``response_finished``에는 그때까지 조립한 응답 전체를 남기며, 정상 종료와 미완료, 오류를 구분한다. Artifact graph의 바깥 시간 제한이 만료되면 해당 작업의 활성 요청을 찾아 ``response_snapshot``에 부분 응답 전체와 ``ARTIFACT_GRAPH_WORK_TIMEOUT`` 사유를 파일에 기록한다.
 
 같은 레코드는 요청별 JSONL에도 즉시 기록하고 flush한다. 기본 위치는 ``.mmm/traces/model_completions/<request_id>.jsonl``이며, 기존 root-cause trace 경로를 지정한 실행에서는 해당 저널과 같은 디렉터리의 ``model_completions``에 저장한다. 실제 경로는 각 로그의 ``journal_path``에 표시한다. 파일 기록이 실패하면 ``recording_error``를 로그에 표시한다. HTTP 인증 헤더는 기록하지 않는다.
+
+Colab의 계획 또는 모델 제작 단계가 실패하면 root-cause 저널, 요청별 원문, 진단 JSON과 오류 traceback을 ``OUTPUT_ROOT/diagnostics/planning-logs.zip`` 또는 ``production-logs.zip``으로 압축하고 자동 다운로드한다. 다운로드가 안 되더라도 원문 폴더와 ZIP 경로를 화면에 남긴다. 결과 다운로드 셀에서도 실패 로그 ZIP을 다시 받을 수 있다.
 
 실행 범위
 ---------

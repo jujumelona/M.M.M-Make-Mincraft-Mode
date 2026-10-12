@@ -39,7 +39,7 @@ def report_active_completions(job_ids: list[str], *, reason: str) -> None:
 
 
 class CompletionTrace:
-    """One request journal, also printed in full to the normal execution log.
+    """One full request journal with compact console status.
 
     Each SSE data line is written and flushed before it reaches the parser/watchdog.
     The journal therefore preserves whitespace, reasoning, malformed JSON and partial
@@ -96,11 +96,34 @@ class CompletionTrace:
                     self._recording_error = f"{type(exc).__name__}: {exc}"
                     record["recording_error"] = self._recording_error
                     line = json.dumps(record, ensure_ascii=False, separators=(",", ":"), default=str)
-            try:
-                print(_PREFIX + line, flush=True)
-            except (OSError, UnicodeError):
-                # Diagnostic output must not replace the original inference failure.
-                pass
+            if event in {"request", "response_snapshot", "response_finished"}:
+                # Per-token JSON and full prompts belong only in the journal. A
+                # notebook stores/renders every console row in the user's browser.
+                summary = {
+                    "event": event,
+                    "request_id": self.request_id,
+                    "elapsed_seconds": record["elapsed_seconds"],
+                    "context": {key: str(value)[:160] for key, value in self.context.items()},
+                    "journal_path": str(self.path),
+                }
+                if event == "request":
+                    payload = fields.get("payload", {})
+                    summary["max_tokens"] = payload.get("max_tokens")
+                if "status" in fields:
+                    summary["status"] = fields["status"]
+                if "reason" in fields:
+                    summary["reason"] = fields["reason"]
+                error = fields.get("error")
+                if isinstance(error, Mapping):
+                    summary["error_type"] = error.get("type")
+                    summary["http_status"] = error.get("status_code")
+                if self._recording_error:
+                    summary["recording_error"] = self._recording_error
+                try:
+                    print(_PREFIX + json.dumps(summary, ensure_ascii=False), flush=True)
+                except (OSError, UnicodeError):
+                    # Diagnostic output must not replace the inference failure.
+                    pass
 
     def _capture(self, chunk: Mapping[str, Any]) -> None:
         if "usage" in chunk:
