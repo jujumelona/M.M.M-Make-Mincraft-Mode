@@ -671,6 +671,7 @@ def test_author_typed_plan_ir_filters_by_deterministic_module_kinds() -> None:
 
 
 def test_complete_planner_does_not_compile_execution_at_plan_time(monkeypatch: Any) -> None:
+    monkeypatch.setattr("minecraft_mod_ai.request_scope.author_request_scope", lambda *a, **k: {})
     from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner
     from minecraft_mod_ai.model_router import ModelRouter
 
@@ -717,6 +718,7 @@ def test_complete_planner_does_not_compile_execution_at_plan_time(monkeypatch: A
 def test_complete_planner_unbound_auto_defers_ir_to_production(
     monkeypatch: Any,
 ) -> None:
+    monkeypatch.setattr("minecraft_mod_ai.request_scope.author_request_scope", lambda *a, **k: {})
     from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner
     from minecraft_mod_ai.model_router import ModelRouter
 

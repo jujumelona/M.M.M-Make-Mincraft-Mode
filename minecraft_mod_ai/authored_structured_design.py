@@ -382,6 +382,45 @@ def _generate_concern_record_count(
         )
     return result
 
+def _generate_section_record_counts(
+    router: Any,
+    prompt: str,
+    *,
+    section: str,
+    completed: Mapping[str, Mapping[str, Any]],
+) -> dict[str, int]:
+    """Decide relevant concerns once, before spending calls on their fields."""
+    from .fixed_template_generation import generate_fixed_template_value
+    from .planning_section_dependencies import SECTION_DEPENDENCIES
+
+    concerns = DETAIL_RECORDS[section]
+    schema = {
+        "type": "object",
+        "properties": {name: {"type": "string", "enum": [
+            str(n) for n in range(PLANNER_CONCERN_MAX_RECORDS + 1)
+        ]} for name in concerns},
+        "required": list(concerns),
+        "additionalProperties": False,
+    }
+    prerequisites = {name: completed[name] for name in SECTION_DEPENDENCIES.get(section, ())
+                     if name in completed}
+    value = generate_fixed_template_value(router, "planner", (
+        {"role": "system", "content": (
+            "Choose record counts for one supporting design section. Use zero for a "
+            "concern that the requested gameplay does not need. Use the smallest "
+            "sufficient count for relevant concerns; never fill every concern to the "
+            "maximum. Features in other subsystems remain in the original request. "
+            "Do not invent gameplay, validation gates or resources to fill a worksheet."
+        )},
+        {"role": "user", "content": prompt + f"\n\nSection: {section}\nConcern fields:\n"
+         + json.dumps(concerns, ensure_ascii=False)
+         + "\nCanonical prerequisite design:\n"
+         + json.dumps(prerequisites, ensure_ascii=False, separators=(",", ":"))},
+    ), response_schema=schema, enable_tools=False,
+       description=f"Select relevant {section} concerns before field authoring.",
+       output_token_ceiling=structured_output_token_ceiling(schema))
+    return {name: int(value[name]) for name in concerns}
+
 @dataclass(frozen=True)
 class _PlannerPageRequest:
     section: str
@@ -402,6 +441,7 @@ class _PlannerSectionRequest:
     chunks: Sequence[Sequence[str]]
     slots: int
     budget: Any = None
+    record_counts: Mapping[str, int] | None = None
 
 
 def _generate_authored_chunk(
@@ -489,6 +529,14 @@ def _generate_authored_page_value(
             author_state_field_page,
             author_state_semantic_page,
         )
+        from .planning_section_dependencies import SECTION_DEPENDENCIES
+
+        prerequisites = {name: page.completed[name]
+                         for name in SECTION_DEPENDENCIES.get(page.section, ())
+                         if name in page.completed}
+        state_prompt = prompt + "\n\nCanonical prerequisite design for state authoring:\n" + json.dumps(
+            prerequisites, ensure_ascii=False, separators=(",", ":"),
+        )
 
         concern = str(page.concerns[0])
         concern_schema = schema["properties"][concern]
@@ -517,7 +565,7 @@ def _generate_authored_page_value(
                     )
             return author_state_field_page(
                 router,
-                prompt,
+                state_prompt,
                 concern=concern,
                 field=executable[0],
                 count=concern_schema["minItems"],
@@ -537,7 +585,7 @@ def _generate_authored_page_value(
                     )
             return author_state_semantic_page(
                 router,
-                prompt,
+                state_prompt,
                 concern=concern,
                 fields=fields,
                 count=int(concern_schema["minItems"]),
@@ -607,9 +655,14 @@ def _generate_concern_pages(
 
     authored_rows: list[dict[str, Any]] = []
     results: list[tuple[int, dict[str, Any]]] = []
-    fixed_count: int | None = None
+    fixed_count: int | None = (
+        request.record_counts.get(concern)
+        if request.record_counts is not None else None
+    )
+    if fixed_count == 0:
+        return [], [(idx, {concern: []}) for idx, _page in pages]
 
-    if request.section == "state_model":
+    if request.section == "state_model" and fixed_count is None:
         if request.budget is not None:
             request.budget.consume("structured.state_model.cardinality")
         fixed_count = _generate_concern_record_count(
@@ -665,7 +718,7 @@ def _generate_concern_pages(
                 f"AUTHORED_STRUCTURED_DESIGN: {request.section}.{concern} page "
                 f"{index} must return a record array"
             )
-        if request.section != "state_model" and i == 0:
+        if request.section != "state_model" and i == 0 and fixed_count is None:
             fixed_count = len(rows)
             if fixed_count == 0:
                 return [], [(idx, {concern: []}) for idx, _page in pages]
@@ -781,7 +834,9 @@ def _author_section(
             order,
             allow_parallel=allow_parallel,
         )
-    return merge_worksheet_section_chunks(request.section, results, set())
+    return merge_worksheet_section_chunks(
+        request.section, results, set(), page_specs=request.chunks,
+    )
 
 
 def author_structured_sections(
@@ -826,15 +881,21 @@ def author_structured_sections(
         snapshot = deepcopy(completed)
 
         def run(section: str) -> tuple[str, dict[str, Any]]:
+            if budget is not None:
+                budget.consume(f"structured.{section}.cardinality")
+            record_counts = _generate_section_record_counts(
+                router, prompt, section=section, completed=snapshot,
+            )
             request = _PlannerSectionRequest(
                 router=router,
                 prompt=prompt,
                 section=section,
                 completed=snapshot,
                 media_paths=media_paths,
-                chunks=pack_section_concerns(section),
+                chunks=pack_section_concerns(section, record_counts=record_counts),
                 slots=slots,
                 budget=budget,
+                record_counts=record_counts,
             )
             return section, _author_section(
                 request,

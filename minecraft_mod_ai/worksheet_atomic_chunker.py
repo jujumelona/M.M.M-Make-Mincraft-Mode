@@ -183,7 +183,9 @@ def _planner_page_field_schema(
     return result
 
 
-def pack_section_concerns(section: str) -> list[tuple[str, ...]]:
+def pack_section_concerns(
+    section: str, *, record_counts: Mapping[str, int] | None = None,
+) -> list[tuple[str, ...]]:
     """Page every concern deterministically with the host-owned page width."""
 
     key = _normalize_section_name(section)
@@ -213,7 +215,9 @@ def pack_section_concerns(section: str) -> list[tuple[str, ...]]:
         # Executable state fields are different: author_state_field_page emits one
         # independently bounded IR call per record, so their outer worksheet array is
         # never sent to the model and must not be used for this page-size proof.
-        proof_count = 1 if per_record_transport else PLANNER_CONCERN_MAX_RECORDS
+        proof_count = (1 if per_record_transport else
+                       record_counts[concern_name] if record_counts is not None else
+                       PLANNER_CONCERN_MAX_RECORDS)
         schema = worksheet_chunk_schema(
             key,
             chunk,
@@ -621,12 +625,13 @@ def merge_worksheet_section_chunks(
     section: str,
     chunks: Sequence[Mapping[str, Any]],
     allowed_refs: set[str],
+    *, page_specs: Sequence[Sequence[str]] | None = None,
 ) -> dict[str, Any]:
     from .planning_contract_ssot import is_schema_definition_echo
 
     key = _normalize_section_name(section)
     records = DETAIL_RECORDS[key]
-    expected_chunks = pack_section_concerns(key)
+    expected_chunks = page_specs if page_specs is not None else pack_section_concerns(key)
     if len(chunks) != len(expected_chunks):
         raise ValueError(
             f"DETAILED_PLAN_WORKSHEET: {key} expected {len(expected_chunks)} chunks, got {len(chunks)}"

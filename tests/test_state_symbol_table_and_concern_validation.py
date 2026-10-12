@@ -257,6 +257,21 @@ def test_author_structured_sections_passes_symbols_and_fails_undeclared_early():
             seen_schemas.append(schema)
             properties = schema.get("properties", {})
 
+            if "Concern fields:" in content:
+                section = content.split("Section: ", 1)[1].splitlines()[0]
+                return json.dumps({name: str(int(section != "state_model" or name in {"variables", "updates"}))
+                                   for name in properties})
+
+            if "Target: state_model.variables[" in content:
+                return json.dumps({field: variable_values[field] for field in properties})
+            if "Target: state_model.updates[" in content:
+                values = {"trigger": "trade", "owner": "player"}
+                return json.dumps({field: values[field] for field in properties})
+            if "count" in properties:
+                return json.dumps({"count": "one"})
+            if "target" in properties:
+                return json.dumps({"target": "current_phase"})
+
             if "Author state mutation for" in content or any(f in properties for f in ("mutation", "initial_state", "action")):
                 field = next(f for f in ("mutation", "initial_state", "action") if f in properties)
                 return json.dumps({field: [{"target": "current_phase", "operator": "=", "value": {"kind": "literal", "value": "1"}}]})
@@ -310,21 +325,15 @@ def test_author_structured_sections_passes_symbols_and_fails_undeclared_early():
 
     # The target decision itself rejects undeclared names before another field
     # or section can consume a malformed state assignment.
-    targets = [
-        schema["properties"][f]["items"]["properties"]["target"]
-        for schema in seen_schemas
-        for f in ("mutation", "initial_state", "action")
-        if f in schema.get("properties", {})
-        and "items" in schema["properties"][f]
-        and "target" in schema["properties"][f]["items"].get("properties", {})
-    ]
+    targets = [schema["properties"]["target"] for schema in seen_schemas
+               if "target" in schema.get("properties", {})]
     assert targets and all(s["enum"] == ["player_currency"] for s in targets)
 
-    # The canonical variable symbol table is still supplied to every later
-    # transition field page before host-side validation rejects current_phase.
+    # Mutation decisions receive the canonical variable table before the
+    # undeclared target is rejected.
     transition_prompts = [
-        prompt for prompt in seen_prompts
-        if "Active Concerns: transitions" in prompt
+        prompt for prompt, schema in zip(seen_prompts, seen_schemas)
+        if "target" in schema.get("properties", {})
     ]
     assert transition_prompts
     assert all("Canonical state symbols:" in prompt for prompt in transition_prompts)
