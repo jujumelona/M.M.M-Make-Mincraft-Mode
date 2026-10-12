@@ -43,6 +43,44 @@ def test_authored_feature_query_survives_ontology_alias_budget():
     assert "crew recruitment" in crew[0]
 
 
+def test_compound_feature_broadens_to_actual_source_nouns(monkeypatch):
+    monkeypatch.setenv("MMM_REUSE_QUERY_VARIANTS", "3")
+    monkeypatch.delenv("MMM_CURSEFORGE_API_KEY", raising=False)
+    monkeypatch.delenv("CURSEFORGE_API_KEY", raising=False)
+
+    class Client:
+        def __init__(self):
+            self.calls = []
+
+        def search(self, provider, query, **kwargs):
+            self.calls.append((provider, query))
+            if provider == "github" and query == "ship":
+                return {"candidates": [
+                    {"repository": "example/ships", "title": "Minecraft mod",
+                     "summary": "Build and sail physical ships"},
+                    {"repository": "example/ui", "title": "Minecraft Fabric mod UI widgets"},
+                ]}
+            return {"candidates": []}
+
+    client = Client()
+    result = reuse_discovery.discover_repositories_for_graph(
+        ("spaceship construction",), client,
+        capability_graph={"search_terms": [{"capability": "spaceship construction",
+                                           "terms": ["spaceship construction"]}]},
+    )
+    assert result["spaceship construction"] == ("example/ships",)
+    assert ("github", "ship") in client.calls
+    assert len(client.calls) == len(set(client.calls))
+
+
+def test_catalogue_plural_and_compound_words_rank_as_related_source():
+    source = {"title": "Minecraft mod", "summary": "Build controllable airships and ships"}
+    assert reuse_discovery._candidate_relevance(source, "spaceship construction") > 0
+    assert reuse_discovery._candidate_relevance(source, "alien combat") == 0
+    unrelated = {"title": "Minecraft Fabric mod", "summary": "UI account membership and ownership"}
+    assert reuse_discovery._candidate_relevance(unrelated, "spaceship construction") == 0
+
+
 def test_queries_are_deduplicated_after_provider_normalization(monkeypatch):
     monkeypatch.setenv("MMM_REUSE_QUERY_VARIANTS", "3")
     monkeypatch.delenv("MMM_CURSEFORGE_API_KEY", raising=False)
@@ -77,6 +115,44 @@ def test_unrelated_mod_cannot_claim_feature_coverage(monkeypatch):
 
     result = reuse_discovery.discover_repositories_for_graph(("space travel",), Client())
     assert result["space travel"] == ("example/planet",)
+
+
+def test_catalogue_membership_does_not_replace_feature_relevance(monkeypatch):
+    monkeypatch.setenv("MMM_REUSE_QUERY_VARIANTS", "1")
+    monkeypatch.delenv("MMM_CURSEFORGE_API_KEY", raising=False)
+    monkeypatch.delenv("CURSEFORGE_API_KEY", raising=False)
+
+    class Client:
+        def search(self, provider, query, **kwargs):
+            if provider != "modrinth":
+                return {"candidates": []}
+            return {"candidates": [
+                {"repository": "example/ui", "title": "Minecraft UI widgets"},
+                {"repository": "example/space", "title": "Travel to planets in space"},
+            ]}
+
+    result = reuse_discovery.discover_repositories_for_graph(("space travel",), Client())
+    assert result["space travel"] == ("example/space",)
+
+
+def test_source_project_body_recovers_relevance_missing_from_short_description(monkeypatch):
+    import httpx
+
+    def respond(request):
+        return httpx.Response(200, json={
+            "source_url": "https://github.com/example/eureka",
+            "description": "Assemble and sail your creations",
+            "body": "Build physical ships from blocks. " + "Supporting documentation. " * 400,
+        })
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as http:
+        monkeypatch.setattr(reuse_discovery, "_pooled_http_client", lambda: http)
+        values = reuse_discovery._resolve_modrinth_candidates([
+            {"title": "Eureka", "api_url": "https://api.modrinth.com/v2/project/eureka"},
+        ], with_metadata=True)
+    assert values[0][0] == "example/eureka"
+    assert reuse_discovery._candidate_relevance(values[0][2], "spaceship construction") > 0
+    assert len(values[0][2]["body"]) <= 6000
 
 
 def test_shared_query_is_ranked_separately_for_each_feature(monkeypatch):

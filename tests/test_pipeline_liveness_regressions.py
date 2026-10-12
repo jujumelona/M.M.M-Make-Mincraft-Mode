@@ -21,7 +21,8 @@ def test_resume_cache_tracks_touched_paths(tmp_path: Path) -> None:
     target = tmp_path / "src" / "Example.java"
     target.parent.mkdir(parents=True)
     target.write_text("class Example {}", encoding="utf-8")
-    receipt = {"status": "SUCCEEDED", "touched_paths": ["src/Example.java"]}
+    receipt = {"schema_version": "mmm/artifact-graph-execution-receipt-v1",
+               "status": "SUCCEEDED", "touched_paths": ["src/Example.java"]}
     # A receipt without host-attested output hashes cannot authorize a resume.
     assert not CompleteProductionOrchestrator._receipt_outputs_exist(receipt, project_root=tmp_path)
     bound = CompleteProductionOrchestrator._bind_receipt_output_hashes(

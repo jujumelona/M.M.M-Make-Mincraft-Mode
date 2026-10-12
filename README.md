@@ -55,6 +55,9 @@ analysis. Short authored feature queries precede classifier aliases; shared sear
 are scored separately for each feature, and untried ranked candidates are retained.
 Candidates are inspected and proved in small ranked batches; a usable result avoids
 downloading the rest of the frontier. Failed batches continue to later candidates.
+Compound feature queries also try underlying source nouns, with plural/compound
+matching. Every catalogue candidate needs feature evidence; bounded project bodies
+recover context missing from short descriptions without accepting unrelated mods.
 
 Each implementation task receives only its related source excerpts and original
 feature. Target-proven slices are installed; older licensed slices that need migration

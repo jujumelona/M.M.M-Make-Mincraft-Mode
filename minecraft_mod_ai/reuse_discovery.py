@@ -34,6 +34,44 @@ _HTTP_CLIENT: httpx.Client | None = None
 _GITHUB_QUERY_BOILERPLATE = frozenset(
     {"minecraft", "mod", "mods", "custom", "implementation", "source"}
 )
+_QUERY_ACTION_WORDS = frozenset({
+    "gameplay", "feature", "system", "entity", "generation", "construction",
+    "assembly", "crafting", "building", "create", "creation", "implement",
+    "travel", "exploration", "recruitment", "upgrade", "upgrades",
+})
+_COMPOUND_SHIP_NOUNS = frozenset({
+    "spaceship", "spacecraft", "airship", "starship", "warship", "battleship",
+    "dropship", "shipyard",
+})
+
+
+def _singular_source_word(word: str) -> str:
+    if len(word) > 4 and word.endswith("ies"):
+        return word[:-3] + "y"
+    if len(word) > 3 and word.endswith("s") and not word.endswith(("ss", "us", "is")):
+        return word[:-1]
+    return word
+
+
+def _source_words(text: str) -> set[str]:
+    """Match source vocabulary, including plurals and compound ship nouns."""
+    text = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", text).replace("_", " ")
+    words = set(_TOKEN.findall(text.casefold()))
+    roots = {_singular_source_word(word) for word in words}
+    return words | roots | ({"ship"} if roots & _COMPOUND_SHIP_NOUNS else set())
+
+
+def _short_source_queries(capability: str) -> tuple[str, ...]:
+    # Narrow AND queries often miss repositories whose descriptions name the
+    # underlying object rather than the whole requested mechanic. Broaden only
+    # retrieval wording; the original feature and its source proof stay intact.
+    semantic = capability.replace(".", " ").replace("_", " ").replace("-", " ")
+    words = [word for word in _TOKEN.findall(semantic.casefold())
+             if word not in _GITHUB_QUERY_BOILERPLATE | _QUERY_ACTION_WORDS]
+    if len(_TOKEN.findall(semantic)) < 2 or not words:
+        return ()
+    noun = _singular_source_word(words[0])
+    return (noun, "ship") if noun in _COMPOUND_SHIP_NOUNS else (noun,)
 
 
 @dataclass
@@ -234,7 +272,13 @@ def _query_variants(capability: str, terms: Sequence[str]) -> tuple[str, ...]:
             if len(_TOKEN.findall(query)) <= 8:
                 _append_query(values, seen, query)
 
-    for query in _ontology_search_queries(capability):
+    aliases = _ontology_search_queries(capability)
+    if capability in atomic_capability_definitions() and aliases:
+        _append_query(values, seen, aliases[0])
+    if values:
+        for query in _short_source_queries(capability):
+            _append_query(values, seen, query)
+    for query in aliases:
         if len(query) <= 90:
             _append_query(values, seen, query)
 
@@ -348,15 +392,14 @@ def _candidate_relevance(candidate: Mapping[str, Any], capability: str) -> float
         "fabric", "forge", "neoforge", "quilt", "system", "feature", "generation",
         "the", "and", "for", "with", "a", "an", "to", "of",
     }
-    terms = {word for word in _TOKEN.findall(capability.casefold()) if word not in stop}
+    terms = _source_words(capability) - stop
     if capability in atomic_capability_definitions():
         terms.update(word for query in _ontology_search_queries(capability)
-                     for word in _TOKEN.findall(query.casefold()) if word not in stop)
+                     for word in _source_words(query) if word not in stop)
     text = " ".join(str(candidate.get(key) or "") for key in (
-        "title", "summary", "description", "repository", "source_url", "topics",
+        "title", "summary", "description", "body", "repository", "source_url", "topics",
     ))
-    text = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", text).casefold()
-    matched = terms & set(_TOKEN.findall(text))
+    matched = terms & _source_words(text)
     return len(matched) / max(1, len(terms))
 
 
@@ -386,6 +429,7 @@ def _resolve_modrinth_candidates(candidates: Sequence[Mapping[str, Any]], *, wit
                 return "", 0.0, {}
             return _github_repository(value.get("source_url")), 1.0 / (1 + index), {
                 **candidates[index], "description": value.get("description", ""),
+                "body": str(value.get("body") or "")[:6000],
             }
         except Exception:
             return "", 0.0, {}
@@ -483,7 +527,7 @@ def discover_repositories_for_graph(
     def register(capability: str, provider: str, values: Sequence) -> None:
         for repository, rank, metadata in values:
             relevance = _candidate_relevance(metadata, capability)
-            if provider == "github" and relevance == 0:
+            if relevance == 0:
                 continue
             rank += 2 * relevance
             repository = _github_repository(repository)
