@@ -30,7 +30,13 @@ Java 생성 데이터에는 출력 최소 예약량을 지정하지 않는다. �
 Java 문법 리소스
 ----------------
 
-``tools/grammars/tree-sitter-java-0.23.5.json``은 MIT 라이선스의 ``tree-sitter/tree-sitter-java`` v0.23.5 원문이다. admission parser도 같은 버전으로 고정한다. ``tools/compile_java_source_grammar.py``는 nullable·unit production을 제거하고 좌재귀가 있는 SCC에 selective left-corner 변환을 적용해 재사용 가능한 native GBNF를 만든다. 리소스에는 원본 commit·blob SHA와 라이선스를 포함한다. 이는 모델 응답의 복구나 재생성이 아니다.
+``tools/grammars/tree-sitter-java-0.23.5.json``은 MIT 라이선스의 ``tree-sitter/tree-sitter-java`` v0.23.5 원문이다. admission parser도 같은 버전으로 고정한다. 리소스에는 원본 commit·blob SHA, 컴파일러 버전과 라이선스를 포함한다.
+
+``java-predictive-v2`` 변환은 원본의 ``PREC_LEFT`` 연산자를 실제 우선순위 계층과 더 강하게 결합하는 오른쪽 피연산자로 표현한다. 공통 primary atom 뒤에서 필드·인덱스·호출 suffix를 선택한다. 식별자와 필드·인덱스 결과에만 대입을 허용하며, 리터럴·괄호 본문·호출 결과에는 대입을 허용하지 않는다. 괄호 안의 표현식을 읽기 전에 이후의 ``.field`` 여부를 예측하지 않는다.
+
+nullable production을 제거할 때 순수 epsilon 심볼을 남기지 않는다. 비순환 unit 참조는 공유하고 실제 unit 순환만 합친다. 남은 좌재귀 SCC는 공통 base를 공유해 변환하며, 마지막에는 공통 심볼 접두부를 먼저 읽도록 묶는다. 원본의 모든 unit closure를 펼쳐서 같은 괄호 본문을 여러 경로로 복제하던 변환은 사용하지 않는다. lexeme과 같은 repeat/sequence/choice도 공유한다. 이는 디코더 문법의 구조 수정이며, 모델 응답의 복구나 재생성이 아니다.
+
+이전 리소스에서는 중첩된 각 괄호를 단순 표현식 또는 뒤에 필드 접근이 필요한 표현식으로 미리 선택했다. 닫는 괄호 뒤의 continuation이 서로 달라 native sampler의 동일 stack 제거로 합칠 수 없었다. 깊이 ``k``의 여는 괄호 prefix에서 ``2^k`` 이상의 서로 다른 return stack을 만드는 구조가 있었다. 리소스 파일 크기나 timeout 숫자만 바꿔서는 이 예측 경로 중복을 해결할 수 없다.
 
 구문 토큰 사이에는 공백을 넣어 키워드·식별자의 잘못된 결합을 방지한다. 문자열·문자·text block은 하나의 lexeme으로 생성해 공백 삽입으로 문자열 값을 바꾸지 않는다. 식별자는 기존 선언 계약과 같은 ASCII 문자 집합을 사용하고, 문자열 값은 Unicode 원문으로 출력한다. Java의 토큰화 전에 따옴표·개행을 만들 수 있는 Unicode escape는 생성하지 않으며, 표준 escape와 8진 escape를 사용한다. package/import/module 선언은 본문 범위에서 제외한다. 현재 비-preview Java 대상에 없는 string template도 생성하지 않는다. 이 문법은 Java 파서의 구조적 계약을 생성기에 전달하며, 타입·Minecraft/Fabric API·게임 동작의 정확성까지 보장하지 않는다.
 
@@ -56,7 +62,9 @@ Java 문법 리소스
 모델 원문 진단 로그
 ------------------
 
-실제 요청 본문, 스키마, 출력 예산, 응답 스트림 원문, 종료 사유, 서버의 usage/timings는 요청별 JSONL 파일에 기록한다. 별도의 디버그 옵션을 켤 필요가 없다. 같은 ``request_id``로 기록을 연결한다. ``context``에는 생성 중인 ``job_id``, canonical leaf, 모델 역할과 모델 ID, 데이터 페이지 ``action``이 들어간다. 화면의 ``MODEL COMPLETION TRACE:``에는 요청 시작과 종료 상태, 파일 경로만 짧게 표시한다. 원문과 토큰별 응답 조각을 화면에 출력하지 않는다.
+실제 요청 본문, 스키마, 출력 예산, 응답 스트림 원문, 종료 사유, 서버의 usage/timings는 요청별 JSONL 파일에 기록한다. 별도의 디버그 옵션을 켤 필요가 없다. 같은 ``request_id``로 기록을 연결한다. ``context``에는 생성 중인 ``job_id``, canonical leaf, 모델 역할과 모델 ID, 데이터 페이지 ``action``이 들어간다. 화면의 ``MODEL COMPLETION TRACE:``에는 요청 시작과 종료 상태, 파일 경로와 제약 형식·문법 크기·SHA를 짧게 표시한다. 토큰별 응답 조각을 화면에 출력하지 않는다.
+
+미완료·오류·scheduler snapshot에는 출력 delta 수, 마지막 출력 시점, 마지막 prompt progress와 채널별 문자 수를 표시한다. 첫 choice의 채널들에 걸쳐 총 1,024자까지만 마지막 출력을 보여준다. prompt 처리 이벤트만 있었는지, 코드 출력이 어디에서 멈췄는지를 첨부한 콘솔 로그에서도 구분할 수 있다. 전체 원문은 기존 JSONL에 유지하며 콘솔 미리보기를 만드는 동안 전체 응답을 다시 복사하지 않는다.
 
 ``response_delta``는 파서와 스트림 감시기에 전달하기 전에 파일에 기록한다. 출력에 포함된 공백, 추론 채널, 부분 도구 인자와 잘못된 JSON을 생략하거나 길이로 자르지 않는다. ``response_finished``에는 그때까지 조립한 응답 전체를 남기며, 정상 종료와 미완료, 오류를 구분한다. Artifact graph의 바깥 시간 제한이 만료되면 해당 작업의 활성 요청을 찾아 ``response_snapshot``에 부분 응답 전체와 ``ARTIFACT_GRAPH_WORK_TIMEOUT`` 사유를 파일에 기록한다.
 
@@ -69,4 +77,4 @@ Java 선언 파싱에 실패하면 ``java_declaration_failure`` 이벤트에 종
 실행 범위
 ---------
 
-사용자 요청에 따라 이번 변경의 관련 테스트는 실행하지 않았다. 실제 Colab/T4의 MiMo 추론과 해당 모드의 빌드 성공은 이 환경에서 확인하지 못했다.
+사용자 요청에 따라 관련 테스트·모델 추론·CI는 실행하지 않는다. 문법 리소스 빌드와 소스 검토는 실제 Colab/T4의 MiMo 실행 성공을 증명하지 않는다. ``1128e14`` 실행 로그는 첫 raw Java 구현 요청에서 16회의 semantic event 이후 120초 무진행으로 종료됐다. 그 로그에는 실패 요청의 출력 prefix가 없으므로, 확인한 문법 구조 결함이 해당 요청의 어느 문자에서 비용을 키웠는지는 확정할 수 없다.

@@ -1,8 +1,9 @@
 """Build native Java fragment grammars from the vendored Tree-sitter grammar.
 
 This is a resource compiler, not a model retry or a generated-code repair.
-Nullable and unit productions are removed before a selective left-corner
-transformation. Lexemes stay atomic; immediate tokens do not acquire whitespace.
+Java expression precedence and postfix states are made explicit before lowering.
+Nullable productions are removed; acyclic unit references remain shared. Lexemes
+stay atomic; immediate tokens do not acquire whitespace.
 """
 from __future__ import annotations
 
@@ -87,11 +88,163 @@ def identifier_rules():
     return root, result
 
 
+def factor_java_expressions(source):
+    """Delay postfix/assignment choices until after the common primary atom.
+
+    Tree-sitter uses precedence to resolve its expression alternatives. A native
+    GBNF recognizer has no such precedence facility: copying those alternatives
+    creates different pending return stacks before the same nested expression.
+    Keep the original Java atoms/types/statements, but represent the operator
+    levels and the category of the completed postfix explicitly.
+    """
+    rules = source["rules"]
+    def sym(name):
+        return {"type": "SYMBOL", "name": name}
+    def text(value):
+        return {"type": "STRING", "value": value}
+    def seq(*members):
+        return {"type": "SEQ", "members": list(members)}
+    def choice(*members):
+        return {"type": "CHOICE", "members": list(members)}
+    def repeat(content):
+        return {"type": "REPEAT", "content": content}
+    def optional(content):
+        return choice(content, {"type": "BLANK"})
+
+    name = choice(sym("identifier"), sym("_reserved_identifier"))
+    operators = {}
+    for binary in rules["binary_expression"]["members"]:
+        operators.setdefault(binary["value"], []).append(binary["content"]["members"][1]["content"])
+    levels = sorted(operators)
+    instance = rules["instanceof_expression"]
+    instance_tail = seq(*instance["content"]["members"][1:])
+    assignment_operator = rules["assignment_expression"]["content"]["members"][1]["content"]
+    prefix = choice(*(unary["content"]["members"][0]["content"]
+                      for unary in rules["unary_expression"]["members"]), text("++"), text("--"))
+    update = choice(text("++"), text("--"))
+    cast = seq(text("("), sym("_type"), choice(
+        seq(text(")"), sym("source_unary")),
+        seq({"type": "REPEAT1", "content": seq(text("&"), sym("_type"))}, text(")"),
+            choice(sym("primary_expression"), sym("lambda_expression"))),
+        seq(text(")"), sym("lambda_expression")),
+    ))
+
+    # Both creation forms share annotations and the entire type before choosing
+    # constructor arguments or array dimensions. Nested annotation values must
+    # not be predicted once per later creation suffix.
+    array_tail = rules["array_creation_expression"]["content"]["members"][-1]
+    object_tail = seq(sym("argument_list"), optional(sym("class_body")))
+    rules["_unqualified_object_creation_expression"] = seq(
+        text("new"), repeat(sym("_annotation")),
+        optional(seq(sym("type_arguments"), repeat(sym("_annotation")))),
+        sym("_simple_type"), object_tail,
+    )
+    rules["source_creation"] = seq(text("new"), repeat(sym("_annotation")), choice(
+        seq(sym("type_arguments"), repeat(sym("_annotation")), sym("_simple_type"), object_tail),
+        seq(sym("_simple_type"), choice(object_tail, array_tail)),
+    ))
+    type_reference = seq(text("::"), optional(sym("type_arguments")),
+                         choice(text("new"), sym("identifier")))
+    rules["source_type_primary"] = choice(
+        seq(sym("_unannotated_type"), choice(seq(text("."), text("class")), type_reference)),
+        seq(sym("annotated_type"), type_reference),
+    )
+
+    # Ordinary operands return to their caller; the initial expression operand
+    # returns to shared binary/conditional tails or, for an actual LHS, assignment.
+    # A method call is a value, a field/index is assignable, and only name/field
+    # states accept call arguments. Never accept `literal = ...` or `call() = ...`.
+    for mode, end in (("primary", {"type": "BLANK"}), ("root", sym("source_expression_end"))):
+        def tail(state):
+            return sym(f"source_{mode}_{state}_tail")
+        reference = seq(text("::"), optional(sym("type_arguments")),
+                        choice(text("new"), sym("identifier")), tail("value"))
+        selector = seq(optional(seq(sym("super"), text("."))), choice(
+                seq(name, tail("name")), seq(sym("this"), tail("field")),
+                seq(sym("type_arguments"), name, sym("argument_list"), tail("value")),
+            ))
+        field = seq(text("."), choice(selector,
+                    seq(sym("_unqualified_object_creation_expression"), tail("value"))))
+        index = seq(text("["), sym("expression"), text("]"), tail("index"))
+        for state in ("name", "field", "index", "value", "super"):
+            alternatives = [seq(text("."), selector) if state == "super" else field, reference]
+            if state != "super":
+                alternatives.extend([index, end])
+                if mode == "root":
+                    alternatives.append(seq(update, end))
+                    if state in {"name", "field", "index"}:
+                        alternatives.append(seq(assignment_operator, sym("expression")))
+            if state == "name":
+                alternatives.append(seq(sym("argument_list"), tail("value")))
+            rules[f"source_{mode}_{state}_tail"] = choice(*alternatives)
+        value_atom = choice(sym("_literal"), sym("source_type_primary"), sym("this"),
+                            sym("parenthesized_expression"), sym("source_creation"))
+        rules[f"source_{mode}_start"] = choice(
+            seq(name, tail("name")), seq(value_atom, tail("value")),
+            seq(sym("super"), tail("super")),
+        )
+    rules["primary_expression"] = sym("source_primary_start")
+    rules["source_unary"] = choice(
+        seq(prefix, sym("source_unary")), cast,
+        seq(sym("primary_expression"), optional(update)), sym("switch_expression"),
+    )
+
+    for index in reversed(range(len(levels))):
+        level = levels[index]
+        tighter = sym(f"source_binary_{levels[index + 1]}") if index + 1 < len(levels) else sym("source_unary")
+        tails = [seq(choice(*operators[level]), tighter)]
+        if level == instance["value"]:
+            tails.append(instance_tail)
+        rules[f"source_binary_tail_{level}"] = repeat(choice(*tails))
+        rules[f"source_binary_{level}"] = seq(tighter, sym(f"source_binary_tail_{level}"))
+    rules["source_expression_end"] = seq(
+        *(sym(f"source_binary_tail_{level}") for level in reversed(levels)),
+        optional(seq(text("?"), sym("expression"), text(":"), sym("expression"))),
+    )
+    rules["expression"] = choice(
+        sym("lambda_expression"), sym("source_root_start"),
+        seq(prefix, sym("source_unary"), sym("source_expression_end")),
+        seq(cast, sym("source_expression_end")),
+        seq(sym("switch_expression"), sym("source_expression_end")),
+    )
+
+
+def cyclic_groups(edges):
+    """Return only strongly connected left/unit-corner groups with a cycle."""
+    index_of, low, active, stack, groups = {}, {}, set(), [], []
+    def visit(name):
+        index_of[name] = low[name] = len(index_of)
+        stack.append(name)
+        active.add(name)
+        for child in sorted(edges[name]):
+            if child not in index_of:
+                visit(child)
+                low[name] = min(low[name], low[child])
+            elif child in active:
+                low[name] = min(low[name], index_of[child])
+        if low[name] == index_of[name]:
+            group = set()
+            while True:
+                child = stack.pop()
+                active.remove(child)
+                group.add(child)
+                if child == name:
+                    break
+            if len(group) > 1 or name in edges[name]:
+                groups.append(group)
+    for name in sorted(edges):
+        if name not in index_of:
+            visit(name)
+    return groups
+
+
 class Compiler:
     def __init__(self, source):
         self.source = source
         self.rules = {}
         self.tokens = {}
+        self.token_ids = {}
+        self.node_ids = {}
         self.symbols = {name: "g" + str(index) for index, name in enumerate(source["rules"])}
         self.counter = 0
         self.id_root, self.lexical = identifier_rules()
@@ -122,10 +275,14 @@ class Compiler:
         raise ValueError(f"unsupported Java token rule: {kind}")
 
     def token(self, expression, *, immediate=False):
-        name = "t" + str(len(self.tokens))
         # Required separation prevents a keyword and following identifier from
         # merging into another identifier. Inside literals, the token is atomic.
-        self.tokens[name] = expression if immediate else '" " ' + expression
+        expression = expression if immediate else '" " ' + expression
+        if expression in self.token_ids:
+            return self.token_ids[expression]
+        name = "t" + str(len(self.tokens))
+        self.tokens[name] = expression
+        self.token_ids[expression] = name
         return name
 
     def lower(self, node):
@@ -136,18 +293,29 @@ class Compiler:
             return self.lower(node["content"])
         if kind in {"STRING", "PATTERN", "TOKEN", "IMMEDIATE_TOKEN"}:
             return self.token(self.regex_node(node), immediate=kind == "IMMEDIATE_TOKEN")
-        name = self.helper()
         if kind == "BLANK":
-            self.rules[name] = {()}
+            productions = {()}
         elif kind == "SEQ":
-            self.rules[name] = {tuple(self.lower(child) for child in node["members"])}
+            productions = {tuple(self.lower(child) for child in node["members"])}
         elif kind == "CHOICE":
-            self.rules[name] = {(self.lower(child),) for child in node["members"]}
+            productions = {(self.lower(child),) for child in node["members"]}
         elif kind in {"REPEAT", "REPEAT1"}:
             child = self.lower(node["content"])
+            key = (kind, child)
+            if key in self.node_ids:
+                return self.node_ids[key]
+            name = self.helper()
             self.rules[name] = {(), (child, name)} if kind == "REPEAT" else {(child,), (child, name)}
+            self.node_ids[key] = name
+            return name
         else:
             raise ValueError(f"unsupported Java production: {kind}")
+        key = (kind, tuple(sorted(productions)))
+        if key in self.node_ids:
+            return self.node_ids[key]
+        name = self.helper()
+        self.rules[name] = productions
+        self.node_ids[key] = name
         return name
 
     def load(self):
@@ -191,66 +359,60 @@ class Compiler:
                 break
             nullable.update(more)
         nullable_entries = set(entries) & nullable
+        nonempty = set(self.tokens)
+        while True:
+            more = {name for name, productions in self.rules.items()
+                    if any(production and all(symbol in nonempty or symbol in nullable for symbol in production)
+                           and any(symbol in nonempty for symbol in production) for production in productions)} - nonempty
+            if not more:
+                break
+            nonempty.update(more)
+        empty_only = nullable - nonempty
         for name, productions in self.rules.items():
             expanded = set()
             for production in productions:
-                options = [(symbol, None) if symbol in nullable else (symbol,) for symbol in production]
+                options = [(None,) if symbol in empty_only else
+                           (symbol, None) if symbol in nullable else (symbol,) for symbol in production]
                 for selection in itertools.product(*options):
                     value = tuple(symbol for symbol in selection if symbol is not None)
                     if value:
                         expanded.add(value)
             self.rules[name] = expanded
-        for name in list(self.rules):
-            closure = {name}
-            pending = [name]
-            while pending:
-                for production in self.rules[pending.pop()]:
-                    if len(production) == 1 and production[0] in self.rules and production[0] not in closure:
-                        closure.add(production[0])
-                        pending.append(production[0])
-            self.rules[name] = {production for child in closure for production in self.rules[child]
-                                if not (len(production) == 1 and production[0] in self.rules)}
-        # Selective left-corner transformation keeps shared Java productions
-        # factored instead of exponentially substituting all expression paths.
+        # Only collapse actual unit cycles. Expanding every acyclic unit closure
+        # copies the same nested atom into unrelated prediction paths.
+        units = {name: {p[0] for p in productions if len(p) == 1 and p[0] in self.rules}
+                 for name, productions in self.rules.items()}
+        replacements = {}
+        for group in cyclic_groups(units):
+            target = min(group)
+            replacements.update({name: target for name in group})
+        merged = {}
+        for name, productions in self.rules.items():
+            target = replacements.get(name, name)
+            changed = {tuple(replacements.get(symbol, symbol) for symbol in p) for p in productions}
+            merged.setdefault(target, set()).update(p for p in changed if p != (target,))
+        for name, target in replacements.items():
+            if name != target:
+                merged[name] = {(target,)}
+        self.rules = merged
+        # Remaining left recursion is transformed without inlining shared units.
         edges = {name: {production[0] for production in productions if production and production[0] in self.rules}
                  for name, productions in self.rules.items()}
-        index_of, low, active, stack, groups = {}, {}, set(), [], []
-        def visit(name):
-            index_of[name] = low[name] = len(index_of)
-            stack.append(name)
-            active.add(name)
-            for child in sorted(edges[name]):
-                if child not in index_of:
-                    visit(child)
-                    low[name] = min(low[name], low[child])
-                elif child in active:
-                    low[name] = min(low[name], index_of[child])
-            if low[name] == index_of[name]:
-                group = set()
-                while True:
-                    child = stack.pop()
-                    active.remove(child)
-                    group.add(child)
-                    if child == name:
-                        break
-                if len(group) > 1 or name in edges[name]:
-                    groups.append(group)
-        for name in edges:
-            if name not in index_of:
-                visit(name)
-        for group in groups:
+        for group in cyclic_groups(edges):
             members = sorted(group)
             originals = {name: self.rules[name] for name in members}
             bases = {}
             for name in members:
-                productions = {p for p in originals[name] if p and p[0] not in group}
-                if productions:
-                    base = self.helper()
-                    bases[name] = base
-                    self.rules[base] = productions
+                for production in originals[name]:
+                    if production and production[0] not in group:
+                        bases.setdefault(production, set()).add(name)
             continuations = {(target, corner): self.helper() for target in members for corner in members}
             for target in members:
-                self.rules[target] = {(base, continuations[target, corner]) for corner, base in bases.items()}
+                self.rules[target] = set()
+                for production, corners in sorted(bases.items()):
+                    tail = self.helper()
+                    self.rules[tail] = {(continuations[target, corner],) for corner in corners}
+                    self.rules[target].add(production + (tail,))
                 for corner in members:
                     self.rules[continuations[target, corner]] = ({()} if target == corner else set()) | {
                         production[1:] + (continuations[target, owner],)
@@ -259,7 +421,35 @@ class Compiler:
                     }
         for name in nullable_entries:
             self.rules[name].add(())
+        self.factor_prefixes()
         self.reachable(entries)
+
+    def factor_prefixes(self):
+        """Consume a shared symbol before predicting its different suffixes."""
+        shared = {}
+        for name, productions in self.rules.items():
+            shared.setdefault(frozenset(productions), name)
+        pending = list(self.rules)
+        while pending:
+            name = pending.pop()
+            groups = {}
+            for production in self.rules[name]:
+                if production:
+                    groups.setdefault(production[0], set()).add(production[1:])
+            factored = {()} if () in self.rules[name] else set()
+            for first, suffixes in sorted(groups.items()):
+                if len(suffixes) == 1:
+                    factored.add((first,) + next(iter(suffixes)))
+                else:
+                    key = frozenset(suffixes)
+                    tail = shared.get(key)
+                    if tail is None:
+                        tail = self.helper()
+                        shared[key] = tail
+                        self.rules[tail] = suffixes
+                        pending.append(tail)
+                    factored.add((first, tail))
+            self.rules[name] = factored
 
     def emit(self):
         lines = []
@@ -291,6 +481,7 @@ def build():
         if item.get("name") not in {"package_declaration", "import_declaration", "module_declaration"}]
     for name, original in (("source_method_content", "block"), ("source_constructor_content", "constructor_body")):
         source["rules"][name] = {"type": "SEQ", "members": source["rules"][original]["members"][1:-1]}
+    factor_java_expressions(source)
     compiler = Compiler(source)
     compiler.load()
     entries = {"field": compiler.symbols["_variable_initializer"],
@@ -301,6 +492,7 @@ def build():
     compiler.normalize(entries.values())
     grammar = compiler.emit()
     payload = {"source": "tree-sitter/tree-sitter-java@0.23.5",
+               "compiler": "java-predictive-v2",
                "source_blob_sha": "2b2f18d9e063c8c8161b4335f49cd04d0b39a9d7",
                "source_commit_sha": "94703d5a6bed02b98e438d7cad1136c01a60ba2c",
                "license": (SOURCE.with_name("tree-sitter-java-LICENSE")).read_text(encoding="utf-8"),

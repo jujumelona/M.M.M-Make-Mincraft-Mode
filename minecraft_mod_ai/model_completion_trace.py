@@ -1,6 +1,7 @@
 """Record exact model requests and streamed output before consumers can discard it."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -57,6 +58,17 @@ class CompletionTrace:
         self._choices: dict[int, dict[str, Any]] = {}
         self._usage: Any = None
         self._timings: Any = None
+        self._output_events = 0
+        self._last_output_elapsed: float | None = None
+        self._prompt_progress: Any = None
+        grammar = payload.get("grammar")
+        self._constraint = (
+            {"format": "llguidance" if grammar.lstrip().startswith("%llguidance") else "gbnf",
+             "grammar_chars": len(grammar), "grammar_rules": len(grammar.splitlines()),
+             "grammar_sha256": hashlib.sha256(grammar.encode("utf-8")).hexdigest()}
+            if isinstance(grammar, str) else
+            {"format": "json-schema"} if payload.get("json_schema") else {"format": "none"}
+        )
         self._http_status: int | None = None
         self._journal: Any = None
         self._recording_error: str | None = None
@@ -109,6 +121,7 @@ class CompletionTrace:
                 if event == "request":
                     payload = fields.get("payload", {})
                     summary["max_tokens"] = payload.get("max_tokens")
+                    summary["constraint"] = self._constraint
                 if "status" in fields:
                     summary["status"] = fields["status"]
                 if "reason" in fields:
@@ -117,6 +130,10 @@ class CompletionTrace:
                 if isinstance(error, Mapping):
                     summary["error_type"] = error.get("type")
                     summary["http_status"] = error.get("status_code")
+                if event == "response_snapshot" or (event == "response_finished" and
+                    (fields.get("partial") or fields.get("status") == "error")):
+                    summary["partial_output"] = self._partial_summary()
+                    summary["constraint"] = self._constraint
                 if self._recording_error:
                     summary["recording_error"] = self._recording_error
                 try:
@@ -126,6 +143,8 @@ class CompletionTrace:
                     pass
 
     def _capture(self, chunk: Mapping[str, Any]) -> None:
+        if isinstance(chunk.get("prompt_progress"), Mapping):
+            self._prompt_progress = dict(chunk["prompt_progress"])
         if "usage" in chunk:
             self._usage = chunk["usage"]
         if "timings" in chunk:
@@ -133,6 +152,7 @@ class CompletionTrace:
         choices = chunk.get("choices")
         if not isinstance(choices, list):
             return
+        output_progressed = False
         for position, choice in enumerate(choices):
             if not isinstance(choice, Mapping):
                 continue
@@ -151,12 +171,47 @@ class CompletionTrace:
             for channel in ("content", "reasoning_content", "reasoning"):
                 value = delta.get(channel)
                 if isinstance(value, str):
+                    output_progressed = output_progressed or bool(value)
                     pieces = output["channels"].setdefault(channel, [])
                     if is_message:
                         pieces.clear()
                     pieces.append(value)
             if "tool_calls" in delta:
                 output["tool_call_deltas"].append(delta["tool_calls"])
+                output_progressed = output_progressed or bool(delta["tool_calls"])
+        if output_progressed:
+            self._output_events += 1
+            self._last_output_elapsed = round(max(0.0, time.monotonic() - self.started_at), 3)
+
+    def _partial_summary(self) -> dict[str, Any]:
+        """Bounded failure evidence; the complete response stays in the journal."""
+        channels = {}
+        preview_remaining = 1024
+        for _, output in sorted(self._choices.items()):
+            for channel, pieces in output["channels"].items():
+                characters = sum(map(len, pieces))
+                # Assemble only the tail needed by the console, not a second
+                # copy of a potentially large unfinished response.
+                suffix = []
+                remaining = preview_remaining
+                for piece in reversed(pieces):
+                    if remaining <= 0:
+                        break
+                    suffix.append(piece[-remaining:])
+                    remaining -= len(suffix[-1])
+                tail = "".join(reversed(suffix))
+                channels[channel] = {"characters": characters, "tail": tail}
+                preview_remaining -= len(tail)
+            break
+        return {"output_delta_events": self._output_events,
+                "last_output_elapsed_seconds": self._last_output_elapsed,
+                "last_prompt_progress": (
+                    {key: value for key, value in self._prompt_progress.items()
+                     if key in {"processed", "n_processed", "total", "n_total", "time_ms", "elapsed_ms"}
+                     and isinstance(value, (int, float, bool))}
+                    if isinstance(self._prompt_progress, Mapping) else None
+                ),
+                "channels": channels}
 
     def observe_line(self, raw_line: Any) -> None:
         line = raw_line.decode("utf-8", errors="replace") if isinstance(raw_line, bytes) else str(raw_line)
