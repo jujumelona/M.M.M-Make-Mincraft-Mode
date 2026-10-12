@@ -45,6 +45,24 @@ _ROLE_TOOL_STAGE = {
 _NATIVE_TOOL_ADAPTERS = frozenset({"llama_cpp", "vllm", "openai_compatible"})
 _DEFAULT_STRUCTURED_TOOL_OUTPUT_TOKEN_CEILING = 2048
 _DEFAULT_STRUCTURED_JSON_OUTPUT_TOKEN_CEILING = 4096
+
+def _native_tool_template_contains_source(schema: Any) -> bool:
+    """Identify source-code payloads without changing short structured tool budgets."""
+
+    from .execution_contract_policy import SCHEMA_STRING_CLASS_KEY, STRING_CLASS_SOURCE
+
+    if isinstance(schema, Mapping):
+        if schema.get(SCHEMA_STRING_CLASS_KEY) == STRING_CLASS_SOURCE:
+            return True
+        return any(
+            _native_tool_template_contains_source(child)
+            for child in schema.values()
+            if isinstance(child, (Mapping, list, tuple))
+        )
+    if isinstance(schema, (list, tuple)):
+        return any(_native_tool_template_contains_source(child) for child in schema)
+    return False
+
 _DEFAULT_AGENT_TOOL_ROUND_LIMIT = 64
 _REPOSITORY_POLICY_ROLES = frozenset({"coder", "coder_safe"})
 _REPOSITORY_MAIN_ONLY_SYSTEM_CONTEXT = (
@@ -475,7 +493,11 @@ class ModelRouter:
                 "mmm_output_token_ceiling": (
                     max(1, int(output_token_ceiling))
                     if output_token_ceiling is not None
-                    else _DEFAULT_STRUCTURED_TOOL_OUTPUT_TOKEN_CEILING
+                    else (
+                        config.max_new_tokens
+                        if _native_tool_template_contains_source(parameters)
+                        else _DEFAULT_STRUCTURED_TOOL_OUTPUT_TOKEN_CEILING
+                    )
                 ),
                 **({"mmm_force_non_thinking": True} if force_non_thinking else {}),
             },
