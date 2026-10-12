@@ -61,6 +61,21 @@ class GenerationOutputBudgetError(RuntimeError):
 
 
 
+def assert_request_output_capacity(request: Any, payload: Mapping[str, Any]) -> None:
+    """Do not silently reduce a schema-sized action at the final wire boundary."""
+    metadata = getattr(request, "metadata", {})
+    if not isinstance(metadata, Mapping):
+        return
+    required = int(metadata.get("mmm_output_token_floor") or 0)
+    available = int(payload.get("max_tokens") or 0)
+    if required > available:
+        raise GenerationOutputBudgetError(
+            "REQUEST_OUTPUT_CAPACITY_INSUFFICIENT: "
+            f"required={required} available={available}; "
+            "the declared complete action cannot fit the configured runtime"
+        )
+
+
 def _positive_override(name: str) -> int | None:
     raw = os.environ.get(name, "").strip()
     if not raw:

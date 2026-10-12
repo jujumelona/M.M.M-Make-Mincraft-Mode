@@ -443,3 +443,25 @@ def test_generate_turn_keeps_detailed_schema_host_side(monkeypatch) -> None:
     assert payload["response_format"] == {"type": "json_object"}
     assert payload["json_schema"] == schema
     assert "grammar" not in payload
+
+
+def test_complete_action_floor_is_checked_after_live_context_clamp(monkeypatch):
+    from minecraft_mod_ai.generation_output_budget import GenerationOutputBudgetError
+    from minecraft_mod_ai.model_adapters import llama_cpp_adapter
+
+    def clamped(_url, payload, **kwargs):
+        return {**payload, 'max_tokens': 2304}
+
+    monkeypatch.setattr(llama_exact_context, 'capacity_safe_payload', clamped)
+    sent = []
+    monkeypatch.setattr(llama_cpp_adapter, '_completion_message',
+                        lambda *args: sent.append(args))
+    request = GenerationRequest(
+        messages=({'role': 'user', 'content': 'Write a complete member'},),
+        tools=(_tool(),), tool_choice='required',
+        metadata={'mmm_output_token_floor': 15899,
+                  'mmm_output_token_ceiling': 15899},
+    )
+    with pytest.raises(GenerationOutputBudgetError, match='available=2304'):
+        llama_cpp_adapter._completion_exchange(_adapter(), 'http://127.0.0.1:8910/v1', request)
+    assert sent == []

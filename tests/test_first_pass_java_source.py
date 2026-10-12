@@ -29,7 +29,7 @@ class FakeNativeRouter:
 
     def generate_tool_decision(self, role, messages, *, tool_name, parameters,
                                description="", output_token_ceiling=None,
-                               force_non_thinking=False):
+                               force_non_thinking=False, output_token_floor=None):
         self.calls.append((tool_name, output_token_ceiling, parameters))
         if self.fail_on == tool_name:
             raise RuntimeError("synthetic model failure")
@@ -50,7 +50,18 @@ class FakeNativeRouter:
                 "member": "public boolean isReady() { return ready; }"
             },
         }
+        if tool_name.startswith("submit_java_construction_plan_"):
+            plan = self.generate_plan(answers["submit_java_construction_plan"])
+            suffix = tool_name[len("submit_java_construction_plan_"):]
+            if suffix == "imports_count":
+                return {"count": len(plan["imports"])}
+            if suffix.startswith("imports_"):
+                return {"value": plan["imports"][int(suffix.split("_")[-1]) - 1]}
+            return {suffix: plan[suffix]}
         return answers[tool_name]
+
+    def generate_plan(self, plan):
+        return plan
 
 
 def test_first_pass_builds_complete_java_from_small_member_calls():
@@ -63,11 +74,14 @@ def test_first_pass_builds_complete_java_from_small_member_calls():
     assert result.count("public boolean isReady()") == 1
     assert result.rstrip().endswith("}")
     assert [name for name, _, _ in router.calls] == [
-        "submit_java_construction_plan",
+        "submit_java_construction_plan_imports_count",
+        "submit_java_construction_plan_superclass",
+        "submit_java_construction_plan_interfaces",
+        "submit_java_construction_plan_units",
         "submit_java_member_1",
         "submit_java_member_2",
     ]
-    assert [budget for _, budget, _ in router.calls] == [1536, 2304, 2304]
+    assert all(0 < budget <= 16384 for _, budget, _ in router.calls)
 
 
 def test_failed_member_is_not_retried_or_regenerated():
@@ -75,7 +89,10 @@ def test_failed_member_is_not_retried_or_regenerated():
     with pytest.raises(RuntimeError, match="synthetic model failure"):
         compose_first_pass_java(router, SPEC, [], source_context=())
     assert [name for name, _, _ in router.calls] == [
-        "submit_java_construction_plan", "submit_java_member_1"
+        "submit_java_construction_plan_imports_count",
+        "submit_java_construction_plan_superclass",
+        "submit_java_construction_plan_interfaces",
+        "submit_java_construction_plan_units", "submit_java_member_1"
     ]
 
 
@@ -97,18 +114,15 @@ def test_host_writes_class_identity_without_requesting_model_declaration():
     result = compose_first_pass_java(router, SPEC, [])
     assert "package example.client;" in result
     assert "public class Gate {" in result
-    parameters = router.calls[0][2]
-    assert "declaration" not in parameters["properties"]
-    assert all(name in parameters["properties"] for name in ("superclass", "interfaces"))
+    properties = {key for _, _, schema in router.calls[:4] for key in schema["properties"]}
+    assert "declaration" not in properties
+    assert {"superclass", "interfaces"} <= properties
 
 
 def test_superclass_and_interfaces_are_composed_by_host():
     class InterfaceRouter(FakeNativeRouter):
-        def generate_tool_decision(self, *args, **kwargs):
-            result = super().generate_tool_decision(*args, **kwargs)
-            if kwargs["tool_name"] == "submit_java_construction_plan":
-                return {**result, "superclass": "BaseScreen", "interfaces": "Runnable, AutoCloseable"}
-            return result
+        def generate_plan(self, plan):
+            return {**plan, "superclass": "BaseScreen", "interfaces": "Runnable, AutoCloseable"}
 
     result = compose_first_pass_java(InterfaceRouter(), SPEC, [])
     assert "public class Gate extends BaseScreen implements Runnable, AutoCloseable {" in result
@@ -116,16 +130,13 @@ def test_superclass_and_interfaces_are_composed_by_host():
 
 def test_multiline_type_clause_rejected_without_member_retry():
     class BadTypeRouter(FakeNativeRouter):
-        def generate_tool_decision(self, *args, **kwargs):
-            result = super().generate_tool_decision(*args, **kwargs)
-            if kwargs["tool_name"] == "submit_java_construction_plan":
-                return {**result, "superclass": "BaseScreen" + chr(10) + "public class Wrong"}
-            return result
+        def generate_plan(self, plan):
+            return {**plan, "superclass": "BaseScreen" + chr(10) + "public class Wrong"}
 
     router = BadTypeRouter()
     with pytest.raises(ValueError, match="JAVA_FIRST_PASS_TYPE_REFERENCE_INVALID"):
         compose_first_pass_java(router, SPEC, [])
-    assert len(router.calls) == 1
+    assert len(router.calls) == 4
 
 
 def test_host_assembles_imports_from_references_and_existing_java_syntax():
@@ -152,14 +163,8 @@ def test_host_assembles_imports_from_references_and_existing_java_syntax():
 
 def test_model_outputs_dependency_references_not_java_import_statements():
     class ImportRouter(FakeNativeRouter):
-        def generate_tool_decision(self, *args, **kwargs):
-            result = super().generate_tool_decision(*args, **kwargs)
-            if kwargs["tool_name"] == "submit_java_construction_plan":
-                return {
-                    **result,
-                    "imports": ["java.util.List", "java.util.Map"],
-                }
-            return result
+        def generate_plan(self, plan):
+            return {**plan, "imports": ["java.util.List", "java.util.Map"]}
 
     router = ImportRouter()
     java = compose_first_pass_java(router, SPEC, [])
@@ -167,25 +172,30 @@ def test_model_outputs_dependency_references_not_java_import_statements():
         "package example.client;\n\nimport java.util.List;\n"
         "import java.util.Map;\n\npublic class Gate {"
     )
-    parameters = router.calls[0][2]
-    assert parameters["properties"]["imports"]["type"] == "array"
-    assert len(router.calls) == 3
+    assert [call[0] for call in router.calls[:3]] == [
+        "submit_java_construction_plan_imports_count",
+        "submit_java_construction_plan_imports_1",
+        "submit_java_construction_plan_imports_2",
+    ]
+    assert len(router.calls) == 8
 
 
 def test_invalid_import_suggestion_does_not_inject_code_or_trigger_model_retry():
     class NonImportRouter(FakeNativeRouter):
-        def generate_tool_decision(self, *args, **kwargs):
-            result = super().generate_tool_decision(*args, **kwargs)
-            if kwargs["tool_name"] == "submit_java_construction_plan":
-                return {**result, "imports": ["public class Injected {}", "java.util.List"]}
-            return result
+        def generate_plan(self, plan):
+            return {**plan, "imports": ["public class Injected {}", "java.util.List"]}
 
     router = NonImportRouter()
     result = compose_first_pass_java(router, SPEC, [])
     assert "public class Injected" not in result
     assert "import java.util.List;" in result
     assert [name for name, *_ in router.calls] == [
-        "submit_java_construction_plan",
+        "submit_java_construction_plan_imports_count",
+        "submit_java_construction_plan_imports_1",
+        "submit_java_construction_plan_imports_2",
+        "submit_java_construction_plan_superclass",
+        "submit_java_construction_plan_interfaces",
+        "submit_java_construction_plan_units",
         "submit_java_member_1",
         "submit_java_member_2",
     ]

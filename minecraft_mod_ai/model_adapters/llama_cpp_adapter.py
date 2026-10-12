@@ -307,6 +307,10 @@ def _completion_exchange(
             structured_output=prepared.response_format == "json",
         )
 
+    from ..generation_output_budget import assert_request_output_capacity
+
+    assert_request_output_capacity(prepared, payload)
+
     from ..llama_lora_runtime import apply_request_lora
 
     apply_request_lora(payload, server_url, adapter.config, prepared)

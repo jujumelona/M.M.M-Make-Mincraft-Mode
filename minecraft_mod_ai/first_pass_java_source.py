@@ -17,7 +17,13 @@ from .fixed_template_generation import (
     _model_transport_schema,
     _validate_native_arguments,
 )
-from .model_output_atomicity_contract import assert_atomic_model_schema
+from .model_output_atomicity_contract import (
+    assert_atomic_model_schema,
+    structured_output_token_ceiling,
+)
+
+_JAVA_ACTION_CAPACITY = 16_384
+_NATIVE_CALL_ENVELOPE_TOKENS = 256
 
 
 _PLAN_SCHEMA: dict[str, Any] = {
@@ -96,17 +102,66 @@ def _one_structured_action(
     *,
     name: str,
     schema: Mapping[str, Any],
-    output_tokens: int,
 ) -> Mapping[str, Any]:
     """One attempt for one small action. No schema-repair or source regeneration."""
     assert_atomic_model_schema(schema, surface=f"first-pass Java {name}")
+    parameters = _model_transport_schema(dict(schema))
+    try:
+        output_tokens = structured_output_token_ceiling(
+            parameters,
+            absolute_ceiling=_JAVA_ACTION_CAPACITY - _NATIVE_CALL_ENVELOPE_TOKENS,
+        ) + _NATIVE_CALL_ENVELOPE_TOKENS
+    except ValueError:
+        # Page the declared structure BEFORE inference. Never truncate a completed
+        # value or replay a failed action. Later pages see the completed prefix.
+        properties = schema.get("properties")
+        if not isinstance(properties, Mapping) or len(properties) != 1:
+            if not isinstance(properties, Mapping) or not properties:
+                raise
+            merged: dict[str, Any] = {}
+            for field, child in properties.items():
+                page = {"type": "object", "properties": {field: child},
+                        "required": [field], "additionalProperties": False}
+                merged.update(_one_structured_action(
+                    router, [*messages, {"role": "user", "content": json.dumps(
+                        {"current_field": field, "completed_plan_fields": merged},
+                        ensure_ascii=False)}], name=f"{name}_{field}", schema=page,
+                ))
+            return _validate_native_arguments(merged, schema)
+        field, child = next(iter(properties.items()))
+        if child.get("type") != "array":
+            raise
+        maximum = int(child["maxItems"])
+        minimum = int(child.get("minItems", 0))
+        count_schema = {"type": "object", "properties": {"count": {
+            "type": "integer", "enum": list(range(minimum, maximum + 1))}},
+            "required": ["count"], "additionalProperties": False}
+        count = _one_structured_action(
+            router, [*messages, {"role": "user", "content":
+                f"Choose the number of necessary {field} entries; include all requirements."}],
+            name=f"{name}_count", schema=count_schema,
+        )["count"]
+        values: list[Any] = []
+        for index in range(count):
+            page_schema = {"type": "object", "properties": {"value": child["items"]},
+                           "required": ["value"], "additionalProperties": False}
+            item = _one_structured_action(
+                router, [*messages, {"role": "user", "content": json.dumps({
+                    "field": field, "index": index, "count": count,
+                    "previous_entries": values,
+                    "instruction": "Return the next necessary entry without duplicates."},
+                    ensure_ascii=False)}], name=f"{name}_{index + 1}", schema=page_schema,
+            )
+            values.append(item["value"])
+        return _validate_native_arguments({field: values}, schema)
     response = router.generate_tool_decision(
         "coder",
         messages,
         tool_name=name,
-        parameters=_model_transport_schema(dict(schema)),
+        parameters=parameters,
         description="Return the exact requested Java construction page, once.",
         output_token_ceiling=output_tokens,
+        output_token_floor=output_tokens,
         force_non_thinking=True,
     )
     if not isinstance(response, Mapping):
@@ -201,7 +256,6 @@ def compose_first_pass_java(
         plan_messages,
         name="submit_java_construction_plan",
         schema=_PLAN_SCHEMA,
-        output_tokens=1536,
     )
 
     imports = _assemble_java_imports(plan["imports"])
@@ -250,7 +304,6 @@ def compose_first_pass_java(
             member_messages,
             name=f"submit_java_member_{index}",
             schema=_MEMBER_SCHEMA,
-            output_tokens=2304,
         )
         finished.append(str(result["member"]).strip())
 

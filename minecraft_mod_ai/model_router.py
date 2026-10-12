@@ -346,11 +346,13 @@ class ModelRouter:
         parameters: Mapping[str, Any],
         description: str = "",
         output_token_ceiling: int | None = None,
+        output_token_floor: int | None = None,
         force_non_thinking: bool = False,
     ) -> dict[str, Any]:
         return self._generate_tool_decision_impl(
             role, messages, tool_name=tool_name, parameters=parameters, description=description,
             output_token_ceiling=output_token_ceiling,
+            **({"output_token_floor": output_token_floor} if output_token_floor is not None else {}),
             **({"force_non_thinking": True} if force_non_thinking else {}),
         )
 
@@ -363,6 +365,7 @@ class ModelRouter:
         parameters: Mapping[str, Any],
         description: str = "",
         output_token_ceiling: int | None = None,
+        output_token_floor: int | None = None,
     ) -> tuple[dict[str, Any], ...]:
         """Return one or more calls from one native function-calling turn."""
         return self._generate_tool_decisions_impl(
@@ -372,6 +375,7 @@ class ModelRouter:
             parameters=parameters,
             description=description,
             output_token_ceiling=output_token_ceiling,
+            **({"output_token_floor": output_token_floor} if output_token_floor is not None else {}),
             allow_multiple=True,
         )
 
@@ -390,6 +394,7 @@ class ModelRouter:
         parameters: Mapping[str, Any],
         description: str = "",
         output_token_ceiling: int | None = None,
+        output_token_floor: int | None = None,
         force_non_thinking: bool = False,
     ) -> dict[str, Any]:
         values = self._generate_tool_decisions_impl(
@@ -399,6 +404,7 @@ class ModelRouter:
             parameters=parameters,
             description=description,
             output_token_ceiling=output_token_ceiling,
+            **({"output_token_floor": output_token_floor} if output_token_floor is not None else {}),
             allow_multiple=False,
             **({"force_non_thinking": True} if force_non_thinking else {}),
         )
@@ -413,6 +419,7 @@ class ModelRouter:
         parameters: Mapping[str, Any],
         description: str = "",
         output_token_ceiling: int | None = None,
+        output_token_floor: int | None = None,
         allow_multiple: bool,
         force_non_thinking: bool = False,
     ) -> tuple[dict[str, Any], ...]:
@@ -489,6 +496,7 @@ class ModelRouter:
             parallel_tool_calls=allow_multiple,
             metadata={
                 "tool_stage": _ROLE_TOOL_STAGE.get(role, ""),
+                **({"mmm_output_token_floor": int(output_token_floor)} if output_token_floor is not None else {}),
                 "role": role,
                 "mmm_output_token_ceiling": (
                     max(1, int(output_token_ceiling))

@@ -168,3 +168,18 @@ def test_planner_native_tool_decision_transport_is_forbidden() -> None:
             },
         )
     assert router.adapter.request is None
+
+
+def test_native_tool_capacity_floor_reaches_adapter_metadata():
+    router = _Router()
+    parameters = {
+        'type': 'object',
+        'properties': {'value': {'type': 'string', 'maxLength': 64}},
+        'required': ['value'], 'additionalProperties': False,
+    }
+    assert router.generate_tool_decision(
+        'coder', [{'role': 'user', 'content': 'fill value'}],
+        tool_name='submit_capacity_test', parameters=parameters,
+        output_token_ceiling=1024, output_token_floor=1024,
+    ) == {'value': 'ok'}
+    assert router.adapter.request.metadata['mmm_output_token_floor'] == 1024

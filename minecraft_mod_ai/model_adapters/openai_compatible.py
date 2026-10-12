@@ -168,6 +168,9 @@ class OpenAICompatibleAdapter(ModelAdapter):
                     int(payload.get("max_tokens", 1) or 1),
                     request_output_token_limit(cfg, request),
                 )
+            from ..generation_output_budget import assert_request_output_capacity
+
+            assert_request_output_capacity(request, payload)
             response = _http_client(base_url, purpose="completion").post(
                 f"{base_url}/chat/completions",
                 headers={
