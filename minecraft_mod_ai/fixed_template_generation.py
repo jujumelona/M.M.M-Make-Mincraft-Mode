@@ -549,6 +549,14 @@ def _architecture_impl__generate_native_template_arguments(_ctx):
             raise ValueError("fixed-template function call did not return an argument mapping")
         return _validate_native_arguments(arguments, host_parameters)
     except Exception as initial_error:
+        # Output/context exhaustion is a model transport failure, not a schema
+        # validation failure. Replaying an identical large fixed template with
+        # extra repair instructions only wastes inference and hides the cause.
+        from .llama_finish_reason_contract import completion_boundary_error
+
+        if completion_boundary_error(initial_error) is not None:
+            raise
+
         current: BaseException | None = initial_error
         while current is not None:
             if "Failed to initialize samplers: failed to parse grammar" in str(current):
