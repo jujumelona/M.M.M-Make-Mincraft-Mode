@@ -23,7 +23,7 @@ from .model_output_atomicity_contract import assert_atomic_model_schema
 _PLAN_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "imports": {"type": "string", "maxLength": 1800},
+        "imports": {"type": "array", "maxItems": 24, "items": {"type": "string", "maxLength": 240}},
         "superclass": {"type": "string", "maxLength": 240},
         "interfaces": {"type": "string", "maxLength": 480},
         "units": {
@@ -57,6 +57,39 @@ _MEMBER_SCHEMA: dict[str, Any] = {
     "required": ["member"],
     "additionalProperties": False,
 }
+
+
+_QUALIFIED_JAVA_IMPORT = re.compile(
+    r"(?:[A-Za-z_$][A-Za-z0-9_$]*\\.)+[A-Za-z_$][A-Za-z0-9_$]*|"
+    r"(?:[A-Za-z_$][A-Za-z0-9_$]*\\.)+\\*"
+)
+
+
+def _assemble_java_imports(entries: Sequence[str]) -> str:
+    """Create legal Java import statements from model-supplied type references.
+
+    A model need not serialize import keywords, semicolons or line layout.
+    Tolerate legacy complete import statements and collapsed lines as input,
+    but never copy arbitrary model text into the Java compilation-unit header.
+    Syntax-irrelevant or unusable suggestions are omitted, leaving semantic
+    dependency errors to the real Java compiler rather than a formatting gate.
+    """
+    statements: list[str] = []
+    for suggestion in entries:
+        if not isinstance(suggestion, str):
+            continue
+        for fragment in re.split(r"[;\\r\\n,]", suggestion):
+            reference = fragment.strip()
+            reference = re.sub(r"^import\\s+", "", reference).strip()
+            is_static = reference.startswith("static ")
+            if is_static:
+                reference = reference[len("static "):].strip()
+            if not _QUALIFIED_JAVA_IMPORT.fullmatch(reference):
+                continue
+            statements.append(
+                "import " + ("static " if is_static else "") + reference + ";"
+            )
+    return "\\n".join(dict.fromkeys(statements))
 
 
 def _one_structured_action(
@@ -148,7 +181,10 @@ def compose_first_pass_java(
                 "finishable class-member responsibilities. Account for every required "
                 "behavior and integration, including constructors and registration "
                 "when required; never simplify the gameplay specification. "
-                "Imports must be Java import statements only, with no package. "
+                "List Java imports as an array of fully-qualified type references, "
+                "for example [\\\"java.util.List\\\", \\\"java.util.Map\\\"]. "
+                "Do not include import keywords, semicolons or package lines. "
+                "Use \\\"static package.Type.member\\\" only for a static import. "
                 "The HOST writes the package and class header using the exact "
                 f"class name {class_name}; do not generate those declarations. "
                 "Provide superclass as just the optional Java type name (no "
@@ -170,7 +206,7 @@ def compose_first_pass_java(
         output_tokens=1536,
     )
 
-    imports = str(plan["imports"]).strip()
+    imports = _assemble_java_imports(plan["imports"])
     superclass = str(plan["superclass"]).strip()
     interfaces = str(plan["interfaces"]).strip()
     # The model never authors identity, scope, or outer braces. It supplies only
@@ -185,12 +221,6 @@ def compose_first_pass_java(
         + (f" implements {interfaces}" if interfaces else "")
         + " {"
     )
-    if any(
-        not line.strip().startswith("import ") or not line.strip().endswith(";")
-        for line in imports.splitlines() if line.strip()
-    ):
-        raise ValueError("JAVA_FIRST_PASS_IMPORTS_INVALID")
-
     finished: list[str] = []
     for index, unit in enumerate(plan["units"], 1):
         unit_task = {
