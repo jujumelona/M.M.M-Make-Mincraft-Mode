@@ -2,10 +2,10 @@ from __future__ import annotations
 
 """Global model structured-output template boundary.
 
-Every model-authored structured response must have an explicit, closed schema. Real
-models never author JSON syntax directly: the host turns the schema into one forced
-function-argument template, receives typed arguments, serializes them, and validates the
-result. Machine-owned JSON remains valid for storage and transport.
+Every model-authored structured response must have an explicit, closed schema.
+Action decisions use forced function-argument templates. Side-effect-free data pages
+can use ModelRouter.generate_structured_data, with the schema active in the sampler
+and exact JSON parsing. Machine-owned JSON remains valid for storage and transport.
 """
 
 import json
@@ -681,7 +681,7 @@ def _schema_max_json_chars(
 def structured_output_token_ceiling(
     schema: Mapping[str, Any],
     *,
-    absolute_ceiling: int = PLANNER_RECORD_PAGE_OUTPUT_TOKEN_CEILING,
+    absolute_ceiling: int | None = PLANNER_RECORD_PAGE_OUTPUT_TOKEN_CEILING,
 ) -> int:
     """Prove and return a finite decode ceiling for one structured model page."""
 
@@ -689,6 +689,10 @@ def structured_output_token_ceiling(
         raise TypeError("structured output budget requires a schema mapping")
     max_json_chars = _schema_max_json_chars(schema, root=schema)
     derived = max(64, max_json_chars + 32)
+    if absolute_ceiling is None:
+        # A host pager needs the finite size before selecting page boundaries.
+        # Callers still enforce their page capacity before sending any inference.
+        return derived
     limit = max(1, int(absolute_ceiling))
     if derived > limit:
         raise ValueError(

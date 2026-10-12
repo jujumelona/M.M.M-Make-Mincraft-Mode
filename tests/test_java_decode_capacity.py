@@ -4,7 +4,7 @@ from minecraft_mod_ai.model_output_atomicity_contract import structured_output_t
 
 class RecordingRouter:
     def __init__(self): self.calls = []
-    def generate_tool_decision(self, role, messages, **kwargs):
+    def generate_structured_data(self, role, messages, **kwargs):
         self.calls.append(kwargs)
         props = kwargs['parameters']['properties']
         if 'count' in props: return {'count': 0}

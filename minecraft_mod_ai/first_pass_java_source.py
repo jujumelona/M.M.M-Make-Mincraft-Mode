@@ -23,7 +23,7 @@ from .model_output_atomicity_contract import (
 )
 
 _JAVA_ACTION_CAPACITY = 16_384
-_NATIVE_CALL_ENVELOPE_TOKENS = 256
+_DATA_PAGE_MARGIN_TOKENS = 256
 
 
 _PLAN_SCHEMA: dict[str, Any] = {
@@ -106,18 +106,16 @@ def _one_structured_action(
     """One attempt for one small action. No schema-repair or source regeneration."""
     assert_atomic_model_schema(schema, surface=f"first-pass Java {name}")
     parameters = _model_transport_schema(dict(schema))
-    try:
-        output_tokens = structured_output_token_ceiling(
-            parameters,
-            absolute_ceiling=_JAVA_ACTION_CAPACITY - _NATIVE_CALL_ENVELOPE_TOKENS,
-        ) + _NATIVE_CALL_ENVELOPE_TOKENS
-    except ValueError:
+    output_tokens = structured_output_token_ceiling(
+        parameters, absolute_ceiling=None,
+    ) + _DATA_PAGE_MARGIN_TOKENS
+    if output_tokens > _JAVA_ACTION_CAPACITY:
         # Page the declared structure BEFORE inference. Never truncate a completed
         # value or replay a failed action. Later pages see the completed prefix.
         properties = schema.get("properties")
         if not isinstance(properties, Mapping) or len(properties) != 1:
             if not isinstance(properties, Mapping) or not properties:
-                raise
+                raise ValueError("JAVA_DATA_PAGE_NOT_DECOMPOSABLE")
             merged: dict[str, Any] = {}
             for field, child in properties.items():
                 page = {"type": "object", "properties": {field: child},
@@ -130,7 +128,7 @@ def _one_structured_action(
             return _validate_native_arguments(merged, schema)
         field, child = next(iter(properties.items()))
         if child.get("type") != "array":
-            raise
+            raise ValueError("JAVA_DATA_PAGE_NOT_DECOMPOSABLE")
         maximum = int(child["maxItems"])
         minimum = int(child.get("minItems", 0))
         count_schema = {"type": "object", "properties": {"count": {
@@ -154,15 +152,13 @@ def _one_structured_action(
             )
             values.append(item["value"])
         return _validate_native_arguments({field: values}, schema)
-    response = router.generate_tool_decision(
+    response = router.generate_structured_data(
         "coder",
         messages,
-        tool_name=name,
+        data_name=name,
         parameters=parameters,
-        description="Return the exact requested Java construction page, once.",
         output_token_ceiling=output_tokens,
         output_token_floor=output_tokens,
-        force_non_thinking=True,
     )
     if not isinstance(response, Mapping):
         raise ValueError(f"JAVA_FIRST_PASS_ACTION_MISSING: {name}")

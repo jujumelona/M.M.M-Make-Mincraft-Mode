@@ -337,6 +337,65 @@ class ModelRouter:
             response_schema=request.response_schema,
         )
 
+    def generate_structured_data(
+        self,
+        role: str,
+        messages: Sequence[Mapping[str, Any]],
+        *,
+        data_name: str,
+        parameters: Mapping[str, Any],
+        output_token_ceiling: int,
+        output_token_floor: int,
+    ) -> dict[str, Any]:
+        """Generate one bounded data page using the backend's schema sampler.
+
+        Data pages do not execute tools. Their schema belongs in response_schema,
+        and must remain active throughout this single inference request.
+        """
+        from .model_output_atomicity_contract import assert_atomic_model_schema
+        from .fixed_template_generation import _validate_native_arguments
+        from .model_context_budget import fit_messages_to_context
+
+        assert_atomic_model_schema(parameters, surface=f"structured data {data_name}")
+        config, adapter = self._generation_adapter(role)
+        schema = dict(parameters)
+        request_messages = fit_messages_to_context(
+            [
+                *messages,
+                {"role": "system", "content": (
+                    "Return ONLY the JSON object for this data page. "
+                    "No function call, XML, reasoning, prose or Markdown. "
+                    "Populate only the fields in this page; the host assembles the "
+                    "complete result. Response schema: "
+                    + json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
+                )},
+            ],
+            config=config,
+            tools=(),
+        )
+        request = GenerationRequest(
+            messages=request_messages,
+            response_format="json",
+            response_schema=schema,
+            tools=(),
+            metadata={
+                "role": role,
+                "mmm_data_page": data_name,
+                "mmm_strict_structured_data": True,
+                "mmm_force_non_thinking": True,
+                "mmm_output_token_ceiling": int(output_token_ceiling),
+                "mmm_output_token_floor": int(output_token_floor),
+            },
+        )
+        with self._generation_scope(config):
+            raw = adapter.generate(request)
+        # Parse the exact returned data. Do not extract/reconstruct JSON from
+        # prose or a partial function call, and do not ask the model to repair it.
+        value = json.loads(raw)
+        if not isinstance(value, Mapping):
+            raise ModelConfigurationError("STRUCTURED_DATA_OBJECT_REQUIRED")
+        return dict(_validate_native_arguments(value, schema))
+
     def generate_tool_decision(
         self,
         role: str,

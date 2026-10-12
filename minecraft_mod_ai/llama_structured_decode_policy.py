@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from functools import wraps
 from typing import Any
@@ -40,6 +41,12 @@ def _bind_structured_generation_retry(llama_cpp_module: Any) -> None:
             or bool(getattr(request, "tools", ()))
         ):
             return output
+        metadata = getattr(request, "metadata", {})
+        if isinstance(metadata, Mapping) and metadata.get("mmm_strict_structured_data"):
+            # A constrained data request must already return exact JSON. The
+            # ordinary legacy parser may extract embedded JSON from prose;
+            # accepting that here would conceal a broken sampler contract.
+            json.loads(output)
         return validate_structured_output(
             output,
             response_format=request.response_format,

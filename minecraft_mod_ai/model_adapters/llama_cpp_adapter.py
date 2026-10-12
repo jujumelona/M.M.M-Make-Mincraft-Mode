@@ -171,10 +171,14 @@ class LlamaCppAdapter(ModelAdapter):
 
         server_url = self._server_url(request)
         active_request = request
+        strict_data = bool(
+            isinstance(request.metadata, Mapping)
+            and request.metadata.get("mmm_strict_structured_data")
+        )
         try:
             return _generate_one_turn(self, server_url, request)
         except Exception as exc:
-            if not request.tools and is_recoverable_native_format_error(exc):
+            if not strict_data and not request.tools and is_recoverable_native_format_error(exc):
                 active_request = _native_format_replay_request(request)
                 try:
                     if (
@@ -198,7 +202,7 @@ class LlamaCppAdapter(ModelAdapter):
 
             if isinstance(exc, ModelBackendError):
                 raise exc
-            if _transient_transport_failure(exc):
+            if not strict_data and _transient_transport_failure(exc):
                 try:
                     from .. import llama_server_autotune
 

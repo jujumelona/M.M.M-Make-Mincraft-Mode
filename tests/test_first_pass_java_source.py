@@ -27,9 +27,9 @@ class FakeNativeRouter:
         self.calls = []
         self.fail_on = fail_on
 
-    def generate_tool_decision(self, role, messages, *, tool_name, parameters,
-                               description="", output_token_ceiling=None,
-                               force_non_thinking=False, output_token_floor=None):
+    def generate_structured_data(self, role, messages, *, data_name, parameters,
+                                 output_token_ceiling, output_token_floor):
+        tool_name = data_name
         self.calls.append((tool_name, output_token_ceiling, parameters))
         if self.fail_on == tool_name:
             raise RuntimeError("synthetic model failure")
