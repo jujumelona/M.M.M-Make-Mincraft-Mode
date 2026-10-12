@@ -468,13 +468,12 @@ def discover_repositories_for_graph(
         if provider == "curseforge":
             return capability, provider, _search_curseforge(provider_query, limit=_query_limit())
         try:
-            target_kwargs = (
-                {"minecraft_version": minecraft_version, "loader": loader}
-                if minecraft_version and loader else {}
-            )
+            # This finds source to adapt, not installable binary releases. Exact
+            # target checks belong to donor inspection and compile proof; catalog
+            # release filters would hide useful code from older mods/loaders.
             page = client.search(
                 provider, provider_query, limit=_query_limit(),
-                target_profile="minecraft_mod", **target_kwargs,
+                target_profile="minecraft_mod",
             )
         except Exception:
             return capability, provider, []

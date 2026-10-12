@@ -3,6 +3,27 @@ from __future__ import annotations
 from minecraft_mod_ai import reuse_discovery
 
 
+def test_source_discovery_does_not_filter_by_binary_release_target(monkeypatch):
+    monkeypatch.setenv("MMM_REUSE_QUERY_VARIANTS", "1")
+    monkeypatch.delenv("MMM_CURSEFORGE_API_KEY", raising=False)
+    monkeypatch.delenv("CURSEFORGE_API_KEY", raising=False)
+
+    class Client:
+        def __init__(self):
+            self.calls = []
+
+        def search(self, provider, query, **kwargs):
+            self.calls.append(kwargs)
+            return {"candidates": []}
+
+    client = Client()
+    reuse_discovery.discover_repositories_for_graph(
+        ("space.travel",), client, minecraft_version="1.21.11", loader="fabric",
+    )
+    assert client.calls
+    assert all("minecraft_version" not in call and "loader" not in call for call in client.calls)
+
+
 def test_canonical_capability_query_precedes_long_authored_clause() -> None:
     variants = reuse_discovery._query_variants(
         "space.travel",

@@ -120,7 +120,9 @@ def _validate_wrapper(path: Path) -> None:
 def _live_wrapper_pin(gradle: str) -> tuple[str, str, int]:
     """Verify the exact official Gradle release, not Fabric's mutable main.
 
-    The official release server publishes a wrapper JAR and its SHA-256.
+    The release server publishes the SHA-256, but newer releases do not serve
+    the JAR there. Download the binary from the immutable official source tag
+    and still verify it against the release checksum.
     The third tuple member is retained for the existing caller interface.
     """
     if not re.fullmatch(r"[0-9][0-9A-Za-z_.-]*", gradle):
@@ -130,7 +132,12 @@ def _live_wrapper_pin(gradle: str) -> tuple[str, str, int]:
     digest = checksum_text.split()[0].casefold() if checksum_text else ""
     if not re.fullmatch(r"[0-9a-f]{64}", digest):
         raise RuntimeError(f"Official Gradle {gradle} wrapper checksum is invalid")
-    return url, digest, 0
+    tag_version = gradle + ".0" if re.fullmatch(r"\d+\.\d+", gradle) else gradle
+    source_url = (
+        f"https://raw.githubusercontent.com/gradle/gradle/v{tag_version}"
+        "/gradle/wrapper/gradle-wrapper.jar"
+    )
+    return source_url, digest, 0
 
 
 def _ensure_wrapper(adapter: PlatformAdapter) -> Path:

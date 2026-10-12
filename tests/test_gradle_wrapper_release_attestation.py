@@ -22,11 +22,11 @@ def test_live_wrapper_pin_uses_official_release_not_fabric_main(monkeypatch):
     monkeypatch.setattr(scaffold, "_fetch_text", get)
     result = scaffold._live_wrapper_pin("9.5.1")
     assert result == (
-        "https://services.gradle.org/distributions/gradle-9.5.1-wrapper.jar",
+        "https://raw.githubusercontent.com/gradle/gradle/v9.5.1/gradle/wrapper/gradle-wrapper.jar",
         digest,
         0,
     )
-    assert seen == [result[0] + ".sha256"]
+    assert seen == ["https://services.gradle.org/distributions/gradle-9.5.1-wrapper.jar.sha256"]
     with pytest.raises(RuntimeError, match="Invalid Gradle"):
         scaffold._live_wrapper_pin("../main")
     scaffold._live_wrapper_pin.cache_clear()
