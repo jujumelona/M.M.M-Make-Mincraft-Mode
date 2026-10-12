@@ -6,6 +6,7 @@ import pytest
 from minecraft_mod_ai.first_pass_java_source import (
     can_compose_first_pass_java,
     compose_first_pass_java,
+    _assemble_java_imports,
 )
 
 
@@ -34,7 +35,7 @@ class FakeNativeRouter:
             raise RuntimeError("synthetic model failure")
         answers = {
             "submit_java_construction_plan": {
-                "imports": "",
+                "imports": [],
                 "superclass": "",
                 "interfaces": "",
                 "units": [
@@ -125,3 +126,66 @@ def test_multiline_type_clause_rejected_without_member_retry():
     with pytest.raises(ValueError, match="JAVA_FIRST_PASS_TYPE_REFERENCE_INVALID"):
         compose_first_pass_java(router, SPEC, [])
     assert len(router.calls) == 1
+
+
+def test_host_assembles_imports_from_references_and_existing_java_syntax():
+    imports = _assemble_java_imports([
+        "java.util.List",
+        "java.util.Map",
+        "import java.util.List;",
+        "import net.minecraft.client.gui.screens.Screen; import java.util.Set;",
+        "static java.util.Collections.emptyList",
+        "net.minecraft.world.entity.*",
+        "package unrelated;",
+        "public class Oops {",
+        "",
+    ])
+    assert imports.splitlines() == [
+        "import java.util.List;",
+        "import java.util.Map;",
+        "import net.minecraft.client.gui.screens.Screen;",
+        "import java.util.Set;",
+        "import static java.util.Collections.emptyList;",
+        "import net.minecraft.world.entity.*;",
+    ]
+
+
+def test_model_outputs_dependency_references_not_java_import_statements():
+    class ImportRouter(FakeNativeRouter):
+        def generate_tool_decision(self, *args, **kwargs):
+            result = super().generate_tool_decision(*args, **kwargs)
+            if kwargs["tool_name"] == "submit_java_construction_plan":
+                return {
+                    **result,
+                    "imports": ["java.util.List", "java.util.Map"],
+                }
+            return result
+
+    router = ImportRouter()
+    java = compose_first_pass_java(router, SPEC, [])
+    assert java.startswith(
+        "package example.client;\n\nimport java.util.List;\n"
+        "import java.util.Map;\n\npublic class Gate {"
+    )
+    parameters = router.calls[0][2]
+    assert parameters["properties"]["imports"]["type"] == "array"
+    assert len(router.calls) == 3
+
+
+def test_invalid_import_suggestion_does_not_inject_code_or_trigger_model_retry():
+    class NonImportRouter(FakeNativeRouter):
+        def generate_tool_decision(self, *args, **kwargs):
+            result = super().generate_tool_decision(*args, **kwargs)
+            if kwargs["tool_name"] == "submit_java_construction_plan":
+                return {**result, "imports": ["public class Injected {}", "java.util.List"]}
+            return result
+
+    router = NonImportRouter()
+    result = compose_first_pass_java(router, SPEC, [])
+    assert "public class Injected" not in result
+    assert "import java.util.List;" in result
+    assert [name for name, *_ in router.calls] == [
+        "submit_java_construction_plan",
+        "submit_java_member_1",
+        "submit_java_member_2",
+    ]
