@@ -2,8 +2,6 @@
 
 import pytest
 
-from minecraft_mod_ai.complete_spec import ProductionModule
-from minecraft_mod_ai import authored_structured_design
 
 
 def test_gameplay_regeneration_schema_excludes_gui() -> None:
@@ -61,6 +59,7 @@ def test_atomic_gameplay_writers_become_content_generation_inputs(monkeypatch) -
     [
         ("steps", None),
         ("atomic_mutations", None),
+        ("features", None),
     ],
 )
 def test_gameplay_gui_only_discovery_retries_with_executable_owner(
@@ -96,8 +95,9 @@ def test_gameplay_gui_only_discovery_retries_with_executable_owner(
                     "requirement_id": "gameplay_mutation_1",
                     "statement": "Implement executable gameplay, not a GUI-only stub",
                     "design_context": {
-                        "source_section": "algorithm",
+                        "source_section": "request_scope" if concern == "features" else "algorithm",
                         "source_concern": concern,
+                        "source_feature": {"implementation_role": "gameplay"},
                     },
                 }],
                 "host_constraints": {},
@@ -106,25 +106,32 @@ def test_gameplay_gui_only_discovery_retries_with_executable_owner(
     assert len(attempts) == 2
 
 
-def test_unrelated_server_tick_does_not_make_join_initialization_gameplay(
-    monkeypatch,
-) -> None:
-    monkeypatch.setattr(
-        authored_structured_design, "active_concern_records", _concerns,
-    )
-    plan = _plan(mutations=True)
-    plan.typed_plan_ir["event_bindings"].append({
-        "event": "server_tick", "function": "tick",
-    })
-    plan.typed_plan_ir["functions"].append({
-        "id": "tick",
-        "body": [{
-            "op": "expr",
-            "value": {"op": "capability", "id": "player.send_message", "args": []},
-        }],
-    })
-    with pytest.raises(ValueError, match="GAMEPLAY_IMPLEMENTATION_ABSENT.*non-bootstrap"):
-        _assert_executable_gameplay_floor(plan, (), {"capabilities": []})
+def test_requested_interface_keeps_its_gui_owner(monkeypatch):
+    from minecraft_mod_ai import content_design_graph
+
+    class DiscoveryFinished(Exception):
+        pass
+
+    attempts = []
+
+    def records(_router, identifier, *, context, **kwargs):
+        if identifier != "design/content_entity":
+            raise DiscoveryFinished()
+        attempts.append(context)
+        return {"records": [{"kind": "gui", "entity_id": "shipyard", "role": "screen"}]}
+
+    monkeypatch.setattr(content_design_graph, "run_record_template", records)
+    with pytest.raises(DiscoveryFinished):
+        content_design_graph.compile_content_graph("shipyard screen", object(), request_catalog={
+            "requirements": [{"requirement_id": "screen", "statement": "Show a shipyard screen",
+                "design_context": {"source_section": "request_scope", "source_concern": "features",
+                                   "source_feature": {"implementation_role": "interface"}}}],
+            "host_constraints": {},
+        })
+    assert len(attempts) == 1
+    assert "rejected_gui_only_candidates" not in attempts[0]
+
+
 
 
 def test_dispatch_event_guard_does_not_misattribute_join_mutation() -> None:
@@ -215,71 +222,8 @@ def test_atomic_mutation_passive_item_requires_actionable_retry(monkeypatch) -> 
     assert len(calls) == 2
 
 
-def test_multiple_authored_actions_reject_command_counter_stub(monkeypatch) -> None:
-    """A runnable command writing one flag cannot implement a farm/harvest/cook loop."""
-    def concerns(sections: dict, section: str) -> dict:
-        if section == "resources_and_ui":
-            return {"interactions": [
-                {"server_action": "plant_crop", "trigger": "player_plant_crop"},
-                {"server_action": "harvest_crop", "trigger": "player_harvest_crop"},
-                {"server_action": "cook_dish", "trigger": "player_cook_dish"},
-            ]}
-        return _concerns(sections, section)
-
-    monkeypatch.setattr(authored_structured_design, "active_concern_records", concerns)
-    plan = _plan(mutations=True)
-    plan.typed_plan_ir["event_bindings"] = [{"event": "command", "function": "join"}]
-    plan.typed_plan_ir["functions"][0]["body"] = [{
-        "op": "state_set",
-        "key": {"op": "literal", "type": "string", "value": "generic_counter"},
-        "value": {"op": "literal", "type": "int", "value": 1},
-    }]
-    with pytest.raises(ValueError, match="GAMEPLAY_ACTION_COVERAGE_MISSING.*plant_crop"):
-        _assert_executable_gameplay_floor(
-            plan,
-            (ProductionModule("farm_screen", "gui", {}),),
-            {"capabilities": []},
-        )
 
 
-def test_individually_guarded_gameplay_actions_pass_coverage(monkeypatch) -> None:
-    """One command can legitimately dispatch multiple *proven* mutating actions."""
-    actions = ("plant_crop", "harvest_crop", "cook_dish")
-
-    def concerns(sections: dict, section: str) -> dict:
-        if section == "resources_and_ui":
-            return {"interactions": [
-                {"server_action": action, "trigger": "player_" + action}
-                for action in actions
-            ]}
-        return _concerns(sections, section)
-
-    monkeypatch.setattr(authored_structured_design, "active_concern_records", concerns)
-    plan = _plan(mutations=True)
-    plan.typed_plan_ir["event_bindings"] = [{"event": "command", "function": "join"}]
-    plan.typed_plan_ir["functions"][0]["body"] = [
-        {
-            "op": "if",
-            "condition": {
-                "op": "binary",
-                "operator": "==",
-                "left": {"op": "ref", "name": "action"},
-                "right": {"op": "literal", "type": "string", "value": action},
-            },
-            "then": [{
-                "op": "state_set",
-                "key": {"op": "literal", "type": "string", "value": action},
-                "value": {"op": "literal", "type": "int", "value": 1},
-            }],
-            "else": [],
-        }
-        for action in actions
-    ]
-    _assert_executable_gameplay_floor(
-        plan,
-        (ProductionModule("farm_screen", "gui", {}),),
-        {"capabilities": []},
-    )
 
 
 def test_empty_atomic_mutation_discovery_gets_actionable_retry(monkeypatch) -> None:

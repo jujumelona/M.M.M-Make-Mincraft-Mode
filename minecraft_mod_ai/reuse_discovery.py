@@ -76,6 +76,10 @@ def _minimum_candidates() -> int:
     return _env_int("MMM_REUSE_MIN_CANDIDATES_PER_CAPABILITY", 3, minimum=1, maximum=12)
 
 
+def _discovery_pages() -> int:
+    return _env_int("MMM_REUSE_DISCOVERY_PAGES", 2, minimum=1, maximum=4)
+
+
 def _pooled_http_client() -> httpx.Client:
     """Return one thread-safe connection pool for auxiliary discovery APIs."""
 
@@ -223,9 +227,12 @@ def _query_variants(capability: str, terms: Sequence[str]) -> tuple[str, ...]:
         for raw in terms
         if 2 <= len(" ".join(str(raw or "").split())) <= 90
     )
-    if capability.startswith("custom gameplay "):
+    # An authored English feature query is more specific than an ontology
+    # classifier's guess. Exact canonical IDs still use their curated aliases.
+    if capability.startswith("custom gameplay ") or capability not in atomic_capability_definitions():
         for query in specific_terms:
-            _append_query(values, seen, query)
+            if len(_TOKEN.findall(query)) <= 8:
+                _append_query(values, seen, query)
 
     for query in _ontology_search_queries(capability):
         if len(query) <= 90:
@@ -335,33 +342,53 @@ def _candidate_repository(candidate: Mapping[str, Any]) -> str:
     )
 
 
-def _resolve_modrinth_candidates(candidates: Sequence[Mapping[str, Any]]) -> list[tuple[str, float]]:
+def _candidate_relevance(candidate: Mapping[str, Any], capability: str) -> float:
+    """Rank actual feature evidence, rather than crediting a hit with its query."""
+    stop = _GITHUB_QUERY_BOILERPLATE | {
+        "fabric", "forge", "neoforge", "quilt", "system", "feature", "generation",
+        "the", "and", "for", "with", "a", "an", "to", "of",
+    }
+    terms = {word for word in _TOKEN.findall(capability.casefold()) if word not in stop}
+    if capability in atomic_capability_definitions():
+        terms.update(word for query in _ontology_search_queries(capability)
+                     for word in _TOKEN.findall(query.casefold()) if word not in stop)
+    text = " ".join(str(candidate.get(key) or "") for key in (
+        "title", "summary", "description", "repository", "source_url", "topics",
+    ))
+    text = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", text).casefold()
+    matched = terms & set(_TOKEN.findall(text))
+    return len(matched) / max(1, len(terms))
+
+
+def _resolve_modrinth_candidates(candidates: Sequence[Mapping[str, Any]], *, with_metadata=False) -> list:
     jobs: list[tuple[int, str]] = []
-    direct: list[tuple[str, float]] = []
+    direct = []
     for index, candidate in enumerate(candidates):
         repository = _candidate_repository(candidate)
         if repository:
-            direct.append((repository, 1.0 / (1 + index)))
+            direct.append((repository, 1.0 / (1 + index), candidate))
             continue
         api_url = str(candidate.get("api_url") or "").strip()
         if api_url.startswith("https://api.modrinth.com/v2/project/"):
             jobs.append((index, api_url))
     if not jobs:
-        return direct
+        return direct if with_metadata else [(repo, rank) for repo, rank, _meta in direct]
 
     client = _pooled_http_client()
 
-    def resolve(job: tuple[int, str]) -> tuple[str, float]:
+    def resolve(job: tuple[int, str]):
         index, url = job
         try:
             response = client.get(url, timeout=8.0)
             response.raise_for_status()
             value = response.json()
             if not isinstance(value, Mapping):
-                return "", 0.0
-            return _github_repository(value.get("source_url")), 1.0 / (1 + index)
+                return "", 0.0, {}
+            return _github_repository(value.get("source_url")), 1.0 / (1 + index), {
+                **candidates[index], "description": value.get("description", ""),
+            }
         except Exception:
-            return "", 0.0
+            return "", 0.0, {}
 
     for _job, result in iter_completed_with_deadlines(
         jobs,
@@ -370,10 +397,10 @@ def _resolve_modrinth_candidates(candidates: Sequence[Mapping[str, Any]]) -> lis
         stage="reuse-modrinth-source-resolution",
         sort_key=lambda item: item[0],
     ):
-        repository, score = result
+        repository, score, metadata = result
         if repository:
-            direct.append((repository, score))
-    return direct
+            direct.append((repository, score, metadata))
+    return direct if with_metadata else [(repo, rank) for repo, rank, _meta in direct]
 
 
 def _ascii_search_query(value: str) -> str:
@@ -390,7 +417,7 @@ def _ascii_search_query(value: str) -> str:
     return re.sub(r"\s+", " ", ascii_text).strip()
 
 
-def _search_curseforge(query: str, *, limit: int) -> list[tuple[str, float]]:
+def _search_curseforge(query: str, *, limit: int, with_metadata=False) -> list:
     api_key = _curseforge_api_key()
     if not api_key:
         return []
@@ -427,8 +454,11 @@ def _search_curseforge(query: str, *, limit: int) -> list[tuple[str, float]]:
         source_url = links.get("sourceUrl") if isinstance(links, Mapping) else ""
         repository = _github_repository(source_url)
         if repository:
-            result.append((repository, 1.0 / (1 + index)))
-    return result
+            result.append((repository, 1.0 / (1 + index), {
+                "title": item.get("name", ""), "summary": item.get("summary", ""),
+                "repository": repository,
+            }))
+    return result if with_metadata else [(repo, rank) for repo, rank, _meta in result]
 
 
 def discover_repositories_for_graph(
@@ -450,8 +480,12 @@ def discover_repositories_for_graph(
     evidence: dict[str, _RepositoryEvidence] = {}
     per_capability: dict[str, dict[str, float]] = {capability: {} for capability in ordered}
 
-    def register(capability: str, provider: str, values: Sequence[tuple[str, float]]) -> None:
-        for repository, rank in values:
+    def register(capability: str, provider: str, values: Sequence) -> None:
+        for repository, rank, metadata in values:
+            relevance = _candidate_relevance(metadata, capability)
+            if provider == "github" and relevance == 0:
+                continue
+            rank += 2 * relevance
             repository = _github_repository(repository)
             if not repository:
                 continue
@@ -466,42 +500,62 @@ def discover_repositories_for_graph(
     def provider_search(capability: str, provider: str, query: str) -> tuple[str, str, list[tuple[str, float]]]:
         provider_query = _provider_query(provider, query)
         if provider == "curseforge":
-            return capability, provider, _search_curseforge(provider_query, limit=_query_limit())
+            return capability, provider, _search_curseforge(provider_query, limit=_query_limit(), with_metadata=True)
+        candidates = []
+        cursor = ""
         try:
             # This finds source to adapt, not installable binary releases. Exact
             # target checks belong to donor inspection and compile proof; catalog
             # release filters would hide useful code from older mods/loaders.
-            page = client.search(
-                provider, provider_query, limit=_query_limit(),
-                target_profile="minecraft_mod",
-            )
+            for _page_index in range(_discovery_pages()):
+                page = client.search(
+                    provider, provider_query, limit=_query_limit(), target_profile="minecraft_mod",
+                    **({"cursor": cursor} if cursor else {}),
+                )
+                raw = page.get("candidates") if isinstance(page, Mapping) else None
+                if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes)):
+                    candidates.extend(item for item in raw if isinstance(item, Mapping))
+                next_cursor = page.get("next_cursor", "") if isinstance(page, Mapping) else ""
+                if not next_cursor or next_cursor == cursor:
+                    break
+                cursor = next_cursor
         except Exception:
-            return capability, provider, []
-        raw = page.get("candidates") if isinstance(page, Mapping) else None
-        candidates = [item for item in raw if isinstance(item, Mapping)] if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes)) else []
+            # Later-page throttling must not erase source evidence already
+            # collected from successful pages of the same immutable query.
+            if not candidates:
+                return capability, provider, []
         if provider == "modrinth":
-            return capability, provider, _resolve_modrinth_candidates(candidates)
-        values: list[tuple[str, float]] = []
+            return capability, provider, _resolve_modrinth_candidates(candidates, with_metadata=True)
+        values = []
         for index, candidate in enumerate(candidates):
             if provider == "github" and not _github_candidate_is_minecraft_mod(candidate):
                 continue
             repository = _candidate_repository(candidate)
             if repository:
-                values.append((repository, 1.0 / (1 + index)))
+                values.append((repository, 1.0 / (1 + index), candidate))
         return capability, provider, values
 
     providers = ["github", "modrinth"]
     if _curseforge_api_key():
         providers.append("curseforge")
+    query_results: dict[tuple[str, str], list] = {}
 
     def run_wave(capability_set: Sequence[str], variant_index: int) -> None:
         jobs: list[tuple[str, str, str]] = []
+        subscribers: dict[tuple[str, str], list[str]] = {}
         for capability in capability_set:
             query_list = variants[capability]
             if variant_index >= len(query_list):
                 continue
             for provider in providers:
-                jobs.append((capability, provider, query_list[variant_index]))
+                query = _provider_query(provider, query_list[variant_index])
+                key = (provider, query)
+                if key in query_results:
+                    register(capability, provider, query_results[key])
+                    continue
+                if key not in subscribers:
+                    jobs.append((capability, provider, query))
+                subscribers.setdefault(key, []).append(capability)
         if not jobs:
             return
         def safe_provider_search(
@@ -521,7 +575,10 @@ def discover_repositories_for_graph(
             sort_key=lambda item: (item[0], item[1], item[2]),
         ):
             capability, provider, values = result_row
-            register(capability, provider, values)
+            key = (_job[1], _job[2])
+            query_results[key] = values
+            for owner_capability in subscribers[key]:
+                register(owner_capability, provider, values)
 
     run_wave(ordered, 0)
     for variant_index in range(1, _query_variant_limit()):
@@ -552,7 +609,9 @@ def discover_repositories_for_graph(
         selected_for_capability = [repo for repo in ranked if repo in selected_set]
         if not selected_for_capability and ranked:
             selected_for_capability.append(ranked[0])
-        result[capability] = tuple(selected_for_capability)
+        # Representatives are the first inspection batch. Keep every ranked
+        # candidate so proof failure can continue to a different source donor.
+        result[capability] = tuple(selected_for_capability + [repo for repo in ranked if repo not in selected_for_capability])
     return result
 
 

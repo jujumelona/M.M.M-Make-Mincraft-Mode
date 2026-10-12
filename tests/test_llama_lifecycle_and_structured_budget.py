@@ -141,7 +141,8 @@ def test_semantic_watchdog_resets_on_prompt_progress():
     assert watchdog.observe(": ping") is False
 
 
-def test_lifecycle_logs_first_progress_completion_and_finalization(capsys):
+def test_lifecycle_logs_first_progress_completion_and_finalization(monkeypatch, capsys):
+    monkeypatch.setenv("MMM_LLAMA_LIFECYCLE_VERBOSE", "1")
     response = _ProgressCheckedResponse(
         _Lines(
             [

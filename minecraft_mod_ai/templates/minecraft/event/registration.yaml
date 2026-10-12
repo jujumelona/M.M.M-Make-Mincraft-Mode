@@ -17,9 +17,8 @@ outputs:
   type: code_fragment
 host_requirements:
   capabilities:
-  - REGISTER_ITEM
-  symbols:
-  - register_item
+  - EVENT_LISTENER
+  symbols: []
   schemas: []
 implementation_key: fabric/event/registration
 validators:

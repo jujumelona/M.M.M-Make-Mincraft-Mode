@@ -8,7 +8,7 @@ from .parallel_model_tasks import deterministic_model_map
 from .task_template_catalog import load_template
 
 
-def generate_canonical_leaf(inputs, *, leaf_id, router, authority):
+def generate_canonical_leaf(inputs, *, leaf_id, router, authority, source_context=()):
     """Generate one declared artifact, keeping identity/receipt fields host-owned."""
     from .fixed_template_generation import generate_fixed_template_value
     from .integrity_validators import validate_semantic_contract, validate_json_schema
@@ -98,6 +98,7 @@ def generate_canonical_leaf(inputs, *, leaf_id, router, authority):
                         "requirement": spec["requirement"],
                         "slot": slot["description"],
                         "bindings": spec["bindings"],
+                        "materialized_prerequisite_source": source_context,
                     },
                     sort_keys=True,
                 ),

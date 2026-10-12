@@ -286,6 +286,14 @@ class CompleteGameDesignPlanner:
             structured_sections,
             content_design,
         )
+        from .request_runtime_ownership import author_runtime_ownership
+
+        if request_scope and "_request_runtime_owners" not in content_design:
+            content_design["_request_runtime_owners"] = author_runtime_ownership(
+                self.router, request_scope, structured_sections, budget=budget,
+            )
+            checkpoint.save_content_design(content_catalog, content_design)
+        runtime_owners = content_design.get("_request_runtime_owners", ())
 
         if reuse_receipt is not None:
             content_design["_host_source_reuse"] = reuse_receipt
@@ -352,6 +360,7 @@ class CompleteGameDesignPlanner:
                 deterministic_module_kinds=effective_kinds,
                 allowed_platform_kinds=auto_allowed_platform_kinds,
                 externally_covered_refs=external_content_refs,
+                runtime_owners=runtime_owners,
                 budget=budget,
             )
         from .typed_plan_support import assert_typed_plan_host_support
@@ -360,6 +369,7 @@ class CompleteGameDesignPlanner:
             structured_sections,
             typed_plan_ir,
             externally_covered_refs=external_content_refs,
+            runtime_owners=runtime_owners,
         )
         return AuthoredPlan(
             requested_prompt=prompt,

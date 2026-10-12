@@ -5,11 +5,14 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from minecraft_mod_ai import CompleteExecutionOptions, CompleteModAISession
 from minecraft_mod_ai.colab_run_modes import FULL_MODE, run_plan_dialog, should_build
+from minecraft_mod_ai.complete_orchestrator import CompleteProductionOrchestrator
 
 
-class _CapturingOrchestrator:
+class _CapturingOrchestrator(CompleteProductionOrchestrator):
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
@@ -53,8 +56,25 @@ def _debug_session(tmp_path: Path) -> tuple[CompleteModAISession, _CapturingOrch
 
 def test_colab_debug_fixture_loads_validated_plan_then_uses_normal_build_dispatch(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session, orchestrator = _debug_session(tmp_path)
+    prepared = []
+    toolchain_checks = []
+
+    def prepare(owner, approved, *, run_root, adapter, error_type):
+        # This dispatch fixture does not download an external scaffold. Keep
+        # the actual proposal writer and assert preparation happens first.
+        root = run_root / "project"
+        owner._write_base_proposal(root, approved.base_proposal)
+        assert not owner.calls
+        prepared.append(root)
+        return root
+
+    monkeypatch.setattr("minecraft_mod_ai.platform_live_execution_contract.prepare_official_fabric_project",
+                        prepare)
+    monkeypatch.setattr("minecraft_mod_ai.complete_preflight_contract.validate_platform_toolchain_preflight",
+                        lambda platform, options: toolchain_checks.append((platform, options)))
     plan_path = tmp_path / "proposal.json"
     printed: list[str] = []
 
@@ -108,6 +128,9 @@ def test_colab_debug_fixture_loads_validated_plan_then_uses_normal_build_dispatc
     )
 
     assert result.status == "CAPTURED_DEBUG_DISPATCH"
+    assert prepared == [orchestrator._prepared_fabric_project]
+    assert (prepared[0] / ".minecraft_ai/base-proposal.json").is_file()
+    assert len(toolchain_checks) == 1 and toolchain_checks[0][1] is options
     assert len(orchestrator.calls) == 1
     call = orchestrator.calls[0]
     assert call["proposal"] is proposal

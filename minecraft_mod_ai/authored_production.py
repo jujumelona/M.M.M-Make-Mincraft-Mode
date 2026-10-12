@@ -185,6 +185,7 @@ def _compile_new_authored_modules(
             plan.structured_sections,
             getattr(plan, "content_design", {}),
         ),
+        runtime_owners=plan.content_design.get("_request_runtime_owners", ()),
     )
 
     raw_platform_modules = validated_plan.get("platform_modules", [])
@@ -580,6 +581,8 @@ def _compile_content_artifact_graph(
     adapter: Any,
     mod_id: str,
     package_name: str,
+    source_rag: Any = None,
+    source_reuse: Mapping[str, Any] | None = None,
 ) -> tuple[tuple[ProductionModule, ...], tuple[AssetRequest, ...], tuple[Any, ...]]:
     """Restore canonical content facts and lower them through the artifact graph."""
 
@@ -912,6 +915,13 @@ def _compile_content_artifact_graph(
             sort_keys=True,
             separators=(",", ":"),
         )
+        from .authored_source_rag import VerifiedSourceRAG, bind_owner_source_context
+
+        bind_owner_source_context(
+            bindings, owner=owner, request_scope=plan.request_scope,
+            reuse_plan=source_reuse or {}, rag=source_rag or VerifiedSourceRAG(),
+            requirement=str(spec_input.get("requirement") or ""),
+        )
 
     module_ids = {module.module_id for module in modules}
     from .artifact_job import validate_artifact_job_graph
@@ -1027,6 +1037,28 @@ def compile_authored_design(
     target = _bound_target(design)
     design = {**design, **target}
 
+    # Older ledger-bearing checkpoints predate explicit runtime ownership.
+    # Re-author their Typed projection before producing feature callbacks so
+    # a saved command/join dispatcher cannot execute the same effects twice.
+    if plan.request_scope and "_request_runtime_owners" not in content_design:
+        from dataclasses import replace
+
+        from .authored_content_contract import content_owned_refs
+        from .request_runtime_ownership import author_runtime_ownership
+        from .typed_host_capabilities import typed_host_capability_contracts
+        from .typed_plan_authoring import author_typed_plan_ir
+
+        content_design = deepcopy(dict(content_design))
+        runtime_owners = author_runtime_ownership(router, plan.request_scope, plan.structured_sections)
+        content_design["_request_runtime_owners"] = runtime_owners
+        plan = replace(plan, content_design=content_design, typed_plan_ir=author_typed_plan_ir(
+            router, plan.text, plan.structured_sections, typed_host_capability_contracts(),
+            deterministic_module_kinds=deterministic_backend_capabilities(adapter),
+            externally_covered_refs=content_owned_refs(plan.structured_sections, content_design),
+            runtime_owners=runtime_owners,
+        ))
+        design["authored_plan"] = plan.to_dict()
+
     # External-source discovery/proof is a host decision and must be explicitly
     # attached to the production artifact, not left in an unrelated research log.
     # Resolve after immutable target binding for AUTO; reuse planning receipts
@@ -1105,12 +1137,31 @@ def compile_authored_design(
         production_state_section=production_state_section,
         deterministic_module_kinds=deterministic_backend_capabilities(adapter),
     )
-    content_modules, content_assets, artifact_jobs = _compile_content_artifact_graph(
-        plan,
-        adapter=adapter,
-        mod_id=base.spec.mod_id,
+    from .authored_source_rag import verified_source_rag
+
+    with verified_source_rag(
+        source_reuse, adapter=adapter, mod_id=base.spec.mod_id,
         package_name=base.spec.package_name,
-    )
+    ) as source_rag:
+        content_modules, content_assets, artifact_jobs = _compile_content_artifact_graph(
+            plan, adapter=adapter, mod_id=base.spec.mod_id,
+            package_name=base.spec.package_name, source_rag=source_rag,
+            source_reuse=source_reuse,
+        )
+        from .authored_feature_implementation import compile_request_feature_jobs
+
+        feature_modules, feature_jobs = compile_request_feature_jobs(
+            plan, adapter=adapter, mod_id=base.spec.mod_id,
+            package_name=base.spec.package_name, content_modules=content_modules,
+            content_jobs=artifact_jobs, source_rag=source_rag, source_reuse=source_reuse,
+            runtime_modules=modules,
+        )
+        content_modules = (*content_modules, *feature_modules)
+        artifact_jobs = (*artifact_jobs, *feature_jobs)
+        if source_rag.license_notices:
+            design["_host_source_reuse"]["reference_license_notices"] = dict(source_rag.license_notices)
+        if source_rag.reference_failures:
+            design["_host_source_reuse"]["reference_failures"] = list(source_rag.reference_failures)
     typed_ids = {module.module_id for module in modules}
     duplicate_content_ids = sorted(
         typed_ids & {module.module_id for module in content_modules}

@@ -107,7 +107,6 @@ def test_host_constraints_do_not_become_content_requirements() -> None:
     specification["assets"] = [{
         "kind": "item",
         "purpose": "moon ore icon",
-        "owner": "moon_ore",
         "production_owner": "resource_asset_production",
     }]
     specification["data_resources"] = [{

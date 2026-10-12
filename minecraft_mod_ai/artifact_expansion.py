@@ -191,7 +191,7 @@ def _java_type_name(value: str) -> str:
 
 
 def _canonical_candidate_inputs(
-    fact: PromptFact | ImplementationFact,
+    fact: PromptFact | ImplementationFact | None,
     *,
     canonical_leaf: str,
     mod_id: str,
@@ -200,6 +200,8 @@ def _canonical_candidate_inputs(
     subject: str,
     minecraft_version: str,
     context_id: str,
+    source_requirement: str = "",
+    parent_requirement: str = "",
 ) -> dict[str, Any]:
     """Build the persisted host-owned input contract for a generator candidate."""
 
@@ -222,7 +224,7 @@ def _canonical_candidate_inputs(
     # Fabric 26.1+ is unobfuscated and the official scaffold has a client set.
     source_root = "src/client/java" if side == "CLIENT" and minecraft_version.startswith("26.") else "src/main/java"
     target_path = f"{source_root}/{generated_package_path}/{class_name}.java"
-    requirement = str(getattr(fact, "source_clause", "") or "").strip()
+    requirement = source_requirement or str(getattr(fact, "source_clause", "") or "").strip()
     if not requirement:
         requirement = (
             str(getattr(fact, "display_name", "") or "").strip()
@@ -239,10 +241,10 @@ def _canonical_candidate_inputs(
         "registry_path": subject,
         "minecraft_version": minecraft_version,
         "display_name": display_name,
-        "fact_type": fact.fact_type.value,
+        "fact_type": fact.fact_type.value if fact is not None else "REQUEST_FEATURE",
         "source_requirement": requirement[:12000],
     }
-    parent_requirement = str(getattr(fact, "parent_requirement", "") or "").strip()
+    parent_requirement = parent_requirement or str(getattr(fact, "parent_requirement", "") or "").strip()
     if parent_requirement:
         bindings["parent_requirement"] = parent_requirement
 

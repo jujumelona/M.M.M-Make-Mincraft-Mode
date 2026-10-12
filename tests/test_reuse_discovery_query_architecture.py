@@ -36,6 +36,109 @@ def test_canonical_capability_query_precedes_long_authored_clause() -> None:
     assert len(variants) <= reuse_discovery._query_variant_limit()
 
 
+def test_authored_feature_query_survives_ontology_alias_budget():
+    variants = reuse_discovery._query_variants("space travel", ("minecraft space travel mod", "space travel"))
+    assert variants[0] == "minecraft space travel mod"
+    crew = reuse_discovery._query_variants("crew recruitment", ("minecraft crew recruitment mod",))
+    assert "crew recruitment" in crew[0]
+
+
+def test_queries_are_deduplicated_after_provider_normalization(monkeypatch):
+    monkeypatch.setenv("MMM_REUSE_QUERY_VARIANTS", "3")
+    monkeypatch.delenv("MMM_CURSEFORGE_API_KEY", raising=False)
+    monkeypatch.delenv("CURSEFORGE_API_KEY", raising=False)
+
+    class Client:
+        def __init__(self):
+            self.calls = []
+
+        def search(self, provider, query, **kwargs):
+            self.calls.append((provider, query))
+            return {"candidates": []}
+
+    client = Client()
+    reuse_discovery.discover_repositories_for_graph(("planet ore generation",), client)
+    assert len(client.calls) == len(set(client.calls))
+
+
+def test_unrelated_mod_cannot_claim_feature_coverage(monkeypatch):
+    monkeypatch.setenv("MMM_REUSE_QUERY_VARIANTS", "1")
+    monkeypatch.delenv("MMM_CURSEFORGE_API_KEY", raising=False)
+    monkeypatch.delenv("CURSEFORGE_API_KEY", raising=False)
+
+    class Client:
+        def search(self, provider, query, **kwargs):
+            if provider != "github":
+                return {"candidates": []}
+            return {"candidates": [
+                {"repository": "example/ui-lib", "title": "Minecraft Fabric mod UI widgets"},
+                {"repository": "example/planet", "title": "Minecraft Fabric planet travel mod"},
+            ]}
+
+    result = reuse_discovery.discover_repositories_for_graph(("space travel",), Client())
+    assert result["space travel"] == ("example/planet",)
+
+
+def test_shared_query_is_ranked_separately_for_each_feature(monkeypatch):
+    monkeypatch.setenv("MMM_REUSE_QUERY_VARIANTS", "1")
+    monkeypatch.delenv("MMM_CURSEFORGE_API_KEY", raising=False)
+    monkeypatch.delenv("CURSEFORGE_API_KEY", raising=False)
+    monkeypatch.setattr(reuse_discovery, "_query_variants", lambda *args: ("shared query",))
+
+    class Client:
+        def __init__(self):
+            self.calls = []
+
+        def search(self, provider, query, **kwargs):
+            self.calls.append((provider, query))
+            return {"candidates": [
+                {"repository": "example/ships", "title": "Minecraft mod spaceship construction"},
+                {"repository": "example/planets", "title": "Minecraft mod planet exploration"},
+            ]} if provider == "github" else {"candidates": []}
+
+    client = Client()
+    result = reuse_discovery.discover_repositories_for_graph(("spaceship construction", "planet exploration"), client)
+    assert result["spaceship construction"] == ("example/ships",)
+    assert result["planet exploration"] == ("example/planets",)
+    assert len(client.calls) == len(set(client.calls))
+
+
+def test_next_page_keeps_a_relevant_source_after_unrelated_first_hits(monkeypatch):
+    monkeypatch.setenv("MMM_REUSE_QUERY_VARIANTS", "1")
+    monkeypatch.delenv("MMM_CURSEFORGE_API_KEY", raising=False)
+    monkeypatch.delenv("CURSEFORGE_API_KEY", raising=False)
+
+    class Client:
+        def search(self, provider, query, **kwargs):
+            if provider != "github":
+                return {"candidates": []}
+            if kwargs.get("cursor") == "next":
+                return {"candidates": [{"repository": "example/travel", "title": "Minecraft planet travel mod"}]}
+            return {"candidates": [{"repository": "example/ui", "title": "Minecraft widget mod"}],
+                    "next_cursor": "next"}
+
+    result = reuse_discovery.discover_repositories_for_graph(("space travel",), Client())
+    assert result["space travel"] == ("example/travel",)
+
+
+def test_later_page_throttling_preserves_verified_first_page_candidates(monkeypatch):
+    monkeypatch.setenv("MMM_REUSE_QUERY_VARIANTS", "1")
+    monkeypatch.delenv("MMM_CURSEFORGE_API_KEY", raising=False)
+    monkeypatch.delenv("CURSEFORGE_API_KEY", raising=False)
+
+    class Client:
+        def search(self, provider, query, **kwargs):
+            if provider != "github":
+                return {"candidates": []}
+            if kwargs.get("cursor"):
+                raise RuntimeError("provider rate limit")
+            return {"candidates": [{"repository": "example/travel", "title": "Minecraft planet travel mod"}],
+                    "next_cursor": "next"}
+
+    result = reuse_discovery.discover_repositories_for_graph(("space travel",), Client())
+    assert result["space travel"] == ("example/travel",)
+
+
 def test_custom_capability_gets_compact_ecosystem_queries() -> None:
     variants = reuse_discovery._query_variants(
         "interstellar_ship_construction",

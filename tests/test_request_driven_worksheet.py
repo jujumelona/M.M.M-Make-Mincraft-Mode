@@ -5,7 +5,10 @@ import json
 from minecraft_mod_ai import authored_structured_design as design
 from minecraft_mod_ai import planner_state_authoring
 from minecraft_mod_ai.planning_detail_slots import DETAIL_RECORDS
-from minecraft_mod_ai.worksheet_atomic_chunker import pack_section_concerns, worksheet_chunk_schema
+from minecraft_mod_ai.worksheet_atomic_chunker import (
+    pack_section_concerns,
+    worksheet_chunk_schema,
+)
 
 
 def test_section_counts_choose_inactive_concerns_before_field_authoring():

@@ -11,7 +11,7 @@ from copy import deepcopy
 from .resolved_version_context import ResolvedVersionContext, _encode
 
 _OLD_GENERATOR = "sha256:c16768f8ee7c094762ea102bcc8d9b95a85fca854335a2e9209906815d0fa8ab"
-_REVIEWED_GENERATOR = "sha256:577f6b964b3096e79afb6537f54134af98391e92efae2d0cfba5159e132d493b"
+_REVIEWED_GENERATOR = "sha256:544d6b43e511f3b37be8b28cfa80c849f97cf06340b98c92eab84221197f0576"
 
 
 def migrate_published_generator_authority(catalog: dict) -> dict:

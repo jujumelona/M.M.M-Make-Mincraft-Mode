@@ -31,12 +31,43 @@ Choose `RUN_MODE` in the first cell:
 - **Revise** — upload an existing source/release ZIP, write a revision plan, then patch the project.
 - **Execute** — load a saved plan and build its implementation.
 
-The Planner uses a writing template and returns its own text. Planning does not parse
-the model's response as JSON, grade its content, require evidence for design choices,
-or run a repair loop. The host saves the text unchanged in an `mmm/authored-plan-v1`
-document; JSON is only the file container, not a required model response. Existing
-compiled proposal files remain loadable. Production contracts and target binding run
-when building, and a production error leaves the saved design intact.
+The Planner retrieves local task templates, decomposes the original request into
+distinct features and source-search queries, and saves that feature ledger alongside
+the supporting design in an `mmm/authored-plan-v2` document. Model responses use small,
+bounded JSON pages. The ledger preserves the whole request even when one worksheet
+concern has only four records. Irrelevant concerns are skipped, and state authoring
+receives the preceding behavior design. Legacy plans remain loadable.
+Dense source pages continue after 32 features without expanding each model response.
+
+Runtime worksheet records have one persisted execution owner before Typed IR is
+authored. Custom gameplay hooks belong to their feature implementation; retained
+UI transactions keep their exact action identities. This prevents the limited
+Typed dispatcher and generated feature callbacks from both applying one effect.
+After dependencies are generated, the coder receives their actual Java declarations
+and bounded source excerpts, alongside assigned state and atomic mutation records.
+
+Production searches related mod source for each feature, pins and inspects candidate
+code, adapts compatible slices, verifies them against the selected target, and gives
+the remaining work to implementation. Source discovery can find older mod versions;
+target compatibility is checked when adapting and compiling. A pinned commit archive
+is downloaded and its files are checked against the immutable Git tree before source
+analysis. Short authored feature queries precede classifier aliases; shared searches
+are scored separately for each feature, and untried ranked candidates are retained.
+Candidates are inspected and proved in small ranked batches; a usable result avoids
+downloading the rest of the frontier. Failed batches continue to later candidates.
+
+Each implementation task receives only its related source excerpts and original
+feature. Target-proven slices are installed; older licensed slices that need migration
+are supplied with the failed compilation diagnostics for target adaptation. Original
+gameplay features also receive startup-bound Java callback/glue jobs, including
+features that need no new content registry. Explicit UI features retain their screen
+owner. Search hits are never reported as installed reusable code. A production error
+leaves the saved plan intact.
+Unavailable optional migration references are recorded and skipped so fresh
+implementation can continue; installed donor source still requires its pinned files.
+
+Successful model calls emit a compact completion line; failures and periodic progress
+remain visible. Set `MMM_LLAMA_LIFECYCLE_VERBOSE=1` for detailed transport lifecycle logs.
 
 The notebook does not require an engine ZIP. The setup cell clones or fast-forwards the official GitHub `main`, verifies that the checkout exactly matches `origin/main`, and prints the commit actually used. If a Colab tab predates an engine/setup change, reopen the notebook and restart the runtime before running the cells again.
 
@@ -54,16 +85,16 @@ The optional local CUDA llama-server cell uses the same resolved planner configu
 
 Production compiles declaration-only concerns such as
 `persistence.stored_state` directly from canonical records. New authored plans
-also persist a Typed PlanIR during planning. Supported Typed PlanIR operations are
+persist a Typed PlanIR when preparing production. Supported Typed PlanIR operations are
 validated and lowered to `AuthoredProgram.java` by a deterministic host compiler;
 state operations use the canonical structured-state compiler and
 `AuthoredStateModel.java`. These production paths do not invoke the coder, Java
 structure assembly, paging, completion decisions, or model repair, and the
 orchestrator does not load the model router for Typed PlanIR generation.
 
-Unsupported platform operations are rejected at the planning boundary and checked
-again at production. They are never silently reconstructed from prose or routed
-back to the small coder. Legacy saved plans without Typed PlanIR retain the
+Unsupported Typed IR operations are rejected at the planning boundary and checked
+again at production. Original gameplay callbacks have their own persisted source
+implementation owners and receive actual prerequisite APIs. Legacy saved plans without Typed PlanIR retain the
 compatibility path so old artifacts remain readable.
 
 ```python

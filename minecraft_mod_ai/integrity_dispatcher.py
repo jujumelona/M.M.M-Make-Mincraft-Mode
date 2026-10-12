@@ -184,10 +184,21 @@ def execute_generator_job(job, *, context, router, port_registry=None, base_dir=
     if port_registry is not None and any(port_registry.has(name) for name in job.produces):
         raise ValueError("GENERATOR_OUTPUT_PORT_CONFLICT")
     generator = authority.executors[job.implementation_id]
-    output = generator(inputs, leaf_id=job.canonical_leaf, router=router, authority=authority)
+    source_context = ()
+    if base_dir is not None and spec.get("bindings", {}).get("content_dependency_paths_json"):
+        from .request_runtime_ownership import generated_owner_source_context
+
+        source_context = generated_owner_source_context(base_dir, spec)
+    extra_context = {"source_context": source_context} if source_context else {}
+    output = generator(inputs, leaf_id=job.canonical_leaf, router=router, authority=authority, **extra_context)
     source = output[next(p["name"] for p in manifest["outputs"] if p["type"] == "code_fragment")]
     verify_candidate_content(job, resolved, context, spec, source)
     validations = []
+    if source_context:
+        validations.append({
+            "validator": "materialized_prerequisite_source", "status": "CONTEXT",
+            "sources": [{"path": row["path"], "sha256": row["sha256"]} for row in source_context],
+        })
     if spec["language"] == "java":
         from .canonical_java_target_contract import assert_canonical_java_target
 

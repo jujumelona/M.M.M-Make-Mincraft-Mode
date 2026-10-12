@@ -34,10 +34,14 @@ def typed_plan_support_issues(
     typed_plan_ir: Mapping[str, Any] | None = None,
     *,
     externally_covered_refs=(),
+    runtime_owners=(),
 ) -> tuple[str, ...]:
     """Return deterministic unsupported-operation diagnostics."""
 
     normalized = normalize_structured_sections(structured_sections)
+    from .request_runtime_ownership import owned_record_refs
+
+    feature_owned = owned_record_refs(normalized, runtime_owners)
     issues: list[str] = []
     from .planning_detail_template import WORKSHEET_SECTIONS
 
@@ -124,7 +128,9 @@ def typed_plan_support_issues(
         active = active_concern_records(normalized, section)
         for concern, rows in active.items():
             ref = f"{section}.{concern}"
-            if rows and ref not in function_covered:
+            remaining = [row for index, row in enumerate(rows)
+                         if f"{ref}[{index}]" not in feature_owned]
+            if remaining and ref not in function_covered:
                 issues.append(ref)
 
     integration = active_concern_records(normalized, "integration")
@@ -142,6 +148,10 @@ def typed_plan_support_issues(
     bound_entry_points = set(bindings_by_entry)
 
     for index, row in enumerate(entry_points):
+        if f"integration.entry_points[{index}]" in feature_owned:
+            if index in bound_entry_points:
+                issues.append(f"integration.entry_points[{index}].duplicate_runtime_owner")
+            continue
         trigger = row.get("trigger")
         if is_mod_initialize_trigger(trigger):
             if index in bound_entry_points:
@@ -240,11 +250,13 @@ def assert_typed_plan_host_support(
     typed_plan_ir: Mapping[str, Any] | None = None,
     *,
     externally_covered_refs=(),
+    runtime_owners=(),
 ) -> None:
     issues = typed_plan_support_issues(
         structured_sections,
         typed_plan_ir,
         externally_covered_refs=externally_covered_refs,
+        runtime_owners=runtime_owners,
     )
     if issues:
         raise ValueError(

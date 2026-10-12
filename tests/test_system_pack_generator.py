@@ -78,7 +78,7 @@ def test_single_economy_manager_scales_shops_but_routes_extra_currency() -> None
     ]
     validate_system_modules("economy-shop", modules)
 
-    with pytest.raises(ValueError, match="explicit instance namespace"):
+    with pytest.raises(ValueError, match="Multiple independent currencies"):
         validate_system_modules(
             "economy-shop",
             [modules[0], _system_module("tokens", "economy", {"initial_balance": 0})],

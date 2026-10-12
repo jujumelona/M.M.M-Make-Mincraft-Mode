@@ -1308,7 +1308,9 @@ def _validate_metadata(metadata: dict[str, Any]) -> None:
         "intermediary",
         "official",
     }:
-        raise ValueError("Unsupported mapping namespace.")
+        if not (metadata["mapping_namespace"] == "unknown"
+                and metadata.get("source_kind") == "pinned_reference_requires_target_adaptation"):
+            raise ValueError("Unsupported mapping namespace.")
     if (
         not str(metadata["license"]).strip()
         or not str(metadata["source_commit"]).strip()

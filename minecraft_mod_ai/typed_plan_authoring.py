@@ -1675,6 +1675,7 @@ def author_semantic_game_dispatch(
     coverage_refs: Sequence[str],
     budget: Any = None,
     bound_events: Sequence[str] | None = None,
+    record_action_guards: Mapping[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Author exactly one bounded semantic action per host-owned coverage unit."""
 
@@ -1712,7 +1713,8 @@ def author_semantic_game_dispatch(
     units: list[tuple[str, int | None, Mapping[str, Any] | None]] = []
     for ref in refs:
         if ref in {"algorithm.steps", "algorithm.atomic_mutations",
-                   "resources_and_ui.interactions"}:
+                   "resources_and_ui.interactions"} or any(
+                       key.startswith(ref + "[") for key in (record_action_guards or {})):
             section, _, concern = ref.partition(".")
             records = active_concern_records(
                 structured_sections, section,
@@ -1841,6 +1843,9 @@ def author_semantic_game_dispatch(
                 "TYPED_PLAN_SEMANTIC_RESPONSE_INVALID: rule must be an object"
             )
         rule = dict(raw)
+        assigned_action = (record_action_guards or {}).get(f"{coverage_ref}[{record_index}]")
+        if assigned_action:
+            rule["action_guard"] = assigned_action
         if coverage_ref == "resources_and_ui.interactions":
             action = str((focus_record or {}).get("server_action") or "").strip()
             if not action:
@@ -2452,6 +2457,7 @@ def author_typed_plan_ir(
     deterministic_module_kinds: Iterable[str] | None = None,
     allowed_platform_kinds: Iterable[str] | None = None,
     externally_covered_refs: Iterable[str] = (),
+    runtime_owners=(),
     max_calls: int | None = None,
     budget: Any = None,
 ) -> dict[str, Any]:
@@ -2477,6 +2483,11 @@ def author_typed_plan_ir(
 
     coverage_refs = _active_concern_refs(structured_sections)
     entry_points = _integration_entry_points(structured_sections)
+    from .request_runtime_ownership import owned_record_refs, runtime_sections, TYPED_UI_OWNER
+
+    feature_owned = owned_record_refs(structured_sections, runtime_owners)
+    logic_sections = runtime_sections(structured_sections, runtime_owners)
+    logic_coverage = set(_active_concern_refs(logic_sections))
     from .authored_ui_action_bindings import _mutating_ui_actions
     requested_actions = _mutating_ui_actions(structured_sections)
     bind_ui_actions = bool(requested_actions)
@@ -2496,6 +2507,8 @@ def author_typed_plan_ir(
     # Event handler structure is host-owned. The planner only chooses the typed
     # event enum and, for command events, the bounded command configuration.
     for entry_point_index, row in enumerate(entry_points):
+        if f"integration.entry_points[{entry_point_index}]" in feature_owned:
+            continue
         if is_mod_initialize_trigger(row.get("trigger")):
             continue
 
@@ -2574,7 +2587,7 @@ def author_typed_plan_ir(
 
     logic_refs = sorted(
         ref
-        for ref in coverage_refs
+        for ref in logic_coverage
         if ref.startswith((
             "behavior_contract.",
             "algorithm.",
@@ -2610,7 +2623,7 @@ def author_typed_plan_ir(
         logic_dispatch_body = author_semantic_game_dispatch(
             router,
             source_text,
-            structured_sections,
+            logic_sections,
             capabilities,
             coverage_refs=logic_refs,
             budget=budget,
@@ -2625,6 +2638,11 @@ def author_typed_plan_ir(
     ui_dispatch_spec: dict[str, Any] | None = None
     ui_dispatch_body: list[dict[str, Any]] = []
     if bind_ui_actions:
+        from .request_runtime_ownership import ui_record_action_guards
+
+        ui_covers = {ref.split("[", 1)[0] for owner in runtime_owners
+                     if owner["feature_id"] == TYPED_UI_OWNER
+                     for ref in owner["worksheet_record_refs"]}
         ui_dispatch_spec = {
             "id": ui_dispatch_id,
             "parameters": [
@@ -2634,12 +2652,13 @@ def author_typed_plan_ir(
                 {"name": "flag", "type": "boolean"},
             ],
             "return_type": "int",
-            "covers": ["resources_and_ui.interactions"],
+            "covers": sorted({"resources_and_ui.interactions", *ui_covers}),
         }
         ui_dispatch_body = author_semantic_game_dispatch(
-            router, source_text, structured_sections, capabilities,
-            coverage_refs=("resources_and_ui.interactions",),
+            router, source_text, runtime_sections(structured_sections, runtime_owners, for_ui=True), capabilities,
+            coverage_refs=tuple(sorted({"resources_and_ui.interactions", *ui_covers})),
             budget=budget, bound_events=("command",),
+            record_action_guards=ui_record_action_guards(structured_sections, runtime_owners),
         )
 
     def literal(kind: str, value: Any) -> dict[str, Any]:
@@ -2689,7 +2708,7 @@ def author_typed_plan_ir(
                 "has no host binding"
             )
         event = str(binding["event"])
-        if logic_dispatch_spec is None:
+        if logic_dispatch_spec is None and function_id not in action_by_function:
             body = (
                 [{
                     "op": "return",

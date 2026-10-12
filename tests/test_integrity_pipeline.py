@@ -373,20 +373,20 @@ def test_native_scalar_source_wrapper_preserves_root_profile():
     ) == "class MarketScreen {}"
 
 
-@pytest.mark.parametrize("leaf", ["minecraft/screen/registration", "minecraft/block_entity/registry"])
+@pytest.mark.parametrize("leaf", ["minecraft/event/callback", "minecraft/event/registration"])
 @pytest.mark.parametrize("valid_source", [True, False])
 def test_real_candidate_source_contract_uses_transport_schema_and_host_validation(leaf, valid_source):
-    from types import SimpleNamespace
     from minecraft_mod_ai.artifact_expansion import _canonical_candidate_inputs
-    from minecraft_mod_ai.prompt_fact_types import FactType
+    from minecraft_mod_ai.execution_contract_policy import SOURCE_REPAIR_HARD_ATTEMPTS
     from minecraft_mod_ai.integrity_bootstrap import bootstrap_integrity
     from minecraft_mod_ai.model_output_atomicity_contract import assert_atomic_model_schema
     from minecraft_mod_ai.task_template_catalog import load_template
 
     inputs = _canonical_candidate_inputs(
-        SimpleNamespace(fact_type=FactType.GUI_EXISTS, source_clause="Implement fabricator UI", display_name="Fabricator"),
+        None,
         canonical_leaf=leaf, mod_id="space", package_name="example.space",
         package_path="example/space", subject="fabricator", minecraft_version="26.2", context_id="ctx",
+        source_requirement="Implement the authored gameplay callback", parent_requirement="request_callback",
     )
     manifest = load_template(leaf)
     spec = inputs[next(p["name"] for p in manifest["inputs"] if p["type"] == "specification")]
@@ -418,5 +418,5 @@ def test_real_candidate_source_contract_uses_transport_schema_and_host_validatio
         from jsonschema import ValidationError
         with pytest.raises(ValidationError):
             execute()
-    assert router.calls == 1
+    assert router.calls == (1 if valid_source else SOURCE_REPAIR_HARD_ATTEMPTS)
     assert "pattern" in spec["slots"][0]["schema"]

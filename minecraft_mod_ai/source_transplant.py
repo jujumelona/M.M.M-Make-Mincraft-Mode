@@ -15,6 +15,8 @@ import hashlib
 import json
 import os
 import re
+import tempfile
+import zipfile
 from collections import OrderedDict, deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -939,6 +941,15 @@ def _repository_snapshot(repository: str, discovery_client: Any) -> Mapping[str,
         client = _github_client(token)
         try:
             entries = _repository_tree_entries(client, repository, commit_sha)
+            blobs = {str(item["path"]): str(item["sha"]) for item in entries
+                     if item.get("type") == "blob" and isinstance(item.get("path"), str)
+                     and isinstance(item.get("sha"), str)}
+            try:
+                _prefetch_pinned_archive(client, repository, commit_sha, blobs)
+            except (httpx.HTTPError, SourceTransplantError, OSError, zipfile.BadZipFile):
+                # The immutable blob API remains a hash-checked fallback for
+                # unavailable/oversized archives and shallow test clients.
+                pass
         finally:
             client.close()
         blobs = {
@@ -1015,8 +1026,68 @@ def _github_json(client: httpx.Client, url: str, *, params: Mapping[str, str] | 
         ) from exc
 
 
-def _fetch_blob_bytes(client: httpx.Client, repository: str, blob_sha: str) -> bytes:
+def _remember_verified_blob(repository: str, blob_sha: str, raw: bytes) -> None:
     global _BLOB_CACHE_BYTES
+    key = (repository, blob_sha)
+    with _BLOB_LOCK:
+        existing = _BLOB_CACHE.pop(key, None)
+        if existing is not None:
+            _BLOB_CACHE_BYTES -= len(existing)
+        byte_budget = _blob_cache_byte_budget()
+        while _BLOB_CACHE and _BLOB_CACHE_BYTES + len(raw) > byte_budget:
+            _old_key, old_value = _BLOB_CACHE.popitem(last=False)
+            _BLOB_CACHE_BYTES -= len(old_value)
+        _BLOB_CACHE[key] = raw
+        _BLOB_CACHE_BYTES += len(raw)
+
+
+def _prefetch_pinned_archive(client: httpx.Client, repository: str, commit_sha: str,
+                             blobs: Mapping[str, str]) -> int:
+    """One commit archive replaces API-per-file downloads, retaining Git hashes."""
+    from .repository_artifact_index import _is_repository_artifact
+
+    if not callable(getattr(client, "stream", None)):
+        return 0
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) or not re.fullmatch(r"[0-9a-f]{40,64}", commit_sha):
+        raise SourceTransplantError("Archive source is not an immutable repository commit.")
+    budget = _env_int("MMM_SOURCE_ARCHIVE_BYTE_BUDGET", 64 * 1024 * 1024,
+                      minimum=64 * 1024, maximum=512 * 1024 * 1024)
+    verified: list[tuple[str, bytes]] = []
+    with tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024) as downloaded:
+        with client.stream("GET", f"https://codeload.github.com/{repository}/zip/{commit_sha}",
+                           headers={"Authorization": ""}, timeout=30.0) as response:
+            response.raise_for_status()
+            total = 0
+            for chunk in response.iter_bytes(64 * 1024):
+                total += len(chunk)
+                if total > budget:
+                    raise SourceTransplantError("Pinned source archive exceeded download byte budget.")
+                downloaded.write(chunk)
+        downloaded.seek(0)
+        with zipfile.ZipFile(downloaded) as archive:
+            decoded = 0
+            for member in archive.infolist():
+                _root, separator, path = member.filename.partition("/")
+                if not separator or path not in blobs or not _is_repository_artifact(path):
+                    continue
+                if member.file_size > _single_blob_byte_budget():
+                    raise SourceTransplantError("Pinned source archive file exceeded blob byte budget.")
+                decoded += member.file_size
+                if decoded > _blob_cache_byte_budget():
+                    raise SourceTransplantError("Pinned source archive exceeded decoded byte budget.")
+                raw = archive.read(member)
+                identity = b"blob " + str(len(raw)).encode("ascii") + b"\0" + raw
+                actual = (hashlib.sha1(identity).hexdigest() if len(blobs[path]) == 40
+                          else hashlib.sha256(identity).hexdigest())
+                if actual != blobs[path]:
+                    raise SourceTransplantError("Pinned source archive Git blob hash mismatch: " + path)
+                verified.append((blobs[path], raw))
+    for blob_sha, raw in verified:
+        _remember_verified_blob(repository, blob_sha, raw)
+    return len(verified)
+
+
+def _fetch_blob_bytes(client: httpx.Client, repository: str, blob_sha: str) -> bytes:
 
     if not re.fullmatch(r"[0-9a-f]{40,64}", blob_sha):
         raise SourceTransplantError("Donor blob is not immutable.")
@@ -1060,16 +1131,7 @@ def _fetch_blob_bytes(client: httpx.Client, repository: str, blob_sha: str) -> b
             raise SourceTransplantError(
                 f"Single donor blob exceeded configured byte budget ({single_blob_budget} bytes)."
             )
-        with _BLOB_LOCK:
-            existing = _BLOB_CACHE.pop(key, None)
-            if existing is not None:
-                _BLOB_CACHE_BYTES -= len(existing)
-            byte_budget = _blob_cache_byte_budget()
-            while _BLOB_CACHE and _BLOB_CACHE_BYTES + len(raw) > byte_budget:
-                _old_key, old_value = _BLOB_CACHE.popitem(last=False)
-                _BLOB_CACHE_BYTES -= len(old_value)
-            _BLOB_CACHE[key] = raw
-            _BLOB_CACHE_BYTES += len(raw)
+        _remember_verified_blob(repository, blob_sha, raw)
         return raw
     finally:
         with _BLOB_LOCK:

@@ -279,17 +279,59 @@ def _proof_admits(donor: DonorSlice, receipt: ReuseProofReceipt) -> bool:
     return True
 
 
-def _donor_rank(
-    donor: DonorSlice,
-    receipt: ReuseProofReceipt,
-) -> tuple[int, int, float, float, str]:
-    return (
-        1 if receipt.tests_passed else 0,
-        1 if donor.target_compatibility == "exact" else 0,
-        float(donor.confidence),
-        -float(donor.adaptation_cost),
-        donor.repository.casefold(),
-    )
+def _inspect_candidate_batch(
+    cards: Sequence[Mapping[str, Any]], *, capability: str, terms: Sequence[str],
+    adapter: TargetContract, client: EcosystemDiscoveryClient,
+    donor_inspector: DonorInspector, inspections: list[dict[str, Any]],
+) -> list[DonorSlice]:
+    """Inspect a small ranked batch before paying for the rest of the frontier."""
+    candidates: list[DonorSlice] = []
+    for card in cards:
+        overlap = _candidate_overlap(capability, terms, card)
+        explicit_reference = bool(card.get("explicit_reference"))
+        if overlap <= 0 and not explicit_reference:
+            continue
+        repository = str(card["repository"])
+        try:
+            donor = donor_inspector(
+                repository=repository,
+                capability=capability,
+                adapter=adapter,
+                discovery_client=client,
+            )
+        except Exception as exc:  # noqa: BLE001 - fail closed per external donor
+            inspections.append(
+                {
+                    "capability": capability,
+                    "repository": repository,
+                    "page_refs": list(card.get("page_refs", ())),
+                    "explicit_reference": explicit_reference,
+                    "candidate_origin": str(card.get("candidate_origin") or "planning_state_or_explicit"),
+                    "status": "inspection_error",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+            continue
+        admitted = bool(
+            donor is not None
+            and donor.closure_complete
+            and donor.target_compatibility in {"exact", "adapt"}
+        )
+        inspections.append(
+            {
+                "capability": capability,
+                "repository": repository,
+                "page_refs": list(card.get("page_refs", ())),
+                "explicit_reference": explicit_reference,
+                "candidate_origin": str(card.get("candidate_origin") or "planning_state_or_explicit"),
+                "status": "proof_pending" if admitted else "inspection_rejected",
+                "overlap": overlap,
+            }
+        )
+        if admitted and donor is not None:
+            candidates.append(donor)
+
+    return candidates
 
 
 def build_repository_reuse_plan(
@@ -348,6 +390,7 @@ def build_repository_reuse_plan(
     decisions: list[dict[str, Any]] = []
     inspections: list[dict[str, Any]] = []
     proofs: list[dict[str, Any]] = []
+    reference_sources: list[dict[str, Any]] = []
     temporary = None
     proof_workspace = Path(target_workspace).resolve() if target_workspace else None
     if proof_workspace is None:
@@ -356,81 +399,67 @@ def build_repository_reuse_plan(
     try:
         for capability in capabilities:
             terms = terms_by_capability.get(capability, (capability.replace(".", " "),))
-            candidates: list[DonorSlice] = []
-            for card in cards:
-                overlap = _candidate_overlap(capability, terms, card)
-                explicit_reference = bool(card.get("explicit_reference"))
-                if overlap <= 0 and not explicit_reference:
-                    continue
-                repository = str(card["repository"])
-                try:
-                    donor = donor_inspector(
-                        repository=repository,
-                        capability=capability,
-                        adapter=adapter,
-                        discovery_client=client,
-                    )
-                except Exception as exc:  # noqa: BLE001 - fail closed per external donor
-                    inspections.append(
-                        {
-                            "capability": capability,
-                            "repository": repository,
-                            "page_refs": list(card.get("page_refs", ())),
-                            "explicit_reference": explicit_reference,
-                            "candidate_origin": str(card.get("candidate_origin") or "planning_state_or_explicit"),
-                            "status": "inspection_error",
-                            "error": f"{type(exc).__name__}: {exc}",
-                        }
-                    )
-                    continue
-                admitted = bool(
-                    donor is not None
-                    and donor.closure_complete
-                    and donor.target_compatibility in {"exact", "adapt"}
-                )
-                inspections.append(
-                    {
-                        "capability": capability,
-                        "repository": repository,
-                        "page_refs": list(card.get("page_refs", ())),
-                        "explicit_reference": explicit_reference,
-                        "candidate_origin": str(card.get("candidate_origin") or "planning_state_or_explicit"),
-                        "status": "proof_pending" if admitted else "inspection_rejected",
-                        "overlap": overlap,
-                    }
-                )
-                if admitted and donor is not None:
-                    candidates.append(donor)
-
             verified: list[tuple[DonorSlice, ReuseProofReceipt]] = []
-            for donor in candidates:
-                try:
-                    receipt = proof_executor(
-                        donor,
-                        target_workspace=proof_workspace,
-                        target_context=_target_context(adapter),
-                        discovery_client=client,
-                        run_tests=True,
-                    )
-                except Exception as exc:  # noqa: BLE001 - reject one failed proof only
-                    proofs.append(
-                        {
-                            "candidate_id": f"{donor.repository}@{donor.commit_sha}",
-                            "capability": capability,
-                            "status": "proof_error",
-                            "error": f"{type(exc).__name__}: {exc}",
-                        }
-                    )
-                    continue
-                proof_payload = receipt.to_dict()
-                proof_payload["status"] = (
-                    "verified_code_reuse" if _proof_admits(donor, receipt) else "rejected"
+            ranked_cards = sorted(
+                (card for card in cards if card.get("explicit_reference")
+                 or _candidate_overlap(capability, terms, card) > 0),
+                key=lambda card: (bool(card.get("explicit_reference")),
+                                  _candidate_overlap(capability, terms, card)), reverse=True,
+            )
+            # Two inspections preserve exact-target/adaptation-cost ranking
+            # locally. Later batches remain available if every proof rejects;
+            # stop downloading as soon as usable code is found.
+            for offset in range(0, len(ranked_cards), 2):
+                candidates = _inspect_candidate_batch(
+                    ranked_cards[offset:offset + 2], capability=capability, terms=terms,
+                    adapter=adapter, client=client, donor_inspector=donor_inspector,
+                    inspections=inspections,
                 )
-                proofs.append(proof_payload)
-                if _proof_admits(donor, receipt):
-                    verified.append((donor, receipt))
+                for donor in sorted(candidates, key=lambda row: (
+                    row.target_compatibility == "exact", -row.adaptation_cost, row.confidence,
+                ), reverse=True):
+                    try:
+                        receipt = proof_executor(
+                            donor,
+                            target_workspace=proof_workspace,
+                            target_context=_target_context(adapter),
+                            discovery_client=client,
+                            run_tests=True,
+                        )
+                    except Exception as exc:  # noqa: BLE001 - reject one failed proof only
+                        proofs.append(
+                            {
+                                "candidate_id": f"{donor.repository}@{donor.commit_sha}",
+                                "capability": capability,
+                                "status": "proof_error",
+                                "error": f"{type(exc).__name__}: {exc}",
+                            }
+                        )
+                        reference_sources.append({
+                            "capability": capability, "donor": donor.to_dict(),
+                            "authority": "pinned_licensed_reference_only",
+                            "migration_diagnostics": f"{type(exc).__name__}: {exc}"[:1200],
+                        })
+                        continue
+                    proof_payload = receipt.to_dict()
+                    proof_payload["status"] = (
+                        "verified_code_reuse" if _proof_admits(donor, receipt) else "rejected"
+                    )
+                    proofs.append(proof_payload)
+                    if _proof_admits(donor, receipt):
+                        verified.append((donor, receipt))
+                        break
+                    else:
+                        reference_sources.append({
+                            "capability": capability, "donor": donor.to_dict(),
+                            "authority": "pinned_licensed_reference_only",
+                            "migration_diagnostics": str(receipt.failure_message or receipt.failure_code)[:1200],
+                        })
 
-            selected = max(verified, key=lambda item: _donor_rank(*item)) if verified else None
+                if verified:
+                    break
+
+            selected = verified[0] if verified else None
             if selected is None:
                 decisions.append(
                     {
@@ -482,6 +511,7 @@ def build_repository_reuse_plan(
         ),
         "inspection_receipts": inspections,
         "proof_receipts": proofs,
+        "reference_sources": reference_sources,
         "selection_policy": (
             "reference-only host-grounded/explicit GitHub candidate -> frozen-intent capability "
             "inspection -> immutable source + permissive-license closure -> authoritative target "

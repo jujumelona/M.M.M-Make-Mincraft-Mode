@@ -21,6 +21,7 @@ from .artifact_graph_executor import execute_artifact_graph
 from .artifact_job import (
     ArtifactJob,
     canonical_client_entrypoints,
+    canonical_main_entrypoints,
     parse_artifact_jobs,
 )
 from .artifact_materializer import ensure_artifact_scaffolding
@@ -2010,6 +2011,12 @@ class CompleteProductionOrchestrator:
                     approved_client_entrypoints = canonical_client_entrypoints(
                         owned_client_jobs
                     )
+                    approved_main_entrypoints = canonical_main_entrypoints(owned_client_jobs)
+                    if approved_main_entrypoints:
+                        ensure_fabric_main_entrypoints(
+                            inspect_fabric_project(project_root), entrypoints=approved_main_entrypoints,
+                        )
+                        touched_paths.append("src/main/resources/fabric.mod.json")
                     if approved_client_entrypoints:
                         ensure_fabric_client_entrypoints(
                             inspect_fabric_project(project_root),
@@ -2442,6 +2449,17 @@ class CompleteProductionOrchestrator:
         # and can miss client jobs executed as transitive prerequisites or
         # reused from a checkpoint. The final validator must see the complete
         # approved set, not a partial shard-local subset.
+        expected_main = canonical_main_entrypoints(artifact_jobs)
+        if expected_main:
+            entrypoint_receipt = ensure_fabric_main_entrypoints(
+                inspect_fabric_project(project_root), entrypoints=expected_main,
+            )
+            module_receipts.append({
+                "schema_version": "mmm/feature-entrypoints-reconciliation-v1",
+                "status": "SUCCEEDED", "entrypoints": list(expected_main),
+                "metadata_status": entrypoint_receipt.get("status", "UNKNOWN"),
+                "touched_paths": ["src/main/resources/fabric.mod.json"],
+            })
         expected_clients = canonical_client_entrypoints(artifact_jobs)
         if expected_clients:
             for job in artifact_jobs:

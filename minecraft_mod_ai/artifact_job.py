@@ -53,6 +53,25 @@ def artifact_owner_module_ids(jobs: Iterable[Any]) -> frozenset[str]:
     return frozenset(owners)
 
 
+def canonical_main_entrypoints(jobs: Iterable["ArtifactJob"]) -> tuple[str, ...]:
+    """Only host-persisted feature classes may become common Fabric entrypoints."""
+    entrypoints = set()
+    for job in jobs:
+        if job.executor_type is not ExecutorType.PYTHON_GENERATOR or job.canonical_leaf != "minecraft/event/callback":
+            continue
+        inputs = job.deterministic_inputs.get("_canonical_inputs", {})
+        spec = inputs.get("event_callback_input", {})
+        bindings = spec.get("bindings", {})
+        fqcn = bindings.get("request_feature_entrypoint")
+        if not fqcn:
+            continue
+        expected = str(bindings.get("package_name", "")) + "." + str(bindings.get("class_name", ""))
+        if fqcn != expected or spec.get("side") != "COMMON":
+            raise ValueError("REQUEST_FEATURE_ENTRYPOINT_CONTRACT_MISMATCH")
+        entrypoints.add(fqcn)
+    return tuple(sorted(entrypoints))
+
+
 def canonical_client_entrypoints(
     jobs: Iterable["ArtifactJob"],
 ) -> tuple[str, ...]:

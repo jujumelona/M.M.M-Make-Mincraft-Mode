@@ -483,8 +483,12 @@ def compile_content_graph(
         gameplay_context = context.get("design_context")
         gameplay_obligation = (
             isinstance(gameplay_context, Mapping)
-            and gameplay_context.get("source_section") == "algorithm"
-            and gameplay_context.get("source_concern") in {"steps", "atomic_mutations"}
+            and (
+                (gameplay_context.get("source_section") == "algorithm"
+                 and gameplay_context.get("source_concern") in {"steps", "atomic_mutations"})
+                or (gameplay_context.get("source_section") == "request_scope"
+                    and gameplay_context.get("source_feature", {}).get("implementation_role") == "gameplay")
+            )
         )
         if gameplay_obligation and nodes and all(
             node.get("kind") == "gui" for node in nodes
@@ -503,7 +507,6 @@ def compile_content_graph(
             # mutation. Preserve the broad set of non-GUI content owners:
             # forcing an item/block use action would invent a different
             # interaction from the user's original gameplay contract.
-            # The production floor separately proves executable mutations.
             playable_kinds = [
                 kind for kind in PRIMARY_CONTENT_KINDS if kind != "gui"
             ]
@@ -1416,6 +1419,9 @@ def compile_content_graph(
     by_slot = {}
     for decision in decisions:
         by_slot.setdefault(decision["slot_id"], []).append(decision["value"])
+    request_requirements = [deepcopy(req) for req in requirements
+                            if req.get("design_context", {}).get("source_section") == "request_scope"]
+    content_bound_refs = {ref for node in entities.values() for ref in node["requirement_refs"]}
     return {
         "title": prompt,
         "pitch": prompt,
@@ -1438,6 +1444,10 @@ def compile_content_graph(
         "_implementation_facts": facts,
         "_content_domains": sorted({m.kind for m in modules}),
         "_content_entities": list(entities.values()),
+        **({"_request_requirements": request_requirements,
+            "_residual_request_features": [req for req in request_requirements
+                                           if req["requirement_id"] not in content_bound_refs]}
+           if request_requirements else {}),
         **({"_content_requirements": content_requirements} if content_requirements else {}),
         "_content_relations": relations,
         "_research_facts": research_facts,

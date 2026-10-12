@@ -336,6 +336,15 @@ def materialize_verified_authored_sources(
         row for row in reuse_plan.get("capabilities", ())
         if isinstance(row, Mapping) and row.get("mode") == "source_transplant"
     ]
+    notices = reuse_plan.get("reference_license_notices", {})
+    if notices:
+        root = Path(project_root).resolve()
+        for relative, notice in notices.items():
+            target = (root / relative).resolve()
+            if not target.is_relative_to(root) or not str(relative).startswith("src/main/resources/META-INF/"):
+                raise ValueError("SOURCE_REUSE_LICENSE_PATH_INVALID")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(notice, encoding="utf-8")
     if not chosen:
         return {"schema_version": "mmm/authored-source-install-v1", "donor_count": 0, "files": []}
     if not package_name.strip() or not mod_id.strip():

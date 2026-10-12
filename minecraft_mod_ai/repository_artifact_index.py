@@ -66,7 +66,7 @@ def _bounded_env_int(
 def _cache_entry_limit() -> int:
     return _bounded_env_int(
         "MMM_REPOSITORY_ARTIFACT_INDEX_CACHE_ENTRIES",
-        4,
+        16,
         minimum=1,
         maximum=32,
     )

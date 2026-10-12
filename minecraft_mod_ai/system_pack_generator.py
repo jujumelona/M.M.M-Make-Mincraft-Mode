@@ -41,6 +41,15 @@ def supported_system_packs() -> tuple[str, ...]:
     return tuple(sorted(_PACKS))
 
 
+def system_pack_source_paths(pack_id: str, package_name: str) -> tuple[str, ...]:
+    """Share exact emitted Java paths with dependent implementation tasks."""
+    class_name = "".join(part.capitalize() for part in pack_id.split("-"))
+    if not class_name.endswith("System"):
+        class_name += "System"
+    prefix = f"src/main/java/{package_name.replace('.', '/')}/system/"
+    return (prefix + class_name + ".java", prefix + "MmmPersistentStore.java", prefix + "MmmSystemConfig.java")
+
+
 def generate_system_pack(
     *,
     project_root: str | Path,
@@ -105,13 +114,8 @@ def generate_system_pack(
     ]
     validate_system_modules(pack_id, merged_modules)
 
-    class_name = "".join(part.capitalize() for part in pack_id.split("-"))
-    if not class_name.endswith("System"):
-        class_name += "System"
-    package_path = package_name.replace(".", "/")
-    relative_java = f"src/main/java/{package_path}/system/{class_name}.java"
-    shared_store = f"src/main/java/{package_path}/system/MmmPersistentStore.java"
-    shared_config = f"src/main/java/{package_path}/system/MmmSystemConfig.java"
+    relative_java, shared_store, shared_config = system_pack_source_paths(pack_id, package_name)
+    class_name = PurePosixPath(relative_java).stem
     contract_relative = f"src/main/resources/data/{mod_id}/mmm_systems/{pack_id}.json"
     files = {
         shared_store: _persistent_store_java(package_name, mod_id),

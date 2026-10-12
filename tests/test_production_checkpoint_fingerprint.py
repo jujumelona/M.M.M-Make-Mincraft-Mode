@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from minecraft_mod_ai import production_checkpoint_policy as policy
 
 
@@ -45,3 +47,21 @@ def test_native_stage_fingerprints_include_their_owner_generators(monkeypatch) -
     assert "minecraft_mod_ai.typed_plan_production" in _fingerprinted_names(
         monkeypatch, "host"
     )
+
+
+@pytest.mark.parametrize("owner", [
+    "canonical_generators", "integrity_dispatcher", "request_runtime_ownership",
+    "registered_leaf_binding", "host_generator_catalog_migration",
+])
+def test_feature_resume_invalidates_changed_runtime_implementation(monkeypatch, owner):
+    revision = ["0" * 64]
+
+    def digest(value):
+        return revision[0] if getattr(value, "__name__", "") == "minecraft_mod_ai." + owner else "f" * 64
+
+    monkeypatch.setattr(policy, "_file_digest", digest)
+    before = policy.production_implementation_fingerprint("content")
+    host_before = policy.production_implementation_fingerprint("host")
+    revision[0] = "1" * 64
+    assert policy.production_implementation_fingerprint("content") != before
+    assert policy.production_implementation_fingerprint("host") == host_before

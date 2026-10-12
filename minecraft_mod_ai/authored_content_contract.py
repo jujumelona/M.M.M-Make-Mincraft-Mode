@@ -151,18 +151,23 @@ def content_request_catalog(
         structured_sections, requested_prompt=requested_prompt,
     )
     if request_scope and request_scope.get("requirements"):
-        peers = [{"requirement_id": row["requirement_id"], "statement": row["statement"]}
-                 for row in request_scope["requirements"]]
+        transactions = [row for row in gameplay_requirements
+                        if row["design_context"].get("source_section") == "algorithm"
+                        and row["design_context"].get("source_concern") == "atomic_mutations"]
         gameplay_requirements = [{
             "requirement_id": row["requirement_id"], "statement": row["statement"],
             "source_span": deepcopy(row.get("source_span", {})),
             "design_context": {
-                "requested_prompt": requested_prompt, "source_section": "request_scope",
-                "source_concern": "features", "source_feature": deepcopy(row),
-                "peer_features": peers,
+                "source_section": "request_scope",
+                "source_concern": "features", "source_feature": {
+                    key: deepcopy(row[key]) for key in (
+                        "requirement_id", "statement", "search_query", "source_span",
+                        "implementation_role",
+                    ) if key in row
+                },
                 "scope_policy": "Implement this original feature; supporting worksheet rows cannot narrow it.",
             },
-        } for row in request_scope["requirements"]]
+        } for row in request_scope["requirements"]] + transactions
     if not any(records.get(concern) for concern in CONTENT_GRAPH_DRIVER_CONCERNS):
         return {
             "requirements": gameplay_requirements,

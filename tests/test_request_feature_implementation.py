@@ -1,0 +1,91 @@
+from __future__ import annotations
+
+from minecraft_mod_ai.authored_plan import AuthoredPlan
+from minecraft_mod_ai.content_design_graph import compile_content_graph
+
+
+def test_zero_entity_feature_remains_executable_work(monkeypatch):
+    monkeypatch.setattr("minecraft_mod_ai.content_design_graph.run_record_template",
+                        lambda *args, **kwargs: {"records": []})
+    row = {"requirement_id": "request_planet", "statement": "Travel to planets",
+           "design_context": {"source_section": "request_scope", "source_concern": "features",
+                              "source_feature": {"implementation_role": "gameplay"}}}
+    result = compile_content_graph("Travel to planets", object(),
+                                   request_catalog={"requirements": [row], "host_constraints": {}})
+    assert result["modules"] == []
+    assert result["_request_requirements"][0]["requirement_id"] == "request_planet"
+    assert result["_residual_request_features"][0]["statement"] == "Travel to planets"
+
+
+def test_feature_glue_uses_registered_java_and_real_fabric_startup():
+    from minecraft_mod_ai.artifact_job import (
+        canonical_main_entrypoints,
+        validate_artifact_job_graph,
+    )
+    from minecraft_mod_ai.authored_feature_implementation import (
+        compile_request_feature_jobs,
+    )
+    from minecraft_mod_ai.authored_source_rag import VerifiedSourceRAG
+    from minecraft_mod_ai.host_version_catalog import host_target
+
+    adapter = host_target("26.1.2")
+    plan = AuthoredPlan("Travel to planets", "Saved worksheet", request_scope={"requirements": [{
+        "requirement_id": "request_planet", "statement": "Travel to planets",
+        "search_query": "space travel", "implementation_role": "gameplay",
+    }]})
+    modules, jobs = compile_request_feature_jobs(
+        plan, adapter=adapter, mod_id="space", package_name="test.space",
+        content_modules=(), content_jobs=(), source_rag=VerifiedSourceRAG(), source_reuse={},
+    )
+    assert modules[0].kind == "integration"
+    assert modules[0].config["requirement_refs"] == ["request_planet"]
+    assert jobs[0].canonical_leaf == "minecraft/event/callback"
+    validate_artifact_job_graph(jobs, module_ids=[m.module_id for m in modules])
+    entrypoints = canonical_main_entrypoints(jobs)
+    spec = jobs[0].deterministic_inputs["_canonical_inputs"]["event_callback_input"]
+    assert entrypoints == (spec["bindings"]["package_name"] + "." + spec["bindings"]["class_name"],)
+    assert "onInitialize" in spec["output_schema"]["pattern"]
+    assert "Travel to planets" in spec["requirement"]
+    assert "player_join" not in spec["bindings"]
+    from minecraft_mod_ai.integrity_bootstrap import get_integrity_authority
+    get_integrity_authority().types.validate_input(
+        "minecraft/event/callback:input", jobs[0].deterministic_inputs["_canonical_inputs"],
+    )
+    import json
+
+    from minecraft_mod_ai.canonical_generators import generate_canonical_leaf
+
+    class Router:
+        def generate_text(self, role, messages, **kwargs):
+            assert role == "coder"
+            assert "Travel to planets" in messages[-1]["content"]
+            return json.dumps(
+                f"package {spec['bindings']['package_name']}; "
+                f"public final class {spec['bindings']['class_name']} implements net.fabricmc.api.ModInitializer "
+                "{ public void onInitialize() { System.out.println(\"test startup\"); } }"
+            )
+
+    generated = generate_canonical_leaf(jobs[0].deterministic_inputs["_canonical_inputs"],
+                                        leaf_id=jobs[0].canonical_leaf, router=Router(),
+                                        authority=get_integrity_authority())
+    assert "onInitialize" in generated["event_callback_artifact"]
+    assert generated["event_callback_receipt"]["context_id"] == adapter.version_context.context_id
+
+
+def test_explicit_gui_feature_uses_existing_screen_without_extra_server_class():
+    from types import SimpleNamespace
+
+    from minecraft_mod_ai.authored_feature_implementation import (
+        compile_request_feature_jobs,
+    )
+    from minecraft_mod_ai.authored_source_rag import VerifiedSourceRAG
+
+    plan = AuthoredPlan("Shipyard screen", "Saved", request_scope={"requirements": [{
+        "requirement_id": "screen", "statement": "Show shipyard screen", "implementation_role": "interface",
+    }]})
+    modules, jobs = compile_request_feature_jobs(
+        plan, adapter=SimpleNamespace(), mod_id="space", package_name="test.space",
+        content_modules=(SimpleNamespace(kind="gui", config={"requirement_refs": ["screen"]}),),
+        content_jobs=(), source_rag=VerifiedSourceRAG(), source_reuse={},
+    )
+    assert modules == jobs == ()
