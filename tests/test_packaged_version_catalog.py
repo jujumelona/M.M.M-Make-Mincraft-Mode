@@ -13,13 +13,15 @@ def test_packaged_catalog_has_exact_requests_and_evidence_bindings(monkeypatch):
     monkeypatch.delenv("MMM_VERSION_BUNDLE_CATALOG", raising=False)
     resolver, bundles = load_host_catalog()
     report = json.loads(DEFAULT_CATALOG.with_name("official_version_evidence.json").read_text())
-    evidence = {row["context_id"]: row for row in report["versions"]}
+    # Reviewed executor migrations change the runtime context ID while the
+    # official version metadata and its independently checked digest stay fixed.
+    evidence = {row["minecraft"]: row for row in report["versions"]}
     assert len(bundles) == len(evidence) == 43
     assert resolver.resolve(VersionRequest()).minecraft == "26.2"
     for context in bundles:
         assert resolver.resolve(VersionRequest.from_input(context.minecraft)) == context
         assert host_target(context.minecraft).version_context == context
-        row = dict(evidence[context.context_id])
+        row = dict(evidence[context.minecraft])
         row.pop("context_id")
         digest = sha256(json.dumps(row, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
         assert context.host_revision == "sha256:" + digest

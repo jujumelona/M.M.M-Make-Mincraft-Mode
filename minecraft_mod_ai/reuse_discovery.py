@@ -250,58 +250,32 @@ def _ontology_search_queries(capability: str) -> tuple[str, ...]:
     return tuple(values)
 
 
-def _query_variants(capability: str, terms: Sequence[str]) -> tuple[str, ...]:
-    """Prioritize short, source-searchable capability queries over request dumps.
+def _specific_search_terms(terms: Sequence[str]) -> tuple[str, ...]:
+    normalized = (" ".join(str(raw or "").split()) for raw in terms)
+    return tuple(query for query in normalized if 2 <= len(query) <= 90)
 
-    GitHub cannot search an entire authored requirements paragraph as one AND
-    query. Structured retrieval terms and ontology aliases take precedence;
-    long narrative strings are intentionally excluded from the provider budget.
-    """
+
+def _ordered_source_queries(capability: str, terms: Sequence[str]) -> tuple[str, ...]:
+    specific = _specific_search_terms(terms)
+    aliases = _ontology_search_queries(capability)
+    canonical = capability in atomic_capability_definitions()
+    authored = tuple(query for query in specific if len(_TOKEN.findall(query)) <= 8)
+    head = aliases[:1] if canonical else authored
+    compact = _short_source_queries(capability) if head else ()
+    ordinary = () if capability.startswith("custom gameplay ") else specific
+    semantic = " ".join(_TOKEN.findall(
+        capability.replace(".", " ").replace("_", " ").replace("-", " ").replace(":", " ")))
+    fallback = (f"minecraft {semantic} mod", f"{semantic} fabric mod") if semantic and len(semantic) <= 90 else ()
+    return (*head, *compact, *(query for query in aliases if len(query) <= 90), *ordinary, *fallback)
+
+
+def _query_variants(capability: str, terms: Sequence[str]) -> tuple[str, ...]:
+    """Prioritize the authored phrase, source nouns and curated retrieval aliases."""
     values: list[str] = []
     seen: set[str] = set()
-
-    specific_terms = tuple(
-        " ".join(str(raw or "").split())
-        for raw in terms
-        if 2 <= len(" ".join(str(raw or "").split())) <= 90
-    )
-    # An authored English feature query is more specific than an ontology
-    # classifier's guess. Exact canonical IDs still use their curated aliases.
-    if capability.startswith("custom gameplay ") or capability not in atomic_capability_definitions():
-        for query in specific_terms:
-            if len(_TOKEN.findall(query)) <= 8:
-                _append_query(values, seen, query)
-
-    aliases = _ontology_search_queries(capability)
-    if capability in atomic_capability_definitions() and aliases:
-        _append_query(values, seen, aliases[0])
-    if values:
-        for query in _short_source_queries(capability):
-            _append_query(values, seen, query)
-    for query in aliases:
-        if len(query) <= 90:
-            _append_query(values, seen, query)
-
-    if not capability.startswith("custom gameplay "):
-        for query in specific_terms:
-            _append_query(values, seen, query)
-
-    semantic = " ".join(
-        _TOKEN.findall(
-            capability.replace(".", " ")
-            .replace("_", " ")
-            .replace("-", " ")
-            .replace(":", " ")
-        )
-    )
-    if semantic and len(semantic) <= 90:
-        _append_query(values, seen, f"minecraft {semantic} mod")
-        _append_query(values, seen, f"{semantic} fabric mod")
-
-    limit = _query_variant_limit()
-    # Returning the first slice is deliberate: the plan can contain many
-    # capabilities, but each individual external search must stay bounded.
-    return tuple(values[:limit] or ("minecraft mod",))
+    for query in _ordered_source_queries(capability, terms):
+        _append_query(values, seen, query)
+    return tuple(values[:_query_variant_limit()] or ("minecraft mod",))
 
 
 def _provider_query(provider: str, query: str) -> str:

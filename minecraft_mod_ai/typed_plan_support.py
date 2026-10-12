@@ -39,7 +39,7 @@ def typed_plan_support_issues(
     """Return deterministic unsupported-operation diagnostics."""
 
     normalized = normalize_structured_sections(structured_sections)
-    from .request_runtime_ownership import owned_record_refs
+    from .request_runtime_records import owned_record_refs
 
     feature_owned = owned_record_refs(normalized, runtime_owners)
     issues: list[str] = []

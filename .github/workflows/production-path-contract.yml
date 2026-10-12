@@ -17,6 +17,7 @@ on:
       - 'minecraft_mod_ai/java_region_parser.py'
       - 'minecraft_mod_ai/request_scope.py'
       - 'minecraft_mod_ai/request_runtime_ownership.py'
+      - 'minecraft_mod_ai/request_runtime_records.py'
       - 'minecraft_mod_ai/production_checkpoint_policy.py'
       - 'tests/test_production_checkpoint_fingerprint.py'
       - 'minecraft_mod_ai/canonical_generators.py'
@@ -86,6 +87,7 @@ on:
       - 'minecraft_mod_ai/java_region_parser.py'
       - 'minecraft_mod_ai/request_scope.py'
       - 'minecraft_mod_ai/request_runtime_ownership.py'
+      - 'minecraft_mod_ai/request_runtime_records.py'
       - 'minecraft_mod_ai/production_checkpoint_policy.py'
       - 'tests/test_production_checkpoint_fingerprint.py'
       - 'minecraft_mod_ai/canonical_generators.py'
@@ -198,6 +200,8 @@ jobs:
             tests/test_request_feature_implementation.py \
             tests/test_request_runtime_ownership.py \
             tests/test_production_checkpoint_fingerprint.py \
+            tests/test_packaged_version_catalog.py \
+            tests/test_ci_quality_regression_audit.py \
             tests/test_authored_source_rag.py \
             tests/test_pinned_repository_download.py \
             tests/test_grounded_source_reuse_frontier.py \

@@ -86,6 +86,34 @@ def test_new_import_cycle_is_rejected():
     assert any(row["category"] == "new_import_cycle" for row in violations)
 
 
+def test_removing_a_module_from_an_existing_cycle_is_an_improvement():
+    audit = _load_auditor()
+    base = audit.analyze_sources({
+        "pkg/a.py": "from pkg import b\n",
+        "pkg/b.py": "from pkg import a, c\n",
+        "pkg/c.py": "from pkg import a\n",
+    })
+    head = audit.analyze_sources({
+        "pkg/a.py": "from pkg import b\n",
+        "pkg/b.py": "from pkg import a, c\n",
+        "pkg/c.py": "VALUE = 1\n",
+    })
+    assert audit.compare_snapshots(base, head) == []
+
+
+def test_merging_independent_import_cycles_is_still_rejected():
+    audit = _load_auditor()
+    base = audit.analyze_sources({
+        "pkg/a.py": "from pkg import b\n", "pkg/b.py": "from pkg import a\n",
+        "pkg/c.py": "from pkg import d\n", "pkg/d.py": "from pkg import c\n",
+    })
+    head = audit.analyze_sources({
+        "pkg/a.py": "from pkg import b\n", "pkg/b.py": "from pkg import a, c\n",
+        "pkg/c.py": "from pkg import d\n", "pkg/d.py": "from pkg import c, a\n",
+    })
+    assert any(row["category"] == "new_import_cycle" for row in audit.compare_snapshots(base, head))
+
+
 def test_new_duplicate_function_body_is_rejected():
     audit = _load_auditor()
     base = audit.analyze_sources(

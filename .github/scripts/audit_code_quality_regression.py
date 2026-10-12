@@ -393,12 +393,19 @@ def _file_regressions(base: dict[str, Any], head: dict[str, Any]) -> list[dict[s
     return violations
 
 
+def _existing_cycle_members(cycle: tuple[str, ...], previous: tuple[set[str], ...]) -> bool:
+    return any(set(cycle) <= component for component in previous)
+
+
 def _cycle_regressions(base: dict[str, Any], head: dict[str, Any]) -> list[dict[str, Any]]:
-    base_cycles = {tuple(row) for row in base.get("import_cycles", [])}
-    head_cycles = {tuple(row) for row in head.get("import_cycles", [])}
+    base_cycles = tuple(map(set, base.get("import_cycles", [])))
+    head_cycles = set(map(tuple, head.get("import_cycles", [])))
+    # Removing members can split a strongly connected component into smaller
+    # existing cycles. Only newly connected cycle members are a regression.
     return [
         {"category": "new_import_cycle", "subject": list(cycle)}
-        for cycle in sorted(head_cycles - base_cycles)
+        for cycle in sorted(head_cycles)
+        if not _existing_cycle_members(cycle, base_cycles)
     ]
 
 

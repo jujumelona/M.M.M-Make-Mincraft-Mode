@@ -45,6 +45,8 @@ UI transactions keep their exact action identities. This prevents the limited
 Typed dispatcher and generated feature callbacks from both applying one effect.
 After dependencies are generated, the coder receives their actual Java declarations
 and bounded source excerpts, alongside assigned state and atomic mutation records.
+Independent ownership calls use the measured native model slots and retain input
+order. Execution reads pure record/source views without importing planning models.
 
 Production searches related mod source for each feature, pins and inspects candidate
 code, adapts compatible slices, verifies them against the selected target, and gives

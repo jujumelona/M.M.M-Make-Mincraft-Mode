@@ -186,7 +186,7 @@ def execute_generator_job(job, *, context, router, port_registry=None, base_dir=
     generator = authority.executors[job.implementation_id]
     source_context = ()
     if base_dir is not None and spec.get("bindings", {}).get("content_dependency_paths_json"):
-        from .request_runtime_ownership import generated_owner_source_context
+        from .request_runtime_records import generated_owner_source_context
 
         source_context = generated_owner_source_context(base_dir, spec)
     extra_context = {"source_context": source_context} if source_context else {}

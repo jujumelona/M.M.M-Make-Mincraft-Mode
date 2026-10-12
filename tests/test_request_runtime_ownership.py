@@ -41,6 +41,32 @@ def test_custom_trigger_is_owned_before_typed_authoring_without_fake_event():
     assert typed_plan_support_issues(design, plan)
 
 
+def test_independent_ownership_calls_use_measured_model_slots(monkeypatch):
+    import threading
+
+    from minecraft_mod_ai.planner_budget import PlannerBudget
+    from minecraft_mod_ai.request_runtime_ownership import author_runtime_ownership
+
+    monkeypatch.setattr("minecraft_mod_ai.parallel_model_tasks.router_native_model_parallelism",
+                        lambda *args, **kwargs: 2)
+    barrier = threading.Barrier(2, timeout=3)
+
+    class Router:
+        def generate_text(self, role, messages, **kwargs):
+            record = json.loads(messages[1]["content"])["record_ref"]
+            barrier.wait()
+            return json.dumps("planet" if record.startswith("integration.") else "crew")
+
+    ledger = scope()
+    ledger["requirements"].append({"requirement_id": "crew", "statement": "Recruit a crew",
+                                    "implementation_role": "gameplay", "search_query": "crew recruitment"})
+    budget = PlannerBudget()
+    owners = author_runtime_ownership(Router(), ledger, sections(), budget=budget)
+    assert [row["feature_id"] for row in owners] == ["crew", "planet"]
+    assert budget.call_count == 2
+    assert owners[1]["worksheet_record_refs"] == ["integration.entry_points[0]"]
+
+
 def test_owner_api_context_contains_actual_signatures_and_preserves_approved_inputs(tmp_path):
     from minecraft_mod_ai.request_runtime_ownership import (
         generated_owner_source_context,

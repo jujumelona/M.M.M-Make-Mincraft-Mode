@@ -17,7 +17,7 @@ from .authored_source_rag import bind_owner_source_context
 from .complete_spec import ProductionModule
 from .implementation_identity import ExecutorType
 from .registered_leaf_binding import require_registered_leaf_binding
-from .request_runtime_ownership import feature_module_id, owner_records
+from .request_runtime_records import feature_module_id, owner_records
 
 
 def compile_request_feature_jobs(

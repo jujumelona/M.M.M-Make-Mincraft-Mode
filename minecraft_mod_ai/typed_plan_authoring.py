@@ -2483,7 +2483,7 @@ def author_typed_plan_ir(
 
     coverage_refs = _active_concern_refs(structured_sections)
     entry_points = _integration_entry_points(structured_sections)
-    from .request_runtime_ownership import owned_record_refs, runtime_sections, TYPED_UI_OWNER
+    from .request_runtime_records import owned_record_refs, runtime_sections, TYPED_UI_OWNER
 
     feature_owned = owned_record_refs(structured_sections, runtime_owners)
     logic_sections = runtime_sections(structured_sections, runtime_owners)
@@ -2638,7 +2638,7 @@ def author_typed_plan_ir(
     ui_dispatch_spec: dict[str, Any] | None = None
     ui_dispatch_body: list[dict[str, Any]] = []
     if bind_ui_actions:
-        from .request_runtime_ownership import ui_record_action_guards
+        from .request_runtime_records import ui_record_action_guards
 
         ui_covers = {ref.split("[", 1)[0] for owner in runtime_owners
                      if owner["feature_id"] == TYPED_UI_OWNER
