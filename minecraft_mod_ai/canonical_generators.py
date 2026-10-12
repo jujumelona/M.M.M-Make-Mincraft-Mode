@@ -40,10 +40,8 @@ def generate_canonical_leaf(inputs, *, leaf_id, router, authority, source_contex
         assert_atomic_model_schema(schema, surface=f"canonical slot {leaf_id}:{name}")
         model_schemas[name] = schema
 
-    def generate_slot(slot, *, repair_note: str = ""):
-        from jsonschema.exceptions import ValidationError
-
-        from .execution_contract_policy import SOURCE_REPAIR_HARD_ATTEMPTS
+    def generate_slot(slot):
+        from .fixed_template_generation import _adapter_name
 
         slot_schema = slot["schema"]
         is_source = (
@@ -52,40 +50,23 @@ def generate_canonical_leaf(inputs, *, leaf_id, router, authority, source_contex
         )
         system_message = manifest["task"] + "\n" + "\n".join(manifest.get("rules", ()))
         if is_source:
-            # The llama.cpp transport cannot enforce the host's package/class regex.
-            # Give the coder the exact obligation rather than allowing arbitrary
-            # scalar text to pass until a later artifact-graph boundary.
             source_kind = "Java compilation unit" if spec.get("language") == "java" else "source artifact"
             system_message += (
-                f"\nProduce a COMPLETE {source_kind} as the string value. "
-                "Implement the stated requirement. Never return a placeholder, TODO, "
-                "example label, Markdown fence, or explanation instead of source."
+                f"\nProduce a COMPLETE {source_kind}, not a placeholder, TODO, "
+                "Markdown fence, or explanation. Implement the requested behavior."
             )
             if slot_schema.get("pattern"):
                 system_message += (
-                    "\nThe complete source MUST match this host-owned source "
-                    f"declaration contract: {slot_schema['pattern']}"
+                    "\nThe source MUST match the declared source contract: "
+                    + slot_schema["pattern"]
                 )
             if spec.get("language") == "java" and str(
                 spec.get("bindings", {}).get("minecraft_version", "")
             ).startswith("26."):
                 system_message += (
-                    "\nCRITICAL MINECRAFT 26.x API CONTRACT: use ONLY official "
-                    "Mojang names for this bound target. NEVER import or reference "
-                    "Yarn-era net.minecraft.util.Identifier, net.minecraft.text.Text, "
-                    "net.minecraft.client.gui.screen.Screen, or other pre-26 "
-                    "mapping namespaces. The resource identifier type is "
-                    "net.minecraft.resources.Identifier; text components "
-                    "use net.minecraft.network.chat.Component. Verify method "
-                    "signatures against the bound target, not older tutorials. "
-                    "A syntactically valid obsolete Yarn import will be rejected."
-                )
-            if repair_note:
-                system_message += (
-                    "\nThe previous complete rendered Java artifact failed this "
-                    "host-owned target check: " + repair_note
-                    + "\nRegenerate this slot using only the bound target's "
-                    "official Mojang API; preserve the stated behavior."
+                    "\nMinecraft 26.x: use only official Mojang API names, not "
+                    "obsolete Yarn net.minecraft.util.Identifier or "
+                    "net.minecraft.text.Text. Bind methods to the selected target."
                 )
 
         messages = [
@@ -104,11 +85,32 @@ def generate_canonical_leaf(inputs, *, leaf_id, router, authority, source_contex
                 ),
             },
         ]
-        # Source-only repair is bounded and never changes the host schema or
-        # invents code. Every candidate must validate before the graph can
-        # publish a receipt, write a file, or cache the result.
-        attempts = max(1, SOURCE_REPAIR_HARD_ATTEMPTS) if is_source else 1
-        for attempt in range(attempts):
+        # Compile full Java classes from *first-pass* bounded, complete member
+        # actions. Do not repeatedly ask the model to regenerate an oversized
+        # compilation unit with a larger output allowance.
+        if (
+            is_source
+            and spec.get("language") == "java"
+            and _adapter_name(router, "coder") == "llama_cpp"
+        ):
+            from .first_pass_java_source import (
+                can_compose_first_pass_java,
+                compose_first_pass_java,
+            )
+
+            if can_compose_first_pass_java(spec):
+                value = compose_first_pass_java(
+                    router, spec, messages, source_context=source_context,
+                )
+            else:
+                value = generate_fixed_template_value(
+                    router,
+                    "coder",
+                    messages,
+                    response_schema=model_schemas[slot["name"]],
+                    enable_tools=False,
+                )
+        else:
             value = generate_fixed_template_value(
                 router,
                 "coder",
@@ -116,80 +118,36 @@ def generate_canonical_leaf(inputs, *, leaf_id, router, authority, source_contex
                 response_schema=model_schemas[slot["name"]],
                 enable_tools=False,
             )
-            try:
-                validate_json_schema(value, slot_schema)
-                if is_source and spec.get("language") == "java":
-                    # A valid package/class declaration is not sufficient:
-                    # the Minecraft 26.x target must reject obsolete Yarn API
-                    # names *inside* the bounded source-repair loop. The
-                    # dispatcher repeats this check before materialization.
-                    from .canonical_java_target_contract import assert_canonical_java_target
 
-                    assert_canonical_java_target(value, spec)
-            except (ValidationError, ValueError) as exc:
-                # Retry only candidate-level source violations. Misconfigured
-                # target paths/bindings and unrelated ValueErrors are not
-                # fixable by asking the model to regenerate source.
-                if isinstance(exc, ValueError) and not str(exc).startswith((
-                    "CANONICAL_MOJANG_API_REQUIRED:",
-                    "CANONICAL_SCREEN_REGISTRATION_CLASS_INVALID:",
-                )):
-                    raise
-                if attempt + 1 >= attempts:
-                    raise
-                diagnostic = exc.message if isinstance(exc, ValidationError) else str(exc)
-                messages.append({
-                    "role": "system",
-                    "content": (
-                        "The host REJECTED the previous source candidate. "
-                        f"Validation error: {diagnostic}. "
-                        "Regenerate the entire source string for the supplied Minecraft "
-                        "target and canonical API namespace; do not reuse obsolete "
-                        "mappings or guess signatures. Satisfy the exact package/type "
-                        "declaration and original implementation requirement. "
-                        "Do not repeat a placeholder; the host schema is unchanged."
-                    ),
-                })
-                continue
-            return value
-        raise AssertionError("unreachable: canonical slot repair has no validated result")
+        # One authored candidate only. Production checks the assembled source;
+        # a failed check does not launch another full-file inference.
+        validate_json_schema(value, slot_schema)
+        if is_source and spec.get("language") == "java":
+            from .canonical_java_target_contract import assert_canonical_java_target
 
-    # Validate the COMPLETE rendered compilation unit as well as individual
-    # model slots. A mold can introduce imports absent from an isolated slot.
-    from .execution_contract_policy import SOURCE_REPAIR_HARD_ATTEMPTS
+            assert_canonical_java_target(value, spec)
+        return value
+
     from .canonical_java_target_contract import assert_canonical_java_target
 
-    java_target = spec.get("language") == "java"
-    attempts = max(1, SOURCE_REPAIR_HARD_ATTEMPTS) if java_target else 1
-    repair_note = ""
-    for render_attempt in range(attempts):
-        generated = deterministic_model_map(
-            router,
-            slots,
-            lambda slot: generate_slot(slot, repair_note=repair_note),
-            role="coder",
-            thread_name_prefix="canonical-slot",
-        )
-        for slot, value in zip(slots, generated):
-            validate_json_schema(value, slot["schema"])
-            values[slot["name"]] = value
+    generated = deterministic_model_map(
+        router,
+        slots,
+        generate_slot,
+        role="coder",
+        thread_name_prefix="canonical-slot",
+    )
+    for slot, value in zip(slots, generated):
+        validate_json_schema(value, slot["schema"])
+        values[slot["name"]] = value
 
-        source = render_template({"render": spec["render_mold"]}, values)
-        validate_semantic_contract(
-            source, contract=spec, context_id=spec["context_id"], leaf_id=leaf_id
-        )
-        if java_target:
-            try:
-                assert_canonical_java_target(source, spec)
-            except ValueError as exc:
-                if not str(exc).startswith((
-                    "CANONICAL_MOJANG_API_REQUIRED:",
-                    "CANONICAL_SCREEN_REGISTRATION_CLASS_INVALID:",
-                )) or render_attempt + 1 >= attempts or not slots:
-                    raise
-                repair_note = str(exc)
-                continue
-        break
+    source = render_template({"render": spec["render_mold"]}, values)
+    validate_semantic_contract(
+        source, contract=spec, context_id=spec["context_id"], leaf_id=leaf_id
+    )
+    if spec.get("language") == "java":
+        assert_canonical_java_target(source, spec)
+
     result = {}
     for port in manifest["outputs"]:
         if port["type"] == "code_fragment":
