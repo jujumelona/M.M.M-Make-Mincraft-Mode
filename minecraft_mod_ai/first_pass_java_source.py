@@ -177,7 +177,7 @@ def compose_first_pass_java(
     # optional Java type references used in a deterministic host-owned header.
     # Reject executable fragments, not legitimate inheritance relationships.
     for type_clause in (superclass, interfaces):
-        if any(marker in type_clause for marker in ("{", "}", ";", "\\n", "\\r", "/*", "//")):
+        if any(marker in type_clause for marker in ("{", "}", ";", chr(10), chr(13), "/*", "//")):
             raise ValueError("JAVA_FIRST_PASS_TYPE_REFERENCE_INVALID")
     declaration = (
         f"public class {class_name}"
