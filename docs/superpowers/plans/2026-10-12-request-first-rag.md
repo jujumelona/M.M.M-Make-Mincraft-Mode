@@ -81,7 +81,9 @@ Files: llama_completion_liveness_contract.py and logging tests.
 - [x] Record unavailable optional source references and continue fresh implementation.
 - [x] Inspect/prove ranked source batches lazily while retaining the whole candidate frontier.
 - [x] Continue feature decomposition after 32 records without increasing a model output page.
-- [x] Detect repeated feature identities and use bounded recovery without adding a feature-count limit.
+- [x] Recover repeated feature output without aborting the plan or duplicating requirements.
+- [x] Remove predicted feature counts; let each bounded response identify a feature or finish.
+- [x] Preserve unquoted source spans if small-model extraction repeats or cannot fill its schema.
 
 Validation: 320 production/source contracts passed with six JVM/environment skips;
 focused follow-up regressions are tracked in test_request_runtime_ownership.py and

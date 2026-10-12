@@ -1,8 +1,8 @@
 """Request-first feature decomposition with local task-template RAG.
 
-The worksheet is supporting design, never the authority for which requested
-features survive. Model pages are bounded; the persisted feature ledger is not
-limited to the four records in a worksheet concern.
+The original request remains the scope authority. Each small-model response
+identifies one feature or ends the page; a predicted count never forces it to
+invent or repeat features. Recovery preserves source text instead of aborting.
 """
 from __future__ import annotations
 
@@ -19,6 +19,17 @@ from .fixed_template_generation import generate_fixed_template_value
 from .rag_index import ProjectRAGIndex
 from .task_template_catalog import RUNTIME_TEMPLATE_ROOT
 from .structured_output import StructuredOutputValidationError
+
+_FEATURE_SCHEMA = {
+    "type": "object", "properties": {
+        "status": {"type": "string", "enum": ["complete", "feature"]},
+        "statement": {"type": "string", "maxLength": 256},
+        "search_query": {"type": "string", "maxLength": 96},
+        "source_quote": {"type": "string", "maxLength": 192},
+        "implementation_role": {"type": "string", "enum": ["gameplay", "interface", "infrastructure"]},
+    }, "required": ["status", "statement", "search_query", "source_quote", "implementation_role"],
+    "additionalProperties": False,
+}
 
 
 def _template_rag() -> ProjectRAGIndex:
@@ -44,135 +55,175 @@ def _references(index: ProjectRAGIndex | None, query: str) -> list[dict[str, Any
     if index is None:
         return []
     try:
-        hits = index.search(query, limit=3)
+        hits = index.search(query, limit=2)
     except (OSError, ValueError, RuntimeError, sqlite3.Error):
         return []
-    return [{**asdict(hit), "text": hit.text[:1200],
+    return [{**asdict(hit), "text": hit.text[:800],
              "authority": "task_template_reference_only"} for hit in hits]
 
 
-def _request_chunks(prompt: str):
+def _request_chunks(prompt: str, *, limit: int = 768):
     """Bound input pages without dropping any source characters."""
     start = 0
     while start < len(prompt):
-        end = min(start + 768, len(prompt))
+        end = min(start + limit, len(prompt))
         if end < len(prompt):
-            boundary = max(prompt.rfind("\n", start + 384, end),
-                           prompt.rfind(" ", start + 384, end))
+            boundary = max(prompt.rfind("\n", start + limit // 2, end),
+                           prompt.rfind(" ", start + limit // 2, end))
             if boundary > start:
                 end = boundary + 1
         yield start, prompt[start:end]
         start = end
 
 
+def _identity(row: Mapping[str, Any]) -> tuple[str, str]:
+    return tuple(" ".join(str(row[key]).split()).casefold()
+                 for key in ("statement", "source_quote"))
+
+
+def _uncovered_source(chunk: str, prior: list[dict[str, Any]]) -> str:
+    remaining = chunk
+    for quote in dict.fromkeys(row["source_quote"] for row in prior):
+        if quote:
+            remaining = remaining.replace(quote, " " * len(quote), 1)
+    return remaining
+
+
+def _feature_messages(context: str, chunk: str, prior: list[dict[str, Any]], repair_note: str):
+    return (
+        {"role": "system", "content": (
+            "Identify the next distinct requested Minecraft mod feature in source order. "
+            "Include exploration, combat and progression wherever requested. "
+            "Return status=feature with a complete compact English statement, a short "
+            "English mod/source search query, and a verbatim original source quote. "
+            "Classify it as gameplay, interface, or infrastructure. Use interface only "
+            "when the feature itself is a screen or UI. Distinct features may share "
+            "a quote. When all features are covered, return status=complete with "
+            "empty statement, search_query and source_quote. Constraints alone need "
+            "no additional feature. Do not repeat features or invent mechanics to "
+            "fill a count. RAG examples provide guidance, not user requirements."
+        )},
+        {"role": "user", "content": context
+         + "\nAlready identified features (do not repeat):\n"
+         + json.dumps([{"statement": row["statement"], "source_quote": row["source_quote"]}
+                       for row in prior[-8:]], ensure_ascii=False, separators=(",", ":"))
+         + "\nStill-unquoted original words (guidance; shared quotes may have further features):\n"
+         + _uncovered_source(chunk, prior) + repair_note},
+    )
+
+
+def _new_feature(row: Mapping[str, Any], chunk: str, identities: set[tuple[str, str]]) -> bool:
+    return (
+        all(str(row[key]).strip() for key in ("statement", "search_query", "source_quote"))
+        and row["source_quote"] in chunk
+        and _identity(row) not in identities
+    )
+
+
+def _feature_record(prompt: str, start: int, chunk: str, row: Mapping[str, Any], index: Any):
+    quote = str(row["source_quote"])
+    offset = chunk.find(quote)
+    source_text = quote if offset >= 0 else chunk
+    source_start = start + max(0, offset)
+    digest = hashlib.sha256(
+        f"{prompt}\0{source_start}\0{row['statement']}".encode()
+    ).hexdigest()[:16]
+    return {
+        "requirement_id": "request_" + digest,
+        "statement": row["statement"], "search_query": row["search_query"],
+        "implementation_role": row["implementation_role"],
+        "source_span": {"text": source_text, "start": source_start,
+                        "end": source_start + len(source_text)},
+        "rag_references": _references(index, str(row["search_query"])),
+    }
+
+
+def _uncovered_spans(chunk: str, prior: list[dict[str, Any]]):
+    covered = bytearray(len(chunk))
+    for quote in dict.fromkeys(row["source_quote"] for row in prior):
+        offset = chunk.find(quote)
+        if quote and offset >= 0:
+            covered[offset:offset + len(quote)] = b"\x01" * len(quote)
+    offset = 0
+    while offset < len(chunk):
+        if covered[offset]:
+            offset += 1
+            continue
+        end = offset + 1
+        while end < len(chunk) and not covered[end]:
+            end += 1
+        yield offset, chunk[offset:end]
+        offset = end
+
+
+def _source_recovery(prompt: str, start: int, chunk: str, prior: list[dict[str, Any]], index: Any):
+    """Keep actual unquoted request text in the ledger if decomposition stalls."""
+    for span_start, source in _uncovered_spans(chunk, prior):
+        for offset, text in _request_chunks(source, limit=192):
+            trimmed = text.strip()
+            if not any(char.isalnum() for char in trimmed):
+                continue
+            source_start = start + span_start + offset + len(text) - len(text.lstrip())
+            row = {"statement": trimmed, "search_query": trimmed[:96],
+                   "source_quote": trimmed, "implementation_role": "gameplay"}
+            record = _feature_record(prompt, source_start, trimmed, row, index)
+            record["source_recovery"] = True
+            yield record
+
+
 def author_request_scope(router: Any, prompt: str, *, budget: Any = None) -> dict[str, Any]:
-    """Identify requested features, then retrieve references for each feature."""
+    """Identify requested features without making extraction a production gate."""
     try:
         index = _template_rag()
     except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
         index = None
         print(f"REQUEST_RAG: unavailable ({type(exc).__name__}); preserving request", flush=True)
-    references = _references(index, prompt)
-    if not references:
-        references = _references(index, "gameplay request content entity core loop")
     features: list[dict[str, Any]] = []
     for start, chunk in _request_chunks(prompt):
         context = (
             "Original request (scope authority):\n" + chunk
-            + "\n\nLocal task-template RAG (design guidance, no target API authority):\n"
-            + json.dumps(references, ensure_ascii=False, separators=(",", ":"))
+            + "\n\nLocal task-template RAG (guidance, no target API authority):\n"
+            + json.dumps(_references(index, chunk), ensure_ascii=False, separators=(",", ":"))
         )
-        prior: list[dict[str, str]] = []
+        prior: list[dict[str, Any]] = []
         identities: set[tuple[str, str]] = set()
-        while True:
+        repeats = 0
+        repair_note = ""
+        # One ordered response loop handles both progress and recovery. A finite
+        # source page cannot cause endless paraphrases; exhaustion keeps its text.
+        for _ in range(max(3, len(chunk) * 3)):
             if budget is not None:
-                budget.consume("request_scope.cardinality")
-            count = generate_fixed_template_value(router, "planner", (
-                {"role": "system", "content": (
-                    "Decompose the user's Minecraft mod request into distinct playable features. "
-                    "Count every requested mechanic, including later exploration/combat/progression. "
-                    "Count features, not worksheet fields, implementation classes or quality checks. "
-                    "Do not reduce the entire request to its first subsystem or add new mechanics. "
-                    "Count only features not already identified. Choose 32+ for more than 32 "
-                    "remaining features. Use zero for constraints or continuation details "
-                    "without another feature."
-                )},
-                {"role": "user", "content": context + "\nAlready covered source quotes:\n"
-                 + json.dumps(list(dict.fromkeys(row["source_quote"] for row in prior)), ensure_ascii=False)
-                 + "\nChoose the number of still-unlisted distinct features in this source page."},
-            ), response_schema={
-                "type": "object", "properties": {"feature_count": {
-                    "type": "string", "enum": [str(n) for n in range(33)] + ["32+"],
-                }}, "required": ["feature_count"], "additionalProperties": False,
-            }, enable_tools=False)
-            for page_ordinal in range(32 if count["feature_count"] == "32+" else int(count["feature_count"])):
-                ordinal = len(prior)
-                repair_note = ""
-                for attempt in range(3):
-                    if budget is not None:
-                        budget.consume("request_scope.feature")
-                    row = generate_fixed_template_value(router, "planner", (
-                        {"role": "system", "content": (
-                            "Identify one requested feature in source order. Write a complete compact "
-                            "English statement and a short English mod/source search query. Quote the "
-                            "original words identifying it. Keep distinct features distinct. "
-                            "Classify the feature as gameplay, interface, or infrastructure. "
-                            "Use interface only when the requested feature itself is a screen or UI. "
-                            "RAG examples inform implementation; they do not add user requirements."
-                        )},
-                        {"role": "user", "content": context
-                         + f"\nFeature {ordinal + 1}, page item {page_ordinal + 1}."
-                         + "\nAlready covered source quotes:\n"
-                         + json.dumps(list(dict.fromkeys(row["source_quote"] for row in prior)), ensure_ascii=False)
-                         + "\nAlready identified features (do not repeat):\n"
-                         + json.dumps([{"statement": item["statement"], "source_quote": item["source_quote"]}
-                                       for item in prior[-8:]], ensure_ascii=False) + repair_note},
-                    ), response_schema={
-                        "type": "object", "properties": {
-                            "statement": {"type": "string", "minLength": 1, "maxLength": 256},
-                            "search_query": {"type": "string", "minLength": 1, "maxLength": 96},
-                            "source_quote": {"type": "string", "minLength": 1, "maxLength": 192},
-                            "implementation_role": {"type": "string", "enum": ["gameplay", "interface", "infrastructure"]},
-                        }, "required": ["statement", "search_query", "source_quote", "implementation_role"],
-                        "additionalProperties": False,
-                    }, enable_tools=False)
-                    identity = tuple(" ".join(row[key].split()).casefold()
-                                     for key in ("statement", "source_quote"))
-                    if identity not in identities:
-                        break
-                    repair_note = (
-                        "\nThe preceding response repeated an already identified feature. "
-                        "Identify the next distinct feature in source order. Different features "
-                        "may share a source quote, but must have different statements."
-                    )
-                else:
-                    failure = StructuredOutputValidationError(
-                        output=json.dumps(row, ensure_ascii=False),
-                        errors=("REQUEST_SCOPE_NO_PROGRESS: repeated feature after bounded recovery",),
-                    )
-                    failure.repair_attempts = attempt
-                    raise failure
-                identities.add(identity)
-                prior.append(dict(row))
-                quote = row["source_quote"]
-                offset = chunk.find(quote)
-                # A model paraphrase cannot masquerade as an exact source quotation.
-                source_text = quote if offset >= 0 else chunk
-                source_start = start + max(0, offset)
-                digest = hashlib.sha256(
-                    f"{prompt}\0{source_start}\0{row['statement']}".encode()
-                ).hexdigest()[:16]
-                features.append({
-                    "requirement_id": "request_" + digest,
-                    "statement": row["statement"], "search_query": row["search_query"],
-                    "implementation_role": row["implementation_role"],
-                    "source_span": {"text": source_text, "start": source_start,
-                                    "end": source_start + len(source_text)},
-                    "rag_references": _references(index, row["search_query"]),
-                })
-            if count["feature_count"] != "32+":
+                budget.consume("request_scope.feature")
+            try:
+                row = generate_fixed_template_value(
+                    router, "planner", _feature_messages(context, chunk, prior, repair_note),
+                    response_schema=_FEATURE_SCHEMA, enable_tools=False,
+                )
+            except StructuredOutputValidationError:
+                features.extend(_source_recovery(prompt, start, chunk, prior, index))
                 break
-    print(f"REQUEST_SCOPE: features={len(features)}; original request preserved", flush=True)
+            if row["status"] == "complete":
+                break
+            if not _new_feature(row, chunk, identities):
+                repeats += 1
+                if repeats < 3:
+                    repair_note = (
+                        "\nThe previous feature was already covered, empty, or not quoted "
+                        "from this source. Extract a different feature from the remaining "
+                        "source, or return status=complete if none remains."
+                    )
+                    continue
+                features.extend(_source_recovery(prompt, start, chunk, prior, index))
+                break
+            identities.add(_identity(row))
+            prior.append(dict(row))
+            features.append(_feature_record(prompt, start, chunk, row, index))
+            repeats = 0
+            repair_note = ""
+        else:
+            features.extend(_source_recovery(prompt, start, chunk, prior, index))
+    recovered = sum(bool(row.get("source_recovery")) for row in features)
+    print(f"REQUEST_SCOPE: features={len(features)} source_recovery={recovered}; original request preserved", flush=True)
     return {"schema_version": "mmm/request-scope-v1", "requested_prompt": prompt,
             "requirements": features}
 

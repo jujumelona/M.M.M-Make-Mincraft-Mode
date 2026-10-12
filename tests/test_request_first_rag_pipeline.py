@@ -118,12 +118,13 @@ def test_request_decomposition_retains_more_than_four_features(monkeypatch, tmp_
 
         def generate_text(self, role, messages, **kwargs):
             self.messages.append(messages)
-            fields = kwargs["response_schema"]["properties"]
-            if "feature_count" in fields:
-                return json.dumps({"feature_count": "8"})
+            assert "feature_count" not in kwargs["response_schema"]["properties"]
+            if self.ordinal == len(FEATURES):
+                return json.dumps({"status": "complete", "statement": "", "search_query": "",
+                                   "source_quote": "", "implementation_role": "gameplay"})
             statement, query, quote = FEATURES[self.ordinal]
             self.ordinal += 1
-            return json.dumps({"statement": statement, "search_query": query, "source_quote": quote,
+            return json.dumps({"status": "feature", "statement": statement, "search_query": query, "source_quote": quote,
                                "implementation_role": "gameplay"})
 
     router = Router()
@@ -144,25 +145,22 @@ def test_dense_request_continues_after_a_full_feature_page(monkeypatch):
 
     class Router:
         def __init__(self):
-            self.counts = 0
             self.ordinal = 0
             self.inputs = []
 
         def generate_text(self, role, messages, **kwargs):
             self.inputs.append(str(messages))
-            fields = kwargs["response_schema"]["properties"]
-            if "feature_count" in fields:
-                self.counts += 1
-                assert "32+" in fields["feature_count"]["enum"]
-                return json.dumps({"feature_count": "32+" if self.counts == 1 else "1"})
+            if self.ordinal == 33:
+                return json.dumps({"status": "complete", "statement": "", "search_query": "",
+                                   "source_quote": "", "implementation_role": "gameplay"})
             token = f"f{self.ordinal:02d}"
             self.ordinal += 1
-            return json.dumps({"statement": "Implement " + token, "search_query": token,
+            return json.dumps({"status": "feature", "statement": "Implement " + token, "search_query": token,
                                "source_quote": token, "implementation_role": "gameplay"})
 
     router = Router()
     scope = request_scope.author_request_scope(router, prompt)
-    assert router.counts == 2
+    assert router.ordinal == 33
     assert len(scope["requirements"]) == 33
     assert len({row["requirement_id"] for row in scope["requirements"]}) == 33
     assert [row["source_span"]["text"] for row in scope["requirements"]] == prompt.split()
@@ -170,10 +168,7 @@ def test_dense_request_continues_after_a_full_feature_page(monkeypatch):
 
 
 def test_repeating_continuation_has_bounded_recovery_without_duplicate_requirements(monkeypatch):
-    import pytest
-
     from minecraft_mod_ai import request_scope
-    from minecraft_mod_ai.structured_output import StructuredOutputValidationError
 
     monkeypatch.setattr(request_scope, "_template_rag", lambda: None)
 
@@ -183,15 +178,20 @@ def test_repeating_continuation_has_bounded_recovery_without_duplicate_requireme
         def generate_text(self, role, messages, **kwargs):
             self.calls += 1
             assert self.calls < 10, "Repeated output must not cause an endless continuation"
-            if "feature_count" in kwargs["response_schema"]["properties"]:
-                return json.dumps({"feature_count": "32+"})
-            return json.dumps({"statement": "Mine ore", "search_query": "ore mining",
+            return json.dumps({"status": "feature", "statement": "Mine ore", "search_query": "ore mining",
                                "source_quote": "mine ore", "implementation_role": "gameplay"})
 
     router = Router()
-    with pytest.raises(StructuredOutputValidationError, match="REQUEST_SCOPE_NO_PROGRESS"):
-        request_scope.author_request_scope(router, "mine ore, travel, build, trade")
-    assert router.calls <= 6
+    prompt = "mine ore, travel, build, trade"
+    scope = request_scope.author_request_scope(router, prompt)
+    assert router.calls <= 4
+    assert scope["requested_prompt"] == prompt
+    assert sum(row["statement"] == "Mine ore" for row in scope["requirements"]) == 1
+    assert any(row.get("source_recovery") for row in scope["requirements"])
+    ledger = " ".join(row["statement"] for row in scope["requirements"])
+    assert all(word in ledger for word in ("travel", "build", "trade"))
+    assert all(prompt[row["source_span"]["start"]:row["source_span"]["end"]] == row["source_span"]["text"]
+               for row in scope["requirements"])
 
 
 def test_duplicate_recovery_preserves_distinct_features_sharing_one_clause(monkeypatch):
@@ -203,11 +203,12 @@ def test_duplicate_recovery_preserves_distinct_features_sharing_one_clause(monke
         rows = 0
 
         def generate_text(self, role, messages, **kwargs):
-            if "feature_count" in kwargs["response_schema"]["properties"]:
-                return json.dumps({"feature_count": "2"})
+            if self.rows == 3:
+                return json.dumps({"status": "complete", "statement": "", "search_query": "",
+                                   "source_quote": "", "implementation_role": "gameplay"})
             self.rows += 1
             statement = "Mine ore" if self.rows < 3 else "Trade ore"
-            return json.dumps({"statement": statement, "search_query": statement,
+            return json.dumps({"status": "feature", "statement": statement, "search_query": statement,
                                "source_quote": "mine and trade ore", "implementation_role": "gameplay"})
 
     router = Router()
@@ -215,3 +216,60 @@ def test_duplicate_recovery_preserves_distinct_features_sharing_one_clause(monke
     assert router.rows == 3
     assert [row["statement"] for row in scope["requirements"]] == ["Mine ore", "Trade ore"]
     assert len({row["requirement_id"] for row in scope["requirements"]}) == 2
+
+
+def test_repeated_last_feature_finishes_without_a_plan_error(monkeypatch):
+    from minecraft_mod_ai import request_scope
+
+    monkeypatch.setattr(request_scope, "_template_rag", lambda: None)
+
+    class Router:
+        calls = 0
+
+        def generate_text(self, role, messages, **kwargs):
+            self.calls += 1
+            assert "feature_count" not in kwargs["response_schema"]["properties"]
+            return json.dumps({"status": "feature", "statement": "Mine ore",
+                               "search_query": "ore mining", "source_quote": "mine ore",
+                               "implementation_role": "gameplay"})
+
+    router = Router()
+    scope = request_scope.author_request_scope(router, "mine ore")
+    assert router.calls == 4
+    assert len(scope["requirements"]) == 1
+    assert not any(row.get("source_recovery") for row in scope["requirements"])
+
+
+def test_failed_feature_extraction_preserves_original_source_and_continues(monkeypatch):
+    from minecraft_mod_ai import request_scope
+    from minecraft_mod_ai.structured_output import StructuredOutputValidationError
+
+    monkeypatch.setattr(request_scope, "_template_rag", lambda: None)
+    prompts = []
+
+    def reject(_router, _role, messages, **kwargs):
+        prompts.append(messages[-1]["content"])
+        raise StructuredOutputValidationError(output="{}", errors=("fixture schema failure",))
+
+    monkeypatch.setattr(request_scope, "generate_fixed_template_value", reject)
+    prompt = "mine, trade, explore\n" * 90
+    scope = request_scope.author_request_scope(object(), prompt)
+    assert len(prompts) > 1
+    assert scope["requested_prompt"] == prompt
+    assert all(row.get("source_recovery") for row in scope["requirements"])
+    spans = [row["source_span"] for row in scope["requirements"]]
+    assert all(prompt[span["start"]:span["end"]] == span["text"] for span in spans)
+    assert len({row["requirement_id"] for row in scope["requirements"]}) == len(spans)
+    assert "".join("".join(span["text"].split()) for span in spans) == "".join(prompt.split())
+
+
+def test_constraints_only_do_not_force_a_gameplay_feature(monkeypatch):
+    from minecraft_mod_ai import request_scope
+
+    monkeypatch.setattr(request_scope, "_template_rag", lambda: None)
+    router = type("Router", (), {"generate_text": lambda self, *args, **kwargs: json.dumps({
+        "status": "complete", "statement": "", "search_query": "", "source_quote": "",
+        "implementation_role": "infrastructure",
+    })})()
+    scope = request_scope.author_request_scope(router, "Fabric only; keep the original package name")
+    assert scope["requirements"] == []
