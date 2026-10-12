@@ -403,6 +403,7 @@ def generate_fixed_template_value(
     tool_name: str = _DEFAULT_TOOL_NAME,
     description: str = "",
     output_token_ceiling: int | None = None,
+    single_pass: bool = False,
 ) -> Any:
     """Return host-validated structured data through exactly one role transport."""
 
@@ -494,18 +495,36 @@ def generate_fixed_template_value(
         )
 
     parameters, unwrap_value = _tool_parameters(response_schema)
-    arguments = _generate_native_template_arguments(
-        router,
-        role,
-        _template_messages(messages, semantic_output=semantic_output),
-        tool_name=str(tool_name or _DEFAULT_TOOL_NAME),
-        parameters=parameters,
-        description=(
-            description.strip()
-            or "Fill the host-supplied fixed response template exactly once. "
-            "Populate only declared fields."
-        ),
+    native_messages = _template_messages(messages, semantic_output=semantic_output)
+    native_description = (
+        description.strip()
+        or "Fill the host-supplied fixed response template exactly once. "
+        "Populate only declared fields."
     )
+    if single_pass:
+        # First-pass generation must not hide a bad initial action behind
+        # full-object schema repair calls or more output tokens.
+        raw_arguments = router.generate_tool_decision(
+            role,
+            native_messages,
+            tool_name=str(tool_name or _DEFAULT_TOOL_NAME),
+            parameters=_model_transport_schema(parameters),
+            description=native_description,
+            output_token_ceiling=output_token_ceiling,
+            force_non_thinking=True,
+        )
+        if not isinstance(raw_arguments, Mapping):
+            raise ValueError("fixed-template single-pass tool omitted its arguments")
+        arguments = _validate_native_arguments(raw_arguments, parameters)
+    else:
+        arguments = _generate_native_template_arguments(
+            router,
+            role,
+            native_messages,
+            tool_name=str(tool_name or _DEFAULT_TOOL_NAME),
+            parameters=parameters,
+            description=native_description,
+        )
     value: Any = arguments.get("value") if unwrap_value else arguments
     if unwrap_value and "value" not in arguments:
         raise ValueError("fixed-template function call omitted wrapped value")
