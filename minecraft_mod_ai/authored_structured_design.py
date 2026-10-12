@@ -22,6 +22,18 @@ from .planning_detail_slots import DETAIL_RECORDS
 from .planning_detail_template import WORKSHEET_SECTIONS, worksheet_section_schema
 
 
+# These are the information slots indispensable to any executable gameplay
+# design. They describe the user's requested feature, never an invented feature.
+# Non-essential concerns (including optional state/network/persistence) may be 0.
+_CORE_REQUIRED_CONCERNS: dict[str, tuple[str, ...]] = {
+    "behavior_contract": (
+        "actors", "entry_conditions", "outputs", "success_postconditions",
+    ),
+    "integration": ("entry_points", "responsibilities"),
+    "verification": ("success_cases",),
+}
+
+
 def normalize_structured_sections(raw: Mapping[str, Any] | None) -> dict[str, Any]:
     if not raw:
         return {}
@@ -394,10 +406,14 @@ def _generate_section_record_counts(
     from .planning_section_dependencies import SECTION_DEPENDENCIES
 
     concerns = DETAIL_RECORDS[section]
+    required = frozenset(_CORE_REQUIRED_CONCERNS.get(section, ()))
+    # Constrain the count *before* inference: a short small-model response must
+    # never erase the actual behavior while aggressively pruning optional work.
     schema = {
         "type": "object",
         "properties": {name: {"type": "string", "enum": [
-            str(n) for n in range(PLANNER_CONCERN_MAX_RECORDS + 1)
+            str(n) for n in range(1 if name in required else 0,
+                                   PLANNER_CONCERN_MAX_RECORDS + 1)
         ]} for name in concerns},
         "required": list(concerns),
         "additionalProperties": False,
@@ -406,11 +422,14 @@ def _generate_section_record_counts(
                      if name in completed}
     value = generate_fixed_template_value(router, "planner", (
         {"role": "system", "content": (
-            "Choose record counts for one supporting design section. Use zero for a "
-            "concern that the requested gameplay does not need. Use the smallest "
-            "sufficient count for relevant concerns; never fill every concern to the "
-            "maximum. Features in other subsystems remain in the original request. "
-            "Do not invent gameplay, validation gates or resources to fill a worksheet."
+            "Select record counts for the USER-REQUESTED feature, not for generic "
+            "worksheet completeness. Preserve its concrete actor, activation, "
+            "observable outcome and successful result. A count of zero means the "
+            "concern is genuinely irrelevant; never use zero to skip the primary "
+            "gameplay or defer it to another section. Use the smallest sufficient "
+            "positive count for relevant concerns. Do not invent additional features, "
+            "validation gates or resources merely to fill a worksheet. "
+            "Honor the supplied schema's nonzero core fields."
         )},
         {"role": "user", "content": prompt + f"\n\nSection: {section}\nConcern fields:\n"
          + json.dumps(concerns, ensure_ascii=False)
@@ -419,7 +438,12 @@ def _generate_section_record_counts(
     ), response_schema=schema, enable_tools=False,
        description=f"Select relevant {section} concerns before field authoring.",
        output_token_ceiling=structured_output_token_ceiling(schema))
-    return {name: int(value[name]) for name in concerns}
+    counts = {name: int(value[name]) for name in concerns}
+    # Preserve the schema invariant even when a provider ignores its JSON enum:
+    # the next page must author the missing record, not silently omit gameplay.
+    for name in required:
+        counts[name] = max(1, counts[name])
+    return counts
 
 @dataclass(frozen=True)
 class _PlannerPageRequest:

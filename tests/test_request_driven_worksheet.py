@@ -15,14 +15,19 @@ def test_section_counts_choose_inactive_concerns_before_field_authoring():
     class Router:
         def generate_text(self, role, messages, **kwargs):
             self.messages = messages
-            return json.dumps({key: "1" if key == "outputs" else "0"
-                               for key in kwargs["response_schema"]["properties"]})
+            return json.dumps({
+                key: "1" if "0" not in constraint["enum"] or key == "outputs" else "0"
+                for key, constraint in kwargs["response_schema"]["properties"].items()
+            })
 
     router = Router()
     counts = design._generate_section_record_counts(
         router, "A tool that teleports players", section="behavior_contract", completed={},
     )
-    assert counts == {key: int(key == "outputs") for key in DETAIL_RECORDS["behavior_contract"]}
+    baseline = {"actors", "entry_conditions", "outputs", "success_postconditions"}
+    assert counts == {
+        key: int(key in baseline) for key in DETAIL_RECORDS["behavior_contract"]
+    }
     assert "zero" in str(router.messages).lower()
 
 

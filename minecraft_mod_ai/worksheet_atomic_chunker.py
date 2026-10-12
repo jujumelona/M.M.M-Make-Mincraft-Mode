@@ -26,6 +26,7 @@ from .model_output_atomicity_contract import (
 )
 from .planning_detail_slots import DETAIL_RECORDS, record_field_schema
 from .planning_detail_template import (
+    CORE_WORKSHEET_SECTIONS,
     _normalize_section_name,
     _section_description,
     validate_worksheet_section,
@@ -779,9 +780,14 @@ def merge_worksheet_section_chunks(
         if concern in empty_concerns and _meaningful_text(reason):
             inapplicable_by_concern[concern] = reason
 
-    if not any(merged_specification[concern] for concern in records) and not inapplicable_by_concern:
+    # Only optional sections may be entirely inapplicable (e.g. a feature with
+    # no persistent state). A required gameplay section cannot be dismissed by
+    # model-authored inapplicability claims or swallowed as an empty plan.
+    if key in CORE_WORKSHEET_SECTIONS and not any(
+        merged_specification[concern] for concern in records
+    ):
         raise ValueError(
-            f"DETAILED_PLAN_WORKSHEET: {key} contains no meaningful authored content"
+            f"DETAILED_PLAN_WORKSHEET: {key} contains no gameplay records"
         )
 
     final_inapplicable: list[dict[str, str]] = []
