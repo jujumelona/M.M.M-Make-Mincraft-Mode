@@ -35,7 +35,8 @@ class FakeNativeRouter:
         answers = {
             "submit_java_construction_plan": {
                 "imports": "",
-                "declaration": "public final class Gate {",
+                "superclass": "",
+                "interfaces": "",
                 "units": [
                     {"name": "state", "purpose": "Store readiness state"},
                     {"name": "check", "purpose": "Expose readiness result"},
@@ -56,7 +57,7 @@ def test_first_pass_builds_complete_java_from_small_member_calls():
     assert can_compose_first_pass_java(SPEC)
     result = compose_first_pass_java(router, SPEC, [], source_context=())
     assert result.startswith("package example.client;")
-    assert "public final class Gate {" in result
+    assert "public class Gate {" in result
     assert result.count("private final boolean ready = true;") == 1
     assert result.count("public boolean isReady()") == 1
     assert result.rstrip().endswith("}")
@@ -88,3 +89,39 @@ def test_target_identity_must_match_declared_source_path():
         **SPEC,
         "bindings": {**SPEC["bindings"], "class_name": "Other"},
     })
+
+
+def test_host_writes_class_identity_without_requesting_model_declaration():
+    router = FakeNativeRouter()
+    result = compose_first_pass_java(router, SPEC, [])
+    assert "package example.client;" in result
+    assert "public class Gate {" in result
+    parameters = router.calls[0][2]
+    assert "declaration" not in parameters["properties"]
+    assert all(name in parameters["properties"] for name in ("superclass", "interfaces"))
+
+
+def test_superclass_and_interfaces_are_composed_by_host():
+    class InterfaceRouter(FakeNativeRouter):
+        def generate_tool_decision(self, *args, **kwargs):
+            result = super().generate_tool_decision(*args, **kwargs)
+            if kwargs["tool_name"] == "submit_java_construction_plan":
+                return {**result, "superclass": "BaseScreen", "interfaces": "Runnable, AutoCloseable"}
+            return result
+
+    result = compose_first_pass_java(InterfaceRouter(), SPEC, [])
+    assert "public class Gate extends BaseScreen implements Runnable, AutoCloseable {" in result
+
+
+def test_multiline_type_clause_rejected_without_member_retry():
+    class BadTypeRouter(FakeNativeRouter):
+        def generate_tool_decision(self, *args, **kwargs):
+            result = super().generate_tool_decision(*args, **kwargs)
+            if kwargs["tool_name"] == "submit_java_construction_plan":
+                return {**result, "superclass": "BaseScreen\\npublic class Wrong"}
+            return result
+
+    router = BadTypeRouter()
+    with pytest.raises(ValueError, match="JAVA_FIRST_PASS_TYPE_REFERENCE_INVALID"):
+        compose_first_pass_java(router, SPEC, [])
+    assert len(router.calls) == 1
