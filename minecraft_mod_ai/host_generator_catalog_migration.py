@@ -43,7 +43,6 @@ def _rebind_unreviewed_generator(
         current not in _HISTORIC_GENERATORS
         or row.get("state") != "not_reviewed"
         or impl.get("evidence_id")
-        or impl.get("executor_type") != "python_generator"
     ):
         raise ValueError(
             "HOST_GENERATOR_BINDING_UNRECOGNIZED: "
