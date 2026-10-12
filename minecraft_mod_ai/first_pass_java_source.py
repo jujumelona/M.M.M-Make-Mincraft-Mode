@@ -24,7 +24,8 @@ _PLAN_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "imports": {"type": "string", "maxLength": 1800},
-        "declaration": {"type": "string", "maxLength": 480},
+        "superclass": {"type": "string", "maxLength": 240},
+        "interfaces": {"type": "string", "maxLength": 480},
         "units": {
             "type": "array",
             "minItems": 1,
@@ -40,7 +41,7 @@ _PLAN_SCHEMA: dict[str, Any] = {
             },
         },
     },
-    "required": ["imports", "declaration", "units"],
+    "required": ["imports", "superclass", "interfaces", "units"],
     "additionalProperties": False,
 }
 
@@ -148,9 +149,13 @@ def compose_first_pass_java(
                 "behavior and integration, including constructors and registration "
                 "when required; never simplify the gameplay specification. "
                 "Imports must be Java import statements only, with no package. "
-                "Declaration must be one exact Java public class declaration with its "
-                "opening brace, and no closing brace. The class name must be "
-                f"{class_name}. Plan only real necessary members, at most ten; "
+                "The HOST writes the package and class header using the exact "
+                f"class name {class_name}; do not generate those declarations. "
+                "Provide superclass as just the optional Java type name (no "
+                "'extends' keyword), and interfaces as optional comma-separated "
+                "Java type names (no 'implements' keyword). Empty strings mean "
+                "none. Preserve actual API inheritance/interface requirements. "
+                "Plan only real necessary members, at most ten; "
                 "each planned unit must fit in 2600 Java source characters, "
                 "including complete method/field bodies. No code in the plan units."
             ),
@@ -166,17 +171,20 @@ def compose_first_pass_java(
     )
 
     imports = str(plan["imports"]).strip()
-    declaration = str(plan["declaration"]).strip()
-    if (
-        not re.search(r"\bclass\s+" + re.escape(class_name) + r"\b", declaration)
-        or not declaration.endswith("{")
-        or "package " in declaration
-        or "}" in declaration
-    ):
-        raise ValueError(
-            "JAVA_FIRST_PASS_CLASS_DECLARATION_INVALID: the planned Java class "
-            "header does not match the host-owned target"
-        )
+    superclass = str(plan["superclass"]).strip()
+    interfaces = str(plan["interfaces"]).strip()
+    # The model never authors identity, scope, or outer braces. It supplies only
+    # optional Java type references used in a deterministic host-owned header.
+    # Reject executable fragments, not legitimate inheritance relationships.
+    for type_clause in (superclass, interfaces):
+        if any(marker in type_clause for marker in ("{", "}", ";", "\\n", "\\r", "/*", "//")):
+            raise ValueError("JAVA_FIRST_PASS_TYPE_REFERENCE_INVALID")
+    declaration = (
+        f"public class {class_name}"
+        + (f" extends {superclass}" if superclass else "")
+        + (f" implements {interfaces}" if interfaces else "")
+        + " {"
+    )
     if any(
         not line.strip().startswith("import ") or not line.strip().endswith(";")
         for line in imports.splitlines() if line.strip()
