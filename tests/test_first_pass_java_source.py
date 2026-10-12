@@ -118,7 +118,7 @@ def test_multiline_type_clause_rejected_without_member_retry():
         def generate_tool_decision(self, *args, **kwargs):
             result = super().generate_tool_decision(*args, **kwargs)
             if kwargs["tool_name"] == "submit_java_construction_plan":
-                return {**result, "superclass": "BaseScreen\\npublic class Wrong"}
+                return {**result, "superclass": "BaseScreen" + chr(10) + "public class Wrong"}
             return result
 
     router = BadTypeRouter()
