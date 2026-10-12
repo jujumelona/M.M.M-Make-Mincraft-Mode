@@ -2,7 +2,7 @@
 
 This is a first-pass production protocol, not an output-exhaustion retry.  The
 host owns the package boundary, final closing brace, and source assembly.  The
-model authors typed declaration metadata and implementation bodies. Required
+model supplies typed metadata and completes fixed-prefix Java declarations. Required
 Fabric entrypoint declarations are immutable host data, not model suggestions.
 """
 from __future__ import annotations
@@ -19,8 +19,8 @@ from .fixed_template_generation import (
 )
 from .model_output_atomicity_contract import assert_atomic_model_schema
 from .first_pass_java_declarations import (
-    BODY, IDENTIFIER, MEMBER_KINDS, declaration_header,
-    metadata_schema, render_declaration,
+    IDENTIFIER, MEMBER_KINDS, declaration_frame, declaration_header,
+    metadata_schema, render_declaration, validate_declaration_metadata,
 )
 
 
@@ -88,6 +88,7 @@ def _one_structured_action(
     name: str,
     schema: Mapping[str, Any],
     page_structure: bool = True,
+    string_frame: Mapping[str, Any] | None = None,
 ) -> Mapping[str, Any]:
     """One attempt for one small action. No schema-repair or source regeneration."""
     assert_atomic_model_schema(schema, surface=f"first-pass Java {name}")
@@ -143,6 +144,7 @@ def _one_structured_action(
     response = router.generate_structured_data(
         "coder", messages, data_name=name,
         parameters=dict(schema),
+        **({"string_frame": string_frame} if string_frame is not None else {}),
     )
     if not isinstance(response, Mapping):
         raise ValueError(f"JAVA_FIRST_PASS_ACTION_MISSING: {name}")
@@ -206,7 +208,7 @@ def compose_first_pass_java(
         "prerequisite_source": source_context,
         "side": spec.get("side"),
         "target_path": spec.get("target_path"),
-        "source_contracts": [slot.get("description", "") for slot in spec.get("slots", ())],
+        "implementation_requirements": spec.get("bindings", {}).get("java_implementation_requirements", ""),
     }
     bindings = task["bindings"]
     # Use the persisted owner roles which already select Fabric entrypoints.
@@ -238,8 +240,8 @@ def compose_first_pass_java(
             "role": "system",
             "content": (
                 "Plan typed Java field/method/constructor/nested-type responsibilities. "
-                "The host renders every declaration from typed metadata; implement only "
-                "expressions or method-body statements in the subsequent body requests. "
+                "The host fixes every declaration from typed metadata; later complete "
+                "one Java declaration from its immutable signature per request. "
                 "Account for every required "
                 "behavior and integration, including constructors and registration "
                 "when required; never simplify the gameplay specification. "
@@ -314,7 +316,7 @@ def compose_first_pass_java(
                     "owns its kind and exact name. Types are Java types, parameters are "
                     "type/name records, and annotations are annotation names with optional "
                     "arguments. Do not place a complete declaration or class in a scalar. "
-                    "Use the source contracts, side and verified prerequisite APIs. "
+                    "Use implementation_requirements, side and verified prerequisite APIs. "
                     "Preserve exact override names for nested API implementations. "
                     "For a nested type supply typed field/constructor/method metadata. "
                     "Implementation is requested only after every signature is available."
@@ -331,6 +333,7 @@ def compose_first_pass_java(
             schema=metadata_schema(kind, member_name),
             page_structure=nested_type,
         ))
+        validate_declaration_metadata(kind, member_name, parts, owner=class_name)
         declarations.append((unit, parts))
 
     # All method/field signatures are fixed before any body is authored. Forward
@@ -371,19 +374,31 @@ def compose_first_pass_java(
             for index, child in enumerate(parts["methods"], 1):
                 implement("method", child["name"], child, owner=name, action=f"{action}_method_{index}", purpose=purpose)
             return
-        field = "initializer" if kind == "field" else "body"
+        # No static initializer blocks are authored by this protocol. A final
+        # field needs an expression unless an instance constructor can assign it.
+        allow_uninitialized = not parts.get("final") or (
+            not parts.get("static") and any(
+                member["kind"] == "constructor" and member["owner"] == owner
+                for member in signature_index
+            )
+        )
+        frame, source_schema = declaration_frame(kind, name, parts,
+                                                 allow_uninitialized=allow_uninitialized)
         body_task = {**task, "imports": imports, "current_unit_purpose": purpose,
                      "class_declaration": declaration, "owner_type": owner_types[owner],
                      "owner": owner, "declaration_metadata": parts,
                      "host_signature": declaration_header(kind, name, parts),
+                     "response_source_frame": frame,
                      "declared_member_api": signature_index, "previous_complete_members": finished}
         body_messages = [
             {"role": "system", "content": (
-                "Implement only the fixed host_signature. For a field return its "
-                "initializer expression without a semicolon. For a method/constructor "
-                "return only statements INSIDE its body, without the signature or "
-                "surrounding method braces. Never return package/import directives, "
-                "a class or another method declaration. Respect source_contracts, "
+                "Return one COMPLETE Java field/method/constructor declaration in source. "
+                "Start with response_source_frame.prefix and end with its suffix; the "
+                "sampler fixes this signature. For an uninitialized field its exact "
+                "empty_value is also allowed. Complete the expression or statements "
+                "in that declaration. Do not repeat the signature inside its implementation. "
+                "Never return package/import directives, an outer class or extra members. "
+                "Respect implementation_requirements, "
                 "side, current_unit_purpose and actual prerequisite/member APIs. "
                 "declared_member_api contains the exact signatures of all helpers, "
                 "including forward references. Implement the requested behavior "
@@ -392,9 +407,8 @@ def compose_first_pass_java(
             {"role": "user", "content": json.dumps(body_task, ensure_ascii=False, default=str)},
         ]
         result = _one_structured_action(router, body_messages, name=action,
-            schema={"type": "object", "properties": {field: BODY},
-                    "required": [field], "additionalProperties": False})
-        parts[field] = result[field]
+            schema=source_schema, string_frame=frame)
+        parts["source"] = result["source"]
     for index, (unit, parts) in enumerate(declarations, 1):
         kind, member_name = unit["kind"], unit["name"]
         implement(kind, member_name, parts, owner=class_name,
@@ -407,24 +421,27 @@ def compose_first_pass_java(
         lifecycle = {"visibility": "public", "static": False, "return_type": "void",
                      "parameters": [], "throws": [], "annotations": ["Override"],
                      "type_parameters": ""}
+        frame, source_schema = declaration_frame("method", entrypoint_method, lifecycle, minimum=1)
         lifecycle_messages = [
             {"role": "system", "content": (
-                "Implement only the statements inside the supplied host initialization "
-                "method. Register and implement the exact original feature using the "
+                "Return the COMPLETE supplied initialization method in source, starting "
+                "with response_source_frame.prefix and ending with its suffix. The sampler "
+                "fixes its signature; complete its body without repeating that signature. "
+                "Register and implement the exact original feature using the "
                 "verified APIs and completed helper declarations. Respect the assigned "
-                "side and source_contracts; retain existing typed behavior without "
-                "duplicating its effects. Return no method signature, package/import "
-                "directives, class declaration or outer method braces."
+                "side and implementation_requirements; retain existing typed behavior "
+                "without duplicating its effects. Return no package/import directives, "
+                "class declaration or extra method."
             )},
             {"role": "user", "content": json.dumps({**task, "imports": imports,
                 "host_signature": declaration_header("method", entrypoint_method, lifecycle),
+                "response_source_frame": frame,
                 "complete_members": finished}, ensure_ascii=False, default=str)},
         ]
         result = _one_structured_action(router, lifecycle_messages,
             name="submit_java_entrypoint_body",
-            schema={"type": "object", "properties": {"body": {**BODY, "minLength": 1}},
-                    "required": ["body"], "additionalProperties": False})
-        lifecycle["body"] = result["body"]
+            schema=source_schema, string_frame=frame)
+        lifecycle["source"] = result["source"]
         finished.append(render_declaration("method", entrypoint_method, lifecycle, owner=class_name))
 
     return (

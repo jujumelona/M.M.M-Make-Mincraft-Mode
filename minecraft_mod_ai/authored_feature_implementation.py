@@ -120,10 +120,8 @@ def compile_request_feature_jobs(
         )
         spec["output_schema"]["pattern"] = source_pattern
         spec["slots"][0]["schema"]["pattern"] = source_pattern
-        spec["slots"][0]["description"] += (
-            " This is the executable implementation of the supplied original feature. "
-            "Implement net.fabricmc.api.ModInitializer and public void onInitialize(); "
-            "register the relevant real Fabric/Minecraft callbacks from onInitialize "
+        implementation_requirements = (
+            "Register the relevant real Fabric/Minecraft callbacks from onInitialize "
             "and implement their behavior. Choose hooks matching the original player/world "
             "interaction; do not default to player join or invent an item/command trigger. "
             "Call installed donor code where applicable and implement missing glue. "
@@ -136,6 +134,14 @@ def compile_request_feature_jobs(
             "callbacks, purchases, rewards or state effects. Preserve their exact command "
             "and action identities when adding residual world behavior. "
             "Use the existing content owner classes; do not duplicate their registrations."
+        )
+        bindings["java_implementation_requirements"] = (
+            bindings.get("java_implementation_requirements", "") + implementation_requirements
+        )
+        spec["slots"][0]["description"] += (
+            " This is the executable implementation of the supplied original feature. "
+            "Implement net.fabricmc.api.ModInitializer and public void onInitialize(); "
+            + implementation_requirements
         )
         jobs.append(ArtifactJob(
             job_id=subject + ".implementation", template_id="", owner_module=subject,

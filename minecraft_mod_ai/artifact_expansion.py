@@ -276,6 +276,14 @@ def _canonical_candidate_inputs(
             "If an API or required screen/menu registration is not known, "
             "do not invent symbols or a no-op success implementation. "
         )
+    # Implementation requests inherit behavior/API rules, never the full-file
+    # reply instructions below. These are different scopes in the generator.
+    bindings["java_implementation_requirements"] = (
+        epoch_source_contract +
+        f"Implement only canonical responsibility {canonical_leaf} for "
+        f"Minecraft {minecraft_version}. Preserve the supplied gameplay "
+        "requirement and verified bindings; do not invent unrelated systems. "
+    )
     output_schema = {
         "type": "string",
         "minLength": 1,

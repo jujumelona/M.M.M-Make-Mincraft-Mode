@@ -344,11 +344,13 @@ class ModelRouter:
         *,
         data_name: str,
         parameters: Mapping[str, Any],
+        string_frame: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Generate one bounded data page using the backend's schema sampler.
+        """Generate one bounded data page using the backend's constrained sampler.
 
-        Data pages do not execute tools. Their schema belongs in response_schema,
-        and must remain active throughout this single inference request.
+        Data pages do not execute tools. Ordinary pages use response_schema;
+        an optional string_frame uses a literal-prefix JSON grammar instead.
+        The original response_schema still validates the exact returned data.
         """
         from .model_output_atomicity_contract import assert_atomic_model_schema
         from .fixed_template_generation import _validate_native_arguments
@@ -381,6 +383,7 @@ class ModelRouter:
                 "mmm_data_page": data_name,
                 "mmm_strict_structured_data": True,
                 "mmm_force_non_thinking": True,
+                **({"mmm_data_string_frame": dict(string_frame)} if string_frame is not None else {}),
             },
         )
         with self._generation_scope(config):

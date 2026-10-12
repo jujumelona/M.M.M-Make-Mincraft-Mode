@@ -218,6 +218,11 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
         )
     from .generation_output_budget import apply_request_generation_budget
 
+    metadata = getattr(request, "metadata", {})
+    if isinstance(metadata, Mapping) and isinstance(metadata.get("mmm_data_string_frame"), Mapping):
+        from .llama_structured_decode_policy import _apply_llama_json_schema
+
+        _apply_llama_json_schema(payload, request, adapter=adapter)
     payload = _enforce_required_tool_sampling(payload)
     return apply_request_generation_budget(payload, config=adapter.config, request=request)
 

@@ -122,7 +122,74 @@ def declaration_header(kind: str, name: str, parts: Mapping[str, Any]) -> str:
     return header
 
 
-def _one_member(source: str, *, kind: str, name: str, owner: str) -> str:
+def declaration_frame(kind: str, name: str, parts: Mapping[str, Any], *, minimum: int = 0,
+                      allow_uninitialized: bool = True):
+    """One complete Java declaration with a sampler-owned literal signature."""
+    header = declaration_header(kind, name, parts)
+    if kind == "field":
+        prefix, suffix = header + " = ", ";"
+        empty = header + ";" if allow_uninitialized else None
+        minimum = 1
+    elif kind in {"method", "constructor"}:
+        prefix, suffix, empty = header + " {\n", "\n}", None
+    else:
+        raise ValueError("JAVA_SOURCE_FRAME_REQUIRES_FIELD_METHOD_OR_CONSTRUCTOR")
+    frame = {"field": "source", "prefix": prefix, "suffix": suffix,
+             "min_length": minimum, "max_length": BODY["maxLength"]}
+    if empty is not None:
+        frame["empty_value"] = empty
+    source_schema = {"type": "string",
+                     "minLength": len(empty) if empty is not None else len(prefix) + minimum + len(suffix),
+                     "maxLength": len(prefix) + BODY["maxLength"] + len(suffix)}
+    return frame, {"type": "object", "properties": {"source": source_schema},
+                   "required": ["source"], "additionalProperties": False}
+
+
+def validate_declaration_metadata(kind: str, name: str, parts: Mapping[str, Any], *, owner: str) -> None:
+    """Parse fixed declaration syntax before asking for any implementation."""
+    stub = deepcopy(dict(parts))
+    if kind == "field":
+        stub["initializer"] = ""
+    elif kind in {"method", "constructor"}:
+        stub["body"] = ""
+    else:
+        for child in stub["fields"]:
+            child["initializer"] = ""
+        for child in (*stub["methods"], *stub["constructors"]):
+            child["body"] = ""
+    render_declaration(kind, name, stub, owner=owner, phase="metadata")
+
+
+def _one_member(source: str, *, kind: str, name: str, owner: str, phase: str) -> str:
+    from .java_region_parser import JavaRegionParseError
+
+    try:
+        return _parse_one_member(source, kind=kind, name=name, owner=owner)
+    except JavaRegionParseError as exc:
+        _record_source_failure(source, kind=kind, name=name, owner=owner, phase=phase, exc=exc)
+        raise
+
+
+def _record_source_failure(source: str, *, kind: str, name: str, owner: str, phase: str, exc: Exception) -> None:
+    from .planner_trace_artifacts import save_trace_artifact
+    from .root_cause_trace import durable_trace_path, emit_root_cause
+
+    details = {"kind": kind, "member": name, "owner": owner, "phase": phase}
+    try:
+        details["source_artifact"] = save_trace_artifact(
+            {**details, "member_source": source, "parser_source": f"class {owner} {{\n{source}\n}}",
+             "error": str(exc)}, durable_trace_path().parent / "artifacts",
+        )
+    except Exception as artifact_error:
+        details["source_artifact_error"] = type(artifact_error).__name__
+    # Only identity/path metadata reaches the console. The complete source is in
+    # the existing downloadable failure ZIP, not copied into browser output.
+    emit_root_cause("java_declaration_failure", stage="generate:content",
+                    operation=name, gate="java_declaration", result="FAIL",
+                    reason=str(exc), details=details, exc=exc)
+
+
+def _parse_one_member(source: str, *, kind: str, name: str, owner: str) -> str:
     """Construct one parser-backed declaration; implementation cannot escape its scope."""
     from .java_region_parser import JavaRegionParseError, _class_body, _parse, _text
 
@@ -149,8 +216,23 @@ def _one_member(source: str, *, kind: str, name: str, owner: str) -> str:
     return _text(raw, node)
 
 
-def render_declaration(kind: str, name: str, parts: Mapping[str, Any], *, owner: str) -> str:
+def render_declaration(kind: str, name: str, parts: Mapping[str, Any], *, owner: str,
+                       phase: str = "implementation") -> str:
     header = declaration_header(kind, name, parts)
+    if "source" in parts:
+        source = parts["source"]
+        frame, _ = declaration_frame(kind, name, parts)
+        if source != frame.get("empty_value") and not (
+            source.startswith(frame["prefix"]) and source.endswith(frame["suffix"])
+        ):
+            from .java_region_parser import JavaRegionParseError
+
+            exc = JavaRegionParseError("source changed the immutable host declaration", category="scope")
+            _record_source_failure(source, kind=kind, name=name, owner=owner, phase=phase, exc=exc)
+            raise exc
+        # The response is already a complete declaration. Never concatenate it
+        # after an '=' or insert it as statements inside another declaration.
+        return _one_member(source, kind=kind, name=name, owner=owner, phase=phase)
     if kind == "field":
         initializer = str(parts.get("initializer") or "").strip()
         source = header + (" = " + initializer if initializer else "") + ";"
@@ -161,8 +243,8 @@ def render_declaration(kind: str, name: str, parts: Mapping[str, Any], *, owner:
         if kind == "enum":
             members.append(", ".join(item["name"] + ("(" + item["arguments"] + ")" if item["arguments"] else "")
                                      for item in parts["constants"]) + ";")
-        members.extend(render_declaration("field", item["name"], item, owner=name) for item in parts["fields"])
-        members.extend(render_declaration("constructor", name, item, owner=name) for item in parts["constructors"])
-        members.extend(render_declaration("method", item["name"], item, owner=name) for item in parts["methods"])
+        members.extend(render_declaration("field", item["name"], item, owner=name, phase=phase) for item in parts["fields"])
+        members.extend(render_declaration("constructor", name, item, owner=name, phase=phase) for item in parts["constructors"])
+        members.extend(render_declaration("method", item["name"], item, owner=name, phase=phase) for item in parts["methods"])
         source = header + " {\n" + "\n\n".join(members) + "\n}"
-    return _one_member(source, kind=kind, name=name, owner=owner)
+    return _one_member(source, kind=kind, name=name, owner=owner, phase=phase)
