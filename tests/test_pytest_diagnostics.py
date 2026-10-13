@@ -332,3 +332,27 @@ def test_timeout_returns_124_and_preserves_only_redacted_output(
     assert "timeout-secret" not in console
     assert "timeout-secret" not in log.read_text(encoding="utf-8")
     assert "token=<redacted>" in log.read_text(encoding="utf-8")
+
+
+def test_malformed_junit_retains_redacted_pytest_failure_identity(tmp_path, monkeypatch, capsys):
+    log = tmp_path / "pytest.log"
+    junit = tmp_path / "pytest.xml"
+
+    def callback(command, raw_handle, timeout_seconds):
+        raw_handle.write(
+            "FAILED tests/test_work_graph_state_transition_contract.py::test_success "
+            "- sqlite3.OperationalError: unrecognized token\\n"
+        )
+        junit.write_text("<testsuite><testcase>", encoding="utf-8")
+        return 1, None
+
+    _install_fake_launch(monkeypatch, callback)
+    status = pytest_diagnostics.main(
+        ["--log", str(log), "--junit", str(junit), "tests/test_anything.py"]
+    )
+    output = capsys.readouterr().out
+    assert status == 1
+    assert "ParseError" in output
+    assert "PYTEST FAILURE (UNVERIFIED JUNIT)" in output
+    assert "sqlite3.OperationalError" in output
+    assert "FINAL STATUS\\nPASS" not in output
