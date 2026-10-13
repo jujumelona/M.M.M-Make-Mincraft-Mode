@@ -69,7 +69,7 @@ def test_quote_resolves_exact_unicode_source_slice_even_when_model_collapses_whi
 
 
 def test_production_scope_reuses_saved_behavior_without_more_model_calls():
-    source = "Gather resources and trade for spacecraft parts."
+    source = "Gather resources; trade for spacecraft parts."
     router = PageRouter([
         _page(intent="Gather materials", quote="Gather resources"),
         _page(intent="Buy parts", quote="trade for spacecraft parts"),
@@ -88,18 +88,50 @@ def test_production_scope_reuses_saved_behavior_without_more_model_calls():
         assert behavior["behavior_id"] + ".verify" in ids
 
 
-def test_unanchored_behavior_is_rejected_not_silently_fabricated():
+def test_unanchored_model_answer_preserves_original_but_does_not_claim_grounded():
     scope = _scope("Collect minerals")
     router = PageRouter([_page(intent="Unrequested power", quote="Install a fictional device")])
-    with pytest.raises(ValueError, match="CONSTRUCTION_BEHAVIOR_UNGROUNDED"):
-        author_behavior_requirements(scope, router)
+    result = author_behavior_requirements(scope, router)
+    assert len(result) == 1
+    assert result[0].source_quote == "Collect minerals"
+    assert result[0].source_status == "source_preserved_unresolved"
+    assert result[0].trigger == ""
 
 
-def test_duplicate_intent_is_not_silently_counted_as_distinct():
-    scope = _scope("Gather resources and gather more resources")
+def test_repeated_english_intent_with_distinct_source_spans_is_valid():
+    scope = _scope("Gather resources; gather more resources")
     router = PageRouter([
         _page(intent="Gather resources", quote="Gather resources"),
         _page(intent="Gather resources", quote="gather more resources"),
+        _page(status="complete"),
     ])
-    with pytest.raises(ValueError, match="CONSTRUCTION_BEHAVIOR_NO_PROGRESS"):
-        author_behavior_requirements(scope, router)
+    result = author_behavior_requirements(scope, router)
+    assert len(result) == 2
+    assert result[0].behavior_id != result[1].behavior_id
+    assert all(row.source_status == "grounded" for row in result)
+
+
+def test_duplicate_model_action_stops_without_requery_or_losing_remaining_original_text():
+    source = "Collect minerals; trade minerals for fuel"
+    router = PageRouter([
+        _page(intent="Collect", quote="Collect minerals"),
+        _page(intent="Collect", quote="Collect minerals"),
+    ])
+    result = author_behavior_requirements(_scope(source), router)
+    assert router.calls == 2
+    assert len([r for r in result if r.source_status == "grounded"]) == 1
+    unhandled = [r for r in result if r.source_status == "source_preserved_unresolved"]
+    assert unhandled
+    assert any("trade minerals for fuel" in r.source_quote for r in unhandled)
+
+
+def test_full_span_duplicate_is_a_single_action_not_an_exception():
+    source = "Collect and trade minerals"
+    router = PageRouter([
+        _page(intent="Collect and trade minerals", quote=source),
+        _page(intent="Collect and trade minerals", quote=source),
+    ])
+    result = author_behavior_requirements(_scope(source), router)
+    assert router.calls == 2
+    assert len(result) == 1
+    assert result[0].source_status == "grounded"
