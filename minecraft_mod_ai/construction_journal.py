@@ -1,0 +1,89 @@
+"""Durable first-pass model transcript for exact class and member decisions.
+
+Only deterministic replay of the *same* prompt/schema/context is permitted.
+Changing the task, target, source, or input invalidates the prior transcript.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+from threading import RLock
+from uuid import uuid4
+
+_LOCK = RLock()
+
+
+def _json(value):
+    return json.dumps(value, ensure_ascii=False, sort_keys=True,
+                      separators=(",", ":"), allow_nan=False)
+
+
+def _sha(value):
+    return hashlib.sha256(_json(value).encode("utf-8")).hexdigest()
+
+
+class JournaledConstructionRouter:
+    def __init__(self, router, project_root, spec, context):
+        self.router = router
+        self.binding = _sha({
+            "schema": "mmm/construction-inference-v1",
+            "spec": spec,
+            "target": context["target"],
+            "prerequisites": context["prerequisite_hashes"],
+            "source_symbols": sorted(
+                (key, row.get("source_hash"))
+                for key, row in context.get("project_symbols", {}).items()
+            ),
+        })
+        root = Path(project_root).resolve()
+        self.path = root / ".mmm" / "construction_inference" / (self.binding + ".json")
+        self.position = 0
+        with _LOCK:
+            if self.path.exists():
+                envelope = json.loads(self.path.read_text(encoding="utf-8"))
+                if envelope.get("binding") != self.binding or not isinstance(envelope.get("rows"), list):
+                    raise ValueError("CONSTRUCTION_INFERENCE_JOURNAL_INVALID")
+                rows = envelope["rows"]
+                if envelope.get("digest") != _sha(rows):
+                    raise ValueError("CONSTRUCTION_INFERENCE_JOURNAL_CORRUPT")
+                self.rows = rows
+            else:
+                self.rows = []
+
+    def __getattr__(self, name):
+        return getattr(self.router, name)
+
+    def generate_structured_data(self, role, messages, *, data_name, parameters, **kwargs):
+        identity = _sha({"role": role, "messages": messages,
+                         "data_name": data_name, "parameters": parameters,
+                         "kwargs": kwargs})
+        with _LOCK:
+            index = self.position
+            self.position += 1
+            if index < len(self.rows):
+                row = self.rows[index]
+                if row.get("input_sha256") != identity:
+                    raise ValueError("CONSTRUCTION_INFERENCE_REPLAY_DRIFT: " + str(index))
+                return json.loads(row["response_json"])
+            if index != len(self.rows):
+                raise ValueError("CONSTRUCTION_INFERENCE_GAP")
+        # Do not hold the journal lock while running the model.
+        result = self.router.generate_structured_data(
+            role, messages, data_name=data_name, parameters=parameters, **kwargs)
+        serialized = _json(result)
+        with _LOCK:
+            if len(self.rows) != index:
+                raise ValueError("CONSTRUCTION_INFERENCE_CONCURRENT_CONFLICT")
+            self.rows.append({"input_sha256": identity, "response_json": serialized})
+            envelope = {"binding": self.binding, "rows": self.rows,
+                        "digest": _sha(self.rows)}
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_name("." + self.path.name + "." + uuid4().hex + ".tmp")
+            try:
+                tmp.write_text(_json(envelope), encoding="utf-8")
+                tmp.replace(self.path)
+            finally:
+                if tmp.exists():
+                    tmp.unlink()
+        return result
