@@ -53,6 +53,12 @@ def compile_request_feature_jobs(
         bindings = spec["bindings"]
         fqcn = bindings["package_name"] + "." + bindings["class_name"]
         bindings["request_feature_entrypoint"] = fqcn
+        behavior_rows = [row for row in plan.request_scope.get("behavior_requirements", ())
+                         if row.get("requirement_id") == rid]
+        if not behavior_rows:
+            raise ValueError("CONSTRUCTION_BEHAVIOR_COVERAGE_MISSING: " + rid)
+        bindings["construction_behaviors_json"] = json.dumps(
+            behavior_rows, ensure_ascii=False, separators=(",", ":"))
         bindings["target_contract_json"] = json.dumps(adapter.version_context.to_dict().get("target", {}), separators=(",", ":"))
         declarations = []
         source_paths = []
