@@ -55,15 +55,50 @@ def test_live_runtime_candidate_matches_catalog_for_modular_gui():
     assert verify_job_binding(job, resolved, {}) is not None
 
 
-def test_published_generator_migration_pin_matches_live_executor():
-    """A generator source edit must invalidate CI before Colab session startup."""
-    from minecraft_mod_ai.host_generator_catalog_migration import _REVIEWED_GENERATOR
+def test_published_generator_migration_accepts_only_unreviewed_historical_binding():
+    """Source changes migrate only the published, unevidenced generator identity."""
+    from minecraft_mod_ai.host_generator_catalog_migration import (
+        _OLD_GENERATOR,
+        _REVIEWED_GENERATOR,
+        _HISTORIC_GENERATORS,
+        _rebind_unreviewed_generator,
+    )
 
+    assert _HISTORIC_GENERATORS == {_OLD_GENERATOR, _REVIEWED_GENERATOR}
     authority = bootstrap_integrity()
     live = authority.implementations.get_implementation(
         "python_generator:minecraft/screen/registration"
     )
-    assert live.content_sha256 == _REVIEWED_GENERATOR
+    assert live.content_sha256.startswith("sha256:")
+    assert len(live.content_sha256) == len(_REVIEWED_GENERATOR)
+
+    row = {
+        "state": "not_reviewed",
+        "implementation": {
+            "implementation_id": "python_generator:minecraft/screen/registration",
+            "implementation_sha256": _REVIEWED_GENERATOR,
+            "evidence_id": "",
+        },
+    }
+    changed = _rebind_unreviewed_generator(
+        leaf="minecraft/screen/registration",
+        row=row,
+        actual=live.content_sha256,
+        minecraft="26.2",
+    )
+    assert changed == (live.content_sha256 != _REVIEWED_GENERATOR)
+    assert row["implementation"]["implementation_sha256"] == live.content_sha256
+
+    # An admitted/evidenced implementation cannot silently inherit a new hash.
+    row["state"] = "admitted"
+    row["implementation"]["implementation_sha256"] = _REVIEWED_GENERATOR
+    with pytest.raises(ValueError, match="HOST_GENERATOR_BINDING_UNRECOGNIZED"):
+        _rebind_unreviewed_generator(
+            leaf="minecraft/screen/registration",
+            row=row,
+            actual="sha256:" + "0" * 64,
+            minecraft="26.2",
+        )
 
 
 def test_fabric_26_2_target_selectable_at_session_entry():
