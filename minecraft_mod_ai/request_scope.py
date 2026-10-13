@@ -106,7 +106,7 @@ def _feature_messages(context: str, chunk: str, prior: list[dict[str, Any]], rep
     return (
         {"role": "system", "content": (
             "Identify the next separately actionable Minecraft mod feature in source order. "
-            "Include exploration, combat and progression wherever requested. "
+            "Split different player actions and stages into distinct features. Include exploration, combat and progression wherever requested. "
             "Return status=feature with a complete compact English statement, a short "
             "English mod/source search query, and a verbatim original source quote. "
             "Classify it as gameplay, interface, or infrastructure. Use interface only "
