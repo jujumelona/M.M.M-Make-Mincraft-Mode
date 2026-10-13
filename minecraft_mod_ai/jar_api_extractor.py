@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 import struct
 from pathlib import Path
 from zipfile import BadZipFile, ZipFile
@@ -11,6 +12,29 @@ from .implementation_identity import compute_content_hash
 
 class ClassFormatError(ValueError):
     pass
+
+
+_FORBIDDEN_MODIFIED_UTF8_BYTE = re.compile(rb"[\x00\xf0-\xff]")
+
+
+def _decode_modified_utf8(data: bytes) -> str:
+    """Decode JVM CONSTANT_Utf8 data without rejecting Java char values.
+
+    Modified UTF-8 encodes NUL as C0 80 and every UTF-16 code unit in at
+    most three bytes. Java strings may contain unpaired surrogate units;
+    valid pairs are combined to match Python's Unicode class/path names.
+    """
+    forbidden = _FORBIDDEN_MODIFIED_UTF8_BYTE.search(data)
+    if forbidden is not None:
+        offset = forbidden.start()
+        raise ClassFormatError(
+            f"Invalid modified UTF-8 byte 0x{data[offset]:02x} at offset {offset}"
+        )
+    try:
+        value = data.replace(b"\xc0\x80", b"\x00").decode("utf-8", "surrogatepass")
+    except UnicodeDecodeError as exc:
+        raise ClassFormatError("Invalid modified UTF-8 encoding: " + exc.reason) from exc
+    return value.encode("utf-16-be", "surrogatepass").decode("utf-16-be", "surrogatepass")
 
 
 class _Reader:
@@ -72,10 +96,10 @@ def parse_class(data: bytes, *, default_side: str = "COMMON") -> ApiClass:
     while i < len(cp):
         tag = r.u1()
         if tag == 1:
-            # Modified UTF-8 encodes NUL as C0 80 and supplementary chars as surrogate pairs.
-            raw = r.take(r.u2()).replace(b"\xc0\x80", b"\x00")
-            value = raw.decode("utf-8", "surrogatepass")
-            cp[i] = value.encode("utf-16", "surrogatepass").decode("utf-16")
+            try:
+                cp[i] = _decode_modified_utf8(r.take(r.u2()))
+            except ClassFormatError as exc:
+                raise ClassFormatError(f"Invalid CONSTANT_Utf8 #{i}: {exc}") from exc
         elif tag in {3, 4}:
             cp[i] = r.take(4)
         elif tag in {5, 6}:
