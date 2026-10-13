@@ -241,11 +241,8 @@ def author_request_scope(router: Any, prompt: str, *, budget: Any = None) -> dic
     print(f"REQUEST_SCOPE: features={len(features)} source_recovery={recovered}; original request preserved", flush=True)
     scope = {"schema_version": "mmm/request-scope-v1", "requested_prompt": prompt,
              "requirements": features}
-    # Persist observable child behaviors while keeping every original parent ID.
-    # Recovery text is an unresolved planning input, never a single Java task.
-    from .construction_planner import author_behavior_requirements
-    behaviors = author_behavior_requirements(scope, router)
-    scope["behavior_requirements"] = [behavior.to_dict() for behavior in behaviors]
+    # Planning is user-facing design authoring, not production construction.
+    # Generate observable behavior tasks later from these preserved source spans.
     return scope
 
 
