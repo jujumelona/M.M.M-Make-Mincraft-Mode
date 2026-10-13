@@ -168,9 +168,9 @@ def compose(router, spec, *, source_context=(), construction_context=None):
         render_task_java(registrar_task, nodes, symbols)
         members.append(render_task_member(registrar_task, nodes, symbols))
     if registrars:
-        lifecycle_calls = '\\n'.join('this.' + symbols[key]['name'] + '();'
+        lifecycle_calls = '\n'.join('this.' + symbols[key]['name'] + '();'
                                     for key, _ in registrars)
-        members.append('@Override\\npublic void onInitialize() {\\n' + lifecycle_calls + '\\n}')
+        members.append('@Override\npublic void onInitialize() {\n' + lifecycle_calls + '\n}')
     source = 'package ' + package + ';\n\npublic ' + ('final ' if lifecycle else '') + 'class ' + name
     source += (' extends ' + superclass if superclass else '') + (' implements ' + ', '.join(interfaces) if interfaces else '')
     source += ' {\n' + '\n\n'.join(members) + '\n}\n'
