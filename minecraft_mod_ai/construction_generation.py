@@ -3,7 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import replace
-from .construction_author import ID, TEXT, obj, ask, symbol_page
+from .construction_author import ID, TEXT, obj, ask
+from .construction_state import ConstructionState, STATE_INSTRUCTION
 from .construction_task import ConstructionTask
 from .construction_author import author_task_operations
 from .construction_java import render_task_member, render_task_java
@@ -11,7 +12,7 @@ from .java_operation_ir import PRIMITIVES, identifier, qualified_name
 
 CLASS_NEXT = obj({'action': {'type': 'string', 'enum': ['superclass', 'interface', 'symbols', 'complete']},
                   'type_ref': TEXT, 'offset': {'type': 'integer', 'minimum': 0}})
-MEMBER_NEXT = obj({'action': {'type': 'string', 'enum': ['method', 'field', 'constructor', 'symbols', 'complete', 'extension']},
+MEMBER_NEXT = obj({'action': {'type': 'string', 'enum': ['method', 'field', 'constructor', 'symbols', 'declarations', 'complete', 'extension']},
                   'name': TEXT, 'purpose': TEXT, 'query': TEXT, 'offset': {'type': 'integer', 'minimum': 0}})
 SIGNATURE = obj({'return_type': ID, 'visibility': {'type': 'string', 'enum': ['public', 'protected', 'private', '']},
                  'static': {'type': 'boolean'}, 'final': {'type': 'boolean'}})
@@ -19,7 +20,7 @@ PARAMETER = obj({'complete': {'type': 'boolean'}, 'name': TEXT, 'type_ref': TEXT
 INSTRUCTION = ('Plan one current Java declaration at a time. No source code. Types are exact fully qualified '
     'inspected inventory names (primitives are intrinsic). Request symbols using a lexical query and offset. '
     'All existing signatures are retrievable by lookup. Do not duplicate a declaration. Complete only after '
-    'every required behavior has an owner. Use extension for unsupported language constructs.')
+    'every required behavior has an owner. Use extension for unsupported language constructs. ' + STATE_INSTRUCTION)
 
 
 def exact_type(value, symbols, *, allow_void=True):
@@ -70,60 +71,45 @@ def compose(router, spec, *, source_context=(), construction_context=None):
     elif str(spec.get('side', '')).upper() == 'CLIENT':
         lifecycle, interface = 'onInitializeClient', 'net.fabricmc.api.ClientModInitializer'
     else: lifecycle = interface = ''
-    interfaces, superclass, page, seen = [], '', {}, set()
+    # This renderer owns a new complete class, not edits to an inspected class.
+    # Never relabel installed source or bytecode as a provisional declaration.
+    if owner in symbols or any(row.get('owner') == owner for row in symbols.values()):
+        raise ValueError('CONSTRUCTION_OWNER_ALREADY_EXISTS: ' + owner)
+    interfaces, superclass = [], ''
+    symbols[owner] = {'kind': 'CLASS', 'owner': owner, 'name': name, 'access': 1,
+        'superclass': superclass, 'interfaces': interfaces,
+        'side': str(spec.get('side', 'COMMON')), 'provenance': 'construction_plan'}
+    state = ConstructionState(symbols, owner, task.target_path)
     payload = {'intent': task.intent, 'trigger': task.trigger, 'effects': task.effects,
                'state_reads': task.state_reads, 'state_writes': task.state_writes,
                'owner': owner, 'target_path': task.target_path}
     if interface:
         exact_type(interface, symbols, allow_void=False); interfaces.append(interface)
         payload['host_entrypoint'] = {'interface': interface, 'method': lifecycle}
+        state.advance()
     else:
+        state.enter('class_header')
         while True:
-            choice = ask(planning_router, 'construction_class_next', {**payload, 'lookup': page}, CLASS_NEXT, INSTRUCTION)
+            actions = ['interface', 'symbols', 'complete']
+            if not superclass: actions.insert(0, 'superclass')
+            schema = obj({**CLASS_NEXT['properties'], 'action': {'type': 'string', 'enum': actions}})
+            choice = ask(planning_router, 'construction_class_next',
+                {**payload, **state.payload(actions)}, schema, INSTRUCTION)
             if choice['action'] == 'complete': break
-            fingerprint = json.dumps(choice, sort_keys=True)
-            if fingerprint in seen: raise ValueError('CONSTRUCTION_AUTHOR_NO_PROGRESS')
-            seen.add(fingerprint)
             if choice['action'] == 'symbols':
-                page = symbol_page(symbols, choice['type_ref'], choice['offset']); continue
+                state.lookup_symbols(choice['type_ref'], choice['offset']); continue
             type_ = exact_type(choice['type_ref'], symbols, allow_void=False)
+            if type_ == owner or type_.endswith('[]'):
+                raise ValueError('CONSTRUCTION_CLASS_HEADER')
             if choice['action'] == 'superclass':
                 if superclass: raise ValueError('CONSTRUCTION_CLASS_HEADER')
                 superclass = type_
-            else: interfaces.append(type_)
-            page = {}
-    symbols[owner] = {'kind': 'CLASS', 'owner': owner, 'access': 1, 'superclass': superclass,
-                      'interfaces': interfaces, 'side': str(spec.get('side', 'COMMON'))}
-    declarations, seen, page = [], set(), {}
-    while True:
-        item = ask(planning_router, 'construction_member_next', {**payload, 'lookup': page}, MEMBER_NEXT, INSTRUCTION)
-        action = item['action']
-        if action == 'complete': break
-        if action == 'extension': raise ValueError('CONSTRUCTION_RENDERER_EXTENSION_REQUIRED: ' + item['purpose'])
-        if action == 'symbols':
-            fingerprint = ('lookup', item['query'], item['offset'])
-            if fingerprint in seen: raise ValueError('CONSTRUCTION_AUTHOR_NO_PROGRESS')
-            seen.add(fingerprint); page = symbol_page(symbols, item['query'], item['offset']); continue
-        member_name = name if action == 'constructor' else identifier(item['name'])
-        if member_name == lifecycle: raise ValueError('CONSTRUCTION_HOST_ENTRYPOINT_DUPLICATE')
-        current = {**payload, 'kind': action, 'name': member_name, 'purpose': item['purpose'], 'lookup': page}
-        metadata = ask(planning_router, 'construction_member_signature', current, SIGNATURE, INSTRUCTION)
-        exact_type(metadata['return_type'], symbols, allow_void=action != 'field')
-        parameters = []
-        if action != 'field':
-            while True:
-                parameter = ask(planning_router, 'construction_parameter_next', {**current, 'parameter_index': len(parameters)}, PARAMETER, INSTRUCTION)
-                if parameter['complete']: break
-                identifier(parameter['name']); exact_type(parameter['type_ref'], symbols, allow_void=False)
-                if any(p['name'] == parameter['name'] for p in parameters): raise ValueError('CONSTRUCTION_PARAMETER_DUPLICATE')
-                parameters.append({'name': parameter['name'], 'type': parameter['type_ref']})
-        key = owner + '#' + member_name + '(' + ','.join(p['type'] for p in parameters) + ')'
-        if key in symbols: raise ValueError('CONSTRUCTION_DECLARATION_DUPLICATE: ' + key)
-        symbols[key] = {**metadata, 'kind': action.upper(), 'owner': owner, 'name': member_name,
-            'parameters': parameters, 'class_superclass': superclass, 'class_interfaces': interfaces,
-            'side': str(spec.get('side', 'COMMON'))}
-        declarations.append((key, item['purpose']))
-        page = {}; seen.clear()
+                symbols[owner]['superclass'] = superclass
+            else:
+                if type_ in interfaces: raise ValueError('CONSTRUCTION_CLASS_HEADER')
+                interfaces.append(type_)
+            state.advance()
+    declarations = []
     registrars = []
     if bindings.get('request_feature_entrypoint'):
         # Each preserved child behavior owns a distinct method. Host lifecycle
@@ -136,17 +122,68 @@ def compose(router, spec, *, source_context=(), construction_context=None):
                 raise ValueError('CONSTRUCTION_DECLARATION_DUPLICATE: ' + key)
             symbols[key] = {'kind': 'METHOD', 'owner': owner, 'name': symbol_name,
                 'parameters': [], 'return_type': 'void', 'static': False,
-                'visibility': 'private', 'side': str(spec.get('side', 'COMMON'))}
+                'visibility': 'private', 'side': str(spec.get('side', 'COMMON')),
+                'class_superclass': superclass, 'class_interfaces': interfaces,
+                'provenance': 'construction_plan', 'body_owner': behavior['behavior_id'],
+                'purpose': behavior['intent']}
             registrars.append((key, behavior))
+            state.add_declaration(key)
     if lifecycle:
         key = owner + '#' + lifecycle + '()'
         if key in symbols: raise ValueError('CONSTRUCTION_HOST_ENTRYPOINT_DUPLICATE')
         symbols[key] = {'kind': 'METHOD', 'owner': owner, 'name': lifecycle, 'parameters': [],
             'return_type': 'void', 'static': False, 'visibility': 'public',
-            'annotations': ['java.lang.Override'], 'class_interfaces': interfaces,
-            'side': str(spec.get('side', 'COMMON'))}
-        if not registrars:
-            declarations.append((key, task.intent))
+            'annotations': ['java.lang.Override'], 'class_superclass': superclass,
+            'class_interfaces': interfaces, 'side': str(spec.get('side', 'COMMON')),
+            'provenance': 'construction_plan',
+            'body_owner': 'host_lifecycle' if registrars else task.task_id,
+            'purpose': 'Invoke every assigned behavior registrar' if registrars else task.intent}
+        state.add_declaration(key)
+    while True:
+        state.enter('member_declarations')
+        actions = list(MEMBER_NEXT['properties']['action']['enum'])
+        if not state.declaration_ids: actions.remove('complete')
+        schema = obj({**MEMBER_NEXT['properties'], 'action': {'type': 'string', 'enum': actions}})
+        item = ask(planning_router, 'construction_member_next',
+            {**payload, **state.payload(actions)}, schema, INSTRUCTION)
+        action = item['action']
+        if action == 'complete': break
+        if action == 'extension': raise ValueError('CONSTRUCTION_RENDERER_EXTENSION_REQUIRED: ' + item['purpose'])
+        if action == 'symbols':
+            state.lookup_symbols(item['query'], item['offset']); continue
+        if action == 'declarations':
+            state.lookup_declarations(item['offset']); continue
+        member_name = name if action == 'constructor' else identifier(item['name'])
+        if member_name == lifecycle: raise ValueError('CONSTRUCTION_HOST_ENTRYPOINT_DUPLICATE')
+        current = {**payload, 'kind': action, 'name': member_name, 'purpose': item['purpose']}
+        state.enter('member_signature')
+        metadata = ask(planning_router, 'construction_member_signature',
+            {**current, **state.payload(['signature'])}, SIGNATURE, INSTRUCTION)
+        exact_type(metadata['return_type'], symbols, allow_void=action != 'field')
+        state.advance()
+        parameters = []
+        if action != 'field':
+            state.enter('member_parameters')
+            while True:
+                parameter = ask(planning_router, 'construction_parameter_next',
+                    {**current, 'signature': metadata, 'parameters': parameters,
+                     'parameter_index': len(parameters),
+                     **state.payload(['parameter', 'complete'])}, PARAMETER, INSTRUCTION)
+                if parameter['complete']: break
+                identifier(parameter['name']); exact_type(parameter['type_ref'], symbols, allow_void=False)
+                if any(p['name'] == parameter['name'] for p in parameters): raise ValueError('CONSTRUCTION_PARAMETER_DUPLICATE')
+                parameters.append({'name': parameter['name'], 'type': parameter['type_ref']})
+                state.advance()
+        key = owner + '#' + member_name + '(' + ','.join(p['type'] for p in parameters) + ')'
+        if key in symbols: raise ValueError('CONSTRUCTION_DECLARATION_DUPLICATE: ' + key)
+        symbols[key] = {**metadata, 'kind': action.upper(), 'owner': owner, 'name': member_name,
+            'parameters': parameters, 'class_superclass': superclass, 'class_interfaces': interfaces,
+            'side': str(spec.get('side', 'COMMON')), 'provenance': 'construction_plan',
+            'body_owner': task.task_id, 'purpose': item['purpose']}
+        declarations.append((key, item['purpose']))
+        state.add_declaration(key)
+    if lifecycle and not registrars:
+        declarations.append((owner + '#' + lifecycle + '()', task.intent))
     if not declarations and not registrars: raise ValueError('CONSTRUCTION_BODY_EMPTY')
     assigned_records = {}
     residual_records = json.loads(bindings.get('owned_runtime_records_json') or '[]')
@@ -160,8 +197,9 @@ def compose(router, spec, *, source_context=(), construction_context=None):
     port_tasks = select_port_tasks(
         planning_router, task, owner=owner,
         references=context.get('reference_port_obligations', ()),
-        symbols=symbols, exact_type=exact_type,
+        symbols=symbols, exact_type=exact_type, state=state,
     )
+    context['construction_declaration_ids'] = tuple(state.declaration_ids)
     member_invocations = {}
 
     def author_one(member_task, *, owned_records=(), port_source_ref=''):

@@ -4,6 +4,7 @@ import json
 from copy import deepcopy
 from .java_operation_ir import ATTRIBUTES, REQUIRED, OPERATIONS, JavaOperations
 from .fixed_template_generation import _validate_native_arguments
+from .construction_state import symbol_page
 
 TEXT = {'type': 'string', 'maxLength': 240}
 ID = {'type': 'string', 'maxLength': 240, 'minLength': 1}
@@ -30,13 +31,6 @@ def operation_schema(op):
         'catches': array(obj({'name': ID, 'type_ref': ID}))}
     return obj({'node_id': ID, 'input_refs': array(ID), 'typed_result': ID,
                 'attributes': obj({key: attributes[key] for key in sorted(ATTRIBUTES[op])}, sorted(REQUIRED[op]))})
-
-
-def symbol_page(symbols, query, offset):
-    if len(query.strip()) < 2: raise ValueError('CONSTRUCTION_LOOKUP_QUERY_REQUIRED')
-    matches = sorted(key for key, row in symbols.items() if query.casefold() in key.casefold() or query.casefold() == str(row.get('name', '')).casefold())
-    return {'matches': [{'symbol_id': key, **{k: v for k, v in symbols[key].items() if k not in {'code', 'source', 'source_path'}}}
-                        for key in matches[offset:offset + 8]], 'next_offset': offset + 8 if len(matches) > offset + 8 else None}
 
 
 def author_task_operations(router, task, context):

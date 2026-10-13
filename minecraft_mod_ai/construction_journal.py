@@ -11,6 +11,8 @@ from pathlib import Path
 from threading import RLock
 from uuid import uuid4
 
+from .construction_state import PROTOCOL_VERSION
+
 _LOCK = RLock()
 
 
@@ -28,6 +30,7 @@ class JournaledConstructionRouter:
         self.router = router
         self.binding = _sha({
             "schema": "mmm/construction-inference-v1",
+            "construction_protocol": PROTOCOL_VERSION,
             "spec": spec,
             "target": context["target"],
             "prerequisites": context["prerequisite_hashes"],
