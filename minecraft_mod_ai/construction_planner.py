@@ -211,7 +211,11 @@ def bind_behavior_scope(scope, router):
         return bounded
     from .construction_behavior_checkpoint import BehaviorPlanningCheckpoint
     checkpoint = BehaviorPlanningCheckpoint(bounded, router)
-    behaviors = author_behavior_requirements(bounded, router, checkpoint=checkpoint)
+    # Read -> model -> accept -> publish is one scope-owned transaction.
+    # A second notebook waits and then restores accepted per-requirement
+    # records instead of independently inferring and racing to overwrite.
+    with checkpoint.claim():
+        behaviors = author_behavior_requirements(bounded, router, checkpoint=checkpoint)
     bounded["behavior_requirements"] = [row.to_dict() for row in behaviors]
     return bounded
 
