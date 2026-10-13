@@ -161,7 +161,8 @@ class ConstructionState:
                 or any(not isinstance(row, dict) for row in history)):
             raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
         restored = {_lookup_request(*row) for row in requests}
-        if len(restored) != len(requests): raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
+        if len(restored) != len(requests):
+            raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
         last = record.get('last_lookup')
         if last is not None and (not isinstance(last, dict) or set(last) != {'kind', 'query', 'offset'}
                 or _lookup_request(last['kind'], last['query'], last['offset']) not in restored):
