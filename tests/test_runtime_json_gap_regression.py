@@ -44,7 +44,7 @@ def test_qwen35_json_requests_keep_validation_host_side_without_grammar():
     assert payload["response_format"] == {"type": "json_object"}
     assert "json_schema" not in payload
     assert "grammar" not in payload
-    assert payload["reasoning_effort"] == "none"
+    assert "reasoning_effort" not in payload
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
 
 
@@ -132,7 +132,7 @@ def test_llama_tool_turn_host_parses_qwen_markup_without_server_peg(monkeypatch)
     assert "response_format" not in payload
     assert "json_schema" not in payload
     assert "grammar" not in payload
-    assert payload["reasoning_effort"] == "none"
+    assert "reasoning_effort" not in payload
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     rendered = "\n".join(str(message.get("content", "")) for message in payload["messages"])
     assert "mmm/host-tool-envelope" not in rendered
