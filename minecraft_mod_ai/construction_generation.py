@@ -162,7 +162,7 @@ def compose(router, spec, *, source_context=(), construction_context=None):
         references=context.get('reference_port_obligations', ()),
         symbols=symbols, exact_type=exact_type,
     )
-    used_donor_symbols = set()
+    member_invocations = {}
 
     def author_one(member_task, *, owned_records=(), port_source_ref=''):
         from .construction_progress import ConstructionNodeCheckpoint
@@ -190,12 +190,12 @@ def compose(router, spec, *, source_context=(), construction_context=None):
         nodes = author_task_operations(router, member_task, scoped_context)
         if port_source_ref and port_source_ref not in progress.recorded_source_refs():
             raise ValueError('CONSTRUCTION_PORT_SOURCE_NOT_READ: ' + port_source_ref)
-        used_donor_symbols.update(
+        member_invocations[member_task.owner_symbol] = {
             node['attributes']['symbol_ref']
             for node in nodes
             if node['op'] in {'call', 'new', 'field'}
             and node['attributes'].get('symbol_ref')
-        )
+        }
         return nodes
 
     members = []
@@ -226,16 +226,32 @@ def compose(router, spec, *, source_context=(), construction_context=None):
         nodes = author_one(registrar_task, owned_records=owned)
         render_task_java(registrar_task, nodes, symbols)
         members.append(render_task_member(registrar_task, nodes, symbols))
+    # Donor/port calls in an unreachable helper are not runtime integration.
+    # The lifecycle invokes every registrar; follow its typed member call
+    # graph transitively before claiming source glue was actually connected.
+    roots = [key for key, _behavior in registrars]
+    if not roots:
+        roots = list(member_invocations)
+    reachable_members, reachable_calls, frontier = set(), set(), list(roots)
+    while frontier:
+        current = frontier.pop()
+        if current in reachable_members:
+            continue
+        reachable_members.add(current)
+        for called in member_invocations.get(current, ()):
+            reachable_calls.add(called)
+            if called in member_invocations and called not in reachable_members:
+                frontier.append(called)
     missing_port_calls = [
         item.owner_symbol for item, _ref in port_tasks
-        if item.owner_symbol not in used_donor_symbols
+        if item.owner_symbol not in reachable_calls
     ]
     if missing_port_calls:
         raise ValueError('CONSTRUCTION_PORT_GLUE_CALL_MISSING: ' +
                          ','.join(sorted(missing_port_calls)))
     missing_donor_calls = [
         cap for cap, identifiers in donor_symbols.items()
-        if not set(identifiers) & used_donor_symbols
+        if not set(identifiers) & reachable_calls
     ]
     if missing_donor_calls:
         raise ValueError('CONSTRUCTION_DONOR_GLUE_CALL_MISSING: ' +
@@ -256,7 +272,7 @@ def compose(router, spec, *, source_context=(), construction_context=None):
             for port_task, ref in port_tasks
         ],
         installed_donor_calls=sorted(
-            used_donor_symbols & {
+            reachable_calls & {
                 ref for rows in donor_symbols.values() for ref in rows
             }
         ),
