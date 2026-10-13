@@ -156,9 +156,15 @@ def compose(router, spec, *, source_context=(), construction_context=None):
         assigned_records = assign_behavior_records(planning_router, behaviors, residual_records)
 
     donor_symbols = context.get('donor_callable_symbols', {})
+    from .construction_porting import select_port_tasks
+    port_tasks = select_port_tasks(
+        planning_router, task, owner=owner,
+        references=context.get('reference_port_obligations', ()),
+        symbols=symbols, exact_type=exact_type,
+    )
     used_donor_symbols = set()
 
-    def author_one(member_task, *, owned_records=()):
+    def author_one(member_task, *, owned_records=(), port_source_ref=''):
         from .construction_progress import ConstructionNodeCheckpoint
         if not context.get('project_root'):
             raise ValueError('CONSTRUCTION_RESUME_WORKSPACE_REQUIRED')
@@ -167,6 +173,8 @@ def compose(router, spec, *, source_context=(), construction_context=None):
             prerequisite_hashes=context['prerequisite_hashes'])
         scoped_context = dict(context)
         scoped_context['owned_runtime_records'] = list(owned_records)
+        scoped_context['port_source_ref'] = port_source_ref
+        scoped_context['source_read'] = progress.record_source_read
         scoped_context['donor_call_obligations'] = {
             cap: {'callable_symbol_count': len(identifiers),
                   'lookup_hint': identifiers[0].split('#', 1)[0]}
@@ -180,6 +188,8 @@ def compose(router, spec, *, source_context=(), construction_context=None):
         scoped_context['resume_nodes'] = lambda current: progress.load()
         scoped_context['checkpoint'] = progress.save
         nodes = author_task_operations(router, member_task, scoped_context)
+        if port_source_ref and port_source_ref not in progress.recorded_source_refs():
+            raise ValueError('CONSTRUCTION_PORT_SOURCE_NOT_READ: ' + port_source_ref)
         used_donor_symbols.update(
             node['attributes']['symbol_ref']
             for node in nodes
@@ -195,6 +205,10 @@ def compose(router, spec, *, source_context=(), construction_context=None):
         nodes = author_one(member_task)
         render_task_java(member_task, nodes, symbols)
         members.append(render_task_member(member_task, nodes, symbols))
+    for port_task, reference_id in port_tasks:
+        nodes = author_one(port_task, port_source_ref=reference_id)
+        render_task_java(port_task, nodes, symbols)
+        members.append(render_task_member(port_task, nodes, symbols))
     for key, behavior in registrars:
         registrar_task = replace(task,
             task_id=behavior['behavior_id'] + '.registration',
@@ -212,6 +226,13 @@ def compose(router, spec, *, source_context=(), construction_context=None):
         nodes = author_one(registrar_task, owned_records=owned)
         render_task_java(registrar_task, nodes, symbols)
         members.append(render_task_member(registrar_task, nodes, symbols))
+    missing_port_calls = [
+        item.owner_symbol for item, _ref in port_tasks
+        if item.owner_symbol not in used_donor_symbols
+    ]
+    if missing_port_calls:
+        raise ValueError('CONSTRUCTION_PORT_GLUE_CALL_MISSING: ' +
+                         ','.join(sorted(missing_port_calls)))
     missing_donor_calls = [
         cap for cap, identifiers in donor_symbols.items()
         if not set(identifiers) & used_donor_symbols
