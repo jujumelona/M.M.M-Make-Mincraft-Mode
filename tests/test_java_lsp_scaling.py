@@ -61,6 +61,16 @@ class _FakeJsonRpcProcess:
         raise AssertionError(f"unexpected fake JDT request: {method}")
 
     def notify(self, method: str, params: dict[str, Any]) -> None:
+        if method == "initialized":
+            # JDT's ServiceReady is a required protocol gate. The fake must
+            # publish it rather than making production code bypass readiness.
+            self.messages.put(
+                {
+                    "method": "language/status",
+                    "params": {"type": "ServiceReady", "message": "Ready"},
+                }
+            )
+            return
         if method == "textDocument/didOpen":
             uri = str(params["textDocument"]["uri"])
             stem = Path(uri).stem
