@@ -8,7 +8,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import subprocess
 from functools import lru_cache
 from threading import RLock
@@ -17,8 +16,6 @@ from tempfile import TemporaryDirectory
 
 _BEGIN = "MMM_COMPILE_CLASSPATH_BEGIN"
 _END = "MMM_COMPILE_CLASSPATH_END"
-_JVM_BEGIN = "MMM_COMPILE_JVM_BEGIN"
-_JVM_END = "MMM_COMPILE_JVM_END"
 _TASK = "mmmInspectCompileClasspath"
 _INIT = r'''
 import org.gradle.api.DefaultTask
@@ -37,9 +34,6 @@ abstract class MmmInspectCompileClasspath extends DefaultTask {
         // Gradle resolves declared task inputs under the owning project's
         // lock. The action consumes files without accessing Project/SourceSet.
         def files = inspectedClasspath.files
-        println("MMM_COMPILE_JVM_BEGIN")
-        println(System.getProperty("java.specification.version"))
-        println("MMM_COMPILE_JVM_END")
         println("MMM_COMPILE_CLASSPATH_BEGIN")
         println(groovy.json.JsonOutput.toJson(files.collect { it.absolutePath }))
         println("MMM_COMPILE_CLASSPATH_END")
@@ -81,7 +75,6 @@ def resolve_fabric_compile_classpath(project_root: str, *, timeout_seconds: int 
                                     java_version: int | None = None) -> tuple[str, ...]:
     root = Path(project_root).resolve()
     java_home = ""
-    required_java = None
     if java_version is not None:
         from .java_lsp import _resolve_project_java_home
 
@@ -91,14 +84,14 @@ def resolve_fabric_compile_classpath(project_root: str, *, timeout_seconds: int 
         java_home = str(_resolve_project_java_home(required_java, require_compiler=True).resolve())
     with _INSPECTION_LOCK:
         return _resolve_inspected_classpath(
-            str(root), timeout_seconds, _config_signature(root), java_home, required_java,
+            str(root), timeout_seconds, _config_signature(root), java_home,
         )
 
 
 @lru_cache(maxsize=4)
 def _resolve_inspected_classpath(project_root: str, timeout_seconds: int,
                                 config_signature: tuple[tuple[str, str], ...],
-                                java_home: str = "", java_version: int | None = None) -> tuple[str, ...]:
+                                java_home: str = "") -> tuple[str, ...]:
     root = Path(project_root).resolve()
     wrapper = root / "gradlew"
     if not wrapper.is_file():
@@ -109,6 +102,8 @@ def _resolve_inspected_classpath(project_root: str, timeout_seconds: int,
         environment = None
         java_options = []
         if java_home:
+            # Respect project-owned daemon criteria: the Gradle launcher JVM
+            # may differ from the approved Java compiler/release toolchain.
             environment = dict(os.environ)
             environment["JAVA_HOME"] = java_home
             environment["PATH"] = str(Path(java_home) / "bin") + os.pathsep + environment.get("PATH", "")
@@ -124,20 +119,6 @@ def _resolve_inspected_classpath(project_root: str, timeout_seconds: int,
             raise RuntimeError("CONSTRUCTION_GRADLE_CLASSPATH_TIMEOUT") from exc
     if result.returncode:
         raise RuntimeError("CONSTRUCTION_GRADLE_CLASSPATH_FAILED: " + (result.stderr or result.stdout)[-2000:])
-    if java_version is not None:
-        # Project-owned daemon criteria can override JAVA_HOME and the system
-        # property even with --no-daemon. Verify the JVM that ran the task.
-        try:
-            actual_java = result.stdout.split(_JVM_BEGIN, 1)[1].split(_JVM_END, 1)[0].strip()
-        except IndexError as exc:
-            raise RuntimeError("CONSTRUCTION_GRADLE_JVM_UNREPORTED") from exc
-        match = re.fullmatch(r"(?:1\.)?(\d+)", actual_java)
-        if match is None:
-            raise RuntimeError("CONSTRUCTION_GRADLE_JVM_VERSION_INVALID: " + actual_java)
-        if int(match.group(1)) != java_version:
-            raise RuntimeError(
-                f"CONSTRUCTION_GRADLE_JVM_VERSION_MISMATCH: requested={java_version}, actual={actual_java}"
-            )
     try:
         raw = result.stdout.split(_BEGIN, 1)[1].split(_END, 1)[0].strip()
         rows = json.loads(raw)
