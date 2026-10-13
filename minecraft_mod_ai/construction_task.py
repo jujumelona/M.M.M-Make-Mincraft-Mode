@@ -24,11 +24,14 @@ class BehaviorRequirement:
     effects: str
     state_reads: tuple[str, ...] = ()
     state_writes: tuple[str, ...] = ()
+    source_status: str = "grounded"
 
     def __post_init__(self):
         if not all(isinstance(value, str) and value.strip() for value in
                    (self.behavior_id, self.requirement_id, self.intent, self.source_quote, self.effects)):
             raise ValueError("CONSTRUCTION_BEHAVIOR_IDENTITY_REQUIRED")
+        if self.source_status not in {"grounded", "source_preserved_unresolved"}:
+            raise ValueError("CONSTRUCTION_BEHAVIOR_SOURCE_STATUS_INVALID")
 
     def to_dict(self):
         return asdict(self)
