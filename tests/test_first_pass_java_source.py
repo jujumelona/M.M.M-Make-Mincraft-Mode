@@ -87,7 +87,7 @@ class RecordingJavaRouter:
         if data_name == "submit_java_implementation_1":
             return source_frame["prefix"] + "    return true;" + source_frame["suffix"]
         if data_name == "submit_java_entrypoint_source":
-            return source_frame["prefix"] + "    // Host-owned lifecycle declaration." + source_frame["suffix"]
+            return source_frame["prefix"] + "    mmmMember1();" + source_frame["suffix"]
         raise AssertionError("Unexpected Java implementation action: " + data_name)
 
 
@@ -225,6 +225,7 @@ def test_client_entrypoint_is_host_owned_and_not_redeclared_by_model():
     assert "public final class Gate implements net.fabricmc.api.ClientModInitializer {" in source
     assert "boolean mmmMember1()" in source
     assert source.count("void onInitializeClient()") == 1
+    assert "    mmmMember1();" in source
     assert _source_names(router) == [
         "submit_java_implementation_1",
         "submit_java_entrypoint_source",
