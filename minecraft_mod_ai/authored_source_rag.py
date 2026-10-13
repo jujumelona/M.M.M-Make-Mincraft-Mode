@@ -20,34 +20,56 @@ class VerifiedSourceRAG:
         self.reference_failures: list[dict[str, str]] = []
 
     def context(self, capabilities: Sequence[str], query: str) -> list[dict[str, Any]]:
-        """Retrieve only this owner's donors, with a fixed total coder budget."""
-        selected = []
-        seen = set()
-        remaining = 5000
+        """Return whole AST declarations, never mid-method text fragments.
+
+        Hits remain discovery hints. A donor becomes callable only when the
+        exact target's installed output and inspected symbols are bound later.
+        """
+        from .construction_context import java_source_units
+
+        selected, seen = [], set()
         for capability, index, root, donor in self.sources:
             if capability not in capabilities:
                 continue
-            for hit in index.search(query + " " + capability, limit=2):
-                path = Path(hit.source_path)
-                identity = (str(path), hit.start_line)
-                if identity in seen or remaining <= 0:
+            for hit in index.search(query + " " + capability, limit=8):
+                path = Path(hit.source_path).resolve()
+                if not path.is_relative_to(root.resolve()) or path.suffix != ".java":
                     continue
-                seen.add(identity)
-                code = hit.text[:min(2400, remaining)]
-                remaining -= len(code)
-                selected.append({
-                    "capability": capability, "repository": donor["repository"],
-                    "source_commit": donor["commit_sha"], "license": donor["license_id"],
-                    "path": str(path.relative_to(root)), "start_line": hit.start_line,
-                    "adapted_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-                    "code": code, "authority": donor.get("_authority", "installed_target_adapted_source"),
-                    **({"migration_diagnostics": donor["_migration_diagnostics"][:600]}
-                       if donor.get("_migration_diagnostics") else {}),
-                })
-                if len(selected) == 3:
-                    return selected
+                if not path.is_file():
+                    raise ValueError("SOURCE_RAG_PINNED_FILE_MISSING: " + str(path))
+                raw = path.read_text(encoding="utf-8")
+                try:
+                    units = java_source_units(raw, path=str(path.relative_to(root)))
+                except (ValueError, RuntimeError) as exc:
+                    self.reference_failures.append({
+                        "capability": capability, "repository": donor["repository"],
+                        "status": "source_parse_failed", "error": str(exc)[:1200],
+                    })
+                    continue
+                first = int(hit.start_line)
+                last = int(getattr(hit, "end_line", first))
+                members = [unit for unit in units
+                           if unit["kind"] in {"method", "constructor", "field"}
+                           and unit["start_line"] <= last and unit["end_line"] >= first]
+                for unit in members:
+                    identity = (str(path), unit["start_line"], unit["end_line"])
+                    if identity in seen:
+                        continue
+                    seen.add(identity)
+                    selected.append({
+                        "capability": capability, "repository": donor["repository"],
+                        "source_commit": donor["commit_sha"], "license": donor["license_id"],
+                        "path": str(path.relative_to(root)), "start_line": unit["start_line"],
+                        "end_line": unit["end_line"], "owner": unit["owner"],
+                        "symbol": unit["name"], "signature": unit["signature"],
+                        "source_unit_kind": unit["kind"],
+                        "adapted_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                        "code": unit["code"],
+                        "authority": donor.get("_authority", "installed_target_adapted_source"),
+                        **({"migration_diagnostics": donor["_migration_diagnostics"]}
+                           if donor.get("_migration_diagnostics") else {}),
+                    })
         return selected
-
 
 @contextmanager
 def verified_source_rag(reuse_plan: Mapping[str, Any], *, adapter: Any,
