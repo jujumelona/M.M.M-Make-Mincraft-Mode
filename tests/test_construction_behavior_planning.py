@@ -135,3 +135,40 @@ def test_full_span_duplicate_is_a_single_action_not_an_exception():
     assert router.calls == 2
     assert len(result) == 1
     assert result[0].source_status == "grounded"
+
+
+def test_new_production_run_reuses_completed_behavior_checkpoint(monkeypatch, tmp_path):
+    monkeypatch.setenv("MMM_CONSTRUCTION_BEHAVIOR_CACHE_ROOT", str(tmp_path))
+    original = _scope("Collect minerals and build a ship")
+    router = PageRouter([
+        _page(intent="Build a ship after mining", quote=original["requested_prompt"]),
+        _page(status="complete"),
+    ])
+    first = bind_behavior_scope(original, router)
+    assert router.calls == 2
+    no_more_model_calls = PageRouter([])
+    second = bind_behavior_scope(original, no_more_model_calls)
+    assert second == first
+    assert no_more_model_calls.calls == 0
+
+
+def test_unresolved_source_cannot_be_marked_runtime_verified_even_with_pass_receipt():
+    from minecraft_mod_ai.construction_coverage import requirement_completion
+
+    receipt = {
+        "requirement_id": "req-one",
+        "source_sha256": "source-digest",
+        "behaviors": [
+            {"behavior_id": "grounded", "source_status": "grounded"},
+            {"behavior_id": "unresolved", "source_status": "source_preserved_unresolved"},
+        ],
+    }
+    events = [
+        {"behavior_id": bid, "source_sha256": "source-digest",
+         "status": "PASS", "trigger_observed": True,
+         "effect_observed": True, "state_observed": True}
+        for bid in ("grounded", "unresolved")
+    ]
+    result = requirement_completion(receipt, events)
+    assert result["status"] == "SOURCE_REVIEW_REQUIRED"
+    assert result["source_review_required_ids"] == ["unresolved"]
