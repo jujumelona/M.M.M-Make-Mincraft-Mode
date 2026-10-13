@@ -1,4 +1,4 @@
-"""Regressions for source-slot placeholders in content artifact-graph generation."""
+"""First-pass canonical source rejection; no repeat whole-file model generation."""
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -75,24 +75,20 @@ def _generate(monkeypatch, candidates, *, source=True, minecraft_version=None):
     )
 
 
-def test_placeholder_is_repaired_before_canonical_source_publication(monkeypatch):
+def test_placeholder_fails_first_pass_without_publishing_source(monkeypatch):
     run, seen = _generate(monkeypatch, ["placeholder", _VALID_JAVA])
-    result = run()
-
-    assert result["artifact"] == _VALID_JAVA
-    assert result["receipt"]["leaf_id"] == "test/registry"
-    assert len(seen) == 2
-    assert "pattern" not in seen[0][1]  # llama transport cannot enforce the host regex
-    assert _PACKAGE_AND_CLASS in seen[0][0][0]["content"]  # exact host constraint is given to coder
-    assert "REJECTED" in seen[1][0][-1]["content"]  # focused model repair feedback
-    assert "placeholder" in seen[1][0][-1]["content"]
+    with pytest.raises(ValidationError, match="does not match"):
+        run()
+    assert len(seen) == 1
+    assert "pattern" not in seen[0][1]  # llama transport cannot enforce host regex
+    assert _PACKAGE_AND_CLASS in seen[0][0][0]["content"]
 
 
 def test_persistent_placeholder_never_publishes_an_artifact(monkeypatch):
     run, seen = _generate(monkeypatch, ["placeholder", "placeholder", _VALID_JAVA])
     with pytest.raises(ValidationError, match="does not match"):
         run()
-    assert len(seen) == 2  # fixed, bounded repair; no third call or silent fallback
+    assert len(seen) == 1  # fail closed on first invalid source; never retry whole Java
 
 
 def test_non_source_slot_does_not_retry_invalid_scalar(monkeypatch):
@@ -108,7 +104,7 @@ def test_valid_source_does_not_consume_repair_attempt(monkeypatch):
     assert len(seen) == 1
 
 
-def test_obsolete_26x_yarn_api_is_repaired_before_canonical_publication(monkeypatch):
+def test_obsolete_26x_yarn_api_fails_before_publication_without_retry(monkeypatch):
     invalid = (
         "package p; import net.minecraft.util.Identifier; "
         "public class Good { public static int value() { return 42; } }"
@@ -119,13 +115,9 @@ def test_obsolete_26x_yarn_api_is_repaired_before_canonical_publication(monkeypa
     )
     run, seen = _generate(monkeypatch, [invalid, repaired], minecraft_version="26.2")
 
-    assert run()["artifact"] == repaired
-    assert len(seen) == 2
-    feedback = seen[1][0][-1]["content"]
-    assert "CANONICAL_MOJANG_API_REQUIRED" in feedback
-    assert "net.minecraft.util.Identifier" in feedback
-    assert "26.2" in feedback
-    assert "canonical API namespace" in feedback
+    with pytest.raises(ValueError, match="CANONICAL_MOJANG_API_REQUIRED"):
+        run()
+    assert len(seen) == 1
 
 
 def test_persistent_obsolete_26x_yarn_api_fails_without_publication(monkeypatch):
@@ -134,7 +126,7 @@ def test_persistent_obsolete_26x_yarn_api_fails_without_publication(monkeypatch)
 
     with pytest.raises(ValueError, match="CANONICAL_MOJANG_API_REQUIRED"):
         run()
-    assert len(seen) == 2  # Never publish an invalid candidate or run an unbounded loop.
+    assert len(seen) == 1  # No full-source retry; target-epoch violation remains fail-closed.
 
 
 def test_older_minecraft_epoch_is_not_rejected_by_26x_only_guard(monkeypatch):
