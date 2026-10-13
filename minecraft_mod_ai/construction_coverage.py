@@ -160,10 +160,16 @@ def summarize_construction_coverage(project_root, request_scope, runtime_receipt
             if isinstance(row, dict):
                 observations.append(row)
     summaries = []
+    delegated_ui = []
     for requirement in requirements:
         rid = requirement["requirement_id"]
         ids = expected.get(rid, set())
         path = _coverage_path(project_root, rid)
+        # Interface-only features can be owned by the existing Typed/UI
+        # graph. The general authored coverage gate checks those separately.
+        if requirement.get("implementation_role") == "interface" and not path.exists():
+            delegated_ui.append(rid)
+            continue
         if not path.is_file():
             summaries.append({"requirement_id": rid,
                               "status": "SOURCE_NOT_MATERIALIZED",
@@ -191,7 +197,9 @@ def summarize_construction_coverage(project_root, request_scope, runtime_receipt
         summaries.append(requirement_completion(recorded, matching))
     success = bool(summaries) and all(row["status"] == "VERIFIED" for row in summaries)
     return {"schema_version": "mmm/construction-coverage-summary-v1",
-            "status": "VERIFIED" if success else "RUNTIME_UNVERIFIED",
+            "status": ("NOT_APPLICABLE" if not summaries else
+                       "VERIFIED" if success else "RUNTIME_UNVERIFIED"),
             "requirements": summaries,
+            "delegated_ui_requirements": delegated_ui,
             "total_requirements": len(summaries),
             "verified_requirements": sum(x["status"] == "VERIFIED" for x in summaries)}
