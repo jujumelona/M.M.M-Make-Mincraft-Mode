@@ -126,11 +126,33 @@ def execute_checkpointed_job(job, *, context, router, registry, base_dir, execut
                 f"ARTIFACT_REQUIRED_PORT_MISSING: {job.job_id!r} requires {name!r}"
             )
         dependencies[name] = digest(port.to_dict())
+    source_hashes = {}
+    if is_generator:
+        spec = inputs[spec_port]
+        bindings = spec.get("bindings") or {}
+        raw_paths = bindings.get("content_dependency_paths_json")
+        if raw_paths:
+            paths = json.loads(raw_paths)
+            if not isinstance(paths, list):
+                raise ValueError("ARTIFACT_SOURCE_DEPENDENCY_PATHS_INVALID")
+            for relative_source in paths:
+                path = (root / str(relative_source)).resolve()
+                if not path.is_relative_to(root) or not str(relative_source).startswith(
+                    ("src/main/java/", "src/client/java/")
+                ):
+                    raise ValueError("ARTIFACT_SOURCE_DEPENDENCY_PATH_INVALID")
+                source_hashes[relative_source] = _current_sha256(path)
+        donor_caps = json.loads(bindings.get("construction_donor_capabilities_json") or "[]")
+        if donor_caps:
+            from .authored_reuse_bridge import installed_donor_source_context
+            for row in installed_donor_source_context(root, donor_caps):
+                source_hashes[row["path"]] = row["sha256"]
     binding = digest(
         {
             "job": definition,
             "template": manifest if is_generator else load_template(job.template_id),
             "dependency_hashes": dependencies,
+            "materialized_source_hashes": source_hashes,
             "context": context or {},
         }
     )
