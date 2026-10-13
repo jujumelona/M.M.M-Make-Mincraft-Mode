@@ -10,7 +10,7 @@ from collections import deque
 from copy import deepcopy
 
 
-PROTOCOL_VERSION = "mmm/construction-state-v2"
+PROTOCOL_VERSION = "mmm/construction-state-v3"
 PAGE_SIZE = 8
 RECENT_SIZE = 4
 LOOKUP_KINDS = frozenset({'symbols', 'declarations', 'nodes', 'node_index', 'source', 'sources'})

@@ -5,22 +5,34 @@ import json
 from dataclasses import replace
 from .construction_author import ID, TEXT, obj, ask
 from .construction_state import ConstructionState, STATE_INSTRUCTION
+from .construction_declaration_choices import header_candidates, header_schema, choice_actions
 from .construction_task import ConstructionTask
 from .construction_author import author_task_operations
 from .construction_java import render_task_member, render_task_java
 from .java_operation_ir import PRIMITIVES, identifier, qualified_name
 
-CLASS_NEXT = obj({'action': {'type': 'string', 'enum': ['superclass', 'interface', 'symbols', 'complete']},
-                  'type_ref': TEXT, 'offset': {'type': 'integer', 'minimum': 0}})
 MEMBER_NEXT = obj({'action': {'type': 'string', 'enum': ['method', 'field', 'constructor', 'symbols', 'declarations', 'complete', 'extension']},
                   'name': TEXT, 'purpose': TEXT, 'query': TEXT, 'offset': {'type': 'integer', 'minimum': 0}})
 SIGNATURE = obj({'return_type': ID, 'visibility': {'type': 'string', 'enum': ['public', 'protected', 'private', '']},
                  'static': {'type': 'boolean'}, 'final': {'type': 'boolean'}})
 PARAMETER = obj({'complete': {'type': 'boolean'}, 'name': TEXT, 'type_ref': TEXT})
-INSTRUCTION = ('Plan one current Java declaration at a time. No source code. Types are exact fully qualified '
-    'inspected inventory names (primitives are intrinsic). Request symbols using a lexical query and offset. '
-    'All existing signatures are retrievable by lookup. Do not duplicate a declaration. Complete only after '
-    'every required behavior has an owner. Use extension for unsupported language constructs. ' + STATE_INSTRUCTION)
+HEADER_INSTRUCTION = ('Choose only inheritance for the current new class. No Java source. '
+    'Complete this phase when no further superclass or interfaces are needed; methods and behavior bodies '
+    'are planned and authored in later phases. A class with no explicit superclass extends Object implicitly. '
+    'Search dependencies with symbols; inheritance can use only the inspected header_candidates in this page. '
+    'A superclass is a non-final class. An implemented type is an interface. The new owner is neither '
+    'an inheritance candidate nor an implementation target in this phase. ' + STATE_INSTRUCTION)
+MEMBER_INSTRUCTION = ('Plan only additional helper methods, fields or constructors. No Java source. '
+    'Declarations with a body_owner already have an assigned author and will receive their actual bodies '
+    'after this phase. Do not redeclare them. Complete means no additional helper declarations are needed; '
+    'it does not complete or skip any assigned behavior body. Use symbols for dependency signatures and '
+    'declarations for older members. Types are exact inspected names; primitives are intrinsic. ' + STATE_INSTRUCTION)
+SIGNATURE_INSTRUCTION = ('Describe only the current new member signature: return type, visibility and '
+    'modifiers. No Java source. Use exact inspected type names or primitives. This phase does not declare '
+    'other members or finish their behaviors. ' + STATE_INSTRUCTION)
+PARAMETER_INSTRUCTION = ('Plan exactly one parameter for the current method or constructor. '
+    'Complete means its parameter list is finished, not that its body is finished. A parameter has a Java '
+    'identifier and an exact inspected type or primitive. Do not emit method/class declarations. ' + STATE_INSTRUCTION)
 
 
 def exact_type(value, symbols, *, allow_void=True):
@@ -90,16 +102,18 @@ def compose(router, spec, *, source_context=(), construction_context=None):
     else:
         state.enter('class_header')
         while True:
-            actions = ['interface', 'symbols', 'complete']
-            if not superclass: actions.insert(0, 'superclass')
-            schema = obj({**CLASS_NEXT['properties'], 'action': {'type': 'string', 'enum': actions}})
+            candidates = header_candidates(state)
+            schema = header_schema(candidates)
+            actions = choice_actions(schema)
             choice = ask(planning_router, 'construction_class_next',
-                {**payload, **state.payload(actions)}, schema, INSTRUCTION)
+                {**payload, **state.payload(actions, header_candidates=candidates)}, schema, HEADER_INSTRUCTION)
             if choice['action'] == 'complete': break
+            if choice['action'] == 'extension':
+                raise ValueError('CONSTRUCTION_RENDERER_EXTENSION_REQUIRED: ' + choice['reason'])
             if choice['action'] == 'symbols':
-                state.lookup_symbols(choice['type_ref'], choice['offset']); continue
+                state.lookup_symbols(choice['query'], choice['offset']); continue
             type_ = exact_type(choice['type_ref'], symbols, allow_void=False)
-            if type_ == owner or type_.endswith('[]'):
+            if type_ not in candidates[choice['action']]:
                 raise ValueError('CONSTRUCTION_CLASS_HEADER')
             if choice['action'] == 'superclass':
                 if superclass: raise ValueError('CONSTRUCTION_CLASS_HEADER')
@@ -145,7 +159,7 @@ def compose(router, spec, *, source_context=(), construction_context=None):
         if not state.declaration_ids: actions.remove('complete')
         schema = obj({**MEMBER_NEXT['properties'], 'action': {'type': 'string', 'enum': actions}})
         item = ask(planning_router, 'construction_member_next',
-            {**payload, **state.payload(actions)}, schema, INSTRUCTION)
+            {**payload, **state.payload(actions)}, schema, MEMBER_INSTRUCTION)
         action = item['action']
         if action == 'complete': break
         if action == 'extension': raise ValueError('CONSTRUCTION_RENDERER_EXTENSION_REQUIRED: ' + item['purpose'])
@@ -158,7 +172,7 @@ def compose(router, spec, *, source_context=(), construction_context=None):
         current = {**payload, 'kind': action, 'name': member_name, 'purpose': item['purpose']}
         state.enter('member_signature')
         metadata = ask(planning_router, 'construction_member_signature',
-            {**current, **state.payload(['signature'])}, SIGNATURE, INSTRUCTION)
+            {**current, **state.payload(['signature'])}, SIGNATURE, SIGNATURE_INSTRUCTION)
         exact_type(metadata['return_type'], symbols, allow_void=action != 'field')
         state.advance()
         parameters = []
@@ -168,7 +182,7 @@ def compose(router, spec, *, source_context=(), construction_context=None):
                 parameter = ask(planning_router, 'construction_parameter_next',
                     {**current, 'signature': metadata, 'parameters': parameters,
                      'parameter_index': len(parameters),
-                     **state.payload(['parameter', 'complete'])}, PARAMETER, INSTRUCTION)
+                     **state.payload(['parameter', 'complete'])}, PARAMETER, PARAMETER_INSTRUCTION)
                 if parameter['complete']: break
                 identifier(parameter['name']); exact_type(parameter['type_ref'], symbols, allow_void=False)
                 if any(p['name'] == parameter['name'] for p in parameters): raise ValueError('CONSTRUCTION_PARAMETER_DUPLICATE')
