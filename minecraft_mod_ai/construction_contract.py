@@ -20,9 +20,12 @@ def construction_contract(manifest, inputs, spec):
             continue
         if key.endswith('_json'):
             decoded = json.loads(value)
-            if isinstance(decoded, list): units = decoded
-            elif isinstance(decoded, dict): units = [{'key': k, 'value': v} for k, v in decoded.items()]
-            else: units = [decoded]
+            if isinstance(decoded, list):
+                units = decoded
+            elif isinstance(decoded, dict):
+                units = [{'key': k, 'value': v} for k, v in decoded.items()]
+            else:
+                units = [decoded]
             pages[key] = units
         else:
             scalar[key] = value
