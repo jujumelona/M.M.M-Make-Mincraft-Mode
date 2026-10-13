@@ -82,6 +82,28 @@ def prepare_construction_context(spec, *, java_classpath, project_root, source_c
     if set(project_symbols) & set(symbols):
         raise ValueError("CONSTRUCTION_PROJECT_SYMBOL_COLLISION")
     symbols.update(project_symbols)
+    # Pinned old-version references provide porting evidence, never callable
+    # target API authority or permission to install outdated code unchanged.
+    reference_members = []
+    for item in json.loads(bindings.get("verified_source_code_json") or "[]"):
+        if item.get("authority") != "reference_only_requires_target_adaptation":
+            continue
+        if not item.get("source_commit") or not item.get("adapted_sha256"):
+            raise ValueError("CONSTRUCTION_PORT_REFERENCE_UNPINNED")
+        ref_id = "reference:" + hashlib.sha256((
+            item["repository"] + "@" + item["source_commit"] + ":" +
+            item["path"] + ":" + str(item["start_line"])).encode()).hexdigest()[:20]
+        pages[ref_id] = [{
+            "code": item["code"], "signature": item.get("signature", ""),
+            "source_ref": ref_id, "authority": "reference_only_port_required",
+            "repository": item["repository"], "source_commit": item["source_commit"],
+            "source_sha256": item["adapted_sha256"],
+            "migration_diagnostics": item.get("migration_diagnostics", ""),
+        }]
+        reference_members.append({
+            "source_ref": ref_id, "signature": item.get("signature", ""),
+            "migration_diagnostics": item.get("migration_diagnostics", ""),
+        })
     donor_members = {}
     for row in source_context:
         if row.get("authority") != "installed_target_adapted_source":
@@ -96,6 +118,7 @@ def prepare_construction_context(spec, *, java_classpath, project_root, source_c
         raise ValueError("CONSTRUCTION_INSTALLED_DONOR_CALLABLE_API_MISSING: " +
                          ",".join(sorted(missing)))
     return {
+        "reference_port_obligations": reference_members,
         "donor_callable_symbols": {cap: sorted(keys) for cap, keys in donor_members.items()},
         "project_root": str(root),
         "source_symbol_rejections": list(rejected),
