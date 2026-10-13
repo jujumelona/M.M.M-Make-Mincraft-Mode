@@ -46,7 +46,16 @@ def author_task_operations(router, task, context):
     base = {'task_id': task.task_id, 'intent': task.intent, 'trigger': task.trigger, 'effects': task.effects,
             'state_reads': list(task.state_reads), 'state_writes': list(task.state_writes),
             'declaration': declaration, 'target_path': task.target_path}
-    nodes, by_id, page, lookups = [], {}, {}, set()
+    resume = context.get('resume_nodes')
+    existing, stage = resume(task) if callable(resume) else ((), '')
+    nodes = [deepcopy(node) for node in existing]
+    by_id = {row['node_id']: row for row in nodes}
+    if len(by_id) != len(nodes):
+        raise ValueError('CONSTRUCTION_CHECKPOINT_NODES_INVALID')
+    if stage == 'validated':
+        JavaOperations(task, nodes, symbols)
+        return tuple(nodes)
+    page, lookups = {}, set()
     instruction = ('Author this current behavior as typed Java operations, one node per turn. No Java source strings. '
         'Use exact inspected symbol IDs and type names. Request symbols with a lexical query and offset, '
         'nodes by ID, or source by ID. Relevant graph nodes are stored on the host; do not recreate them. '
