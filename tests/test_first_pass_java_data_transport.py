@@ -58,7 +58,8 @@ def test_strict_data_does_not_downgrade_schema_on_format_error(monkeypatch):
     request = GenerationRequest(messages=(), response_format='json',
                                 response_schema=IMPORT_PAGE,
                                 metadata={'mmm_strict_structured_data': True})
-    with pytest.raises(ModelBackendError): adapter.generate_turn(request)
+    with pytest.raises(ModelBackendError):
+        adapter.generate_turn(request)
     assert len(calls) == 1
 
 
