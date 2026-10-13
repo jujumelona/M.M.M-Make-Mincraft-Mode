@@ -46,9 +46,11 @@ def author_behavior_requirements(scope, router):
                 raise ValueError("CONSTRUCTION_PLANNER_REQUIRED")
             messages = [{"role": "system", "content": (
                 "Decompose the current requirement into independently observable behaviors. "
-                "Return one behavior at a time in source order, preserving all requested mechanics. "
-                "Quote the actual source. Keep coupled atomic transaction effects together. "
-                "State reads/writes are only this behavior's dependencies. Return complete only "
+                "Return one independently triggered behavior at a time in source order, "
+                "preserving every requested mechanic rather than grouping unrelated player actions. "
+                "Use only the supplied original source_text as authority; quote a matching source span "
+                "and do not invent new effects or interactions. Keep coupled atomic transaction "
+                "effects together. State reads/writes are only this behavior's dependencies. Return complete only "
                 "after every behavior is represented; never invent an interaction or delete a feature. "
                 "Do not write Java or choose a fixed gameplay catalogue.")},
                 {"role": "user", "content": json.dumps({
