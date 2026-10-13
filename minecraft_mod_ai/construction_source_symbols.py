@@ -74,8 +74,12 @@ def inspected_project_source_symbols(source_pages, inspected_symbols):
         symbols[owner] = {
             "kind": "CLASS", "name": owner.rsplit(".", 1)[-1], "owner": owner,
             "access": (1 if unit["public"] else 0) |
-                      (0x200 if kind == "interface" else 0),
-            "superclass": "java.lang.Object" if owner != "java.lang.Object" else "",
+                      (0x200 if kind == "interface" else 0) |
+                      (0x400 if kind == "interface" or
+                       re.search(r"\babstract\b", unit["signature"]) else 0),
+            "superclass": ("java.lang.Object"
+                           if kind != "interface" and owner != "java.lang.Object"
+                           else ""),
             "interfaces": [], "side": unit["side"], "source_hash": unit["source_sha256"],
             "source_path": unit["path"], "provenance": "materialized_source",
         }
