@@ -128,7 +128,7 @@ def test_llama_budget_uses_request_contract_when_qwen_removes_grammar() -> None:
     assert payload["max_tokens"] >= 4096
     assert "response_format" not in payload
 
-def test_llama_budget_respects_request_owned_atomic_ceiling() -> None:
+def test_dynamic_llama_budget_does_not_truncate_source_to_page_estimate() -> None:
     from types import SimpleNamespace
     from minecraft_mod_ai.llama_generation_budget import install
 
@@ -152,5 +152,28 @@ def test_llama_budget_respects_request_owned_atomic_ceiling() -> None:
 
     payload = hardware._server_payload(SimpleNamespace(config=_DynamicConfig()), request)
 
+    # Dynamic profiles reserve the remaining context for complete edits. The
+    # per-action metadata ceiling is a packing estimate, not a transport cap.
+    assert payload["max_tokens"] > 8192
+
+
+def test_static_llama_budget_obeys_explicit_request_output_ceiling() -> None:
+    from types import SimpleNamespace
+
+    from minecraft_mod_ai.generation_output_budget import apply_request_generation_budget
+
+    config = _StaticConfig(max_new_tokens=8192)
+    request = SimpleNamespace(
+        response_format="text",
+        metadata={"mmm_output_token_ceiling": 4096},
+    )
+    payload = apply_request_generation_budget(
+        {
+            "messages": [{"role": "user", "content": "one atomic edit"}],
+            "max_tokens": 8192,
+        },
+        config=config,
+        request=request,
+    )
     assert payload["max_tokens"] == 4096
 
