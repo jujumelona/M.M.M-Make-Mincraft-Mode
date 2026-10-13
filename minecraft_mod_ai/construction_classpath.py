@@ -5,9 +5,11 @@ The first Gradle configuration must succeed before expensive coder inference.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from functools import lru_cache
+from threading import RLock
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -31,8 +33,29 @@ gradle.projectsEvaluated {
 '''
 
 
-@lru_cache(maxsize=4)
+_INSPECTION_LOCK = RLock()
+_INPUTS = ("settings.gradle", "settings.gradle.kts", "build.gradle", "build.gradle.kts",
+           "gradle.properties", "gradle/libs.versions.toml")
+
+
+def _config_signature(root: Path) -> tuple[tuple[str, str], ...]:
+    # Do not reuse an old classpath when this Fabric project's declared
+    # dependencies or Gradle configuration have changed.
+    return tuple(
+        (name, hashlib.sha256((root / name).read_bytes()).hexdigest())
+        for name in _INPUTS if (root / name).is_file()
+    )
+
+
 def resolve_fabric_compile_classpath(project_root: str, *, timeout_seconds: int = 180) -> tuple[str, ...]:
+    root = Path(project_root).resolve()
+    with _INSPECTION_LOCK:
+        return _resolve_inspected_classpath(str(root), timeout_seconds, _config_signature(root))
+
+
+@lru_cache(maxsize=4)
+def _resolve_inspected_classpath(project_root: str, timeout_seconds: int,
+                                config_signature: tuple[tuple[str, str], ...]) -> tuple[str, ...]:
     root = Path(project_root).resolve()
     wrapper = root / "gradlew"
     if not wrapper.is_file():
