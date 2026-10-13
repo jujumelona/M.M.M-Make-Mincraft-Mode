@@ -27,15 +27,39 @@ def compile_request_feature_jobs(
     runtime_modules: Sequence[Any] = (),
 ):
     modules, jobs = [], []
+    # An existing Typed GUI implementation owns its interface requirement;
+    # constructing an additional server callback would duplicate its effects.
+    def _owned_interface(feature):
+        return (
+            feature.get("implementation_role") == "interface"
+            and any(
+                module.kind == "gui"
+                and feature["requirement_id"] in module.config.get("requirement_refs", ())
+                for module in content_modules
+            )
+        )
+
+    execution_features = tuple(
+        feature for feature in plan.request_scope.get("requirements", ())
+        if not _owned_interface(feature)
+    )
+    if not execution_features:
+        return (), ()
     from .source_reuse_evidence import build_source_reuse_evidence
     from .construction_planner import plan_construction_tasks
-    source_evidence = build_source_reuse_evidence(
-        plan.request_scope.get("requirements", ()), source_reuse, {})
+    source_evidence = build_source_reuse_evidence(execution_features, source_reuse, {})
+    ids = {feature["requirement_id"] for feature in execution_features}
+    scoped = {**plan.request_scope, "requirements": execution_features}
+    if "behavior_requirements" in scoped:
+        scoped["behavior_requirements"] = [
+            row for row in scoped["behavior_requirements"]
+            if row.get("requirement_id") in ids
+        ]
     construction_tasks = plan_construction_tasks(
-        plan.request_scope, source_evidence, {}, router=None)
-    if plan.request_scope.get("requirements") and not construction_tasks:
+        scoped, source_evidence, {}, router=None)
+    if not construction_tasks:
         raise ValueError("CONSTRUCTION_TASK_GRAPH_EMPTY")
-    for feature in plan.request_scope.get("requirements", ()):
+    for feature in execution_features:
         rid = feature["requirement_id"]
         owners = [module for module in content_modules if rid in module.config.get("requirement_refs", ())]
         if feature.get("implementation_role") == "interface" and any(m.kind == "gui" for m in owners):
