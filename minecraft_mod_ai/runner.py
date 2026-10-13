@@ -21,6 +21,9 @@ from .java_lsp import JDTWorkspaceBootstrapError, _resolve_project_java_home
 from .platform_catalog import adapter_from_project
 
 
+DEFAULT_GRADLE_COMMAND_TIMEOUT_SECONDS = 1200
+
+
 class BuildRunnerError(RuntimeError):
     pass
 
@@ -94,7 +97,7 @@ class GradleRunner:
         cache_dir: Path,
         *,
         download_timeout_seconds: int = 300,
-        command_timeout_seconds: int = 1200,
+        command_timeout_seconds: int = DEFAULT_GRADLE_COMMAND_TIMEOUT_SECONDS,
         eula_accepted: bool = False,
         require_clean_build: bool = False,
     ) -> None:
@@ -128,6 +131,41 @@ class GradleRunner:
         if not resolved.is_dir():
             raise BuildRunnerError(f"Project root is not a directory: {resolved}")
         return resolved
+
+    def run_project_command(
+        self,
+        project_root: Path,
+        *,
+        name: str,
+        arguments: tuple[str, ...],
+        log_path: Path,
+        java_version: int | None = None,
+    ) -> CommandResult:
+        """Run a project query through the same pinned build execution authority.
+
+        The result certifies only this command, never a build or runtime release.
+        Callers may keep its redacted log outside a disposable project copy.
+        """
+        from .java_lsp import _java_major_version
+
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        prepared = self._prepare_build_context(
+            self._trusted_project_root(project_root), require_compiler=True,
+        )
+        if isinstance(prepared, BuildReport):
+            raise BuildRunnerError(prepared.error or "Project Gradle toolchain unavailable")
+        if java_version is not None:
+            actual_java = _java_major_version(Path(prepared.environment["JAVA_HOME"]))
+            if actual_java != java_version:
+                raise BuildRunnerError(
+                    f"Project Java target mismatch: requested={java_version} actual={actual_java}"
+                )
+        log_path = Path(log_path).expanduser().resolve()
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        return self._run(
+            name=name, executable=prepared.gradle, arguments=arguments,
+            cwd=prepared.project_root, env=prepared.environment, log_path=log_path,
+        )
 
     def compile_java(self, project_root: Path) -> BuildReport:
         """Run only the Java compilation task for fast in-generation source feedback.
@@ -259,9 +297,10 @@ class GradleRunner:
             return wrapper_pin
         return str(getattr(adapter, "gradle")), str(getattr(adapter, "gradle_sha256"))
 
-    def _prepare_build_context(self, project_root: Path) -> _PreparedBuild | BuildReport:
+    def _prepare_build_context(self, project_root: Path, *,
+                               require_compiler: bool = False) -> _PreparedBuild | BuildReport:
         project_root = project_root.resolve()
-        if not (project_root / "build.gradle").is_file():
+        if not any((project_root / name).is_file() for name in ("build.gradle", "build.gradle.kts")):
             raise BuildRunnerError(f"Not a generated Gradle project: {project_root}")
         try:
             adapter = adapter_from_project(project_root)
@@ -284,7 +323,10 @@ class GradleRunner:
                 f"Project target has an invalid Java version: {adapter.java_version!r}"
             )
         try:
-            java_home = _resolve_project_java_home(required_java)
+            java_home = (
+                _resolve_project_java_home(required_java, require_compiler=True)
+                if require_compiler else _resolve_project_java_home(required_java)
+            )
         except JDTWorkspaceBootstrapError as exc:
             return BuildReport(
                 status="UNAVAILABLE",
