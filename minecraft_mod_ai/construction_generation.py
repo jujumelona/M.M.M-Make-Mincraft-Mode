@@ -145,7 +145,14 @@ def compose(router, spec, *, source_context=(), construction_context=None):
         if not registrars:
             declarations.append((key, task.intent))
     if not declarations and not registrars: raise ValueError('CONSTRUCTION_BODY_EMPTY')
-    def author_one(member_task):
+    assigned_records = {}
+    residual_records = json.loads(bindings.get('owned_runtime_records_json') or '[]')
+    typed_owners = json.loads(bindings.get('retained_typed_behavior_json') or '{}')
+    if registrars and residual_records:
+        from .construction_ownership import assign_behavior_records
+        assigned_records = assign_behavior_records(router, behaviors, residual_records)
+
+    def author_one(member_task, *, owned_records=()):
         from .construction_progress import ConstructionNodeCheckpoint
         if not context.get('project_root'):
             raise ValueError('CONSTRUCTION_RESUME_WORKSPACE_REQUIRED')
@@ -153,6 +160,12 @@ def compose(router, spec, *, source_context=(), construction_context=None):
             target=context['target'],
             prerequisite_hashes=context['prerequisite_hashes'])
         scoped_context = dict(context)
+        scoped_context['owned_runtime_records'] = list(owned_records)
+        scoped_context['already_implemented_effects'] = {
+            'ui_owned_records': typed_owners.get('ui_owned_records', ()),
+            'typed_functions': typed_owners.get('functions', ()),
+            'typed_events': typed_owners.get('event_bindings', ()),
+        }
         scoped_context['resume_nodes'] = lambda current: progress.load()
         scoped_context['checkpoint'] = progress.save
         return author_task_operations(router, member_task, scoped_context)
@@ -176,7 +189,9 @@ def compose(router, spec, *, source_context=(), construction_context=None):
             output_symbols=(key,),
             verification_ids=(behavior['behavior_id'] + '.compile',
                               behavior['behavior_id'] + '.behavior'))
-        nodes = author_one(registrar_task)
+        owned = [record for record in residual_records if
+                 assigned_records.get(record['record_ref']) == behavior['behavior_id']]
+        nodes = author_one(registrar_task, owned_records=owned)
         render_task_java(registrar_task, nodes, symbols)
         members.append(render_task_member(registrar_task, nodes, symbols))
     if registrars:
