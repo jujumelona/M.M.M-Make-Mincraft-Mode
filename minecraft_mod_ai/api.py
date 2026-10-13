@@ -466,11 +466,9 @@ def _preflight_production_construction(
     from .target_contract import TargetContract, target_symbol_namespace
 
     adapter = platform if isinstance(platform, TargetContract) else adapter_for_lock_values(platform)
-    resolved = adapter.version_context
-    target = resolved.to_dict()["target"]
     # Existing projects still use the same target semantics; their classpath is
     # inspected after import. Fresh official scaffolds are available right now.
-    target_symbol_namespace(target)
+    target_symbol_namespace(adapter.public_dict())
     if session.existing_input is not None:
         return
     from .platform_live_execution_contract import _uses_official_scaffold
@@ -479,6 +477,8 @@ def _preflight_production_construction(
         return
     from .complete_orchestrator_support import CompleteProductionError
 
+    resolved = adapter.version_context
+    target = resolved.to_dict()["target"]
     root = getattr(session.orchestrator, "_prepared_fabric_project", None)
     if root is None:
         raise CompleteProductionError("CONSTRUCTION_PREPARED_PROJECT_REQUIRED")
