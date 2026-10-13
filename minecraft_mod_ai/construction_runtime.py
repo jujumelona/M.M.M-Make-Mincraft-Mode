@@ -36,9 +36,13 @@ def _symbol_inventory(paths: tuple[str, ...], java_version: int, namespace: str)
                                 classpath_sides={})
 
 
-def prepare_construction_context(spec, *, java_classpath, project_root, source_context=()):
+def prepare_construction_context(spec, *, java_classpath, project_root, source_context=(), target_override=None):
     bindings = spec.get("bindings") or {}
     target = json.loads(bindings.get("target_contract_json") or "{}")
+    if target_override is not None:
+        if target and target != target_override:
+            raise ValueError("CONSTRUCTION_TARGET_CONTRACT_MISMATCH")
+        target = target_override
     if not target:
         raise ValueError("CONSTRUCTION_IMMUTABLE_TARGET_REQUIRED")
     java_version = int(target.get("java_version") or 0)
