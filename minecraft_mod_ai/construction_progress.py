@@ -23,12 +23,33 @@ def _sha(payload):
 
 
 class ConstructionNodeCheckpoint:
-    def __init__(self, project_root, task, *, target, prerequisite_hashes):
+    def __init__(self, project_root, task, *, target, prerequisite_hashes,
+                 declaration, owner_header):
         self.root = Path(project_root).resolve()
         self.task = task
-        self.key = _sha({"schema": "mmm/construction-nodes-v1",
+        if (declaration.get('owner') != owner_header.get('owner')
+                or owner_header.get('kind') != 'CLASS'):
+            raise ValueError('CONSTRUCTION_CHECKPOINT_DECLARATION_INVALID')
+        # Bind executable semantics, not descriptive/protocol metadata. A
+        # signature with different parameter names has the same symbol ID,
+        # but its accepted parameter nodes are not interchangeable.
+        contract = {
+            'member': {key: declaration[key] for key in (
+                'kind', 'owner', 'name', 'descriptor', 'parameters', 'return_type',
+                'static', 'final', 'visibility', 'access', 'annotations', 'throws',
+                'class_superclass', 'class_interfaces', 'side',
+            ) if key in declaration},
+            'owner_header': {key: owner_header[key] for key in (
+                'kind', 'owner', 'name', 'access', 'superclass', 'interfaces', 'side',
+            ) if key in owner_header},
+        }
+        # Unbound v1 records cannot prove their original signature. They stay
+        # intact but never seed a new, declaration-bound graph. The protocol
+        # version is deliberately absent so equal declarations keep their work.
+        self.key = _sha({"schema": "mmm/construction-nodes-v2",
                          "task": task.to_dict(), "target": target,
-                         "prerequisite_hashes": prerequisite_hashes})
+                         "prerequisite_hashes": prerequisite_hashes,
+                         "declaration_contract": contract})
         self.path = self.root / ".mmm" / "construction_nodes" / (self.key + ".json")
         self.author_state_path = self.path.with_suffix(
             '.author_state.' + _sha(PROTOCOL_VERSION)[:12] + '.json')

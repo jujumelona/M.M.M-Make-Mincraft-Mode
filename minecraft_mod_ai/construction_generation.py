@@ -208,7 +208,8 @@ def compose(router, spec, *, source_context=(), construction_context=None):
             raise ValueError('CONSTRUCTION_RESUME_WORKSPACE_REQUIRED')
         progress = ConstructionNodeCheckpoint(context['project_root'], member_task,
             target=context['target'],
-            prerequisite_hashes=context['prerequisite_hashes'])
+            prerequisite_hashes=context['prerequisite_hashes'],
+            declaration=symbols[member_task.owner_symbol], owner_header=symbols[owner])
         scoped_context = dict(context)
         scoped_context['owned_runtime_records'] = list(owned_records)
         scoped_context['port_source_ref'] = port_source_ref
