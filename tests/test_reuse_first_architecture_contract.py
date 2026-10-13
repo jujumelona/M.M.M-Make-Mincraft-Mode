@@ -90,6 +90,24 @@ def test_discovery_is_parallel_provider_aware_and_prefers_cross_capability_repos
     assert providers == {"github", "modrinth"}
 
 
+
+def test_repository_source_search_receives_resolved_minecraft_target(monkeypatch):
+    """Every provider page uses the actual target, including broad source donors."""
+    monkeypatch.delenv("MMM_CURSEFORGE_API_KEY", raising=False)
+    monkeypatch.delenv("CURSEFORGE_API_KEY", raising=False)
+    client = _FakeDiscovery()
+    discover_repositories_for_graph(
+        ("economy.trade",), client,
+        minecraft_version="26.2", loader="fabric",
+    )
+    assert client.calls, "source discovery silently skipped every provider"
+    for provider, _query, kwargs in client.calls:
+        assert provider in {"github", "modrinth"}
+        assert kwargs["minecraft_version"] == "26.2"
+        assert kwargs["loader"] == "fabric"
+        assert kwargs["target_profile"] == "minecraft_mod"
+
+
 def test_target_plan_exposes_generation_scope_ledger():
     class Adapter:
         def public_dict(self):
