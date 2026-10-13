@@ -10,7 +10,7 @@ from .construction_declaration_choices import (header_candidates, header_schema,
 from .construction_task import ConstructionTask
 from .construction_author import author_task_operations
 from .construction_java import render_task_member, render_task_java
-from .java_operation_ir import PRIMITIVES, identifier, qualified_name
+from .java_operation_ir import PRIMITIVES, identifier
 
 SIGNATURE = obj({'visibility': {'type': 'string', 'enum': ['public', 'protected', 'private', '']},
                  'static': {'type': 'boolean'}, 'final': {'type': 'boolean'}})
@@ -36,9 +36,11 @@ PARAMETER_INSTRUCTION = ('Plan exactly one parameter for the current method or c
 
 def exact_type(value, symbols, *, allow_void=True):
     base = value
-    while base.endswith('[]'): base = base[:-2]
+    while base.endswith('[]'):
+        base = base[:-2]
     if base in PRIMITIVES:
-        if base == 'void' and (value != base or not allow_void): raise ValueError('CONSTRUCTION_TYPE_VOID')
+        if base == 'void' and (value != base or not allow_void):
+            raise ValueError('CONSTRUCTION_TYPE_VOID')
     elif symbols.get(base, {}).get('kind') != 'CLASS':
         raise ValueError('CONSTRUCTION_TYPE_NOT_INSPECTED: ' + base)
     return value
@@ -48,16 +50,20 @@ def compose(router, spec, *, source_context=(), construction_context=None,
             authoring_contract=None, binding_pages=None):
     from .first_pass_java_source import _java_identity
     identity = _java_identity(spec)
-    if identity is None: raise ValueError('CONSTRUCTION_RENDERER_EXTENSION_REQUIRED: Java fragment/identity')
+    if identity is None:
+        raise ValueError('CONSTRUCTION_RENDERER_EXTENSION_REQUIRED: Java fragment/identity')
     if not construction_context or 'symbols' not in construction_context:
         raise ValueError('CONSTRUCTION_TARGET_CONTEXT_REQUIRED')
     context = dict(construction_context)
     context['authoring_contract'] = dict(authoring_contract or {})
     context['binding_pages'] = dict(binding_pages or {})
-    symbols = dict(context['symbols']); context['symbols'] = symbols
-    package, name = identity; owner = package + '.' + name
+    symbols = dict(context['symbols'])
+    context['symbols'] = symbols
+    package, name = identity
+    owner = package + '.' + name
     bindings = spec.get('bindings', {})
-    if not isinstance(bindings, dict): raise ValueError('CONSTRUCTION_BINDINGS_REQUIRED')
+    if not isinstance(bindings, dict):
+        raise ValueError('CONSTRUCTION_BINDINGS_REQUIRED')
     from .construction_journal import JournaledConstructionRouter
     planning_router = JournaledConstructionRouter(
         router, context['project_root'], spec, context)
@@ -78,13 +84,15 @@ def compose(router, spec, *, source_context=(), construction_context=None,
             for row in behaviors
         ):
             raise ValueError('CONSTRUCTION_BEHAVIOR_SCOPE_INVALID')
-    if task.target_path and task.target_path != spec['target_path']: raise ValueError('CONSTRUCTION_TARGET_MISMATCH')
+    if task.target_path and task.target_path != spec['target_path']:
+        raise ValueError('CONSTRUCTION_TARGET_MISMATCH')
     task = replace(task, target_path=spec['target_path'], allowed_writes=(spec['target_path'],))
     if bindings.get('request_feature_entrypoint'):
         lifecycle, interface = 'onInitialize', 'net.fabricmc.api.ModInitializer'
     elif str(spec.get('side', '')).upper() == 'CLIENT':
         lifecycle, interface = 'onInitializeClient', 'net.fabricmc.api.ClientModInitializer'
-    else: lifecycle = interface = ''
+    else:
+        lifecycle = interface = ''
     # This renderer owns a new complete class, not edits to an inspected class.
     # Never relabel installed source or bytecode as a provisional declaration.
     if owner in symbols or any(row.get('owner') == owner for row in symbols.values()):
@@ -100,7 +108,8 @@ def compose(router, spec, *, source_context=(), construction_context=None,
                'owner': owner, 'target_path': task.target_path,
                'authoring_contract': context['authoring_contract']}
     if interface:
-        exact_type(interface, symbols, allow_void=False); interfaces.append(interface)
+        exact_type(interface, symbols, allow_void=False)
+        interfaces.append(interface)
         payload['host_entrypoint'] = {'interface': interface, 'method': lifecycle}
         state.advance()
     else:
@@ -111,19 +120,23 @@ def compose(router, spec, *, source_context=(), construction_context=None,
             actions = choice_actions(schema)
             choice = ask(planning_router, 'construction_class_next',
                 {**payload, **state.payload(actions, header_candidates=candidates)}, schema, HEADER_INSTRUCTION)
-            if choice['action'] == 'complete': break
+            if choice['action'] == 'complete':
+                break
             if choice['action'] == 'extension':
                 raise ValueError('CONSTRUCTION_RENDERER_EXTENSION_REQUIRED: ' + choice['reason'])
-            if consume_lookup_choice(state, choice): continue
+            if consume_lookup_choice(state, choice):
+                continue
             type_ = exact_type(choice['type_ref'], symbols, allow_void=False)
             if type_ not in candidates[choice['action']]:
                 raise ValueError('CONSTRUCTION_CLASS_HEADER')
             if choice['action'] == 'superclass':
-                if superclass: raise ValueError('CONSTRUCTION_CLASS_HEADER')
+                if superclass:
+                    raise ValueError('CONSTRUCTION_CLASS_HEADER')
                 superclass = type_
                 symbols[owner]['superclass'] = superclass
             else:
-                if type_ in interfaces: raise ValueError('CONSTRUCTION_CLASS_HEADER')
+                if type_ in interfaces:
+                    raise ValueError('CONSTRUCTION_CLASS_HEADER')
                 interfaces.append(type_)
             state.advance()
     declarations = []
@@ -147,7 +160,8 @@ def compose(router, spec, *, source_context=(), construction_context=None,
             state.add_declaration(key)
     if lifecycle:
         key = owner + '#' + lifecycle + '()'
-        if key in symbols: raise ValueError('CONSTRUCTION_HOST_ENTRYPOINT_DUPLICATE')
+        if key in symbols:
+            raise ValueError('CONSTRUCTION_HOST_ENTRYPOINT_DUPLICATE')
         symbols[key] = {'kind': 'METHOD', 'owner': owner, 'name': lifecycle, 'parameters': [],
             'return_type': 'void', 'static': False, 'visibility': 'public',
             'annotations': ['java.lang.Override'], 'class_superclass': superclass,
@@ -157,7 +171,8 @@ def compose(router, spec, *, source_context=(), construction_context=None,
             'purpose': 'Invoke every assigned behavior registrar' if registrars else task.intent}
         state.add_declaration(key)
     reserved_names = {symbols[key]['name'] for key, _behavior in registrars}
-    if lifecycle: reserved_names.add(lifecycle)
+    if lifecycle:
+        reserved_names.add(lifecycle)
     preferred_body = ''
     while True:
         state.enter('member_declarations')
@@ -169,29 +184,38 @@ def compose(router, spec, *, source_context=(), construction_context=None,
         item = ask(planning_router, 'construction_member_next',
             {**payload, **state.payload(actions, body_candidates=body_candidates)}, schema, MEMBER_INSTRUCTION)
         action = item['action']
-        if action == 'complete': break
+        if action == 'complete':
+            break
         if action == 'begin_bodies':
-            preferred_body = item['symbol_ref']; break
-        if action == 'extension': raise ValueError('CONSTRUCTION_RENDERER_EXTENSION_REQUIRED: ' + item['reason'])
-        if consume_lookup_choice(state, item): continue
+            preferred_body = item['symbol_ref']
+            break
+        if action == 'extension':
+            raise ValueError('CONSTRUCTION_RENDERER_EXTENSION_REQUIRED: ' + item['reason'])
+        if consume_lookup_choice(state, item):
+            continue
         if action == 'declarations':
-            state.lookup_declarations(item['offset']); continue
+            state.lookup_declarations(item['offset'])
+            continue
         member_name = name if action == 'constructor' else identifier(item['name'])
-        if member_name in reserved_names: raise ValueError('CONSTRUCTION_HOST_DECLARATION_RESERVED')
-        if action == 'overload': action = 'method'
+        if member_name in reserved_names:
+            raise ValueError('CONSTRUCTION_HOST_DECLARATION_RESERVED')
+        if action == 'overload':
+            action = 'method'
         current = {**payload, 'kind': action, 'name': member_name, 'purpose': item['purpose']}
         return_type = 'void' if action == 'constructor' else choose_type(planning_router, state, current,
             phase='member_return_type', allow_void=action != 'field')
         state.enter('member_signature')
         schema = obj({**SIGNATURE['properties'], 'return_type': {'const': return_type}})
-        if action == 'constructor': schema['properties']['static'] = {'const': False}
+        if action == 'constructor':
+            schema['properties']['static'] = {'const': False}
         while True:
             decision_schema = with_binding_lookups(state, schema)
             metadata = ask(planning_router, 'construction_member_signature',
                 {**current, 'return_type': return_type,
                  **state.payload(choice_actions(decision_schema, default_action='signature'))},
                 decision_schema, SIGNATURE_INSTRUCTION)
-            if consume_lookup_choice(state, metadata): continue
+            if consume_lookup_choice(state, metadata):
+                continue
             break
         exact_type(metadata['return_type'], symbols, allow_void=action != 'field')
         state.advance()
@@ -208,19 +232,23 @@ def compose(router, spec, *, source_context=(), construction_context=None,
                      'parameter_index': len(parameters),
                      **state.payload(choice_actions(schema))},
                     schema, PARAMETER_INSTRUCTION)
-                if consume_lookup_choice(state, parameter): continue
-                if parameter['complete']: break
+                if consume_lookup_choice(state, parameter):
+                    continue
+                if parameter['complete']:
+                    break
                 identifier(parameter['name'])
                 type_ = choose_type(planning_router, state,
                     {**current, 'signature': metadata, 'parameters': parameters, 'parameter_name': parameter['name']},
                     phase='member_parameter_type')
                 exact_type(type_, symbols, allow_void=False)
-                if any(p['name'] == parameter['name'] for p in parameters): raise ValueError('CONSTRUCTION_PARAMETER_DUPLICATE')
+                if any(p['name'] == parameter['name'] for p in parameters):
+                    raise ValueError('CONSTRUCTION_PARAMETER_DUPLICATE')
                 parameters.append({'name': parameter['name'], 'type': type_})
                 state.advance()
                 state.enter('member_parameters')
         key = owner + '#' + member_name + '(' + ','.join(p['type'] for p in parameters) + ')'
-        if key in symbols: raise ValueError('CONSTRUCTION_DECLARATION_DUPLICATE: ' + key)
+        if key in symbols:
+            raise ValueError('CONSTRUCTION_DECLARATION_DUPLICATE: ' + key)
         symbols[key] = {**metadata, 'kind': action.upper(), 'owner': owner, 'name': member_name,
             'parameters': parameters, 'class_superclass': superclass, 'class_interfaces': interfaces,
             'side': str(spec.get('side', 'COMMON')), 'provenance': 'construction_plan',
@@ -229,7 +257,8 @@ def compose(router, spec, *, source_context=(), construction_context=None,
         state.add_declaration(key)
     if lifecycle and not registrars:
         declarations.append((owner + '#' + lifecycle + '()', task.intent))
-    if not declarations and not registrars: raise ValueError('CONSTRUCTION_BODY_EMPTY')
+    if not declarations and not registrars:
+        raise ValueError('CONSTRUCTION_BODY_EMPTY')
     assigned_records = {}
     residual_records = json.loads(bindings.get('owned_runtime_records_json') or '[]')
     typed_owners = json.loads(bindings.get('retained_typed_behavior_json') or '{}')
@@ -358,7 +387,8 @@ def compose(router, spec, *, source_context=(), construction_context=None,
     source = 'package ' + package + ';\n\npublic ' + ('final ' if lifecycle else '') + 'class ' + name
     source += (' extends ' + superclass if superclass else '') + (' implements ' + ', '.join(interfaces) if interfaces else '')
     source += ' {\n' + '\n\n'.join(members) + '\n}\n'
-    if context.get('verify_source'): context['verify_source'](source, spec['target_path'])
+    if context.get('verify_source'):
+        context['verify_source'](source, spec['target_path'])
     from .construction_coverage import record_authored_source_calls
     record_authored_source_calls(context['project_root'], spec['target_path'], source,
         selected_ports=[
