@@ -44,7 +44,8 @@ def exact_type(value, symbols, *, allow_void=True):
     return value
 
 
-def compose(router, spec, *, source_context=(), construction_context=None, authoring_contract=None):
+def compose(router, spec, *, source_context=(), construction_context=None,
+            authoring_contract=None, binding_pages=None):
     from .first_pass_java_source import _java_identity
     identity = _java_identity(spec)
     if identity is None: raise ValueError('CONSTRUCTION_RENDERER_EXTENSION_REQUIRED: Java fragment/identity')
@@ -52,6 +53,7 @@ def compose(router, spec, *, source_context=(), construction_context=None, autho
         raise ValueError('CONSTRUCTION_TARGET_CONTEXT_REQUIRED')
     context = dict(construction_context)
     context['authoring_contract'] = dict(authoring_contract or {})
+    context['binding_pages'] = dict(binding_pages or {})
     symbols = dict(context['symbols']); context['symbols'] = symbols
     package, name = identity; owner = package + '.' + name
     bindings = spec.get('bindings', {})
@@ -235,8 +237,9 @@ def compose(router, spec, *, source_context=(), construction_context=None, autho
         symbols=symbols, exact_type=exact_type, state=state,
     )
     context['construction_declaration_ids'] = tuple(state.declaration_ids)
-    from .construction_progress import planned_declarations_fingerprint
+    from .construction_progress import planned_declarations_fingerprint, construction_input_fingerprint
     planned_declaration_hash = planned_declarations_fingerprint(symbols, state.declaration_ids)
+    input_hash = construction_input_fingerprint(spec, context['authoring_contract'])
     member_invocations = {}
 
     def author_one(member_task, *, owned_records=(), port_source_ref=''):
@@ -247,7 +250,7 @@ def compose(router, spec, *, source_context=(), construction_context=None, autho
             target=context['target'],
             prerequisite_hashes=context['prerequisite_hashes'],
             declaration=symbols[member_task.owner_symbol], owner_header=symbols[owner],
-            planned_declaration_hash=planned_declaration_hash)
+            planned_declaration_hash=planned_declaration_hash, construction_input_hash=input_hash)
         scoped_context = dict(context)
         scoped_context['owned_runtime_records'] = list(owned_records)
         scoped_context['port_source_ref'] = port_source_ref

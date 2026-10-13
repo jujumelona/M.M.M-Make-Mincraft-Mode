@@ -34,9 +34,15 @@ def planned_declarations_fingerprint(symbols, declaration_ids):
                        if field in symbols[key]}) for key in sorted(declaration_ids)])
 
 
+def construction_input_fingerprint(spec, authoring_contract):
+    # Identity/registry paths, paged configuration and canonical rules are body
+    # inputs too. Equal signatures alone do not certify an unchanged behavior.
+    return _sha({'specification': spec, 'authoring_contract': authoring_contract})
+
+
 class ConstructionNodeCheckpoint:
     def __init__(self, project_root, task, *, target, prerequisite_hashes,
-                 declaration, owner_header, planned_declaration_hash):
+                 declaration, owner_header, planned_declaration_hash, construction_input_hash):
         self.root = Path(project_root).resolve()
         self.task = task
         if (declaration.get('owner') != owner_header.get('owner')
@@ -58,7 +64,8 @@ class ConstructionNodeCheckpoint:
                          "task": task.to_dict(), "target": target,
                          "prerequisite_hashes": prerequisite_hashes,
                          "declaration_contract": contract,
-                         "planned_declaration_hash": planned_declaration_hash})
+                         "planned_declaration_hash": planned_declaration_hash,
+                         "construction_input_hash": construction_input_hash})
         self.path = self.root / ".mmm" / "construction_nodes" / (self.key + ".json")
         self.author_state_path = self.path.with_suffix(
             '.author_state.' + _sha(PROTOCOL_VERSION)[:12] + '.json')

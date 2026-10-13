@@ -13,7 +13,7 @@ from copy import deepcopy
 PROTOCOL_VERSION = "mmm/construction-state-v3"
 PAGE_SIZE = 8
 RECENT_SIZE = 4
-LOOKUP_KINDS = frozenset({'symbols', 'declarations', 'nodes', 'node_index', 'source', 'sources'})
+LOOKUP_KINDS = frozenset({'symbols', 'declarations', 'nodes', 'node_index', 'source', 'sources', 'bindings'})
 
 
 def _lookup_request(kind, query, offset):

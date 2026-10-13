@@ -48,6 +48,7 @@ def author_task_operations(router, task, context):
     base = {'task_id': task.task_id, 'intent': task.intent, 'trigger': task.trigger, 'effects': task.effects,
             'state_reads': list(task.state_reads), 'state_writes': list(task.state_writes),
             'declaration': symbol_record(task.owner_symbol, declaration), 'target_path': task.target_path,
+            'authoring_contract': context.get('authoring_contract', {}),
             'owned_runtime_records': context.get('owned_runtime_records', ()),
             'donor_call_obligations': context.get('donor_call_obligations', {}),
             'port_source_ref': context.get('port_source_ref', ''),
@@ -73,6 +74,7 @@ def author_task_operations(router, task, context):
     roots = dict.fromkeys(key for key in by_id if key not in referenced)
     source_units = context.get('source_pages', {})
     source_ids = sorted(source_units)
+    bindings = context.get('binding_pages', {})
     read_refs = context.get('recorded_source_refs')
     read_sources = set(read_refs() if callable(read_refs) else ())
 
@@ -97,6 +99,9 @@ def author_task_operations(router, task, context):
             matches = [{'source_ref': key, 'unit_count': len(source_units[key])} for key in source_ids
                        if query.strip().casefold() in key.casefold()]
             return page_result(matches, offset, field='sources')
+        if action == 'bindings':
+            if query not in bindings: raise ValueError('CONSTRUCTION_BINDING_MISSING')
+            return page_result(bindings[query], offset, field='bindings')
         if action != 'source' or query not in source_units:
             raise ValueError('CONSTRUCTION_SOURCE_PAGE_MISSING')
         pages = source_units[query]
@@ -123,12 +128,15 @@ def author_task_operations(router, task, context):
         'through typed call/field/new operations and implement missing state and event glue. '
         'Only the latest four node summaries are shown. Use node_index to discover older node IDs, '
         'then nodes to read their complete records. Use sources to discover source IDs, then source '
-        'to read one complete unit. Forward references are allowed; pending_input_refs must be authored '
+        'to read one complete unit. Use bindings with a binding_id from authoring_contract.binding_pages '
+        'to read complete configuration records. Respect the canonical responsibility, exact identities '
+        'and implementation_requirements in authoring_contract. Forward references are allowed; pending_input_refs must be authored '
         'before complete. Finish only after all effects and return paths are represented. '
         'Unsupported syntax requires extension, never raw Java. ' + STATE_INSTRUCTION)
     while True:
         recent = [_node_summary(row) for row in nodes[-4:]]
         actions = list(NEXT_SCHEMA['properties']['action']['enum'])
+        if bindings: actions.append('bindings')
         if not nodes or pending: actions.remove('complete')
         schema = obj({**NEXT_SCHEMA['properties'], 'action': {'type': 'string', 'enum': actions}})
         payload = {**base, 'recent_nodes': recent, **state.payload(actions,
@@ -147,7 +155,7 @@ def author_task_operations(router, task, context):
             JavaOperations(task, nodes, symbols)
             if context.get('checkpoint'): context['checkpoint'](task, tuple(nodes), 'validated')
             return tuple(nodes)
-        if action in {'symbols', 'declarations', 'nodes', 'node_index', 'source', 'sources'}:
+        if action in {'symbols', 'declarations', 'nodes', 'node_index', 'source', 'sources', 'bindings'}:
             query = choice['query'].strip()
             if action == 'declarations': query = ''
             state.consume_lookup(action, query, choice['offset'],

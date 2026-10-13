@@ -31,6 +31,7 @@ class JournaledConstructionRouter:
         self.binding = _sha({
             "schema": "mmm/construction-inference-v1",
             "construction_protocol": PROTOCOL_VERSION,
+            "authoring_contract": context.get('authoring_contract', {}),
             "spec": spec,
             "target": context["target"],
             "prerequisites": context["prerequisite_hashes"],

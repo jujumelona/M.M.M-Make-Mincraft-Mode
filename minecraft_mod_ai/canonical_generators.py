@@ -99,8 +99,11 @@ def generate_canonical_leaf(inputs, *, leaf_id, router, authority, source_contex
             if construction_context is None:
                 raise ValueError("CONSTRUCTION_TARGET_CONTEXT_REQUIRED")
             from .construction_generation import compose
+            from .construction_contract import construction_contract
+            contract, binding_pages = construction_contract(manifest, inputs, spec)
             value = compose(router, spec, source_context=source_context,
-                            construction_context=construction_context)
+                            construction_context=construction_context,
+                            authoring_contract=contract, binding_pages=binding_pages)
         else:
             value = generate_fixed_template_value(
                 router,
