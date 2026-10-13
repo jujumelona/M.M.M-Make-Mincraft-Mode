@@ -9,7 +9,7 @@ import shutil
 import threading
 from concurrent.futures import Future
 from contextlib import contextmanager
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -468,7 +468,10 @@ def _preflight_production_construction(
     adapter = platform if isinstance(platform, TargetContract) else adapter_for_lock_values(platform)
     # Existing projects still use the same target semantics; their classpath is
     # inspected after import. Fresh official scaffolds are available right now.
-    target_symbol_namespace(adapter.public_dict())
+    # Match the execution snapshot's raw fields without admitting a host bundle
+    # yet, so native mapping contradictions cannot disappear in a public view.
+    adapter.validate()
+    target_symbol_namespace(asdict(adapter))
     if session.existing_input is not None:
         return
     from .platform_live_execution_contract import _uses_official_scaffold
