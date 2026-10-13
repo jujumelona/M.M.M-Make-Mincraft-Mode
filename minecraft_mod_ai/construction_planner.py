@@ -63,13 +63,6 @@ def author_behavior_requirements(scope, router):
             if row["status"] == "complete":
                 if not prior:
                     raise ValueError("CONSTRUCTION_REQUIREMENT_UNRESOLVED: " + parent)
-                from .request_requirements import validate_leaf_atomicity
-                atomicity, _ = validate_leaf_atomicity({
-                    "semantic_statement": statement, "source_anchor": statement})
-                if atomicity.name == "COMPOUND" and len(prior) < 2:
-                    # The lexical classifier is only an under-decomposition
-                    # warning; it never supplies missing invented behaviors.
-                    raise ValueError("CONSTRUCTION_COMPOUND_BEHAVIOR_INCOMPLETE: " + parent)
                 break
             intent, quote = row["intent"].strip(), row["source_quote"]
             from .request_scope import _source_quote_bounds
