@@ -8,7 +8,6 @@ from __future__ import annotations
 import hashlib
 from dataclasses import replace
 
-from .construction_task import ConstructionTask
 from .construction_author import ask, obj, TEXT
 from .construction_declaration_choices import (choose_type, parameter_schema, with_binding_lookups,
                                              choice_actions, consume_lookup_choice)
