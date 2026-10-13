@@ -155,9 +155,10 @@ def _feature_record(prompt: str, start: int, chunk: str, row: Mapping[str, Any],
 def _uncovered_spans(chunk: str, prior: list[dict[str, Any]]):
     covered = bytearray(len(chunk))
     for quote in dict.fromkeys(row["source_quote"] for row in prior):
-        offset = chunk.find(quote)
-        if quote and offset >= 0:
-            covered[offset:offset + len(quote)] = b"\x01" * len(quote)
+        bounds = _source_quote_bounds(chunk, quote)
+        if bounds is not None:
+            offset, end = bounds
+            covered[offset:end] = bytes([1]) * (end - offset)
     offset = 0
     while offset < len(chunk):
         if covered[offset]:
