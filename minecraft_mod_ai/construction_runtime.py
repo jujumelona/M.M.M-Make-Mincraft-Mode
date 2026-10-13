@@ -28,7 +28,7 @@ def _jdk_image(java_version: int) -> str:
 
 @lru_cache(maxsize=2)
 def _symbol_inventory(paths: tuple[str, ...], java_version: int, namespace: str,
-                      image_signature: tuple[int, int]):
+                      _image_signature: tuple[int, int]):
     # Parse verified .class/.jar members, not model-invented Fabric APIs.
     # The runtime image fingerprint is part of the cache identity, so replacing
     # a JDK at the same home cannot reuse an older standard-library inventory.
