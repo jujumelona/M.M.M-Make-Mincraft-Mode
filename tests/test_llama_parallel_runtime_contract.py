@@ -126,7 +126,7 @@ def test_parallel_router_keeps_one_stable_selector_owned_tool_surface(monkeypatc
         "required": ["status"],
         "additionalProperties": False,
     }
-    tool_result = router.generate_text(
+    result = router.generate_text(
         "coder",
         ({"role": "user", "content": "repair"},),
         response_format="json",
@@ -134,28 +134,21 @@ def test_parallel_router_keeps_one_stable_selector_owned_tool_surface(monkeypatc
         tool_stage="generation",
         enable_tools=True,
     )
-    assert tool_result == '{"status":"tool-aware"}'
-    assert len(adapter.turn_requests) == 2
+    assert result == '{"status":"tool-aware"}'
 
-    semantic_request, template_request = adapter.turn_requests
+    # The reviewed loop now owns exactly one semantic tool turn; it does not
+    # manufacture a second fixed-template call after an accepted JSON answer.
+    assert len(adapter.turn_requests) == 1
+    semantic_request = adapter.turn_requests[0]
     exposed_names = {str(tool["function"]["name"]) for tool in semantic_request.tools}
-    assert exposed_names
     assert {"search_code_rag", "search_project_rag"} <= exposed_names
     assert "plan_complete_game" not in exposed_names
     assert "runtime_start_server" not in exposed_names
     assert "package_release" not in exposed_names
     assert semantic_request.tool_choice == "auto"
     assert semantic_request.parallel_tool_calls is True
-    assert semantic_request.response_format == "text"
-
-    fixed_names = {str(tool["function"]["name"]) for tool in template_request.tools}
-    assert fixed_names == {"submit_fixed_template"}
-    assert template_request.tool_choice == {
-        "type": "function",
-        "function": {"name": "submit_fixed_template"},
-    }
-    assert template_request.parallel_tool_calls is False
-    assert template_request.response_format == "text"
+    assert semantic_request.response_format == "json"
+    assert semantic_request.response_schema == tool_schema
 
     capability_messages = [
         str(message.get("content", ""))
@@ -167,8 +160,6 @@ def test_parallel_router_keeps_one_stable_selector_owned_tool_surface(monkeypatc
     capability = capability_messages[-1]
     assert "ground-production-with-live-evidence" in capability
     assert "mmm/agent-capability-context-v7" in capability
-    # Keep this synchronized with the reviewed richest-route capability budget enforced
-    # by the security regression. The full request has its own stricter packing preflight.
     assert len(capability.encode("utf-8")) < 27_000
 
     schema = {
@@ -192,18 +183,13 @@ def test_parallel_router_keeps_one_stable_selector_owned_tool_surface(monkeypatc
         enable_tools=False,
     )
     assert plain_result == '{"game_design":{}}'
-    assert len(adapter.turn_requests) == 3
-    plain_template_request = adapter.turn_requests[-1]
-    assert {
-        str(tool["function"]["name"]) for tool in plain_template_request.tools
-    } == {"submit_fixed_template"}
-    assert plain_template_request.tool_choice == {
-        "type": "function",
-        "function": {"name": "submit_fixed_template"},
-    }
-    assert plain_template_request.parallel_tool_calls is False
-    assert plain_template_request.response_format == "text"
-    assert adapter.generate_requests == []
+    assert len(adapter.turn_requests) == 1
+    assert len(adapter.generate_requests) == 1
+    plain_request = adapter.generate_requests[0]
+    assert plain_request.tools == ()
+    assert plain_request.tool_choice is None
+    assert plain_request.response_format == "json"
+    assert plain_request.response_schema == schema
 
 
 def test_shared_gpu_lock_allows_readers_but_blocks_writer() -> None:
