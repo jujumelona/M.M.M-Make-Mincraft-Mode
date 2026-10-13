@@ -9,7 +9,6 @@ import re
 from collections.abc import Mapping
 
 from .java_operation_ir import PRIMITIVES
-from .construction_context import java_source_units
 
 _GENERIC = re.compile(r"<[^<>]*>")
 _QUALIFIED = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*")
