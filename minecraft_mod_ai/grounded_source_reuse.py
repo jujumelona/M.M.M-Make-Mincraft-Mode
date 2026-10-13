@@ -354,12 +354,14 @@ def build_repository_reuse_plan(
     # A search hit has ZERO reuse authority until the proof below passes.
     from .reuse_discovery import discover_repositories_for_graph
 
+    discovery_receipts: list[dict[str, Any]] = []
     discovered = discover_repositories_for_graph(
         tuple(str(node) for node in graph.get("nodes", ()) if str(node).strip()),
         client,
         capability_graph=graph,
         minecraft_version=adapter.minecraft_version,
         loader=adapter.loader,
+        diagnostics=discovery_receipts,
     )
     by_repository = {str(card["repository"]).casefold(): i for i, card in enumerate(cards)}
     for capability, repositories in discovered.items():
@@ -461,10 +463,33 @@ def build_repository_reuse_plan(
 
             selected = verified[0] if verified else None
             if selected is None:
+                failed_proofs = [r for r in proofs if r.get("capability") == capability
+                                 and r.get("status") in {"rejected", "proof_error"}]
+                failed_inspections = [r for r in inspections if r.get("capability") == capability
+                                      and r.get("status") == "inspection_error"]
+                searches = [r for r in discovery_receipts
+                            if capability in r.get("capabilities", ())]
+                if failed_proofs:
+                    search_status = "target_compile_failed"
+                    failure_code = str(failed_proofs[-1].get("failure_code") or
+                                       failed_proofs[-1].get("status"))
+                elif failed_inspections:
+                    search_status = "download_error"
+                    failure_code = "DONOR_INSPECTION_FAILED"
+                elif searches and all(r["status"] == "provider_error" for r in searches):
+                    search_status = "provider_error"
+                    failure_code = "ALL_DISCOVERY_PROVIDERS_FAILED"
+                elif searches and all(r["status"] in {"search_empty", "provider_error"} for r in searches):
+                    search_status = "search_empty" if any(r["status"] == "search_empty" for r in searches) else "provider_error"
+                    failure_code = "NO_SOURCE_CANDIDATES" if search_status == "search_empty" else "ALL_DISCOVERY_PROVIDERS_FAILED"
+                else:
+                    search_status, failure_code = "unresolved", "NO_VERIFIED_DONOR"
                 decisions.append(
                     {
                         "capability": capability,
                         "mode": "fresh",
+                        "search_status": search_status,
+                        "failure_code": failure_code,
                         "source_id": "",
                         "component_refs": [],
                         "rationale": (
@@ -509,6 +534,7 @@ def build_repository_reuse_plan(
         "explicit_reference_repository_count": sum(
             bool(card.get("explicit_reference")) for card in cards
         ),
+        "discovery_receipts": discovery_receipts,
         "inspection_receipts": inspections,
         "proof_receipts": proofs,
         "reference_sources": reference_sources,
