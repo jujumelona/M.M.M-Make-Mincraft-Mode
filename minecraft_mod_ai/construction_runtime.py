@@ -77,8 +77,15 @@ def prepare_construction_context(spec, *, java_classpath, project_root, source_c
         prerequisites[relative] = sha
         if absolute.suffix == ".java":
             pages[relative] = java_source_units(data.decode("utf-8"), path=relative)
+    from .construction_source_symbols import inspected_project_source_symbols
+    project_symbols, rejected = inspected_project_source_symbols(pages, symbols)
+    if set(project_symbols) & set(symbols):
+        raise ValueError("CONSTRUCTION_PROJECT_SYMBOL_COLLISION")
+    symbols.update(project_symbols)
     return {
         "project_root": str(root),
+        "source_symbol_rejections": list(rejected),
+        "project_symbols": project_symbols,
         "symbols": symbols,
         "source_pages": pages,
         "prerequisite_hashes": prerequisites,
