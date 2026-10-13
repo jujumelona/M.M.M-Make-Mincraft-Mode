@@ -109,7 +109,7 @@ def resolve_fabric_compile_classpath(project_root: str, *,
 
 @lru_cache(maxsize=4)
 def _resolve_inspected_classpath(project_root: str, timeout_seconds: int,
-                                config_signature: tuple[tuple[str, str], ...],
+                                _config_signature: tuple[tuple[str, str], ...],
                                 java_home: str = "", cache_dir: str = "",
                                 java_version: int | None = None) -> tuple[str, ...]:
     from .root_cause_trace import durable_trace_path
