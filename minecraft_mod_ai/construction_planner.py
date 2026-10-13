@@ -55,7 +55,7 @@ def _unclaimed_source(source_text, claimed):
         offset = right
 
 
-def author_behavior_requirements(scope, router):
+def author_behavior_requirements(scope, router, *, checkpoint=None):
     result = []
     saved = scope.get("behavior_requirements")
     if saved is not None:
@@ -71,6 +71,12 @@ def author_behavior_requirements(scope, router):
         return tuple(result)
 
     for requirement in scope.get("requirements", ()):
+        if checkpoint is not None:
+            cached = checkpoint.load(requirement)
+            if cached is not None:
+                result.extend(cached)
+                continue
+        beginning = len(result)
         parent, statement = requirement["requirement_id"], requirement["statement"]
         source_text = str(requirement.get("source_span", {}).get("text") or statement)
         if not source_text.strip():
@@ -164,11 +170,14 @@ def author_behavior_requirements(scope, router):
             ))
         print("CONSTRUCTION_BEHAVIOR_COVERAGE: " + json.dumps({
             "requirement_id": parent,
+            "source_excerpt": source_text[:240],
             "source_characters": len(source_text),
             "grounded_behaviors": len(prior),
             "unresolved_source_spans": len(missing),
             "stop_reason": stop_reason,
         }, ensure_ascii=False), flush=True)
+        if checkpoint is not None:
+            checkpoint.save(requirement, result[beginning:])
     return tuple(result)
 
 
@@ -183,7 +192,9 @@ def bind_behavior_scope(scope, router):
     if not bounded.get("requirements"):
         bounded["behavior_requirements"] = []
         return bounded
-    behaviors = author_behavior_requirements(bounded, router)
+    from .construction_behavior_checkpoint import BehaviorPlanningCheckpoint
+    checkpoint = BehaviorPlanningCheckpoint(bounded, router)
+    behaviors = author_behavior_requirements(bounded, router, checkpoint=checkpoint)
     bounded["behavior_requirements"] = [row.to_dict() for row in behaviors]
     return bounded
 
