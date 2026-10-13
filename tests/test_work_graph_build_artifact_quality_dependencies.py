@@ -61,7 +61,7 @@ def _evidenced_receipt(node_id: str) -> dict:
             "build": {
                 "status": "PASS",
                 "commands": [
-                    {"name": "build", "exit_code": 0, "timed_out": False}
+                    {"name": "build", "command": ["./gradlew", "build"], "exit_code": 0, "timed_out": False}
                 ],
                 "artifact_receipt": {"sha256": "sha256:" + "b" * 64},
             },
