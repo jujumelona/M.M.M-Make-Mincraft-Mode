@@ -162,9 +162,12 @@ jobs:
           path: audit/kill-gates/collection.log
           if-no-files-found: warn
 
+  # An import/collection failure cannot produce a valid suite execution.
+  # Do not spend eight expensive runners on an already-invalid suite; the
+  # always() gate still reports collection failure and all skipped lanes.
   lane1:
     name: Kill gate lane L1
-    needs: file-plan
+    needs: [file-plan, collection-contract]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -230,7 +233,7 @@ jobs:
 
   lane2:
     name: Kill gate lane L2
-    needs: file-plan
+    needs: [file-plan, collection-contract]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -240,7 +243,7 @@ jobs:
 
   lane3:
     name: Kill gate lane L3
-    needs: file-plan
+    needs: [file-plan, collection-contract]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -250,7 +253,7 @@ jobs:
 
   lane4:
     name: Kill gate lane L4
-    needs: file-plan
+    needs: [file-plan, collection-contract]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -260,7 +263,7 @@ jobs:
 
   lane5:
     name: Kill gate lane L5
-    needs: file-plan
+    needs: [file-plan, collection-contract]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -270,7 +273,7 @@ jobs:
 
   lane6:
     name: Kill gate lane L6
-    needs: file-plan
+    needs: [file-plan, collection-contract]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -280,7 +283,7 @@ jobs:
 
   lane7:
     name: Kill gate lane L7
-    needs: file-plan
+    needs: [file-plan, collection-contract]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -290,7 +293,7 @@ jobs:
 
   lane8:
     name: Kill gate lane L8
-    needs: file-plan
+    needs: [file-plan, collection-contract]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
