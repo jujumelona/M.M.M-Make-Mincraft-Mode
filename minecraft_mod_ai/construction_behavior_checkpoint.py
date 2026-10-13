@@ -7,7 +7,6 @@ concurrent notebooks cannot independently produce or overwrite the same plan.
 """
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
 import os
@@ -16,6 +15,12 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
+
+try:
+    import fcntl  # Linux / Colab
+except ImportError:  # pragma: no cover - Windows execution
+    fcntl = None
+    import msvcrt
 
 _SCHEMA = "mmm/behavior-plan-checkpoint-v3"
 _LEGACY_SCHEMA = "mmm/behavior-plan-checkpoint-v2"
@@ -85,18 +90,35 @@ class BehaviorPlanningCheckpoint:
         try:
             self.lock_path.parent.mkdir(parents=True, exist_ok=True)
             with self.lock_path.open("a+b") as lock_file:
+                if fcntl is None:  # Windows msvcrt byte-range lock
+                    lock_file.seek(0, os.SEEK_END)
+                    if lock_file.tell() == 0:
+                        lock_file.write(bytes([0]))
+                        lock_file.flush()
                 while True:
                     try:
-                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        if fcntl is None:
+                            lock_file.seek(0)
+                            msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                        else:
+                            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                         break
-                    except BlockingIOError:
+                    except (BlockingIOError, PermissionError, OSError) as exc:
+                        if not isinstance(exc, BlockingIOError) and getattr(exc, "errno", None) not in (
+                            11, 13, 33, 36,
+                        ):
+                            raise
                         if time.monotonic() >= deadline:
-                            raise TimeoutError("CONSTRUCTION_BEHAVIOR_CHECKPOINT_LOCK_TIMEOUT: process")
+                            raise TimeoutError("CONSTRUCTION_BEHAVIOR_CHECKPOINT_LOCK_TIMEOUT: process") from exc
                         time.sleep(0.2)
                 try:
                     yield
                 finally:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                    if fcntl is None:
+                        lock_file.seek(0)
+                        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                    else:
+                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
         finally:
             self._mutex.release()
 
