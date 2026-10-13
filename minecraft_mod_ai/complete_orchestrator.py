@@ -1229,6 +1229,28 @@ class CompleteProductionOrchestrator:
                 artifact_sha256=str(artifact_receipt['sha256']),
                 unresolved_gates=normalized_unresolved,
             )
+        authored_plan_data = approved.game_design.get('authored_plan')
+        authored_scope = (
+            authored_plan_data.get('request_scope', {})
+            if isinstance(authored_plan_data, dict) else {}
+        )
+        if authored_scope.get('behavior_requirements'):
+            from .construction_coverage import summarize_construction_coverage
+            behavior_coverage = summarize_construction_coverage(
+                project_root, authored_scope,
+                runtime_receipts=(runtime_receipt, playtest_receipt),
+            )
+            (metadata_root / 'construction-behavior-coverage.json').write_text(
+                json.dumps(behavior_coverage, ensure_ascii=False, indent=2, sort_keys=True)
+                + '\n', encoding='utf-8',
+            )
+            if behavior_coverage['status'] != 'VERIFIED':
+                unresolved.extend(
+                    'construction:' + row['requirement_id'] + ':' + row['status']
+                    for row in behavior_coverage['requirements']
+                    if row['status'] != 'VERIFIED'
+                )
+                normalized_unresolved = tuple(sorted(set(unresolved)))
         (metadata_root / 'requirement-coverage.json').write_text(
             json.dumps(coverage_receipt, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
             encoding='utf-8',
