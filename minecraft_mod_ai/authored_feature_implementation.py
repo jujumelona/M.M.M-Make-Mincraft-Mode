@@ -27,6 +27,14 @@ def compile_request_feature_jobs(
     runtime_modules: Sequence[Any] = (),
 ):
     modules, jobs = [], []
+    from .source_reuse_evidence import build_source_reuse_evidence
+    from .construction_planner import plan_construction_tasks
+    source_evidence = build_source_reuse_evidence(
+        plan.request_scope.get("requirements", ()), source_reuse, {})
+    construction_tasks = plan_construction_tasks(
+        plan.request_scope, source_evidence, {}, router=None)
+    if plan.request_scope.get("requirements") and not construction_tasks:
+        raise ValueError("CONSTRUCTION_TASK_GRAPH_EMPTY")
     for feature in plan.request_scope.get("requirements", ()):
         rid = feature["requirement_id"]
         owners = [module for module in content_modules if rid in module.config.get("requirement_refs", ())]
@@ -60,6 +68,21 @@ def compile_request_feature_jobs(
             raise ValueError("CONSTRUCTION_BEHAVIOR_COVERAGE_MISSING: " + rid)
         bindings["construction_behaviors_json"] = json.dumps(
             behavior_rows, ensure_ascii=False, separators=(",", ":"))
+        required_task_ids = {row["behavior_id"] + ".logic" for row in behavior_rows}
+        current_tasks = [task for task in construction_tasks if rid in task.requirement_ids]
+        if not required_task_ids <= {task.task_id for task in current_tasks}:
+            raise ValueError("CONSTRUCTION_TASK_GRAPH_MISSING_BEHAVIORS: " + rid)
+        bindings["construction_tasks_json"] = json.dumps([
+            {"task_id": task.task_id, "kind": task.kind,
+             "behavior_id": task.behavior_id,
+             "intent": task.intent, "depends_on": list(task.depends_on),
+             "source_refs": [{
+                 "evidence_id": row.get("evidence_id"), "source_id": row.get("source_id"),
+                 "status": row.get("status"), "mode": row.get("mode"),
+                 "capability": row.get("capability"),
+             } for row in task.source_refs],
+             "verification_ids": list(task.verification_ids)}
+            for task in current_tasks], ensure_ascii=False, separators=(",", ":"))
         proven_capabilities = {
             row.get("capability") for row in source_reuse.get("capabilities", ())
             if row.get("mode") == "source_transplant"
