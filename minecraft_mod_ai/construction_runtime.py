@@ -3,26 +3,21 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import re
-import shutil
-import subprocess
 from functools import lru_cache
 from pathlib import Path
 
 from .construction_context import build_target_symbols, java_source_units
+from .target_contract import target_symbol_namespace
 
 
 def _jdk_base(java_version: int) -> str:
-    java = shutil.which("java")
-    if not java:
-        raise ValueError("CONSTRUCTION_JDK_REQUIRED")
-    completed = subprocess.run([java, "-version"], capture_output=True, text=True, timeout=15)
-    version_text = completed.stderr + completed.stdout
-    match = re.search(r'version\s+"(\d+)', version_text)
-    if not match or int(match.group(1)) != java_version:
+    from .java_lsp import _java_major_version, _resolve_project_java_home
+
+    # Preflight, javac and construction must use the same exact target JDK.
+    # Colab's PATH can still refer to an older system Java after provisioning.
+    root = _resolve_project_java_home(java_version, require_compiler=True).resolve()
+    if _java_major_version(root) != java_version:
         raise ValueError("CONSTRUCTION_JDK_VERSION_MISMATCH: requested " + str(java_version))
-    root = Path(java).resolve().parent.parent
     jmod = root / "jmods/java.base.jmod"
     if not jmod.is_file():
         raise ValueError("CONSTRUCTION_JDK_MODULE_MISSING")
@@ -46,15 +41,7 @@ def prepare_construction_context(spec, *, java_classpath, project_root, source_c
     if not target:
         raise ValueError("CONSTRUCTION_IMMUTABLE_TARGET_REQUIRED")
     java_version = int(target.get("java_version") or 0)
-    mapping = str(target.get("mappings_kind") or "").lower()
-    if target.get("mappings_applicable") is False or mapping in {"mojang", "official"}:
-        namespace = "OFFICIAL"
-    elif mapping in {"yarn", "named"}:
-        namespace = "NAMED"
-    elif mapping == "intermediary":
-        namespace = "INTERMEDIARY"
-    else:
-        raise ValueError("CONSTRUCTION_MAPPING_NAMESPACE_REQUIRED")
+    namespace = target_symbol_namespace(target)
     if not java_version or not java_classpath:
         raise ValueError("CONSTRUCTION_CLASSPATH_REQUIRED")
     java_base = _jdk_base(java_version)

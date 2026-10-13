@@ -159,6 +159,38 @@ def target_coordinates_from_mapping(target: Mapping[str, Any]) -> TargetCoordina
     )
 
 
+def target_symbol_namespace(target: Mapping[str, Any]) -> str:
+    """Resolve compiler names through the canonical host target contract.
+
+    Native targets have no mapping coordinate or mapping kind. Both serialized
+    provider receipts and immutable execution snapshots must resolve identically.
+    """
+    coordinates = target_coordinates_from_mapping(target)
+    mapping = target.get("mappings")
+    kinds = []
+    if isinstance(mapping, Mapping) and "kind" in mapping:
+        kinds.append(_text(mapping["kind"]).casefold())
+    if "mappings_kind" in target:
+        kinds.append(_text(target["mappings_kind"]).casefold())
+    if len(set(kinds)) > 1:
+        raise TargetContractError("TARGET_MAPPINGS_ALIAS: mapping kinds disagree")
+    kind = kinds[0] if kinds else ""
+    if not coordinates.mappings_applicable:
+        if kind:
+            raise TargetContractError(
+                "TARGET_MAPPINGS_INAPPLICABLE: native targets must not carry a mapping kind."
+            )
+        return "OFFICIAL"
+    namespaces = {"mojang": "OFFICIAL", "yarn": "NAMED"}
+    if kind not in namespaces:
+        raise TargetContractError(
+            f"TARGET_MAPPINGS_KIND: unsupported or missing mappings kind {kind!r}."
+        )
+    if kind == "mojang" and coordinates.mappings != "mojang":
+        raise TargetContractError("Mojang mappings must use canonical mappings_version='mojang'.")
+    return namespaces[kind]
+
+
 _BASE_REQUIRED_TARGET_FIELDS = (
     "minecraft_version",
     "loader",
@@ -398,6 +430,7 @@ __all__ = [
     "minecraft_version_tuple",
     "minimum_java_major",
     "target_coordinates_from_mapping",
+    "target_symbol_namespace",
     "uses_native_names",
     "validate_target_coordinates",
 ]
