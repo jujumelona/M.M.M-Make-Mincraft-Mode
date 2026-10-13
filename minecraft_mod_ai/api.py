@@ -454,6 +454,59 @@ def _prepare_production_scaffold(
     return base.spec.platform
 
 
+def _preflight_production_construction(
+    session: "CompleteModAISession", platform: Any,
+) -> None:
+    """Prepare the actual small-model compiler context before production planning."""
+    from .fixed_template_generation import _adapter_name
+
+    if _adapter_name(session.router, "coder") != "llama_cpp":
+        return
+    from .platform_catalog import adapter_for_lock_values
+    from .target_contract import target_symbol_namespace
+
+    adapter = adapter_for_lock_values(platform)
+    resolved = adapter.version_context
+    target = resolved.to_dict()["target"]
+    # Existing projects still use the same target semantics; their classpath is
+    # inspected after import. Fresh official scaffolds are available right now.
+    target_symbol_namespace(target)
+    if session.existing_input is not None:
+        return
+    from .platform_live_execution_contract import _uses_official_scaffold
+
+    if not _uses_official_scaffold(adapter):
+        return
+    from .complete_orchestrator_support import CompleteProductionError
+
+    root = getattr(session.orchestrator, "_prepared_fabric_project", None)
+    if root is None:
+        raise CompleteProductionError("CONSTRUCTION_PREPARED_PROJECT_REQUIRED")
+    print(
+        f"CONSTRUCTION_TARGET_PREFLIGHT: minecraft={resolved.minecraft} before production model work",
+        flush=True,
+    )
+    from .construction_classpath import resolve_fabric_compile_classpath
+    from .construction_runtime import prepare_construction_context
+
+    try:
+        classpath = resolve_fabric_compile_classpath(str(root), java_version=resolved.java)
+        context = prepare_construction_context(
+            {}, java_classpath=classpath, project_root=root, target_override=target,
+        )
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise CompleteProductionError(
+            "Construction target preflight failed before production model work: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+    print(
+        f"CONSTRUCTION_TARGET_READY: minecraft={resolved.minecraft} "
+        f"namespace={context['namespace']} java={resolved.java} "
+        f"symbols={len(context['symbols'])} context_id={resolved.context_id}",
+        flush=True,
+    )
+
+
 @dataclass(frozen=True)
 class CompleteChatReply:
     """Natural-language complete-production plan with hidden execution state."""
@@ -691,6 +744,7 @@ class CompleteModAISession:
                 )
 
                 validate_platform_toolchain_preflight(bound_platform, selected)
+                _preflight_production_construction(self, bound_platform)
 
             proposal = _production_proposal(self, proposal)
         # Colab's reusable launch options may have been created before the
