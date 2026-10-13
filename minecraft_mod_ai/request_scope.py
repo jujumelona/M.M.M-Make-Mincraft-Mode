@@ -140,7 +140,7 @@ def _feature_record(prompt: str, start: int, chunk: str, row: Mapping[str, Any],
     source_text = chunk[offset:end]
     source_start = start + offset
     digest = hashlib.sha256(
-        f"{prompt}\0{source_start}\0{row['statement']}".encode()
+        f"{prompt}\0{source_start}\0{start + end}\0{row['statement']}".encode()
     ).hexdigest()[:16]
     return {
         "requirement_id": "request_" + digest,
