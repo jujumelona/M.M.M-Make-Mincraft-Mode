@@ -1945,10 +1945,29 @@ class CompleteProductionOrchestrator:
                         if any(_job_uses_model_slots(job) for job in artifact_jobs_to_run)
                         else None
                     )
+                    generation_context = {
+                        "project_root": project_root, "base_dir": project_root,
+                        "resolved_version_context": spec.platform.version_context.to_dict(),
+                    }
+                    # Establish the actual Fabric/JDK API before model authoring.
+                    # A broken Gradle toolchain must fail here, not after coder work.
+                    def _java_generator_job(job: ArtifactJob) -> bool:
+                        if job.executor_type.value != "python_generator":
+                            return False
+                        values = job.deterministic_inputs.get("_canonical_inputs", {})
+                        return isinstance(values, dict) and any(
+                            isinstance(item, dict) and item.get("language") == "java"
+                            and item.get("slots")
+                            for item in values.values()
+                        )
+                    if any(_java_generator_job(job) for job in artifact_jobs_to_run):
+                        from .construction_classpath import resolve_fabric_compile_classpath
+                        generation_context["java_classpath"] = list(
+                            resolve_fabric_compile_classpath(str(project_root))
+                        )
                     graph_receipt = execute_artifact_graph(
                         artifact_jobs_to_run,
-                        context={"project_root": project_root, "base_dir": project_root,
-                                 "resolved_version_context": spec.platform.version_context.to_dict()},
+                        context=generation_context,
                         router=generator_router,
                         base_dir=project_root,
                     )
