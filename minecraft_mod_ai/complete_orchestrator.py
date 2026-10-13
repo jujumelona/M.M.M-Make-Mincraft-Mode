@@ -2404,7 +2404,6 @@ class CompleteProductionOrchestrator:
                 failed_ids = [node_id for node_id, state in states.items() if state in {'failed', 'cancelled', 'input_required'}]
                 if failed_ids:
                     blocked_ids = []
-                    by_node = {n.node_id: n for n in generation_nodes}
                     blocked = set(failed_ids)
                     changed = True
                     while changed:
@@ -2412,7 +2411,7 @@ class CompleteProductionOrchestrator:
                         for candidate in generation_nodes:
                             if candidate.node_id in blocked:
                                 continue
-                            if any(dep in blocked for dep in candidate.depends_on):
+                            if any(dep in blocked for dep in candidate.dependencies):
                                 blocked.add(candidate.node_id)
                                 blocked_ids.append(candidate.node_id)
                                 changed = True
