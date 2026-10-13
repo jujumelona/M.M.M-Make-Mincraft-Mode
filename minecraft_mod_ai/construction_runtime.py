@@ -82,7 +82,21 @@ def prepare_construction_context(spec, *, java_classpath, project_root, source_c
     if set(project_symbols) & set(symbols):
         raise ValueError("CONSTRUCTION_PROJECT_SYMBOL_COLLISION")
     symbols.update(project_symbols)
+    donor_members = {}
+    for row in source_context:
+        if row.get("authority") != "installed_target_adapted_source":
+            continue
+        for capability in row.get("capabilities", ()):
+            keys = [key for key, record in project_symbols.items()
+                    if record.get("source_path") == row["path"]
+                    and record.get("kind") in {"METHOD", "CONSTRUCTOR", "FIELD"}]
+            donor_members.setdefault(capability, set()).update(keys)
+    missing = [cap for cap, keys in donor_members.items() if not keys]
+    if missing:
+        raise ValueError("CONSTRUCTION_INSTALLED_DONOR_CALLABLE_API_MISSING: " +
+                         ",".join(sorted(missing)))
     return {
+        "donor_callable_symbols": {cap: sorted(keys) for cap, keys in donor_members.items()},
         "project_root": str(root),
         "source_symbol_rejections": list(rejected),
         "project_symbols": project_symbols,
