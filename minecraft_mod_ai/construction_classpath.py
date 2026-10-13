@@ -100,17 +100,15 @@ def _resolve_inspected_classpath(project_root: str, timeout_seconds: int,
         init_script = Path(directory) / "mmm-classpath.gradle"
         init_script.write_text(_INIT, encoding="utf-8")
         environment = None
-        java_options = []
         if java_home:
-            # Respect project-owned daemon criteria: the Gradle launcher JVM
-            # may differ from the approved Java compiler/release toolchain.
+            # Match the normal runner's launcher fallback. Project-owned daemon
+            # properties/criteria may select a JVM distinct from the compiler.
             environment = dict(os.environ)
             environment["JAVA_HOME"] = java_home
             environment["PATH"] = str(Path(java_home) / "bin") + os.pathsep + environment.get("PATH", "")
-            java_options.append("-Dorg.gradle.java.home=" + java_home)
         try:
             result = subprocess.run(
-                ["bash", str(wrapper), *java_options, "--no-daemon", "--no-configuration-cache",
+                ["bash", str(wrapper), "--no-daemon", "--no-configuration-cache",
                  "--console=plain", "--init-script", str(init_script), "-q", ":" + _TASK],
                 cwd=root, capture_output=True, text=True,
                 timeout=timeout_seconds, check=False, env=environment,
