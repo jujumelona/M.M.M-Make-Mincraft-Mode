@@ -200,6 +200,8 @@ def compose(router, spec, *, source_context=(), construction_context=None):
         symbols=symbols, exact_type=exact_type, state=state,
     )
     context['construction_declaration_ids'] = tuple(state.declaration_ids)
+    from .construction_progress import planned_declarations_fingerprint
+    planned_declaration_hash = planned_declarations_fingerprint(symbols, state.declaration_ids)
     member_invocations = {}
 
     def author_one(member_task, *, owned_records=(), port_source_ref=''):
@@ -209,7 +211,8 @@ def compose(router, spec, *, source_context=(), construction_context=None):
         progress = ConstructionNodeCheckpoint(context['project_root'], member_task,
             target=context['target'],
             prerequisite_hashes=context['prerequisite_hashes'],
-            declaration=symbols[member_task.owner_symbol], owner_header=symbols[owner])
+            declaration=symbols[member_task.owner_symbol], owner_header=symbols[owner],
+            planned_declaration_hash=planned_declaration_hash)
         scoped_context = dict(context)
         scoped_context['owned_runtime_records'] = list(owned_records)
         scoped_context['port_source_ref'] = port_source_ref

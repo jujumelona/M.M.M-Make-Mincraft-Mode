@@ -15,6 +15,11 @@ from .construction_state import PROTOCOL_VERSION
 
 
 _LOCK = RLock()
+_MEMBER_FIELDS = (
+    'kind', 'owner', 'name', 'descriptor', 'parameters', 'return_type',
+    'static', 'final', 'visibility', 'access', 'annotations', 'throws',
+    'class_superclass', 'class_interfaces', 'side',
+)
 
 
 def _sha(payload):
@@ -22,9 +27,16 @@ def _sha(payload):
         sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
 
 
+def planned_declarations_fingerprint(symbols, declaration_ids):
+    # A body can call another planned member. Its receiver and result contracts
+    # must be stable too, even if this body's own signature did not change.
+    return _sha([(key, {field: symbols[key][field] for field in _MEMBER_FIELDS
+                       if field in symbols[key]}) for key in sorted(declaration_ids)])
+
+
 class ConstructionNodeCheckpoint:
     def __init__(self, project_root, task, *, target, prerequisite_hashes,
-                 declaration, owner_header):
+                 declaration, owner_header, planned_declaration_hash):
         self.root = Path(project_root).resolve()
         self.task = task
         if (declaration.get('owner') != owner_header.get('owner')
@@ -34,11 +46,7 @@ class ConstructionNodeCheckpoint:
         # signature with different parameter names has the same symbol ID,
         # but its accepted parameter nodes are not interchangeable.
         contract = {
-            'member': {key: declaration[key] for key in (
-                'kind', 'owner', 'name', 'descriptor', 'parameters', 'return_type',
-                'static', 'final', 'visibility', 'access', 'annotations', 'throws',
-                'class_superclass', 'class_interfaces', 'side',
-            ) if key in declaration},
+            'member': {key: declaration[key] for key in _MEMBER_FIELDS if key in declaration},
             'owner_header': {key: owner_header[key] for key in (
                 'kind', 'owner', 'name', 'access', 'superclass', 'interfaces', 'side',
             ) if key in owner_header},
@@ -49,7 +57,8 @@ class ConstructionNodeCheckpoint:
         self.key = _sha({"schema": "mmm/construction-nodes-v2",
                          "task": task.to_dict(), "target": target,
                          "prerequisite_hashes": prerequisite_hashes,
-                         "declaration_contract": contract})
+                         "declaration_contract": contract,
+                         "planned_declaration_hash": planned_declaration_hash})
         self.path = self.root / ".mmm" / "construction_nodes" / (self.key + ".json")
         self.author_state_path = self.path.with_suffix(
             '.author_state.' + _sha(PROTOCOL_VERSION)[:12] + '.json')
