@@ -46,3 +46,34 @@ def scoped_state(section, reads, writes):
     specification = section.get('specification', {})
     return {'specification': {key: [deepcopy(row) for row in rows if references(row)]
                              for key, rows in specification.items() if isinstance(rows, list)}}
+
+
+def assign_behavior_records(router, behaviors, records):
+    """Assign each residual runtime record to exactly one observable behavior.
+
+    Typed/UI records are already removed by the parent ownership contract.
+    No transaction or state mutation is duplicated across child callbacks.
+    """
+    from .construction_author import ask, obj, ID
+    by_id = {row['behavior_id']: row for row in behaviors}
+    if not by_id or len(by_id) != len(behaviors):
+        raise ValueError('CONSTRUCTION_BEHAVIOR_OWNER_IDENTITY_INVALID')
+    assignments = {}
+    for record in records:
+        ref = record['record_ref']
+        if ref in assignments:
+            raise ValueError('CONSTRUCTION_RECORD_DUPLICATE: ' + ref)
+        if len(by_id) == 1:
+            assignments[ref] = next(iter(by_id))
+            continue
+        schema = obj({'behavior_id': {'type': 'string', 'enum': sorted(by_id)}})
+        payload = {'record_ref': ref, 'record': record['record'],
+                   'behaviors': [{'behavior_id': row['behavior_id'],
+                                 'intent': row['intent'], 'effects': row['effects']}
+                                for row in behaviors]}
+        reply = ask(router, 'construction_record_owner', payload, schema,
+                    'Select exactly one child behavior to implement this entire '
+                    'runtime record and its state mutations. Do not invent a new '
+                    'behavior or assign a record to multiple callbacks.')
+        assignments[ref] = reply['behavior_id']
+    return assignments
