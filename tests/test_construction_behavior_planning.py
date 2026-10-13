@@ -185,3 +185,91 @@ def test_identical_user_phrases_in_two_source_positions_are_distinct_anchors():
     assert [row.source_quote for row in result] == ["collect", "collect"]
     assert result[0].behavior_id != result[1].behavior_id
     assert all(row.source_status == "grounded" for row in result)
+
+
+def test_shared_scope_writes_different_requirements_without_stale_map_conflicts(monkeypatch, tmp_path):
+    from minecraft_mod_ai.construction_behavior_checkpoint import BehaviorPlanningCheckpoint
+    from minecraft_mod_ai.construction_task import BehaviorRequirement
+
+    monkeypatch.setenv("MMM_CONSTRUCTION_BEHAVIOR_CACHE_ROOT", str(tmp_path))
+    base = _scope("Collect ore; trade ore")
+    base["requirements"] = [
+        {"requirement_id": "req-collect", "statement": "Collect ore"},
+        {"requirement_id": "req-trade", "statement": "Trade ore"},
+    ]
+    first, second = base["requirements"]
+    router = PageRouter([])
+    a = BehaviorPlanningCheckpoint(base, router)
+    b = BehaviorPlanningCheckpoint(base, router)  # Two snapshots precede either write.
+    collected = BehaviorRequirement(
+        "behavior-collect", "req-collect", "Collect ore", "Collect ore",
+        "Player mines", "Ore gained",
+    )
+    traded = BehaviorRequirement(
+        "behavior-trade", "req-trade", "Trade ore", "Trade ore",
+        "Player trades", "Currency gained",
+    )
+    with a.claim():
+        a.save(first, [collected])
+    with b.claim():
+        b.save(second, [traded])
+    c = BehaviorPlanningCheckpoint(base, router)
+    assert [x.behavior_id for x in c.load(first)] == ["behavior-collect"]
+    assert [x.behavior_id for x in c.load(second)] == ["behavior-trade"]
+    assert len(list((tmp_path / "v3").rglob("*.json"))) == 2
+
+
+def test_v2_checkpoint_is_migrated_without_model_requests(monkeypatch, tmp_path):
+    from minecraft_mod_ai.construction_behavior_checkpoint import (
+        BehaviorPlanningCheckpoint, _digest,
+    )
+    from minecraft_mod_ai.construction_task import BehaviorRequirement
+    import json
+
+    monkeypatch.setenv("MMM_CONSTRUCTION_BEHAVIOR_CACHE_ROOT", str(tmp_path))
+    scope = _scope("Collect ore")
+    parent = scope["requirements"][0]["requirement_id"]
+    behavior = BehaviorRequirement(
+        "behavior-existing", parent, "Collect ore", "Collect ore",
+        "Player mines", "Ore gained",
+    )
+    old_identity = _digest({
+        "schema": "mmm/behavior-plan-checkpoint-v2",
+        "prompt": scope["requested_prompt"],
+        "requirements": scope["requirements"],
+        "model_id": "",
+    })
+    rows = {parent: [behavior.to_dict()]}
+    legacy = {
+        "schema": "mmm/behavior-plan-checkpoint-v2",
+        "identity": old_identity,
+        "rows": rows,
+        "digest": _digest(rows),
+    }
+    old_path = tmp_path / (old_identity + ".json")
+    old_path.write_text(json.dumps(legacy), encoding="utf-8")
+    router = PageRouter([])
+    restored = bind_behavior_scope(scope, router)
+    assert router.calls == 0
+    assert restored["behavior_requirements"] == rows[parent]
+    assert json.loads(old_path.read_text(encoding="utf-8")) == legacy
+    v3 = BehaviorPlanningCheckpoint(scope, router)
+    assert v3.load(scope["requirements"][0])[0].behavior_id == "behavior-existing"
+
+
+def test_behavior_checkpoint_detects_real_accepted_record_conflict(monkeypatch, tmp_path):
+    from minecraft_mod_ai.construction_behavior_checkpoint import BehaviorPlanningCheckpoint
+    from minecraft_mod_ai.construction_task import BehaviorRequirement
+
+    monkeypatch.setenv("MMM_CONSTRUCTION_BEHAVIOR_CACHE_ROOT", str(tmp_path))
+    scope = _scope("Collect ore")
+    requirement = scope["requirements"][0]
+    checkpoint = BehaviorPlanningCheckpoint(scope, PageRouter([]))
+    a = BehaviorRequirement("behavior-a", "req-one", "Mine ore", "Collect ore", "Mine", "Ore")
+    b = BehaviorRequirement("behavior-b", "req-one", "Mine ore", "Collect ore", "Mine", "Ore")
+    with checkpoint.claim():
+        checkpoint.save(requirement, [a])
+        checkpoint.save(requirement, [a])
+        with pytest.raises(ValueError, match="DIFFERENT_ACCEPTED_RECORD"):
+            checkpoint.save(requirement, [b])
+    assert checkpoint.load(requirement)[0].behavior_id == "behavior-a"
