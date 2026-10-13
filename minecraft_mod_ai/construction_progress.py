@@ -68,3 +68,32 @@ class ConstructionNodeCheckpoint:
             finally:
                 if temporary.exists():
                     temporary.unlink()
+
+    def recorded_source_refs(self):
+        path = self.path.with_suffix(".source_refs.json")
+        with _LOCK:
+            if not path.exists():
+                return ()
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if data.get("key") != self.key or not isinstance(data.get("refs"), list) or (
+                data.get("sha256") != _sha({"key": self.key, "refs": data.get("refs")})):
+                raise ValueError("CONSTRUCTION_SOURCE_LOOKUP_CHECKPOINT_INVALID")
+            return tuple(data["refs"])
+
+    def record_source_read(self, task, source_ref):
+        if task.task_id != self.task.task_id or not source_ref:
+            raise ValueError("CONSTRUCTION_SOURCE_LOOKUP_TASK_MISMATCH")
+        path = self.path.with_suffix(".source_refs.json")
+        with _LOCK:
+            refs = set(self.recorded_source_refs())
+            refs.add(source_ref)
+            body = {"key": self.key, "refs": sorted(refs)}
+            record = {**body, "sha256": _sha(body)}
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_name("." + path.name + "." + uuid4().hex + ".tmp")
+            try:
+                temporary.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
+                temporary.replace(path)
+            finally:
+                if temporary.exists():
+                    temporary.unlink()
