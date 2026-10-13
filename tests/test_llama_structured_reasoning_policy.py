@@ -63,7 +63,7 @@ def test_qwen35_schema_less_json_keeps_validation_host_side() -> None:
 
     assert payload["response_format"] == {"type": "json_object"}
     assert "json_schema" not in payload
-    assert payload["reasoning_effort"] == "none"
+    assert "reasoning_effort" not in payload
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
 
 
@@ -179,7 +179,7 @@ def test_native_tool_transport_keeps_tools_visible_for_pure_content_parser() -> 
     assert payload["tools"] == [tool]
     assert payload["tool_choice"] == "auto"
     assert payload["parallel_tool_calls"] is True
-    assert payload["reasoning_effort"] == "none"
+    assert "reasoning_effort" not in payload
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     assert "response_format" not in payload
     assert "json_schema" not in payload
