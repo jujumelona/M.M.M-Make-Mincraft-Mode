@@ -126,16 +126,17 @@ def _feature_messages(context: str, chunk: str, prior: list[dict[str, Any]], rep
 def _new_feature(row: Mapping[str, Any], chunk: str, identities: set[tuple[str, str]]) -> bool:
     return (
         all(str(row[key]).strip() for key in ("statement", "search_query", "source_quote"))
-        and row["source_quote"] in chunk
+        and _source_quote_bounds(chunk, row["source_quote"]) is not None
         and _identity(row) not in identities
     )
 
 
 def _feature_record(prompt: str, start: int, chunk: str, row: Mapping[str, Any], index: Any):
     quote = str(row["source_quote"])
-    offset = chunk.find(quote)
-    source_text = quote if offset >= 0 else chunk
-    source_start = start + max(0, offset)
+    bounds = _source_quote_bounds(chunk, quote)
+    offset, end = bounds if bounds is not None else (0, len(chunk))
+    source_text = chunk[offset:end]
+    source_start = start + offset
     digest = hashlib.sha256(
         f"{prompt}\0{source_start}\0{row['statement']}".encode()
     ).hexdigest()[:16]
