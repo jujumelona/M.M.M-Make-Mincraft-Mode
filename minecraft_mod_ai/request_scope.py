@@ -95,8 +95,10 @@ def _identity(row: Mapping[str, Any]) -> tuple[str, str]:
 def _uncovered_source(chunk: str, prior: list[dict[str, Any]]) -> str:
     remaining = chunk
     for quote in dict.fromkeys(row["source_quote"] for row in prior):
-        if quote:
-            remaining = remaining.replace(quote, " " * len(quote), 1)
+        bounds = _source_quote_bounds(remaining, quote)
+        if bounds is not None:
+            left, right = bounds
+            remaining = remaining[:left] + " " * (right - left) + remaining[right:]
     return remaining
 
 
