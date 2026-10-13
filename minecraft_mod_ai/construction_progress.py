@@ -11,6 +11,8 @@ from pathlib import Path
 from threading import RLock
 from uuid import uuid4
 
+from .construction_state import PROTOCOL_VERSION
+
 
 _LOCK = RLock()
 
@@ -28,6 +30,8 @@ class ConstructionNodeCheckpoint:
                          "task": task.to_dict(), "target": target,
                          "prerequisite_hashes": prerequisite_hashes})
         self.path = self.root / ".mmm" / "construction_nodes" / (self.key + ".json")
+        self.author_state_path = self.path.with_suffix(
+            '.author_state.' + _sha(PROTOCOL_VERSION)[:12] + '.json')
 
     def load(self):
         with _LOCK:
@@ -79,6 +83,42 @@ class ConstructionNodeCheckpoint:
                 data.get("sha256") != _sha({"key": self.key, "refs": data.get("refs")})):
                 raise ValueError("CONSTRUCTION_SOURCE_LOOKUP_CHECKPOINT_INVALID")
             return tuple(data["refs"])
+
+    def load_author_state(self, task, nodes):
+        if task.task_id != self.task.task_id:
+            raise ValueError('CONSTRUCTION_CHECKPOINT_TASK_MISMATCH')
+        with _LOCK:
+            if not self.author_state_path.exists(): return None
+            envelope = json.loads(self.author_state_path.read_text(encoding='utf-8'))
+            record = envelope.get('record')
+            if not isinstance(record, dict) or _sha(record) != envelope.get('sha256'):
+                raise ValueError('CONSTRUCTION_AUTHOR_STATE_CORRUPT')
+            if record.get('key') != self.key or record.get('protocol') != PROTOCOL_VERSION:
+                raise ValueError('CONSTRUCTION_AUTHOR_STATE_BINDING_MISMATCH')
+            # A crash between node and cursor writes may leave an older cursor.
+            # Keep the accepted graph; only that cursor is stale.
+            if record.get('nodes_sha256') != _sha(nodes): return None
+            return record.get('state')
+
+    def save_author_state(self, task, nodes, state):
+        if task.task_id != self.task.task_id:
+            raise ValueError('CONSTRUCTION_CHECKPOINT_TASK_MISMATCH')
+        record = {'key': self.key, 'protocol': PROTOCOL_VERSION,
+                  'nodes_sha256': _sha(nodes), 'state': state}
+        with _LOCK:
+            existing, _stage = self.load()
+            if tuple(nodes) != existing:
+                raise ValueError('CONSTRUCTION_AUTHOR_STATE_GRAPH_MISMATCH')
+            envelope = {'record': record, 'sha256': _sha(record)}
+            self.author_state_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.author_state_path.with_name(
+                '.' + self.author_state_path.name + '.' + uuid4().hex + '.tmp')
+            try:
+                temporary.write_text(json.dumps(envelope, ensure_ascii=False,
+                    sort_keys=True, separators=(',', ':')), encoding='utf-8')
+                temporary.replace(self.author_state_path)
+            finally:
+                if temporary.exists(): temporary.unlink()
 
     def record_source_read(self, task, source_ref):
         if task.task_id != self.task.task_id or not source_ref:

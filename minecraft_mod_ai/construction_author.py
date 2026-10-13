@@ -73,6 +73,8 @@ def author_task_operations(router, task, context):
     roots = dict.fromkeys(key for key in by_id if key not in referenced)
     source_units = context.get('source_pages', {})
     source_ids = sorted(source_units)
+    read_refs = context.get('recorded_source_refs')
+    read_sources = set(read_refs() if callable(read_refs) else ())
 
     def lookup_result(action, query, offset):
         if action == 'symbols': return symbol_page(symbols, query, offset)
@@ -102,6 +104,17 @@ def author_task_operations(router, task, context):
         return {'source': pages[offset:offset + 1], 'total_count': len(pages),
                 'status': 'matches', 'next_offset': offset + 1 if len(pages) > offset + 1 else None}
 
+    resume_author = context.get('resume_author_state')
+    saved_state = resume_author(task, tuple(nodes)) if callable(resume_author) else None
+    if saved_state is not None:
+        last = state.restore(saved_state)
+        if last is not None:
+            state.lookup = {**lookup_result(last['kind'], last['query'], last['offset']), **last}
+
+    def save_author():
+        callback = context.get('checkpoint_author_state')
+        if callable(callback): callback(task, tuple(nodes), state.export())
+
     instruction = ('Author this current behavior as typed Java operations, one node per turn. No Java source strings. '
         'Use exact inspected symbol IDs and type names. Request symbols with a lexical query and offset, '
         'nodes by ID, or source by ID. Relevant graph nodes are stored on the host; do not recreate them. '
@@ -125,7 +138,8 @@ def author_task_operations(router, task, context):
                    'pending_input_ref_count': len(pending), 'pending_input_refs': list(islice(pending, PAGE_SIZE)),
                    'root_count': len(roots), 'root_ids': list(islice(roots, PAGE_SIZE))},
             sources={'total_count': len(source_ids), 'recent_ids': source_ids[:PAGE_SIZE],
-                     'lookup_action': 'sources'})}
+                     'lookup_action': 'sources',
+                     'pinned_source_read': bool(base['port_source_ref'] in read_sources)})}
         choice = ask(router, 'construction_operation_next', payload, schema, instruction)
         action = choice['action']
         if action == 'extension': raise ValueError('CONSTRUCTION_RENDERER_EXTENSION_REQUIRED: ' + choice['query'])
@@ -142,6 +156,8 @@ def author_task_operations(router, task, context):
                 callback = context.get('source_read')
                 if callable(callback):
                     callback(task, query)
+                read_sources.add(query)
+            save_author()
             continue
         row = dict(ask(router, 'construction_operation_' + action,
                        {**payload, 'selected_operation': action}, operation_schema(action), instruction))
@@ -157,3 +173,4 @@ def author_task_operations(router, task, context):
         state.advance()
         stage = 'authoring'
         if context.get('checkpoint'): context['checkpoint'](task, tuple(nodes), 'authoring')
+        save_author()

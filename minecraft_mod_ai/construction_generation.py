@@ -225,6 +225,9 @@ def compose(router, spec, *, source_context=(), construction_context=None):
         }
         scoped_context['resume_nodes'] = lambda current: progress.load()
         scoped_context['checkpoint'] = progress.save
+        scoped_context['resume_author_state'] = progress.load_author_state
+        scoped_context['checkpoint_author_state'] = progress.save_author_state
+        scoped_context['recorded_source_refs'] = progress.recorded_source_refs
         nodes = author_task_operations(router, member_task, scoped_context)
         if port_source_ref and port_source_ref not in progress.recorded_source_refs():
             raise ValueError('CONSTRUCTION_PORT_SOURCE_NOT_READ: ' + port_source_ref)

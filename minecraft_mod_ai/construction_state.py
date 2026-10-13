@@ -7,11 +7,22 @@ the host; every decision receives its phase, cursor and lookup provenance.
 from __future__ import annotations
 
 from collections import deque
+from copy import deepcopy
 
 
 PROTOCOL_VERSION = "mmm/construction-state-v2"
 PAGE_SIZE = 8
 RECENT_SIZE = 4
+LOOKUP_KINDS = frozenset({'symbols', 'declarations', 'nodes', 'node_index', 'source', 'sources'})
+
+
+def _lookup_request(kind, query, offset):
+    if kind not in LOOKUP_KINDS or not isinstance(query, str) or type(offset) is not int or offset < 0:
+        raise ValueError('CONSTRUCTION_LOOKUP_REQUEST_INVALID')
+    normalized = query.strip().casefold() if kind in {'symbols', 'sources'} else query.strip()
+    if kind == 'nodes': normalized = ','.join(sorted(key.strip() for key in query.split(',')))
+    if kind == 'declarations': normalized = ''
+    return kind, normalized, offset
 
 
 def symbol_record(key, row):
@@ -105,9 +116,7 @@ class ConstructionState:
         }, "lookup": self.lookup}
 
     def consume_lookup(self, kind, query, offset, result):
-        normalized = query.strip().casefold() if kind in {"symbols", "sources"} else query.strip()
-        if kind == "nodes": normalized = ",".join(sorted(key.strip() for key in query.split(',')))
-        request = (kind, normalized, offset)
+        request = _lookup_request(kind, query, offset)
         if request in self.requests:
             raise ValueError("CONSTRUCTION_AUTHOR_NO_PROGRESS: repeated " + kind + " lookup")
         self.requests.add(request)
@@ -117,6 +126,36 @@ class ConstructionState:
             "status": result["status"], "total_count": result["total_count"],
             "next_offset": result["next_offset"]})
         return self.lookup
+
+    def export(self):
+        # Save selectors, never cached source or API rows as fresh authority.
+        last = {key: self.lookup[key] for key in ('kind', 'query', 'offset')} if self.lookup else None
+        return {'protocol': PROTOCOL_VERSION, 'phase': self.phase, 'revision': self.revision,
+                'requests': [list(row) for row in sorted(self.requests)],
+                'history': deepcopy(list(self.history)), 'last_lookup': last}
+
+    def restore(self, record):
+        if (not isinstance(record, dict) or record.get('protocol') != PROTOCOL_VERSION
+                or record.get('phase') != self.phase or type(record.get('revision')) is not int
+                or record['revision'] != self.revision):
+            raise ValueError('CONSTRUCTION_AUTHOR_STATE_BINDING_MISMATCH')
+        requests, history = record.get('requests'), record.get('history')
+        if (not isinstance(requests, list) or not isinstance(history, list)
+                or len(history) > PAGE_SIZE
+                or any(not isinstance(row, list) or len(row) != 3 for row in requests)
+                or any(not isinstance(row, dict) for row in history)):
+            raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
+        restored = {_lookup_request(*row) for row in requests}
+        if len(restored) != len(requests): raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
+        last = record.get('last_lookup')
+        if last is not None and (not isinstance(last, dict) or set(last) != {'kind', 'query', 'offset'}
+                or _lookup_request(last['kind'], last['query'], last['offset']) not in restored):
+            raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
+        self.requests = restored
+        self.history = deque(deepcopy(history), maxlen=PAGE_SIZE)
+        # The caller re-resolves this selector against current inspected inputs.
+        self.lookup = {}
+        return last
 
     def lookup_symbols(self, query, offset):
         return self.consume_lookup("symbols", query, offset,
