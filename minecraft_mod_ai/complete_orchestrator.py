@@ -1244,7 +1244,7 @@ class CompleteProductionOrchestrator:
                 json.dumps(behavior_coverage, ensure_ascii=False, indent=2, sort_keys=True)
                 + '\n', encoding='utf-8',
             )
-            if behavior_coverage['status'] != 'VERIFIED':
+            if behavior_coverage['status'] not in {'VERIFIED', 'NOT_APPLICABLE'}:
                 unresolved.extend(
                     'construction:' + row['requirement_id'] + ':' + row['status']
                     for row in behavior_coverage['requirements']
