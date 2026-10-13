@@ -55,8 +55,13 @@ class JavaSymbolResolver:
                     found = {c.name: c for c in (parse_class(p.read_bytes(), default_side=default_side)
                                                for p in path.rglob("*.class"))}
                 else:
-                    found = inspect_jar(path, java_version=int(self.java_version), default_side=default_side)
+                    found = inspect_jar(
+                        path, java_version=int(self.java_version), default_side=default_side,
+                        require_classes=False,
+                    )
                 for name, item in found.items():
+                    if name == "module-info":
+                        continue
                     if name in classes and classes[name].content_hash != item.content_hash:
                         raise JavaSymbolResolverError("AMBIGUOUS_CLASSPATH_CLASS: " + name)
                     classes[name] = item

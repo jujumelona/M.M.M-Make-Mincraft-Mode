@@ -40,7 +40,7 @@ def inspect_api_epoch(minecraft_version, *, loader, namespace, java_version, jar
     for raw in jars:
         path = Path(raw)
         hashes[str(path.resolve())] = compute_content_hash(path.read_bytes())
-        for name, item in inspect_jar(path, java_version=java_version).items():
+        for name, item in inspect_jar(path, java_version=java_version, require_classes=False).items():
             if mappings is not None:
                 if not source_namespace:
                     raise ValueError("SOURCE_NAMESPACE_REQUIRED")
@@ -59,6 +59,8 @@ def inspect_api_epoch(minecraft_version, *, loader, namespace, java_version, jar
             classes[name] = item
     if not hashes:
         raise ValueError("API_JARS_REQUIRED")
+    if not classes:
+        raise ValueError("API_CLASSES_REQUIRED: " + ", ".join(hashes))
     if loader == "fabric" and any(n.startswith(("net/neoforged/", "net/minecraftforge/")) for n in classes):
         raise ValueError("MIXED_LOADER_CLASSPATH")
     if loader != "fabric" and any(n.startswith("net/fabricmc/") for n in classes):

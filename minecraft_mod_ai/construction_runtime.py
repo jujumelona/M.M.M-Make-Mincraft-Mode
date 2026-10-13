@@ -50,13 +50,20 @@ def prepare_construction_context(spec, *, java_classpath, project_root, source_c
     if not java_version or not java_classpath:
         raise ValueError("CONSTRUCTION_CLASSPATH_REQUIRED")
     jdk_image = _jdk_image(java_version)
-    paths = tuple(dict.fromkeys([jdk_image, *(str(Path(p).resolve()) for p in java_classpath)]))
+    classpath_paths = tuple(str(Path(p).resolve()) for p in java_classpath)
+    paths = tuple(dict.fromkeys([jdk_image, *classpath_paths]))
     if any(not Path(p).exists() for p in paths):
         raise ValueError("CONSTRUCTION_CLASSPATH_PATH_MISSING")
     image_state = Path(jdk_image).stat()
     symbols = dict(_symbol_inventory(
         paths, java_version, namespace, (image_state.st_size, image_state.st_mtime_ns),
     ))
+    # Classless dependency archives are valid, but the target dependency group
+    # must still expose bytecode. The JDK alone cannot certify a target API.
+    dependency_paths = set(classpath_paths) - {str(Path(jdk_image).resolve())}
+    if not any(row.get("kind") == "CLASS" and row.get("source_path") in dependency_paths
+               for row in symbols.values()):
+        raise ValueError("CONSTRUCTION_DEPENDENCY_CLASSES_MISSING: " + json.dumps(sorted(dependency_paths)))
     root = Path(project_root).resolve()
     pages = {}
     prerequisites = {}

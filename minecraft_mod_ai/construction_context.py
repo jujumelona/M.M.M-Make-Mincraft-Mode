@@ -64,8 +64,13 @@ def build_target_symbols(classpath, *, java_version: int, namespace: str, classp
                 classes = [parse_class(archive.read(n), default_side=side) for n in archive.namelist()
                            if n.startswith("classes/") and n.endswith(".class") and not n.endswith("module-info.class")]
         else:
-            classes = inspect_jar(path, java_version=java_version, default_side=side).values()
+            classes = inspect_jar(
+                path, java_version=java_version, default_side=side, require_classes=False,
+            ).values()
         for item in classes:
+            # Directory classpaths can contain module descriptors as well.
+            if item.name == "module-info":
+                continue
             if item.name in class_hashes and class_hashes[item.name] != item.content_hash:
                 raise ValueError("CONSTRUCTION_CLASSPATH_AMBIGUOUS: " + item.name)
             class_hashes[item.name] = item.content_hash
