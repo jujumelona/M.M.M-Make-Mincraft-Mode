@@ -71,8 +71,12 @@ def build_target_symbols(classpath, *, java_version: int, namespace: str, classp
             # Directory classpaths can contain module descriptors as well.
             if item.name == "module-info":
                 continue
-            if item.name in class_hashes and class_hashes[item.name] != item.content_hash:
-                raise ValueError("CONSTRUCTION_CLASSPATH_AMBIGUOUS: " + item.name)
+            if item.name in class_hashes:
+                if class_hashes[item.name] != item.content_hash:
+                    raise ValueError("CONSTRUCTION_CLASSPATH_AMBIGUOUS: " + item.name)
+                # Preserve classpath precedence and the original bytecode source;
+                # a later dependency cannot relabel a JDK type as its own API.
+                continue
             class_hashes[item.name] = item.content_hash
             owner = item.name.replace("/", ".").replace("$", ".")
             result[owner] = {"owner": owner, "name": owner.rsplit(".",1)[-1], "kind": "CLASS",

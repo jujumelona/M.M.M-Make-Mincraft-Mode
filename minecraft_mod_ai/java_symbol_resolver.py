@@ -62,8 +62,10 @@ class JavaSymbolResolver:
                 for name, item in found.items():
                     if name == "module-info":
                         continue
-                    if name in classes and classes[name].content_hash != item.content_hash:
-                        raise JavaSymbolResolverError("AMBIGUOUS_CLASSPATH_CLASS: " + name)
+                    if name in classes:
+                        if classes[name].content_hash != item.content_hash:
+                            raise JavaSymbolResolverError("AMBIGUOUS_CLASSPATH_CLASS: " + name)
+                        continue
                     classes[name] = item
             output = []
             for row in rows:
