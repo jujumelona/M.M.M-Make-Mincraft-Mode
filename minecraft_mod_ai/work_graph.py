@@ -836,28 +836,47 @@ class DurableWorkLedger:
 
     @classmethod
     def _verify_stored_receipts(cls, connection: sqlite3.Connection) -> None:
+        from .verifier_receipt_truth_contract import (
+            VerifierReceiptTruthError,
+            _assert_receipt_reusable,
+        )
+
         corrupt_tasks: list[str] = []
         task_rows = tuple(
             connection.execute(
-                'SELECT node_id, output_hash, receipt_json, receipt_hash '
-                'FROM tasks WHERE state = ?',
+                'SELECT node_id, stage, input_hash, payload_json, output_hash, '
+                'receipt_json, receipt_hash FROM tasks WHERE state = ?',
                 (WorkState.SUCCEEDED.value,),
             )
         )
-        for node_id, output_hash, receipt_json, receipt_hash in task_rows:
+        for node_id, stage, input_hash, payload_json, output_hash, receipt_json, receipt_hash in task_rows:
             digest = cls._verified_receipt_digest(receipt_json)
-            if digest is None:
+            if digest is None or (
+                receipt_hash and str(receipt_hash) != digest
+            ) or (
+                not receipt_hash and str(output_hash or '') != digest
+            ):
                 corrupt_tasks.append(str(node_id))
-            elif receipt_hash:
-                if str(receipt_hash) != digest:
-                    corrupt_tasks.append(str(node_id))
-            elif str(output_hash or '') == digest:
+                continue
+            try:
+                _assert_receipt_reusable(
+                    {
+                        'node_id': str(node_id),
+                        'stage': str(stage),
+                        'input_hash': str(input_hash),
+                        'payload': json.loads(payload_json),
+                    },
+                    json.loads(receipt_json),
+                )
+            except (VerifierReceiptTruthError, ValueError, TypeError):
+                # Hash validity alone never promotes an unverifiable PASS.
+                corrupt_tasks.append(str(node_id))
+                continue
+            if not receipt_hash:
                 connection.execute(
                     'UPDATE tasks SET receipt_hash = ? WHERE node_id = ?',
                     (digest, node_id),
                 )
-            else:
-                corrupt_tasks.append(str(node_id))
         if corrupt_tasks:
             cls._invalidate_many(connection, corrupt_tasks)
 
