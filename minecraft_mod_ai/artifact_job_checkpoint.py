@@ -97,12 +97,21 @@ def execute_checkpointed_job(job, *, context, router, registry, base_dir, execut
         verify_job_binding(job, resolved, context or {})
         registry.bind_context(resolved.context_id)
     from .implementation_identity import ExecutorType
-    if job.executor_type == ExecutorType.PYTHON_GENERATOR:
-        return execute(job, context=context, router=router, port_registry=registry, base_dir=base_dir)
+    is_generator = job.executor_type == ExecutorType.PYTHON_GENERATOR
     if base_dir is None:
-        return execute(job, context=context, router=router, port_registry=registry)
+        return execute(job, context=context, router=router, port_registry=registry, base_dir=base_dir)
     root = Path(base_dir).resolve()
-    target = (root / job.target_path).resolve()
+    if is_generator:
+        from .integrity_dispatcher import _canonical_inputs_for_job
+        inputs = _canonical_inputs_for_job(job, context or {})
+        if not isinstance(inputs, dict):
+            raise ValueError("GENERATOR_CANONICAL_INPUTS_REQUIRED")
+        manifest = load_template(job.canonical_leaf)
+        spec_port = next(p["name"] for p in manifest["inputs"] if p["type"] == "specification")
+        target_relative = inputs[spec_port]["target_path"]
+    else:
+        target_relative = job.target_path
+    target = (root / target_relative).resolve()
     if not target.is_relative_to(root):
         raise ValueError("ARTIFACT_TARGET_ESCAPE")
     relative = target.relative_to(root).as_posix()
@@ -120,7 +129,7 @@ def execute_checkpointed_job(job, *, context, router, registry, base_dir, execut
     binding = digest(
         {
             "job": definition,
-            "template": load_template(job.template_id),
+            "template": manifest if is_generator else load_template(job.template_id),
             "dependency_hashes": dependencies,
             "context": context or {},
         }
@@ -179,6 +188,7 @@ def execute_checkpointed_job(job, *, context, router, registry, base_dir, execut
             "after_hash": after,
             "status": "SUCCESS",
             "receipt": receipt,
+            "verification_level": "artifact_materialized_not_behavior_proven",
         }
         # Commit the target hash first. If the process dies before the job record is
         # written, the next run safely re-executes the job against the verified target
