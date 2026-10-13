@@ -486,8 +486,9 @@ def discover_repositories_for_graph(
     capability_graph: Mapping[str, Any] | None = None,
     minecraft_version: str | None = None,
     loader: str | None = None,
+    diagnostics: list[dict[str, Any]] | None = None,
 ) -> dict[str, tuple[str, ...]]:
-    """Adaptive two-wave discovery with cross-capability representative selection."""
+    """Adaptive discovery. Provider errors are distinct from successful zero hits."""
 
     ordered = tuple(dict.fromkeys(str(item).strip() for item in capabilities if str(item).strip()))
     result: dict[str, tuple[str, ...]] = {capability: () for capability in ordered}
@@ -538,10 +539,10 @@ def discover_repositories_for_graph(
                     break
                 cursor = next_cursor
         except Exception:
-            # Later-page throttling must not erase source evidence already
-            # collected from successful pages of the same immutable query.
+            # Preserve partial successful pages, but never turn first-page
+            # provider failure into the evidence claim "zero results".
             if not candidates:
-                return capability, provider, []
+                raise
         if provider == "modrinth":
             return capability, provider, _resolve_modrinth_candidates(candidates, with_metadata=True)
         values = []
@@ -578,12 +579,13 @@ def discover_repositories_for_graph(
             return
         def safe_provider_search(
             job: tuple[str, str, str],
-        ) -> tuple[str, str, list[tuple[str, float]]]:
+        ):
             capability, provider, query = job
             try:
-                return provider_search(capability, provider, query)
-            except Exception:
-                return capability, provider, []
+                owner, backend, values = provider_search(capability, provider, query)
+                return owner, backend, values, ""
+            except Exception as exc:
+                return capability, provider, [], f"{type(exc).__name__}: {exc}"[:1200]
 
         for _job, result_row in iter_completed_with_deadlines(
             jobs,
@@ -592,9 +594,16 @@ def discover_repositories_for_graph(
             stage=f"reuse-catalog-wave-{variant_index}",
             sort_key=lambda item: (item[0], item[1], item[2]),
         ):
-            capability, provider, values = result_row
+            capability, provider, values, error = result_row
             key = (_job[1], _job[2])
             query_results[key] = values
+            if diagnostics is not None:
+                diagnostics.append({
+                    "provider": provider, "query": _job[2],
+                    "capabilities": list(subscribers[key]),
+                    "status": "provider_error" if error else ("found" if values else "search_empty"),
+                    "error": error, "repository_count": len(values),
+                })
             for owner_capability in subscribers[key]:
                 register(owner_capability, provider, values)
 
