@@ -2307,6 +2307,7 @@ class CompleteProductionOrchestrator:
             review_workers = max(1, min(4, int(capacities['cpu_io'])))
         review_pool = ThreadPoolExecutor(max_workers=max(1, review_workers), thread_name_prefix='blockbench_review')
         node_futures: dict[str, Future[Any]] = {}
+        generation_errors: dict[str, str] = {}
         idle_wait = threading.Event()
         lease_seconds = 900
         heartbeat_seconds = 60.0
@@ -2367,7 +2368,9 @@ class CompleteProductionOrchestrator:
                             f"[ORCHESTRATOR MODULE] {__file__}\n",
                             flush=True,
                         )
-                        raise CompleteProductionError(f'Pipeline generation node failed: {node_id}: {type(exc).__name__}: {exc}') from exc
+                        # Preserve this node's failure but continue ready,
+                        # independent work; failed prerequisites remain blocked.
+                        generation_errors[node_id] = f'{type(exc).__name__}: {exc}'
 
                 if generation_stages:
                     while True:
@@ -2400,7 +2403,37 @@ class CompleteProductionOrchestrator:
                 states = {node_id: str(task['state']) for node_id, task in task_rows.items()}
                 failed_ids = [node_id for node_id, state in states.items() if state in {'failed', 'cancelled', 'input_required'}]
                 if failed_ids:
-                    raise CompleteProductionError(f'Pipeline generation failed on nodes: {failed_ids}')
+                    blocked_ids = []
+                    by_node = {n.node_id: n for n in generation_nodes}
+                    blocked = set(failed_ids)
+                    changed = True
+                    while changed:
+                        changed = False
+                        for candidate in generation_nodes:
+                            if candidate.node_id in blocked:
+                                continue
+                            if any(dep in blocked for dep in candidate.depends_on):
+                                blocked.add(candidate.node_id)
+                                blocked_ids.append(candidate.node_id)
+                                changed = True
+                    failure_report = {
+                        'schema_version': 'mmm/construction-failures-v1',
+                        'failed_nodes': sorted(failed_ids),
+                        'blocked_dependents': sorted(blocked_ids),
+                        'errors': generation_errors,
+                        'independent_completed': sorted(k for k,v in states.items()
+                                                        if v in {'succeeded', 'completed'}),
+                    }
+                    report_path = project_root / '.minecraft_ai' / 'construction-failures.json'
+                    report_path.parent.mkdir(parents=True, exist_ok=True)
+                    report_path.write_text(
+                        json.dumps(failure_report, ensure_ascii=False, indent=2, sort_keys=True) + '\\n',
+                        encoding='utf-8',
+                    )
+                    raise CompleteProductionError(
+                        'Pipeline generation failed; completed independent work was preserved. '
+                        'Failed nodes: ' + ', '.join(sorted(failed_ids)) +
+                        '; blocked dependents: ' + ', '.join(sorted(blocked_ids)))
                 if all(state in {'succeeded', 'completed'} for state in states.values()):
                     break
                 running = [task for task in task_rows.values() if str(task['state']) == 'running']
