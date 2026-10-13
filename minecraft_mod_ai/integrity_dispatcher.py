@@ -190,6 +190,18 @@ def execute_generator_job(job, *, context, router, port_registry=None, base_dir=
 
         source_context = generated_owner_source_context(base_dir, spec)
     extra_context = {"source_context": source_context} if source_context else {}
+    if spec["language"] == "java":
+        from .fixed_template_generation import _adapter_name
+        if _adapter_name(router, "coder") == "llama_cpp":
+            if base_dir is None or not context.get("java_classpath"):
+                # Fail before spending hundreds of model calls on invented APIs.
+                raise ValueError("CONSTRUCTION_TARGET_CLASSPATH_REQUIRED")
+            from .construction_runtime import prepare_construction_context
+            extra_context["construction_context"] = prepare_construction_context(
+                spec, java_classpath=context["java_classpath"],
+                project_root=base_dir, source_context=source_context,
+                target_override=resolved.to_dict()["target"],
+            )
     output = generator(inputs, leaf_id=job.canonical_leaf, router=router, authority=authority, **extra_context)
     source = output[next(p["name"] for p in manifest["outputs"] if p["type"] == "code_fragment")]
     verify_candidate_content(job, resolved, context, spec, source)
