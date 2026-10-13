@@ -20,8 +20,10 @@ def _lookup_request(kind, query, offset):
     if kind not in LOOKUP_KINDS or not isinstance(query, str) or type(offset) is not int or offset < 0:
         raise ValueError('CONSTRUCTION_LOOKUP_REQUEST_INVALID')
     normalized = query.strip().casefold() if kind in {'symbols', 'sources'} else query.strip()
-    if kind == 'nodes': normalized = ','.join(sorted(key.strip() for key in query.split(',')))
-    if kind == 'declarations': normalized = ''
+    if kind == 'nodes':
+        normalized = ','.join(sorted(key.strip() for key in query.split(',')))
+    if kind == 'declarations':
+        normalized = ''
     return kind, normalized, offset
 
 
@@ -132,8 +134,10 @@ class ConstructionState:
             raise ValueError("CONSTRUCTION_AUTHOR_NO_PROGRESS: repeated " + kind + " lookup")
         self.requests.add(request)
         self.lookup = {**result, "kind": kind, "query": query.strip(), "offset": offset}
-        if kind == 'symbols': self.symbol_lookup = self.lookup
-        if kind == 'bindings': self.binding_lookup = self.lookup
+        if kind == 'symbols':
+            self.symbol_lookup = self.lookup
+        if kind == 'bindings':
+            self.binding_lookup = self.lookup
         self.history.append({"phase": self.phase, "revision": self.revision,
             "kind": kind, "query": query.strip(), "offset": offset,
             "status": result["status"], "total_count": result["total_count"],
