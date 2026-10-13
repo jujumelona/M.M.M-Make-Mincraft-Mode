@@ -3,19 +3,17 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import replace
-from .construction_author import ID, TEXT, obj, ask
+from .construction_author import obj, ask
 from .construction_state import ConstructionState, STATE_INSTRUCTION
-from .construction_declaration_choices import header_candidates, header_schema, choice_actions
+from .construction_declaration_choices import (header_candidates, header_schema, choice_actions,
+    member_schema, parameter_schema, consume_symbol_choice, choose_type)
 from .construction_task import ConstructionTask
 from .construction_author import author_task_operations
 from .construction_java import render_task_member, render_task_java
 from .java_operation_ir import PRIMITIVES, identifier, qualified_name
 
-MEMBER_NEXT = obj({'action': {'type': 'string', 'enum': ['method', 'field', 'constructor', 'symbols', 'declarations', 'complete', 'extension']},
-                  'name': TEXT, 'purpose': TEXT, 'query': TEXT, 'offset': {'type': 'integer', 'minimum': 0}})
-SIGNATURE = obj({'return_type': ID, 'visibility': {'type': 'string', 'enum': ['public', 'protected', 'private', '']},
+SIGNATURE = obj({'visibility': {'type': 'string', 'enum': ['public', 'protected', 'private', '']},
                  'static': {'type': 'boolean'}, 'final': {'type': 'boolean'}})
-PARAMETER = obj({'complete': {'type': 'boolean'}, 'name': TEXT, 'type_ref': TEXT})
 HEADER_INSTRUCTION = ('Choose only inheritance for the current new class. No Java source. '
     'Complete this phase when no further superclass or interfaces are needed; methods and behavior bodies '
     'are planned and authored in later phases. A class with no explicit superclass extends Object implicitly. '
@@ -25,7 +23,8 @@ HEADER_INSTRUCTION = ('Choose only inheritance for the current new class. No Jav
 MEMBER_INSTRUCTION = ('Plan only additional helper methods, fields or constructors. No Java source. '
     'Declarations with a body_owner already have an assigned author and will receive their actual bodies '
     'after this phase. Do not redeclare them. Complete means no additional helper declarations are needed; '
-    'it does not complete or skip any assigned behavior body. Use symbols for dependency signatures and '
+    'begin_bodies selects the first queued body to author. Both transitions keep every assigned body. '
+    'Use overload only to add a distinct signature to a helper. Use symbols for dependency signatures and '
     'declarations for older members. Types are exact inspected names; primitives are intrinsic. ' + STATE_INSTRUCTION)
 SIGNATURE_INSTRUCTION = ('Describe only the current new member signature: return type, visibility and '
     'modifiers. No Java source. Use exact inspected type names or primitives. This phase does not declare '
@@ -45,13 +44,14 @@ def exact_type(value, symbols, *, allow_void=True):
     return value
 
 
-def compose(router, spec, *, source_context=(), construction_context=None):
+def compose(router, spec, *, source_context=(), construction_context=None, authoring_contract=None):
     from .first_pass_java_source import _java_identity
     identity = _java_identity(spec)
     if identity is None: raise ValueError('CONSTRUCTION_RENDERER_EXTENSION_REQUIRED: Java fragment/identity')
     if not construction_context or 'symbols' not in construction_context:
         raise ValueError('CONSTRUCTION_TARGET_CONTEXT_REQUIRED')
     context = dict(construction_context)
+    context['authoring_contract'] = dict(authoring_contract or {})
     symbols = dict(context['symbols']); context['symbols'] = symbols
     package, name = identity; owner = package + '.' + name
     bindings = spec.get('bindings', {})
@@ -94,7 +94,8 @@ def compose(router, spec, *, source_context=(), construction_context=None):
     state = ConstructionState(symbols, owner, task.target_path)
     payload = {'intent': task.intent, 'trigger': task.trigger, 'effects': task.effects,
                'state_reads': task.state_reads, 'state_writes': task.state_writes,
-               'owner': owner, 'target_path': task.target_path}
+               'owner': owner, 'target_path': task.target_path,
+               'authoring_contract': context['authoring_contract']}
     if interface:
         exact_type(interface, symbols, allow_void=False); interfaces.append(interface)
         payload['host_entrypoint'] = {'interface': interface, 'method': lifecycle}
@@ -103,15 +104,14 @@ def compose(router, spec, *, source_context=(), construction_context=None):
         state.enter('class_header')
         while True:
             candidates = header_candidates(state)
-            schema = header_schema(candidates)
+            schema = header_schema(state, candidates)
             actions = choice_actions(schema)
             choice = ask(planning_router, 'construction_class_next',
                 {**payload, **state.payload(actions, header_candidates=candidates)}, schema, HEADER_INSTRUCTION)
             if choice['action'] == 'complete': break
             if choice['action'] == 'extension':
                 raise ValueError('CONSTRUCTION_RENDERER_EXTENSION_REQUIRED: ' + choice['reason'])
-            if choice['action'] == 'symbols':
-                state.lookup_symbols(choice['query'], choice['offset']); continue
+            if consume_symbol_choice(state, choice): continue
             type_ = exact_type(choice['type_ref'], symbols, allow_void=False)
             if type_ not in candidates[choice['action']]:
                 raise ValueError('CONSTRUCTION_CLASS_HEADER')
@@ -153,41 +153,62 @@ def compose(router, spec, *, source_context=(), construction_context=None):
             'body_owner': 'host_lifecycle' if registrars else task.task_id,
             'purpose': 'Invoke every assigned behavior registrar' if registrars else task.intent}
         state.add_declaration(key)
+    reserved_names = {symbols[key]['name'] for key, _behavior in registrars}
+    if lifecycle: reserved_names.add(lifecycle)
+    preferred_body = ''
     while True:
         state.enter('member_declarations')
-        actions = list(MEMBER_NEXT['properties']['action']['enum'])
-        if not state.declaration_ids: actions.remove('complete')
-        schema = obj({**MEMBER_NEXT['properties'], 'action': {'type': 'string', 'enum': actions}})
+        # The page is already bounded; every remaining body still stays queued.
+        body_candidates = [key for key in state.declaration_ids if
+                           symbols[key].get('body_owner') != 'host_lifecycle'][-8:]
+        schema = member_schema(state, reserved_names=reserved_names, body_candidates=body_candidates)
+        actions = choice_actions(schema)
         item = ask(planning_router, 'construction_member_next',
-            {**payload, **state.payload(actions)}, schema, MEMBER_INSTRUCTION)
+            {**payload, **state.payload(actions, body_candidates=body_candidates)}, schema, MEMBER_INSTRUCTION)
         action = item['action']
         if action == 'complete': break
-        if action == 'extension': raise ValueError('CONSTRUCTION_RENDERER_EXTENSION_REQUIRED: ' + item['purpose'])
-        if action == 'symbols':
-            state.lookup_symbols(item['query'], item['offset']); continue
+        if action == 'begin_bodies':
+            preferred_body = item['symbol_ref']; break
+        if action == 'extension': raise ValueError('CONSTRUCTION_RENDERER_EXTENSION_REQUIRED: ' + item['reason'])
+        if consume_symbol_choice(state, item): continue
         if action == 'declarations':
             state.lookup_declarations(item['offset']); continue
         member_name = name if action == 'constructor' else identifier(item['name'])
-        if member_name == lifecycle: raise ValueError('CONSTRUCTION_HOST_ENTRYPOINT_DUPLICATE')
+        if member_name in reserved_names: raise ValueError('CONSTRUCTION_HOST_DECLARATION_RESERVED')
+        if action == 'overload': action = 'method'
         current = {**payload, 'kind': action, 'name': member_name, 'purpose': item['purpose']}
+        return_type = 'void' if action == 'constructor' else choose_type(planning_router, state, current,
+            phase='member_return_type', allow_void=action != 'field')
         state.enter('member_signature')
+        schema = obj({**SIGNATURE['properties'], 'return_type': {'const': return_type}})
+        if action == 'constructor': schema['properties']['static'] = {'const': False}
         metadata = ask(planning_router, 'construction_member_signature',
-            {**current, **state.payload(['signature'])}, SIGNATURE, SIGNATURE_INSTRUCTION)
+            {**current, 'return_type': return_type, **state.payload(['signature'])}, schema, SIGNATURE_INSTRUCTION)
         exact_type(metadata['return_type'], symbols, allow_void=action != 'field')
         state.advance()
         parameters = []
         if action != 'field':
             state.enter('member_parameters')
             while True:
+                # Same-name helpers can be overloaded only by a distinct
+                # parameter signature. The sampler cannot finish a duplicate.
+                candidate_key = owner + '#' + member_name + '(' + ','.join(p['type'] for p in parameters) + ')'
+                schema = parameter_schema(parameters, can_complete=candidate_key not in symbols)
                 parameter = ask(planning_router, 'construction_parameter_next',
                     {**current, 'signature': metadata, 'parameters': parameters,
                      'parameter_index': len(parameters),
-                     **state.payload(['parameter', 'complete'])}, PARAMETER, PARAMETER_INSTRUCTION)
+                     **state.payload(['parameter'] + (['complete'] if candidate_key not in symbols else []))},
+                    schema, PARAMETER_INSTRUCTION)
                 if parameter['complete']: break
-                identifier(parameter['name']); exact_type(parameter['type_ref'], symbols, allow_void=False)
+                identifier(parameter['name'])
+                type_ = choose_type(planning_router, state,
+                    {**current, 'signature': metadata, 'parameters': parameters, 'parameter_name': parameter['name']},
+                    phase='member_parameter_type')
+                exact_type(type_, symbols, allow_void=False)
                 if any(p['name'] == parameter['name'] for p in parameters): raise ValueError('CONSTRUCTION_PARAMETER_DUPLICATE')
-                parameters.append({'name': parameter['name'], 'type': parameter['type_ref']})
+                parameters.append({'name': parameter['name'], 'type': type_})
                 state.advance()
+                state.enter('member_parameters')
         key = owner + '#' + member_name + '(' + ','.join(p['type'] for p in parameters) + ')'
         if key in symbols: raise ValueError('CONSTRUCTION_DECLARATION_DUPLICATE: ' + key)
         symbols[key] = {**metadata, 'kind': action.upper(), 'owner': owner, 'name': member_name,
@@ -257,17 +278,13 @@ def compose(router, spec, *, source_context=(), construction_context=None):
         }
         return nodes
 
-    members = []
+    body_jobs = []
     for index, (key, purpose) in enumerate(declarations):
         member_task = replace(task, task_id=task.task_id + '.member.' + str(index), owner_symbol=key,
                               intent=purpose, output_symbols=(key,))
-        nodes = author_one(member_task)
-        render_task_java(member_task, nodes, symbols)
-        members.append(render_task_member(member_task, nodes, symbols))
+        body_jobs.append((member_task, {}))
     for port_task, reference_id in port_tasks:
-        nodes = author_one(port_task, port_source_ref=reference_id)
-        render_task_java(port_task, nodes, symbols)
-        members.append(render_task_member(port_task, nodes, symbols))
+        body_jobs.append((port_task, {'port_source_ref': reference_id}))
     for key, behavior in registrars:
         registrar_task = replace(task,
             task_id=behavior['behavior_id'] + '.registration',
@@ -282,9 +299,17 @@ def compose(router, spec, *, source_context=(), construction_context=None):
                               behavior['behavior_id'] + '.behavior'))
         owned = [record for record in residual_records if
                  assigned_records.get(record['record_ref']) == behavior['behavior_id']]
-        nodes = author_one(registrar_task, owned_records=owned)
-        render_task_java(registrar_task, nodes, symbols)
-        members.append(render_task_member(registrar_task, nodes, symbols))
+        body_jobs.append((registrar_task, {'owned_records': owned}))
+    # A request to author an already-assigned method changes the phase, never
+    # recreates its signature or removes other pending behavior owners.
+    authoring_order = sorted(body_jobs, key=lambda job: job[0].owner_symbol != preferred_body)
+    rendered = {}
+    for member_task, options in authoring_order:
+        nodes = author_one(member_task, **options)
+        render_task_java(member_task, nodes, symbols)
+        rendered[member_task.owner_symbol] = render_task_member(member_task, nodes, symbols)
+    # Keep declaration/field initialization order independent of author order.
+    members = [rendered[current.owner_symbol] for current, _options in body_jobs]
     # Donor/port calls in an unreachable helper are not runtime integration.
     # The lifecycle invokes every registrar; follow its typed member call
     # graph transitively before claiming source glue was actually connected.
