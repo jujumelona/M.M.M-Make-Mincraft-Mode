@@ -43,6 +43,9 @@ def compose(router, spec, *, source_context=(), construction_context=None):
     package, name = identity; owner = package + '.' + name
     bindings = spec.get('bindings', {})
     if not isinstance(bindings, dict): raise ValueError('CONSTRUCTION_BINDINGS_REQUIRED')
+    from .construction_journal import JournaledConstructionRouter
+    planning_router = JournaledConstructionRouter(
+        router, context['project_root'], spec, context)
     saved = bindings.get('construction_task_json')
     task = ConstructionTask.from_dict(json.loads(saved)) if saved else ConstructionTask(
         'canonical_' + hashlib.sha256(spec['target_path'].encode()).hexdigest()[:16],
@@ -76,7 +79,7 @@ def compose(router, spec, *, source_context=(), construction_context=None):
         payload['host_entrypoint'] = {'interface': interface, 'method': lifecycle}
     else:
         while True:
-            choice = ask(router, 'construction_class_next', {**payload, 'lookup': page}, CLASS_NEXT, INSTRUCTION)
+            choice = ask(planning_router, 'construction_class_next', {**payload, 'lookup': page}, CLASS_NEXT, INSTRUCTION)
             if choice['action'] == 'complete': break
             fingerprint = json.dumps(choice, sort_keys=True)
             if fingerprint in seen: raise ValueError('CONSTRUCTION_AUTHOR_NO_PROGRESS')
@@ -93,7 +96,7 @@ def compose(router, spec, *, source_context=(), construction_context=None):
                       'interfaces': interfaces, 'side': str(spec.get('side', 'COMMON'))}
     declarations, seen, page = [], set(), {}
     while True:
-        item = ask(router, 'construction_member_next', {**payload, 'lookup': page}, MEMBER_NEXT, INSTRUCTION)
+        item = ask(planning_router, 'construction_member_next', {**payload, 'lookup': page}, MEMBER_NEXT, INSTRUCTION)
         action = item['action']
         if action == 'complete': break
         if action == 'extension': raise ValueError('CONSTRUCTION_RENDERER_EXTENSION_REQUIRED: ' + item['purpose'])
@@ -104,12 +107,12 @@ def compose(router, spec, *, source_context=(), construction_context=None):
         member_name = name if action == 'constructor' else identifier(item['name'])
         if member_name == lifecycle: raise ValueError('CONSTRUCTION_HOST_ENTRYPOINT_DUPLICATE')
         current = {**payload, 'kind': action, 'name': member_name, 'purpose': item['purpose'], 'lookup': page}
-        metadata = ask(router, 'construction_member_signature', current, SIGNATURE, INSTRUCTION)
+        metadata = ask(planning_router, 'construction_member_signature', current, SIGNATURE, INSTRUCTION)
         exact_type(metadata['return_type'], symbols, allow_void=action != 'field')
         parameters = []
         if action != 'field':
             while True:
-                parameter = ask(router, 'construction_parameter_next', {**current, 'parameter_index': len(parameters)}, PARAMETER, INSTRUCTION)
+                parameter = ask(planning_router, 'construction_parameter_next', {**current, 'parameter_index': len(parameters)}, PARAMETER, INSTRUCTION)
                 if parameter['complete']: break
                 identifier(parameter['name']); exact_type(parameter['type_ref'], symbols, allow_void=False)
                 if any(p['name'] == parameter['name'] for p in parameters): raise ValueError('CONSTRUCTION_PARAMETER_DUPLICATE')
@@ -150,7 +153,7 @@ def compose(router, spec, *, source_context=(), construction_context=None):
     typed_owners = json.loads(bindings.get('retained_typed_behavior_json') or '{}')
     if registrars and residual_records:
         from .construction_ownership import assign_behavior_records
-        assigned_records = assign_behavior_records(router, behaviors, residual_records)
+        assigned_records = assign_behavior_records(planning_router, behaviors, residual_records)
 
     def author_one(member_task, *, owned_records=()):
         from .construction_progress import ConstructionNodeCheckpoint
