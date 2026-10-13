@@ -2437,11 +2437,20 @@ class CompleteProductionOrchestrator:
                                 blocked.add(candidate.node_id)
                                 blocked_ids.append(candidate.node_id)
                                 changed = True
+                    failure_errors = {
+                        node_id: generation_errors.get(node_id) or str(
+                            task_rows[node_id].get('error') or
+                            f"Node state: {states[node_id]}"
+                        )
+                        for node_id in sorted(failed_ids)
+                    }
                     failure_report = {
                         'schema_version': 'mmm/construction-failures-v1',
                         'failed_nodes': sorted(failed_ids),
                         'blocked_dependents': sorted(blocked_ids),
-                        'errors': generation_errors,
+                        # Include persisted errors when a resumed run did not
+                        # execute the failed node in this scheduler invocation.
+                        'errors': failure_errors,
                         'independent_completed': sorted(k for k,v in states.items()
                                                         if v in {'succeeded', 'completed'}),
                     }
@@ -2454,7 +2463,11 @@ class CompleteProductionOrchestrator:
                     raise CompleteProductionError(
                         'Pipeline generation failed; completed independent work was preserved. '
                         'Failed nodes: ' + ', '.join(sorted(failed_ids)) +
-                        '; blocked dependents: ' + ', '.join(sorted(blocked_ids)))
+                        '; blocked dependents: ' + ', '.join(sorted(blocked_ids)) +
+                        '; causes:\n' + '\n'.join(
+                            f'[{node_id}] {failure_errors[node_id]}'
+                            for node_id in sorted(failed_ids)
+                        ) + '\nFailure report: ' + str(report_path))
                 if all(state in {'succeeded', 'completed'} for state in states.values()):
                     break
                 running = [task for task in task_rows.values() if str(task['state']) == 'running']
