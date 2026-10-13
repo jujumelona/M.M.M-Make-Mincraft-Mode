@@ -50,14 +50,15 @@ def build_target_symbols(classpath, *, java_version: int, namespace: str, classp
         raise ValueError("CONSTRUCTION_NAMESPACE_REQUIRED")
     result, class_hashes = {}, {}
     for raw_path in classpath:
-        path = Path(raw_path).resolve()
+        logical_path = Path(raw_path).expanduser()
+        path = logical_path.resolve()
         side = classpath_sides.get(str(path), classpath_sides.get(str(raw_path), "COMMON"))
         if path.is_dir():
             classes = [parse_class(p.read_bytes(), default_side=side) for p in path.rglob("*.class")]
-        elif path.name == "modules" and path.parent.name == "lib":
+        elif logical_path.name == "modules" and logical_path.parent.name == "lib":
             from .jdk_runtime_inventory import inspect_jdk_runtime_image
 
-            classes = inspect_jdk_runtime_image(path, java_version=java_version, default_side=side)
+            classes = inspect_jdk_runtime_image(logical_path, java_version=java_version, default_side=side)
         elif path.suffix == ".jmod":
             with ZipFile(path) as archive:
                 classes = [parse_class(archive.read(n), default_side=side) for n in archive.namelist()

@@ -104,10 +104,10 @@ def _run_reader(command: list[str], *, cwd: Path, stage: str, timeout_seconds: i
 
 
 @lru_cache(maxsize=2)
-def _inspect_image(image_text: str, java_version: int, side: str,
+def _inspect_image(home_text: str, image_text: str, java_version: int, side: str,
                    signature: tuple[int, int]) -> tuple[ApiClass, ...]:
     image = Path(image_text)
-    home = image.parent.parent
+    home = Path(home_text)
     suffix = ".exe" if os.name == "nt" else ""
     java, javac = home / "bin" / ("java" + suffix), home / "bin" / ("javac" + suffix)
     if not java.is_file() or not javac.is_file():
@@ -144,11 +144,15 @@ def _inspect_image(image_text: str, java_version: int, side: str,
 
 def inspect_jdk_runtime_image(image: Path, *, java_version: int,
                               default_side: str = "COMMON") -> tuple[ApiClass, ...]:
-    image = Path(image).resolve()
+    image = Path(image).expanduser()
     if image.name != "modules" or image.parent.name != "lib" or not image.is_file():
         raise ValueError("CONSTRUCTION_JDK_RUNTIME_IMAGE_REQUIRED: " + str(image))
+    # A module image may be linked outside its JDK home. Preserve the selected
+    # executable home while canonicalizing only the image identity/provenance.
+    home = image.parent.parent.resolve()
+    image = image.resolve()
     state = image.stat()
     with _INSPECTION_LOCK:
         return _inspect_image(
-            str(image), java_version, default_side, (state.st_size, state.st_mtime_ns),
+            str(home), str(image), java_version, default_side, (state.st_size, state.st_mtime_ns),
         )
