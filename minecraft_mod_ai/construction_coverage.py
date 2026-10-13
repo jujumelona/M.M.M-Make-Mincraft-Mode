@@ -92,3 +92,66 @@ def requirement_completion(receipt, runtime_evidence):
             "status": "VERIFIED" if expected == successes and expected else "RUNTIME_UNVERIFIED",
             "verified_behavior_ids": sorted(successes),
             "missing_behavior_ids": sorted(expected - successes)}
+
+
+def summarize_construction_coverage(project_root, request_scope, runtime_receipts=()):
+    """Aggregate exact per-child evidence from immutable source hashes.
+
+    No aggregate build/JAR/runtime PASS is converted into a feature-specific
+    assertion. Only explicit child trigger/effect/state observations qualify.
+    """
+    requirements = request_scope.get("requirements", ())
+    behaviors = request_scope.get("behavior_requirements", ())
+    expected = {}
+    for behavior in behaviors:
+        parent, bid = behavior["requirement_id"], behavior["behavior_id"]
+        expected.setdefault(parent, set())
+        if bid in expected[parent]:
+            raise ValueError("CONSTRUCTION_DUPLICATE_BEHAVIOR: " + bid)
+        expected[parent].add(bid)
+    if not requirements:
+        return {"schema_version": "mmm/construction-coverage-summary-v1",
+                "status": "NOT_APPLICABLE", "requirements": []}
+    observations = []
+    for receipt in runtime_receipts:
+        if not isinstance(receipt, dict):
+            continue
+        for row in receipt.get("construction_behavior_observations", ()):
+            if isinstance(row, dict):
+                observations.append(row)
+    summaries = []
+    for requirement in requirements:
+        rid = requirement["requirement_id"]
+        ids = expected.get(rid, set())
+        path = _coverage_path(project_root, rid)
+        if not path.is_file():
+            summaries.append({"requirement_id": rid,
+                              "status": "SOURCE_NOT_MATERIALIZED",
+                              "missing_behavior_ids": sorted(ids)})
+            continue
+        recorded = json.loads(path.read_text(encoding="utf-8"))
+        if recorded.get("schema_version") != "mmm/construction-coverage-v1":
+            raise ValueError("CONSTRUCTION_COVERAGE_SCHEMA_MISMATCH")
+        if recorded.get("requirement_id") != rid:
+            raise ValueError("CONSTRUCTION_COVERAGE_PARENT_MISMATCH")
+        child_ids = {x["behavior_id"] for x in recorded["behaviors"]}
+        if child_ids != ids or not ids:
+            raise ValueError("CONSTRUCTION_COVERAGE_SCOPE_MISMATCH: " + rid)
+        target = (Path(project_root).resolve() / recorded["target_path"]).resolve()
+        if not target.is_relative_to(Path(project_root).resolve()) or not target.is_file():
+            summaries.append({"requirement_id": rid, "status": "SOURCE_MISSING",
+                              "missing_behavior_ids": sorted(ids)})
+            continue
+        if _digest(target.read_bytes()) != recorded["source_sha256"]:
+            summaries.append({"requirement_id": rid, "status": "SOURCE_HASH_DRIFT",
+                              "missing_behavior_ids": sorted(ids)})
+            continue
+        matching = [row for row in observations
+                    if row.get("requirement_id") == rid]
+        summaries.append(requirement_completion(recorded, matching))
+    success = bool(summaries) and all(row["status"] == "VERIFIED" for row in summaries)
+    return {"schema_version": "mmm/construction-coverage-summary-v1",
+            "status": "VERIFIED" if success else "RUNTIME_UNVERIFIED",
+            "requirements": summaries,
+            "total_requirements": len(summaries),
+            "verified_requirements": sum(x["status"] == "VERIFIED" for x in summaries)}
