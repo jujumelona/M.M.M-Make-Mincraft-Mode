@@ -14,20 +14,19 @@ from tempfile import TemporaryDirectory
 _BEGIN = "MMM_COMPILE_CLASSPATH_BEGIN"
 _END = "MMM_COMPILE_CLASSPATH_END"
 _INIT = r'''
+// Resolve the inspected classpath during configuration, NOT inside a task
+// execution action. Gradle 9.x configuration cache disallows reading Project
+// from doLast, and sourceSets.main is project state.
 gradle.projectsEvaluated {
     def root = gradle.rootProject
-    root.tasks.register("mmmPrintCompileClasspath") {
-        doLast {
-            def sets = root.extensions.findByName("sourceSets")
-            if (sets == null || sets.findByName("main") == null) {
-                throw new GradleException("MMM_SOURCESETS_UNAVAILABLE")
-            }
-            def files = sets.main.compileClasspath.files
-            println("MMM_COMPILE_CLASSPATH_BEGIN")
-            println(groovy.json.JsonOutput.toJson(files.collect { it.absolutePath }))
-            println("MMM_COMPILE_CLASSPATH_END")
-        }
+    def sets = root.extensions.findByName("sourceSets")
+    if (sets == null || sets.findByName("main") == null) {
+        throw new GradleException("MMM_SOURCESETS_UNAVAILABLE")
     }
+    def files = sets.main.compileClasspath.files
+    println("MMM_COMPILE_CLASSPATH_BEGIN")
+    println(groovy.json.JsonOutput.toJson(files.collect { it.absolutePath }))
+    println("MMM_COMPILE_CLASSPATH_END")
 }
 '''
 
@@ -43,8 +42,8 @@ def resolve_fabric_compile_classpath(project_root: str, *, timeout_seconds: int 
         init_script.write_text(_INIT, encoding="utf-8")
         try:
             result = subprocess.run(
-                ["bash", str(wrapper), "--no-daemon", "--console=plain",
-                 "--init-script", str(init_script), "-q", "mmmPrintCompileClasspath"],
+                ["bash", str(wrapper), "--no-daemon", "--no-configuration-cache",
+                 "--console=plain", "--init-script", str(init_script), "-q", "help"],
                 cwd=root, capture_output=True, text=True,
                 timeout=timeout_seconds, check=False,
             )
