@@ -45,7 +45,9 @@ def author_task_operations(router, task, context):
     if declaration is None: raise ValueError('CONSTRUCTION_SYMBOL_MISSING: ' + task.owner_symbol)
     base = {'task_id': task.task_id, 'intent': task.intent, 'trigger': task.trigger, 'effects': task.effects,
             'state_reads': list(task.state_reads), 'state_writes': list(task.state_writes),
-            'declaration': declaration, 'target_path': task.target_path}
+            'declaration': declaration, 'target_path': task.target_path,
+            'owned_runtime_records': context.get('owned_runtime_records', ()),
+            'already_implemented_effects': context.get('already_implemented_effects', {})}
     resume = context.get('resume_nodes')
     existing, stage = resume(task) if callable(resume) else ((), '')
     nodes = [deepcopy(node) for node in existing]
@@ -59,6 +61,7 @@ def author_task_operations(router, task, context):
     instruction = ('Author this current behavior as typed Java operations, one node per turn. No Java source strings. '
         'Use exact inspected symbol IDs and type names. Request symbols with a lexical query and offset, '
         'nodes by ID, or source by ID. Relevant graph nodes are stored on the host; do not recreate them. '
+        'Implement only owned runtime records; never duplicate effects already provided by Typed/UI. '
         'Only the latest four node summaries are shown. Forward references are allowed. Finish only after '
         'all effects and return paths are represented. Unsupported syntax requires extension, never raw Java.')
     while True:
