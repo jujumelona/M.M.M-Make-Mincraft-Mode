@@ -45,7 +45,10 @@ public final class JdkRuntimeInventory {
         }
         TreeMap<String, ModuleReference> modules = new TreeMap<>();
         for (ModuleReference reference : ModuleFinder.ofSystem().findAll()) {
-            modules.put(reference.descriptor().name(), reference);
+            String name = reference.descriptor().name();
+            // Inventory the same default module graph as unnamed-module javac.
+            // Installed incubator modules require explicit compiler opt-in.
+            if (ModuleLayer.boot().findModule(name).isPresent()) modules.put(name, reference);
         }
         Set<String> written = new HashSet<>();
         try (ZipOutputStream archive = new ZipOutputStream(Files.newOutputStream(Paths.get(args[1])))) {
