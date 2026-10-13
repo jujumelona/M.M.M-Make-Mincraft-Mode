@@ -273,3 +273,18 @@ def test_behavior_checkpoint_detects_real_accepted_record_conflict(monkeypatch, 
         with pytest.raises(ValueError, match="DIFFERENT_ACCEPTED_RECORD"):
             checkpoint.save(requirement, [b])
     assert checkpoint.load(requirement)[0].behavior_id == "behavior-a"
+
+
+def test_behavior_receipt_serializes_tuple_references_as_json_arrays():
+    from minecraft_mod_ai.construction_task import BehaviorRequirement
+
+    behavior = BehaviorRequirement(
+        "behavior-collect", "req-one", "Collect ore", "Collect ore",
+        "Player mines", "Ore gained",
+        state_reads=("inventory",), state_writes=("ore_counter",),
+    )
+    row = behavior.to_dict()
+    assert row["state_reads"] == ["inventory"]
+    assert row["state_writes"] == ["ore_counter"]
+    # Disk reads must compare equal to freshly serialized accepted values.
+    assert row == __import__("json").loads(__import__("json").dumps(row))
