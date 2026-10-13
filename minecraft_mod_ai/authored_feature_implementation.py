@@ -53,6 +53,7 @@ def compile_request_feature_jobs(
         bindings = spec["bindings"]
         fqcn = bindings["package_name"] + "." + bindings["class_name"]
         bindings["request_feature_entrypoint"] = fqcn
+        bindings["parent_requirement_id"] = rid
         behavior_rows = [row for row in plan.request_scope.get("behavior_requirements", ())
                          if row.get("requirement_id") == rid]
         if not behavior_rows:
