@@ -362,37 +362,52 @@ def compile_content_graph(
             }
         ]
     # Fail on malformed catalog input before issuing any costly model calls.
-    # In particular, a duplicate ID used to surface only after earlier content
-    # requirements had already spent their generation budget.
-    preflight_ids: set[str] = set()
+    # Log the exact offending input (and both sides of a duplicate) to the
+    # Colab/production failure log. No silent truncation or generic error only.
+    def invalid_requirement(reason, index, row, *, first_index=None, first_row=None):
+        details = {
+            "reason": reason,
+            "index": index,
+            "requirement_id": row.get("requirement_id") if isinstance(row, Mapping) else None,
+            "requirement": row,
+        }
+        if first_index is not None:
+            details["first_index"] = first_index
+            details["first_requirement"] = first_row
+        print(
+            "CONTENT_REQUIREMENT_DIAGNOSTIC: "
+            + json.dumps(details, ensure_ascii=False, sort_keys=True, default=str),
+            flush=True,
+        )
+        raise SlotFillError(
+            f"CONTENT_REQUIREMENT_INVALID: reason={reason}, index={index}, "
+            f"id={details['requirement_id']!r}"
+            + (f", first_index={first_index}" if first_index is not None else "")
+        )
+
+    preflight_ids: dict[str, int] = {}
     for index, req in enumerate(requirements):
         if not isinstance(req, Mapping):
-            raise SlotFillError(
-                f"CONTENT_REQUIREMENT_INVALID: index={index}, not a mapping"
-            )
+            invalid_requirement("not_a_mapping", index, req)
         rid = req.get("requirement_id")
         span = req.get("source_span") or {}
         if not isinstance(span, Mapping):
-            raise SlotFillError(
-                f"CONTENT_REQUIREMENT_INVALID: index={index}, source_span invalid"
-            )
+            invalid_requirement("invalid_source_span", index, req)
         statement = (
             req.get("statement") or req.get("semantic_statement")
             or req.get("authored_text") or span.get("text")
         )
         if not isinstance(rid, str) or not rid.strip():
-            raise SlotFillError(
-                f"CONTENT_REQUIREMENT_INVALID: index={index}, missing ID"
-            )
+            invalid_requirement("missing_id", index, req)
         if rid in preflight_ids:
-            raise SlotFillError(
-                f"CONTENT_REQUIREMENT_DUPLICATE: index={index}, id={rid}"
+            first_index = preflight_ids[rid]
+            invalid_requirement(
+                "duplicate_id", index, req,
+                first_index=first_index, first_row=requirements[first_index],
             )
         if not isinstance(statement, str) or not statement.strip():
-            raise SlotFillError(
-                f"CONTENT_REQUIREMENT_INVALID: index={index}, id={rid}, missing statement"
-            )
-        preflight_ids.add(rid)
+            invalid_requirement("missing_statement", index, req)
+        preflight_ids[rid] = index
 
     entities, relations, decisions = {}, [], []
     requirement_ids = set()
