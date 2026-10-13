@@ -53,6 +53,7 @@ def author_behavior_requirements(scope, router):
                 "Do not write Java or choose a fixed gameplay catalogue.")},
                 {"role": "user", "content": json.dumps({
                     "requirement_id": parent, "statement": statement,
+                    "source_text": source_text,
                     "source_recovery": bool(requirement.get("source_recovery")),
                     "previous_intents": prior}, ensure_ascii=False)}]
             row = _validate_native_arguments(router.generate_structured_data(
@@ -69,8 +70,11 @@ def author_behavior_requirements(scope, router):
                     raise ValueError("CONSTRUCTION_COMPOUND_BEHAVIOR_INCOMPLETE: " + parent)
                 break
             intent, quote = row["intent"].strip(), row["source_quote"]
-            if not intent or not row["effects"].strip() or not quote or quote not in statement:
+            from .request_scope import _source_quote_bounds
+            bounds = _source_quote_bounds(source_text, quote)
+            if not intent or not row["effects"].strip() or bounds is None:
                 raise ValueError("CONSTRUCTION_BEHAVIOR_UNGROUNDED: " + parent)
+            quote = source_text[bounds[0]:bounds[1]]
             if intent.casefold() in {value.casefold() for value in prior}:
                 raise ValueError("CONSTRUCTION_BEHAVIOR_NO_PROGRESS: " + parent)
             prior.append(intent)
