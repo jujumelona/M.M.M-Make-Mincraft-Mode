@@ -1,7 +1,9 @@
-"""Contract checks for Fabric compile classpath inspection on Gradle 9.x.
+"""Python-side I/O checks for Fabric compile classpath inspection.
 
 The probe is read-only: it may resolve actual declared classpath dependencies,
 but must not rely on a Gradle execution-time Project object or generated APIs.
+Gradle is mocked here, so these checks do not establish Gradle compatibility
+or exercise its configuration-resolution locking rules.
 """
 from __future__ import annotations
 
@@ -35,19 +37,16 @@ def _response(jar):
     )
 
 
-def test_gradle9_inspection_is_configuration_phase_only_and_cache_disabled(tmp_path, monkeypatch):
+def test_inspection_invokes_classpath_task_and_disables_cache(tmp_path, monkeypatch):
     root, jar = _project(tmp_path)
     calls = []
 
     def fake_run(argv, *, cwd, capture_output, text, timeout, check):
         calls.append(tuple(argv))
-        init = Path(argv[argv.index("--init-script") + 1]).read_text(encoding="utf-8")
+        init = Path(argv[argv.index("--init-script") + 1])
         assert "--no-configuration-cache" in argv
-        assert argv[-2:] == ["-q", "help"]
-        assert "gradle.projectsEvaluated" in init
-        assert "sourceSets" in init
-        assert "doLast" not in init
-        assert "mmmPrintCompileClasspath" not in init
+        assert argv[-2:] == ["-q", ":mmmInspectCompileClasspath"]
+        assert init.is_file()
         assert str(root) == str(cwd)
         return _response(jar)
 

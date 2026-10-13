@@ -1,7 +1,7 @@
 """Resolve the *actual* Fabric compile classpath before model generation.
 
 No guessed APIs, SDK version downgrades, or jar guesses from repository names.
-The first Gradle configuration must succeed before expensive coder inference.
+Gradle classpath inspection must succeed before expensive coder inference.
 """
 from __future__ import annotations
 
@@ -15,20 +15,42 @@ from tempfile import TemporaryDirectory
 
 _BEGIN = "MMM_COMPILE_CLASSPATH_BEGIN"
 _END = "MMM_COMPILE_CLASSPATH_END"
+_TASK = "mmmInspectCompileClasspath"
 _INIT = r'''
-// Resolve the inspected classpath during configuration, NOT inside a task
-// execution action. Gradle 9.x configuration cache disallows reading Project
-// from doLast, and sourceSets.main is project state.
-gradle.projectsEvaluated {
-    def root = gradle.rootProject
-    def sets = root.extensions.findByName("sourceSets")
-    if (sets == null || sets.findByName("main") == null) {
-        throw new GradleException("MMM_SOURCESETS_UNAVAILABLE")
+import org.gradle.api.DefaultTask
+import org.gradle.api.file.ConfigurableFileCollection
+import org.gradle.api.tasks.Classpath
+import org.gradle.api.tasks.InputFiles
+import org.gradle.api.tasks.TaskAction
+
+abstract class MmmInspectCompileClasspath extends DefaultTask {
+    @InputFiles
+    @Classpath
+    abstract ConfigurableFileCollection getInspectedClasspath()
+
+    @TaskAction
+    void reportClasspath() {
+        // Gradle resolves declared task inputs under the owning project's
+        // lock. The action consumes files without accessing Project/SourceSet.
+        def files = inspectedClasspath.files
+        println("MMM_COMPILE_CLASSPATH_BEGIN")
+        println(groovy.json.JsonOutput.toJson(files.collect { it.absolutePath }))
+        println("MMM_COMPILE_CLASSPATH_END")
     }
-    def files = sets.main.compileClasspath.files
-    println("MMM_COMPILE_CLASSPATH_BEGIN")
-    println(groovy.json.JsonOutput.toJson(files.collect { it.absolutePath }))
-    println("MMM_COMPILE_CLASSPATH_END")
+}
+
+gradle.beforeProject { project ->
+    if (project.path != ":") {
+        return
+    }
+    project.pluginManager.withPlugin("java") {
+        def sets = project.extensions.getByName("sourceSets")
+        project.tasks.register("mmmInspectCompileClasspath", MmmInspectCompileClasspath) {
+            // Keep the FileCollection lazy; resolving it in a global lifecycle
+            // callback bypasses Gradle's project lock, even with cache disabled.
+            inspectedClasspath.from(sets.main.compileClasspath)
+        }
+    }
 }
 '''
 
@@ -66,7 +88,7 @@ def _resolve_inspected_classpath(project_root: str, timeout_seconds: int,
         try:
             result = subprocess.run(
                 ["bash", str(wrapper), "--no-daemon", "--no-configuration-cache",
-                 "--console=plain", "--init-script", str(init_script), "-q", "help"],
+                 "--console=plain", "--init-script", str(init_script), "-q", ":" + _TASK],
                 cwd=root, capture_output=True, text=True,
                 timeout=timeout_seconds, check=False,
             )
