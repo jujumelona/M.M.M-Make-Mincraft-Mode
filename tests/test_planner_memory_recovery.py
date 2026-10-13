@@ -84,3 +84,17 @@ def test_non_mtp_preserves_prompt_cache(monkeypatch):
     assert "--cache-prompt" in args
     index = args.index("--cache-ram")
     assert args[index + 1] == "128"
+
+
+def test_explicit_profile_cache_opt_out_is_idempotent(monkeypatch):
+    monkeypatch.delenv("MMM_QWEN35_MTP_HOTPATH", raising=False)
+    monkeypatch.delenv("MMM_LLAMA_PROMPT_CACHE_ENABLED", raising=False)
+    config = SimpleNamespace(
+        model_id="any-future-model",
+        extra={"prompt_cache_enabled": False},
+    )
+    args = ["--ctx-size", "8192", "--cache-prompt", "--cache-ram", "1024",
+            "--cache-reuse", "256"]
+    _configure_prompt_cache(args, config)
+    _configure_prompt_cache(args, config)
+    assert args == ["--ctx-size", "8192"]
