@@ -48,6 +48,18 @@ def compose(router, spec, *, source_context=(), construction_context=None):
         'canonical_' + hashlib.sha256(spec['target_path'].encode()).hexdigest()[:16],
         (str(bindings.get('requirement_id') or spec.get('context_id') or 'canonical'),), 'logic', spec['requirement'],
         target_path=spec['target_path'], allowed_writes=(spec['target_path'],), effects=spec['requirement'])
+    behaviors = json.loads(bindings.get('construction_behaviors_json') or '[]')
+    if bindings.get('request_feature_entrypoint'):
+        if not isinstance(behaviors, list) or not behaviors:
+            raise ValueError('CONSTRUCTION_BEHAVIOR_COVERAGE_MISSING')
+        expected = str(bindings.get('parent_requirement_id') or bindings.get('requirement_id') or '')
+        ids = [row.get('behavior_id') for row in behaviors]
+        if len(ids) != len(set(ids)) or any(
+            not isinstance(row, dict) or not row.get('intent') or not row.get('effects')
+            or not row.get('source_quote') or (expected and row.get('requirement_id') != expected)
+            for row in behaviors
+        ):
+            raise ValueError('CONSTRUCTION_BEHAVIOR_SCOPE_INVALID')
     if task.target_path and task.target_path != spec['target_path']: raise ValueError('CONSTRUCTION_TARGET_MISMATCH')
     task = replace(task, target_path=spec['target_path'], allowed_writes=(spec['target_path'],))
     if bindings.get('request_feature_entrypoint'):
@@ -109,13 +121,30 @@ def compose(router, spec, *, source_context=(), construction_context=None):
             'side': str(spec.get('side', 'COMMON'))}
         declarations.append((key, item['purpose']))
         page = {}; seen.clear()
+    registrars = []
+    if bindings.get('request_feature_entrypoint'):
+        # Each preserved child behavior owns a distinct method. Host lifecycle
+        # code registers every one, while MiMo writes the actual callbacks.
+        for behavior in behaviors:
+            symbol_name = 'registerBehavior' + hashlib.sha256(
+                behavior['behavior_id'].encode('utf-8')).hexdigest()[:20]
+            key = owner + '#' + symbol_name + '()'
+            if key in symbols:
+                raise ValueError('CONSTRUCTION_DECLARATION_DUPLICATE: ' + key)
+            symbols[key] = {'kind': 'METHOD', 'owner': owner, 'name': symbol_name,
+                'parameters': [], 'return_type': 'void', 'static': False,
+                'visibility': 'private', 'side': str(spec.get('side', 'COMMON'))}
+            registrars.append((key, behavior))
     if lifecycle:
         key = owner + '#' + lifecycle + '()'
+        if key in symbols: raise ValueError('CONSTRUCTION_HOST_ENTRYPOINT_DUPLICATE')
         symbols[key] = {'kind': 'METHOD', 'owner': owner, 'name': lifecycle, 'parameters': [],
-            'return_type': 'void', 'static': False, 'visibility': 'public', 'annotations': ['java.lang.Override'],
-            'class_interfaces': interfaces, 'side': str(spec.get('side', 'COMMON'))}
-        declarations.append((key, task.intent))
-    if not declarations: raise ValueError('CONSTRUCTION_BODY_EMPTY')
+            'return_type': 'void', 'static': False, 'visibility': 'public',
+            'annotations': ['java.lang.Override'], 'class_interfaces': interfaces,
+            'side': str(spec.get('side', 'COMMON'))}
+        if not registrars:
+            declarations.append((key, task.intent))
+    if not declarations and not registrars: raise ValueError('CONSTRUCTION_BODY_EMPTY')
     members = []
     for index, (key, purpose) in enumerate(declarations):
         member_task = replace(task, task_id=task.task_id + '.member.' + str(index), owner_symbol=key,
@@ -123,6 +152,25 @@ def compose(router, spec, *, source_context=(), construction_context=None):
         nodes = author_task_operations(router, member_task, context)
         render_task_java(member_task, nodes, symbols)
         members.append(render_task_member(member_task, nodes, symbols))
+    for key, behavior in registrars:
+        registrar_task = replace(task,
+            task_id=behavior['behavior_id'] + '.registration',
+            requirement_ids=(behavior['requirement_id'],),
+            behavior_id=behavior['behavior_id'], owner_symbol=key,
+            intent=behavior['intent'], trigger=behavior.get('trigger', ''),
+            effects=behavior['effects'],
+            state_reads=tuple(behavior.get('state_reads', ())),
+            state_writes=tuple(behavior.get('state_writes', ())),
+            output_symbols=(key,),
+            verification_ids=(behavior['behavior_id'] + '.compile',
+                              behavior['behavior_id'] + '.behavior'))
+        nodes = author_task_operations(router, registrar_task, context)
+        render_task_java(registrar_task, nodes, symbols)
+        members.append(render_task_member(registrar_task, nodes, symbols))
+    if registrars:
+        lifecycle_calls = '\\n'.join('this.' + symbols[key]['name'] + '();'
+                                    for key, _ in registrars)
+        members.append('@Override\\npublic void onInitialize() {\\n' + lifecycle_calls + '\\n}')
     source = 'package ' + package + ';\n\npublic ' + ('final ' if lifecycle else '') + 'class ' + name
     source += (' extends ' + superclass if superclass else '') + (' implements ' + ', '.join(interfaces) if interfaces else '')
     source += ' {\n' + '\n\n'.join(members) + '\n}\n'
