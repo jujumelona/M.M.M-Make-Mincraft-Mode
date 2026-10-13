@@ -544,6 +544,24 @@ def iter_geckolib_entity_records(
     raw = json.loads(manifest.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise GeckoLibGenerationError("GeckoLib entity index must be an object.")
+    if raw.get("schema_version") == "mmm/geckolib-entities-v2":
+        # Read approved legacy manifests without inventing entries or treating
+        # unsupported formats as valid. New writes still use per-entity records.
+        if (
+            set(raw) != {"schema_version", "shard_size", "entities"}
+            or type(raw["shard_size"]) is not int
+            or raw["shard_size"] <= 0
+            or not isinstance(raw["entities"], list)
+        ):
+            raise GeckoLibGenerationError("Legacy GeckoLib entity manifest is invalid.")
+        seen_ids: set[str] = set()
+        for entry in raw["entities"]:
+            value = _entity_record(entry)
+            if value["entity_id"] in seen_ids:
+                raise GeckoLibGenerationError("Duplicate legacy GeckoLib entity ID.")
+            seen_ids.add(value["entity_id"])
+            yield value
+        return
     if raw.get("schema_version") != "mmm/geckolib-entity-index-v1":
         raise GeckoLibGenerationError("Unsupported GeckoLib entity index.")
     relative = raw.get("record_directory")
