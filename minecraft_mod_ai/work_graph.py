@@ -377,33 +377,46 @@ class DurableWorkLedger:
         return self.task(node_id)
 
     def succeed(self, node_id: str, receipt: dict[str, Any], *, output_hash: str='') -> dict[str, Any]:
-        receipt_json = canonical_json(receipt)
-        receipt_hash = self._receipt_hash(receipt_json)
-        digest = output_hash or receipt_hash
+        """Persist only stage-appropriate, input-bound completion evidence."""
+        from .verifier_receipt_truth_contract import _decorate_receipt
+
         with self._connect() as connection:
             row = connection.execute(
-                'SELECT state, output_hash, receipt_json, receipt_hash FROM tasks WHERE node_id = ?',
+                'SELECT state, stage, input_hash, payload_json, output_hash, receipt_json, receipt_hash '
+                'FROM tasks WHERE node_id = ?',
                 (node_id,),
             ).fetchone()
             if row is None:
                 raise WorkGraphError(f'Unknown work node: {node_id}')
             state = str(row[0])
+            if state not in {WorkState.RUNNING.value, WorkState.SUCCEEDED.value}:
+                raise WorkGraphError(
+                    f'Work node {node_id} cannot succeed from state {state}.'
+                )
+            verified_receipt = _decorate_receipt(
+                {
+                    'node_id': node_id,
+                    'stage': str(row[1]),
+                    'input_hash': str(row[2]),
+                    'payload': json.loads(row[3]),
+                },
+                receipt,
+            )
+            receipt_json = canonical_json(verified_receipt)
+            receipt_hash = self._receipt_hash(receipt_json)
+            digest = output_hash or receipt_hash
             if state == WorkState.SUCCEEDED.value:
                 if (
-                    str(row[1] or '') == digest
-                    and str(row[2] or '') == receipt_json
-                    and str(row[3] or '') == receipt_hash
+                    str(row[4] or '') == digest
+                    and str(row[5] or '') == receipt_json
+                    and str(row[6] or '') == receipt_hash
                 ):
                     connection.commit()
                     return self.task(node_id)
                 raise WorkGraphError(
                     f'Work node {node_id} already succeeded with a different receipt.'
                 )
-            if state != WorkState.RUNNING.value:
-                raise WorkGraphError(
-                    f'Work node {node_id} cannot succeed from state {state}.'
-                )
-            cursor = connection.execute('\n                UPDATE tasks\n                SET state = ?, output_hash = ?, receipt_json = ?, receipt_hash = ?,\n                    lease_owner = NULL, lease_until = NULL, error = NULL,\n                    updated_at = ?\n                WHERE node_id = ? AND state = ?\n                ', (
+            cursor = connection.execute('\\n                UPDATE tasks\\n                SET state = ?, output_hash = ?, receipt_json = ?, receipt_hash = ?,\\n                    lease_owner = NULL, lease_until = NULL, error = NULL,\\n                    updated_at = ?\\n                WHERE node_id = ? AND state = ?\\n                ', (
                     WorkState.SUCCEEDED.value,
                     digest,
                     receipt_json,
@@ -419,6 +432,7 @@ class DurableWorkLedger:
         return self.task(node_id)
 
     succeed._mmm_fenced_transition = True  # type: ignore[attr-defined]
+    succeed._mmm_verifier_receipt_truth_integrated = True  # type: ignore[attr-defined]
 
     def fail(self, node_id: str, error: str, *, input_required: bool=False) -> dict[str, Any]:
         target = WorkState.INPUT_REQUIRED if input_required else WorkState.FAILED
