@@ -1135,12 +1135,9 @@ def compile_authored_design(
     # resolved, and carry the same immutable scope into downstream receipts.
     if plan.request_scope.get("requirements"):
         from dataclasses import replace
-        from .construction_planner import author_behavior_requirements
+        from .construction_planner import bind_behavior_scope
 
-        behaviors = author_behavior_requirements(plan.request_scope, router)
-        scoped = deepcopy(plan.request_scope)
-        scoped["behavior_requirements"] = [row.to_dict() for row in behaviors]
-        plan = replace(plan, request_scope=scoped)
+        plan = replace(plan, request_scope=bind_behavior_scope(plan.request_scope, router))
         design["authored_plan"] = plan.to_dict()
 
     production_state_section = compile_production_state_section(plan)
