@@ -78,6 +78,7 @@ def record_constructed_requirement(project_root, spec, source, *, materialized_s
         children.append({"behavior_id": bid, "intent": behavior["intent"],
                          "trigger": behavior.get("trigger", ""),
                          "effects": behavior.get("effects", ""),
+                         "source_status": behavior.get("source_status", "grounded"),
                          "registration": registration, "stage": "SOURCE_MATERIALIZED",
                          "runtime_status": "NOT_OBSERVED", "verification_ids": [
                              bid + ".compile", bid + ".behavior"]})
@@ -166,6 +167,10 @@ def requirement_completion(receipt, runtime_evidence):
     source_sha = receipt["source_sha256"]
     expected = {row["behavior_id"] for row in receipt["behaviors"]}
     successes = set()
+    source_unresolved = sorted(
+        row["behavior_id"] for row in receipt["behaviors"]
+        if row.get("source_status", "grounded") != "grounded"
+    )
     for evidence in runtime_evidence:
         if evidence.get("behavior_id") not in expected:
             continue
@@ -177,8 +182,11 @@ def requirement_completion(receipt, runtime_evidence):
             and evidence.get("state_observed") is True):
             successes.add(evidence["behavior_id"])
     return {"requirement_id": receipt["requirement_id"],
-            "status": "VERIFIED" if expected == successes and expected else "RUNTIME_UNVERIFIED",
+            "status": ("SOURCE_REVIEW_REQUIRED" if source_unresolved else
+                       "VERIFIED" if expected == successes and expected else
+                       "RUNTIME_UNVERIFIED"),
             "verified_behavior_ids": sorted(successes),
+            "source_review_required_ids": source_unresolved,
             "missing_behavior_ids": sorted(expected - successes)}
 
 
