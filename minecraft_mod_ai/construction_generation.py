@@ -155,6 +155,9 @@ def compose(router, spec, *, source_context=(), construction_context=None):
         from .construction_ownership import assign_behavior_records
         assigned_records = assign_behavior_records(planning_router, behaviors, residual_records)
 
+    donor_symbols = context.get('donor_callable_symbols', {})
+    used_donor_symbols = set()
+
     def author_one(member_task, *, owned_records=()):
         from .construction_progress import ConstructionNodeCheckpoint
         if not context.get('project_root'):
@@ -164,6 +167,11 @@ def compose(router, spec, *, source_context=(), construction_context=None):
             prerequisite_hashes=context['prerequisite_hashes'])
         scoped_context = dict(context)
         scoped_context['owned_runtime_records'] = list(owned_records)
+        scoped_context['donor_call_obligations'] = {
+            cap: {'callable_symbol_count': len(identifiers),
+                  'lookup_hint': identifiers[0].split('#', 1)[0]}
+            for cap, identifiers in donor_symbols.items()
+        }
         scoped_context['already_implemented_effects'] = {
             'ui_owned_records': typed_owners.get('ui_owned_records', ()),
             'typed_functions': typed_owners.get('functions', ()),
@@ -171,7 +179,14 @@ def compose(router, spec, *, source_context=(), construction_context=None):
         }
         scoped_context['resume_nodes'] = lambda current: progress.load()
         scoped_context['checkpoint'] = progress.save
-        return author_task_operations(router, member_task, scoped_context)
+        nodes = author_task_operations(router, member_task, scoped_context)
+        used_donor_symbols.update(
+            node['attributes']['symbol_ref']
+            for node in nodes
+            if node['op'] in {'call', 'new', 'field'}
+            and node['attributes'].get('symbol_ref')
+        )
+        return nodes
 
     members = []
     for index, (key, purpose) in enumerate(declarations):
@@ -197,6 +212,13 @@ def compose(router, spec, *, source_context=(), construction_context=None):
         nodes = author_one(registrar_task, owned_records=owned)
         render_task_java(registrar_task, nodes, symbols)
         members.append(render_task_member(registrar_task, nodes, symbols))
+    missing_donor_calls = [
+        cap for cap, identifiers in donor_symbols.items()
+        if not set(identifiers) & used_donor_symbols
+    ]
+    if missing_donor_calls:
+        raise ValueError('CONSTRUCTION_DONOR_GLUE_CALL_MISSING: ' +
+                         ','.join(sorted(missing_donor_calls)))
     if registrars:
         lifecycle_calls = '\n'.join('this.' + symbols[key]['name'] + '();'
                                     for key, _ in registrars)
