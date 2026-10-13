@@ -1128,6 +1128,21 @@ def compile_authored_design(
     plan = repair_authored_ui_action_plan(router, plan, source_reuse)
     design["authored_plan"] = plan.to_dict()
 
+    # The conversational plan preserves the user's source without making
+    # individual behavior authoring an early planning failure. Actual
+    # construction, however, requires behavior-owned tasks before generating
+    # any feature callbacks. Bind them once, after the target/reuse plan is
+    # resolved, and carry the same immutable scope into downstream receipts.
+    if plan.request_scope.get("requirements"):
+        from dataclasses import replace
+        from .construction_planner import author_behavior_requirements
+
+        behaviors = author_behavior_requirements(plan.request_scope, router)
+        scoped = deepcopy(plan.request_scope)
+        scoped["behavior_requirements"] = [row.to_dict() for row in behaviors]
+        plan = replace(plan, request_scope=scoped)
+        design["authored_plan"] = plan.to_dict()
+
     production_state_section = compile_production_state_section(plan)
     modules, manifest = _compile_new_authored_modules(
         plan,
