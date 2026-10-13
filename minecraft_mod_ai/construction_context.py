@@ -100,6 +100,23 @@ def build_target_symbols(classpath, *, java_version: int, namespace: str, classp
                 row.update(descriptor=after.descriptor, parameters=parameters, return_type=returns)
             remapped[owner if after.kind=="CLASS" else owner+"#"+after.name+after.descriptor] = row
         result = remapped
+    # Model lambdas may target only inspected single-abstract-method interfaces.
+    # Derive the callback shape from the resolved bytecode, never from Fabric names.
+    for symbol_id, symbol in result.items():
+        if symbol.get("kind") != "CLASS" or not symbol.get("access", 0) & 0x0200:
+            continue
+        owner = symbol["owner"]
+        abstract_members = [
+            row for row in result.values()
+            if row.get("owner") == owner
+            and row.get("kind") == "METHOD"
+            and row.get("access", 0) & 0x0400
+            and not row.get("access", 0) & (0x0040 | 0x1000)
+        ]
+        if len(abstract_members) == 1:
+            member = abstract_members[0]
+            symbol["functional_parameters"] = list(member["parameters"])
+            symbol["functional_return_type"] = member["return_type"]
     return result
 
 
