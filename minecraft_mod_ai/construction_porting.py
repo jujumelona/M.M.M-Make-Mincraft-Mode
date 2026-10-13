@@ -37,7 +37,8 @@ def select_port_tasks(router, parent_task, *, owner, references, symbols, exact_
             "Select port=true only if this exact pinned method is relevant to the "
             "requested behavior and can be reimplemented using inspected target API. "
             "Otherwise port=false; an unselected reference is never installed. " + STATE_INSTRUCTION)
-            if consume_lookup_choice(state, selected): continue
+            if consume_lookup_choice(state, selected):
+                continue
             break
         state.advance()
         if not selected["port"]:
@@ -59,7 +60,8 @@ def select_port_tasks(router, parent_task, *, owner, references, symbols, exact_
             }, schema,
             "Choose one target Java method signature for porting the old method. "
             "Use only inspected types. Do not write Java code. " + STATE_INSTRUCTION)
-            if consume_lookup_choice(state, signature): continue
+            if consume_lookup_choice(state, signature):
+                continue
             break
         exact_type(result_type, symbols)
         state.advance()
@@ -75,7 +77,8 @@ def select_port_tasks(router, parent_task, *, owner, references, symbols, exact_
             }, schema,
             "Provide exactly one parameter of the new target API helper at a time. "
             "Use complete=true after all needed parameters. No Java source. " + STATE_INSTRUCTION)
-            if consume_lookup_choice(state, row): continue
+            if consume_lookup_choice(state, row):
+                continue
             if row["complete"]:
                 break
             identifier(row["name"])
