@@ -67,7 +67,7 @@ def build_target_symbols(classpath, *, java_version: int, namespace: str, classp
             owner = item.name.replace("/", ".").replace("$", ".")
             result[owner] = {"owner": owner, "name": owner.rsplit(".",1)[-1], "kind": "CLASS",
                              "side": item.side, "namespace": namespace, "source_hash": item.content_hash,
-                             "superclass": item.superclass.replace("/", "."),
+                             "superclass": (item.superclass or "").replace("/", "."),
                              "interfaces": [x.replace("/", ".") for x in item.interfaces],
                              "access": item.access, "source_path": str(path)}
             for member in item.members:
