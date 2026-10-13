@@ -111,7 +111,7 @@ def _feature_messages(context: str, chunk: str, prior: list[dict[str, Any]], rep
             "English mod/source search query, and a verbatim original source quote. "
             "Classify it as gameplay, interface, or infrastructure. Use interface only "
             "when the feature itself is a screen or UI. Distinct features may share "
-            "a quote. When all features are covered, return status=complete with "
+            "a quote. Choose a short original contiguous quote for each distinct action. Only when every requested action is covered, return status=complete with "
             "empty statement, search_query and source_quote. Constraints alone need "
             "no additional feature. Do not repeat features or invent mechanics to "
             "fill a count. RAG examples provide guidance, not user requirements."
