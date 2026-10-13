@@ -2448,7 +2448,7 @@ class CompleteProductionOrchestrator:
                     report_path = project_root / '.minecraft_ai' / 'construction-failures.json'
                     report_path.parent.mkdir(parents=True, exist_ok=True)
                     report_path.write_text(
-                        json.dumps(failure_report, ensure_ascii=False, indent=2, sort_keys=True) + '\\n',
+                        json.dumps(failure_report, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
                         encoding='utf-8',
                     )
                     raise CompleteProductionError(
