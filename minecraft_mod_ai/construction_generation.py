@@ -145,11 +145,23 @@ def compose(router, spec, *, source_context=(), construction_context=None):
         if not registrars:
             declarations.append((key, task.intent))
     if not declarations and not registrars: raise ValueError('CONSTRUCTION_BODY_EMPTY')
+    def author_one(member_task):
+        from .construction_progress import ConstructionNodeCheckpoint
+        if not context.get('project_root'):
+            raise ValueError('CONSTRUCTION_RESUME_WORKSPACE_REQUIRED')
+        progress = ConstructionNodeCheckpoint(context['project_root'], member_task,
+            target=context['target'],
+            prerequisite_hashes=context['prerequisite_hashes'])
+        scoped_context = dict(context)
+        scoped_context['resume_nodes'] = lambda current: progress.load()
+        scoped_context['checkpoint'] = progress.save
+        return author_task_operations(router, member_task, scoped_context)
+
     members = []
     for index, (key, purpose) in enumerate(declarations):
         member_task = replace(task, task_id=task.task_id + '.member.' + str(index), owner_symbol=key,
                               intent=purpose, output_symbols=(key,))
-        nodes = author_task_operations(router, member_task, context)
+        nodes = author_one(member_task)
         render_task_java(member_task, nodes, symbols)
         members.append(render_task_member(member_task, nodes, symbols))
     for key, behavior in registrars:
@@ -164,7 +176,7 @@ def compose(router, spec, *, source_context=(), construction_context=None):
             output_symbols=(key,),
             verification_ids=(behavior['behavior_id'] + '.compile',
                               behavior['behavior_id'] + '.behavior'))
-        nodes = author_task_operations(router, registrar_task, context)
+        nodes = author_one(registrar_task)
         render_task_java(registrar_task, nodes, symbols)
         members.append(render_task_member(registrar_task, nodes, symbols))
     if registrars:
