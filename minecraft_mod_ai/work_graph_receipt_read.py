@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Read-boundary integrity for durable work receipts without runtime rebinding."""
 
+import json
 import sqlite3
 from collections.abc import Sequence
 from typing import Any
@@ -34,9 +35,29 @@ def _receipt_status(ledger: Any, row: Sequence[Any]) -> str:
     if digest is None:
         return "invalid"
     receipt_hash = str(row[10] or "")
-    if receipt_hash:
-        return "valid" if receipt_hash == digest else "invalid"
-    return "legacy" if str(row[8] or "") == digest else "invalid"
+    if receipt_hash and receipt_hash != digest:
+        return "invalid"
+    if not receipt_hash and str(row[8] or "") != digest:
+        return "invalid"
+
+    from .verifier_receipt_truth_contract import (
+        VerifierReceiptTruthError,
+        _assert_receipt_reusable,
+    )
+    try:
+        _assert_receipt_reusable(
+            {
+                "node_id": str(row[0]),
+                "stage": str(row[1]),
+                "input_hash": str(row[2]),
+                "payload": json.loads(row[3]),
+            },
+            json.loads(row[9]),
+        )
+    except (VerifierReceiptTruthError, TypeError, ValueError):
+        # A self-consistent JSON hash does not attest a verifier's actual work.
+        return "invalid"
+    return "valid" if receipt_hash else "legacy"
 
 
 def verified_task_row(
