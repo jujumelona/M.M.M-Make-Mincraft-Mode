@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sqlite3
 from collections.abc import Mapping
 from dataclasses import asdict
@@ -74,6 +75,16 @@ def _request_chunks(prompt: str, *, limit: int = 768):
                 end = boundary + 1
         yield start, prompt[start:end]
         start = end
+
+
+def _source_quote_bounds(source: str, quote: str) -> tuple[int, int] | None:
+    """Find a verbatim source span allowing only whitespace differences."""
+    words = str(quote).split()
+    if not words:
+        return None
+    pattern = r"\\s+".join(re.escape(word) for word in words)
+    match = re.search(pattern, source)
+    return (match.start(), match.end()) if match else None
 
 
 def _identity(row: Mapping[str, Any]) -> tuple[str, str]:
