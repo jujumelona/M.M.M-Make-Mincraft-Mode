@@ -29,10 +29,18 @@ def test_feature_glue_uses_registered_java_and_real_fabric_startup():
     from minecraft_mod_ai.host_version_catalog import host_target
 
     adapter = host_target("26.1.2")
-    plan = AuthoredPlan("Travel to planets", "Saved worksheet", request_scope={"requirements": [{
-        "requirement_id": "request_planet", "statement": "Travel to planets",
-        "search_query": "space travel", "implementation_role": "gameplay",
-    }]})
+    plan = AuthoredPlan("Travel to planets", "Saved worksheet", request_scope={
+        "requirements": [{
+            "requirement_id": "request_planet", "statement": "Travel to planets",
+            "search_query": "space travel", "implementation_role": "gameplay",
+        }],
+        "behavior_requirements": [{
+            "behavior_id": "behavior_travel", "requirement_id": "request_planet",
+            "intent": "Travel to planets", "source_quote": "Travel to planets",
+            "trigger": "Requested journey", "effects": "Arrive at a planet",
+            "state_reads": [], "state_writes": [],
+        }],
+    })
     modules, jobs = compile_request_feature_jobs(
         plan, adapter=adapter, mod_id="space", package_name="test.space",
         content_modules=(), content_jobs=(), source_rag=VerifiedSourceRAG(), source_reuse={},
