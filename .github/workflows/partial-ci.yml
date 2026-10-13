@@ -110,6 +110,24 @@ jobs:
               "minecraft_mod_ai/typed_plan_production.py": (
                   "tests/test_typed_plan_production.py",
               ),
+              # Java construction is a production compiler path, not merely
+              # a helper library. Cover its direct contracts even when the
+              # imports are routed indirectly through the work graph.
+              "minecraft_mod_ai/construction_classpath.py": (
+                  "tests/test_construction_classpath_contract.py",
+              ),
+              "minecraft_mod_ai/construction_author.py": (
+                  "tests/test_construction_behavior_planning.py",
+              ),
+              "minecraft_mod_ai/construction_generation.py": (
+                  "tests/test_construction_behavior_planning.py",
+                  "tests/test_construction_classpath_contract.py",
+              ),
+              "minecraft_mod_ai/first_pass_java_source.py": (
+                  "tests/test_first_pass_java_source.py",
+                  "tests/test_first_pass_java_data_transport.py",
+                  "tests/test_java_decode_capacity.py",
+              ),
           }
           targeted_path_tests = {}
           for prefix, candidates in targeted_path_tests.items():
@@ -184,10 +202,23 @@ jobs:
               "tests/test_gametest_eula_consent_forwarding.py",
               "tests/test_runner_parallel_validation_contract.py",
               "tests/test_production_ci_e2e_gate.py",
+              "tests/test_construction_classpath_contract.py",
+              "tests/test_construction_behavior_planning.py",
               ".github/workflows/partial-ci.yml",
               ".github/workflows/deterministic-debug-full-e2e.yml",
           }
           production_prefixes = (
+              # Fresh compiler inventories and typed Java construction must
+              # run the same real Gradle + GameTest fixture as the work graph.
+              "minecraft_mod_ai/construction_",
+              "minecraft_mod_ai/first_pass_java_",
+              "minecraft_mod_ai/java_operation_ir",
+              "minecraft_mod_ai/java_symbol_resolver",
+              "minecraft_mod_ai/java_lsp",
+              "minecraft_mod_ai/jar_api_extractor",
+              "minecraft_mod_ai/jdk_runtime_inventory",
+              "minecraft_mod_ai/target_contract",
+              "minecraft_mod_ai/generation_target_compile",
               "minecraft_mod_ai/runner",
               "minecraft_mod_ai/resource_",
               "minecraft_mod_ai/model_",
