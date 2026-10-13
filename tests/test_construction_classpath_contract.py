@@ -37,6 +37,10 @@ def _project(tmp_path):
 
 
 def _response(jar, *, arguments, log_path, exit_code=0, output=None):
+    if exit_code == 0:
+        prefix = "-D" + probe._REPORT_PROPERTY + "="
+        report_path = Path(next(value[len(prefix):] for value in arguments if value.startswith(prefix)))
+        report_path.write_text(json.dumps([str(jar)]), encoding="utf-8")
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_path.write_text(
         output if output is not None else "noise\n" + probe._BEGIN + "\n" + json.dumps([str(jar)])

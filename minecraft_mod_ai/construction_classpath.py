@@ -18,11 +18,14 @@ from .runner import DEFAULT_GRADLE_COMMAND_TIMEOUT_SECONDS
 _BEGIN = "MMM_COMPILE_CLASSPATH_BEGIN"
 _END = "MMM_COMPILE_CLASSPATH_END"
 _TASK = "mmmInspectCompileClasspath"
+_REPORT_PROPERTY = "mmm.compile.classpath.report"
 _INIT = r'''
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.ConfigurableFileCollection
+import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.tasks.Classpath
 import org.gradle.api.tasks.InputFiles
+import org.gradle.api.tasks.OutputFile
 import org.gradle.api.tasks.TaskAction
 
 abstract class MmmInspectCompileClasspath extends DefaultTask {
@@ -30,13 +33,18 @@ abstract class MmmInspectCompileClasspath extends DefaultTask {
     @Classpath
     abstract ConfigurableFileCollection getInspectedClasspath()
 
+    @OutputFile
+    abstract RegularFileProperty getClasspathReport()
+
     @TaskAction
     void reportClasspath() {
         // Gradle resolves declared task inputs under the owning project's
         // lock. The action consumes files without accessing Project/SourceSet.
         def files = inspectedClasspath.files
+        def payload = groovy.json.JsonOutput.toJson(files.collect { it.absolutePath })
+        classpathReport.get().asFile.setText(payload, "UTF-8")
         println("MMM_COMPILE_CLASSPATH_BEGIN")
-        println(groovy.json.JsonOutput.toJson(files.collect { it.absolutePath }))
+        println(payload)
         println("MMM_COMPILE_CLASSPATH_END")
     }
 }
@@ -51,6 +59,9 @@ gradle.beforeProject { project ->
             // Keep the FileCollection lazy; resolving it in a global lifecycle
             // callback bypasses Gradle's project lock, even with cache disabled.
             inspectedClasspath.from(sets.main.compileClasspath)
+            def reportPath = System.getProperty("mmm.compile.classpath.report")
+            if (!reportPath) throw new GradleException("MMM compile classpath report path required")
+            classpathReport.set(new File(reportPath))
         }
     }
 }
@@ -111,8 +122,10 @@ def _resolve_inspected_classpath(project_root: str, timeout_seconds: int,
     cache = Path(cache_dir) if cache_dir else production_gradle_cache_dir()
     runner = GradleRunner(cache, command_timeout_seconds=timeout_seconds)
     log_path = durable_trace_path().parent / "gradle_commands" / f"classpath-{uuid4().hex}.log"
+    raw, report_error = None, None
     with TemporaryDirectory(prefix="mmm-classpath-") as directory:
         init_script = Path(directory) / "mmm-classpath.gradle"
+        report_path = Path(directory) / "classpath.json"
         init_script.write_text(_INIT, encoding="utf-8")
         # Reuse the SHA-verified distribution, production user home, bootstrap
         # lock, target launcher, and process-tree cleanup used by actual builds.
@@ -120,9 +133,17 @@ def _resolve_inspected_classpath(project_root: str, timeout_seconds: int,
         result = runner.run_project_command(
             root, name="inspect_compile_classpath",
             arguments=("--no-daemon", "--no-configuration-cache", "--console=plain",
-                       "--init-script", str(init_script), "--info", "--stacktrace", ":" + _TASK),
+                       "--init-script", str(init_script),
+                       f"-D{_REPORT_PROPERTY}={report_path}", "--info", "--stacktrace", ":" + _TASK),
             log_path=log_path, java_version=java_version,
         )
+        if not result.timed_out and result.exit_code == 0:
+            try:
+                # Logs are redacted for humans. The private result channel must
+                # preserve exact paths even when a name resembles a credential.
+                raw = report_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError) as exc:
+                report_error = exc
     output = Path(result.log_path).read_text(encoding="utf-8", errors="replace")
     evidence = f"log={result.log_path}\n" + output[-4000:]
     if result.timed_out:
@@ -131,10 +152,11 @@ def _resolve_inspected_classpath(project_root: str, timeout_seconds: int,
         )
     if result.exit_code:
         raise RuntimeError("CONSTRUCTION_GRADLE_CLASSPATH_FAILED: " + evidence)
+    if report_error is not None:
+        raise RuntimeError("CONSTRUCTION_GRADLE_CLASSPATH_UNREPORTED: " + evidence) from report_error
     try:
-        raw = output.split(_BEGIN, 1)[1].split(_END, 1)[0].strip()
         rows = json.loads(raw)
-    except (IndexError, ValueError, TypeError) as exc:
+    except (ValueError, TypeError) as exc:
         raise RuntimeError("CONSTRUCTION_GRADLE_CLASSPATH_UNREPORTED: " + evidence) from exc
     if not isinstance(rows, list) or not rows or any(not isinstance(row, str) for row in rows):
         raise RuntimeError("CONSTRUCTION_GRADLE_CLASSPATH_EMPTY")
