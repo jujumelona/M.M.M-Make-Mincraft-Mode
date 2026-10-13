@@ -21,6 +21,38 @@ def _coverage_path(project_root, requirement_id):
         _digest(requirement_id.encode()) + ".json")
 
 
+def _authored_source_path(project_root, target_path):
+    root = Path(project_root).resolve()
+    return root / ".mmm" / "construction_authorship" / (
+        _digest(target_path.encode()) + ".json")
+
+
+def record_authored_source_calls(project_root, target_path, source, *,
+                                 selected_ports, installed_donor_calls):
+    """Record typed IR's actual invocations; no runtime success is implied."""
+    output = {
+        "schema_version": "mmm/construction-authorship-v1",
+        "target_path": target_path,
+        "source_sha256": _digest(source.encode("utf-8")),
+        "selected_port_tasks": list(selected_ports),
+        "installed_donor_symbol_calls": sorted(installed_donor_calls),
+        "status": "TYPED_SOURCE_RENDERED_RUNTIME_UNVERIFIED",
+    }
+    path = _authored_source_path(project_root, target_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and json.loads(path.read_text(encoding="utf-8")) == output:
+        return str(path)
+    temporary = path.with_name("." + path.name + "." + uuid4().hex + ".tmp")
+    try:
+        temporary.write_text(json.dumps(output, ensure_ascii=False,
+                             sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        temporary.replace(path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+    return str(path)
+
+
 def record_constructed_requirement(project_root, spec, source, *, materialized_sha256):
     bindings = spec.get("bindings") or {}
     raw = bindings.get("construction_behaviors_json")
@@ -88,11 +120,27 @@ def record_constructed_requirement(project_root, spec, source, *, materialized_s
         else:
             record["stage"] = "PLANNED"
         task_receipts.append(record)
+    authorship_file = _authored_source_path(project_root, spec["target_path"])
+    authorship = None
+    if authorship_file.is_file():
+        candidate = json.loads(authorship_file.read_text(encoding="utf-8"))
+        if (candidate.get("schema_version") == "mmm/construction-authorship-v1"
+            and candidate.get("source_sha256") == source_sha
+            and candidate.get("target_path") == spec["target_path"]):
+            authorship = candidate
+    if authorship:
+        for port in authorship["selected_port_tasks"]:
+            task_receipts.append({
+                "task_id": port["task_id"], "kind": "port",
+                "source_ref": port["source_ref"], "owner_symbol": port["owner_symbol"],
+                "stage": "PORT_SOURCE_RENDERED_RUNTIME_UNVERIFIED",
+            })
     receipt = {"schema_version": "mmm/construction-coverage-v1",
                "requirement_id": parent, "target_path": spec["target_path"],
                "source_sha256": source_sha,
                "status": "RUNTIME_UNVERIFIED", "behaviors": children,
-               "tasks": task_receipts}
+               "tasks": task_receipts,
+               "authorship": authorship}
     path = _coverage_path(project_root, parent)
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
