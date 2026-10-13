@@ -48,6 +48,7 @@ def author_task_operations(router, task, context):
             'declaration': declaration, 'target_path': task.target_path,
             'owned_runtime_records': context.get('owned_runtime_records', ()),
             'donor_call_obligations': context.get('donor_call_obligations', {}),
+            'port_source_ref': context.get('port_source_ref', ''),
             'already_implemented_effects': context.get('already_implemented_effects', {})}
     resume = context.get('resume_nodes')
     existing, stage = resume(task) if callable(resume) else ((), '')
@@ -91,6 +92,11 @@ def author_task_operations(router, task, context):
                 if choice['query'] not in units: raise ValueError('CONSTRUCTION_SOURCE_PAGE_MISSING')
                 pages = units[choice['query']]
                 page = {'source': pages[choice['offset']:choice['offset'] + 1]}
+                if not page['source']:
+                    raise ValueError('CONSTRUCTION_SOURCE_PAGE_OFFSET_INVALID')
+                callback = context.get('source_read')
+                if callable(callback):
+                    callback(task, choice['query'])
             continue
         row = dict(ask(router, 'construction_operation_' + action, payload, operation_schema(action), instruction))
         row['op'] = action
