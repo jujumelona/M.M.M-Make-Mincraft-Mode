@@ -248,4 +248,17 @@ def compose(router, spec, *, source_context=(), construction_context=None):
     source += (' extends ' + superclass if superclass else '') + (' implements ' + ', '.join(interfaces) if interfaces else '')
     source += ' {\n' + '\n\n'.join(members) + '\n}\n'
     if context.get('verify_source'): context['verify_source'](source, spec['target_path'])
+    from .construction_coverage import record_authored_source_calls
+    record_authored_source_calls(context['project_root'], spec['target_path'], source,
+        selected_ports=[
+            {'task_id': port_task.task_id, 'source_ref': ref,
+             'owner_symbol': port_task.owner_symbol}
+            for port_task, ref in port_tasks
+        ],
+        installed_donor_calls=sorted(
+            used_donor_symbols & {
+                ref for rows in donor_symbols.values() for ref in rows
+            }
+        ),
+    )
     return source
