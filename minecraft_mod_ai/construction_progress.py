@@ -125,7 +125,8 @@ class ConstructionNodeCheckpoint:
         if task.task_id != self.task.task_id:
             raise ValueError('CONSTRUCTION_CHECKPOINT_TASK_MISMATCH')
         with _LOCK:
-            if not self.author_state_path.exists(): return None
+            if not self.author_state_path.exists():
+                return None
             envelope = json.loads(self.author_state_path.read_text(encoding='utf-8'))
             record = envelope.get('record')
             if not isinstance(record, dict) or _sha(record) != envelope.get('sha256'):
@@ -134,7 +135,8 @@ class ConstructionNodeCheckpoint:
                 raise ValueError('CONSTRUCTION_AUTHOR_STATE_BINDING_MISMATCH')
             # A crash between node and cursor writes may leave an older cursor.
             # Keep the accepted graph; only that cursor is stale.
-            if record.get('nodes_sha256') != _sha(nodes): return None
+            if record.get('nodes_sha256') != _sha(nodes):
+                return None
             return record.get('state')
 
     def save_author_state(self, task, nodes, state):
@@ -155,7 +157,8 @@ class ConstructionNodeCheckpoint:
                     sort_keys=True, separators=(',', ':')), encoding='utf-8')
                 temporary.replace(self.author_state_path)
             finally:
-                if temporary.exists(): temporary.unlink()
+                if temporary.exists():
+                    temporary.unlink()
 
     def record_source_read(self, task, source_ref):
         if task.task_id != self.task.task_id or not source_ref:
