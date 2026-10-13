@@ -9,7 +9,7 @@ import re
 import string
 
 from .construction_author import ID, obj, ask
-from .construction_state import STATE_INSTRUCTION
+from .construction_state import PAGE_SIZE, STATE_INSTRUCTION
 from .java_operation_ir import KEYWORDS, PRIMITIVES
 
 
@@ -84,11 +84,19 @@ def action_schema(action, properties=None):
     return obj({'action': {'const': action}, **(properties or {})})
 
 
-def choice_actions(schema):
+def choice_actions(schema, *, default_action=None):
     actions = []
-    for branch in schema['oneOf']:
-        shape = branch['properties']['action']
-        actions.extend([shape['const']] if 'const' in shape else shape['enum'])
+    for branch in schema.get('oneOf', [schema]):
+        properties = branch['properties']
+        if 'action' in properties:
+            shape = properties['action']
+            actions.extend([shape['const']] if 'const' in shape else shape['enum'])
+        elif 'complete' in properties:
+            actions.append('complete' if properties['complete']['const'] else 'parameter')
+        elif default_action:
+            actions.append(default_action)
+        else:
+            raise ValueError('CONSTRUCTION_CHOICE_ACTION_REQUIRED')
     return list(dict.fromkeys(actions))
 
 
@@ -112,10 +120,30 @@ def symbol_lookup_schemas(state):
     return branches
 
 
-def consume_symbol_choice(state, choice):
-    if choice['action'] not in {'symbols', 'more_symbols'}: return False
-    state.lookup_symbols(choice['query'], choice.get('offset', 0))
-    return True
+def binding_lookup_schemas(state):
+    branches = []
+    for key, rows in sorted(state.binding_pages.items()):
+        consumed = {offset for kind, query, offset in state.requests
+                    if kind == 'bindings' and query == key}
+        offset = max(consumed) + PAGE_SIZE if consumed else 0
+        # First page and then its exact successor; consumed pages and arbitrary
+        # offsets never become model choices. Empty bindings have one empty page.
+        if offset and offset >= len(rows): continue
+        branches.append(action_schema('bindings', {'query': {'const': key}, 'offset': {'const': offset}}))
+    return branches
+
+
+def with_binding_lookups(state, schema):
+    branches = binding_lookup_schemas(state)
+    return {'oneOf': [*schema.get('oneOf', [schema]), *branches]} if branches else schema
+
+
+def consume_lookup_choice(state, choice):
+    if choice.get('action') in {'symbols', 'more_symbols'}:
+        state.lookup_symbols(choice['query'], choice.get('offset', 0)); return True
+    if choice.get('action') == 'bindings':
+        state.lookup_bindings(choice['query'], choice['offset']); return True
+    return False
 
 
 def member_schema(state, *, reserved_names, body_candidates):
@@ -127,7 +155,8 @@ def member_schema(state, *, reserved_names, body_candidates):
                      'name': identifier_schema(known_names | set(reserved_names)), 'purpose': ID}),
                 action_schema('constructor', {'purpose': ID}),
                 action_schema('declarations', {'offset': {'type': 'integer', 'minimum': 0}}),
-                action_schema('extension', {'reason': ID}), *symbol_lookup_schemas(state)]
+                action_schema('extension', {'reason': ID}), *symbol_lookup_schemas(state),
+                *binding_lookup_schemas(state)]
     if helpers:
         branches.append(action_schema('overload', {'name': {'enum': helpers}, 'purpose': ID}))
     if state.declaration_ids: branches.append(action_schema('complete'))
@@ -136,16 +165,16 @@ def member_schema(state, *, reserved_names, body_candidates):
     return {'oneOf': branches}
 
 
-def parameter_schema(parameters, *, can_complete=True):
+def parameter_schema(parameters, *, state, can_complete=True):
     branches = [obj({'complete': {'const': False},
                      'name': identifier_schema(p['name'] for p in parameters)})]
     if can_complete: branches.append(obj({'complete': {'const': True}}))
-    return {'oneOf': branches}
+    return with_binding_lookups(state, {'oneOf': branches})
 
 
 def type_candidates(state):
     types = set(PRIMITIVES) - {'void'}
-    visible = [state.symbols[state.owner], *state.lookup.get('matches', ())]
+    visible = [state.symbols[state.owner], *state.symbol_lookup.get('matches', ())]
     for row in visible:
         names = [row.get('owner', ''), row.get('return_type', '')]
         if row.get('kind') == 'CLASS': names.append(row.get('symbol_id', row.get('owner', '')))
@@ -166,13 +195,14 @@ def choose_type(router, state, payload, *, phase, allow_void=False):
         types = type_candidates(state)
         branches = [action_schema('type', {'base_type': {'type': 'string', 'enum': types},
                                           'array_dimensions': {'type': 'integer', 'minimum': 0, 'maximum': 255}}),
-                    *symbol_lookup_schemas(state), action_schema('extension', {'reason': ID})]
+                    *symbol_lookup_schemas(state), *binding_lookup_schemas(state),
+                    action_schema('extension', {'reason': ID})]
         # JVMS 4.11 bounds array dimensions; void is never an array/component.
         if allow_void: branches.append(action_schema('void'))
         schema = {'oneOf': branches}
         choice = ask(router, 'construction_type_next',
             {**payload, **state.payload(choice_actions(schema), type_candidates=types)}, schema, instruction)
-        if consume_symbol_choice(state, choice): continue
+        if consume_lookup_choice(state, choice): continue
         if choice['action'] == 'extension':
             raise ValueError('CONSTRUCTION_RENDERER_EXTENSION_REQUIRED: ' + choice['reason'])
         state.advance()
@@ -192,7 +222,7 @@ def accessible_type(state, row):
 def header_candidates(state):
     candidates = {'superclass': [], 'interface': []}
     header = state.symbols[state.owner]
-    for match in state.lookup.get('matches', ()):
+    for match in state.symbol_lookup.get('matches', ()):
         key = match['symbol_id']
         row = state.symbols.get(key, {})
         if (key == state.owner or row.get('provenance') == 'construction_plan'
@@ -207,7 +237,7 @@ def header_candidates(state):
 
 
 def header_schema(state, candidates):
-    branches = [*symbol_lookup_schemas(state), action_schema('complete'),
+    branches = [*symbol_lookup_schemas(state), *binding_lookup_schemas(state), action_schema('complete'),
                 action_schema('extension', {'reason': ID})]
     for kind, keys in candidates.items():
         if keys:

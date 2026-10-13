@@ -67,7 +67,8 @@ def author_task_operations(router, task, context):
         declaration_ids = sorted(key for key, row in symbols.items()
                                  if row.get('owner') == declaration['owner'] and row.get('kind') != 'CLASS')
     state = ConstructionState(symbols, declaration['owner'], task.target_path,
-                              declaration_ids=declaration_ids, revision=len(nodes))
+        declaration_ids=declaration_ids, revision=len(nodes),
+        authoring_contract=context.get('authoring_contract'), binding_pages=context.get('binding_pages'))
     state.enter('operation_graph')
     referenced = {ref for row in nodes for ref in row['input_refs']}
     pending = dict.fromkeys(ref for row in nodes for ref in row['input_refs'] if ref not in by_id)
@@ -100,8 +101,7 @@ def author_task_operations(router, task, context):
                        if query.strip().casefold() in key.casefold()]
             return page_result(matches, offset, field='sources')
         if action == 'bindings':
-            if query not in bindings: raise ValueError('CONSTRUCTION_BINDING_MISSING')
-            return page_result(bindings[query], offset, field='bindings')
+            return state.binding_result(query, offset)
         if action != 'source' or query not in source_units:
             raise ValueError('CONSTRUCTION_SOURCE_PAGE_MISSING')
         pages = source_units[query]

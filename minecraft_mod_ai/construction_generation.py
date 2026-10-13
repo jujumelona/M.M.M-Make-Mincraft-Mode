@@ -6,7 +6,7 @@ from dataclasses import replace
 from .construction_author import obj, ask
 from .construction_state import ConstructionState, STATE_INSTRUCTION
 from .construction_declaration_choices import (header_candidates, header_schema, choice_actions,
-    member_schema, parameter_schema, consume_symbol_choice, choose_type)
+    member_schema, parameter_schema, consume_lookup_choice, choose_type, with_binding_lookups)
 from .construction_task import ConstructionTask
 from .construction_author import author_task_operations
 from .construction_java import render_task_member, render_task_java
@@ -93,7 +93,8 @@ def compose(router, spec, *, source_context=(), construction_context=None,
     symbols[owner] = {'kind': 'CLASS', 'owner': owner, 'name': name, 'access': 1,
         'superclass': superclass, 'interfaces': interfaces,
         'side': str(spec.get('side', 'COMMON')), 'provenance': 'construction_plan'}
-    state = ConstructionState(symbols, owner, task.target_path)
+    state = ConstructionState(symbols, owner, task.target_path,
+        authoring_contract=context['authoring_contract'], binding_pages=context['binding_pages'])
     payload = {'intent': task.intent, 'trigger': task.trigger, 'effects': task.effects,
                'state_reads': task.state_reads, 'state_writes': task.state_writes,
                'owner': owner, 'target_path': task.target_path,
@@ -113,7 +114,7 @@ def compose(router, spec, *, source_context=(), construction_context=None,
             if choice['action'] == 'complete': break
             if choice['action'] == 'extension':
                 raise ValueError('CONSTRUCTION_RENDERER_EXTENSION_REQUIRED: ' + choice['reason'])
-            if consume_symbol_choice(state, choice): continue
+            if consume_lookup_choice(state, choice): continue
             type_ = exact_type(choice['type_ref'], symbols, allow_void=False)
             if type_ not in candidates[choice['action']]:
                 raise ValueError('CONSTRUCTION_CLASS_HEADER')
@@ -172,7 +173,7 @@ def compose(router, spec, *, source_context=(), construction_context=None,
         if action == 'begin_bodies':
             preferred_body = item['symbol_ref']; break
         if action == 'extension': raise ValueError('CONSTRUCTION_RENDERER_EXTENSION_REQUIRED: ' + item['reason'])
-        if consume_symbol_choice(state, item): continue
+        if consume_lookup_choice(state, item): continue
         if action == 'declarations':
             state.lookup_declarations(item['offset']); continue
         member_name = name if action == 'constructor' else identifier(item['name'])
@@ -184,8 +185,14 @@ def compose(router, spec, *, source_context=(), construction_context=None,
         state.enter('member_signature')
         schema = obj({**SIGNATURE['properties'], 'return_type': {'const': return_type}})
         if action == 'constructor': schema['properties']['static'] = {'const': False}
-        metadata = ask(planning_router, 'construction_member_signature',
-            {**current, 'return_type': return_type, **state.payload(['signature'])}, schema, SIGNATURE_INSTRUCTION)
+        while True:
+            decision_schema = with_binding_lookups(state, schema)
+            metadata = ask(planning_router, 'construction_member_signature',
+                {**current, 'return_type': return_type,
+                 **state.payload(choice_actions(decision_schema, default_action='signature'))},
+                decision_schema, SIGNATURE_INSTRUCTION)
+            if consume_lookup_choice(state, metadata): continue
+            break
         exact_type(metadata['return_type'], symbols, allow_void=action != 'field')
         state.advance()
         parameters = []
@@ -195,12 +202,13 @@ def compose(router, spec, *, source_context=(), construction_context=None,
                 # Same-name helpers can be overloaded only by a distinct
                 # parameter signature. The sampler cannot finish a duplicate.
                 candidate_key = owner + '#' + member_name + '(' + ','.join(p['type'] for p in parameters) + ')'
-                schema = parameter_schema(parameters, can_complete=candidate_key not in symbols)
+                schema = parameter_schema(parameters, state=state, can_complete=candidate_key not in symbols)
                 parameter = ask(planning_router, 'construction_parameter_next',
                     {**current, 'signature': metadata, 'parameters': parameters,
                      'parameter_index': len(parameters),
-                     **state.payload(['parameter'] + (['complete'] if candidate_key not in symbols else []))},
+                     **state.payload(choice_actions(schema))},
                     schema, PARAMETER_INSTRUCTION)
+                if consume_lookup_choice(state, parameter): continue
                 if parameter['complete']: break
                 identifier(parameter['name'])
                 type_ = choose_type(planning_router, state,

@@ -67,19 +67,28 @@ STATE_INSTRUCTION = (
     "results are exhausted. Never repeat a consumed query and offset in the same "
     "phase and revision; choose another dependency query or advance the current "
     "declaration/operation. Planned members with a body_owner are already assigned; "
-    "add only missing declarations. Select only available_actions."
+    "add only missing declarations. authoring_contract defines the artifact's responsibility, "
+    "identities and implementation requirements. Use bindings with an exact binding_id from "
+    "authoring_contract.binding_pages to inspect shared configuration before choosing declarations "
+    "or types. binding_lookup retains the latest complete configuration page across phases. "
+    "Select only available_actions."
 )
 
 
 class ConstructionState:
-    def __init__(self, symbols, owner, target_path, *, declaration_ids=(), revision=0):
+    def __init__(self, symbols, owner, target_path, *, declaration_ids=(), revision=0,
+                 authoring_contract=None, binding_pages=None):
         self.symbols = symbols
         self.owner = owner
         self.target_path = target_path
+        self.authoring_contract = dict(authoring_contract or {})
+        self.binding_pages = dict(binding_pages or {})
         self.declaration_ids = list(declaration_ids)
         self.revision = revision
         self.phase = ""
         self.lookup = {}
+        self.symbol_lookup = {}
+        self.binding_lookup = {}
         self.history = deque(maxlen=PAGE_SIZE)
         self.requests = set()
 
@@ -91,6 +100,7 @@ class ConstructionState:
     def advance(self):
         self.revision += 1
         self.lookup = {}
+        self.symbol_lookup = {}
         self.requests.clear()
 
     def add_declaration(self, key):
@@ -113,7 +123,8 @@ class ConstructionState:
             "lookups_since_progress": len(self.requests),
             "recent_lookups": list(self.history),
             "available_actions": list(available_actions), **cursor,
-        }, "lookup": self.lookup}
+        }, "lookup": self.lookup, "authoring_contract": self.authoring_contract,
+            "binding_lookup": self.binding_lookup}
 
     def consume_lookup(self, kind, query, offset, result):
         request = _lookup_request(kind, query, offset)
@@ -121,6 +132,8 @@ class ConstructionState:
             raise ValueError("CONSTRUCTION_AUTHOR_NO_PROGRESS: repeated " + kind + " lookup")
         self.requests.add(request)
         self.lookup = {**result, "kind": kind, "query": query.strip(), "offset": offset}
+        if kind == 'symbols': self.symbol_lookup = self.lookup
+        if kind == 'bindings': self.binding_lookup = self.lookup
         self.history.append({"phase": self.phase, "revision": self.revision,
             "kind": kind, "query": query.strip(), "offset": offset,
             "status": result["status"], "total_count": result["total_count"],
@@ -130,9 +143,11 @@ class ConstructionState:
     def export(self):
         # Save selectors, never cached source or API rows as fresh authority.
         last = {key: self.lookup[key] for key in ('kind', 'query', 'offset')} if self.lookup else None
+        binding = {key: self.binding_lookup[key] for key in ('kind', 'query', 'offset')} if self.binding_lookup else None
         return {'protocol': PROTOCOL_VERSION, 'phase': self.phase, 'revision': self.revision,
                 'requests': [list(row) for row in sorted(self.requests)],
-                'history': deepcopy(list(self.history)), 'last_lookup': last}
+                'history': deepcopy(list(self.history)), 'last_lookup': last,
+                'last_binding_lookup': binding}
 
     def restore(self, record):
         if (not isinstance(record, dict) or record.get('protocol') != PROTOCOL_VERSION
@@ -155,6 +170,16 @@ class ConstructionState:
         self.history = deque(deepcopy(history), maxlen=PAGE_SIZE)
         # The caller re-resolves this selector against current inspected inputs.
         self.lookup = {}
+        self.symbol_lookup = {}
+        binding = record.get('last_binding_lookup')
+        if binding is not None:
+            if (not isinstance(binding, dict) or set(binding) != {'kind', 'query', 'offset'}
+                    or binding['kind'] != 'bindings'):
+                raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
+            _lookup_request(binding['kind'], binding['query'], binding['offset'])
+            self.binding_lookup = {**self.binding_result(binding['query'], binding['offset']), **binding}
+        else:
+            self.binding_lookup = {}
         return last
 
     def lookup_symbols(self, query, offset):
@@ -165,3 +190,11 @@ class ConstructionState:
         rows = [symbol_record(key, self.symbols[key]) for key in self.declaration_ids]
         return self.consume_lookup("declarations", "", offset,
                                    page_result(rows, offset, field="declarations"))
+
+    def binding_result(self, query, offset):
+        if query not in self.binding_pages:
+            raise ValueError('CONSTRUCTION_BINDING_MISSING')
+        return page_result(self.binding_pages[query], offset, field='bindings')
+
+    def lookup_bindings(self, query, offset):
+        return self.consume_lookup('bindings', query, offset, self.binding_result(query, offset))

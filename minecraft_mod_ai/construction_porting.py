@@ -10,7 +10,9 @@ from dataclasses import replace
 
 from .construction_task import ConstructionTask
 from .construction_author import ask, obj, TEXT
-from .construction_declaration_choices import choose_type, parameter_schema
+from .construction_declaration_choices import (choose_type, parameter_schema, with_binding_lookups,
+                                             choice_actions, consume_lookup_choice)
+from .construction_state import STATE_INSTRUCTION
 from .java_operation_ir import identifier
 
 
@@ -24,16 +26,21 @@ def select_port_tasks(router, parent_task, *, owner, references, symbols, exact_
     for reference in references:
         ref = reference["source_ref"]
         state.enter('port_selection')
-        selected = ask(router, "construction_port_reference_select", {
-            "current_behavior": parent_task.intent,
-            "source_ref": ref,
-            "original_signature": reference.get("signature", ""),
-            "migration_diagnostics": reference.get("migration_diagnostics", ""),
-            **state.payload(['port', 'skip']),
-        }, _PORT_CHOICE,
-        "Select port=true only if this exact pinned method is relevant to the "
-        "requested behavior and can be reimplemented using inspected target API. "
-        "Otherwise port=false; an unselected reference is never installed.")
+        while True:
+            schema = with_binding_lookups(state, _PORT_CHOICE)
+            selected = ask(router, "construction_port_reference_select", {
+                "current_behavior": parent_task.intent,
+                "source_ref": ref,
+                "original_signature": reference.get("signature", ""),
+                "migration_diagnostics": reference.get("migration_diagnostics", ""),
+                **state.payload(choice_actions(schema, default_action='port_decision')),
+            }, schema,
+            "Select port=true only if this exact pinned method is relevant to the "
+            "requested behavior and can be reimplemented using inspected target API. "
+            "Otherwise port=false; an unselected reference is never installed. " + STATE_INSTRUCTION)
+            if consume_lookup_choice(state, selected): continue
+            break
+        state.advance()
         if not selected["port"]:
             continue
         member = "portedLogic" + hashlib.sha256(ref.encode()).hexdigest()[:20]
@@ -44,24 +51,32 @@ def select_port_tasks(router, parent_task, *, owner, references, symbols, exact_
         }
         result_type = choose_type(router, state, current, phase='port_return_type', allow_void=True)
         state.enter('port_signature')
-        signature = ask(router, "construction_port_signature", {
-            **current, 'return_type': result_type, **state.payload(['signature']),
-        }, obj({**_PORT_SIGNATURE['properties'], 'return_type': {'const': result_type}}),
-        "Choose one target Java method signature for porting the old method. "
-        "Use only inspected types. Do not write Java code.")
+        while True:
+            schema = with_binding_lookups(state,
+                obj({**_PORT_SIGNATURE['properties'], 'return_type': {'const': result_type}}))
+            signature = ask(router, "construction_port_signature", {
+                **current, 'return_type': result_type,
+                **state.payload(choice_actions(schema, default_action='signature')),
+            }, schema,
+            "Choose one target Java method signature for porting the old method. "
+            "Use only inspected types. Do not write Java code. " + STATE_INSTRUCTION)
+            if consume_lookup_choice(state, signature): continue
+            break
         exact_type(result_type, symbols)
         state.advance()
         state.enter('port_parameters')
         parameters = []
         while True:
+            schema = parameter_schema(parameters, state=state)
             row = ask(router, "construction_port_parameter", {
                 "source_ref": ref, "member": member,
                 "signature": signature,
                 "parameter_index": len(parameters), "parameters": parameters,
-                **state.payload(['parameter', 'complete']),
-            }, parameter_schema(parameters),
+                **state.payload(choice_actions(schema)),
+            }, schema,
             "Provide exactly one parameter of the new target API helper at a time. "
-            "Use complete=true after all needed parameters. No Java source.")
+            "Use complete=true after all needed parameters. No Java source. " + STATE_INSTRUCTION)
+            if consume_lookup_choice(state, row): continue
             if row["complete"]:
                 break
             identifier(row["name"])
