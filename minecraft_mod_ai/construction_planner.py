@@ -78,6 +78,23 @@ def author_behavior_requirements(scope, router):
     return tuple(result)
 
 
+
+def bind_behavior_scope(scope, router):
+    """Bind the execution-only behavior ledger to the original source scope.
+
+    Reuse saved exact child contracts during production retries. Never
+    substitute a fake one-behavior result when model authoring fails.
+    """
+    from copy import deepcopy
+    bounded = deepcopy(dict(scope))
+    if not bounded.get("requirements"):
+        bounded["behavior_requirements"] = []
+        return bounded
+    behaviors = author_behavior_requirements(bounded, router)
+    bounded["behavior_requirements"] = [row.to_dict() for row in behaviors]
+    return bounded
+
+
 def plan_construction_tasks(scope, source_evidence, target_symbols, router):
     behaviors = author_behavior_requirements(scope, router)
     tasks, installed = [], set()
