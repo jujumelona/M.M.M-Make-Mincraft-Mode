@@ -332,6 +332,34 @@ def iter_extended_module_records(
             error_type=ExtendedContentError,
         )
         return
+    if raw.get("schema_version") == "mmm/extended-modules-v2":
+        # Legacy monoliths remain readable for explicit migration. New
+        # generation writes bounded records, never another monolith.
+        if (
+            set(raw) != {"schema_version", "shard_size", "modules"}
+            or type(raw["shard_size"]) is not int
+            or raw["shard_size"] <= 0
+            or not isinstance(raw["modules"], list)
+        ):
+            raise ExtendedContentError("Legacy extended module catalog is invalid.")
+        seen: set[str] = set()
+        for item in raw["modules"]:
+            if (
+                not isinstance(item, dict)
+                or set(item) != {"module_id", "kind", "config", "depends_on", "required_gates"}
+                or not isinstance(item["module_id"], str)
+                or not item["module_id"]
+                or not isinstance(item["kind"], str)
+                or not isinstance(item["config"], dict)
+                or not isinstance(item["depends_on"], list)
+                or not isinstance(item["required_gates"], list)
+            ):
+                raise ExtendedContentError("Legacy extended module record is invalid.")
+            if item["module_id"] in seen:
+                raise ExtendedContentError("Duplicate legacy extended module ID.")
+            seen.add(item["module_id"])
+            yield item
+        return
     if raw.get("schema_version") != _CATALOG_SCHEMA:
         raise ExtendedContentError("Unsupported extended module catalog schema.")
     entry = raw.get("root")
