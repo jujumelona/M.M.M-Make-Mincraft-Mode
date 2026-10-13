@@ -6,6 +6,7 @@ quote. These tests assert provenance, not a gameplay-specific special case.
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 
 import pytest
 
@@ -287,4 +288,4 @@ def test_behavior_receipt_serializes_tuple_references_as_json_arrays():
     assert row["state_reads"] == ["inventory"]
     assert row["state_writes"] == ["ore_counter"]
     # Disk reads must compare equal to freshly serialized accepted values.
-    assert row == __import__("json").loads(__import__("json").dumps(row))
+    assert row == json.loads(json.dumps(row))
