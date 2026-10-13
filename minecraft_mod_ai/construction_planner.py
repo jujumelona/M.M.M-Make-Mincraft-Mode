@@ -55,6 +55,24 @@ def _unclaimed_source(source_text, claimed):
         offset = right
 
 
+def _next_source_quote_bounds(source, quote, claimed):
+    """Prefer a not-yet-owned occurrence of a repeated verbatim phrase."""
+    from .request_scope import _source_quote_bounds
+    examined = 0
+    fallback = None
+    while examined < len(source):
+        found = _source_quote_bounds(source[examined:], quote)
+        if found is None:
+            break
+        bounds = (examined + found[0], examined + found[1])
+        if fallback is None:
+            fallback = bounds
+        if bounds not in claimed:
+            return bounds
+        examined = bounds[0] + 1
+    return fallback
+
+
 def author_behavior_requirements(scope, router, *, checkpoint=None):
     result = []
     saved = scope.get("behavior_requirements")
@@ -119,8 +137,7 @@ def author_behavior_requirements(scope, router, *, checkpoint=None):
                 stop_reason = "model_complete"
                 break
             intent, quote = row["intent"].strip(), row["source_quote"]
-            from .request_scope import _source_quote_bounds
-            bounds = _source_quote_bounds(source_text, quote)
+            bounds = _next_source_quote_bounds(source_text, quote, anchored)
             if not intent or not row["effects"].strip() or bounds is None:
                 stop_reason = "ungrounded_model_response"
                 print("CONSTRUCTION_BEHAVIOR_SOURCE_RECOVERY: " +
