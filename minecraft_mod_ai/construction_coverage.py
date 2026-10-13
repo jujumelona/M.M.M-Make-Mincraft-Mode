@@ -49,15 +49,55 @@ def record_constructed_requirement(project_root, spec, source, *, materialized_s
                          "registration": registration, "stage": "SOURCE_MATERIALIZED",
                          "runtime_status": "NOT_OBSERVED", "verification_ids": [
                              bid + ".compile", bid + ".behavior"]})
+    task_rows = json.loads(bindings.get("construction_tasks_json") or "[]")
+    if not isinstance(task_rows, list) or not task_rows:
+        raise ValueError("CONSTRUCTION_WORK_GRAPH_MISSING")
+    task_ids = [row["task_id"] for row in task_rows]
+    if len(task_ids) != len(set(task_ids)):
+        raise ValueError("CONSTRUCTION_WORK_GRAPH_DUPLICATE_TASK")
+    if {child["behavior_id"] + ".logic" for child in children} - set(task_ids):
+        raise ValueError("CONSTRUCTION_WORK_GRAPH_BEHAVIOR_GAP")
+    if {child["behavior_id"] + ".verify" for child in children} - set(task_ids):
+        raise ValueError("CONSTRUCTION_WORK_GRAPH_VERIFICATION_GAP")
+    task_set = set(task_ids)
+    if any(set(row["depends_on"]) - task_set for row in task_rows):
+        raise ValueError("CONSTRUCTION_WORK_GRAPH_UNBOUND_DEPENDENCY")
+    task_receipts = []
+    for task in task_rows:
+        kind = task["kind"]
+        record = {"task_id": task["task_id"], "kind": kind,
+                  "behavior_id": task.get("behavior_id", ""),
+                  "depends_on": task["depends_on"],
+                  "verification_ids": task["verification_ids"]}
+        if kind == "reuse":
+            from .authored_reuse_bridge import installed_donor_source_context
+            capabilities = sorted({ref["capability"] for ref in task["source_refs"]
+                                   if ref.get("capability")})
+            if not capabilities:
+                raise ValueError("CONSTRUCTION_WORK_GRAPH_REUSE_SOURCE_UNBOUND")
+            verified = installed_donor_source_context(project_root, capabilities)
+            record["installed_file_hashes"] = {
+                item["path"]: item["sha256"] for item in verified}
+            record["stage"] = "INSTALLED_HASH_VERIFIED"
+        elif kind in {"logic", "glue"}:
+            record["stage"] = "SOURCE_MATERIALIZED_RUNTIME_UNVERIFIED"
+        elif kind == "port":
+            record["stage"] = "PORT_RUNTIME_UNVERIFIED"
+        elif kind == "verify":
+            record["stage"] = "RUNTIME_UNVERIFIED"
+        else:
+            record["stage"] = "PLANNED"
+        task_receipts.append(record)
     receipt = {"schema_version": "mmm/construction-coverage-v1",
                "requirement_id": parent, "target_path": spec["target_path"],
                "source_sha256": source_sha,
-               "status": "RUNTIME_UNVERIFIED", "behaviors": children}
+               "status": "RUNTIME_UNVERIFIED", "behaviors": children,
+               "tasks": task_receipts}
     path = _coverage_path(project_root, parent)
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         old = json.loads(path.read_text(encoding="utf-8"))
-        if old.get("source_sha256") == source_sha and old.get("behaviors") == children:
+        if old == receipt:
             return str(path)
     temp = path.with_name("." + path.name + "." + uuid4().hex + ".tmp")
     try:
