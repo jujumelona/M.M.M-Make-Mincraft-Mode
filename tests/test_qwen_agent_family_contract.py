@@ -140,7 +140,7 @@ def test_registry_metadata_not_model_name_selects_agent_policy() -> None:
     }
     assert enabled["temperature"] == 0.11
     assert disabled["chat_template_kwargs"] == {"enable_thinking": False}
-    assert disabled["reasoning_effort"] == "none"
+    assert "reasoning_effort" not in disabled
 
 
 def test_qwen38_action_drops_planning_reasoning_effort() -> None:
