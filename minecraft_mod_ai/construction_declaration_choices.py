@@ -21,13 +21,17 @@ def _character_class(chars):
     start = end = values[0]
     for value in values[1:]:
         if value == end + 1:
-            end = value; continue
-        runs.append((start, end)); start = end = value
+            end = value
+            continue
+        runs.append((start, end))
+        start = end = value
     runs.append((start, end))
     parts = []
     for start, end in runs:
-        if end - start >= 2: parts.append(escape(chr(start)) + '-' + escape(chr(end)))
-        else: parts.extend(escape(chr(value)) for value in range(start, end + 1))
+        if end - start >= 2:
+            parts.append(escape(chr(start)) + '-' + escape(chr(end)))
+        else:
+            parts.extend(escape(chr(value)) for value in range(start, end + 1))
     return '[' + ''.join(parts) + ']'
 
 
@@ -43,12 +47,14 @@ def string_excluding(forbidden, *, alphabet, first=None, minimum=1, maximum=240,
     trie = {}
     for value in forbidden:
         value = normalize(value)
-        if not value or len(value) > maximum: continue
+        if not value or len(value) > maximum:
+            continue
         if any(not any(normalize(char) == key for char in (first if i == 0 else alphabet))
                for i, key in enumerate(value)):
             continue
         node = trie
-        for key in value: node = node.setdefault(key, {})
+        for key in value:
+            node = node.setdefault(key, {})
         node[''] = True
     tail = _character_class(alphabet)
 
@@ -60,14 +66,18 @@ def string_excluding(forbidden, *, alphabet, first=None, minimum=1, maximum=240,
             remaining = maximum - depth - 1
             if other and remaining >= max(0, minimum - depth - 1):
                 option = _character_class(other)
-                if remaining: option += tail + '{' + str(max(0, minimum - depth - 1)) + ',' + str(remaining) + '}'
+                if remaining:
+                    option += tail + '{' + str(max(0, minimum - depth - 1)) + ',' + str(remaining) + '}'
                 options.append(option)
             for key in sorted(key for key in node if key):
                 chars = {char for char in allowed if normalize(char) == key}
-                if not chars: continue
+                if not chars:
+                    continue
                 rest = suffix(node[key], depth + 1)
-                if rest is not None: options.append(_character_class(chars) + rest)
-        if not options: return None
+                if rest is not None:
+                    options.append(_character_class(chars) + rest)
+        if not options:
+            return None
         return options[0] if len(options) == 1 else '(?:' + '|'.join(options) + ')'
 
     return {'type': 'string', 'minLength': minimum, 'maxLength': maximum,
@@ -113,7 +123,8 @@ def symbol_lookup_schemas(state):
         if (row['phase'] == state.phase and row['revision'] == state.revision
                 and row['kind'] == 'symbols' and row['next_offset'] is not None):
             request = ('symbols', row['query'].strip().casefold(), row['next_offset'])
-            if request not in state.requests: pages[request] = row
+            if request not in state.requests:
+                pages[request] = row
     for row in pages.values():
         branches.append(action_schema('more_symbols', {
             'query': {'const': row['query']}, 'offset': {'const': row['next_offset']}}))
@@ -128,7 +139,8 @@ def binding_lookup_schemas(state):
         offset = max(consumed) + PAGE_SIZE if consumed else 0
         # First page and then its exact successor; consumed pages and arbitrary
         # offsets never become model choices. Empty bindings have one empty page.
-        if offset and offset >= len(rows): continue
+        if offset and offset >= len(rows):
+            continue
         branches.append(action_schema('bindings', {'query': {'const': key}, 'offset': {'const': offset}}))
     return branches
 
@@ -140,9 +152,11 @@ def with_binding_lookups(state, schema):
 
 def consume_lookup_choice(state, choice):
     if choice.get('action') in {'symbols', 'more_symbols'}:
-        state.lookup_symbols(choice['query'], choice.get('offset', 0)); return True
+        state.lookup_symbols(choice['query'], choice.get('offset', 0))
+        return True
     if choice.get('action') == 'bindings':
-        state.lookup_bindings(choice['query'], choice['offset']); return True
+        state.lookup_bindings(choice['query'], choice['offset'])
+        return True
     return False
 
 
@@ -159,7 +173,8 @@ def member_schema(state, *, reserved_names, body_candidates):
                 *binding_lookup_schemas(state)]
     if helpers:
         branches.append(action_schema('overload', {'name': {'enum': helpers}, 'purpose': ID}))
-    if state.declaration_ids: branches.append(action_schema('complete'))
+    if state.declaration_ids:
+        branches.append(action_schema('complete'))
     if body_candidates:
         branches.append(action_schema('begin_bodies', {'symbol_ref': {'enum': body_candidates}}))
     return {'oneOf': branches}
@@ -168,7 +183,8 @@ def member_schema(state, *, reserved_names, body_candidates):
 def parameter_schema(parameters, *, state, can_complete=True):
     branches = [obj({'complete': {'const': False},
                      'name': identifier_schema(p['name'] for p in parameters)})]
-    if can_complete: branches.append(obj({'complete': {'const': True}}))
+    if can_complete:
+        branches.append(obj({'complete': {'const': True}}))
     return with_binding_lookups(state, {'oneOf': branches})
 
 
@@ -177,9 +193,11 @@ def type_candidates(state):
     visible = [state.symbols[state.owner], *state.symbol_lookup.get('matches', ())]
     for row in visible:
         names = [row.get('owner', ''), row.get('return_type', '')]
-        if row.get('kind') == 'CLASS': names.append(row.get('symbol_id', row.get('owner', '')))
+        if row.get('kind') == 'CLASS':
+            names.append(row.get('symbol_id', row.get('owner', '')))
         for name in names:
-            while name.endswith('[]'): name = name[:-2]
+            while name.endswith('[]'):
+                name = name[:-2]
             if name in types or accessible_type(state, state.symbols.get(name, {})):
                 types.add(name)
     return sorted(types)
@@ -198,20 +216,24 @@ def choose_type(router, state, payload, *, phase, allow_void=False):
                     *symbol_lookup_schemas(state), *binding_lookup_schemas(state),
                     action_schema('extension', {'reason': ID})]
         # JVMS 4.11 bounds array dimensions; void is never an array/component.
-        if allow_void: branches.append(action_schema('void'))
+        if allow_void:
+            branches.append(action_schema('void'))
         schema = {'oneOf': branches}
         choice = ask(router, 'construction_type_next',
             {**payload, **state.payload(choice_actions(schema), type_candidates=types)}, schema, instruction)
-        if consume_lookup_choice(state, choice): continue
+        if consume_lookup_choice(state, choice):
+            continue
         if choice['action'] == 'extension':
             raise ValueError('CONSTRUCTION_RENDERER_EXTENSION_REQUIRED: ' + choice['reason'])
         state.advance()
-        if choice['action'] == 'void': return 'void'
+        if choice['action'] == 'void':
+            return 'void'
         return choice['base_type'] + '[]' * choice['array_dimensions']
 
 
 def accessible_type(state, row):
-    if row.get('kind') != 'CLASS': return False
+    if row.get('kind') != 'CLASS':
+        return False
     if row.get('side') == 'CLIENT' and not state.target_path.startswith('src/client/'):
         return False
     access = row.get('access', 0)
@@ -230,7 +252,8 @@ def header_candidates(state):
             continue
         access = row.get('access', 0)
         if access & 0x0200:
-            if key not in header['interfaces']: candidates['interface'].append(key)
+            if key not in header['interfaces']:
+                candidates['interface'].append(key)
         elif not access & 0x0010 and not header['superclass']:
             candidates['superclass'].append(key)
     return {kind: sorted(set(keys)) for kind, keys in candidates.items()}
