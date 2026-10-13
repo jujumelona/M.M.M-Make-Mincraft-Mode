@@ -3345,6 +3345,16 @@ class CompleteProductionOrchestrator:
                         if 'different approved proposal' not in str(exc):
                             raise CompleteProductionError(f'Existing run ledger is invalid: {exc}') from exc
                     else:
+                        # A new explicit execute(resume=True) may retry stopped
+                        # generation tasks once. Within one execution the scheduler
+                        # never loops on the same failing work. All successful
+                        # independent nodes and per-member author checkpoints survive.
+                        for planned_node in plan.nodes:
+                            if not planned_node.stage.startswith('generate:'):
+                                continue
+                            previous = ledger.task(planned_node.node_id)
+                            if previous['state'] == 'failed':
+                                ledger.retry(planned_node.node_id)
                         self._write_work_graph_summary(root, plan)
                         return (root, ledger, True)
                 revision += 1
