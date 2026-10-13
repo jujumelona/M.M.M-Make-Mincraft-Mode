@@ -39,6 +39,7 @@ def author_behavior_requirements(scope, router):
         return tuple(result)
     for requirement in scope.get("requirements", ()):
         parent, statement = requirement["requirement_id"], requirement["statement"]
+        source_text = str(requirement.get("source_span", {}).get("text") or statement)
         prior = []
         while True:
             if router is None:
