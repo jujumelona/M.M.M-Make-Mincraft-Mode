@@ -42,8 +42,8 @@ def prepare_construction_context(spec, *, java_classpath, project_root, source_c
     if not target:
         raise ValueError("CONSTRUCTION_IMMUTABLE_TARGET_REQUIRED")
     java_version = int(target.get("java_version") or 0)
-    mapping = str(target.get("mappings_kind") or target.get("mappings") or "").lower()
-    if mapping in {"mojang", "official"}:
+    mapping = str(target.get("mappings_kind") or "").lower()
+    if target.get("mappings_applicable") is False or mapping in {"mojang", "official"}:
         namespace = "OFFICIAL"
     elif mapping in {"yarn", "named"}:
         namespace = "NAMED"
