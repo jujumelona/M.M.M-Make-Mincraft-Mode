@@ -8,7 +8,7 @@ from .parallel_model_tasks import deterministic_model_map
 from .task_template_catalog import load_template
 
 
-def generate_canonical_leaf(inputs, *, leaf_id, router, authority, source_context=()):
+def generate_canonical_leaf(inputs, *, leaf_id, router, authority, source_context=(), construction_context=None):
     """Generate one declared artifact, keeping identity/receipt fields host-owned."""
     from .fixed_template_generation import generate_fixed_template_value
     from .integrity_validators import validate_semantic_contract, validate_json_schema
@@ -93,24 +93,14 @@ def generate_canonical_leaf(inputs, *, leaf_id, router, authority, source_contex
             and spec.get("language") == "java"
             and _adapter_name(router, "coder") == "llama_cpp"
         ):
-            from .first_pass_java_source import (
-                can_compose_first_pass_java,
-                compose_first_pass_java,
-            )
-
-            if can_compose_first_pass_java(spec):
-                value = compose_first_pass_java(
-                    router, spec, messages, source_context=source_context,
-                )
-            else:
-                value = generate_fixed_template_value(
-                    router,
-                    "coder",
-                    messages,
-                    response_schema=model_schemas[slot["name"]],
-                    enable_tools=False,
-                    single_pass=True,
-                )
+            from .first_pass_java_source import can_compose_first_pass_java
+            if not can_compose_first_pass_java(spec):
+                raise ValueError("CONSTRUCTION_RENDERER_EXTENSION_REQUIRED: Java fragment")
+            if construction_context is None:
+                raise ValueError("CONSTRUCTION_TARGET_CONTEXT_REQUIRED")
+            from .construction_generation import compose
+            value = compose(router, spec, source_context=source_context,
+                            construction_context=construction_context)
         else:
             value = generate_fixed_template_value(
                 router,
