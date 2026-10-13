@@ -92,11 +92,20 @@ def _unique_content_requirements(rows: list[dict[str, Any]]) -> list[dict[str, A
     disambiguation; retain the original source ID for traceability.
     """
     seen: set[str] = set()
+    first_by_id: dict[str, tuple[int, dict[str, Any]]] = {}
     result: list[dict[str, Any]] = []
     for position, original in enumerate(rows):
         row = deepcopy(original)
         rid = row.get("requirement_id")
         if not isinstance(rid, str) or not rid.strip():
+            print(
+                "CONTENT_REQUIREMENT_DIAGNOSTIC: "
+                + json.dumps({
+                    "reason": "catalog_missing_id", "index": position,
+                    "requirement": row,
+                }, ensure_ascii=False, sort_keys=True, default=str),
+                flush=True,
+            )
             raise ValueError(
                 f"CONTENT_REQUIREMENT_ID_MISSING: catalog entry {position}"
             )
@@ -116,8 +125,24 @@ def _unique_content_requirements(rows: list[dict[str, Any]]) -> list[dict[str, A
             while candidate in seen:
                 suffix += 2
                 candidate = "content_req_" + digest[:suffix]
+            first_index, first_requirement = first_by_id[rid]
+            print(
+                "CONTENT_REQUIREMENT_ID_COLLISION: "
+                + json.dumps({
+                    "reason": "duplicate_catalog_id",
+                    "original_id": rid,
+                    "first_index": first_index,
+                    "first_requirement": first_requirement,
+                    "duplicate_index": position,
+                    "duplicate_requirement": original,
+                    "assigned_content_id": candidate,
+                }, ensure_ascii=False, sort_keys=True, default=str),
+                flush=True,
+            )
             row["source_requirement_id"] = rid
             row["requirement_id"] = candidate
+        else:
+            first_by_id[rid] = (position, deepcopy(row))
         seen.add(row["requirement_id"])
         result.append(row)
     return result
