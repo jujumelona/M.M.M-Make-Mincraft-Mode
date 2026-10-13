@@ -416,7 +416,7 @@ class DurableWorkLedger:
                 raise WorkGraphError(
                     f'Work node {node_id} already succeeded with a different receipt.'
                 )
-            cursor = connection.execute('\\n                UPDATE tasks\\n                SET state = ?, output_hash = ?, receipt_json = ?, receipt_hash = ?,\\n                    lease_owner = NULL, lease_until = NULL, error = NULL,\\n                    updated_at = ?\\n                WHERE node_id = ? AND state = ?\\n                ', (
+            cursor = connection.execute('\n                UPDATE tasks\n                SET state = ?, output_hash = ?, receipt_json = ?, receipt_hash = ?,\n                    lease_owner = NULL, lease_until = NULL, error = NULL,\n                    updated_at = ?\n                WHERE node_id = ? AND state = ?\n                ', (
                     WorkState.SUCCEEDED.value,
                     digest,
                     receipt_json,
