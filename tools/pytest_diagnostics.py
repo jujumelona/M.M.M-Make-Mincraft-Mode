@@ -569,6 +569,31 @@ def _redact_junit(args: argparse.Namespace, process_returncode: int) -> int | No
     return None
 
 
+def _failed_test_lines_from_log(path: Path) -> tuple[str, ...]:
+    """Recover bounded failure identities when JUnit XML is truncated/corrupt.
+
+    The pytest output has already been redacted before this is called.
+    Corrupt JUnit remains a hard failure; stdout only supplies diagnostics.
+    """
+    try:
+        with path.open("rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            stream.seek(max(0, stream.tell() - 128 * 1024))
+            tail = stream.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ()
+    found = []
+    for raw in tail.splitlines():
+        line = raw.strip()
+        if line.startswith(("FAILED tests/", "ERROR tests/")):
+            message = _compact_message(line, limit=1000)
+            if message not in found:
+                found.append(message)
+        if len(found) >= 12:
+            break
+    return tuple(found)
+
+
 def _read_analysis(args: argparse.Namespace, process_returncode: int) -> tuple[JUnitAnalysis | None, int | None]:
     if not args.junit.is_file():
         print(
@@ -593,6 +618,8 @@ def _read_analysis(args: argparse.Namespace, process_returncode: int) -> tuple[J
                 fallback=f"redacted pytest output preserved at {args.log}",
             )
         )
+        for failure in _failed_test_lines_from_log(args.log):
+            print("PYTEST FAILURE (UNVERIFIED JUNIT): " + failure)
         print(f"RAW OUTPUT {args.log}")
         print(f"JUNIT {args.junit}")
         return None, _safe_exit_code(process_returncode)
