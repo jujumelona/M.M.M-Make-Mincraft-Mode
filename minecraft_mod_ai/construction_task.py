@@ -34,7 +34,13 @@ class BehaviorRequirement:
             raise ValueError("CONSTRUCTION_BEHAVIOR_SOURCE_STATUS_INVALID")
 
     def to_dict(self):
-        return asdict(self)
+        # JSON checkpoint files always store arrays, not Python tuples.
+        # Canonicalize before comparing accepted rows so a saved record can
+        # be loaded and saved again without a false identity conflict.
+        row = asdict(self)
+        row["state_reads"] = list(self.state_reads)
+        row["state_writes"] = list(self.state_writes)
+        return row
 
 
 @dataclass(frozen=True)
