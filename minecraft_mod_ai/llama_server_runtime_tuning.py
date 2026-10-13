@@ -279,8 +279,31 @@ def _config_extra(config: Any) -> dict[str, Any]:
     return dict(extra) if isinstance(extra, dict) else {}
 
 
+def _prompt_cache_disabled(config: Any) -> bool:
+    """Honor explicit memory-saving cache policy without guessing a model ID."""
+    extra = _config_extra(config)
+    enabled = extra.get("prompt_cache_enabled")
+    if enabled is not None:
+        if isinstance(enabled, bool):
+            return not enabled
+        return str(enabled).strip().casefold() in {"0", "false", "off", "no"}
+    setting = os.environ.get("MMM_LLAMA_PROMPT_CACHE_ENABLED", "").strip().casefold()
+    if setting:
+        return setting in {"0", "false", "off", "no"}
+    # Existing MTP hot-path installations explicitly opt out of duplicate
+    # prompt storage; never leave a stale --cache-ram allocation in argv.
+    return os.environ.get("MMM_QWEN35_MTP_HOTPATH", "").strip().casefold() in {
+        "1", "true", "on", "yes",
+    }
+
+
 def _configure_prompt_cache(args: list[str], config: Any) -> None:
-    """Configure reusable prompt KV cache for the active GGUF runtime."""
+    """Apply one explicit prompt-cache policy to base and tuned launch argv."""
+    if _prompt_cache_disabled(config):
+        _remove_option(args, ("--cache-prompt",), takes_value=False)
+        _remove_option(args, ("--cache-ram",))
+        _remove_option(args, ("--cache-reuse",))
+        return
     if "--cache-prompt" not in args:
         args.append("--cache-prompt")
     _replace_option(args, ("--cache-ram",), str(_cache_ram_mib()))
@@ -982,7 +1005,7 @@ def install(autotune_module: Any) -> None:
                     args.append("--kv-unified")
             _configure_prompt_cache(args, config)
             _remove_option(args, ("--cache-reuse",), takes_value=True)
-            if variant.cache_reuse > 0:
+            if "--cache-prompt" in args and variant.cache_reuse > 0:
                 args.extend(["--cache-reuse", str(variant.cache_reuse)])
             args.extend(autotune_module._variant_args(variant))
             process = subprocess.Popen(
