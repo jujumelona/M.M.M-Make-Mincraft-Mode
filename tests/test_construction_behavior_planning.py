@@ -172,3 +172,16 @@ def test_unresolved_source_cannot_be_marked_runtime_verified_even_with_pass_rece
     result = requirement_completion(receipt, events)
     assert result["status"] == "SOURCE_REVIEW_REQUIRED"
     assert result["source_review_required_ids"] == ["unresolved"]
+
+
+def test_identical_user_phrases_in_two_source_positions_are_distinct_anchors():
+    original = "collect; collect"
+    router = PageRouter([
+        _page(intent="Collect", quote="collect"),
+        _page(intent="Collect", quote="collect"),
+        _page(status="complete"),
+    ])
+    result = author_behavior_requirements(_scope(original), router)
+    assert [row.source_quote for row in result] == ["collect", "collect"]
+    assert result[0].behavior_id != result[1].behavior_id
+    assert all(row.source_status == "grounded" for row in result)
