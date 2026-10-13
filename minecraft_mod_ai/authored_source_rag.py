@@ -47,7 +47,7 @@ class VerifiedSourceRAG:
                     })
                     continue
                 first = int(hit.start_line)
-                last = int(getattr(hit, "end_line", first))
+                last = int(getattr(hit, "end_line", None) or first)
                 members = [unit for unit in units
                            if unit["kind"] in {"method", "constructor", "field"}
                            and unit["start_line"] <= last and unit["end_line"] >= first]
