@@ -78,6 +78,9 @@ def download_failure_logs(
             paths = [trace_path]
             paths.extend((trace_dir / "model_completions").glob("*.jsonl"))
             paths.extend((trace_dir / "artifacts").glob("*.json"))
+            # Project probes can run in disposable scaffold copies. Their
+            # redacted command logs live beside the trace and must survive it.
+            paths.extend((trace_dir / "gradle_commands").glob("*.log"))
             for path in paths:
                 if path.is_file():
                     archive.write(path, arcname="traces/" + path.relative_to(trace_dir).as_posix())
