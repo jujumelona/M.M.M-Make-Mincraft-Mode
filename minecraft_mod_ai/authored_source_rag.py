@@ -48,9 +48,18 @@ class VerifiedSourceRAG:
                     continue
                 first = int(hit.start_line)
                 last = int(getattr(hit, "end_line", None) or first)
-                members = [unit for unit in units
-                           if unit["kind"] in {"method", "constructor", "field"}
-                           and unit["start_line"] <= last and unit["end_line"] >= first]
+                callable_units = [unit for unit in units
+                                  if unit["kind"] in {"method", "constructor", "field"}]
+                members = [unit for unit in callable_units
+                           if unit["start_line"] <= last and unit["end_line"] >= first]
+                if not members and callable_units:
+                    # RAG can match a class header, import or nearby comment.
+                    # Select the nearest complete declaration, never a slice
+                    # of a method or an unrelated full compilation unit.
+                    members = [min(callable_units, key=lambda unit: (
+                        max(unit["start_line"] - last, first - unit["end_line"], 0),
+                        unit["start_line"],
+                    ))]
                 for unit in members:
                     identity = (str(path), unit["start_line"], unit["end_line"])
                     if identity in seen:
@@ -145,7 +154,7 @@ def verified_source_rag(reuse_plan: Mapping[str, Any], *, adapter: Any,
         installed_capabilities = {row[0] for row in rag.sources}
         for ordinal, reference in enumerate(references):
             capability = reference["capability"]
-            if reference_counts.get(capability, 0) >= 2 or capability in installed_capabilities:
+            if capability in installed_capabilities:
                 continue
             donor_slice = DonorSlice.from_dict(reference["donor"])
             if not donor_slice.closure_complete:
