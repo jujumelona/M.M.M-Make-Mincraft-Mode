@@ -41,7 +41,12 @@ def author_behavior_requirements(scope, router):
         parent, statement = requirement["requirement_id"], requirement["statement"]
         source_text = str(requirement.get("source_span", {}).get("text") or statement)
         prior = []
-        while True:
+        prior_quotes = []
+        # One source page cannot legitimately contain infinitely many distinct
+        # observable behaviors. Fail with the original scope intact rather
+        # than issuing unbounded identical or paraphrased model requests.
+        page_limit = min(256, max(12, len(source_text.split()) * 2))
+        for _page in range(page_limit):
             if router is None:
                 raise ValueError("CONSTRUCTION_PLANNER_REQUIRED")
             messages = [{"role": "system", "content": (
@@ -57,7 +62,8 @@ def author_behavior_requirements(scope, router):
                     "requirement_id": parent, "statement": statement,
                     "source_text": source_text,
                     "source_recovery": bool(requirement.get("source_recovery")),
-                    "previous_intents": prior}, ensure_ascii=False)}]
+                    "previous_intents": prior,
+                    "previous_source_quotes": prior_quotes[-16:]}, ensure_ascii=False)}]
             row = _validate_native_arguments(router.generate_structured_data(
                 "planner", messages, data_name="construction_behavior_next", parameters=_BEHAVIOR_SCHEMA), _BEHAVIOR_SCHEMA)
             if row["status"] == "complete":
@@ -73,8 +79,11 @@ def author_behavior_requirements(scope, router):
             if intent.casefold() in {value.casefold() for value in prior}:
                 raise ValueError("CONSTRUCTION_BEHAVIOR_NO_PROGRESS: " + parent)
             prior.append(intent)
+            prior_quotes.append(quote)
             result.append(BehaviorRequirement(_id(parent, intent), parent, intent, quote,
                           row["trigger"], row["effects"], tuple(row["state_reads"]), tuple(row["state_writes"])))
+        else:
+            raise ValueError("CONSTRUCTION_BEHAVIOR_PAGE_LIMIT_REACHED: " + parent)
     return tuple(result)
 
 
