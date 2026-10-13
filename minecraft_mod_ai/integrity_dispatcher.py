@@ -262,6 +262,13 @@ def execute_generator_job(job, *, context, router, port_registry=None, base_dir=
             retired = retire_owned_legacy_client_candidate(base_dir, spec)
             if retired:
                 materialization["retired_legacy_client_path"] = retired
+    construction_coverage_path = None
+    if materialization is not None and spec.get("bindings", {}).get("construction_behaviors_json"):
+        from .construction_coverage import record_constructed_requirement
+        construction_coverage_path = record_constructed_requirement(
+            base_dir, spec, source,
+            materialized_sha256=materialization["after_sha256"],
+        )
     host_screen_mode = str(spec.get("bindings", {}).get("host_screen_capability") or "")
     if host_screen_mode:
         validations.append({
@@ -292,4 +299,6 @@ def execute_generator_job(job, *, context, router, port_registry=None, base_dir=
     job.status = "SUCCESS"
     return {"status": "PASS", "job_id": job.job_id, "context_id": resolved.context_id,
             "rendered_output": source, "canonical_output": output, "validations": validations,
-            "materialization": materialization, "ports_published": {k: v.to_dict() for k, v in ports.items()}}
+            "materialization": materialization,
+            "construction_coverage_path": construction_coverage_path,
+            "ports_published": {k: v.to_dict() for k, v in ports.items()}}
