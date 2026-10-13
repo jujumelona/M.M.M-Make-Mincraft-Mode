@@ -361,6 +361,39 @@ def compile_content_graph(
                 "statement": prompt,
             }
         ]
+    # Fail on malformed catalog input before issuing any costly model calls.
+    # In particular, a duplicate ID used to surface only after earlier content
+    # requirements had already spent their generation budget.
+    preflight_ids: set[str] = set()
+    for index, req in enumerate(requirements):
+        if not isinstance(req, Mapping):
+            raise SlotFillError(
+                f"CONTENT_REQUIREMENT_INVALID: index={index}, not a mapping"
+            )
+        rid = req.get("requirement_id")
+        span = req.get("source_span") or {}
+        if not isinstance(span, Mapping):
+            raise SlotFillError(
+                f"CONTENT_REQUIREMENT_INVALID: index={index}, source_span invalid"
+            )
+        statement = (
+            req.get("statement") or req.get("semantic_statement")
+            or req.get("authored_text") or span.get("text")
+        )
+        if not isinstance(rid, str) or not rid.strip():
+            raise SlotFillError(
+                f"CONTENT_REQUIREMENT_INVALID: index={index}, missing ID"
+            )
+        if rid in preflight_ids:
+            raise SlotFillError(
+                f"CONTENT_REQUIREMENT_DUPLICATE: index={index}, id={rid}"
+            )
+        if not isinstance(statement, str) or not statement.strip():
+            raise SlotFillError(
+                f"CONTENT_REQUIREMENT_INVALID: index={index}, id={rid}, missing statement"
+            )
+        preflight_ids.add(rid)
+
     entities, relations, decisions = {}, [], []
     requirement_ids = set()
     relation_keys = set()
