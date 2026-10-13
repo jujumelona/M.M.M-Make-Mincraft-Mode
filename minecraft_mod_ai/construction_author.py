@@ -44,7 +44,8 @@ def _node_summary(row):
 def author_task_operations(router, task, context):
     symbols = context['symbols']
     declaration = symbols.get(task.owner_symbol)
-    if declaration is None: raise ValueError('CONSTRUCTION_SYMBOL_MISSING: ' + task.owner_symbol)
+    if declaration is None:
+        raise ValueError('CONSTRUCTION_SYMBOL_MISSING: ' + task.owner_symbol)
     base = {'task_id': task.task_id, 'intent': task.intent, 'trigger': task.trigger, 'effects': task.effects,
             'state_reads': list(task.state_reads), 'state_writes': list(task.state_writes),
             'declaration': symbol_record(task.owner_symbol, declaration), 'target_path': task.target_path,
@@ -80,7 +81,8 @@ def author_task_operations(router, task, context):
     read_sources = set(read_refs() if callable(read_refs) else ())
 
     def lookup_result(action, query, offset):
-        if action == 'symbols': return symbol_page(symbols, query, offset)
+        if action == 'symbols':
+            return symbol_page(symbols, query, offset)
         if action == 'declarations':
             return page_result([symbol_record(key, symbols[key]) for key in declaration_ids],
                                offset, field='declarations')
@@ -91,7 +93,8 @@ def author_task_operations(router, task, context):
             return result
         if action == 'nodes':
             keys = [key.strip() for key in query.split(',')]
-            if offset != 0: raise ValueError('CONSTRUCTION_LOOKUP_OFFSET_INVALID')
+            if offset != 0:
+                raise ValueError('CONSTRUCTION_LOOKUP_OFFSET_INVALID')
             if len(keys) > PAGE_SIZE or any(key not in by_id for key in keys):
                 raise ValueError('CONSTRUCTION_NODE_REFERENCE_MISSING')
             return {'nodes': [by_id[key] for key in keys], 'total_count': len(keys),
@@ -105,7 +108,8 @@ def author_task_operations(router, task, context):
         if action != 'source' or query not in source_units:
             raise ValueError('CONSTRUCTION_SOURCE_PAGE_MISSING')
         pages = source_units[query]
-        if offset >= len(pages): raise ValueError('CONSTRUCTION_SOURCE_PAGE_OFFSET_INVALID')
+        if offset >= len(pages):
+            raise ValueError('CONSTRUCTION_SOURCE_PAGE_OFFSET_INVALID')
         return {'source': pages[offset:offset + 1], 'total_count': len(pages),
                 'status': 'matches', 'next_offset': offset + 1 if len(pages) > offset + 1 else None}
 
@@ -118,7 +122,8 @@ def author_task_operations(router, task, context):
 
     def save_author():
         callback = context.get('checkpoint_author_state')
-        if callable(callback): callback(task, tuple(nodes), state.export())
+        if callable(callback):
+            callback(task, tuple(nodes), state.export())
 
     instruction = ('Author this current behavior as typed Java operations, one node per turn. No Java source strings. '
         'Use exact inspected symbol IDs and type names. Request symbols with a lexical query and offset, '
@@ -136,8 +141,10 @@ def author_task_operations(router, task, context):
     while True:
         recent = [_node_summary(row) for row in nodes[-4:]]
         actions = list(NEXT_SCHEMA['properties']['action']['enum'])
-        if bindings: actions.append('bindings')
-        if not nodes or pending: actions.remove('complete')
+        if bindings:
+            actions.append('bindings')
+        if not nodes or pending:
+            actions.remove('complete')
         schema = obj({**NEXT_SCHEMA['properties'], 'action': {'type': 'string', 'enum': actions}})
         payload = {**base, 'recent_nodes': recent, **state.payload(actions,
             current_member=task.owner_symbol,
@@ -150,14 +157,17 @@ def author_task_operations(router, task, context):
                      'pinned_source_read': bool(base['port_source_ref'] in read_sources)})}
         choice = ask(router, 'construction_operation_next', payload, schema, instruction)
         action = choice['action']
-        if action == 'extension': raise ValueError('CONSTRUCTION_RENDERER_EXTENSION_REQUIRED: ' + choice['query'])
+        if action == 'extension':
+            raise ValueError('CONSTRUCTION_RENDERER_EXTENSION_REQUIRED: ' + choice['query'])
         if action == 'complete':
             JavaOperations(task, nodes, symbols)
-            if context.get('checkpoint'): context['checkpoint'](task, tuple(nodes), 'validated')
+            if context.get('checkpoint'):
+                context['checkpoint'](task, tuple(nodes), 'validated')
             return tuple(nodes)
         if action in {'symbols', 'declarations', 'nodes', 'node_index', 'source', 'sources', 'bindings'}:
             query = choice['query'].strip()
-            if action == 'declarations': query = ''
+            if action == 'declarations':
+                query = ''
             state.consume_lookup(action, query, choice['offset'],
                                  lookup_result(action, query, choice['offset']))
             if action == 'source':
@@ -170,15 +180,21 @@ def author_task_operations(router, task, context):
         row = dict(ask(router, 'construction_operation_' + action,
                        {**payload, 'selected_operation': action}, operation_schema(action), instruction))
         row['op'] = action
-        if row['node_id'] in by_id: raise ValueError('CONSTRUCTION_NODE_DUPLICATE')
-        by_id[row['node_id']] = row; nodes.append(row)
+        if row['node_id'] in by_id:
+            raise ValueError('CONSTRUCTION_NODE_DUPLICATE')
+        by_id[row['node_id']] = row
+        nodes.append(row)
         pending.pop(row['node_id'], None)
         for ref in row['input_refs']:
-            if ref not in by_id: pending.setdefault(ref, None)
-        if row['node_id'] not in referenced: roots[row['node_id']] = None
-        for ref in row['input_refs']: roots.pop(ref, None)
+            if ref not in by_id:
+                pending.setdefault(ref, None)
+        if row['node_id'] not in referenced:
+            roots[row['node_id']] = None
+        for ref in row['input_refs']:
+            roots.pop(ref, None)
         referenced.update(row['input_refs'])
         state.advance()
         stage = 'authoring'
-        if context.get('checkpoint'): context['checkpoint'](task, tuple(nodes), 'authoring')
+        if context.get('checkpoint'):
+            context['checkpoint'](task, tuple(nodes), 'authoring')
         save_author()
