@@ -10,7 +10,7 @@ from .construction_context import build_target_symbols, java_source_units
 from .target_contract import target_symbol_namespace
 
 
-def _jdk_base(java_version: int) -> str:
+def _jdk_image(java_version: int) -> str:
     from .java_lsp import _java_major_version, _resolve_project_java_home
 
     # Preflight, javac and construction must use the same exact target JDK.
@@ -18,15 +18,20 @@ def _jdk_base(java_version: int) -> str:
     root = _resolve_project_java_home(java_version, require_compiler=True).resolve()
     if _java_major_version(root) != java_version:
         raise ValueError("CONSTRUCTION_JDK_VERSION_MISMATCH: requested " + str(java_version))
-    jmod = root / "jmods/java.base.jmod"
-    if not jmod.is_file():
-        raise ValueError("CONSTRUCTION_JDK_MODULE_MISSING")
-    return str(jmod)
+    image = root / "lib/modules"
+    if not image.is_file():
+        raise ValueError(
+            f"CONSTRUCTION_JDK_RUNTIME_IMAGE_MISSING: java={java_version} home={root} expected={image}"
+        )
+    return str(image)
 
 
 @lru_cache(maxsize=2)
-def _symbol_inventory(paths: tuple[str, ...], java_version: int, namespace: str):
+def _symbol_inventory(paths: tuple[str, ...], java_version: int, namespace: str,
+                      image_signature: tuple[int, int]):
     # Parse verified .class/.jar members, not model-invented Fabric APIs.
+    # The runtime image fingerprint is part of the cache identity, so replacing
+    # a JDK at the same home cannot reuse an older standard-library inventory.
     return build_target_symbols(paths, java_version=java_version, namespace=namespace,
                                 classpath_sides={})
 
@@ -44,11 +49,14 @@ def prepare_construction_context(spec, *, java_classpath, project_root, source_c
     namespace = target_symbol_namespace(target)
     if not java_version or not java_classpath:
         raise ValueError("CONSTRUCTION_CLASSPATH_REQUIRED")
-    java_base = _jdk_base(java_version)
-    paths = tuple(dict.fromkeys([java_base, *(str(Path(p).resolve()) for p in java_classpath)]))
+    jdk_image = _jdk_image(java_version)
+    paths = tuple(dict.fromkeys([jdk_image, *(str(Path(p).resolve()) for p in java_classpath)]))
     if any(not Path(p).exists() for p in paths):
         raise ValueError("CONSTRUCTION_CLASSPATH_PATH_MISSING")
-    symbols = dict(_symbol_inventory(paths, java_version, namespace))
+    image_state = Path(jdk_image).stat()
+    symbols = dict(_symbol_inventory(
+        paths, java_version, namespace, (image_state.st_size, image_state.st_mtime_ns),
+    ))
     root = Path(project_root).resolve()
     pages = {}
     prerequisites = {}
