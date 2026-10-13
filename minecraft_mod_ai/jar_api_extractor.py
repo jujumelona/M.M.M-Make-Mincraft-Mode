@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import struct
 from pathlib import Path
-from zipfile import ZipFile
+from zipfile import BadZipFile, ZipFile
 
 from .implementation_identity import compute_content_hash
 
@@ -161,33 +161,53 @@ def parse_class(data: bytes, *, default_side: str = "COMMON") -> ApiClass:
     return ApiClass(name, superclass, interfaces, access, class_side, members, compute_content_hash(data))
 
 
-def inspect_jar(path: Path, *, java_version: int, default_side: str = "COMMON") -> dict[str, ApiClass]:
-    selected = {}
-    with ZipFile(path) as jar:
-        names = jar.namelist()
-        if len(names) != len(set(names)):
-            raise ClassFormatError("Duplicate JAR entries")
-        manifest = jar.read("META-INF/MANIFEST.MF").decode("utf-8") if "META-INF/MANIFEST.MF" in names else ""
-        multi = "multi-release: true" in manifest.lower()
-        for name in names:
-            if not name.endswith(".class"):
-                continue
-            version, logical = 0, name
-            if name.startswith("META-INF/versions/"):
-                parts = name.split("/", 3)
-                if not multi:
+def inspect_jar(path: Path, *, java_version: int, default_side: str = "COMMON",
+                require_classes: bool = True) -> dict[str, ApiClass]:
+    """Read eligible declarations, keeping required API archives strict.
+
+    A compile classpath can include resource/native/aggregate JARs which expose
+    no Java declarations. Its callers opt out of the per-archive class minimum;
+    malformed archives and class entries still fail inspection.
+    """
+    path, entry = Path(path), ""
+    try:
+        if default_side not in {"COMMON", "CLIENT", "SERVER"}:
+            raise ClassFormatError("Explicit classpath side required")
+        selected = {}
+        with ZipFile(path) as jar:
+            names = jar.namelist()
+            if len(names) != len(set(names)):
+                raise ClassFormatError("Duplicate JAR entries")
+            entry = "META-INF/MANIFEST.MF" if "META-INF/MANIFEST.MF" in names else ""
+            manifest = jar.read(entry).decode("utf-8") if entry else ""
+            multi = "multi-release: true" in manifest.lower()
+            for name in names:
+                if not name.endswith(".class"):
                     continue
-                version, logical = int(parts[2]), parts[3]
-                if version > java_version:
-                    continue
-            if logical not in selected or selected[logical][0] < version:
-                selected[logical] = (version, name)
-        result = {}
-        for logical, (_, name) in sorted(selected.items()):
-            item = parse_class(jar.read(name), default_side=default_side)
-            if logical != item.name + ".class":
-                raise ClassFormatError("JAR path/class name mismatch")
-            result[item.name] = item
-    if not result:
-        raise ClassFormatError("JAR has no classes")
-    return result
+                entry = name
+                version, logical = 0, name
+                if name.startswith("META-INF/versions/"):
+                    parts = name.split("/", 3)
+                    if not multi:
+                        continue
+                    version, logical = int(parts[2]), parts[3]
+                    if version > java_version:
+                        continue
+                if logical not in selected or selected[logical][0] < version:
+                    selected[logical] = (version, name)
+            result = {}
+            for logical, (_, name) in sorted(selected.items()):
+                entry = name
+                item = parse_class(jar.read(name), default_side=default_side)
+                if logical != item.name + ".class":
+                    raise ClassFormatError("JAR path/class name mismatch")
+                # Module descriptors are metadata, not callable classpath types.
+                if logical != "module-info.class":
+                    result[item.name] = item
+        entry = ""
+        if require_classes and not result:
+            raise ClassFormatError("JAR has no classes")
+        return result
+    except (ValueError, BadZipFile) as exc:
+        location = f"jar={path}" + (f" entry={entry}" if entry else "")
+        raise ClassFormatError(f"{exc} ({location})") from exc
