@@ -452,14 +452,73 @@ def materialize_verified_authored_sources(
         for relative, (raw, _owner) in sorted(prepared.items())
     }
     file_owners = {relative: owner for relative, (_raw, owner) in sorted(prepared.items())}
+    installed = [
+        {"path": relative, "sha256": file_hashes[relative],
+         "repository": file_owners[relative],
+         "capabilities": sorted({row["capability"] for row in attribution
+                                 if row["repository"] == file_owners[relative]})}
+        for relative in sorted(prepared)
+        if relative.startswith(("src/main/java/", "src/client/java/"))
+        and relative.endswith(".java")
+    ]
+    manifest_path = root / ".minecraft_ai" / "reuse" / "installed_sources.json"
+    manifest_path.write_text(json.dumps({
+        "schema_version": "mmm/installed-source-members-v1",
+        "sources": installed,
+    }, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
     return {
         "schema_version": "mmm/authored-source-install-v1",
         "donor_count": len(attribution),
         "files": sorted(prepared),
         "file_hashes": file_hashes,
         "file_owners": file_owners,
+        "installed_manifest": str(manifest_path),
         "provenance": str(provenance_file),
     }
+
+
+
+def installed_donor_source_context(project_root, capabilities):
+    """Read only installed source members bound to the current behavior.
+
+    A pinned donor's declared source path is never assumed to survive mapping
+    adaptation; the materialization manifest lists the actual installed paths.
+    """
+    from pathlib import Path
+    root = Path(project_root).resolve()
+    manifest = root / ".minecraft_ai" / "reuse" / "installed_sources.json"
+    wanted = set(capabilities)
+    if not wanted:
+        return ()
+    if not manifest.is_file():
+        raise ValueError("CONSTRUCTION_INSTALLED_DONOR_MANIFEST_MISSING")
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    if payload.get("schema_version") != "mmm/installed-source-members-v1":
+        raise ValueError("CONSTRUCTION_INSTALLED_DONOR_MANIFEST_SCHEMA")
+    result = []
+    covered = set()
+    for row in payload.get("sources", ()):
+        matched = wanted & set(row.get("capabilities", ()))
+        if not matched:
+            continue
+        relative = str(row.get("path") or "")
+        path = (root / relative).resolve()
+        if not path.is_relative_to(root) or not relative.startswith(
+            ("src/main/java/", "src/client/java/")
+        ) or not path.is_file():
+            raise ValueError("CONSTRUCTION_INSTALLED_DONOR_PATH_INVALID: " + relative)
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if digest != row.get("sha256"):
+            raise ValueError("CONSTRUCTION_INSTALLED_DONOR_HASH_MISMATCH: " + relative)
+        result.append({"path": relative, "sha256": digest,
+                       "authority": "installed_target_adapted_source",
+                       "repository": row.get("repository", ""),
+                       "capabilities": sorted(matched)})
+        covered.update(matched)
+    if covered != wanted:
+        raise ValueError("CONSTRUCTION_INSTALLED_DONOR_COVERAGE_MISSING: " +
+                         ",".join(sorted(wanted - covered)))
+    return tuple(result)
 
 
 __all__ = [
@@ -468,4 +527,5 @@ __all__ = [
     "verified_reuse_context",
     "materialize_verified_authored_sources",
     "audit_authored_source_reuse",
+    "installed_donor_source_context",
 ]
