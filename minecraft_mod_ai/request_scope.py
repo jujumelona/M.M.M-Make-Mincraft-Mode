@@ -224,8 +224,14 @@ def author_request_scope(router: Any, prompt: str, *, budget: Any = None) -> dic
             features.extend(_source_recovery(prompt, start, chunk, prior, index))
     recovered = sum(bool(row.get("source_recovery")) for row in features)
     print(f"REQUEST_SCOPE: features={len(features)} source_recovery={recovered}; original request preserved", flush=True)
-    return {"schema_version": "mmm/request-scope-v1", "requested_prompt": prompt,
-            "requirements": features}
+    scope = {"schema_version": "mmm/request-scope-v1", "requested_prompt": prompt,
+             "requirements": features}
+    # Persist observable child behaviors while keeping every original parent ID.
+    # Recovery text is an unresolved planning input, never a single Java task.
+    from .construction_planner import author_behavior_requirements
+    behaviors = author_behavior_requirements(scope, router)
+    scope["behavior_requirements"] = [behavior.to_dict() for behavior in behaviors]
+    return scope
 
 
 def request_scope_context(scope: Mapping[str, Any]) -> str:
