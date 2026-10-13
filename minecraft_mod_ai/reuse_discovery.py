@@ -529,6 +529,7 @@ def discover_repositories_for_graph(
             for _page_index in range(_discovery_pages()):
                 page = client.search(
                     provider, provider_query, limit=_query_limit(), target_profile="minecraft_mod",
+                    minecraft_version=minecraft_version, loader=loader,
                     **({"cursor": cursor} if cursor else {}),
                 )
                 raw = page.get("candidates") if isinstance(page, Mapping) else None
