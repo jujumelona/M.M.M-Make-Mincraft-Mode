@@ -114,3 +114,26 @@ def test_gradle_failure_remains_fail_closed(tmp_path, monkeypatch):
     monkeypatch.setattr(command_authority.GradleRunner, "run_project_command", fake_run)
     with pytest.raises(RuntimeError, match="CONSTRUCTION_GRADLE_CLASSPATH_FAILED"):
         probe.resolve_fabric_compile_classpath(str(root))
+
+
+def test_jdk_runtime_image_fingerprint_invalidates_compiler_symbol_cache(monkeypatch):
+    from minecraft_mod_ai import construction_runtime
+
+    calls = []
+
+    def fake_build(paths, *, java_version, namespace, classpath_sides):
+        calls.append((paths, java_version, namespace, classpath_sides))
+        return {"call": len(calls)}
+
+    monkeypatch.setattr(construction_runtime, "build_target_symbols", fake_build)
+    construction_runtime._symbol_inventory.cache_clear()
+    try:
+        base = ("jdk/lib/modules", "target.jar")
+        first = construction_runtime._symbol_inventory(base, 25, "target", (100, 10))
+        same = construction_runtime._symbol_inventory(base, 25, "target", (100, 10))
+        updated = construction_runtime._symbol_inventory(base, 25, "target", (200, 11))
+        assert first == same
+        assert updated != first
+        assert len(calls) == 2
+    finally:
+        construction_runtime._symbol_inventory.cache_clear()
