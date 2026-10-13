@@ -44,6 +44,10 @@ def _debug_session(tmp_path: Path) -> tuple[CompleteModAISession, _CapturingOrch
     session.complete_proposal = None
     session.brief = ""
     session.existing_input = None
+    # The host-only fixture bypasses __init__; provide an inert router so
+    # production target/preflight inspection can exercise its real contract.
+    # It must never construct or call a model during deterministic Debug Mode.
+    session.router = SimpleNamespace()
     orchestrator = _CapturingOrchestrator()
     session.orchestrator = orchestrator
 
