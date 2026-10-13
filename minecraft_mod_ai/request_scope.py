@@ -105,7 +105,7 @@ def _uncovered_source(chunk: str, prior: list[dict[str, Any]]) -> str:
 def _feature_messages(context: str, chunk: str, prior: list[dict[str, Any]], repair_note: str):
     return (
         {"role": "system", "content": (
-            "Identify the next distinct requested Minecraft mod feature in source order. "
+            "Identify the next separately actionable Minecraft mod feature in source order. "
             "Include exploration, combat and progression wherever requested. "
             "Return status=feature with a complete compact English statement, a short "
             "English mod/source search query, and a verbatim original source quote. "
