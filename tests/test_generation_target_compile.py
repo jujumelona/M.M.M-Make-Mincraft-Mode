@@ -6,7 +6,7 @@ from minecraft_mod_ai import generation_target_compile as target_compile
 TARGET = "src/main/java/demo/Test.java"
 
 
-def test_gradle_cache_for_checkpoint_uses_run_cache_before_it_exists(tmp_path) -> None:
+def test_gradle_cache_for_checkpoint_uses_production_cache_before_it_exists(tmp_path, monkeypatch) -> None:
     run_root = tmp_path / "complete-colab-run"
     project = (
         run_root
@@ -17,18 +17,21 @@ def test_gradle_cache_for_checkpoint_uses_run_cache_before_it_exists(tmp_path) -
     )
     project.mkdir(parents=True)
 
-    expected = run_root / ".cache" / "gradle"
+    expected = tmp_path / "production-gradle"
+    monkeypatch.setenv("MMM_GRADLE_CACHE_DIR", str(expected))
     assert not expected.exists()
     assert target_compile._gradle_cache_for(project) == expected
 
 
-def test_gradle_cache_for_unmanaged_project_keeps_existing_nearest_cache(tmp_path) -> None:
+def test_gradle_cache_for_unmanaged_project_uses_same_production_authority(tmp_path, monkeypatch) -> None:
     project = tmp_path / "workspace" / "project"
     project.mkdir(parents=True)
     existing = tmp_path / "workspace" / ".cache" / "gradle"
     existing.mkdir(parents=True)
 
-    assert target_compile._gradle_cache_for(project) == existing
+    expected = tmp_path / "production-gradle"
+    monkeypatch.setenv("MMM_GRADLE_CACHE_DIR", str(expected))
+    assert target_compile._gradle_cache_for(project) == expected
 
 
 class _Build:
