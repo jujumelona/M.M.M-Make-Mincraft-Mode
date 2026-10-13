@@ -355,7 +355,14 @@ def compose(router, spec, *, source_context=(), construction_context=None,
     # graph transitively before claiming source glue was actually connected.
     roots = [key for key, _behavior in registrars]
     if not roots:
-        roots = list(member_invocations)
+        # Only externally callable declarations can be a runtime entry into the
+        # new class. Starting from every authored member makes an uncalled
+        # private helper appear to satisfy donor/port integration obligations.
+        roots = [
+            key for key in member_invocations
+            if symbols[key].get('visibility') in {'public', 'protected'}
+            or symbols[key].get('kind') == 'CONSTRUCTOR'
+        ]
     reachable_members, reachable_calls, frontier = set(), set(), list(roots)
     while frontier:
         current = frontier.pop()
