@@ -488,12 +488,25 @@ def _preflight_production_construction(
     )
     from .construction_classpath import resolve_fabric_compile_classpath
     from .construction_runtime import prepare_construction_context
+    from tempfile import TemporaryDirectory
+
+    root = Path(root).resolve()
+
+    def ignore_runtime_outputs(directory: str, names: list[str]) -> list[str]:
+        # Only root build outputs are caches; a source package named "build"
+        # is part of the approved scaffold and must remain available.
+        return [name for name in names if name in {".gradle", "build"}] if Path(directory) == root else []
 
     try:
-        classpath = resolve_fabric_compile_classpath(str(root), java_version=resolved.java)
-        context = prepare_construction_context(
-            {}, java_classpath=classpath, project_root=root, target_override=target,
-        )
+        # Gradle inspection can write caches/reports. Keep the reusable approved
+        # scaffold immutable, and never hand temporary paths to real generation.
+        with TemporaryDirectory(prefix="mmm-construction-preflight-") as directory:
+            probe_root = Path(directory) / "project"
+            shutil.copytree(root, probe_root, ignore=ignore_runtime_outputs)
+            classpath = resolve_fabric_compile_classpath(str(probe_root), java_version=resolved.java)
+            context = prepare_construction_context(
+                {}, java_classpath=classpath, project_root=probe_root, target_override=target,
+            )
     except (OSError, ValueError, RuntimeError) as exc:
         raise CompleteProductionError(
             "Construction target preflight failed before production model work: "
