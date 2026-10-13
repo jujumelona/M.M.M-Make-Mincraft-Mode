@@ -78,6 +78,7 @@ def prepare_construction_context(spec, *, java_classpath, project_root, source_c
         if absolute.suffix == ".java":
             pages[relative] = java_source_units(data.decode("utf-8"), path=relative)
     return {
+        "project_root": str(root),
         "symbols": symbols,
         "source_pages": pages,
         "prerequisite_hashes": prerequisites,
