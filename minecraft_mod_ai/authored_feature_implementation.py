@@ -60,6 +60,18 @@ def compile_request_feature_jobs(
             raise ValueError("CONSTRUCTION_BEHAVIOR_COVERAGE_MISSING: " + rid)
         bindings["construction_behaviors_json"] = json.dumps(
             behavior_rows, ensure_ascii=False, separators=(",", ":"))
+        proven_capabilities = {
+            row.get("capability") for row in source_reuse.get("capabilities", ())
+            if row.get("mode") == "source_transplant"
+        }
+        bound_capabilities = sorted({
+            row["capability"] for row in source_reuse.get("capability_graph", {}).get(
+                "requirement_bindings", ())
+            if row.get("requirement_id") == rid
+            and row.get("capability") in proven_capabilities
+        })
+        bindings["construction_donor_capabilities_json"] = json.dumps(
+            bound_capabilities, ensure_ascii=False, separators=(",", ":"))
         bindings["target_contract_json"] = json.dumps(adapter.version_context.to_dict().get("target", {}), separators=(",", ":"))
         declarations = []
         source_paths = []
