@@ -154,7 +154,8 @@ def record_constructed_requirement(project_root, spec, source, *, materialized_s
                         sort_keys=True, indent=2) + "\n", encoding="utf-8")
         temp.replace(path)
     finally:
-        if temp.exists(): temp.unlink()
+        if temp.exists():
+            temp.unlink()
     return str(path)
 
 
