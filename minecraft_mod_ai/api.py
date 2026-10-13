@@ -463,9 +463,9 @@ def _preflight_production_construction(
     if _adapter_name(session.router, "coder") != "llama_cpp":
         return
     from .platform_catalog import adapter_for_lock_values
-    from .target_contract import target_symbol_namespace
+    from .target_contract import TargetContract, target_symbol_namespace
 
-    adapter = adapter_for_lock_values(platform)
+    adapter = platform if isinstance(platform, TargetContract) else adapter_for_lock_values(platform)
     resolved = adapter.version_context
     target = resolved.to_dict()["target"]
     # Existing projects still use the same target semantics; their classpath is
