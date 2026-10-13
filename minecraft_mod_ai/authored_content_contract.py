@@ -83,6 +83,46 @@ def _gameplay_content_requirements(
     return requirements
 
 
+def _unique_content_requirements(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Preserve every source obligation even if two features share a source ID.
+
+    The request-scope extractor may legitimately quote overlapping source
+    passages. Historical checkpoints can therefore contain the same source
+    ID for different obligations. Only the content-graph ownership key needs
+    disambiguation; retain the original source ID for traceability.
+    """
+    seen: set[str] = set()
+    result: list[dict[str, Any]] = []
+    for position, original in enumerate(rows):
+        row = deepcopy(original)
+        rid = row.get("requirement_id")
+        if not isinstance(rid, str) or not rid.strip():
+            raise ValueError(
+                f"CONTENT_REQUIREMENT_ID_MISSING: catalog entry {position}"
+            )
+        if rid in seen:
+            identity = json.dumps(
+                {
+                    "original_id": rid,
+                    "entry": position,
+                    "statement": row.get("statement"),
+                    "source_span": row.get("source_span"),
+                },
+                ensure_ascii=False, sort_keys=True, default=str,
+            )
+            digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+            candidate = "content_req_" + digest[:20]
+            suffix = 20
+            while candidate in seen:
+                suffix += 2
+                candidate = "content_req_" + digest[:suffix]
+            row["source_requirement_id"] = rid
+            row["requirement_id"] = candidate
+        seen.add(row["requirement_id"])
+        result.append(row)
+    return result
+
+
 CONTENT_GRAPH_DRIVER_CONCERNS = (
     # Only concerns that can identify player-facing content are model-authored
     # requirements. Engineering-only rows are host constraints and never become
@@ -170,7 +210,7 @@ def content_request_catalog(
         } for row in request_scope["requirements"]] + transactions
     if not any(records.get(concern) for concern in CONTENT_GRAPH_DRIVER_CONCERNS):
         return {
-            "requirements": gameplay_requirements,
+            "requirements": _unique_content_requirements(gameplay_requirements),
             "host_constraints": host_constraints,
         }
 
@@ -231,7 +271,7 @@ def content_request_catalog(
         })
 
     return {
-        "requirements": [*gameplay_requirements, *requirements],
+        "requirements": _unique_content_requirements([*gameplay_requirements, *requirements]),
         "host_constraints": host_constraints,
     }
 
