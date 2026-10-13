@@ -128,6 +128,16 @@ jobs:
                   "tests/test_first_pass_java_data_transport.py",
                   "tests/test_java_decode_capacity.py",
               ),
+              "minecraft_mod_ai/construction_task.py": (
+                  "tests/test_construction_behavior_planning.py",
+              ),
+              "minecraft_mod_ai/llama_server_runtime_tuning.py": (
+                  "tests/test_planner_memory_recovery.py",
+                  "tests/test_llama_parallel_runtime_contract.py",
+              ),
+              "minecraft_mod_ai/llama_generation_budget.py": (
+                  "tests/test_generation_output_budget_structural.py",
+              ),
           }
           targeted_path_tests = {}
           for prefix, candidates in targeted_path_tests.items():
@@ -150,8 +160,9 @@ jobs:
           source_stems: set[str] = set()
           narrow_complete_orchestrator_receipt_change = False
           for path in python_files:
-              if path in targeted_sources:
-                  continue
+              # Directly mapped tests are mandatory, but never replace the
+              # import-based dependency scan. A module may have consumers
+              # beyond the curated smoke/regression list.
               p = Path(path)
               if p.as_posix() == "minecraft_mod_ai/complete_orchestrator.py":
                   diff_text = subprocess.check_output(
@@ -219,6 +230,11 @@ jobs:
               "minecraft_mod_ai/jdk_runtime_inventory",
               "minecraft_mod_ai/target_contract",
               "minecraft_mod_ai/generation_target_compile",
+              "minecraft_mod_ai/llama_server_",
+              "minecraft_mod_ai/llama_generation_budget",
+              "minecraft_mod_ai/generation_output_budget",
+              "minecraft_mod_ai/model_router",
+              "minecraft_mod_ai/reviewed_tool_loop",
               "minecraft_mod_ai/runner",
               "minecraft_mod_ai/resource_",
               "minecraft_mod_ai/model_",
