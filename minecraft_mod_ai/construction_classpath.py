@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 from functools import lru_cache
 from threading import RLock
@@ -57,7 +58,8 @@ gradle.beforeProject { project ->
 
 _INSPECTION_LOCK = RLock()
 _INPUTS = ("settings.gradle", "settings.gradle.kts", "build.gradle", "build.gradle.kts",
-           "gradle.properties", "gradle/libs.versions.toml")
+           "gradle.properties", "gradle/libs.versions.toml",
+           "gradle/gradle-wrapper.properties", "gradle/gradle-daemon-jvm.properties")
 
 
 def _config_signature(root: Path) -> tuple[tuple[str, str], ...]:
@@ -69,15 +71,27 @@ def _config_signature(root: Path) -> tuple[tuple[str, str], ...]:
     )
 
 
-def resolve_fabric_compile_classpath(project_root: str, *, timeout_seconds: int = 180) -> tuple[str, ...]:
+def resolve_fabric_compile_classpath(project_root: str, *, timeout_seconds: int = 180,
+                                    java_version: int | None = None) -> tuple[str, ...]:
     root = Path(project_root).resolve()
+    java_home = ""
+    if java_version is not None:
+        from .java_lsp import _resolve_project_java_home
+
+        required_java = int(java_version)
+        if required_java <= 0:
+            raise ValueError("CONSTRUCTION_JAVA_VERSION_REQUIRED")
+        java_home = str(_resolve_project_java_home(required_java, require_compiler=True).resolve())
     with _INSPECTION_LOCK:
-        return _resolve_inspected_classpath(str(root), timeout_seconds, _config_signature(root))
+        return _resolve_inspected_classpath(
+            str(root), timeout_seconds, _config_signature(root), java_home,
+        )
 
 
 @lru_cache(maxsize=4)
 def _resolve_inspected_classpath(project_root: str, timeout_seconds: int,
-                                config_signature: tuple[tuple[str, str], ...]) -> tuple[str, ...]:
+                                config_signature: tuple[tuple[str, str], ...],
+                                java_home: str = "") -> tuple[str, ...]:
     root = Path(project_root).resolve()
     wrapper = root / "gradlew"
     if not wrapper.is_file():
@@ -85,12 +99,19 @@ def _resolve_inspected_classpath(project_root: str, timeout_seconds: int,
     with TemporaryDirectory(prefix="mmm-classpath-") as directory:
         init_script = Path(directory) / "mmm-classpath.gradle"
         init_script.write_text(_INIT, encoding="utf-8")
+        environment = None
+        java_options = []
+        if java_home:
+            environment = dict(os.environ)
+            environment["JAVA_HOME"] = java_home
+            environment["PATH"] = str(Path(java_home) / "bin") + os.pathsep + environment.get("PATH", "")
+            java_options.append("-Dorg.gradle.java.home=" + java_home)
         try:
             result = subprocess.run(
-                ["bash", str(wrapper), "--no-daemon", "--no-configuration-cache",
+                ["bash", str(wrapper), *java_options, "--no-daemon", "--no-configuration-cache",
                  "--console=plain", "--init-script", str(init_script), "-q", ":" + _TASK],
                 cwd=root, capture_output=True, text=True,
-                timeout=timeout_seconds, check=False,
+                timeout=timeout_seconds, check=False, env=environment,
             )
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError("CONSTRUCTION_GRADLE_CLASSPATH_TIMEOUT") from exc

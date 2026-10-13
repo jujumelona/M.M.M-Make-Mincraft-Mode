@@ -1985,7 +1985,10 @@ class CompleteProductionOrchestrator:
                     if any(_java_generator_job(job) for job in artifact_jobs_to_run):
                         from .construction_classpath import resolve_fabric_compile_classpath
                         generation_context["java_classpath"] = list(
-                            resolve_fabric_compile_classpath(str(project_root))
+                            resolve_fabric_compile_classpath(
+                                str(project_root),
+                                java_version=spec.platform.version_context.java,
+                            )
                         )
                     graph_receipt = execute_artifact_graph(
                         artifact_jobs_to_run,
