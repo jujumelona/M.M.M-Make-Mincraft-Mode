@@ -445,10 +445,19 @@ def materialize_verified_authored_sources(
         json.dumps(attribution, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
+    # Bind every installed artifact to its exact bytes. File presence alone is
+    # insufficient for resumption or for authoring callable donor integration.
+    file_hashes = {
+        relative: hashlib.sha256(raw).hexdigest()
+        for relative, (raw, _owner) in sorted(prepared.items())
+    }
+    file_owners = {relative: owner for relative, (_raw, owner) in sorted(prepared.items())}
     return {
         "schema_version": "mmm/authored-source-install-v1",
         "donor_count": len(attribution),
         "files": sorted(prepared),
+        "file_hashes": file_hashes,
+        "file_owners": file_owners,
         "provenance": str(provenance_file),
     }
 
