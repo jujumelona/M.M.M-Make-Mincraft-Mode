@@ -23,7 +23,7 @@ _BEHAVIOR_SCHEMA = {"type": "object", "properties": {
 
 def _id(parent, intent, start, end):
     """Distinct grounded occurrences must not collapse on English paraphrases."""
-    signature = f"{parent}\\0{start}:{end}\\0{intent.casefold()}"
+    signature = chr(0).join((parent, f"{start}:{end}", intent.casefold()))
     return "behavior_" + hashlib.sha256(signature.encode()).hexdigest()[:20]
 
 
@@ -36,7 +36,7 @@ def _unclaimed_source(source_text, claimed):
     """
     covered = bytearray(len(source_text))
     for left, right in claimed:
-        covered[left:right] = b"\\x01" * (right - left)
+        covered[left:right] = bytes([1]) * (right - left)
     offset = 0
     while offset < len(source_text):
         if covered[offset]:
