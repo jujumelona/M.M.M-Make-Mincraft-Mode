@@ -105,7 +105,8 @@ class ConstructionState:
         }, "lookup": self.lookup}
 
     def consume_lookup(self, kind, query, offset, result):
-        normalized = query.strip().casefold() if kind == "symbols" else query.strip()
+        normalized = query.strip().casefold() if kind in {"symbols", "sources"} else query.strip()
+        if kind == "nodes": normalized = ",".join(sorted(key.strip() for key in query.split(',')))
         request = (kind, normalized, offset)
         if request in self.requests:
             raise ValueError("CONSTRUCTION_AUTHOR_NO_PROGRESS: repeated " + kind + " lookup")
