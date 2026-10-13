@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Mapping
 from copy import deepcopy
 from pathlib import Path
 from zipfile import ZipFile
