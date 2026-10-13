@@ -82,7 +82,7 @@ def _source_quote_bounds(source: str, quote: str) -> tuple[int, int] | None:
     words = str(quote).split()
     if not words:
         return None
-    pattern = r"\\s+".join(re.escape(word) for word in words)
+    pattern = r"\s+".join(re.escape(word) for word in words)
     match = re.search(pattern, source)
     return (match.start(), match.end()) if match else None
 
