@@ -11,25 +11,15 @@ from .runner import BuildRunnerError, GradleRunner
 
 
 def _gradle_cache_for(project_root: Path) -> Path:
-    """Reuse the owning production run cache even before first materialization.
+    """Use the same distribution/dependency authority as preflight and release.
 
-    Generation runs inside a resumable checkpoint below the run root while the
-    production build later uses the run-scoped .cache/gradle directory. Requiring
-    that cache directory to already exist made the first target compile fall back
-    to a project-local cold cache, so Gradle/dependency state was populated twice.
+    Keep the project argument for existing callers. Selecting an ancestor or
+    project-local cache here isolates the coder's compiler from the dependencies
+    already resolved by construction preflight and the production build runner.
     """
+    from .runner import production_gradle_cache_dir
 
-    ancestors = (project_root, *project_root.parents)
-    for ancestor in ancestors:
-        checkpoint_root = ancestor / ".minecraft_ai" / ".mmm-custom-checkpoints"
-        if checkpoint_root.is_dir():
-            return ancestor / ".cache" / "gradle"
-
-    for ancestor in ancestors:
-        candidate = ancestor / ".cache" / "gradle"
-        if candidate.is_dir():
-            return candidate
-    return project_root / ".minecraft_ai" / "cache" / "gradle"
+    return production_gradle_cache_dir()
 
 
 def run_generation_target_compile(
