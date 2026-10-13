@@ -143,6 +143,9 @@ def _unique_content_requirements(rows: list[dict[str, Any]]) -> list[dict[str, A
             row["requirement_id"] = candidate
         else:
             first_by_id[rid] = (position, deepcopy(row))
+        # A future source ID may equal a previously generated content ID.
+        # Preserve provenance for those collisions as well.
+        first_by_id.setdefault(row["requirement_id"], (position, deepcopy(row)))
         seen.add(row["requirement_id"])
         result.append(row)
     return result
