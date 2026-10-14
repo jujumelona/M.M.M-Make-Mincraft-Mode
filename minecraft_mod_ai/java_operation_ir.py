@@ -471,6 +471,7 @@ class JavaOperations:
         expression_indices = {
             "literal": (), "parameter": (), "local": (), "this": (), "declare": range(len(refs)),
             "field": range(len(refs)), "call": range(len(refs)), "new": range(len(refs)),
+            'constructor_call': range(len(refs)),
             "binary": range(len(refs)), "unary": range(len(refs)), "assign": range(len(refs)),
             "cast": range(len(refs)), "instanceof": range(len(refs)), "array_get": range(len(refs)),
             "array_length": range(len(refs)), "new_array": range(len(refs)), "ternary": range(len(refs)),
