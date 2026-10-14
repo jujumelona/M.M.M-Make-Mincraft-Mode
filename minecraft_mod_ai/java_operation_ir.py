@@ -314,6 +314,7 @@ class JavaOperations:
                 if (inherited.get('kind') != 'METHOD' or inherited['owner'] == row['owner']
                         or inherited['name'] != row['name'] or parameter_types(inherited) != parameter_types(row)
                         or inherited.get('access', 0) & 2 or inherited.get('visibility') == 'private'
+                        or (inherited.get('static') and self.symbols.get(inherited['owner'], {}).get('access', 0) & 0x200)
                         or not self.subtype(row['owner'], inherited['owner'])):
                     continue
                 access = inherited.get('access', 1)
@@ -326,6 +327,8 @@ class JavaOperations:
                     raise ValueError('CONSTRUCTION_OVERRIDE_RETURN_TYPE')
                 visibility = row.get('visibility', 'public')
                 if (access & 1 and visibility != 'public') or (access & 4 and visibility not in {'public', 'protected'}):
+                    raise ValueError('CONSTRUCTION_OVERRIDE_VISIBILITY')
+                if not access & 7 and visibility == 'private':
                     raise ValueError('CONSTRUCTION_OVERRIDE_VISIBILITY')
                 for exception in row.get('throws', ()):
                     if self.checked_exception(exception) and not any(self.subtype(exception, allowed) for allowed in inherited.get('throws', ())):

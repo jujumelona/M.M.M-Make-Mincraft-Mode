@@ -55,12 +55,23 @@ def _write_record(root, namespace, key, value):
             temp.unlink()
 
 
-def _read_job_record(root, job_id):
-    return _read_record(root, "jobs", job_id)
+def _read_job_record(root, job_id, target_relative=None):
+    indexed = _read_record(root, "jobs", job_id)
+    relative = target_relative or (indexed or {}).get('target_path')
+    if relative:
+        path_record = _read_record(root, 'paths', relative)
+        if isinstance(path_record, dict) and path_record.get('job_id') == job_id:
+            checkpoint = path_record.get('job_checkpoint')
+            if (not isinstance(checkpoint, dict) or checkpoint.get('target_path') != relative
+                    or checkpoint.get('after_hash') != path_record.get('sha256')):
+                raise ValueError('ARTIFACT_CHECKPOINT_CORRUPT')
+            return checkpoint
+    return indexed
 
 
 def _read_path_hash(root, relative):
-    return _read_record(root, "paths", relative)
+    value = _read_record(root, "paths", relative)
+    return value.get('sha256') if isinstance(value, dict) else value
 
 
 def _locks_for(root, job_id, relative):
@@ -174,7 +185,7 @@ def execute_checkpointed_job(job, *, context, router, registry, base_dir, execut
     # expensive model/render/template execution and checkpoint commits can overlap.
     with job_lock, target_lock:
         current = _current_sha256(target)
-        prior = _read_job_record(root, job.job_id)
+        prior = _read_job_record(root, job.job_id, relative)
         recorded = _read_path_hash(root, relative)
         if prior is not None:
             if resolved is not None:
@@ -227,6 +238,10 @@ def execute_checkpointed_job(job, *, context, router, registry, base_dir, execut
         after = _current_sha256(target)
         if after is None:
             raise ValueError(f"ARTIFACT_CHECKPOINT_TARGET_MISSING: {relative}")
+        if is_generator:
+            materialized = receipt.get('materialization') or {}
+            if materialized.get('after_sha256') != after:
+                raise ValueError(f'ARTIFACT_CHECKPOINT_OUTPUT_DRIFT: {relative}')
 
         # Re-read the per-target record after execution. This detects any mutation
         # that escaped the in-process target lock without serializing unrelated jobs.
@@ -248,9 +263,12 @@ def execute_checkpointed_job(job, *, context, router, registry, base_dir, execut
             "receipt": receipt,
             "verification_level": "artifact_materialized_not_behavior_proven",
         }
-        # Commit the target hash first. If the process dies before the job record is
-        # written, the next run safely re-executes the job against the verified target
-        # instead of accepting an incomplete checkpoint as reusable.
-        _write_record(root, "paths", relative, after)
+        # One atomic envelope publishes the target identity and this job's
+        # complete receipt together. The jobs table is only an index: a crash
+        # before updating it cannot detach refreshed bytes from their evidence.
+        _write_record(root, "paths", relative, {
+            'schema_version': 'mmm/artifact-path-checkpoint-v2',
+            'sha256': after, 'job_id': job.job_id, 'job_checkpoint': checkpoint,
+        })
         _write_record(root, "jobs", job.job_id, checkpoint)
         return receipt
