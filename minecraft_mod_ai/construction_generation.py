@@ -234,8 +234,6 @@ def compose(router, spec, *, source_context=(), construction_context=None,
             throwable_types = sorted(key for key, row in symbols.items()
                 if row.get('kind') == 'CLASS' and state.evidence_index.accessible(key)
                 and state.evidence_index._subtype(key, 'java.lang.Throwable'))
-            schema['properties']['throws'] = {'type': 'array', 'items': {'enum': throwable_types}}
-            schema['required'].append('throws')
             current['exception_contract'] = {
                 'rule': 'Declare only intended propagated exceptions. Bodies must catch other checked exceptions; overrides cannot broaden inherited throws.',
                 'inherited_methods': [symbol_record(key, row) for key, row in symbols.items()
@@ -255,8 +253,21 @@ def compose(router, spec, *, source_context=(), construction_context=None,
                 continue
             break
         exact_type(metadata['return_type'], symbols, allow_void=action != 'field')
-        if len(metadata.get('throws', ())) != len(set(metadata.get('throws', ()))):
-            raise ValueError('CONSTRUCTION_THROW_DUPLICATE')
+        if action != 'field':
+            metadata['throws'] = []
+            from .construction_declaration_choices import action_schema
+            while True:
+                exceptions = [type_ for type_ in throwable_types if type_ not in metadata['throws']]
+                branches = [action_schema('finish_throws')]
+                if exceptions:
+                    branches.append(action_schema('throws', {'type_ref': {'enum': exceptions}}))
+                exception = ask(planning_router, 'construction_member_throws_next',
+                    {**current, 'signature': metadata}, {'oneOf': branches},
+                    'Declare one exact propagated exception or finish this member exception contract. '
+                    'Its body must catch other checked exceptions. Overrides cannot broaden inherited throws. ' + STATE_INSTRUCTION)
+                if exception['action'] == 'finish_throws':
+                    break
+                metadata['throws'].append(exception['type_ref'])
         state.advance()
         parameters = []
         if action != 'field':

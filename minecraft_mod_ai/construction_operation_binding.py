@@ -287,21 +287,38 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
                 else:
                     bits = {'byte': 8, 'short': 16, 'int': 32}[selector]
                     literal = {'type': 'integer', 'minimum': -(2 ** (bits - 1)), 'maximum': 2 ** (bits - 1) - 1}
-                attribute_schema = obj({'selector_type': {'const': selector}, 'cases': {
-                    'type': 'array', 'items': {'oneOf': [obj({'kind': {'const': 'default'}}),
-                        obj({'kind': {'const': 'value'}, 'value': literal})]}}})
+                labels = []
+                while True:
+                    branches = [action_schema('finish_labels'),
+                                action_schema('value_label', {'value': literal})]
+                    if not any(label['kind'] == 'default' for label in labels):
+                        branches.append(action_schema('default_label'))
+                    label = ask(router, 'construction_switch_label_next',
+                        {**current, 'selector_type': selector, 'label_count': len(labels), 'recent_labels': labels[-RECENT_SIZE:]},
+                        {'oneOf': branches}, 'Choose one exact value/default label or finish the label sequence. ' + instruction)
+                    if label['action'] == 'finish_labels':
+                        break
+                    labels.append({'kind': 'default'} if label['action'] == 'default_label' else {'kind': 'value', 'value': label['value']})
+                control_attributes = {'selector_type': selector, 'cases': labels}
             else:
                 throwable_types = sorted(key for key, row in state.symbols.items()
                     if row.get('kind') == 'CLASS' and state.evidence_index.accessible(key)
                     and state.evidence_index._subtype(key, 'java.lang.Throwable'))
-                catches = {'type': 'array', 'minItems': 1, 'items': obj({
-                    'name': attrs['catches']['items']['properties']['name'],
-                    'type_ref': {'enum': throwable_types}})}
-                attribute_schema = {'oneOf': [obj({'catches': catches, 'finally': {'type': 'boolean'}}),
-                    obj({'catches': {'const': []}, 'finally': {'const': True}})]}
-            control_attributes = ask(router, 'construction_' + op + '_structure', current, attribute_schema,
-                'Choose this control node structure. Each listed case/catch creates one required body slot. '
-                'Default is a label kind, distinct from any string value. ' + instruction)
+                catches = []
+                while True:
+                    available = [type_ for type_ in throwable_types if not any(
+                        state.evidence_index._subtype(type_, catch['type_ref']) for catch in catches)]
+                    branches = [action_schema('finish_catches', {'finally': {'type': 'boolean'} if catches else {'const': True}})]
+                    if available:
+                        branches.append(action_schema('catch', {
+                            'name': attrs['catches']['items']['properties']['name'], 'type_ref': {'enum': available}}))
+                    catch = ask(router, 'construction_try_catch_next',
+                        {**current, 'catch_count': len(catches), 'recent_catches': catches[-RECENT_SIZE:]},
+                        {'oneOf': branches}, 'Choose one real catch contract or finish with the finally decision. ' + instruction)
+                    if catch['action'] == 'finish_catches':
+                        control_attributes = {'catches': catches, 'finally': catch['finally']}
+                        break
+                    catches.append({'name': catch['name'], 'type_ref': catch['type_ref']})
             schema['properties']['attributes'] = {'const': control_attributes}
             count = (1 + len(control_attributes['cases']) if op == 'switch' else
                      1 + len(control_attributes['catches']) + bool(control_attributes['finally']))
@@ -311,4 +328,16 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
             minimum, maximum = arities[op]
             for branch in schema.get('oneOf', [schema]):
                 branch['properties']['input_refs'].update(minItems=minimum, maxItems=maximum)
+        if op == 'block' or (op == 'new_array' and not choice['sized']):
+            references = []
+            while True:
+                reference = ask(router, 'construction_' + op + '_input_next',
+                    {**current, 'input_count': len(references), 'recent_input_refs': references[-RECENT_SIZE:]},
+                    {'oneOf': [action_schema('finish_inputs'),
+                        action_schema('input', {'node_ref': schema['properties']['input_refs']['items']})]},
+                    'Choose one actual or forward input node reference in execution order, or finish the sequence. ' + instruction)
+                if reference['action'] == 'finish_inputs':
+                    break
+                references.append(reference['node_ref'])
+            schema['properties']['input_refs'] = {'const': references}
     return dict(ask(router, 'construction_operation_' + op, current, schema, instruction))
