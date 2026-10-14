@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from bisect import bisect_right
 from dataclasses import replace
 
@@ -51,20 +51,24 @@ class ConstructionEvidenceIndex:
         self.eligible = {}
         self.eligibility_header = None
         self.member_orderings = {}
-        descriptions = defaultdict(list)
+        self.owner_term_counts = defaultdict(lambda: defaultdict(Counter))
+        self.owner_document_counts = defaultdict(Counter)
+        self.own_documents = {}
+        self.owner_chunks = {}
+        self.owner_prepared = {}
         for key, row in symbols.items():
             if row.get('provenance') == 'construction_plan' and row['owner'] != owner:
                 continue
             self.by_owner[row['owner']].append(key)
-            descriptions[row['owner']].append(_description(row))
+            self._record_document(key, row)
             if row.get('kind') == 'CLASS':
                 self.aliases[symbol_query_key(key)].add(key)
                 self.aliases[symbol_query_key(row['name'])].add(key)
-        self.owner_chunks = tuple(RAGChunk(owner, owner, '\n'.join(parts), 1, 1, '', {})
-                                  for owner, parts in sorted(descriptions.items()))
-        self.owner_prepared = {row.chunk_id: (frozenset(_tokens(row.text)), row.text.casefold())
-                               for row in self.owner_chunks}
         for type_owner in self.by_owner:
+            if type_owner not in self.owner_chunks:
+                text = _words(type_owner)
+                self.owner_chunks[type_owner] = RAGChunk(type_owner, type_owner, text, 1, 1, '', {})
+                self.owner_prepared[type_owner] = (frozenset(_tokens(text)), text.casefold())
             self._add_owner_scope(type_owner)
         self.sources = {}
         for source_ref, units in source_pages.items():
@@ -92,6 +96,22 @@ class ConstructionEvidenceIndex:
                                        for row, vector in zip(self.source_chunks, vectors))
         self.query_vectors = {}
 
+    def _record_document(self, key, row):
+        owner, kind = row['owner'], row['kind']
+        text = _description(row)
+        terms = frozenset(_tokens(text))
+        if key in self.own_documents:
+            previous_kind, previous_terms = self.own_documents[key]
+            self.owner_term_counts[owner][previous_kind].subtract(previous_terms)
+            self.owner_document_counts[owner][previous_kind] -= 1
+        self.owner_term_counts[owner][kind].update(terms)
+        self.owner_document_counts[owner][kind] += 1
+        if owner == self.owner:
+            self.own_documents[key] = (kind, terms)
+        if kind == 'CLASS':
+            self.owner_chunks[owner] = RAGChunk(owner, owner, text, 1, 1, '', {})
+            self.owner_prepared[owner] = (terms, text.casefold())
+
     def _add_owner_scope(self, owner):
         package = owner.rpartition('.')[0]
         scopes = ['package:']
@@ -115,6 +135,7 @@ class ConstructionEvidenceIndex:
             raise ValueError('CONSTRUCTION_RETRIEVAL_LOCAL_AUTHORITY')
         if key not in self.by_owner[self.owner]:
             self.by_owner[self.owner].append(key)
+        self._record_document(key, row)
         self.member_text[key] = _description(row)
         self.member_prepared[key] = (frozenset(_tokens(self.member_text[key])), self.member_text[key].casefold())
         self.eligible.clear()
@@ -146,6 +167,11 @@ class ConstructionEvidenceIndex:
 
     def root_goal(self, goal):
         return self._goal({**self.goals[goal], 'scope': 'package:'})
+
+    def scoped_goal(self, goal, scope):
+        if scope not in self.scope_owners:
+            raise ValueError('CONSTRUCTION_RETRIEVAL_SCOPE_MISSING')
+        return self._goal({**self.goals[goal], 'scope': scope})
 
     def _eligible_owners(self, kinds):
         header = self.symbols.get(self.owner, {})
@@ -307,7 +333,17 @@ class ConstructionEvidenceIndex:
                     for linked in self.aliases.get(symbol_query_key(type_.removesuffix('[]')), ()):
                         if linked != owner:
                             relation[linked] = max(relation[linked], strength / 2)
-        owners = rank_context_chunks(query, self.owner_chunks, relation_scores=relation,
+        self.anchors = {owner for owner, score in relation.items() if score > 0}
+        terms = set(_meaningful_terms(query))
+        # Vocabulary spread over thousands of unrelated declarations is not
+        # a matching declaration. Normalize term evidence per actual member
+        # document; never join an owner's entire method/constant dictionary.
+        for owner, counts in self.owner_term_counts.items():
+            documents = sum(self.owner_document_counts[owner][kind] for kind in kinds)
+            if documents and terms:
+                hits = sum(counts[kind][term] for kind in kinds for term in terms)
+                relation[owner] += hits / (documents * len(terms))
+        owners = rank_context_chunks(query, self.owner_chunks.values(), relation_scores=relation,
                                      prepared_text=self.owner_prepared)
         eligible = self._eligible_owners(kinds)
         ranked = tuple(row.chunk_id for row in owners if row.chunk_id in eligible)
@@ -369,6 +405,8 @@ class ConstructionEvidenceIndex:
         descriptor = self._ensure(goal)
         scope = descriptor['scope']
         candidates = set(self.scope_children.get(scope, ()))
+        if scope == 'package:':
+            candidates.update('type:' + owner for owner in self.anchors)
         if scope.startswith('type:'):
             owner = scope.removeprefix('type:')
             for key in self.by_owner.get(owner, ()):
@@ -378,8 +416,18 @@ class ConstructionEvidenceIndex:
                     for linked in self.aliases.get(symbol_query_key(type_.split('[', 1)[0]), ()):
                         if linked != owner:
                             candidates.add('type:' + linked)
-        candidates = sorted((key for key in candidates if self.scope_counts.get(key)),
-                            key=lambda key: (-self.scope_scores[key], key))
+        # Skip only actual unary package chains. No branch/type is removed;
+        # the returned ID still names a verified scope in this same inventory.
+        compacted = set()
+        for key in candidates:
+            children = [child for child in self.scope_children.get(key, ()) if self.scope_counts.get(child)]
+            while key.startswith('package:') and len(children) == 1 and children[0].startswith('package:'):
+                key = children[0]
+                children = [child for child in self.scope_children.get(key, ()) if self.scope_counts.get(child)]
+            if self.scope_counts.get(key):
+                compacted.add(key)
+        candidates = sorted(compacted,
+                            key=lambda key: (-self.scope_scores[key], not key.startswith('type:'), key))
         result = page_result(candidates, offset, field='scopes')
         rows = []
         for key in result['scopes']:

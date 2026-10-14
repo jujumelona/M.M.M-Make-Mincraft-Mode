@@ -156,17 +156,17 @@ class ConstructionState:
         self.symbol_goal = None
         self.operation_goal = None
 
-    def prepare_symbols(self, purpose, *, kinds=('CLASS',)):
+    def prepare_symbols(self, purpose, *, kinds=('CLASS',), preserve_scope=False):
         if self.evidence_index is None:
             return
-        query = '\n'.join(str(value) for value in (
-            self.authoring_contract.get('responsibility', ''),
-            self.authoring_contract.get('implementation_requirements', ''), purpose,
-        ) if value)
+        # Authoring rules/negative examples are constraints, not the positive
+        # behavior to retrieve. They remain in authoring_contract unchanged.
+        query = purpose
         goal = self.evidence_index.prepare(query, kinds=kinds)
         current = self.evidence_index.goals.get(self.symbol_goal)
         if current is None or {**current, 'scope': 'package:'} != self.evidence_index.goals[goal]:
-            self.symbol_goal = goal
+            self.symbol_goal = (self.evidence_index.scoped_goal(goal, current['scope'])
+                                if preserve_scope and current is not None else goal)
         if _lookup_request('symbols', self.symbol_goal, 0) not in self.requests:
             self.lookup_symbols(self.symbol_goal, 0)
         if _lookup_request('scopes', self.symbol_goal, 0) not in self.requests:

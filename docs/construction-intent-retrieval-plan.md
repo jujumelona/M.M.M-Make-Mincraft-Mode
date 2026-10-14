@@ -83,10 +83,10 @@ The supplied `20261014-153519` console and `production-logs (6)(1).zip` run publ
 
 **Interfaces:** `prepare_symbols(purpose, *, kinds, preserve_scope=False)` ranks only the supplied positive purpose. The evidence index's real scope selector can be rebound to new symbol kinds without inventing a name. Owner chunks are single class declarations; per-member term document frequencies contribute a normalized mean rather than pooled text.
 
-- [ ] Remove responsibility/negative implementation instructions from retrieval queries; retain them in authoring/admission context.
-- [ ] Replace concatenated owner text with atomic class descriptions and member document-frequency means, incrementally updating own declarations.
-- [ ] Expose actual required/source-linked type anchors and compress only real single-child package paths. All remaining candidates retain literal successors.
-- [ ] Parse syntax, inspect access/cache/selector contracts, run diff checks and commit.
+- [x] Remove responsibility/negative implementation instructions from retrieval queries; retain them in authoring/admission context.
+- [x] Replace concatenated owner text with atomic class descriptions and member document-frequency means, incrementally updating own declarations.
+- [x] Expose actual required/source-linked type anchors and compress only real single-child package paths. All remaining candidates retain literal successors.
+- [x] Parse syntax, inspect access/cache/selector contracts, run diff checks and commit.
 
 ### Task 5: Make evidence available before syntax selection
 
@@ -118,3 +118,4 @@ The supplied `20261014-153519` console and `production-logs (6)(1).zip` run publ
 - First full static review identified three material regressions: header discovery after one inherited type, fresh local array type reachability, and foreach component conversions. Follow-up fixes prepare inheritance evidence each iteration, bind structural array dimensions and element/result/arity, and use the existing IR's component assignment rules. Older source/node catalogue pointers stay usable, source selectors are canonical across scopes, and shown own helper declarations can be chosen directly as actual APIs.
 - Prior publication verified: `111641fa018e83b2c7fb0780c093c0ddfabd7efa`, tree `1e790139461c8357902fb42426876e673290460b`; static confirmation resolved the three reported defects. The new supplied run demonstrates a separate architectural ordering error, not a successful generation.
 - Follow-up ruling: the user explicitly requests the root correction now and retains inline execution/main publication authorization. Proceed without another approval handoff. User prohibition overrides skill test/inference/build requirements; verification is syntax, data inspection, diff checks and independent static review only. Scheduling slot IDs is mechanical; gameplay remains authored by the model.
+- Task 4: positive purposes now exclude authoring rules; owner evidence uses a class declaration plus normalized atomic-member term frequencies. Actual source/contract anchors and real unary namespace compression expose meaningful scopes without inventing an API name. Changed files passed syntax parsing and diff checks; no ranking function/model was executed.
