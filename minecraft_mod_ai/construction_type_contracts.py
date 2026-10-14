@@ -12,6 +12,32 @@ def owner_package(symbols, owner):
     return symbols.get(owner, {}).get('package', owner.rpartition('.')[0])
 
 
+def class_accessible(symbols, owner, current, target_path):
+    """Check the inspected leaf and every enclosing type from this caller."""
+    seen = set()
+    while owner:
+        if owner in seen:
+            return False
+        seen.add(owner)
+        row = symbols.get(owner, {})
+        if row.get('kind') != 'CLASS':
+            return False
+        if row.get('side') == 'CLIENT' and not target_path.startswith('src/client/'):
+            return False
+        access = row.get('access', 1)
+        same_package = owner_package(symbols, owner) == owner_package(symbols, current)
+        if access & 2 and owner != current:
+            return False
+        if not access & 7 and not same_package:
+            return False
+        enclosing = row.get('enclosing_owner', '')
+        if (access & 4 and not same_package
+                and not inspected_subtype(symbols, current, enclosing or owner)):
+            return False
+        owner = enclosing
+    return True
+
+
 def inspected_subtype(symbols, actual, expected):
     if expected == 'java.lang.Object' and (actual.endswith('[]') or symbols.get(actual, {}).get('kind') == 'CLASS'):
         return True

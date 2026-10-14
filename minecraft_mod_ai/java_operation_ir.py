@@ -273,6 +273,9 @@ class JavaOperations:
             if parameters != expected_parameters or returns != row.get("return_type"):
                 raise ValueError("CONSTRUCTION_SYMBOL_DESCRIPTOR")
         current = self.symbols[self.task.owner_symbol]["owner"]
+        from .construction_type_contracts import class_accessible
+        if not class_accessible(self.symbols, row['owner'], current, self.task.target_path):
+            raise ValueError('CONSTRUCTION_SYMBOL_ACCESS')
         if key != self.task.owner_symbol and "access" in row:
             access = row["access"]
             same_package = owner_package(self.symbols, row['owner']) == owner_package(self.symbols, current)

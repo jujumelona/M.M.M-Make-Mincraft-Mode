@@ -91,8 +91,8 @@ def build_target_symbols(classpath, *, java_version: int, namespace: str, classp
                                 if item.enclosing_class and not (item.inner_access or 0) & 8 else '',
                              "source_path": str(path)}
             for member in item.members:
-                if not member.access & 5:
-                    continue
+                # Visibility belongs to the actual caller, not inventory
+                # construction. Same-package APIs must remain discoverable.
                 parameters, returns = descriptor_types(member.descriptor)
                 enclosing = result[owner]['enclosing_instance_type'] if member.kind == 'CONSTRUCTOR' else ''
                 if enclosing:

@@ -4,7 +4,7 @@ Names are returned evidence, never a prerequisite invented by the author.
 The target inventory remains authoritative; old source is porting evidence.
 """
 from __future__ import annotations
-from .construction_type_contracts import owner_package
+from .construction_type_contracts import owner_package, class_accessible
 
 import hashlib
 import json
@@ -114,16 +114,24 @@ class ConstructionEvidenceIndex:
             self.owner_prepared[owner] = (terms, text.casefold())
 
     def _add_owner_scope(self, owner):
-        package = owner.rpartition('.')[0]
+        package = owner_package(self.symbols, owner)
         scopes = ['package:']
         parts = package.split('.') if package else []
         for index in range(1, len(parts) + 1):
             scope = 'package:' + '.'.join(parts[:index])
             self.scope_children[scopes[-1]].add(scope)
             scopes.append(scope)
-        leaf = 'type:' + owner
-        self.scope_children[scopes[-1]].add(leaf)
-        scopes.append(leaf)
+        # '$' normalization does not turn an enclosing class into a package.
+        enclosing, seen, types = owner, set(), []
+        while enclosing:
+            if enclosing in seen:
+                raise ValueError('CONSTRUCTION_ENCLOSING_TYPE_CYCLE')
+            seen.add(enclosing)
+            types.append('type:' + enclosing)
+            enclosing = self.symbols.get(enclosing, {}).get('enclosing_owner', '')
+        for leaf in reversed(types):
+            self.scope_children[scopes[-1]].add(leaf)
+            scopes.append(leaf)
         self.owner_scopes[owner] = tuple(scopes)
         for scope in scopes:
             self.scope_owners[scope].add(owner)
@@ -229,7 +237,9 @@ class ConstructionEvidenceIndex:
             row = self.symbols.get(current, {})
             parents = [row.get('superclass', ''), *row.get('interfaces', ())]
             for parent in parents:
-                pending.extend(self.aliases.get(symbol_query_key(parent), ()))
+                # Discovery aliases may fold case; Java type identity may not.
+                if parent:
+                    pending.append(parent)
         return False
 
     def assignable(self, actual, expected):
@@ -254,14 +264,7 @@ class ConstructionEvidenceIndex:
             return False
         owner = self.symbols.get(row['owner'], {})
         same_package = owner_package(self.symbols, row['owner']) == owner_package(self.symbols, self.owner)
-        if owner and owner.get('side') == 'CLIENT' and not self.target_path.startswith('src/client/'):
-            return False
-        if owner.get('access', 1) & 2 and row['owner'] != self.owner:
-            return False
-        if not owner.get('access', 1) & 7 and not same_package:
-            return False
-        if (owner.get('access', 1) & 4 and not same_package
-                and not self._subtype(self.owner, owner.get('enclosing_owner') or row['owner'])):
+        if not class_accessible(self.symbols, row['owner'], self.owner, self.target_path):
             return False
         access = row.get('access')
         if access is not None:
