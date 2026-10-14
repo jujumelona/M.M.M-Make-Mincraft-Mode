@@ -38,10 +38,10 @@
 - `prepare(purpose, *, kinds)` returns a deterministic goal identifier; `page(goal_id, offset)` returns actual symbol records, literal pagination and ranked source pointers.
 - Goals export only their purpose/kind selectors. Resume recomputes candidate ordering from current inspected inputs.
 
-- [ ] Add public ranking over the existing lexical/cosine/relationship scoring without requiring an exact identifier match.
-- [ ] Build source/owner descriptions, rank from behavior purpose, carry actual source/type relationships, and filter side/access/constructor eligibility.
-- [ ] Provide source evidence and target APIs with separate authority; honor existing embedding device policy.
-- [ ] Parse changed Python with `ast.parse`, inspect the diff, run `git diff --check`, then commit.
+- [x] Add public ranking over the existing lexical/cosine/relationship scoring without requiring an exact identifier match.
+- [x] Build source/owner descriptions, rank from behavior purpose, carry actual source/type relationships, and filter side/access/constructor eligibility.
+- [x] Provide source evidence and target APIs with separate authority; honor existing embedding device policy.
+- [x] Parse changed Python with `ast.parse`, inspect the diff, run `git diff --check`, then commit.
 
 ## Task 2: Connect discovery to declarations and authored operations
 
@@ -74,3 +74,4 @@
 - The repository ignores new Markdown documents; explicitly track this durable plan in the `docs` directory.
 - User authorization is to implement the researched correction now; proceed inline without another approval handoff.
 - Verification is deliberately static under the user's instruction. No test or runtime success is claimed.
+- Task 1: implemented shared evidence ranking and target/source navigation. Syntax parsing passed; no project code ran. Ranked inventory caching retains one ordering and reconstructs older goals so graph growth does not duplicate the full API inventory per node.

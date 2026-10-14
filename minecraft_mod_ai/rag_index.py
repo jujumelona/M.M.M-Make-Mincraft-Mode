@@ -153,6 +153,30 @@ class _Candidate:
         )
 
 
+def rank_context_chunks(query, chunks, *, query_vector=None, relation_scores=None):
+    """Rank a host-owned evidence map without requiring an identifier match.
+
+    Unlike a sparse hit filter, a navigation map retains zero-overlap entries:
+    a native semantic selector can discover their real declarations from the
+    purpose and structure. This is not a new corpus/count limit. Existing RAG
+    lexical, cosine and relationship scoring are shared with indexed search.
+    """
+    if not isinstance(query, str) or not query.strip():
+        raise ValueError("Context ranking requires a behavior query.")
+    terms = set(_meaningful_terms(query))
+    folded = query.casefold()
+    relations = relation_scores or {}
+    candidates = [
+        _Candidate(chunk, _lexical_score(terms, folded, chunk.text),
+                   _cosine(query_vector, chunk.embedding),
+                   relation_score=float(relations.get(chunk.chunk_id, 0.0)))
+        for chunk in chunks
+    ]
+    if any(not math.isfinite(row.score) for row in candidates):
+        raise ValueError("Context ranking returned a non-finite score.")
+    return tuple(_candidate_to_hit(row) for row in _top_candidates(candidates, len(candidates)))
+
+
 @dataclass(frozen=True)
 class _PassResult:
     hits: tuple[RAGHit, ...]
