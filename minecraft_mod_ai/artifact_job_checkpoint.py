@@ -98,6 +98,10 @@ def execute_checkpointed_job(job, *, context, router, registry, base_dir, execut
         registry.bind_context(resolved.context_id)
     from .implementation_identity import ExecutorType
     is_generator = job.executor_type == ExecutorType.PYTHON_GENERATOR
+    implementation_fingerprint = None
+    if is_generator:
+        from .construction_implementation import construction_implementation_fingerprint
+        implementation_fingerprint = construction_implementation_fingerprint()
     if base_dir is None:
         return execute(job, context=context, router=router, port_registry=registry, base_dir=base_dir)
     root = Path(base_dir).resolve()
@@ -174,7 +178,11 @@ def execute_checkpointed_job(job, *, context, router, registry, base_dir, execut
                 )
             if current is None or recorded != current:
                 raise ValueError(f"ARTIFACT_CHECKPOINT_TARGET_DRIFT: {relative}")
-            return _restore_checkpoint(job, prior["receipt"], registry)
+            if prior.get('implementation_fingerprint') == implementation_fingerprint:
+                return _restore_checkpoint(job, prior["receipt"], registry)
+            # Same approved inputs and verified output, new implementation:
+            # regenerate under the normal target lock. Preserve old evidence
+            # until a complete new receipt and target hash are committed.
         if recorded is not None and current != recorded:
             raise ValueError(f"ARTIFACT_CHECKPOINT_TARGET_DRIFT: {relative}")
         before = current
@@ -204,6 +212,7 @@ def execute_checkpointed_job(job, *, context, router, registry, base_dir, execut
         checkpoint = {
             "template_id": job.template_id,
             "input_hash": binding,
+            "implementation_fingerprint": implementation_fingerprint,
             "dependency_hashes": dependencies,
             "target_path": relative,
             "before_hash": before,

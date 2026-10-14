@@ -37,7 +37,9 @@ def planned_declarations_fingerprint(symbols, declaration_ids):
 def construction_input_fingerprint(spec, authoring_contract):
     # Identity/registry paths, paged configuration and canonical rules are body
     # inputs too. Equal signatures alone do not certify an unchanged behavior.
-    return _sha({'specification': spec, 'authoring_contract': authoring_contract})
+    from .construction_implementation import construction_implementation_fingerprint
+    return _sha({'specification': spec, 'authoring_contract': authoring_contract,
+                 'implementation': construction_implementation_fingerprint()})
 
 
 class ConstructionNodeCheckpoint:

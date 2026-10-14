@@ -27,10 +27,12 @@ def _sha(value):
 
 class JournaledConstructionRouter:
     def __init__(self, router, project_root, spec, context):
+        from .construction_implementation import construction_implementation_fingerprint
         self.router = router
         self.binding = _sha({
             "schema": "mmm/construction-inference-v1",
             "construction_protocol": PROTOCOL_VERSION,
+            "implementation": construction_implementation_fingerprint(),
             "authoring_contract": context.get('authoring_contract', {}),
             "spec": spec,
             "target": context["target"],

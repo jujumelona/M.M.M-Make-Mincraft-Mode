@@ -110,6 +110,10 @@ def production_implementation_fingerprint(stage: str) -> str:
     digest.update(b"mmm/production-implementation-v1\0")
     digest.update(str(stage).encode("utf-8"))
     digest.update(b"\0")
+    if stage == 'content':
+        from .construction_implementation import construction_implementation_fingerprint
+        digest.update(construction_implementation_fingerprint().encode('ascii'))
+        digest.update(b'\0')
     for value in _production_inputs(stage):
         name = (
             value.as_posix()
