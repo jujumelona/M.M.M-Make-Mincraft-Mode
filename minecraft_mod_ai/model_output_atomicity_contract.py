@@ -412,6 +412,11 @@ def _model_transport_schema(
     """
 
     if isinstance(value, Mapping):
+        from .native_string_exclusions import DECODED_SCHEMA_KEY
+        if value.get('type') == 'string' and isinstance(value.get(DECODED_SCHEMA_KEY), Mapping):
+            # Repeated transport preparation starts from the logical contract;
+            # wire lengths and escape patterns must never be projected twice.
+            value = value[DECODED_SCHEMA_KEY]
         local_profile = str(
             value.get(SCHEMA_CONTRACT_PROFILE_KEY, profile) or profile
         ).strip()

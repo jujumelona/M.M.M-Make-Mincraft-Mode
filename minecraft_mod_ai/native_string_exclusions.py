@@ -6,9 +6,25 @@ Ordinary Unicode remains literal; quote, backslash and controls use exactly one
 escape spelling, so alternative escapes cannot bypass decoded exclusions.
 """
 from __future__ import annotations
+from collections.abc import Mapping
 
 
 BMP_SCALAR_PATTERN = r'^[\u0000-\ud7ff\ue000-\uffff]$'
+DECODED_SCHEMA_KEY = 'mmm_decoded_string_schema'
+
+
+def decoded_validation_schema(schema):
+    """Keep JSON-wire patterns away from validators of decoded scalar values."""
+    if isinstance(schema, Mapping):
+        logical = schema.get(DECODED_SCHEMA_KEY)
+        if schema.get('type') == 'string' and isinstance(logical, Mapping):
+            if not supports_string_exclusions(logical):
+                raise ValueError('NATIVE_STRING_LOGICAL_SCHEMA_INVALID')
+            return decoded_validation_schema(logical)
+        return {key: decoded_validation_schema(value) for key, value in schema.items()}
+    if isinstance(schema, list):
+        return [decoded_validation_schema(value) for value in schema]
+    return schema
 
 
 def supports_string_exclusions(schema):
@@ -104,4 +120,5 @@ def wire_string_schema(schema):
         raise ValueError('NATIVE_STRING_EXCLUSION_DOMAIN_EMPTY')
     result = {key: value for key, value in schema.items() if key not in {'not', 'pattern'}}
     result.update(pattern='^(' + '|'.join(alternatives) + ')$', maxLength=6 * maximum_length)
+    result[DECODED_SCHEMA_KEY] = dict(schema)
     return result

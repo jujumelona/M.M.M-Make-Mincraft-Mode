@@ -36,7 +36,8 @@ def _json_path(parts: Sequence[Any]) -> str:
 
 
 def _validator_for(schema: Mapping[str, Any]):
-    schema_dict = dict(schema)
+    from .native_string_exclusions import decoded_validation_schema
+    schema_dict = decoded_validation_schema(schema)
     validator_cls = validators.validator_for(schema_dict)
     try:
         validator_cls.check_schema(schema_dict)

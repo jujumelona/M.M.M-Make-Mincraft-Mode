@@ -444,7 +444,7 @@ def generate_fixed_template_value(
             messages,
             media_paths=(),
             response_format=_JSON_FIXTURE_FORMAT,
-            response_schema=effective_schema,
+            response_schema=response_schema,
             enable_tools=False,
             output_token_ceiling=required_ceiling,
             force_non_thinking=True,

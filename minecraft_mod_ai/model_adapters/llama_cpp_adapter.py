@@ -854,6 +854,8 @@ def _schema_rejection(
     schema = schemas.get(call.name)
     if schema is None:
         return "TOOL_NOT_VISIBLE", f"model emitted non-visible tool {call.name!r}"
+    from ..native_string_exclusions import decoded_validation_schema
+    schema = decoded_validation_schema(schema)
     try:
         validator_type = validator_for(schema)
         validator_type.check_schema(schema)
