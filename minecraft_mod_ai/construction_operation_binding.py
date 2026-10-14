@@ -6,11 +6,49 @@ import hashlib
 from .construction_author import ask, obj, operation_schema
 from .construction_declaration_choices import action_schema, choice_actions, type_candidates
 from .construction_operation_choices import operation_context_branches
-from .construction_state import symbol_record
+from .construction_state import symbol_record, RECENT_SIZE
 from .java_operation_ir import parameter_types
 from .construction_operation_contracts import named_values, pending_input_contracts, result_fits
 
 API_KINDS = {'call': 'METHOD', 'new': 'CONSTRUCTOR', 'field': 'FIELD'}
+TYPE_BOUND_OPERATIONS = frozenset({'declare', 'literal', 'cast', 'ternary', 'array_get', 'new_array'})
+
+
+def available_types(state, nodes, declaration, requirements):
+    types = set(type_candidates(state))
+    types.update(row['typed_result'] for row in nodes)
+    types.update(parameter_types(declaration))
+    types.add(declaration['return_type'])
+    types.update(row['expected_type'] for row in requirements if row.get('expected_type'))
+    types.update(row['expected_element_type'] for row in requirements if row.get('expected_element_type'))
+    types.update(value for row in requirements for value in row.get('expected_types', ()))
+    types.update(value for row in requirements for value in row.get('allowed_types', ()))
+    for name in ('java.lang.String', 'java.lang.Object'):
+        if name in state.symbols:
+            types.add(name)
+    return types
+
+
+def type_binding_branches(state, types, requirements, op):
+    branches = []
+    bases = sorted({type_.split('[', 1)[0] for type_ in types} - {'void'})
+    for base in bases:
+        # JVMS array dimensions are structural syntax, not an inventory/name
+        # lookup. Keep every valid dimension without materializing huge enums.
+        minimum, maximum = (1, 255) if op == 'new_array' else (0, 254 if op == 'array_get' else 255)
+        dimensions = [dimension for dimension in range(minimum, maximum + 1)
+                      if result_fits(base + '[]' * dimension, requirements, state.evidence_index)]
+        if not dimensions:
+            continue
+        if dimensions == list(range(dimensions[0], dimensions[-1] + 1)):
+            shape = {'type': 'integer', 'minimum': dimensions[0], 'maximum': dimensions[-1]}
+        else:
+            shape = {'enum': dimensions}
+        properties = {'base_type': {'const': base}, 'array_dimensions': shape}
+        if op == 'new_array':
+            properties['sized'] = {'type': 'boolean'}
+        branches.append(action_schema('write_type', properties))
+    return branches
 
 
 def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_source,
@@ -26,6 +64,7 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
         goal['purpose'], payload['intent'], payload['effects'],
         payload['declaration'].get('purpose', ''),
         *[row.get('expected_type', '') for row in requirements],
+        *[row.get('expected_element_type', '') for row in requirements],
         *payload['state_reads'], *payload['state_writes'],
     ) if value)
     state.prepare_symbols(purpose, kinds=kinds)
@@ -34,6 +73,16 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
         evidence = state.symbol_lookup
         matches = [row for row in evidence.get('matches', ()) if row['kind'] in kinds
                    and (op not in API_KINDS or fits(row['owner'] if op == 'new' else row['return_type']))]
+        if op in API_KINDS:
+            local_keys = set(state.declaration_ids[-RECENT_SIZE:])
+            if state.lookup.get('kind') == 'declarations':
+                local_keys.update(row['symbol_id'] for row in state.lookup.get('declarations', ()))
+            shown = {row['symbol_id'] for row in matches}
+            for key in sorted(local_keys - shown):
+                row = state.symbols[key]
+                if (row['kind'] in kinds and state.evidence_index.accessible(key, constructor=op == 'new')
+                        and fits(row['owner'] if op == 'new' else row['return_type'])):
+                    matches.append(symbol_record(key, row))
         if kinds == ('CLASS',):
             # A previously selected API's input signature is already actual
             # type evidence, including callback interfaces not on this page.
@@ -52,6 +101,9 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
                           if 'functional_parameters' in row and fits(row['symbol_id'])]
             if functional:
                 branches.insert(0, action_schema('functional_type', {'type_ref': {'enum': functional}}))
+        elif op in TYPE_BOUND_OPERATIONS:
+            branches[0:0] = type_binding_branches(state,
+                available_types(state, nodes, payload['declaration'], requirements), requirements, op)
         else:
             branches.insert(0, action_schema('write'))
         if not branches:
@@ -67,9 +119,11 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
             'fit operation_goal, or read a returned source/type/configuration pointer to resolve a '
             'specific missing fact. scopes selects a real package/type branch by meaning when '
             'the right API is not on the current page. API names are returned candidates, not search guesses. '
-            'When this operation can be written, select api/write now. Another operation is chosen '
+            'When this operation can be written, select api, write_type, functional_type or write now. '
+            'write_type binds an actual base type plus array dimensions; new_array also binds sized/initializer form. '
+            'Another operation is chosen '
             'only after this node is written. ' + instruction)
-        if choice['action'] in {'api', 'write', 'functional_type'}:
+        if choice['action'] in {'api', 'write', 'write_type', 'functional_type'}:
             break
         read_lookup(choice)
         save_author()
@@ -78,15 +132,11 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
     from .construction_declaration_choices import string_excluding
     from .construction_operation_choices import NODE_ID_ALPHABET
     schema['properties']['input_refs']['items'] = string_excluding((goal['node_id'],), alphabet=NODE_ID_ALPHABET)
-    types = set(type_candidates(state))
-    types.update(row['typed_result'] for row in nodes)
-    types.update(parameter_types(payload['declaration']))
-    types.add(payload['declaration']['return_type'])
-    types.update(row['expected_type'] for row in requirements if row.get('expected_type'))
-    types.update(value for row in requirements for value in row.get('expected_types', ()))
-    for name in ('java.lang.String', 'java.lang.Object'):
-        if name in state.symbols:
-            types.add(name)
+    types = available_types(state, nodes, payload['declaration'], requirements)
+    selected_type = None
+    if op in TYPE_BOUND_OPERATIONS:
+        selected_type = choice['base_type'] + '[]' * choice['array_dimensions']
+        types.add(selected_type)
     if op in API_KINDS:
         key = choice['symbol_ref']
         row = state.symbols[key]
@@ -121,6 +171,9 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
                   'cast', 'array_get', 'new_array', 'ternary', 'lambda'}:
             result_types = [type_ for type_ in result_types if type_ != 'void']
             schema['properties']['typed_result'] = {'enum': result_types}
+        if selected_type is not None:
+            result_types = [selected_type]
+            schema['properties']['typed_result'] = {'const': selected_type}
         for field in ('type_ref', 'element_type'):
             if field in attrs:
                 attrs[field] = {'enum': nonvoid}
@@ -168,6 +221,12 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
                 branch['properties']['attributes']['properties']['type_ref'] = {'const': type_}
                 variants.append(branch)
             schema = {'oneOf': variants}
+        if op == 'new_array':
+            sized = choice['sized']
+            attrs['sized'] = {'const': sized}
+            attrs['element_type'] = {'const': choice['base_type'] if sized else selected_type[:-2]}
+            if sized:
+                schema['properties']['input_refs'].update(minItems=choice['array_dimensions'], maxItems=choice['array_dimensions'])
         if op == 'literal':
             from copy import deepcopy
             variants = []

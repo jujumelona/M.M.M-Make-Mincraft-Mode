@@ -127,8 +127,8 @@ def compose(router, spec, *, source_context=(), construction_context=None,
         state.advance()
     elif header_policy == 'authored':
         state.enter('class_header')
-        state.prepare_symbols(task.intent, kinds=('CLASS',))
         while True:
+            state.prepare_symbols(task.intent, kinds=('CLASS',))
             candidates = header_candidates(state)
             schema = header_schema(state, candidates)
             actions = choice_actions(schema)

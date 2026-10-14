@@ -144,6 +144,9 @@ class ConstructionEvidenceIndex:
             self.prepare(row['purpose'], kinds=row['kinds'])
         return row
 
+    def root_goal(self, goal):
+        return self._goal({**self.goals[goal], 'scope': 'package:'})
+
     def _eligible_owners(self, kinds):
         header = self.symbols.get(self.owner, {})
         fingerprint = (header.get('superclass', ''), tuple(header.get('interfaces', ())))

@@ -16,6 +16,9 @@ def result_fits(type_, consumers, evidence_index):
             return False
         if row.get('required_shape') == 'array' and not type_.endswith('[]'):
             return False
+        if row.get('expected_element_type') and (not type_.endswith('[]')
+                or not evidence_index.assignable(type_[:-2], row['expected_element_type'])):
+            return False
     return True
 
 
@@ -87,13 +90,16 @@ def pending_input_contracts(nodes, declaration, symbols):
             elif op == 'return':
                 row['expected_types'] = returns_for(node['node_id'])
             elif op == 'array_get':
-                row['expected_type'] = node['typed_result'] + '[]' if index == 0 else 'int'
+                row['allowed_types'] = [node['typed_result'] + '[]'] if index == 0 else ['int', 'byte', 'short', 'char']
             elif op == 'new_array':
-                row['expected_type'] = 'int' if attrs.get('sized') else attrs['element_type']
+                if attrs.get('sized'):
+                    row['allowed_types'] = ['int', 'byte', 'short', 'char']
+                else:
+                    row['expected_type'] = attrs['element_type']
             elif op == 'ternary' and index > 0:
                 row['expected_type'] = node['typed_result']
             elif op == 'foreach' and index == 0:
-                row['expected_type'] = attrs['element_type'] + '[]'
+                row.update(required_shape='array', expected_element_type=attrs['element_type'])
             elif op == 'array_length':
                 row['required_shape'] = 'array'
             elif op == 'for' and index in {0, 2}:

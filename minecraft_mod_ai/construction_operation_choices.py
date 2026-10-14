@@ -38,6 +38,9 @@ def operation_next_schema(state, *, nodes, declaration, can_complete):
                         allowed.discard(action)
                 if not result_fits(declaration['owner'], consumers, state.evidence_index):
                     allowed.discard('this')
+                for action, type_ in (('array_length', 'int'), ('instanceof', 'boolean')):
+                    if not result_fits(type_, consumers, state.evidence_index):
+                        allowed.discard(action)
             if allowed:
                 branches.append(obj({'action': {'enum': sorted(allowed)}, 'node_id': {'const': key}, 'purpose': ID}))
     else:
@@ -69,19 +72,19 @@ def operation_context_branches(state, *, nodes, source_units, pinned_source):
         visible = {row['node_id'] for row in nodes[-PAGE_SIZE:]}
         referenced = {ref for row in nodes for ref in row['input_refs']}
         visible.update(row['node_id'] for row in nodes if row['node_id'] not in referenced)
-        for row in state.lookup_cursors.values():
-            if row['kind'] == 'node_index':
-                visible.update(node['node_id'] for node in nodes[row['offset']:row['offset'] + PAGE_SIZE])
+        for kind, query, offset in state.requests:
+            if kind == 'node_index' and not query:
+                visible.update(node['node_id'] for node in nodes[offset:offset + PAGE_SIZE])
         unread = sorted(key for key in visible if ('nodes', key, 0) not in state.requests)
         if unread:
             branches.append(action_schema('nodes', {'query': {'enum': unread}, 'offset': {'const': 0}}))
     if source_units and state.symbol_goal is not None:
-        goal = state.symbol_goal
+        goal = state.evidence_index.root_goal(state.symbol_goal)
         branches.extend(_index_schema(state, 'sources', goal))
         pages = [state.evidence_index.source_page(goal, 0)]
-        for row in state.lookup_cursors.values():
-            if row['kind'] == 'sources' and row['query'] == goal:
-                pages.append(state.evidence_index.source_page(goal, row['offset']))
+        for kind, query, offset in state.requests:
+            if kind == 'sources' and query == goal:
+                pages.append(state.evidence_index.source_page(goal, offset))
         pointers = {(row['source_ref'], row['offset']) for page in pages for row in page['sources']}
         if pinned_source in source_units:
             pointers.add((pinned_source, 0))
