@@ -99,6 +99,8 @@ def inspected_project_source_symbols(source_pages, inspected_symbols):
                       (0x400 if kind == "interface" or
                        'abstract' in modifiers else 0),
             "superclass": superclass, 'hierarchy_complete': complete,
+            'method_contract_complete': True,
+            'enclosing_instance_type': unit.get('enclosing_owner', '') if not unit['static'] else '',
             "interfaces": [value for value in interfaces if value],
             'package': unit.get('package', owner.rpartition('.')[0]),
             "side": unit["side"], "source_hash": unit["source_sha256"],
@@ -114,12 +116,16 @@ def inspected_project_source_symbols(source_pages, inspected_symbols):
             continue
         member = unit["name"]
         if not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", member):
+            if kind == 'method':
+                symbols[owner]['method_contract_complete'] = False
             rejected.append({"path": unit["path"], "name": member, "reason": "ambiguous_name"})
             continue
         parameters = []
         for param in unit["parameters"]:
             type_ = _resolve(param["type"], unit, all_known)
             if not type_:
+                if kind == 'method':
+                    symbols[owner]['method_contract_complete'] = False
                 rejected.append({"path": unit["path"], "name": member,
                                  "reason": "unresolved_parameter_type", "type": param["type"]})
                 break
@@ -128,18 +134,22 @@ def inspected_project_source_symbols(source_pages, inspected_symbols):
             return_type = (owner if kind == "constructor" else
                            _resolve(unit["return_type"], unit, all_known))
             if not return_type:
+                if kind == 'method':
+                    symbols[owner]['method_contract_complete'] = False
                 rejected.append({"path": unit["path"], "name": member,
                                  "reason": "unresolved_return_type", "type": unit["return_type"]})
                 continue
             modifiers = set(unit.get('modifiers', ()))
             access = (1 if 'public' in modifiers or unit.get('implicit_public') else
                       4 if 'protected' in modifiers else 2 if 'private' in modifiers else 0)
-            access |= (8 if unit['static'] else 0) | (0x10 if 'final' in modifiers else 0)
+            access |= (8 if unit['static'] else 0) | (0x10 if 'final' in modifiers or unit.get('implicit_final') else 0)
             if (kind == 'method' and not unit.get('has_body', True)
                     and ('abstract' in modifiers or symbols[owner]['access'] & 0x200)):
                 access |= 0x400
             throws = [_resolve(value, unit, all_known) for value in unit.get('throws', ())]
             if any(not value for value in throws):
+                if kind == 'method':
+                    symbols[owner]['method_contract_complete'] = False
                 rejected.append({'path': unit['path'], 'name': member, 'reason': 'unresolved_throws_type'})
                 continue
             symbol_id = owner + "#" + member + "(" + ",".join(x["type"] for x in parameters) + ")"
@@ -150,6 +160,7 @@ def inspected_project_source_symbols(source_pages, inspected_symbols):
                 "parameters": parameters, "return_type": return_type,
                 "access": access, "static": unit["static"], "side": unit["side"],
                 'package': symbols[owner]['package'], 'throws': throws,
+                'enclosing_instance_type': symbols[owner].get('enclosing_instance_type', '') if kind == 'constructor' else '',
                 "source_path": unit["path"], "source_hash": unit["source_sha256"],
                 "provenance": "materialized_source",
             }

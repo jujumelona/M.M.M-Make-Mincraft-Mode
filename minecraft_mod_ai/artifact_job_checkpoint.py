@@ -190,7 +190,10 @@ def execute_checkpointed_job(job, *, context, router, registry, base_dir, execut
                         raise ValueError('ARTIFACT_PREREQUISITE_REFRESH_UNVERIFIED: ' + source)
             if current is None or recorded != current:
                 raise ValueError(f"ARTIFACT_CHECKPOINT_TARGET_DRIFT: {relative}")
-            if current != prior.get('after_hash'):
+            refreshing = (prior['input_hash'] != binding
+                          or prior.get('implementation_fingerprint') != implementation_fingerprint)
+            if (refreshing and is_generator and spec.get('operation') in {'CREATE_FILE', 'REPLACE_FILE'}
+                    and current != prior.get('after_hash')):
                 raise ValueError(f"ARTIFACT_CHECKPOINT_TARGET_DRIFT: {relative}")
             if (prior['input_hash'] == binding
                     and prior.get('implementation_fingerprint') == implementation_fingerprint):

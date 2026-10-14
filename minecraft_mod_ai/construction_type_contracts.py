@@ -56,7 +56,8 @@ def annotate_functional_interfaces(symbols):
                 continue
             ancestors.add(current)
             row = symbols.get(current, {})
-            if row.get('kind') != 'CLASS' or row.get('hierarchy_complete') is False:
+            if (row.get('kind') != 'CLASS' or row.get('hierarchy_complete') is False
+                    or row.get('method_contract_complete') is False):
                 complete = False
                 break
             pending.extend(row.get('interfaces', ()))

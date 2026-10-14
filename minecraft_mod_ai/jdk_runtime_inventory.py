@@ -105,7 +105,7 @@ def _run_reader(command: list[str], *, cwd: Path, stage: str, timeout_seconds: i
 
 @lru_cache(maxsize=2)
 def _inspect_image(home_text: str, image_text: str, java_version: int, side: str,
-                   signature: tuple[int, int]) -> tuple[ApiClass, ...]:
+                   signature: tuple[int, ...]) -> tuple[ApiClass, ...]:
     image = Path(image_text)
     home = Path(home_text)
     suffix = ".exe" if os.name == "nt" else ""
@@ -137,7 +137,7 @@ def _inspect_image(home_text: str, image_text: str, java_version: int, side: str
         return True
 
     state = image.stat()
-    if (state.st_size, state.st_mtime_ns) != signature:
+    if (state.st_dev, state.st_ino, state.st_size, state.st_mtime_ns, state.st_ctime_ns) != signature:
         raise ValueError("CONSTRUCTION_JDK_IMAGE_CHANGED_DURING_INSPECTION")
     return tuple(item for name, item in sorted(inspected.items()) if public_type(name))
 
@@ -154,5 +154,6 @@ def inspect_jdk_runtime_image(image: Path, *, java_version: int,
     state = image.stat()
     with _INSPECTION_LOCK:
         return _inspect_image(
-            str(home), str(image), java_version, default_side, (state.st_size, state.st_mtime_ns),
+            str(home), str(image), java_version, default_side,
+            (state.st_dev, state.st_ino, state.st_size, state.st_mtime_ns, state.st_ctime_ns),
         )

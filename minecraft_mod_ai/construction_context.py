@@ -147,6 +147,7 @@ def java_source_units(source, *, path=""):
     digest = hashlib.sha256(raw).hexdigest()
     result = []
     def visit(node, owner, enclosing_kind=''):
+        enclosing_owner = owner if enclosing_kind in {'class', 'interface', 'enum', 'record'} else ''
         kind = {"class_declaration":"class", "interface_declaration":"interface",
                 "record_declaration":"record", "enum_declaration":"enum"}.get(node.type)
         if kind:
@@ -184,13 +185,16 @@ def java_source_units(source, *, path=""):
             type_list = next((c for c in interfaces_node.named_children if c.type == 'type_list'), None) if interfaces_node else None
             throws_node = next((c for c in node.named_children if c.type == 'throws'), None)
             implicit_public = enclosing_kind == 'interface' and 'private' not in modifiers
-            implicit_static = enclosing_kind == 'interface' and kind in {'field', 'class', 'interface', 'enum', 'record'}
+            implicit_static = (enclosing_kind == 'interface' and kind in {'field', 'class', 'interface', 'enum', 'record'}) or (
+                bool(enclosing_owner) and kind in {'interface', 'enum', 'record'})
             result.append({"path":path,"owner":owner,"kind":kind,"name":name,
                 "signature":header,"parameters":parameters,
                 "return_type":_text(raw,return_node) if return_node else "void",
                 "code":code,"start_line":node.start_point[0]+1,"end_line":node.end_point[0]+1,
                 "source_sha256":digest,"imports":imports, 'package': package,
                 'modifiers': sorted(modifiers), 'has_body': body is not None,
+                'enclosing_owner': enclosing_owner,
+                'implicit_final': enclosing_kind == 'interface' and kind == 'field',
                 'superclass': _text(raw, parent.named_children[-1]) if parent and parent.named_children else '',
                 'interfaces': [_text(raw, c) for c in type_list.named_children] if type_list else [],
                 'throws': [_text(raw, c) for c in throws_node.named_children] if throws_node else [],
