@@ -4,6 +4,7 @@ Templates are ropes, flattened once, so deeply nested graphs do not require
 Python recursion or quadratic storage for intermediate source strings.
 """
 from __future__ import annotations
+from .construction_type_contracts import owner_package
 
 from .java_operation_ir import (JavaOperations, EXPRESSIONS, STATEMENTS, identifier,
                                 qualified_name, parameter_records, parameter_types, java_literal)
@@ -65,7 +66,7 @@ def render_task_member(task, nodes, symbols):
                 value = values.pop(0)
                 # Resolve against the inspected owner, retaining subclass types where protected
                 # access requires them. Formal argument casts fix overload selection.
-                protected = row.get("access", 0) & 4 and row["owner"].rpartition(".")[0] != graph.declaration["owner"].rpartition(".")[0]
+                protected = row.get("access", 0) & 4 and owner_package(symbols, row['owner']) != owner_package(symbols, graph.declaration['owner'])
                 receiver = ("(", value, ")") if protected else ("((", row["owner"], ") ", value, ")")
             if op == "field":
                 return (receiver, ".", identifier(row["name"]))

@@ -4,6 +4,7 @@ An instruction is not a type/ownership constraint. Keep action-specific
 schemas closed and expose only choices the current phase can actually accept.
 """
 from __future__ import annotations
+from .construction_type_contracts import owner_package
 
 import string
 
@@ -299,7 +300,7 @@ def accessible_type(state, row):
     if row.get('side') == 'CLIENT' and not state.target_path.startswith('src/client/'):
         return False
     access = row.get('access', 0)
-    same_package = row.get('owner', '').rpartition('.')[0] == state.owner.rpartition('.')[0]
+    same_package = owner_package(state.symbols, row.get('owner', '')) == owner_package(state.symbols, state.owner)
     return bool(access & 1 or (same_package and not access & 2))
 
 

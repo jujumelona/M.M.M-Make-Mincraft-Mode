@@ -28,10 +28,9 @@ def _jdk_image(java_version: int) -> str:
 
 @lru_cache(maxsize=2)
 def _symbol_inventory(paths: tuple[str, ...], java_version: int, namespace: str,
-                      _image_signature: tuple[int, int]):
+                      _classpath_signature: tuple):
     # Parse verified .class/.jar members, not model-invented Fabric APIs.
-    # The runtime image fingerprint is part of the cache identity, so replacing
-    # a JDK at the same home cannot reuse an older standard-library inventory.
+    # Every archive/image/class-directory member participates in cache identity.
     return build_target_symbols(paths, java_version=java_version, namespace=namespace,
                                 classpath_sides={})
 
@@ -54,9 +53,16 @@ def prepare_construction_context(spec, *, java_classpath, project_root, source_c
     paths = tuple(dict.fromkeys([jdk_image, *classpath_paths]))
     if any(not Path(p).exists() for p in paths):
         raise ValueError("CONSTRUCTION_CLASSPATH_PATH_MISSING")
-    image_state = Path(jdk_image).stat()
+    classpath_signature = []
+    for raw_path in paths:
+        path = Path(raw_path)
+        members = sorted(path.rglob('*.class')) if path.is_dir() else (path,)
+        for member in members:
+            state = member.stat()
+            classpath_signature.append((str(member), state.st_dev, state.st_ino,
+                                        state.st_size, state.st_mtime_ns, state.st_ctime_ns))
     symbols = dict(_symbol_inventory(
-        paths, java_version, namespace, (image_state.st_size, image_state.st_mtime_ns),
+        paths, java_version, namespace, tuple(classpath_signature),
     ))
     # Classless dependency archives are valid, but the target dependency group
     # must still expose bytecode. The JDK alone cannot certify a target API.
@@ -84,6 +90,8 @@ def prepare_construction_context(spec, *, java_classpath, project_root, source_c
     if set(project_symbols) & set(symbols):
         raise ValueError("CONSTRUCTION_PROJECT_SYMBOL_COLLISION")
     symbols.update(project_symbols)
+    from .construction_type_contracts import annotate_functional_interfaces
+    annotate_functional_interfaces(symbols)
     # Pinned old-version references provide porting evidence, never callable
     # target API authority or permission to install outdated code unchanged.
     reference_members = []

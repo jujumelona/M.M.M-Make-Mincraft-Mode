@@ -67,6 +67,7 @@ class ApiMember:
     kind: str
     access: int
     side: str
+    exceptions: tuple[str, ...] = ()
 
     @property
     def is_static(self):
@@ -145,6 +146,7 @@ def parse_class(data: bytes, *, default_side: str = "COMMON") -> ApiClass:
 
     def attributes():
         annotations = []
+        exceptions = []
         for _ in range(r.u2()):
             name, payload = utf(r.u2()), r.take(r.u4())
             if name in {"RuntimeVisibleAnnotations", "RuntimeInvisibleAnnotations"}:
@@ -152,7 +154,12 @@ def parse_class(data: bytes, *, default_side: str = "COMMON") -> ApiClass:
                 annotations.extend(annotation(a) for _ in range(a.u2()))
                 if a.pos != len(payload):
                     raise ClassFormatError("Trailing annotation data")
-        return annotations
+            elif name == 'Exceptions':
+                a = _Reader(payload)
+                exceptions.extend(cname(a.u2()) for _ in range(a.u2()))
+                if a.pos != len(payload):
+                    raise ClassFormatError('Trailing exception data')
+        return annotations, tuple(exceptions)
 
     def side(annotations, fallback):
         values = []
@@ -176,12 +183,14 @@ def parse_class(data: bytes, *, default_side: str = "COMMON") -> ApiClass:
     for kind in ("FIELD", "METHOD"):
         for _ in range(r.u2()):
             flags, member_name, descriptor = r.u2(), utf(r.u2()), utf(r.u2())
-            raw_members.append((member_name, descriptor, kind, flags, attributes()))
-    class_side = side(attributes(), default_side)
+            annotations, exceptions = attributes()
+            raw_members.append((member_name, descriptor, kind, flags, annotations, exceptions))
+    class_annotations, _ = attributes()
+    class_side = side(class_annotations, default_side)
     if r.pos != len(data):
         raise ClassFormatError("Trailing class bytes")
-    members = tuple(ApiMember(name, n, d, "CONSTRUCTOR" if n == "<init>" else k, f, side(a, class_side))
-                    for n, d, k, f, a in raw_members)
+    members = tuple(ApiMember(name, n, d, "CONSTRUCTOR" if n == "<init>" else k, f, side(a, class_side), e)
+                    for n, d, k, f, a, e in raw_members)
     return ApiClass(name, superclass, interfaces, access, class_side, members, compute_content_hash(data))
 
 

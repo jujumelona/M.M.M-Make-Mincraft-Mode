@@ -4,6 +4,7 @@ Names are returned evidence, never a prerequisite invented by the author.
 The target inventory remains authoritative; old source is porting evidence.
 """
 from __future__ import annotations
+from .construction_type_contracts import owner_package
 
 import hashlib
 import json
@@ -252,7 +253,7 @@ class ConstructionEvidenceIndex:
         if row.get('provenance') == 'construction_plan' and row['owner'] != self.owner:
             return False
         owner = self.symbols.get(row['owner'], {})
-        same_package = row['owner'].rpartition('.')[0] == self.owner.rpartition('.')[0]
+        same_package = owner_package(self.symbols, row['owner']) == owner_package(self.symbols, self.owner)
         if owner and owner.get('side') == 'CLIENT' and not self.target_path.startswith('src/client/'):
             return False
         if owner.get('access', 1) & 2 and row['owner'] != self.owner:

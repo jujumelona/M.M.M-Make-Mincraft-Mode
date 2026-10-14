@@ -1,5 +1,6 @@
 """Mechanical input obligations derived from the accepted partial operation graph."""
 from __future__ import annotations
+from .construction_type_contracts import owner_package
 
 from .java_operation_ir import parameter_records, parameter_types
 
@@ -73,7 +74,7 @@ def pending_input_contracts(nodes, declaration, symbols):
             api_types = [] if op == 'field' else parameter_types(row)
             if op != 'new' and not row.get('static'):
                 receiver = row['owner']
-                if row.get('access', 0) & 4 and receiver.rpartition('.')[0] != declaration['owner'].rpartition('.')[0]:
+                if row.get('access', 0) & 4 and owner_package(symbols, receiver) != owner_package(symbols, declaration['owner']):
                     receiver = declaration['owner']
                 api_types = [receiver, *api_types]
         for index, ref in enumerate(refs):

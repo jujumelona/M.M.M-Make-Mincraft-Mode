@@ -1,5 +1,6 @@
 """Bind one authored operation to real API/source evidence and signature facts."""
 from __future__ import annotations
+from .construction_type_contracts import owner_package
 
 import hashlib
 
@@ -143,7 +144,7 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
         inputs = [] if op == 'field' else parameter_types(row)
         if op != 'new' and not row.get('static'):
             receiver = row['owner']
-            if row.get('access', 0) & 4 and row['owner'].rpartition('.')[0] != state.owner.rpartition('.')[0]:
+            if row.get('access', 0) & 4 and owner_package(state.symbols, row['owner']) != owner_package(state.symbols, state.owner):
                 receiver = state.owner
             inputs = [receiver, *inputs]
         schema['properties']['attributes']['properties']['symbol_ref'] = {'const': key}

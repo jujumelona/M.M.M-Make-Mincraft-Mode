@@ -5,6 +5,7 @@ import json
 import math
 import re
 from collections import Counter, defaultdict, deque
+from .construction_type_contracts import owner_package
 
 PRIMITIVES = frozenset({"boolean", "byte", "short", "int", "long", "char", "float", "double", "void"})
 NUMERIC = ("byte", "short", "char", "int", "long", "float", "double")
@@ -266,7 +267,7 @@ class JavaOperations:
         current = self.symbols[self.task.owner_symbol]["owner"]
         if key != self.task.owner_symbol and "access" in row:
             access = row["access"]
-            same_package = row["owner"].rpartition(".")[0] == current.rpartition(".")[0]
+            same_package = owner_package(self.symbols, row['owner']) == owner_package(self.symbols, current)
             if access & 2 and row["owner"] != current:
                 raise ValueError("CONSTRUCTION_SYMBOL_ACCESS")
             if not access & 7 and not same_package:
@@ -431,14 +432,14 @@ class JavaOperations:
                 raise ValueError("CONSTRUCTION_SYMBOL_KIND")
             if op == "new" and self.symbols.get(row["owner"], {}).get("access", 0) & (0x200 | 0x400):
                 raise ValueError("CONSTRUCTION_CONSTRUCTOR_ABSTRACT")
-            if op == "new" and row.get("access", 0) & 4 and row["owner"].rpartition(".")[0] != self.declaration["owner"].rpartition(".")[0]:
+            if op == "new" and row.get("access", 0) & 4 and owner_package(self.symbols, row['owner']) != owner_package(self.symbols, self.declaration['owner']):
                 raise ValueError("CONSTRUCTION_SYMBOL_ACCESS")
             args = types
             if op != "new" and not row.get("static"):
                 if not args or not self.assignable(args[0], row["owner"]):
                     raise ValueError("CONSTRUCTION_RECEIVER_TYPE")
                 current = self.declaration["owner"]
-                if row.get("access", 0) & 4 and row["owner"].rpartition(".")[0] != current.rpartition(".")[0] and not self.subtype(args[0], current):
+                if row.get("access", 0) & 4 and owner_package(self.symbols, row['owner']) != owner_package(self.symbols, current) and not self.subtype(args[0], current):
                     raise ValueError("CONSTRUCTION_SYMBOL_ACCESS")
                 args = args[1:]
             expected = [] if op == "field" else parameter_types(row)
