@@ -264,7 +264,7 @@ def execute_generator_job(job, *, context, router, port_registry=None, base_dir=
                     or prior.get('input_hash') != replacement.get('input_hash')
                     or prior.get('after_hash') != replacement.get('before_sha256')
                     or _read_path_hash(Path(base_dir).resolve(), spec['target_path']) != replacement.get('before_sha256')
-                    or spec['operation'] != 'CREATE_FILE'):
+                    or spec['operation'] not in {'CREATE_FILE', 'REPLACE_FILE'}):
                 raise ValueError('ARTIFACT_OWNED_REPLACEMENT_INVALID')
             target_job = replace(target_job, operation='REPLACE_FILE',
                                  expected_sha256=replacement['before_sha256'])
