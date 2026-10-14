@@ -64,10 +64,48 @@
 
 **Files:** Update `docs/structured-construction-root-cause.rst` and this plan's progress notes.
 
-- [ ] Document observed `095f153` timeout/lookup-only behavior and the corrected criteria, including backend/verification limits.
-- [ ] Obtain independent static review of the complete change. Resolve material findings without executing tests or inference.
-- [ ] Verify the reviewed local tree is clean and unchanged; publish exact blobs/trees with a guarded, non-force main update.
-- [ ] Verify remote main and synchronize the local checkout; report the commit and remaining runtime verification limit.
+- [x] Document observed `095f153` timeout/lookup-only behavior and the corrected criteria, including backend/verification limits.
+- [x] Obtain independent static review of the complete change. Resolve material findings without executing tests or inference.
+- [x] Verify the reviewed local tree is clean and unchanged; publish exact blobs/trees with a guarded, non-force main update.
+- [x] Verify remote main and synchronize the local checkout; report the commit and remaining runtime verification limit.
+
+## Follow-up spec: evidence must precede syntax selection
+
+The supplied `20261014-153519` console and `production-logs (6)(1).zip` run published `111641fa018e`. Both initial body choices select `extension` with a reason asking to inspect APIs/configuration, not naming unsupported syntax. Their operation-next schemas offer only operations plus that escape, although the instruction tells them to read bindings/scopes. No operation-binding request occurs and no node is accepted. Both initial API pages contain Windows error fields: retrieval includes negative API-name rules and generic implementation instructions, while concatenating an owner's many declarations rewards pooled vocabulary.
+
+**Goal:** Let the current graph slot obtain its actual evidence before choosing syntax, and rank only positive implementation intent without vocabulary pooling.
+
+**Architecture:** The host schedules the next pending input or an unused root ID mechanically. That selection goal owns a purpose-derived, closed evidence navigation session before operation selection. The same existing decision reads literal context pointers or selects syntax; no extra planning inference is added. API binding preserves the inspected package/type scope. Natural-language lack of information has no fatal renderer-extension action; actual unsupported operations, type/access/semantic/completion and production backend checks still reject invalid work.
+
+### Task 4: Correct retrieval inputs and owner ranking
+
+**Files:** `construction_state.py`, `construction_retrieval.py`.
+
+**Interfaces:** `prepare_symbols(purpose, *, kinds, preserve_scope=False)` ranks only the supplied positive purpose. The evidence index's real scope selector can be rebound to new symbol kinds without inventing a name. Owner chunks are single class declarations; per-member term document frequencies contribute a normalized mean rather than pooled text.
+
+- [ ] Remove responsibility/negative implementation instructions from retrieval queries; retain them in authoring/admission context.
+- [ ] Replace concatenated owner text with atomic class descriptions and member document-frequency means, incrementally updating own declarations.
+- [ ] Expose actual required/source-linked type anchors and compress only real single-child package paths. All remaining candidates retain literal successors.
+- [ ] Parse syntax, inspect access/cache/selector contracts, run diff checks and commit.
+
+### Task 5: Make evidence available before syntax selection
+
+**Files:** `construction_author.py`, `construction_operation_choices.py`, `construction_operation_binding.py`, `construction_state.py`.
+
+**Interfaces:** State persists `selection_goal={node_id,purpose}` independently of `operation_goal`. One current slot is selected before syntax. `operation_next_schema` receives the context branches and the fixed slot; evidence reads checkpoint and return to the same goal. API binding retains the chosen actual scope when narrowing kinds. Binding pages already read in this graph revision remain represented by selectors and are rehydrated on resume.
+
+- [ ] Add and validate the selection goal; advance the construction protocol while retaining accepted graph identity.
+- [ ] Offer actual binding/scope/source/node/declaration reads before opcode selection and remove the unproven natural-language extension escape.
+- [ ] Keep every queued input/body/donor/source obligation and the existing backend/final graph checks. Preserve selected scope and all read binding-page selectors across decision steps and resume.
+- [ ] Parse syntax, inspect current-slot/resume/control flow, run diff checks and commit.
+
+### Task 6: Review and publication
+
+**Files:** This plan and `docs/structured-construction-root-cause.rst`.
+
+- [ ] Document observed evidence-to-failure classification and ranking contamination.
+- [ ] Dispatch a fresh static reviewer for `111641f..HEAD`; fix material findings without tests/inference/builds.
+- [ ] Publish exact reviewed trees with guarded non-force main update, verify remote and synchronize local main.
 
 ## Execution rulings
 
@@ -78,3 +116,5 @@
 - Task 1 review corrections in Task 2: source successors now cover the full ranked source map; native package/type navigation addresses the zero lexical overlap case. Immutable owner/source token sets are prepared once, member scoring is lazy for displayed owners, and repeated source imports use maximum relevance rather than popularity sums.
 - Task 2: operation goals bind an exact node slot; pending inputs carry actual signature/control contracts and are filled before another root. API results/arity, named value types and callback signatures are closed choices. Resume re-resolves intent/scope/source selectors, retaining the unfinished goal. Static review remains required; runtime behavior is not certified.
 - First full static review identified three material regressions: header discovery after one inherited type, fresh local array type reachability, and foreach component conversions. Follow-up fixes prepare inheritance evidence each iteration, bind structural array dimensions and element/result/arity, and use the existing IR's component assignment rules. Older source/node catalogue pointers stay usable, source selectors are canonical across scopes, and shown own helper declarations can be chosen directly as actual APIs.
+- Prior publication verified: `111641fa018e83b2c7fb0780c093c0ddfabd7efa`, tree `1e790139461c8357902fb42426876e673290460b`; static confirmation resolved the three reported defects. The new supplied run demonstrates a separate architectural ordering error, not a successful generation.
+- Follow-up ruling: the user explicitly requests the root correction now and retains inline execution/main publication authorization. Proceed without another approval handoff. User prohibition overrides skill test/inference/build requirements; verification is syntax, data inspection, diff checks and independent static review only. Scheduling slot IDs is mechanical; gameplay remains authored by the model.
