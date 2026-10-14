@@ -885,6 +885,7 @@ def build_authored_design_coverage_receipt(
     authored_plan: Mapping[str, Any] | None,
     authored_manifest: Mapping[str, Any] | None,
     module_ids: Sequence[str],
+    artifact_jobs: Sequence[Mapping[str, Any]] = (),
     project_root: str | Path | None = None,
     artifact_sha256: str,
     source_validation: Mapping[str, Any] | None,
@@ -1049,7 +1050,68 @@ def build_authored_design_coverage_receipt(
                         continue
                     content_module_ids.append(module_id.strip())
 
-    bound_module_ids = content_module_ids + typed_module_ids + platform_module_ids
+    raw_feature_units = manifest.get('request_feature_units', [])
+    feature_units = raw_feature_units if isinstance(raw_feature_units, list) else []
+    if not isinstance(raw_feature_units, list):
+        findings.append('authored execution manifest request_feature_units must be a list')
+    jobs = {row.get('job_id'): row for row in artifact_jobs if isinstance(row, Mapping)}
+    requirement_ids = {row.get('requirement_id') for row in plan.get('request_scope', {}).get('requirements', ())
+                       if isinstance(row, Mapping)}
+    feature_module_ids = []
+    for ordinal, unit in enumerate(feature_units, start=1):
+        if not isinstance(unit, Mapping):
+            findings.append(f'authored request feature {ordinal} is not an object')
+            continue
+        module_id = str(unit.get('module_id') or '')
+        feature_module_ids.append(module_id)
+        job = jobs.get(unit.get('job_id'), {})
+        inputs = job.get('deterministic_inputs', {}).get('_canonical_inputs', {})
+        specifications = [value for value in inputs.values() if isinstance(value, Mapping)
+                          and value.get('language') == 'java']
+        specification = specifications[0] if len(specifications) == 1 else {}
+        requirements = unit.get('requirement_ids', [])
+        if (not module_id or job.get('owner_module') != module_id
+                or job.get('canonical_leaf') != unit.get('canonical_leaf')
+                or job.get('implementation_id') != unit.get('implementation_id')
+                or job.get('context_id') != unit.get('context_id')
+                or _canonical_sha256(inputs) != unit.get('canonical_input_sha256')
+                or unit.get('source_text_sha256') != source_text_sha256
+                or not isinstance(requirements, list) or not requirements
+                or not set(requirements) <= requirement_ids
+                or specification.get('target_path') != unit.get('path')
+                or specification.get('bindings', {}).get('request_feature_entrypoint') != unit.get('symbol')
+                or specification.get('bindings', {}).get('parent_requirement_id') not in requirements):
+            findings.append(f'authored request feature {module_id or ordinal} has inconsistent approved authority')
+            continue
+        relative = str(unit['path'])
+        if (Path(relative).is_absolute() or '..' in Path(relative).parts
+                or not relative.startswith(('src/main/java/', 'src/client/java/')) or not relative.endswith('.java')):
+            findings.append(f'authored request feature {module_id} has an unsafe source path')
+            continue
+        if project_root is not None:
+            source = _safe_existing_file(Path(project_root).resolve() / relative)
+            if source is None:
+                findings.append(f'authored request feature {module_id} source is missing')
+                continue
+            from .construction_context import java_source_units
+            from .construction_coverage import _authored_source_path, _coverage_path
+            try:
+                declarations = java_source_units(source.read_text(encoding='utf-8'), path=relative)
+                authorship = json.loads(_authored_source_path(project_root, relative).read_text(encoding='utf-8'))
+                coverage = json.loads(_coverage_path(project_root, requirements[0]).read_text(encoding='utf-8'))
+                source_sha = hashlib.sha256(source.read_bytes()).hexdigest()
+                if (not any(row['owner'] == unit['symbol'] and row['kind'] == 'method'
+                            and row['name'] == 'onInitialize' and row['public'] and not row['static']
+                            and not row['parameters'] and row['has_body'] for row in declarations)
+                        or authorship.get('target_path') != relative or authorship.get('source_sha256') != source_sha
+                        or authorship.get('schema_version') != 'mmm/construction-authorship-v1'
+                        or coverage.get('target_path') != relative or coverage.get('source_sha256') != source_sha
+                        or coverage.get('requirement_id') not in requirements):
+                    findings.append(f'authored request feature {module_id} has no exact constructed source/entrypoint evidence')
+            except (OSError, ValueError, UnicodeError):
+                findings.append(f'authored request feature {module_id} evidence is unavailable or invalid')
+
+    bound_module_ids = content_module_ids + feature_module_ids + typed_module_ids + platform_module_ids
     if len(bound_module_ids) != len(set(bound_module_ids)):
         findings.append("authored design contains duplicate module bindings")
     if bound_module_ids != expected_module_ids:
@@ -1145,6 +1207,7 @@ def build_authored_design_coverage_receipt(
             "manifest_sha256": supplied_manifest_sha256,
             "unit_count": len(units),
             "content_module_count": len(content_module_ids),
+            'request_feature_module_count': len(feature_module_ids),
             "platform_module_count": len(platform_modules),
             "source_bytes": len(text_bytes),
         },

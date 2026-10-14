@@ -1230,6 +1230,7 @@ class CompleteProductionOrchestrator:
                 authored_plan=approved.game_design.get('authored_plan'),
                 authored_manifest=approved.game_design.get('_authored_execution_manifest'),
                 module_ids=tuple(module.module_id for module in approved.modules),
+                artifact_jobs=approved.game_design.get('_artifact_jobs', ()),
                 project_root=project_root,
                 artifact_sha256=str(artifact_receipt['sha256']),
                 source_validation=source_report,

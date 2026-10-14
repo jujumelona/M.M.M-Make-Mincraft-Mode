@@ -1168,6 +1168,24 @@ def compile_authored_design(
             content_jobs=artifact_jobs, source_rag=source_rag, source_reuse=source_reuse,
             runtime_modules=modules,
         )
+        feature_units = []
+        feature_lookup = {module.module_id: module for module in feature_modules}
+        for job in feature_jobs:
+            inputs = job.deterministic_inputs['_canonical_inputs']
+            specification = next(value for value in inputs.values() if value.get('language') == 'java')
+            feature_units.append({
+                'module_id': job.owner_module, 'job_id': job.job_id,
+                'path': specification['target_path'],
+                'symbol': specification['bindings']['request_feature_entrypoint'],
+                'requirement_ids': list(feature_lookup[job.owner_module].config['requirement_refs']),
+                'canonical_leaf': job.canonical_leaf,
+                'implementation_id': job.implementation_id, 'context_id': job.context_id,
+                'canonical_input_sha256': _sha256_json(inputs),
+                'source_text_sha256': manifest['source_text_sha256'],
+            })
+        manifest = {key: value for key, value in manifest.items() if key != 'manifest_sha256'}
+        manifest['request_feature_units'] = feature_units
+        manifest['manifest_sha256'] = _sha256_json(manifest)
         content_modules = (*content_modules, *feature_modules)
         artifact_jobs = (*artifact_jobs, *feature_jobs)
         if source_rag.license_notices:
