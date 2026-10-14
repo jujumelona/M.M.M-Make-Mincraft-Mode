@@ -332,8 +332,10 @@ class JavaOperations:
                         raise ValueError('CONSTRUCTION_OVERRIDE_THROWS: ' + exception)
 
     def checked_exception(self, type_):
-        return (self.subtype(type_, 'java.lang.Throwable')
-                and not self.subtype(type_, 'java.lang.RuntimeException')
+        # Declared Exceptions attributes are obligations even if an archive
+        # omits the exception's class. Only inspected unchecked ancestry
+        # discharges that obligation.
+        return (not self.subtype(type_, 'java.lang.RuntimeException')
                 and not self.subtype(type_, 'java.lang.Error'))
 
     def check_exception_effects(self):
