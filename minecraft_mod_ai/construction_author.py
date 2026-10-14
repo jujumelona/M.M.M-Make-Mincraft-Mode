@@ -145,7 +145,16 @@ def author_task_operations(router, task, context):
             actions.append('bindings')
         if not nodes or pending:
             actions.remove('complete')
-        schema = obj({**NEXT_SCHEMA['properties'], 'action': {'type': 'string', 'enum': actions}})
+        declaration_offset = state.next_declaration_offset()
+        if declaration_offset is None:
+            actions.remove('declarations')
+        schema = obj({**NEXT_SCHEMA['properties'], 'action': {
+            'type': 'string', 'enum': [action for action in actions if action != 'declarations']}})
+        if declaration_offset is not None:
+            schema = {'oneOf': [schema, obj({
+                'action': {'const': 'declarations'}, 'query': {'const': ''},
+                'offset': {'const': declaration_offset},
+            })]}
         payload = {**base, 'recent_nodes': recent, **state.payload(actions,
             current_member=task.owner_symbol,
             graph={'accepted_node_count': len(nodes), 'resumed_node_count': len(existing),

@@ -10,9 +10,9 @@ from collections import deque
 from copy import deepcopy
 
 
-# Query grammar and page ordering changed. Old inference journals/cursors may
+# Legal declaration pages and prompt schema presentation changed. Old journals/cursors may
 # not be replayed against them; declaration-bound accepted graphs stay reusable.
-PROTOCOL_VERSION = "mmm/construction-state-v4"
+PROTOCOL_VERSION = "mmm/construction-state-v5"
 PAGE_SIZE = 8
 RECENT_SIZE = 4
 LOOKUP_KINDS = frozenset({'symbols', 'declarations', 'nodes', 'node_index', 'source', 'sources', 'bindings'})
@@ -211,6 +211,14 @@ class ConstructionState:
     def lookup_symbols(self, query, offset):
         return self.consume_lookup("symbols", query, offset,
                                    symbol_page(self.symbols, query, offset))
+
+    def next_declaration_offset(self):
+        # The schema and reader share this cursor. Every page remains reachable,
+        # but an already consumed page cannot be offered as a fresh decision.
+        for offset in range(0, max(1, len(self.declaration_ids)), PAGE_SIZE):
+            if ('declarations', '', offset) not in self.requests:
+                return offset
+        return None
 
     def lookup_declarations(self, offset):
         rows = [symbol_record(key, self.symbols[key]) for key in self.declaration_ids]

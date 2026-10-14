@@ -202,9 +202,11 @@ def member_schema(state, *, reserved_names, body_candidates):
     branches = [obj({'action': {'enum': ['method', 'field']},
                      'name': identifier_schema(known_names | set(reserved_names)), 'purpose': ID}),
                 action_schema('constructor', {'purpose': ID}),
-                action_schema('declarations', {'offset': {'type': 'integer', 'minimum': 0}}),
                 action_schema('extension', {'reason': ID}), *symbol_lookup_schemas(state),
                 *binding_lookup_schemas(state)]
+    declaration_offset = state.next_declaration_offset()
+    if declaration_offset is not None:
+        branches.append(action_schema('declarations', {'offset': {'const': declaration_offset}}))
     if helpers:
         branches.append(action_schema('overload', {'name': {'enum': helpers}, 'purpose': ID}))
     if state.declaration_ids:
