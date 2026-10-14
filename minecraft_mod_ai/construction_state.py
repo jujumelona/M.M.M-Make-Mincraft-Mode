@@ -10,9 +10,9 @@ from collections import deque
 from copy import deepcopy
 
 
-# Declaration phase choices changed. Old journals/cursors may
+# Body lookup choices and retained API pages changed. Old journals/cursors may
 # not be replayed against them; declaration-bound accepted graphs stay reusable.
-PROTOCOL_VERSION = "mmm/construction-state-v6"
+PROTOCOL_VERSION = "mmm/construction-state-v7"
 PAGE_SIZE = 8
 RECENT_SIZE = 4
 LOOKUP_KINDS = frozenset({'symbols', 'declarations', 'nodes', 'node_index', 'source', 'sources', 'bindings'})
@@ -80,7 +80,8 @@ def symbol_page(symbols, query, offset, *, kinds=None):
     # method descriptors that merely mention it. Keep every remaining result
     # and a stable order so subsequent pages still exhaust the same inventory.
     matches = sorted((key for key, row in symbols.items()
-                      if (kinds is None or row.get('kind') in kinds)
+                      if row.get('provenance') != 'construction_plan'
+                      and (kinds is None or row.get('kind') in kinds)
                       and (folded in symbol_query_key(key)
                            or folded == symbol_query_key(str(row.get('name', ''))))),
                      key=rank)
@@ -125,17 +126,21 @@ class ConstructionState:
         self.binding_lookup = {}
         self.history = deque(maxlen=PAGE_SIZE)
         self.requests = set()
+        self.lookup_cursors = {}
 
     def enter(self, phase):
         if phase != self.phase:
             self.phase = phase
             self.requests.clear()
+            self.lookup_cursors.clear()
 
-    def advance(self):
+    def advance(self, *, preserve_symbols=False):
         self.revision += 1
         self.lookup = {}
-        self.symbol_lookup = {}
+        if not preserve_symbols:
+            self.symbol_lookup = {}
         self.requests.clear()
+        self.lookup_cursors.clear()
 
     def add_declaration(self, key):
         if key in self.declaration_ids:
@@ -158,7 +163,26 @@ class ConstructionState:
             "recent_lookups": list(self.history),
             "available_actions": list(available_actions), **cursor,
         }, "lookup": self.lookup, "authoring_contract": self.authoring_contract,
-            "binding_lookup": self.binding_lookup}
+            "binding_lookup": self.binding_lookup,
+            "symbol_lookup": self.symbol_lookup if self.lookup.get('kind') != 'symbols' else {}}
+
+    def _remember_cursor(self, kind, query, offset, result):
+        request = _lookup_request(kind, query, offset)
+        self.lookup_cursors[request[:2]] = {
+            'kind': kind, 'query': query.strip(), 'offset': offset,
+            'next_offset': result['next_offset'],
+        }
+
+    def lookup_successors(self, kind):
+        pages = {key: row for key, row in self.lookup_cursors.items() if key[0] == kind}
+        # A real dependency page remains usable after an accepted graph node.
+        # Its exact successor is still resolved from the same target inventory.
+        if kind == 'symbols' and self.symbol_lookup:
+            row = self.symbol_lookup
+            key = _lookup_request(kind, row['query'], row['offset'])[:2]
+            pages.setdefault(key, row)
+        return [row for row in pages.values() if row['next_offset'] is not None
+                and _lookup_request(kind, row['query'], row['next_offset']) not in self.requests]
 
     def consume_lookup(self, kind, query, offset, result):
         request = _lookup_request(kind, query, offset)
@@ -166,6 +190,7 @@ class ConstructionState:
             raise ValueError("CONSTRUCTION_AUTHOR_NO_PROGRESS: repeated " + kind + " lookup")
         self.requests.add(request)
         self.lookup = {**result, "kind": kind, "query": query.strip(), "offset": offset}
+        self._remember_cursor(kind, query, offset, result)
         if kind == 'symbols':
             self.symbol_lookup = self.lookup
         if kind == 'bindings':
@@ -180,12 +205,15 @@ class ConstructionState:
         # Save selectors, never cached source or API rows as fresh authority.
         last = {key: self.lookup[key] for key in ('kind', 'query', 'offset')} if self.lookup else None
         binding = {key: self.binding_lookup[key] for key in ('kind', 'query', 'offset')} if self.binding_lookup else None
+        symbol = {key: self.symbol_lookup[key] for key in ('kind', 'query', 'offset')} if self.symbol_lookup else None
         return {'protocol': PROTOCOL_VERSION, 'phase': self.phase, 'revision': self.revision,
                 'requests': [list(row) for row in sorted(self.requests)],
                 'history': deepcopy(list(self.history)), 'last_lookup': last,
-                'last_binding_lookup': binding}
+                'last_binding_lookup': binding, 'last_symbol_lookup': symbol,
+                'lookup_cursors': [{key: row[key] for key in ('kind', 'query', 'offset')}
+                                   for _, row in sorted(self.lookup_cursors.items())]}
 
-    def restore(self, record):
+    def restore(self, record, *, resolve_lookup=None):
         if (not isinstance(record, dict) or record.get('protocol') != PROTOCOL_VERSION
                 or record.get('phase') != self.phase or type(record.get('revision')) is not int
                 or record['revision'] != self.revision):
@@ -199,12 +227,30 @@ class ConstructionState:
         restored = {_lookup_request(*row) for row in requests}
         if len(restored) != len(requests):
             raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
+        cursors = record.get('lookup_cursors')
+        if (not isinstance(cursors, list) or any(
+                not isinstance(row, dict) or set(row) != {'kind', 'query', 'offset'}
+                or _lookup_request(row['kind'], row['query'], row['offset']) not in restored
+                for row in cursors)):
+            raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
+        cursor_requests = [_lookup_request(row['kind'], row['query'], row['offset']) for row in cursors]
+        latest = {}
+        for kind, query, offset in restored:
+            latest[(kind, query)] = max(offset, latest.get((kind, query), -1))
+        if {(kind, query): offset for kind, query, offset in cursor_requests} != latest or len(cursors) != len(latest):
+            raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
+        if cursors and not callable(resolve_lookup):
+            raise ValueError('CONSTRUCTION_AUTHOR_STATE_LOOKUP_RESOLVER_REQUIRED')
         last = record.get('last_lookup')
         if last is not None and (not isinstance(last, dict) or set(last) != {'kind', 'query', 'offset'}
                 or _lookup_request(last['kind'], last['query'], last['offset']) not in restored):
             raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
         self.requests = restored
         self.history = deque(deepcopy(history), maxlen=PAGE_SIZE)
+        self.lookup_cursors = {}
+        for row in cursors:
+            result = resolve_lookup(row['kind'], row['query'], row['offset'])
+            self._remember_cursor(row['kind'], row['query'], row['offset'], result)
         # The caller re-resolves this selector against current inspected inputs.
         self.lookup = {}
         self.symbol_lookup = {}
@@ -217,12 +263,22 @@ class ConstructionState:
             self.binding_lookup = {**self.binding_result(binding['query'], binding['offset']), **binding}
         else:
             self.binding_lookup = {}
+        symbol = record.get('last_symbol_lookup')
+        if symbol is not None:
+            if (not isinstance(symbol, dict) or set(symbol) != {'kind', 'query', 'offset'}
+                    or symbol['kind'] != 'symbols'):
+                raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
+            _lookup_request(symbol['kind'], symbol['query'], symbol['offset'])
+            self.symbol_lookup = {**self.symbol_result(symbol['query'], symbol['offset']), **symbol}
         return last
 
-    def lookup_symbols(self, query, offset):
+    def symbol_result(self, query, offset):
         kinds = {'CLASS'} if self.phase in TYPE_LOOKUP_PHASES else None
+        return symbol_page(self.symbols, query, offset, kinds=kinds)
+
+    def lookup_symbols(self, query, offset):
         return self.consume_lookup("symbols", query, offset,
-                                   symbol_page(self.symbols, query, offset, kinds=kinds))
+                                   self.symbol_result(query, offset))
 
     def next_declaration_offset(self):
         # The schema and reader share this cursor. Every page remains reachable,

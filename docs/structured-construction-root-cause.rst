@@ -187,3 +187,39 @@ grammar retains its own Java identifier rules.
 Console decisions also include selected node, behavior and port identifiers,
 so body construction and source-port assignment choices can be distinguished
 from lookup requests without logging full source bodies.
+
+Follow-up: body lookup contracts and actual dependency facts
+----------------------------------------------------------
+
+The ``20261014-111017`` console log runs ``2cf3ba11d725`` and reaches
+``construction_operation_next``. All three observed body authors request the
+same symbol query and offset zero twice at revision zero with zero accepted
+nodes. The queries are ``EntityTypeBuilderMixin``, ``EntityType#registerEntity()``
+and the signature of a newly planned helper. No Java operation is accepted.
+The two owning content nodes report ``CONSTRUCTION_AUTHOR_NO_PROGRESS``.
+
+The declaration chooser had native unread-page constraints, while the body
+chooser still used a separate enum with unrestricted query/offset fields.
+Body decisions now reuse the symbol and binding chooser and expose exact
+unread declaration, graph-node and source selectors. New catalogue searches
+start at zero; subsequent pages are literal successors of real host results.
+The bounded recent-history display no longer controls cursor reachability:
+current query cursors are stored separately and reconstructed against current
+inspected inputs on resume. Persisted selectors contain no source/API rows.
+
+Dependency lookups exclude unmaterialized planned declarations. Own members
+remain available through the current declaration and pageable declaration
+inventory. Their qualified and local signatures are excluded from new symbol
+queries. Real type previews from the artifact's dependency requirements and
+installed donor owners provide an ``inspect_dependency`` choice, with exact
+inspected names rather than guessed mixin or method names. Free discovery and
+all remaining target/source pages stay available.
+
+The latest inspected dependency page remains visible while graph nodes are
+accepted, and its selector is re-resolved on resume. Node IDs, references and
+Java names are constrained to the existing renderer's accepted lexical rules;
+an already accepted node ID cannot be emitted again. Runtime/gameplay meaning
+still belongs to the authored operations and existing semantic checks.
+
+This change is inspected statically with syntax/diff checks. Tests, inference,
+Minecraft compilation and gameplay execution are not run.

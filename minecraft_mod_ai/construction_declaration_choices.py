@@ -150,17 +150,12 @@ def symbol_lookup_schemas(state):
     # The plan/own declarations already have their own view. Dependency lookup
     # cannot manufacture another instance of this uninstalled class.
     blocked = consumed | {symbol_query_key(state.owner), symbol_query_key(state.owner.rsplit('.', 1)[-1])}
+    for key in state.declaration_ids:
+        blocked.update((symbol_query_key(key), symbol_query_key(key.rsplit('#', 1)[-1])))
     query = string_excluding(blocked, alphabet=_SYMBOL_QUERY_ALPHABET,
                              minimum=2, normalizer=symbol_query_key)
     branches = [action_schema('symbols', {'query': query})]
-    pages = {}
-    for row in state.history:
-        if (row['phase'] == state.phase and row['revision'] == state.revision
-                and row['kind'] == 'symbols' and row['next_offset'] is not None):
-            request = ('symbols', symbol_query_key(row['query']), row['next_offset'])
-            if request not in state.requests:
-                pages[request] = row
-    for row in pages.values():
+    for row in state.lookup_successors('symbols'):
         branches.append(action_schema('more_symbols', {
             'query': {'const': row['query']}, 'offset': {'const': row['next_offset']}}))
     return branches

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 from itertools import islice
-from .java_operation_ir import ATTRIBUTES, REQUIRED, OPERATIONS, JavaOperations
+from .java_operation_ir import ATTRIBUTES, REQUIRED, JavaOperations
 from .fixed_template_generation import _validate_native_arguments
 from .construction_state import (ConstructionState, STATE_INSTRUCTION, PAGE_SIZE,
                                  page_result, symbol_page, symbol_record)
@@ -33,18 +33,17 @@ def ask(router, name, payload, schema, instruction):
     }, ensure_ascii=False), flush=True)
     return decision
 
-NEXT_SCHEMA = obj({'action': {'type': 'string', 'enum': [*OPERATIONS, 'symbols', 'declarations',
-                   'nodes', 'node_index', 'source', 'sources', 'complete', 'extension']},
-                   'query': TEXT, 'offset': {'type': 'integer', 'minimum': 0}})
-
-
-def operation_schema(op):
+def operation_schema(op, *, node_ids=()):
+    from .construction_declaration_choices import identifier_schema, string_excluding
+    from .construction_operation_choices import NODE_ID_ALPHABET
     scalar = {'anyOf': [{'type': 'string', 'maxLength': 240}, {'type': 'number'}, {'type': 'boolean'}, {'type': 'null'}]}
-    attributes = {'value': scalar, 'name': ID, 'symbol_ref': ID, 'type_ref': ID, 'element_type': ID,
+    node_id = string_excluding(node_ids, alphabet=NODE_ID_ALPHABET)
+    node_ref = string_excluding((), alphabet=NODE_ID_ALPHABET)
+    attributes = {'value': scalar, 'name': identifier_schema(), 'symbol_ref': ID, 'type_ref': ID, 'element_type': ID,
         'operator': {'type': 'string', 'maxLength': 4}, 'final': {'type': 'boolean'}, 'sized': {'type': 'boolean'},
-        'finally': {'type': 'boolean'}, 'parameters': array(ID), 'cases': array(scalar),
-        'catches': array(obj({'name': ID, 'type_ref': ID}))}
-    return obj({'node_id': ID, 'input_refs': array(ID), 'typed_result': ID,
+        'finally': {'type': 'boolean'}, 'parameters': array(identifier_schema()), 'cases': array(scalar),
+        'catches': array(obj({'name': identifier_schema(), 'type_ref': ID}))}
+    return obj({'node_id': node_id, 'input_refs': array(node_ref), 'typed_result': ID,
                 'attributes': obj({key: attributes[key] for key in sorted(ATTRIBUTES[op])}, sorted(REQUIRED[op]))})
 
 
@@ -54,6 +53,10 @@ def _node_summary(row):
 
 
 def author_task_operations(router, task, context):
+    # Choice helpers import the shared schema primitives above; load them only
+    # after this module is initialized, avoiding a declaration/author cycle.
+    from .construction_operation_choices import operation_next_schema
+    from .construction_declaration_choices import choice_actions
     symbols = context['symbols']
     declaration = symbols.get(task.owner_symbol)
     if declaration is None:
@@ -66,6 +69,12 @@ def author_task_operations(router, task, context):
             'donor_call_obligations': context.get('donor_call_obligations', {}),
             'port_source_ref': context.get('port_source_ref', ''),
             'already_implemented_effects': context.get('already_implemented_effects', {})}
+    hints = list(base['authoring_contract'].get('host_requirements', {}).get('symbols', ()))
+    hints.extend(row['lookup_hint'] for row in base['donor_call_obligations'].values())
+    dependency_pages = [symbol_page(symbols, hint, 0, kinds={'CLASS'})
+                        for hint in dict.fromkeys(hints) if isinstance(hint, str) and len(hint.strip()) >= 2]
+    base['dependency_type_pages'] = [page for page in dependency_pages if page['matches']]
+    dependency_types = {row['symbol_id'] for page in base['dependency_type_pages'] for row in page['matches']}
     resume = context.get('resume_nodes')
     existing, stage = resume(task) if callable(resume) else ((), '')
     nodes = [deepcopy(node) for node in existing]
@@ -88,7 +97,6 @@ def author_task_operations(router, task, context):
     roots = dict.fromkeys(key for key in by_id if key not in referenced)
     source_units = context.get('source_pages', {})
     source_ids = sorted(source_units)
-    bindings = context.get('binding_pages', {})
     read_refs = context.get('recorded_source_refs')
     read_sources = set(read_refs() if callable(read_refs) else ())
 
@@ -128,7 +136,7 @@ def author_task_operations(router, task, context):
     resume_author = context.get('resume_author_state')
     saved_state = resume_author(task, tuple(nodes)) if callable(resume_author) else None
     if saved_state is not None:
-        last = state.restore(saved_state)
+        last = state.restore(saved_state, resolve_lookup=lookup_result)
         if last is not None:
             state.lookup = {**lookup_result(last['kind'], last['query'], last['offset']), **last}
 
@@ -138,13 +146,15 @@ def author_task_operations(router, task, context):
             callback(task, tuple(nodes), state.export())
 
     instruction = ('Author this current behavior as typed Java operations, one node per turn. No Java source strings. '
-        'Use exact inspected symbol IDs and type names. Request symbols with a lexical query and offset, '
+        'Use exact inspected symbol IDs and type names. inspect_dependency selects a real type from '
+        'dependency_type_pages; prefer these target facts to guessed API or mixin names. symbols starts '
+        'a new lexical dependency lookup at offset zero, and more_symbols selects an exact unread successor. '
         'nodes by ID, or source by ID. Relevant graph nodes are stored on the host; do not recreate them. '
         'Implement only owned runtime records; never duplicate effects already provided by Typed/UI. '
         'When a pinned donor source is installed, use its exact inspected callable symbols '
         'through typed call/field/new operations and implement missing state and event glue. '
         'Only the latest four node summaries are shown. Use node_index to discover older node IDs, '
-        'then nodes to read their complete records. Use sources to discover source IDs, then source '
+        'then nodes to read one complete known node. Use sources to discover source IDs, then source '
         'to read one complete unit. Use bindings with a binding_id from authoring_contract.binding_pages '
         'to read complete configuration records. Respect the canonical responsibility, exact identities '
         'and implementation_requirements in authoring_contract. Forward references are allowed; pending_input_refs must be authored '
@@ -152,21 +162,10 @@ def author_task_operations(router, task, context):
         'Unsupported syntax requires extension, never raw Java. ' + STATE_INSTRUCTION)
     while True:
         recent = [_node_summary(row) for row in nodes[-4:]]
-        actions = list(NEXT_SCHEMA['properties']['action']['enum'])
-        if bindings:
-            actions.append('bindings')
-        if not nodes or pending:
-            actions.remove('complete')
-        declaration_offset = state.next_declaration_offset()
-        if declaration_offset is None:
-            actions.remove('declarations')
-        schema = obj({**NEXT_SCHEMA['properties'], 'action': {
-            'type': 'string', 'enum': [action for action in actions if action != 'declarations']}})
-        if declaration_offset is not None:
-            schema = {'oneOf': [schema, obj({
-                'action': {'const': 'declarations'}, 'query': {'const': ''},
-                'offset': {'const': declaration_offset},
-            })]}
+        schema = operation_next_schema(state, nodes=nodes, source_units=source_units,
+            pinned_source=base['port_source_ref'], dependency_types=dependency_types,
+            can_complete=bool(nodes) and not pending)
+        actions = choice_actions(schema)
         payload = {**base, 'recent_nodes': recent, **state.payload(actions,
             current_member=task.owner_symbol,
             graph={'accepted_node_count': len(nodes), 'resumed_node_count': len(existing),
@@ -178,6 +177,8 @@ def author_task_operations(router, task, context):
                      'pinned_source_read': bool(base['port_source_ref'] in read_sources)})}
         choice = ask(router, 'construction_operation_next', payload, schema, instruction)
         action = choice['action']
+        if action in {'more_symbols', 'inspect_dependency'}:
+            action = 'symbols'
         if action == 'extension':
             raise ValueError('CONSTRUCTION_RENDERER_EXTENSION_REQUIRED: ' + choice['query'])
         if action == 'complete':
@@ -186,11 +187,11 @@ def author_task_operations(router, task, context):
                 context['checkpoint'](task, tuple(nodes), 'validated')
             return tuple(nodes)
         if action in {'symbols', 'declarations', 'nodes', 'node_index', 'source', 'sources', 'bindings'}:
-            query = choice['query'].strip()
+            query = choice.get('query', '').strip()
             if action == 'declarations':
                 query = ''
-            state.consume_lookup(action, query, choice['offset'],
-                                 lookup_result(action, query, choice['offset']))
+            offset = choice.get('offset', 0)
+            state.consume_lookup(action, query, offset, lookup_result(action, query, offset))
             if action == 'source':
                 callback = context.get('source_read')
                 if callable(callback):
@@ -199,7 +200,7 @@ def author_task_operations(router, task, context):
             save_author()
             continue
         row = dict(ask(router, 'construction_operation_' + action,
-                       {**payload, 'selected_operation': action}, operation_schema(action), instruction))
+                       {**payload, 'selected_operation': action}, operation_schema(action, node_ids=by_id), instruction))
         row['op'] = action
         if row['node_id'] in by_id:
             raise ValueError('CONSTRUCTION_NODE_DUPLICATE')
@@ -214,7 +215,7 @@ def author_task_operations(router, task, context):
         for ref in row['input_refs']:
             roots.pop(ref, None)
         referenced.update(row['input_refs'])
-        state.advance()
+        state.advance(preserve_symbols=True)
         stage = 'authoring'
         if context.get('checkpoint'):
             context['checkpoint'](task, tuple(nodes), 'authoring')
