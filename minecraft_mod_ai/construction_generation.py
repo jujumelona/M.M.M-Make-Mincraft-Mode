@@ -68,6 +68,7 @@ def compose(router, spec, *, source_context=(), construction_context=None,
         raise ValueError('CONSTRUCTION_CLASS_HEADER_POLICY')
     symbols = dict(context['symbols'])
     context['symbols'] = symbols
+    context['source_pages'] = dict(context.get('source_pages', {}))
     package, name = identity
     owner = package + '.' + name
     bindings = spec.get('bindings', {})
@@ -329,6 +330,7 @@ def compose(router, spec, *, source_context=(), construction_context=None,
     input_hash = construction_input_fingerprint(spec, context['authoring_contract'])
     member_invocations = {}
     constructor_delegations = {}
+    accepted_member_evidence = {}
 
     def author_one(member_task, *, owned_records=(), port_source_ref=''):
         from .construction_progress import ConstructionNodeCheckpoint
@@ -338,7 +340,10 @@ def compose(router, spec, *, source_context=(), construction_context=None,
             target=context['target'],
             prerequisite_hashes=context['prerequisite_hashes'],
             declaration=symbols[member_task.owner_symbol], owner_header=symbols[owner],
-            planned_declaration_hash=planned_declaration_hash, construction_input_hash=input_hash)
+            planned_declaration_hash=planned_declaration_hash,
+            construction_input_hash=hashlib.sha256(json.dumps(
+                {'input': input_hash, 'accepted_sibling_evidence': accepted_member_evidence},
+                ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest())
         scoped_context = dict(context)
         scoped_context['owned_runtime_records'] = list(owned_records)
         scoped_context['port_source_ref'] = port_source_ref
@@ -402,6 +407,23 @@ def compose(router, spec, *, source_context=(), construction_context=None,
         nodes = author_one(member_task, **options)
         render_task_java(member_task, nodes, symbols)
         rendered[member_task.owner_symbol] = render_task_member(member_task, nodes, symbols)
+        # A following member must be able to inspect decisions already accepted
+        # here (state encodings, callbacks and helper logic), not only signatures.
+        ref = 'accepted-member:' + hashlib.sha256(member_task.owner_symbol.encode()).hexdigest()[:24]
+        evidence_hash = hashlib.sha256(json.dumps(
+            {'task': member_task.to_dict(), 'nodes': nodes}, ensure_ascii=False,
+            sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        metadata = {'owner': owner, 'authority': 'accepted_sibling_graph',
+                    'source_sha256': evidence_hash, 'side': symbols[member_task.owner_symbol]['side']}
+        units = [{**metadata, 'kind': 'accepted_member', 'signature': member_task.owner_symbol,
+                  'code': json.dumps({'task': member_task.to_dict(), 'node_count': len(nodes),
+                                      'node_ids': [row['node_id'] for row in nodes]}, ensure_ascii=False)}]
+        units.extend({**metadata, 'kind': 'accepted_node',
+                      'signature': member_task.owner_symbol + '::' + row['node_id'] + ' ' + member_task.intent,
+                      'code': json.dumps(row, ensure_ascii=False)} for row in nodes)
+        context['source_pages'][ref] = units
+        context['evidence_index'].include_source(ref, units)
+        accepted_member_evidence[ref] = evidence_hash
     # Keep declaration/field initialization order independent of author order.
     members = [rendered[current.owner_symbol] for current, _options in body_jobs]
     # Donor/port calls in an unreachable helper are not runtime integration.

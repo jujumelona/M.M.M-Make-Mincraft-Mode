@@ -267,7 +267,7 @@ def parameter_schema(parameters, *, state, can_complete=True):
 
 def type_candidates(state):
     types = set(PRIMITIVES) - {'void'}
-    visible = [state.symbols[state.owner], *state.symbol_lookup.get('matches', ())]
+    visible = [state.symbols[state.owner], *state.symbol_lookup.get('matches', ()), *state.memory.visible_symbols()]
     for row in visible:
         names = [row.get('owner', ''), row.get('return_type', '')]
         if row.get('kind') == 'CLASS':
@@ -313,19 +313,14 @@ def choose_type(router, state, payload, *, phase, allow_void=False):
 def accessible_type(state, row):
     if row.get('kind') != 'CLASS':
         return False
-    if row.get('side') == 'CLIENT' and not state.target_path.startswith('src/client/'):
-        return False
-    access = row.get('access', 0)
-    same_package = owner_package(state.symbols, row.get('owner', '')) == owner_package(state.symbols, state.owner)
-    return bool(access & 1 or (same_package and not access & 2)
-                or (access & 4 and state.evidence_index is not None
-                    and state.evidence_index._subtype(state.owner, row.get('enclosing_owner') or row['owner'])))
+    from .construction_type_contracts import class_accessible
+    return class_accessible(state.symbols, row['owner'], state.owner, state.target_path)
 
 
 def header_candidates(state):
     candidates = {'superclass': [], 'interface': []}
     header = state.symbols[state.owner]
-    for match in state.symbol_lookup.get('matches', ()):
+    for match in [*state.symbol_lookup.get('matches', ()), *state.memory.visible_symbols()]:
         key = match['symbol_id']
         row = state.symbols.get(key, {})
         if (key == state.owner or row.get('provenance') == 'construction_plan'

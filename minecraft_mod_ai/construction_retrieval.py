@@ -113,6 +113,28 @@ class ConstructionEvidenceIndex:
             self.owner_chunks[owner] = RAGChunk(owner, owner, text, 1, 1, '', {})
             self.owner_prepared[owner] = (terms, text.casefold())
 
+    def include_source(self, source_ref, units):
+        """Publish accepted sibling evidence without promoting it to bytecode."""
+        additions = []
+        for offset, unit in enumerate(units):
+            key = source_ref + ':' + str(offset)
+            if key in self.sources:
+                raise ValueError('CONSTRUCTION_SOURCE_EVIDENCE_DUPLICATE')
+            if unit.get('side') == 'CLIENT' and not self.target_path.startswith('src/client/'):
+                continue
+            self.sources[key] = (source_ref, offset, unit)
+            text = _words(unit.get('signature', '') + '\n' + unit.get('code', ''))
+            additions.append(RAGChunk(key, source_ref, text, 1, 1, unit.get('source_sha256', ''), {}))
+            self.source_targets[key] = self._source_targets(unit)
+            self.source_prepared[key] = (frozenset(_tokens(text)), text.casefold())
+        if self.dense and additions:
+            vectors = self.router.embed([row.text for row in additions])
+            if len(vectors) != len(additions) or any(not vector for vector in vectors):
+                raise ValueError('CONSTRUCTION_RETRIEVAL_EMBEDDING_SHAPE')
+            additions = [replace(row, embedding=tuple(vector)) for row, vector in zip(additions, vectors)]
+        self.source_chunks = (*self.source_chunks, *additions)
+        self.ordering_goal = None
+
     def _add_owner_scope(self, owner):
         package = owner_package(self.symbols, owner)
         scopes = ['package:']
