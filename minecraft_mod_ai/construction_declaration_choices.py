@@ -186,7 +186,7 @@ def symbol_lookup_schemas(state):
 
 
 def binding_lookup_schemas(state):
-    branches = []
+    branches = memory_schemas(state)
     for key, rows in sorted(state.binding_pages.items()):
         consumed = {offset for kind, query, offset in state.requests
                     if kind == 'bindings' and query == key}
@@ -200,12 +200,28 @@ def binding_lookup_schemas(state):
     return branches
 
 
+def memory_schemas(state):
+    branches = []
+    for offset in state.memory.index_choices():
+        branches.append(action_schema('memory_index', {'offset': {'const': offset}}))
+    records = [row['evidence_id'] for row in state.memory.catalogue()['records'] if not row['active']]
+    if records:
+        branches.append(action_schema('recall', {'evidence_id': {'enum': records}}))
+    return branches
+
+
 def with_binding_lookups(state, schema):
     branches = binding_lookup_schemas(state)
     return {'oneOf': [*schema.get('oneOf', [schema]), *branches]} if branches else schema
 
 
 def consume_lookup_choice(state, choice):
+    if choice.get('action') == 'memory_index':
+        state.memory.select_index(choice['offset'])
+        return True
+    if choice.get('action') == 'recall':
+        state.memory.recall(choice['evidence_id'])
+        return True
     if choice.get('action') == 'scopes':
         state.lookup_scopes(choice['query'], choice['offset'])
         return True

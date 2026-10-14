@@ -12,7 +12,7 @@ from copy import deepcopy
 
 # Body lookup choices and retained API pages changed. Old journals/cursors may
 # not be replayed against them; declaration-bound accepted graphs stay reusable.
-PROTOCOL_VERSION = "mmm/construction-state-v10"
+PROTOCOL_VERSION = "mmm/construction-state-v11"
 PAGE_SIZE = 8
 RECENT_SIZE = 4
 LOOKUP_KINDS = frozenset({'symbols', 'scopes', 'declarations', 'nodes', 'node_index', 'source', 'sources', 'bindings'})
@@ -105,7 +105,9 @@ STATE_INSTRUCTION = (
     "add only missing declarations. authoring_contract defines the artifact's responsibility, "
     "identities and implementation requirements. Use bindings with an exact binding_id from "
     "authoring_contract.binding_pages to inspect shared configuration before choosing declarations "
-    "or types. binding_lookup retains the latest complete configuration page across phases. "
+    "or types. evidence_memory.working_set retains exact inspected facts across phases. "
+    "Use memory_index to page its complete catalogue and recall an exact evidence_id when an "
+    "earlier fact is outside the active view. Recall is memory navigation, not a new search. "
     "Dependency discovery is driven by the current implementation purpose. Exact API names come "
     "from returned candidates, not guesses. Intent selectors identify host-ranked real pages. "
     "scope_candidates are real package/type branches, including branches whose names do not "
@@ -138,6 +140,8 @@ class ConstructionState:
         self.symbol_goal = None
         self.operation_goal = None
         self.selection_goal = None
+        from .construction_memory import ConstructionMemory
+        self.memory = ConstructionMemory()
 
     def enter(self, phase):
         if phase != self.phase:
@@ -218,15 +222,16 @@ class ConstructionState:
             "lookups_since_progress": len(self.requests),
             "recent_lookups": list(self.history),
             "available_actions": list(available_actions), **cursor,
-        }, "lookup": self.lookup, "authoring_contract": self.authoring_contract,
+        }, "lookup": {key: value for key, value in self.lookup.items()
+                      if key not in {'matches', 'nodes', 'source', 'bindings', 'declarations'}},
+            "authoring_contract": self.authoring_contract,
+            "evidence_memory": self.memory.payload(),
             "selection_goal": deepcopy(self.selection_goal),
             "scope_candidates": self.scope_candidates(), "scope_lookup": self.scope_lookup,
             "symbol_page_choices": self.symbol_page_successors(),
-            "binding_lookup": self.binding_lookup if self.lookup.get('kind') != 'bindings' else {},
-            "binding_lookups": [row for key, row in sorted(self.binding_lookups.items())
-                if key != (self.binding_lookup.get('query'), self.binding_lookup.get('offset'))],
-            "source_lookup": self.source_lookup if self.lookup.get('kind') != 'source' else {},
-            "symbol_lookup": self.symbol_lookup if self.lookup.get('kind') != 'symbols' else {}}
+            "binding_lookup": {key: value for key, value in self.binding_lookup.items() if key != 'bindings'},
+            "source_lookup": {key: value for key, value in self.source_lookup.items() if key != 'source'},
+            "symbol_lookup": {key: value for key, value in self.symbol_lookup.items() if key != 'matches'}}
 
     def _remember_cursor(self, kind, query, offset, result):
         request = _lookup_request(kind, query, offset)
@@ -269,6 +274,7 @@ class ConstructionState:
             raise ValueError("CONSTRUCTION_AUTHOR_NO_PROGRESS: repeated " + kind + " lookup")
         self.requests.add(request)
         self.lookup = {**result, "kind": kind, "query": query.strip(), "offset": offset}
+        self.memory.remember(kind, query, offset, result)
         self._remember_cursor(kind, query, offset, result)
         if kind == 'symbols':
             self.symbol_lookup = self.lookup
@@ -302,6 +308,7 @@ class ConstructionState:
                 'last_scope_lookup': scope,
                 'symbol_goal': self.symbol_goal, 'operation_goal': deepcopy(self.operation_goal),
                 'selection_goal': deepcopy(self.selection_goal),
+                'memory': self.memory.export(),
                 'binding_lookups': [{'kind': 'bindings', 'query': query, 'offset': offset}
                                     for query, offset in sorted(self.binding_lookups)],
                 'evidence_goals': self.evidence_index.export_goals() if self.evidence_index else [],
@@ -341,6 +348,7 @@ class ConstructionState:
         if goal is not None and (selection is None or selection['node_id'] != goal['node_id']):
             raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
         self.selection_goal = deepcopy(selection)
+        self.memory.restore(record.get('memory'), resolve_lookup)
         requests, history = record.get('requests'), record.get('history')
         if (not isinstance(requests, list) or not isinstance(history, list)
                 or len(history) > PAGE_SIZE

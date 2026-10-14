@@ -72,7 +72,9 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
     save_author()
     while True:
         evidence = state.symbol_lookup
-        matches = [row for row in evidence.get('matches', ()) if row['kind'] in kinds
+        visible = {row['symbol_id']: row for row in [*evidence.get('matches', ()), *state.memory.visible_symbols()]}
+        matches = [row for row in visible.values() if row['kind'] in kinds
+                   and state.evidence_index.accessible(row['symbol_id'], constructor=op == 'new')
                    and (op not in API_KINDS or fits(row['owner'] if op == 'new' else row['return_type']))]
         if op in API_KINDS:
             local_keys = set(state.declaration_ids[-RECENT_SIZE:])

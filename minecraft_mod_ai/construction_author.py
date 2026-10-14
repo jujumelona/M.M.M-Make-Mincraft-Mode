@@ -153,6 +153,12 @@ def author_task_operations(router, task, context):
 
     def read_lookup(choice):
         action = choice['action']
+        if action == 'memory_index':
+            state.memory.select_index(choice['offset'])
+            return
+        if action == 'recall':
+            state.memory.recall(choice['evidence_id'])
+            return
         if action == 'more_symbols':
             action = 'symbols'
         query = choice.get('query', '').strip()
@@ -236,7 +242,7 @@ def author_task_operations(router, task, context):
         choice = state.operation_goal or ask(router, 'construction_operation_next', payload, schema, instruction)
         action = choice['action']
         if action in {'symbols', 'more_symbols', 'scopes', 'bindings', 'source', 'sources',
-                      'declarations', 'nodes', 'node_index'}:
+                      'declarations', 'nodes', 'node_index', 'memory_index', 'recall'}:
             read_lookup(choice)
             save_author()
             continue
