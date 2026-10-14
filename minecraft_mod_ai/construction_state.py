@@ -10,9 +10,9 @@ from collections import deque
 from copy import deepcopy
 
 
-# Legal declaration pages and prompt schema presentation changed. Old journals/cursors may
+# Declaration phase choices changed. Old journals/cursors may
 # not be replayed against them; declaration-bound accepted graphs stay reusable.
-PROTOCOL_VERSION = "mmm/construction-state-v5"
+PROTOCOL_VERSION = "mmm/construction-state-v6"
 PAGE_SIZE = 8
 RECENT_SIZE = 4
 LOOKUP_KINDS = frozenset({'symbols', 'declarations', 'nodes', 'node_index', 'source', 'sources', 'bindings'})

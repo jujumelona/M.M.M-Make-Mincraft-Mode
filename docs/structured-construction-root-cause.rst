@@ -126,3 +126,43 @@ timeouts, retry policy and exact live-context guard are unchanged.
 
 This follow-up receives syntax/diff checks and static review only. No tests,
 model inference, Minecraft build or gameplay run was executed for it.
+
+Follow-up: phase decisions must reach authored work
+-------------------------------------------------
+
+The in-progress console log ``20261014-090235`` runs ``37b10f9fb03f``.
+Its first content node fails in the class-header phase with
+``CONSTRUCTION_RENDERER_EXTENSION_REQUIRED`` even though the selected reason
+says no further superclass or interfaces are needed. The generic ``extension``
+escape was available alongside phase completion without identifying any
+unsupported construct. Header decisions now use the explicit ``finish_header``
+transition; signature selection phases have no unsupported-syntax escape.
+Actual operation-body unsupported syntax retains its existing fail-closed path.
+The header instruction distinguishes required inheritance from dependency API
+names, which describe callable/stored APIs rather than required supertypes.
+
+After the content failure, another artifact issues 914 consecutive
+``construction_member_next`` requests, with 913 completed responses totaling
+9,071.3 seconds. No type, signature, parameter or operation-author call occurs
+in that consecutive segment. In the inspected loop, selecting a new member
+immediately calls its type/signature planner, and selecting a queued body
+leaves the loop. Therefore this segment consists of lookup-only decisions;
+the console alone does not identify which queries/pages were selected.
+
+Member planning previously offered the entire dependency symbol browser before
+a missing helper had even been identified. That browser is now confined to
+the subsequent type and body decisions that need those signatures. Member
+planning retains finite own-declaration and binding pages, helper declarations
+and a concrete ``begin_bodies`` transition selecting a queued member. Every
+other assigned body remains queued. No lookup-count limit, shortened requested
+behavior, automatic success, retry or timeout increase is introduced.
+
+Each structured construction decision now reports its selected action/cursor
+and the current phase, revision, declaration count and accepted node count.
+This distinguishes response completion from actual accepted construction work
+in the console without requiring a full response archive for that distinction.
+Old planning journals/cursors are separated by the construction protocol;
+declaration-bound accepted graph checkpoints retain their existing identities.
+
+Verification remains syntax/diff inspection and static review. No tests,
+model inference, Minecraft build or gameplay run was executed for this change.

@@ -15,17 +15,20 @@ from .java_operation_ir import PRIMITIVES, identifier
 SIGNATURE = obj({'visibility': {'type': 'string', 'enum': ['public', 'protected', 'private', '']},
                  'static': {'type': 'boolean'}, 'final': {'type': 'boolean'}})
 HEADER_INSTRUCTION = ('Choose only inheritance for the current new class. No Java source. '
-    'Complete this phase when no further superclass or interfaces are needed; methods and behavior bodies '
+    'finish_header ends only this phase when no further superclass or interfaces are needed; methods and behavior bodies '
     'are planned and authored in later phases. A class with no explicit superclass extends Object implicitly. '
+    'Dependency API names in host_requirements are not required supertypes. Use inheritance only when '
+    'the artifact responsibility requires this owner to be a subtype, not merely to call or store an API. '
     'Search dependencies with symbols; inheritance can use only the inspected header_candidates in this page. '
     'A superclass is a non-final class. An implemented type is an interface. The new owner is neither '
     'an inheritance candidate nor an implementation target in this phase. ' + STATE_INSTRUCTION)
 MEMBER_INSTRUCTION = ('Plan only additional helper methods, fields or constructors. No Java source. '
     'Declarations with a body_owner already have an assigned author and will receive their actual bodies '
-    'after this phase. Do not redeclare them. Complete means no additional helper declarations are needed; '
-    'begin_bodies selects the first queued body to author. Both transitions keep every assigned body. '
-    'Use overload only to add a distinct signature to a helper. Use symbols for dependency signatures and '
-    'declarations for older members. Types are exact inspected names; primitives are intrinsic. ' + STATE_INSTRUCTION)
+    'after this phase. Do not redeclare them. If no additional helper is needed, select begin_bodies '
+    'with one queued body; every other assigned body remains queued and will also be authored. '
+    'Use overload only to add a distinct signature to a helper, and declarations to read older members. '
+    'Choose the helper name and purpose here; its types and dependency APIs are resolved in the following '
+    'signature and body phases. Dependency search is not a member-planning action. ' + STATE_INSTRUCTION)
 SIGNATURE_INSTRUCTION = ('Describe only the current new member signature: return type, visibility and '
     'modifiers. No Java source. Use exact inspected type names or primitives. This phase does not declare '
     'other members or finish their behaviors. ' + STATE_INSTRUCTION)
@@ -120,10 +123,8 @@ def compose(router, spec, *, source_context=(), construction_context=None,
             actions = choice_actions(schema)
             choice = ask(planning_router, 'construction_class_next',
                 {**payload, **state.payload(actions, header_candidates=candidates)}, schema, HEADER_INSTRUCTION)
-            if choice['action'] == 'complete':
+            if choice['action'] == 'finish_header':
                 break
-            if choice['action'] == 'extension':
-                raise ValueError('CONSTRUCTION_RENDERER_EXTENSION_REQUIRED: ' + choice['reason'])
             if consume_lookup_choice(state, choice):
                 continue
             type_ = exact_type(choice['type_ref'], symbols, allow_void=False)
@@ -184,13 +185,9 @@ def compose(router, spec, *, source_context=(), construction_context=None,
         item = ask(planning_router, 'construction_member_next',
             {**payload, **state.payload(actions, body_candidates=body_candidates)}, schema, MEMBER_INSTRUCTION)
         action = item['action']
-        if action == 'complete':
-            break
         if action == 'begin_bodies':
             preferred_body = item['symbol_ref']
             break
-        if action == 'extension':
-            raise ValueError('CONSTRUCTION_RENDERER_EXTENSION_REQUIRED: ' + item['reason'])
         if consume_lookup_choice(state, item):
             continue
         if action == 'declarations':

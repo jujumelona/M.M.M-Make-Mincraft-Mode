@@ -202,15 +202,16 @@ def member_schema(state, *, reserved_names, body_candidates):
     branches = [obj({'action': {'enum': ['method', 'field']},
                      'name': identifier_schema(known_names | set(reserved_names)), 'purpose': ID}),
                 action_schema('constructor', {'purpose': ID}),
-                action_schema('extension', {'reason': ID}), *symbol_lookup_schemas(state),
                 *binding_lookup_schemas(state)]
+    # Choosing which helper is missing does not need dependency signatures.
+    # Resolve its types after the declaration is selected, and its calls while
+    # authoring the body. An open dependency browser here can consume the whole
+    # inventory without ever selecting a declaration or an assigned body.
     declaration_offset = state.next_declaration_offset()
     if declaration_offset is not None:
         branches.append(action_schema('declarations', {'offset': {'const': declaration_offset}}))
     if helpers:
         branches.append(action_schema('overload', {'name': {'enum': helpers}, 'purpose': ID}))
-    if state.declaration_ids:
-        branches.append(action_schema('complete'))
     if body_candidates:
         branches.append(action_schema('begin_bodies', {'symbol_ref': {'enum': body_candidates}}))
     return {'oneOf': branches}
@@ -249,8 +250,7 @@ def choose_type(router, state, payload, *, phase, allow_void=False):
         types = type_candidates(state)
         branches = [action_schema('type', {'base_type': {'type': 'string', 'enum': types},
                                           'array_dimensions': {'type': 'integer', 'minimum': 0, 'maximum': 255}}),
-                    *symbol_lookup_schemas(state), *binding_lookup_schemas(state),
-                    action_schema('extension', {'reason': ID})]
+                    *symbol_lookup_schemas(state), *binding_lookup_schemas(state)]
         # JVMS 4.11 bounds array dimensions; void is never an array/component.
         if allow_void:
             branches.append(action_schema('void'))
@@ -259,8 +259,6 @@ def choose_type(router, state, payload, *, phase, allow_void=False):
             {**payload, **state.payload(choice_actions(schema), type_candidates=types)}, schema, instruction)
         if consume_lookup_choice(state, choice):
             continue
-        if choice['action'] == 'extension':
-            raise ValueError('CONSTRUCTION_RENDERER_EXTENSION_REQUIRED: ' + choice['reason'])
         state.advance()
         if choice['action'] == 'void':
             return 'void'
@@ -296,8 +294,8 @@ def header_candidates(state):
 
 
 def header_schema(state, candidates):
-    branches = [*symbol_lookup_schemas(state), *binding_lookup_schemas(state), action_schema('complete'),
-                action_schema('extension', {'reason': ID})]
+    branches = [*symbol_lookup_schemas(state), *binding_lookup_schemas(state),
+                action_schema('finish_header')]
     for kind, keys in candidates.items():
         if keys:
             branches.append(action_schema(kind, {'type_ref': {'type': 'string', 'enum': keys}}))
