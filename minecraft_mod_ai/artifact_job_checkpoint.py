@@ -186,11 +186,18 @@ def execute_checkpointed_job(job, *, context, router, registry, base_dir, execut
         if recorded is not None and current != recorded:
             raise ValueError(f"ARTIFACT_CHECKPOINT_TARGET_DRIFT: {relative}")
         before = current
+        execution_inputs = context
+        if prior is not None and is_generator:
+            execution_inputs = dict(context or {})
+            execution_inputs['_artifact_owned_replacement'] = {
+                'job_id': job.job_id, 'target_path': relative,
+                'before_sha256': before, 'input_hash': binding,
+            }
 
         try:
             receipt = execute(
                 job,
-                context=context,
+                context=execution_inputs,
                 router=router,
                 port_registry=registry,
                 base_dir=root,

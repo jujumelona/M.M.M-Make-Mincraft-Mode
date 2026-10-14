@@ -253,6 +253,21 @@ def execute_generator_job(job, *, context, router, port_registry=None, base_dir=
                          operation=spec["operation"], expected_sha256=spec.get("expected_sha256", "").removeprefix("sha256:"))
     materialization = None
     if base_dir is not None:
+        replacement = context.get('_artifact_owned_replacement')
+        if replacement is not None:
+            from .artifact_job_checkpoint import _read_job_record, _read_path_hash
+            prior = _read_job_record(Path(base_dir).resolve(), job.job_id)
+            if (not isinstance(replacement, dict) or prior is None
+                    or replacement.get('job_id') != job.job_id
+                    or replacement.get('target_path') != spec['target_path']
+                    or prior.get('target_path') != spec['target_path']
+                    or prior.get('input_hash') != replacement.get('input_hash')
+                    or prior.get('after_hash') != replacement.get('before_sha256')
+                    or _read_path_hash(Path(base_dir).resolve(), spec['target_path']) != replacement.get('before_sha256')
+                    or spec['operation'] != 'CREATE_FILE'):
+                raise ValueError('ARTIFACT_OWNED_REPLACEMENT_INVALID')
+            target_job = replace(target_job, operation='REPLACE_FILE',
+                                 expected_sha256=replacement['before_sha256'])
         receipt = materialize_job_output(target_job, source, base_dir=base_dir)
         materialization = {"path": receipt.target_path, "status": receipt.status,
                            "after_sha256": receipt.after_sha256}
