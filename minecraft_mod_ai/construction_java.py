@@ -126,7 +126,7 @@ def render_task_member(task, nodes, symbols):
         if op == "switch":
             cases = []
             for value, body in zip(attrs["cases"], refs[1:]):
-                label = "default" if value == "default" else "case " + java_literal(value, graph.types[refs[0]])
+                label = "default" if value['kind'] == "default" else "case " + java_literal(value['value'], graph.types[refs[0]])
                 cases.append((label, " -> {\n", stmt(body), "\n}"))
             return ("switch (", expr(refs[0]), ") {\n", _join("\n", cases), "\n}")
         if op == "throw":

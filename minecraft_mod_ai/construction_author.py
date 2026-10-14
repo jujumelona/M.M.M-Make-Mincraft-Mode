@@ -14,8 +14,8 @@ ID = {'type': 'string', 'maxLength': 240, 'minLength': 1}
 def obj(properties, required=None):
     return {'type': 'object', 'properties': properties, 'required': list(properties) if required is None else required, 'additionalProperties': False}
 
-def array(items, maximum=8):
-    return {'type': 'array', 'maxItems': maximum, 'items': items}
+def array(items, maximum=None):
+    return {'type': 'array', 'items': items, **({'maxItems': maximum} if maximum is not None else {})}
 
 def ask(router, name, payload, schema, instruction):
     messages = [{'role': 'system', 'content': instruction}, {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)}]
@@ -41,7 +41,9 @@ def operation_schema(op, *, node_ids=()):
     node_ref = string_excluding((), alphabet=NODE_ID_ALPHABET)
     attributes = {'value': scalar, 'name': identifier_schema(), 'symbol_ref': ID, 'type_ref': ID, 'element_type': ID,
         'operator': {'type': 'string', 'maxLength': 4}, 'final': {'type': 'boolean'}, 'sized': {'type': 'boolean'},
-        'finally': {'type': 'boolean'}, 'parameters': array(identifier_schema()), 'cases': array(scalar),
+        'finally': {'type': 'boolean'}, 'parameters': array(identifier_schema()),
+        'selector_type': ID, 'cases': array({'oneOf': [obj({'kind': {'const': 'default'}}),
+                                                    obj({'kind': {'const': 'value'}, 'value': scalar})]}),
         'catches': array(obj({'name': identifier_schema(), 'type_ref': ID}))}
     return obj({'node_id': node_id, 'input_refs': array(node_ref), 'typed_result': ID,
                 'attributes': obj({key: attributes[key] for key in sorted(ATTRIBUTES[op])}, sorted(REQUIRED[op]))})

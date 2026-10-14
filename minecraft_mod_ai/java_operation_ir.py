@@ -23,7 +23,7 @@ ATTRIBUTES = {
     "array_get": set(), "array_length": set(), "new_array": {"element_type", "sized"},
     "ternary": set(), "return": set(), "block": set(), "if": set(), "while": set(),
     "for": set(), "do_while": set(), "foreach": {"name", "element_type"},
-    "lambda": {"parameters"}, "switch": {"cases"}, "throw": set(),
+    "lambda": {"parameters"}, "switch": {"cases", 'selector_type'}, "throw": set(),
     "try": {"catches", "finally"}, "synchronized": set(), "break": set(), "continue": set(),
 }
 OPERATIONS = tuple(ATTRIBUTES)
@@ -353,8 +353,18 @@ class JavaOperations:
             return True
         if actual == expected:
             return True
-        if actual in PRIMITIVES or expected in PRIMITIVES:
-            return self.assignable(actual, expected) or self.assignable(expected, actual)
+        if actual in PRIMITIVES:
+            # Boxing may widen the resulting reference; it never first narrows
+            # long to int merely because Integer can unbox/widen to long.
+            return expected == BOXING.get(actual) or self.subtype(BOXING.get(actual, ''), expected)
+        if expected in PRIMITIVES:
+            unboxed = {value: key for key, value in BOXING.items()}.get(actual)
+            if unboxed:
+                return (unboxed in NUMERIC and expected in NUMERIC) or unboxed == expected
+            # Java reference narrowing followed by unboxing requires the exact
+            # wrapper for the requested primitive to be cast-compatible.
+            wrapper = BOXING.get(expected)
+            return bool(wrapper and self.castable(actual, wrapper))
         if self.subtype(actual, expected) or self.subtype(expected, actual):
             return True
         if actual.endswith("[]") or expected.endswith("[]"):
@@ -568,9 +578,15 @@ class JavaOperations:
                 raise ValueError("CONSTRUCTION_SWITCH_CASES")
             if types[0] not in {"byte", "short", "char", "int", "java.lang.String"}:
                 raise ValueError("CONSTRUCTION_SWITCH_TYPE")
-            for value in attrs["cases"]:
-                if value != "default":
-                    java_literal(value, types[0])
+            if attrs['selector_type'] != types[0]:
+                raise ValueError('CONSTRUCTION_SWITCH_TYPE')
+            for label in attrs["cases"]:
+                if not isinstance(label, dict) or label.get('kind') not in {'value', 'default'}:
+                    raise ValueError('CONSTRUCTION_SWITCH_LABEL')
+                if set(label) != ({'kind', 'value'} if label['kind'] == 'value' else {'kind'}):
+                    raise ValueError('CONSTRUCTION_SWITCH_LABEL')
+                if label['kind'] == 'value':
+                    java_literal(label['value'], types[0])
             if len({json.dumps(x, sort_keys=True) for x in attrs["cases"]}) != len(attrs["cases"]):
                 raise ValueError("CONSTRUCTION_SWITCH_DUPLICATE")
         elif op == "throw":
@@ -753,7 +769,7 @@ class JavaOperations:
                 if op == "do_while" and not completes[body] and not breaks[body] and not continues[body]:
                     complete = False
             elif op == "switch":
-                complete = "default" not in attrs["cases"] or any(completes[r] or breaks[r] for r in refs[1:])
+                complete = not any(label['kind'] == 'default' for label in attrs['cases']) or any(completes[r] or breaks[r] for r in refs[1:])
                 escaping_continue = any(continues[r] for r in refs[1:])
             elif op == "try":
                 bodies = refs[:-1] if attrs.get("finally") else refs

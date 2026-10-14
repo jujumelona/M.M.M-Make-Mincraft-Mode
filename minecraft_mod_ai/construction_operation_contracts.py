@@ -103,6 +103,10 @@ def pending_input_contracts(nodes, declaration, symbols):
                 row.update(required_shape='array', expected_element_type=attrs['element_type'])
             elif op == 'array_length':
                 row['required_shape'] = 'array'
+            elif op == 'switch' and index == 0:
+                row['allowed_types'] = [attrs['selector_type']]
+            elif op == 'throw':
+                row['expected_type'] = 'java.lang.Throwable'
             elif op == 'for' and index in {0, 2}:
                 row['allowed_operations'] = ['declare', 'assign', 'call', 'new'] if index == 0 else ['assign', 'call', 'new']
             result.setdefault(ref, []).append(row)
