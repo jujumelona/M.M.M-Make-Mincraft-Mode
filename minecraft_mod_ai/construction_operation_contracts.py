@@ -69,7 +69,7 @@ def pending_input_contracts(nodes, declaration, symbols):
             api_types = [] if op == 'field' else invocation_parameter_types(row) if op in {'new', 'constructor_call'} else parameter_types(row)
             if op not in {'new', 'constructor_call'} and not row.get('static'):
                 receiver = row['owner']
-                if row.get('access', 0) & 4 and owner_package(symbols, receiver) != owner_package(symbols, declaration['owner']):
+                if row.get('access', 0) & 4 and owner_package(symbols, row.get('declaring_owner') or receiver) != owner_package(symbols, declaration['owner']):
                     receiver = declaration['owner']
                 api_types = [receiver, *api_types]
         for index, ref in enumerate(refs):

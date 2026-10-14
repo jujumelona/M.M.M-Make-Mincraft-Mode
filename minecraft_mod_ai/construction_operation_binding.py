@@ -170,7 +170,7 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
         inputs = [] if op == 'field' else invocation_parameter_types(row) if op in {'new', 'constructor_call'} else parameter_types(row)
         if op not in {'new', 'constructor_call'} and not row.get('static'):
             receiver = row['owner']
-            if row.get('access', 0) & 4 and owner_package(state.symbols, row['owner']) != owner_package(state.symbols, state.owner):
+            if row.get('access', 0) & 4 and owner_package(state.symbols, row.get('declaring_owner') or row['owner']) != owner_package(state.symbols, state.owner):
                 receiver = state.owner
             inputs = [receiver, *inputs]
         schema['properties']['attributes']['properties']['symbol_ref'] = {'const': key}

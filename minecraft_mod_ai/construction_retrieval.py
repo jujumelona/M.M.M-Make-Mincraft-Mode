@@ -285,7 +285,8 @@ class ConstructionEvidenceIndex:
         if row.get('provenance') == 'construction_plan' and row['owner'] != self.owner:
             return False
         owner = self.symbols.get(row['owner'], {})
-        same_package = owner_package(self.symbols, row['owner']) == owner_package(self.symbols, self.owner)
+        declaring = row.get('declaring_owner') or row['owner']
+        same_package = owner_package(self.symbols, declaring) == owner_package(self.symbols, self.owner)
         if not class_accessible(self.symbols, row['owner'], self.owner, self.target_path):
             return False
         access = row.get('access')
@@ -294,7 +295,7 @@ class ConstructionEvidenceIndex:
                 return False
             if not access & 7 and not same_package:
                 return False
-            access_owner = (row.get('enclosing_owner') or row['owner']) if row['kind'] == 'CLASS' else row['owner']
+            access_owner = (row.get('enclosing_owner') or row['owner']) if row['kind'] == 'CLASS' else declaring
             if access & 4 and not same_package and (constructor or not self._subtype(self.owner, access_owner)):
                 return False
         elif row.get('visibility') == 'private' and row['owner'] != self.owner:

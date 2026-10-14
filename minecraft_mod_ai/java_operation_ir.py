@@ -278,12 +278,13 @@ class JavaOperations:
             raise ValueError('CONSTRUCTION_SYMBOL_ACCESS')
         if key != self.task.owner_symbol and "access" in row:
             access = row["access"]
-            same_package = owner_package(self.symbols, row['owner']) == owner_package(self.symbols, current)
+            declaring = row.get('declaring_owner') or row['owner']
+            same_package = owner_package(self.symbols, declaring) == owner_package(self.symbols, current)
             if access & 2 and row["owner"] != current:
                 raise ValueError("CONSTRUCTION_SYMBOL_ACCESS")
             if not access & 7 and not same_package:
                 raise ValueError("CONSTRUCTION_SYMBOL_ACCESS")
-            access_owner = (row.get('enclosing_owner') or row['owner']) if row['kind'] == 'CLASS' else row['owner']
+            access_owner = (row.get('enclosing_owner') or row['owner']) if row['kind'] == 'CLASS' else declaring
             if access & 4 and not same_package and not self.subtype(current, access_owner):
                 raise ValueError("CONSTRUCTION_SYMBOL_ACCESS")
         return row
@@ -558,7 +559,7 @@ class JavaOperations:
                 if not args or not self.assignable(args[0], row["owner"]):
                     raise ValueError("CONSTRUCTION_RECEIVER_TYPE")
                 current = self.declaration["owner"]
-                if row.get("access", 0) & 4 and owner_package(self.symbols, row['owner']) != owner_package(self.symbols, current) and not self.subtype(args[0], current):
+                if row.get("access", 0) & 4 and owner_package(self.symbols, row.get('declaring_owner') or row['owner']) != owner_package(self.symbols, current) and not self.subtype(args[0], current):
                     raise ValueError("CONSTRUCTION_SYMBOL_ACCESS")
                 args = args[1:]
             expected = [] if op == "field" else invocation_parameter_types(row) if op == 'new' else parameter_types(row)
