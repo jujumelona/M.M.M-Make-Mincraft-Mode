@@ -372,6 +372,9 @@ def compose(router, spec, *, source_context=(), construction_context=None,
             if node['op'] in {'call', 'new', 'field', 'constructor_call'}
             and node['attributes'].get('symbol_ref')
         }
+        member_invocations[member_task.owner_symbol].update(
+            symbols[key]['inherited_from'] for key in tuple(member_invocations[member_task.owner_symbol])
+            if symbols[key].get('inherited_from'))
         for node in nodes:
             if node['op'] == 'constructor_call' and node['attributes']['target'] == 'this':
                 constructor_delegations[member_task.owner_symbol] = node['attributes']['symbol_ref']

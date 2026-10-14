@@ -24,6 +24,15 @@ def operation_next_schema(state, *, nodes, declaration, can_complete, context_br
         actions.remove('local')
     if declaration.get('static'):
         actions.remove('this')
+    if state.selection_goal:
+        from .construction_lexical import lexical_sites
+        contexts = [context for key, _env, _writing, context in
+                    lexical_sites(nodes, declaration, state.symbols, slot=state.selection_goal['node_id'])
+                    if key == state.selection_goal['node_id']]
+        if not contexts or not all(context['loops'] for context in contexts):
+            actions.remove('continue')
+        if not contexts or not all(context['loops'] or context['switches'] for context in contexts):
+            actions.remove('break')
     pending = pending_input_contracts(nodes, declaration, state.symbols)
     branches = []
     if state.selection_goal is None:

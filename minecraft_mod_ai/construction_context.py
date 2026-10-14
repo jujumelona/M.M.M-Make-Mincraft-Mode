@@ -145,6 +145,8 @@ def build_target_symbols(classpath, *, java_version: int, namespace: str, classp
         result = remapped
     # Model lambdas may target only inspected single-abstract-method interfaces.
     # Derive the callback shape from the resolved bytecode, never from Fabric names.
+    from .construction_inheritance import project_inherited_api
+    project_inherited_api(result)
     annotate_functional_interfaces(result)
     return result
 

@@ -90,6 +90,8 @@ def prepare_construction_context(spec, *, java_classpath, project_root, source_c
     if set(project_symbols) & set(symbols):
         raise ValueError("CONSTRUCTION_PROJECT_SYMBOL_COLLISION")
     symbols.update(project_symbols)
+    from .construction_inheritance import project_inherited_api
+    project_inherited_api(symbols)
     from .construction_type_contracts import annotate_functional_interfaces
     annotate_functional_interfaces(symbols)
     # Pinned old-version references provide porting evidence, never callable

@@ -316,7 +316,7 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
                     bits = {'byte': 8, 'short': 16, 'int': 32}[selector]
                     literal = {'type': 'integer', 'minimum': -(2 ** (bits - 1)), 'maximum': 2 ** (bits - 1) - 1}
                 labels = draft.setdefault('labels', [])
-                while True:
+                while not draft.get('labels_finished'):
                     available_literal = (literal if selector in {'char', 'java.lang.String'} else
                         unused_integer_labels(literal['minimum'], literal['maximum'],
                                               [row['value'] for row in labels if row['kind'] == 'value']))
@@ -329,6 +329,8 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
                         {**current, 'selector_type': selector, 'label_count': len(labels), 'recent_labels': labels[-RECENT_SIZE:]},
                         {'oneOf': branches}, labels, **sequence_options)
                     if label['action'] == 'finish_labels':
+                        draft['labels_finished'] = True
+                        save_author()
                         break
                     labels.append({'kind': 'default'} if label['action'] == 'default_label' else {'kind': 'value', 'value': label['value']})
                     save_author()
@@ -338,7 +340,7 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
                     if row.get('kind') == 'CLASS' and state.evidence_index.accessible(key)
                     and state.evidence_index._subtype(key, 'java.lang.Throwable'))
                 catches = draft.setdefault('catches', [])
-                while True:
+                while not draft.get('catches_finished'):
                     available = [type_ for type_ in throwable_types if not any(
                         state.evidence_index._subtype(type_, catch['type_ref']) for catch in catches)]
                     branches = [action_schema('finish_catches', {'finally': {'type': 'boolean'} if catches else {'const': True}})]
@@ -349,10 +351,12 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
                         {**current, 'catch_count': len(catches), 'recent_catches': catches[-RECENT_SIZE:]},
                         {'oneOf': branches}, catches, **sequence_options)
                     if catch['action'] == 'finish_catches':
-                        control_attributes = {'catches': catches, 'finally': catch['finally']}
+                        draft['catches_finished'], draft['finally'] = True, catch['finally']
+                        save_author()
                         break
                     catches.append({'name': catch['name'], 'type_ref': catch['type_ref']})
                     save_author()
+                control_attributes = {'catches': catches, 'finally': draft['finally']}
             schema['properties']['attributes'] = {'const': control_attributes}
             count = (1 + len(control_attributes['cases']) if op == 'switch' else
                      1 + len(control_attributes['catches']) + bool(control_attributes['finally']))
@@ -365,7 +369,7 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
         if op == 'block' or (op == 'new_array' and not choice['sized']):
             from .construction_sequence import sequence_item
             references = draft.setdefault('input_refs', [])
-            while True:
+            while not draft.get('inputs_finished'):
                 reference = sequence_item(router, state, 'construction_' + op + '_input_next',
                     {**current, 'input_count': len(references), 'recent_input_refs': references[-RECENT_SIZE:]},
                     {'oneOf': [action_schema('finish_inputs'),
@@ -374,6 +378,8 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
                     read_lookup=read_lookup, save_author=save_author,
                     instruction='Choose one actual or forward input node reference in execution order, or finish the sequence. ' + instruction)
                 if reference['action'] == 'finish_inputs':
+                    draft['inputs_finished'] = True
+                    save_author()
                     break
                 references.append(reference['node_ref'])
                 save_author()

@@ -98,7 +98,7 @@ def lexical_sites(nodes, declaration, symbols, *, slot=None):
                 push(refs[0])
         elif op in {'while', 'do_while'}:
             push(refs[1], dict(env), loop=loops + 1)
-            push(refs[0])
+            push(refs[0], loop=loops + 1)
         elif op == 'for':
             child = dict(env)
             push(refs[2], child, loop=loops + 1)
@@ -108,7 +108,7 @@ def lexical_sites(nodes, declaration, symbols, *, slot=None):
         elif op == 'foreach':
             child = dict(env)
             bind(child, attrs['name'], attrs['element_type'], 'local', key)
-            push(refs[1], child)
+            push(refs[1], child, loop=loops + 1)
             push(refs[0])
         elif op == 'try':
             if attrs.get('finally'):
