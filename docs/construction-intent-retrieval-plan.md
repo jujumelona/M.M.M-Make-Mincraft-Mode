@@ -94,10 +94,10 @@ The supplied `20261014-153519` console and `production-logs (6)(1).zip` run publ
 
 **Interfaces:** State persists `selection_goal={node_id,purpose}` independently of `operation_goal`. One current slot is selected before syntax. `operation_next_schema` receives the context branches and the fixed slot; evidence reads checkpoint and return to the same goal. API binding retains the chosen actual scope when narrowing kinds. Binding pages already read in this graph revision remain represented by selectors and are rehydrated on resume.
 
-- [ ] Add and validate the selection goal; advance the construction protocol while retaining accepted graph identity.
-- [ ] Offer actual binding/scope/source/node/declaration reads before opcode selection and remove the unproven natural-language extension escape.
-- [ ] Keep every queued input/body/donor/source obligation and the existing backend/final graph checks. Preserve selected scope and all read binding-page selectors across decision steps and resume.
-- [ ] Parse syntax, inspect current-slot/resume/control flow, run diff checks and commit.
+- [x] Add and validate the selection goal; advance the construction protocol while retaining accepted graph identity.
+- [x] Offer actual binding/scope/source/node/declaration reads before opcode selection and remove the unproven natural-language extension escape.
+- [x] Keep every queued input/body/donor/source obligation and the existing backend/final graph checks. Preserve selected scope and all read binding-page selectors across decision steps and resume.
+- [x] Parse syntax, inspect current-slot/resume/control flow, run diff checks and commit.
 
 ### Task 6: Review and publication
 
@@ -119,3 +119,4 @@ The supplied `20261014-153519` console and `production-logs (6)(1).zip` run publ
 - Prior publication verified: `111641fa018e83b2c7fb0780c093c0ddfabd7efa`, tree `1e790139461c8357902fb42426876e673290460b`; static confirmation resolved the three reported defects. The new supplied run demonstrates a separate architectural ordering error, not a successful generation.
 - Follow-up ruling: the user explicitly requests the root correction now and retains inline execution/main publication authorization. Proceed without another approval handoff. User prohibition overrides skill test/inference/build requirements; verification is syntax, data inspection, diff checks and independent static review only. Scheduling slot IDs is mechanical; gameplay remains authored by the model.
 - Task 4: positive purposes now exclude authoring rules; owner evidence uses a class declaration plus normalized atomic-member term frequencies. Actual source/contract anchors and real unary namespace compression expose meaningful scopes without inventing an API name. Changed files passed syntax parsing and diff checks; no ranking function/model was executed.
+- Task 5: protocol v9 records a mechanically scheduled selection slot independently of an authored opcode. Literal evidence actions are available on operation-next before syntax; reads retain that slot. Kind narrowing preserves the real scope plus its root frontier. Binding views persist exact selectors and rehydrate actual configuration instead of forgetting older pages. Existing JavaOperations and production/coverage validators remain unchanged. Syntax/diff checks passed; all runtime verification remains excluded by user instruction.

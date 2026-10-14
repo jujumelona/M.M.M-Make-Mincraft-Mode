@@ -1,6 +1,47 @@
 Structured construction: native grammar loss
 ===========================================
 
+Follow-up: evidence access cannot require a premature opcode
+-----------------------------------------------------------
+
+The supplied ``20261014-153519`` transcript and ``production-logs (6)(1).zip``
+run ``111641fa018e``. Both initial body decisions choose ``extension`` with
+reasons asking to inspect the target API or shared state/dependency bindings.
+Neither names an unsupported Java construct. Their actual response schemas
+offer only Java operations and that fatal escape, while the instruction tells
+the model to inspect configuration and scopes. No operation-binding request
+occurs, no graph node is accepted, and both content jobs fail immediately with
+``CONSTRUCTION_RENDERER_EXTENSION_REQUIRED``.
+
+The initial retrieval pages contain Windows error constants. The query includes
+negative examples and generic implementation rules, and an owner description
+concatenates every member. A large constant dictionary therefore covers words
+spread over unrelated declarations and outranks the positive behavior's API.
+Leaving a real hierarchy in the payload cannot help when selecting it is not
+an admitted action in the current decision.
+
+The corrected order schedules a current missing input/root slot mechanically,
+resolves its actual context, selects syntax, binds the real API, and writes the
+node. Literal configuration/scope/source/declaration/node actions are available
+before opcode selection and remain bound to the same purpose. No additional
+planning inference is added. A natural-language request for more information
+has no renderer-extension action; actual unsupported operation, type/access,
+source/body coverage and production backend guards continue to reject invalid
+work. Kind narrowing preserves the inspected scope and its real root frontier.
+Read binding pages retain their selectors and are rehydrated on resume.
+
+Retrieval uses only the supplied positive implementation purpose. Authoring
+rules remain in the contract. Owner ranking combines a single class declaration
+with normalized atomic-member term frequencies, rather than pooling the entire
+owner's vocabulary. Real contract/source type anchors and only actual unary
+package chains provide direct navigation; no dependency class is hardcoded or
+banned. Protocol v9 separates the changed decisions/cursors while accepted
+operation graphs keep their existing declaration-bound identity.
+
+These conclusions come from the supplied production requests and static code
+inspection. Syntax/diff verification and independent static review cannot
+certify a new inference, Minecraft build or gameplay execution. None was run.
+
 Follow-up: discovery must start from implementation purpose
 ----------------------------------------------------------
 

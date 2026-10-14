@@ -67,7 +67,7 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
         *[row.get('expected_element_type', '') for row in requirements],
         *payload['state_reads'], *payload['state_writes'],
     ) if value)
-    state.prepare_symbols(purpose, kinds=kinds)
+    state.prepare_symbols(purpose, kinds=kinds, preserve_scope=True)
     save_author()
     while True:
         evidence = state.symbol_lookup

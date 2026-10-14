@@ -55,7 +55,7 @@ def _node_summary(row):
 def author_task_operations(router, task, context):
     # Choice helpers import the shared schema primitives above; load them only
     # after this module is initialized, avoiding a declaration/author cycle.
-    from .construction_operation_choices import operation_next_schema
+    from .construction_operation_choices import operation_next_schema, operation_context_branches
     from .construction_declaration_choices import choice_actions
     from .construction_operation_binding import bind_operation
     from .construction_operation_contracts import named_values, pending_input_contracts
@@ -164,16 +164,16 @@ def author_task_operations(router, task, context):
                 callback(task, query)
             read_sources.add(query)
 
-    if not state.symbol_lookup:
-        state.prepare_symbols(task.intent + '\n' + str(task.effects), kinds=('METHOD', 'FIELD'))
     if base['port_source_ref'] and base['port_source_ref'] not in read_sources:
         read_lookup({'action': 'source', 'query': base['port_source_ref'], 'offset': 0})
     save_author()
 
     instruction = ('Author this current behavior as typed Java operations, one node per turn. No Java source strings. '
-        'Choose an operation and state its implementation purpose in plain language. Do not guess '
-        'dependency names or issue a search instead of selecting an operation. The host retrieves real '
-        'API/source candidates for this goal; bind the correct actual API before writing its node. '
+        'selection_goal identifies the current missing input or root slot and its implementation purpose. '
+        'Inspect the literal bindings, scopes, symbols and source pointers needed for this slot before '
+        'choosing its operation. Exact API names come from returned declarations. Context reads keep '
+        'the same slot and purpose; when the facts are sufficient, choose its Java operation. '
+        'State the operation purpose in plain language, then bind the correct actual API before writing its node. '
         'API signatures fix result types and receiver/argument counts. Required inputs may be forward '
         'references, and each missing input must be authored. Relevant graph nodes are stored on the '
         'host; do not recreate them. '
@@ -186,11 +186,38 @@ def author_task_operations(router, task, context):
         'to read complete configuration records. Respect the canonical responsibility, exact identities '
         'and implementation_requirements in authoring_contract. Forward references are allowed; pending_input_refs must be authored '
         'before complete. Finish only after all effects and return paths are represented. '
-        'Unsupported syntax requires extension, never raw Java. ' + STATE_INSTRUCTION)
+        'Only the supported typed operations can be authored; the host validates operation/type/access '
+        'and complete behavior contracts before rendering. No raw Java or placeholder success. ' + STATE_INSTRUCTION)
     while True:
+        contracts = pending_input_contracts(nodes, declaration, symbols)
+        if state.selection_goal is None:
+            if pending:
+                slot = next(iter(pending))
+            else:
+                index = len(nodes)
+                slot = 'operation_' + str(index)
+                while slot in by_id:
+                    index += 1
+                    slot = 'operation_' + str(index)
+            parts = [task.intent, str(task.effects), declaration.get('purpose', '')]
+            for consumer in contracts.get(slot, ()):
+                parts.extend(consumer.get(key, '') for key in ('expected_type', 'expected_element_type'))
+                parent = by_id[consumer['consumer']]
+                if parent['op'] in {'call', 'new', 'field'}:
+                    api = symbols[parent['attributes']['symbol_ref']]
+                    parts.append(api.get('purpose') or api['owner'] + '.' + api['name'])
+            purpose = '\n'.join(dict.fromkeys(part for part in parts if part))
+            state.selection_goal = {'node_id': slot, 'purpose': purpose}
+            state.prepare_symbols(purpose, kinds=('CLASS', 'METHOD', 'CONSTRUCTOR', 'FIELD'))
+            save_author()
+        slot = state.selection_goal['node_id']
+        if slot in by_id or (pending and slot not in pending):
+            raise ValueError('CONSTRUCTION_SELECTION_GOAL_NODE_INVALID')
         recent = [_node_summary(row) for row in nodes[-4:]]
         schema = operation_next_schema(state, nodes=nodes, declaration=declaration,
-            can_complete=bool(nodes) and not pending)
+            can_complete=bool(nodes) and not pending,
+            context_branches=operation_context_branches(state, nodes=nodes,
+                source_units=source_units, pinned_source=base['port_source_ref']))
         actions = choice_actions(schema)
         payload = {**base, 'recent_nodes': recent, **state.payload(actions,
             current_member=task.owner_symbol,
@@ -201,13 +228,15 @@ def author_task_operations(router, task, context):
             sources={'total_count': len(source_ids), 'recent_ids': source_ids[:PAGE_SIZE],
                      'lookup_action': 'sources',
                      'pinned_source_read': bool(base['port_source_ref'] in read_sources)})}
-        contracts = pending_input_contracts(nodes, declaration, symbols)
         payload['pending_input_contracts'] = {key: contracts[key] for key in list(contracts)[:PAGE_SIZE]}
         payload['named_values'] = named_values(nodes, declaration, symbols)
         choice = state.operation_goal or ask(router, 'construction_operation_next', payload, schema, instruction)
         action = choice['action']
-        if action == 'extension':
-            raise ValueError('CONSTRUCTION_RENDERER_EXTENSION_REQUIRED: ' + choice['purpose'])
+        if action in {'symbols', 'more_symbols', 'scopes', 'bindings', 'source', 'sources',
+                      'declarations', 'nodes', 'node_index'}:
+            read_lookup(choice)
+            save_author()
+            continue
         if action == 'complete':
             JavaOperations(task, nodes, symbols)
             if context.get('checkpoint'):

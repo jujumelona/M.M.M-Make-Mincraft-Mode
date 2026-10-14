@@ -1,10 +1,10 @@
-"""Choose an operation first; literal evidence reads belong to that goal."""
+"""Resolve current-slot evidence before selecting its typed Java operation."""
 from __future__ import annotations
 
 import string
 
 from .construction_author import ID, obj
-from .construction_declaration_choices import action_schema, binding_lookup_schemas, symbol_lookup_schemas, string_excluding
+from .construction_declaration_choices import action_schema, binding_lookup_schemas, symbol_lookup_schemas
 from .construction_state import PAGE_SIZE
 from .java_operation_ir import OPERATIONS, EXPRESSIONS, STATEMENTS
 from .construction_operation_contracts import named_values, pending_input_contracts, result_fits
@@ -12,7 +12,7 @@ from .construction_operation_contracts import named_values, pending_input_contra
 NODE_ID_ALPHABET = string.ascii_letters + string.digits + '_.:-'
 
 
-def operation_next_schema(state, *, nodes, declaration, can_complete):
+def operation_next_schema(state, *, nodes, declaration, can_complete, context_branches=()):
     actions = list(OPERATIONS)
     values = named_values(nodes, declaration, state.symbols)
     if not values['parameter']:
@@ -23,10 +23,15 @@ def operation_next_schema(state, *, nodes, declaration, can_complete):
         actions.remove('this')
     pending = pending_input_contracts(nodes, declaration, state.symbols)
     branches = []
+    if state.selection_goal is None:
+        raise ValueError('CONSTRUCTION_SELECTION_GOAL_REQUIRED')
+    slot = state.selection_goal['node_id']
     if pending:
         # An accepted API/control node creates concrete input obligations.
         # Fill returned slots before selecting an unrelated new root.
-        for key, consumers in list(pending.items())[:PAGE_SIZE]:
+        for key, consumers in pending.items():
+            if key != slot:
+                continue
             allowed = set(actions)
             for row in consumers:
                 allowed &= EXPRESSIONS if row['mode'] == 'expression' else STATEMENTS
@@ -45,11 +50,12 @@ def operation_next_schema(state, *, nodes, declaration, can_complete):
                 branches.append(obj({'action': {'enum': sorted(allowed)}, 'node_id': {'const': key}, 'purpose': ID}))
     else:
         root_actions = set(actions) & (EXPRESSIONS if declaration['kind'] == 'FIELD' else STATEMENTS)
-        branches.append(obj({'action': {'enum': sorted(root_actions)}, 'node_id': string_excluding(
-            (row['node_id'] for row in nodes), alphabet=NODE_ID_ALPHABET), 'purpose': ID}))
+        branches.append(obj({'action': {'enum': sorted(root_actions)}, 'node_id': {'const': slot}, 'purpose': ID}))
     if can_complete:
         branches.append(action_schema('complete', {'purpose': ID}))
-    return {'oneOf': [*branches, action_schema('extension', {'purpose': ID})]}
+    # Missing information is a literal evidence action for this same slot.
+    # A prose request to inspect it cannot claim a renderer deficiency.
+    return {'oneOf': [*branches, *context_branches]}
 
 
 def _index_schema(state, kind, query):
