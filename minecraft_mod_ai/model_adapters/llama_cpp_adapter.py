@@ -306,6 +306,7 @@ def _completion_exchange(
             _tool_server_payload(adapter, prepared),
             structured_output=False,
             use_full_context=use_full_runtime_output_context(adapter.config),
+            required_output_tokens=int(prepared.metadata.get('mmm_output_token_floor') or 0),
         )
     else:
         payload = capacity_safe_payload(
@@ -313,6 +314,7 @@ def _completion_exchange(
             _server_payload(adapter, prepared),
             structured_output=prepared.response_format == "json",
             use_full_context=use_full_runtime_output_context(adapter.config),
+            required_output_tokens=int(prepared.metadata.get('mmm_output_token_floor') or 0),
         )
 
     from ..generation_output_budget import assert_request_output_capacity

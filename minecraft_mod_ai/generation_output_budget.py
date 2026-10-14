@@ -60,6 +60,82 @@ class GenerationOutputBudgetError(RuntimeError):
     """Raised before inference when one complete host-required action cannot fit."""
 
 
+def structured_response_token_reserve(schema: Mapping[str, Any]) -> int:
+    """Conservative reserve for the schema's required JSON layout.
+
+    This reserves one token per ASCII serialization character, rather than
+    guessing a global page floor. It covers required keys, delimiters, fixed
+    values and minimum payload shapes. It is neither a decode ceiling nor a
+    claim about the exact tokenizer's shortest possible valid response.
+    """
+    def serialized(value):
+        return len(json.dumps(value, ensure_ascii=True, separators=(',', ':')))
+
+    def layout(row, active=()):
+        if 'const' in row:
+            return serialized(row['const'])
+        if row.get('enum'):
+            return min(serialized(value) for value in row['enum'])
+        candidates = []
+        if '$ref' in row:
+            reference = row['$ref']
+            if reference in active or not reference.startswith('#/'):
+                raise ValueError('STRUCTURED_OUTPUT_RESERVE_UNRESOLVED_REF: ' + reference)
+            target = schema
+            for part in reference[2:].split('/'):
+                target = target[part.replace('~1', '/').replace('~0', '~')]
+            candidates.append(layout(target, (*active, reference)))
+        for keyword in ('oneOf', 'anyOf'):
+            if row.get(keyword):
+                alternatives = []
+                for branch in row[keyword]:
+                    try:
+                        alternatives.append(layout(branch, active))
+                    except ValueError:
+                        continue
+                if not alternatives:
+                    raise ValueError('STRUCTURED_OUTPUT_RESERVE_NO_FINITE_BRANCH')
+                candidates.append(min(alternatives))
+        if row.get('allOf'):
+            merged = dict(row)
+            merged.pop('allOf')
+            properties = dict(row.get('properties', {}))
+            required = set(row.get('required', ()))
+            for branch in row['allOf']:
+                properties.update(branch.get('properties', {}))
+                required.update(branch.get('required', ()))
+            merged.update(properties=properties, required=sorted(required))
+            candidates.append(layout(merged, active))
+        raw_type = row.get('type', ())
+        types = {raw_type} if isinstance(raw_type, str) else set(raw_type)
+        if 'object' in types or 'properties' in row:
+            properties = row.get('properties', {})
+            fields = list(row.get('required', ()))
+            candidates.append(2 + max(0, len(fields) - 1) + sum(
+                serialized(name) + 1 + layout(properties[name], active) for name in fields))
+        if 'array' in types:
+            count = int(row.get('minItems', 0))
+            item = layout(row.get('items', {}), active) if count else 0
+            candidates.append(2 + count * item + max(0, count - 1))
+        scalar = []
+        if 'string' in types:
+            scalar.append(2 + int(row.get('minLength', 0)))
+        if types & {'integer', 'number'}:
+            value = max(row.get('minimum', 0), min(0, row.get('maximum', 0)))
+            scalar.append(serialized(value))
+        if 'boolean' in types:
+            scalar.append(4)
+        if 'null' in types:
+            scalar.append(4)
+        if scalar:
+            candidates.append(min(scalar))
+        if not candidates:
+            raise ValueError('STRUCTURED_OUTPUT_RESERVE_SHAPE_MISSING')
+        return max(candidates)
+
+    return layout(schema)
+
+
 
 def assert_request_output_capacity(request: Any, payload: Mapping[str, Any]) -> None:
     """Do not silently reduce a schema-sized action at the final wire boundary."""

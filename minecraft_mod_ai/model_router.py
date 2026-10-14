@@ -384,6 +384,9 @@ class ModelRouter:
         assert_atomic_model_schema(parameters, surface=f"structured data {data_name}")
         config, adapter = self._generation_adapter(role)
         schema = dict(parameters)
+        from .generation_output_budget import structured_response_token_reserve
+        from .model_output_atomicity_contract import effective_model_transport_schema
+        output_reserve = structured_response_token_reserve(effective_model_transport_schema(schema))
         native_schema = str(getattr(config, 'adapter', '')) in {
             'llama_cpp', 'vllm', 'openai_compatible',
         }
@@ -419,6 +422,8 @@ class ModelRouter:
                 "mmm_data_page": data_name,
                 "mmm_strict_structured_data": True,
                 "mmm_force_non_thinking": True,
+                'mmm_output_token_floor': output_reserve,
+                'mmm_output_capacity_basis': 'conservative_required_json_layout',
             },
         )
         with self._generation_scope(config):

@@ -158,6 +158,7 @@ def capacity_safe_payload(
     *,
     structured_output: bool = False,
     use_full_context: bool = False,
+    required_output_tokens: int = 0,
 ) -> dict[str, Any]:
     result = dict(payload)
     accounting = live_context_accounting(server_url, result)
@@ -172,7 +173,10 @@ def capacity_safe_payload(
     has_tools = bool(isinstance(raw_tools, (list, tuple)) and raw_tools)
     from .generation_output_budget import payload_requires_structured_output
 
-    if not use_full_context and (has_tools or structured_output or payload_requires_structured_output(result)) and remaining < _MIN_TOOL_OUTPUT_RESERVE:
+    required = max(int(required_output_tokens),
+                   _MIN_TOOL_OUTPUT_RESERVE if not use_full_context and (
+                       has_tools or structured_output or payload_requires_structured_output(result)) else 0)
+    if remaining < required:
         # This is context pressure, not output exhaustion. Raising the canonical typed
         # boundary here lets the progress-aware owner compact observations *before*
         # inference instead of sending max_tokens=1, receiving finish_reason=length,
@@ -186,7 +190,7 @@ def capacity_safe_payload(
             "exact llama.cpp live context cannot fit one complete tool action; compact "
             "observations before inference; "
             f"input_tokens={accounting.input_tokens} n_ctx={accounting.context_tokens} "
-            f"remaining_tokens={remaining} required_output_tokens={_MIN_TOOL_OUTPUT_RESERVE}",
+            f"remaining_tokens={remaining} required_output_tokens={required}",
             kind=CONTEXT_PRESSURE,
             prompt_tokens=accounting.input_tokens,
             max_tokens=remaining,

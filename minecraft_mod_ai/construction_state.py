@@ -12,7 +12,7 @@ from copy import deepcopy
 
 # Body lookup choices and retained API pages changed. Old journals/cursors may
 # not be replayed against them; declaration-bound accepted graphs stay reusable.
-PROTOCOL_VERSION = "mmm/construction-state-v9"
+PROTOCOL_VERSION = "mmm/construction-state-v10"
 PAGE_SIZE = 8
 RECENT_SIZE = 4
 LOOKUP_KINDS = frozenset({'symbols', 'scopes', 'declarations', 'nodes', 'node_index', 'source', 'sources', 'bindings'})
