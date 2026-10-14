@@ -84,3 +84,43 @@ Changed Python files were parsed with ``ast.parse`` and the changes were checked
 with ``git diff --check``. Tests and model inference were not run, following the
 user's standing instruction. These checks do not certify a completed MiMo
 generation, Minecraft build or in-game behavior.
+
+Follow-up: declaration cursors and prompt grammar growth
+-------------------------------------------------------
+
+The subsequent ``production-logs (4)(1).zip`` reports execution of ``325ef05d733e``.
+The observed failures are now:
+
+* Exact input accounting reports 32,773 input tokens for a 32,768-token slot.
+* A member planner selects declaration offset zero twice in the same phase
+  and revision, triggering ``CONSTRUCTION_AUTHOR_NO_PROGRESS``.
+
+The declaration reader already rejected repeated pages, but ``member_schema``
+still offered an arbitrary nonnegative declaration offset after the first read.
+The operation-author schema had the same mismatch. A shared host cursor now
+offers only the next unread declaration page, using a literal offset. The
+action disappears once those pages are exhausted and becomes available again
+when accepted progress changes the phase/revision. Every declaration remains
+reachable; the host's final repeat and offset checks remain in place.
+
+The final completed scout class-header request before the overflow contained
+a 37,761-character query pattern. Its final system message was 40,578 characters,
+while the actual task/state user message was 6,144 characters. The pattern
+is a native trie complement that excludes consumed selectors, not gameplay
+instructions. ``generate_structured_data`` copied it into a textual schema in
+the model prompt, causing the input to grow with lookup bookkeeping.
+
+Structured data prompts now contain the decision fields, exact choices and
+length/range bounds as a schema outline. Native lexical productions stay in
+the real response schema passed to the sampler and exact host validator. No
+schema constraint, requested behavior or accepted declaration is removed.
+The prompt-only projection walks schema positions so a field or literal
+object named ``pattern`` is preserved.
+
+The construction protocol is advanced to separate previous inference journals
+and lookup cursors from the corrected decisions. Declaration-bound accepted
+operation graphs retain their existing identities. The context limit,
+timeouts, retry policy and exact live-context guard are unchanged.
+
+This follow-up receives syntax/diff checks and static review only. No tests,
+model inference, Minecraft build or gameplay run was executed for it.

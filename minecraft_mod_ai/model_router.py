@@ -46,6 +46,33 @@ _NATIVE_TOOL_ADAPTERS = frozenset({"llama_cpp", "vllm", "openai_compatible"})
 _DEFAULT_STRUCTURED_TOOL_OUTPUT_TOKEN_CEILING = 2048
 _DEFAULT_STRUCTURED_JSON_OUTPUT_TOKEN_CEILING = 4096
 
+def _structured_schema_outline(schema: Mapping[str, Any]) -> dict[str, Any]:
+    """Show decision fields without serializing native lexical productions.
+
+    Patterns remain in the real response schema for sampling and admission.
+    The outline is prompt-only and never replaces or mutates that contract.
+    Recurse through schema positions, preserving literal object values and
+    fields whose names happen to be JSON Schema keywords.
+    """
+    outline = {key: value for key, value in schema.items() if key != 'pattern'}
+    for key in ('properties', '$defs', 'definitions'):
+        value = schema.get(key)
+        if isinstance(value, Mapping):
+            outline[key] = {name: _structured_schema_outline(child)
+                            if isinstance(child, Mapping) else child
+                            for name, child in value.items()}
+    for key in ('items', 'additionalProperties', 'not', 'if', 'then', 'else'):
+        value = schema.get(key)
+        if isinstance(value, Mapping):
+            outline[key] = _structured_schema_outline(value)
+    for key in ('oneOf', 'anyOf', 'allOf', 'prefixItems'):
+        value = schema.get(key)
+        if isinstance(value, (list, tuple)):
+            outline[key] = [_structured_schema_outline(child)
+                            if isinstance(child, Mapping) else child for child in value]
+    return outline
+
+
 def _native_tool_template_contains_source(schema: Any) -> bool:
     """Identify source-code payloads without changing short structured tool budgets."""
 
@@ -357,6 +384,7 @@ class ModelRouter:
         assert_atomic_model_schema(parameters, surface=f"structured data {data_name}")
         config, adapter = self._generation_adapter(role)
         schema = dict(parameters)
+        outline = _structured_schema_outline(schema)
         request_messages = fit_messages_to_context(
             [
                 *messages,
@@ -364,8 +392,9 @@ class ModelRouter:
                     "Return ONLY the JSON object for this data page. "
                     "No function call, XML, reasoning, prose or Markdown. "
                     "Populate only the fields in this page; the host assembles the "
-                    "complete result. Response schema: "
-                    + json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
+                    "complete result. Lexical patterns are enforced by the decoder. "
+                    "Schema outline: "
+                    + json.dumps(outline, ensure_ascii=False, separators=(",", ":"))
                 )},
             ],
             config=config,
