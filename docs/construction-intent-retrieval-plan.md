@@ -103,8 +103,8 @@ The supplied `20261014-153519` console and `production-logs (6)(1).zip` run publ
 
 **Files:** This plan and `docs/structured-construction-root-cause.rst`.
 
-- [ ] Document observed evidence-to-failure classification and ranking contamination.
-- [ ] Dispatch a fresh static reviewer for `111641f..HEAD`; fix material findings without tests/inference/builds.
+- [x] Document observed evidence-to-failure classification and ranking contamination.
+- [x] Dispatch a fresh static reviewer for `111641f..HEAD`; fix material findings without tests/inference/builds.
 - [ ] Publish exact reviewed trees with guarded non-force main update, verify remote and synchronize local main.
 
 ## Execution rulings
@@ -120,3 +120,4 @@ The supplied `20261014-153519` console and `production-logs (6)(1).zip` run publ
 - Follow-up ruling: the user explicitly requests the root correction now and retains inline execution/main publication authorization. Proceed without another approval handoff. User prohibition overrides skill test/inference/build requirements; verification is syntax, data inspection, diff checks and independent static review only. Scheduling slot IDs is mechanical; gameplay remains authored by the model.
 - Task 4: positive purposes now exclude authoring rules; owner evidence uses a class declaration plus normalized atomic-member term frequencies. Actual source/contract anchors and real unary namespace compression expose meaningful scopes without inventing an API name. Changed files passed syntax parsing and diff checks; no ranking function/model was executed.
 - Task 5: protocol v9 records a mechanically scheduled selection slot independently of an authored opcode. Literal evidence actions are available on operation-next before syntax; reads retain that slot. Kind narrowing preserves the real scope plus its root frontier. Binding views persist exact selectors and rehydrate actual configuration instead of forgetting older pages. Existing JavaOperations and production/coverage validators remain unchanged. Syntax/diff checks passed; all runtime verification remains excluded by user instruction.
+- Final static review: no new Critical/Important regression in `111641f..10ba4b1`; inherited Important navigation defect verified and fixed in this follow-up. Leaving type A for B no longer hides A's unread symbol successors; each literal choice shows its actual scope and changes the active scope when read. Binding pages already retained as current facts are not offered for redundant rereading. Remaining limits are native inference quality, large-input prompt/performance behavior and runtime generation/resume, all unverified under the no-execution instruction.

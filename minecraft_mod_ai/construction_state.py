@@ -221,6 +221,7 @@ class ConstructionState:
         }, "lookup": self.lookup, "authoring_contract": self.authoring_contract,
             "selection_goal": deepcopy(self.selection_goal),
             "scope_candidates": self.scope_candidates(), "scope_lookup": self.scope_lookup,
+            "symbol_page_choices": self.symbol_page_successors(),
             "binding_lookup": self.binding_lookup if self.lookup.get('kind') != 'bindings' else {},
             "binding_lookups": [row for key, row in sorted(self.binding_lookups.items())
                 if key != (self.binding_lookup.get('query'), self.binding_lookup.get('offset'))],
@@ -250,6 +251,18 @@ class ConstructionState:
         return [row for row in pages.values() if row['next_offset'] is not None
                 and _lookup_request(kind, row['query'], row['next_offset']) not in self.requests]
 
+    def symbol_page_successors(self):
+        if self.evidence_index is None or self.symbol_goal is None:
+            return []
+        current = self.evidence_index.goals[self.symbol_goal]
+        result = []
+        for row in self.lookup_successors('symbols'):
+            descriptor = self.evidence_index.goals[row['query']]
+            if {**descriptor, 'scope': 'package:'} == {**current, 'scope': 'package:'}:
+                result.append({'query': row['query'], 'offset': row['next_offset'],
+                               'scope': descriptor['scope'], 'purpose': descriptor['purpose']})
+        return result
+
     def consume_lookup(self, kind, query, offset, result):
         request = _lookup_request(kind, query, offset)
         if request in self.requests:
@@ -259,6 +272,8 @@ class ConstructionState:
         self._remember_cursor(kind, query, offset, result)
         if kind == 'symbols':
             self.symbol_lookup = self.lookup
+            if self.evidence_index is not None:
+                self.symbol_goal = query.strip()
         if kind == 'bindings':
             self.binding_lookup = self.lookup
             self.binding_lookups[(query.strip(), offset)] = self.lookup

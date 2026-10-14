@@ -155,10 +155,9 @@ def symbol_lookup_schemas(state):
         branches = []
         if goal is not None and ('symbols', symbol_query_key(goal), 0) not in state.requests:
             branches.append(action_schema('symbols', {'query': {'const': goal}, 'offset': {'const': 0}}))
-        for row in state.lookup_successors('symbols'):
-            if row['query'] == goal:
-                branches.append(action_schema('more_symbols', {
-                    'query': {'const': goal}, 'offset': {'const': row['next_offset']}}))
+        for row in state.symbol_page_successors():
+            branches.append(action_schema('more_symbols', {
+                'query': {'const': row['query']}, 'offset': {'const': row['offset']}}))
         candidates = state.scope_candidates()
         if candidates:
             branches.append(action_schema('scopes', {
@@ -190,6 +189,7 @@ def binding_lookup_schemas(state):
     for key, rows in sorted(state.binding_pages.items()):
         consumed = {offset for kind, query, offset in state.requests
                     if kind == 'bindings' and query == key}
+        consumed.update(offset for query, offset in state.binding_lookups if query == key)
         offset = max(consumed) + PAGE_SIZE if consumed else 0
         # First page and then its exact successor; consumed pages and arbitrary
         # offsets never become model choices. Empty bindings have one empty page.
