@@ -70,3 +70,82 @@ prevents invented-query drift; it does not prove semantic progress or bound
 all future model decisions. Large indivisible source units still depend on
 the existing exact context guard. No retries, timeout increase, model load,
 prompt-specific gameplay rule or fabricated runtime observation is a repair.
+
+Completed static verification
+-----------------------------
+
+The reviewed code snapshot is local main
+``b20f1bccd7949f4b8fc0a2f841db4de8b906994a``, tree
+``d1ef9c93628cbb5ae235f79c4821ba1e30e7fb32``. Two fresh independent reviewers
+reported no confirmed remaining Important/Critical finding within the assigned
+continuity and retrieval/native repair scopes at that exact snapshot. This
+documentation update changes no Python code. Publication verifies every
+content-addressed tree, since connector-authored commit IDs differ from local
+commit IDs.
+
+All 596 Python files under ``minecraft_mod_ai`` were parsed with standard-library
+``ast.parse``. The 24 changed Python files and the complete diff were checked;
+``git diff --check`` was clean. The sorted changed-source path/SHA-256 manifest
+has digest
+``1a698f77eaf7b10b002835a773f1d8fa1e78c3dfdb953d29f486925ad31f2df9``.
+These are syntax/content checks, not executed regression tests.
+
+The actual production path remains ``integrity_dispatcher`` ->
+``canonical_generators`` -> ``construction_generation.compose`` ->
+``author_task_operations`` -> ``ModelRouter.generate_structured_data``.
+The following counterexamples were traced through their producers, native
+choices, prompt payloads, restart state and consumers:
+
+* **Earlier facts disappear:** ``ConstructionMemory`` retains exact individual
+  API/node/source/declaration/binding facts on the host. The active view has
+  eight facts, and every archived fact remains reachable through the paged
+  catalogue and literal ``recall``. Recall does not register a fresh RAG query.
+  Recalled facts feed API/helper/type/header choices; restore re-resolves their
+  selectors against the bound task inventory. Full binding history no longer
+  accumulates in every prompt. Node-index summaries remain visible.
+* **Wrong callback/catch/branch variable:** both partial admission and final IR
+  use ``construction_lexical.lexical_sites``. It follows declaration order,
+  deferred loop-body scopes, initialization, final assignment, captures and
+  actual callback/catch boundaries. Shared holes intersect declaration
+  identities. Contradictory names and loop-control uses are checked before a
+  node is appended/checkpointed; native choices exclude unavailable names.
+* **Sibling state encoding differs:** each accepted member publishes its task
+  and individual typed-node units as ``accepted_sibling_graph`` evidence before
+  the following body. The sibling graph hashes affect that following body's
+  checkpoint key. This makes the earlier representation inspectable; it does
+  not force a model to read or correctly use it. Compose keeps these units
+  local and does not contaminate the caller's prerequisite source dictionary.
+* **Stream history/termination changes on restart:** ordered label/catch/input
+  sequences are pageable while authoring. Their binding, entries, completion
+  flags and exact ``finally`` choice are saved before final-node inference.
+  Resume skips finished sequences. Integer labels use disjoint remaining
+  intervals; char/String labels keep decoded ``not/enum`` exclusions on the
+  host and use canonical JSON-wire complements in native decoding. Quotes,
+  backslashes, controls and Unicode scalar text retain valid spellings.
+* **The sampler ignores the host exclusion:** direct native data payloads and
+  output reserve use the same effective schema. Bounded regex groups retain
+  their measured alternative widths. Preprojected native tool schemas carry
+  their decoded string contract for host validation; the planner retains its
+  original logical response schema. The pinned llama.cpp pattern/compiler
+  source was read, never compiled or invoked.
+* **RAG deletes/legalizes the wrong API:** inspected package-private members
+  are retained and JVM ``<clinit>`` is excluded. Retrieval and IR inspect every
+  enclosing class; subtype admission follows exact case-sensitive parent
+  identities. Nested navigation uses actual package/enclosing metadata.
+  Inherited public receiver projections retain the real declaring source,
+  respect field hiding/ambiguity and most-specific interface returns, and
+  retain original declaring-package protected access through rendering.
+
+Earlier fixes remain in place: ranking uses positive implementation purpose,
+atomic member documents and normalized frequencies; exact-name overlap is not
+an admission requirement. Zero-overlap candidates and every surviving discovery
+tail remain reachable. Kind narrowing retains the selected scope and root
+frontier. A fixed slot/purpose has finite real inventory selectors, not freely
+invented search strings. Reversible memory navigation can revisit facts, so
+this does not assert that all future model decisions converge.
+
+The result is a static closure of the identified host/protocol failure paths.
+Actual model relevance, whether the small model consults the available facts,
+complete generation, target compilation and observed gameplay remain
+``NOT_RUN``/``NOT_OBSERVED``. No runtime success is manufactured from these
+checks or from the independent review reports.
