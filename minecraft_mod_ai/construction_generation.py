@@ -61,6 +61,10 @@ def compose(router, spec, *, source_context=(), construction_context=None,
     context = dict(construction_context)
     context['authoring_contract'] = dict(authoring_contract or {})
     context['binding_pages'] = dict(binding_pages or {})
+    header_policy = context['authoring_contract'].get('host_requirements', {}).get(
+        'java_class_header', 'authored')
+    if header_policy not in ('plain', 'authored'):
+        raise ValueError('CONSTRUCTION_CLASS_HEADER_POLICY')
     symbols = dict(context['symbols'])
     context['symbols'] = symbols
     package, name = identity
@@ -116,7 +120,7 @@ def compose(router, spec, *, source_context=(), construction_context=None,
         interfaces.append(interface)
         payload['host_entrypoint'] = {'interface': interface, 'method': lifecycle}
         state.advance()
-    else:
+    elif header_policy == 'authored':
         state.enter('class_header')
         while True:
             candidates = header_candidates(state)
@@ -141,6 +145,8 @@ def compose(router, spec, *, source_context=(), construction_context=None,
                     raise ValueError('CONSTRUCTION_CLASS_HEADER')
                 interfaces.append(type_)
             state.advance()
+    # A plain artifact is a code container with an implicit Object superclass;
+    # dependency APIs stay available to the authored bodies, not its header.
     declarations = []
     registrars = []
     if bindings.get('request_feature_entrypoint'):

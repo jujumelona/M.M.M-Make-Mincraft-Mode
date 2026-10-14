@@ -225,3 +225,28 @@ still belongs to the authored operations and existing semantic checks.
 
 This change is inspected statically with syntax/diff checks. Tests, inference,
 Minecraft compilation and gameplay execution are not run.
+
+Artifact-owned class headers
+---------------------------
+
+The same console log shows both entity registry containers selecting
+``net.minecraft.world.entity.EntityType`` as their superclass. Neither plans
+a constructor. Inspected target metadata declares an EntityType constructor
+requiring fifteen arguments, so the implicit no-argument superclass call in
+these containers could not satisfy that API. The entity registry manifest
+requires calling/storing EntityType, not becoming an EntityType subtype.
+
+Registry, registration and callback manifests now declare
+``host_requirements.java_class_header: plain``. The native class composer
+honors this host-owned responsibility by retaining the implicit Object
+superclass and its existing explicit host lifecycle interfaces, then starting
+member/body authoring. It does not ask the model to invent inheritance for a
+registration container. This is a manifest contract, not a class-name ban or
+a gameplay implementation. Type/renderer artifacts retain authored headers,
+and missing metadata preserves the existing authored-header behavior. Unknown
+policy values are rejected before inference and during manifest validation.
+
+All assigned bodies, inspected dependency APIs, source reuse and port checks
+remain in their existing authoring paths. Verification is limited to Python
+syntax, YAML parsing, diff checks and static review; generation, compilation
+and gameplay have not been executed.

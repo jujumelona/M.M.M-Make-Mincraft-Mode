@@ -16,6 +16,7 @@ outputs:
 - name: block_entity_registry_artifact
   type: code_fragment
 host_requirements:
+  java_class_header: plain
   capabilities:
   - BLOCK_ENTITY_EXISTS
   - REGISTER_BLOCK

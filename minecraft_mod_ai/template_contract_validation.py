@@ -40,6 +40,11 @@ def placeholders(value):
 
 def validate_template_contract(template):
     identifier = template.get("id", "<unknown>")
+    host_requirements = template.get("host_requirements", {})
+    if isinstance(host_requirements, Mapping) and host_requirements.get(
+        "java_class_header", "authored"
+    ) not in ("plain", "authored"):
+        raise ValueError(f"TEMPLATE_CLASS_HEADER_POLICY: {identifier}")
     if "rules" in template:
         rules = template["rules"]
         if not isinstance(rules, list):
