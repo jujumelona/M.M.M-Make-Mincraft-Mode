@@ -60,9 +60,13 @@ Change
 * Construction character classes use only native-supported escapes. Deep trie
   tails are flattened into alternatives; no excluded query, name or length
   bound is removed to satisfy the compiler's group-depth limit.
+  Symbol selectors also exclude raw JSON quotes and backslashes, since the
+  native pattern compiler emits class atoms directly inside quoted values.
 * Projection rejects over-deep patterns locally so finite length bounds survive
   for other bounded schemas as well. Strict data requests cannot disable their
   native schema through legacy replay metadata.
+  Supported integer minimum/maximum bounds survive projection, including the
+  Java array-dimension contract of 0 through 255.
 * Exact symbol/type matches lead the first lookup page, followed by exact
   member names and owner matches. All substring results remain paginated in a
   deterministic order.

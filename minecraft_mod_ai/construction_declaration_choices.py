@@ -14,6 +14,10 @@ from .java_operation_ir import KEYWORDS, PRIMITIVES
 # This limits regex factoring, not identifiers, queries or the excluded set.
 # llama.cpp's pinned compiler accepts at most 100 nested pattern groups.
 _MAX_TRIE_GROUP_DEPTH = 96
+# Pattern atoms are emitted directly inside a quoted JSON value by llama.cpp.
+# Queries are symbol selectors, so raw JSON delimiters/escapes are unnecessary.
+_SYMBOL_QUERY_ALPHABET = ''.join(chr(i) for i in range(33, 127)
+                                if chr(i) not in {'"', '\\'})
 
 
 def _character_class(chars):
@@ -145,7 +149,7 @@ def symbol_lookup_schemas(state):
     # The plan/own declarations already have their own view. Dependency lookup
     # cannot manufacture another instance of this uninstalled class.
     blocked = consumed | {state.owner.casefold(), state.owner.rsplit('.', 1)[-1].casefold()}
-    query = string_excluding(blocked, alphabet=''.join(chr(i) for i in range(33, 127)),
+    query = string_excluding(blocked, alphabet=_SYMBOL_QUERY_ALPHABET,
                              minimum=2, fold_case=True)
     branches = [action_schema('symbols', {'query': query})]
     pages = {}

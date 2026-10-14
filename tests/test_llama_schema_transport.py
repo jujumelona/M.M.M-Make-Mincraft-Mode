@@ -69,7 +69,7 @@ def test_non_qwen_receives_only_structural_transport_schema():
         "type": "object",
         "properties": {
             "status": {"type": "string", "minLength": 3, "pattern": "^[a-z]+$"},
-            "items": {"type": "array", "items": {"type": "integer"}, "minItems": 2},
+            "items": {"type": "array", "items": {"type": "integer", "minimum": 1}, "minItems": 2},
         },
         "required": ["status", "items"],
         "additionalProperties": False,

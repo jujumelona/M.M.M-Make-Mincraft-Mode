@@ -492,6 +492,13 @@ def project_llama_transport_schema(schema: Any) -> dict[str, Any]:
         result["enum"] = enum
     if "const" in schema:
         result["const"] = copy.deepcopy(schema["const"])
+    # The pinned compiler has a native bounded-integer production. Losing these
+    # bounds at projection would admit values the unchanged host schema rejects
+    # (for example construction's array_dimensions in 0..255).
+    if projected_type == "integer":
+        for keyword in ("minimum", "maximum"):
+            if type(schema.get(keyword)) is int:
+                result[keyword] = schema[keyword]
     # ── llama.cpp keyword precedence fix ──
     # llama.cpp processes "pattern" first and returns immediately, skipping
     # "maxLength" / "minLength".  Dropping either keyword breaks one contract:
