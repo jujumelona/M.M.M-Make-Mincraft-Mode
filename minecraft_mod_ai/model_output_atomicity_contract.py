@@ -149,6 +149,10 @@ def _assert_no_host_only_model_constraints(
 
     for keyword in _HOST_ONLY_MODEL_CONSTRAINT_KEYWORDS:
         if keyword in value:
+            if keyword == 'not':
+                from .native_string_exclusions import supports_string_exclusions
+                if supports_string_exclusions(value):
+                    continue
             raise _configuration_error(
                 "MODEL_SCHEMA_HOST_ONLY_CONSTRAINT: "
                 f"{keyword!r} at {path} for {surface}; "
@@ -429,6 +433,9 @@ def _model_transport_schema(
                 local_profile,
                 local_string_class,
             )
+        from .native_string_exclusions import supports_string_exclusions, wire_string_schema
+        if supports_string_exclusions(result):
+            result = wire_string_schema(result)
         if _schema_has_type(value, "array") and "maxItems" not in result:
             result["maxItems"] = limits.max_array_items
         if (

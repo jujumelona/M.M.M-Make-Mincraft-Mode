@@ -311,13 +311,16 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
                 if selector == 'java.lang.String':
                     literal = {'type': 'string'}
                 elif selector == 'char':
-                    literal = {'type': 'string', 'minLength': 1, 'maxLength': 1}
+                    from .native_string_exclusions import BMP_SCALAR_PATTERN
+                    literal = {'type': 'string', 'minLength': 1, 'maxLength': 1, 'pattern': BMP_SCALAR_PATTERN}
                 else:
                     bits = {'byte': 8, 'short': 16, 'int': 32}[selector]
                     literal = {'type': 'integer', 'minimum': -(2 ** (bits - 1)), 'maximum': 2 ** (bits - 1) - 1}
                 labels = draft.setdefault('labels', [])
                 while not draft.get('labels_finished'):
-                    available_literal = (literal if selector in {'char', 'java.lang.String'} else
+                    available_literal = ({**literal, 'not': {'enum':
+                        [row['value'] for row in labels if row['kind'] == 'value']}}
+                        if selector in {'char', 'java.lang.String'} else
                         unused_integer_labels(literal['minimum'], literal['maximum'],
                                               [row['value'] for row in labels if row['kind'] == 'value']))
                     branches = [action_schema('finish_labels')]

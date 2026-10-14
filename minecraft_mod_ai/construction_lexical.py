@@ -174,10 +174,18 @@ def check_name_use(node, env, writing):
         raise ValueError('CONSTRUCTION_LOCAL_UNINITIALIZED')
 
 
+def check_control_scope(node, context):
+    if node['op'] == 'break' and not context['loops'] and not context['switches']:
+        raise ValueError('CONSTRUCTION_BREAK_SCOPE')
+    if node['op'] == 'continue' and not context['loops']:
+        raise ValueError('CONSTRUCTION_CONTINUE_SCOPE')
+
+
 def check_partial_names(nodes, declaration, symbols):
     """Never checkpoint a name that contradicts its already known use-site."""
     by_id = {node['node_id']: node for node in nodes}
-    for key, env, writing, _context in lexical_sites(nodes, declaration, symbols):
+    for key, env, writing, context in lexical_sites(nodes, declaration, symbols):
         node = by_id.get(key)
         if node is not None:
             check_name_use(node, env, writing)
+            check_control_scope(node, context)

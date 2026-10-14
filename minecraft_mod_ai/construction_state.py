@@ -225,7 +225,8 @@ class ConstructionState:
             "recent_lookups": list(self.history),
             "available_actions": list(available_actions), **cursor,
         }, "lookup": {key: value for key, value in self.lookup.items()
-                      if key not in {'matches', 'nodes', 'source', 'bindings', 'declarations'}},
+                      if key not in {'matches', 'source', 'bindings', 'declarations'}
+                      and (key != 'nodes' or self.lookup.get('kind') == 'node_index')},
             "authoring_contract": self.authoring_contract,
             "evidence_memory": self.memory.payload(),
             "selection_goal": deepcopy(self.selection_goal),

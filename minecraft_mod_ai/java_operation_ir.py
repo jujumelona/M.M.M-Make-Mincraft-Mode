@@ -763,20 +763,17 @@ class JavaOperations:
 
     def check_contexts(self):
         """Use the same lexical walk as partial-node admission and name choices."""
-        from .construction_lexical import lexical_sites, check_name_use
+        from .construction_lexical import lexical_sites, check_name_use, check_control_scope
         for key, env, writing, context in lexical_sites(self.nodes.values(), self.declaration, self.symbols):
             n = self.nodes[key]
             check_name_use(n, env, writing)
+            check_control_scope(n, context)
             op, refs = n['op'], n['input_refs']
             if op == 'return':
                 returns = context['returns']
                 if ((returns == 'void' and refs)
                         or (returns != 'void' and (not refs or not self.assignable(self.types[refs[0]], returns)))):
                     raise ValueError('CONSTRUCTION_RETURN_TYPE')
-            if op == 'break' and not context['loops'] and not context['switches']:
-                raise ValueError('CONSTRUCTION_BREAK_SCOPE')
-            if op == 'continue' and not context['loops']:
-                raise ValueError('CONSTRUCTION_CONTINUE_SCOPE')
 
     def check_completion(self):
         """Conservative structured completion; target javac remains authoritative."""
