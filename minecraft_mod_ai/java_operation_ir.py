@@ -120,7 +120,7 @@ class JavaOperations:
         for row in symbols.values():
             for value in [row.get("owner"), row.get("return_type"), row.get("functional_return_type"),
                           row.get("superclass"), *row.get("interfaces", ()), *parameter_types(row),
-                          *row.get("functional_parameters", ())]:
+                          *row.get("functional_parameters", ()), *row.get('throws', ()), *row.get('functional_throws', ())]:
                 if isinstance(value, str):
                     self.known_types.add(value.split("[")[0])
         self.type_name(self.declaration["owner"])
@@ -221,6 +221,7 @@ class JavaOperations:
         self.check_contexts()
         self.check_constructor_delegation()
         self.check_completion()
+        self.check_exception_effects()
 
     def nonvoid(self, value):
         value = self.type_name(value)
@@ -308,6 +309,83 @@ class JavaOperations:
             self.nonvoid(type_)
             if not self.subtype(type_, "java.lang.Throwable"):
                 raise ValueError("CONSTRUCTION_THROW_TYPE")
+        if row['kind'] == 'METHOD':
+            for inherited in self.symbols.values():
+                if (inherited.get('kind') != 'METHOD' or inherited['owner'] == row['owner']
+                        or inherited['name'] != row['name'] or parameter_types(inherited) != parameter_types(row)
+                        or inherited.get('access', 0) & 2 or inherited.get('visibility') == 'private'
+                        or not self.subtype(row['owner'], inherited['owner'])):
+                    continue
+                access = inherited.get('access', 1)
+                if not access & 7 and owner_package(self.symbols, inherited['owner']) != owner_package(self.symbols, row['owner']):
+                    continue
+                if access & 0x10 or inherited.get('final') or bool(row.get('static')) != bool(inherited.get('static')):
+                    raise ValueError('CONSTRUCTION_OVERRIDE_MODIFIERS')
+                actual, expected = row['return_type'], inherited['return_type']
+                if actual != expected and not (self.reference(actual) and self.reference(expected) and self.subtype(actual, expected)):
+                    raise ValueError('CONSTRUCTION_OVERRIDE_RETURN_TYPE')
+                visibility = row.get('visibility', 'public')
+                if (access & 1 and visibility != 'public') or (access & 4 and visibility not in {'public', 'protected'}):
+                    raise ValueError('CONSTRUCTION_OVERRIDE_VISIBILITY')
+                for exception in row.get('throws', ()):
+                    if self.checked_exception(exception) and not any(self.subtype(exception, allowed) for allowed in inherited.get('throws', ())):
+                        raise ValueError('CONSTRUCTION_OVERRIDE_THROWS: ' + exception)
+
+    def checked_exception(self, type_):
+        return (self.subtype(type_, 'java.lang.Throwable')
+                and not self.subtype(type_, 'java.lang.RuntimeException')
+                and not self.subtype(type_, 'java.lang.Error'))
+
+    def check_exception_effects(self):
+        effects = {}
+        for key in self.order:
+            node = self.nodes[key]
+            op, refs, attrs = node['op'], node['input_refs'], node['attributes']
+            escaping = set().union(*(effects[ref] for ref in refs)) if refs else set()
+            if op in {'call', 'new', 'constructor_call'}:
+                escaping.update(self.symbol(attrs['symbol_ref']).get('throws', ()))
+            elif op == 'throw':
+                escaping.add(self.types[refs[0]])
+            elif op == 'lambda':
+                allowed = self.symbols[node['typed_result']].get('functional_throws', ())
+                unhandled = {type_ for type_ in effects[refs[0]] if self.checked_exception(type_)
+                             and not any(self.subtype(type_, declared) for declared in allowed)}
+                if unhandled:
+                    raise ValueError('CONSTRUCTION_LAMBDA_CHECKED_EXCEPTION_UNHANDLED: ' + ','.join(sorted(unhandled)))
+                # Creating the callback does not execute its body.
+                escaping = set()
+            elif op == 'try':
+                body = effects[refs[0]]
+                remaining = set(body)
+                handlers = set()
+                for catch, ref in zip(attrs.get('catches', ()), refs[1:]):
+                    caught = catch['type_ref']
+                    may_catch_unchecked = (self.subtype('java.lang.RuntimeException', caught)
+                                          or self.subtype('java.lang.Error', caught)
+                                          or not self.checked_exception(caught))
+                    if not may_catch_unchecked and not any(
+                        self.subtype(type_, caught) or self.subtype(caught, type_) for type_ in body):
+                        raise ValueError('CONSTRUCTION_CHECKED_CATCH_UNREACHABLE: ' + caught)
+                    remaining = {type_ for type_ in remaining if not self.subtype(type_, caught)}
+                    handlers.update(effects[ref])
+                escaping = remaining | handlers
+                if attrs.get('finally'):
+                    final = refs[-1]
+                    escaping = (escaping if self.completes[final] else set()) | effects[final]
+            effects[key] = escaping
+        escaping = set().union(*(effects[key] for key in self.roots))
+        if self.implicit_constructor is not None:
+            escaping.update(self.implicit_constructor.get('throws', ()))
+        contracts = [self.declaration.get('throws', ())]
+        if self.declaration['kind'] == 'FIELD' and not self.declaration.get('static'):
+            constructors = [row.get('throws', ()) for row in self.symbols.values()
+                            if row.get('kind') == 'CONSTRUCTOR' and row['owner'] == self.declaration['owner']]
+            contracts = constructors or [()]
+        unhandled = {type_ for type_ in escaping if self.checked_exception(type_)
+                     and any(not any(self.subtype(type_, declared) for declared in allowed) for allowed in contracts)}
+        if unhandled:
+            raise ValueError('CONSTRUCTION_CHECKED_EXCEPTION_UNHANDLED: ' + ','.join(sorted(unhandled)))
+        self.exception_effects = effects
 
     def reference(self, value):
         return value not in PRIMITIVES
@@ -843,6 +921,7 @@ class JavaOperations:
                 if self.lambda_returns[key] != "void" and completes[refs[0]]:
                     raise ValueError("CONSTRUCTION_RETURN_MISSING")
             completes[key], breaks[key], continues[key] = complete, escaping_break, escaping_continue
+        self.completes = completes
         if self.declaration["kind"] == "FIELD":
             return
         complete = True

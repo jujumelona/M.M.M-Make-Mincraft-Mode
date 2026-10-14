@@ -230,8 +230,21 @@ def compose(router, spec, *, source_context=(), construction_context=None,
             phase='member_return_type', allow_void=action != 'field')
         state.enter('member_signature')
         schema = obj({**SIGNATURE['properties'], 'return_type': {'const': return_type}})
+        if action != 'field':
+            throwable_types = sorted(key for key, row in symbols.items()
+                if row.get('kind') == 'CLASS' and state.evidence_index.accessible(key)
+                and state.evidence_index._subtype(key, 'java.lang.Throwable'))
+            schema['properties']['throws'] = {'type': 'array', 'items': {'enum': throwable_types}}
+            schema['required'].append('throws')
+            current['exception_contract'] = {
+                'rule': 'Declare only intended propagated exceptions. Bodies must catch other checked exceptions; overrides cannot broaden inherited throws.',
+                'inherited_methods': [symbol_record(key, row) for key, row in symbols.items()
+                    if row.get('kind') == 'METHOD' and row['name'] == member_name
+                    and row['owner'] != owner and state.evidence_index._subtype(owner, row['owner'])],
+            }
         if action == 'constructor':
             schema['properties']['static'] = {'const': False}
+            schema['properties']['final'] = {'const': False}
         while True:
             decision_schema = with_binding_lookups(state, schema)
             metadata = ask(planning_router, 'construction_member_signature',
@@ -242,6 +255,8 @@ def compose(router, spec, *, source_context=(), construction_context=None,
                 continue
             break
         exact_type(metadata['return_type'], symbols, allow_void=action != 'field')
+        if len(metadata.get('throws', ())) != len(set(metadata.get('throws', ()))):
+            raise ValueError('CONSTRUCTION_THROW_DUPLICATE')
         state.advance()
         parameters = []
         if action != 'field':

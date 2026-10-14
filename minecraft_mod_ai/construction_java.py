@@ -172,7 +172,8 @@ def render_task_member(task, nodes, symbols):
     visibility = row.get("visibility", "public")
     if visibility not in {"public", "protected", "private", ""}:
         raise ValueError("CONSTRUCTION_VISIBILITY")
-    modifiers = " ".join(x for x in (visibility, "static" if row.get("static") else "") if x)
+    modifiers = " ".join(x for x in (visibility, "static" if row.get("static") else "",
+                                    'final' if row['kind'] == 'METHOD' and row.get('final') else '') if x)
     prefix = modifiers + " " if modifiers else ""
     name = identifier(row["name"]) if row["kind"] != "CONSTRUCTOR" else None
     if row["kind"] == "FIELD":
