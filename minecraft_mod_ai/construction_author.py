@@ -27,7 +27,8 @@ def ask(router, name, payload, schema, instruction):
         'accepted_node_count': state.get('graph', {}).get('accepted_node_count'),
         'lookups_since_progress': state.get('lookups_since_progress'),
         'choice': {key: decision[key] for key in
-                   ('action', 'complete', 'query', 'offset', 'name', 'symbol_ref', 'type_ref', 'base_type')
+                   ('action', 'complete', 'query', 'offset', 'name', 'symbol_ref', 'type_ref', 'base_type',
+                    'port', 'behavior_id', 'node_id')
                    if key in decision},
     }, ensure_ascii=False), flush=True)
     return decision

@@ -19,7 +19,8 @@ HEADER_INSTRUCTION = ('Choose only inheritance for the current new class. No Jav
     'are planned and authored in later phases. A class with no explicit superclass extends Object implicitly. '
     'Dependency API names in host_requirements are not required supertypes. Use inheritance only when '
     'the artifact responsibility requires this owner to be a subtype, not merely to call or store an API. '
-    'Search dependencies with symbols; inheritance can use only the inspected header_candidates in this page. '
+    'symbols searches class/type names in this phase; inheritance can use only the inspected '
+    'header_candidates in this page. Methods and fields are looked up while authoring their bodies. '
     'A superclass is a non-final class. An implemented type is an interface. The new owner is neither '
     'an inheritance candidate nor an implementation target in this phase. ' + STATE_INSTRUCTION)
 MEMBER_INSTRUCTION = ('Plan only additional helper methods, fields or constructors. No Java source. '

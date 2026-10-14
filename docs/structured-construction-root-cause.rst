@@ -166,3 +166,24 @@ declaration-bound accepted graph checkpoints retain their existing identities.
 
 Verification remains syntax/diff inspection and static review. No tests,
 model inference, Minecraft build or gameplay run was executed for this change.
+
+Type lookup grounding
+---------------------
+
+Class headers and member types now search the inspected class inventory rather
+than every field/method descriptor mentioning the query. Operation-body lookups
+retain the complete member inventory. The lookup result identifies its symbol
+kinds, and the phase instructions identify the requested information. All
+matching classes remain pageable; no API/type is removed from the inventory.
+
+The inventory expresses nested class owners as source names with ``.`` while
+bytecode descriptors and model queries may use ``$``. Lookup matching, ranking,
+consumed-selector identity and the native exclusion grammar now share the same
+normalization. A short nested name such as ``Outer$Inner`` can resolve the exact
+inspected ``package.Outer.Inner`` class before unrelated descriptor mentions.
+The two spellings cannot reopen the same consumed lookup. Ordinary identifier
+grammar retains its own Java identifier rules.
+
+Console decisions also include selected node, behavior and port identifiers,
+so body construction and source-port assignment choices can be distinguished
+from lookup requests without logging full source bodies.

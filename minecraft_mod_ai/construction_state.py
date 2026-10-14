@@ -16,12 +16,20 @@ PROTOCOL_VERSION = "mmm/construction-state-v6"
 PAGE_SIZE = 8
 RECENT_SIZE = 4
 LOOKUP_KINDS = frozenset({'symbols', 'declarations', 'nodes', 'node_index', 'source', 'sources', 'bindings'})
+TYPE_LOOKUP_PHASES = frozenset({'class_header', 'member_return_type', 'member_parameter_type'})
+
+
+def symbol_query_key(query):
+    # Bytecode uses '$' for nested owners; inspected source/type names use '.'.
+    # They are one selector, including for consumed-query bookkeeping.
+    return query.strip().casefold().replace('$', '.')
 
 
 def _lookup_request(kind, query, offset):
     if kind not in LOOKUP_KINDS or not isinstance(query, str) or type(offset) is not int or offset < 0:
         raise ValueError('CONSTRUCTION_LOOKUP_REQUEST_INVALID')
-    normalized = query.strip().casefold() if kind in {'symbols', 'sources'} else query.strip()
+    normalized = (symbol_query_key(query) if kind == 'symbols' else
+                  query.strip().casefold() if kind == 'sources' else query.strip())
     if kind == 'nodes':
         normalized = ','.join(sorted(key.strip() for key in query.split(',')))
     if kind == 'declarations':
@@ -48,19 +56,19 @@ def page_result(rows, offset, *, field):
             "next_offset": offset + PAGE_SIZE if len(rows) > offset + PAGE_SIZE else None}
 
 
-def symbol_page(symbols, query, offset):
+def symbol_page(symbols, query, offset, *, kinds=None):
     query = query.strip()
     if len(query) < 2:
         raise ValueError("CONSTRUCTION_LOOKUP_QUERY_REQUIRED")
-    folded = query.casefold()
+    folded = symbol_query_key(query)
 
     def rank(key):
         row = symbols[key]
-        owner = str(row.get('owner', '')).casefold()
-        name = str(row.get('name', '')).casefold()
+        owner = symbol_query_key(str(row.get('owner', '')))
+        name = symbol_query_key(str(row.get('name', '')))
         simple_owner = owner.rsplit('.', 1)[-1].rsplit('$', 1)[-1]
-        if key.casefold() == folded or (row.get('kind') == 'CLASS'
-                                       and folded in {name, simple_owner}):
+        if symbol_query_key(key) == folded or (row.get('kind') == 'CLASS'
+                and (folded in {name, simple_owner} or owner.endswith('.' + folded))):
             return 0, key
         if name == folded:
             return 1, key
@@ -72,12 +80,15 @@ def symbol_page(symbols, query, offset):
     # method descriptors that merely mention it. Keep every remaining result
     # and a stable order so subsequent pages still exhaust the same inventory.
     matches = sorted((key for key, row in symbols.items()
-                      if folded in key.casefold() or folded == str(row.get("name", "")).casefold()),
+                      if (kinds is None or row.get('kind') in kinds)
+                      and (folded in symbol_query_key(key)
+                           or folded == symbol_query_key(str(row.get('name', ''))))),
                      key=rank)
     # Materialize only this page, never the whole inspected inventory.
     result = page_result(matches, offset, field="matches")
     result["matches"] = [symbol_record(key, symbols[key]) for key in result["matches"]]
-    return {"kind": "symbols", "query": query, **result}
+    return {"kind": "symbols", "query": query, **result,
+            **({'symbol_kinds': sorted(kinds)} if kinds is not None else {})}
 
 
 STATE_INSTRUCTION = (
@@ -209,8 +220,9 @@ class ConstructionState:
         return last
 
     def lookup_symbols(self, query, offset):
+        kinds = {'CLASS'} if self.phase in TYPE_LOOKUP_PHASES else None
         return self.consume_lookup("symbols", query, offset,
-                                   symbol_page(self.symbols, query, offset))
+                                   symbol_page(self.symbols, query, offset, kinds=kinds))
 
     def next_declaration_offset(self):
         # The schema and reader share this cursor. Every page remains reachable,

@@ -8,7 +8,7 @@ from __future__ import annotations
 import string
 
 from .construction_author import ID, obj, ask
-from .construction_state import PAGE_SIZE, STATE_INSTRUCTION
+from .construction_state import PAGE_SIZE, STATE_INSTRUCTION, symbol_query_key
 from .java_operation_ir import KEYWORDS, PRIMITIVES
 
 # This limits regex factoring, not identifiers, queries or the excluded set.
@@ -44,7 +44,8 @@ def _character_class(chars):
     return '[' + ''.join(parts) + ']'
 
 
-def string_excluding(forbidden, *, alphabet, first=None, minimum=1, maximum=240, fold_case=False):
+def string_excluding(forbidden, *, alphabet, first=None, minimum=1, maximum=240,
+                     fold_case=False, normalizer=None):
     """Finite trie complement; no unsupported lookahead/not or unbounded regex.
 
     Each branch either ends at an allowed prefix, takes a forbidden-word edge,
@@ -52,7 +53,7 @@ def string_excluding(forbidden, *, alphabet, first=None, minimum=1, maximum=240,
     """
     first = set(first or alphabet)
     alphabet = set(alphabet)
-    normalize = str.casefold if fold_case else lambda value: value
+    normalize = normalizer or (str.casefold if fold_case else lambda value: value)
     trie = {}
     for value in forbidden:
         value = normalize(value)
@@ -148,15 +149,15 @@ def symbol_lookup_schemas(state):
     consumed = {query for kind, query, _offset in state.requests if kind == 'symbols'}
     # The plan/own declarations already have their own view. Dependency lookup
     # cannot manufacture another instance of this uninstalled class.
-    blocked = consumed | {state.owner.casefold(), state.owner.rsplit('.', 1)[-1].casefold()}
+    blocked = consumed | {symbol_query_key(state.owner), symbol_query_key(state.owner.rsplit('.', 1)[-1])}
     query = string_excluding(blocked, alphabet=_SYMBOL_QUERY_ALPHABET,
-                             minimum=2, fold_case=True)
+                             minimum=2, normalizer=symbol_query_key)
     branches = [action_schema('symbols', {'query': query})]
     pages = {}
     for row in state.history:
         if (row['phase'] == state.phase and row['revision'] == state.revision
                 and row['kind'] == 'symbols' and row['next_offset'] is not None):
-            request = ('symbols', row['query'].strip().casefold(), row['next_offset'])
+            request = ('symbols', symbol_query_key(row['query']), row['next_offset'])
             if request not in state.requests:
                 pages[request] = row
     for row in pages.values():
@@ -244,7 +245,8 @@ def choose_type(router, state, payload, *, phase, allow_void=False):
     state.enter(phase)
     instruction = ('Choose only the current declaration type. No source code. Use an intrinsic primitive '
         'or inspected type_candidates; search another dependency with symbols when the needed type is '
-        'absent. type binds a base type and array dimensions (zero means scalar). void is available '
+        'absent. In this phase symbols searches class/type names, not method signatures or behavior code. '
+        'Use a simple, qualified or nested class name. type binds a base type and array dimensions (zero means scalar). void is available '
         'only for a method result. This decision does not add another member or finish a body. ' + STATE_INSTRUCTION)
     while True:
         types = type_candidates(state)
