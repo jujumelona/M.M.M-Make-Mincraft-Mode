@@ -23,19 +23,14 @@ def result_fits(type_, consumers, evidence_index):
     return True
 
 
-def named_values(nodes, declaration, symbols):
-    parameters = {(row['name'], row['type']) for row in parameter_records(declaration)}
-    locals_ = set()
-    for node in nodes:
-        attrs = node['attributes']
-        if node['op'] == 'lambda':
-            types = symbols.get(node['typed_result'], {}).get('functional_parameters', ())
-            parameters.update(zip(attrs['parameters'], types))
-        if node['op'] in {'declare', 'foreach'}:
-            locals_.add((attrs['name'], attrs.get('element_type', node['typed_result'])))
-        if node['op'] == 'try':
-            locals_.update((row['name'], row['type_ref']) for row in attrs.get('catches', ()))
-    return {'parameter': sorted(parameters), 'local': sorted(locals_)}
+def named_values(nodes, declaration, symbols, *, node_id=None):
+    from .construction_lexical import names_at_slot
+    # A new root follows preceding roots. An input slot has only the names
+    # visible in all its actual lexical contexts, never sibling callback names.
+    slot = node_id if node_id is not None else '__construction_next_root__'
+    while node_id is None and any(node['node_id'] == slot or slot in node['input_refs'] for node in nodes):
+        slot += '_'
+    return names_at_slot(nodes, declaration, symbols, slot)
 
 
 def pending_input_contracts(nodes, declaration, symbols):

@@ -213,7 +213,7 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
         if op in {'literal', 'parameter', 'local', 'this', 'break', 'continue'}:
             schema['properties']['input_refs'].update(minItems=0, maxItems=0)
         if op in {'parameter', 'local'}:
-            values = named_values(nodes, payload['declaration'], state.symbols)[op]
+            values = named_values(nodes, payload['declaration'], state.symbols, node_id=goal['node_id'])[op]
             variants = []
             from copy import deepcopy
             for name, type_ in values:

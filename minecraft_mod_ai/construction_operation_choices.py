@@ -16,7 +16,8 @@ def operation_next_schema(state, *, nodes, declaration, can_complete, context_br
     actions = list(OPERATIONS)
     if declaration['kind'] != 'CONSTRUCTOR' or any(row['op'] == 'constructor_call' for row in nodes):
         actions.remove('constructor_call')
-    values = named_values(nodes, declaration, state.symbols)
+    values = named_values(nodes, declaration, state.symbols,
+                         node_id=state.selection_goal['node_id'] if state.selection_goal else None)
     if not values['parameter']:
         actions.remove('parameter')
     if not values['local']:

@@ -232,7 +232,7 @@ def author_task_operations(router, task, context):
                      'lookup_action': 'sources',
                      'pinned_source_read': bool(base['port_source_ref'] in read_sources)})}
         payload['pending_input_contracts'] = {key: contracts[key] for key in list(contracts)[:PAGE_SIZE]}
-        payload['named_values'] = named_values(nodes, declaration, symbols)
+        payload['named_values'] = named_values(nodes, declaration, symbols, node_id=slot)
         choice = state.operation_goal or ask(router, 'construction_operation_next', payload, schema, instruction)
         action = choice['action']
         if action in {'symbols', 'more_symbols', 'scopes', 'bindings', 'source', 'sources',
@@ -254,6 +254,8 @@ def author_task_operations(router, task, context):
         row['op'] = action
         if row['node_id'] in by_id:
             raise ValueError('CONSTRUCTION_NODE_DUPLICATE')
+        from .construction_lexical import check_partial_names
+        check_partial_names([*nodes, row], declaration, symbols)
         by_id[row['node_id']] = row
         nodes.append(row)
         pending.pop(row['node_id'], None)
