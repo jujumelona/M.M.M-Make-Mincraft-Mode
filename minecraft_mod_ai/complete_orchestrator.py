@@ -769,6 +769,7 @@ class CompleteProductionOrchestrator:
                 cached,
                 require_gametest=options.run_gametest,
                 spec=spec,
+                source_manifest_sha256=validation_manifest,
             ),
         )
         if build.get('status') != 'PASS':
@@ -783,9 +784,17 @@ class CompleteProductionOrchestrator:
             )
 
         final_manifest = str(
-            execution_project_index(ProjectIndex, project_root, policy=self.policy)
+            ProjectIndex(project_root, policy=self.policy)
             .manifest_receipt()['sha256']
         )
+        if not self._cached_build_exists(
+            build, require_gametest=options.run_gametest, spec=spec,
+            source_manifest_sha256=final_manifest,
+        ):
+            raise CompleteProductionError(
+                'Build evidence no longer matches the actual sources, production JAR or GameTest report.',
+                checkpoint_id='gradle-build',
+            )
 
         reported_jar = _jar_path(build)
         try:
@@ -806,6 +815,8 @@ class CompleteProductionOrchestrator:
             raise CompleteProductionError(
                 'Gradle build report does not identify the sole verified production JAR.'
             )
+        if artifact_receipt['sha256'] != build.get('jar_sha256'):
+            raise CompleteProductionError('Production JAR changed after its build evidence was captured.')
         if not self._full_gradle_build_receipt_passed(build):
             raise CompleteProductionError(
                 'Final project has no passing full Gradle build command receipt.'
@@ -833,6 +844,8 @@ class CompleteProductionOrchestrator:
             'jar_integrity': artifact_receipt['integrity'],
             'mod_metadata': 'PASS',
             'artifact_sha256': artifact_receipt['sha256'],
+            'source_manifest_sha256': build['source_manifest_sha256'],
+            'gametest_report_sha256': build.get('gametest_report_sha256'),
             'artifact': artifact_receipt['artifact'],
             'toolchain': {
                 'loader': artifact_receipt['loader'],
@@ -3640,6 +3653,7 @@ class CompleteProductionOrchestrator:
         *,
         require_gametest: bool = False,
         spec: Any = None,
+        source_manifest_sha256: str | None = None,
     ) -> bool:
         if not isinstance(build, dict) or build.get('status') != 'PASS':
             return False
@@ -3648,9 +3662,27 @@ class CompleteProductionOrchestrator:
         raw = build.get('jar_path')
         if not isinstance(raw, str):
             return False
-        path = Path(raw).expanduser().resolve()
+        path = Path(raw).expanduser()
         if not path.is_file() or path.is_symlink():
             return False
+        expected = build.get('jar_sha256')
+        if not isinstance(expected, str) or file_sha256(path) != expected:
+            return False
+        captured_manifest = build.get('source_manifest_sha256')
+        if not isinstance(captured_manifest, str) or not captured_manifest.startswith('sha256:'):
+            return False
+        if source_manifest_sha256 is not None and captured_manifest != source_manifest_sha256:
+            return False
+        raw_report = build.get('gametest_report')
+        if raw_report is not None:
+            if not isinstance(raw_report, str):
+                return False
+            report = Path(raw_report).expanduser()
+            expected_report = build.get('gametest_report_sha256')
+            if (not report.is_file() or report.is_symlink()
+                    or not isinstance(expected_report, str)
+                    or file_sha256(report) != expected_report):
+                return False
         if require_gametest:
             if spec is None:
                 return False
@@ -3852,6 +3884,8 @@ class CompleteProductionOrchestrator:
             return False
         report_path = raw_report_path.resolve()
         if not report_path.is_file():
+            return False
+        if file_sha256(report_path) != build_report.get('gametest_report_sha256'):
             return False
         try:
             root = ET.parse(report_path).getroot()

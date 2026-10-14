@@ -51,6 +51,9 @@ class BuildReport:
     failure_class: str | None = None
     error_code: str | None = None
     repairable: bool | None = None
+    source_manifest_sha256: str | None = None
+    jar_sha256: str | None = None
+    gametest_report_sha256: str | None = None
 
     @property
     def passed(self) -> bool:
@@ -69,6 +72,9 @@ class BuildReport:
             "failure_class": self.failure_class,
             "error_code": self.error_code,
             "repairable": self.repairable,
+            "source_manifest_sha256": self.source_manifest_sha256,
+            "jar_sha256": self.jar_sha256,
+            "gametest_report_sha256": self.gametest_report_sha256,
         }
 
 
@@ -415,6 +421,10 @@ class GradleRunner:
         if gametest_task == "runGameTest":
             build_arguments.extend(("-x", gametest_task))
         build_arguments.append("--stacktrace")
+        # Capture the actual build inputs after wrapper setup, before Gradle
+        # executes. Receipts must certify these bytes, not paths alone.
+        from .project_index import ProjectIndex
+        source_manifest = ProjectIndex(prepared.project_root).manifest_receipt()['sha256']
         build_result = self._run(
             name="clean_build" if force_clean else "build",
             executable=prepared.gradle,
@@ -476,15 +486,26 @@ class GradleRunner:
                 "Gradle reported success but no remapped release JAR was found.",
                 include_artifacts=True,
             )
+        final_manifest = ProjectIndex(prepared.project_root).manifest_receipt()['sha256']
+        if final_manifest != source_manifest:
+            return self._failed_build(
+                prepared, commands, "Project source changed during the build.",
+                include_artifacts=True, failure_class="moving_input",
+                error_code="GRADLE_BUILD_SOURCE_DRIFT", repairable=False,
+            )
+        report_path = self._gametest_report(prepared.project_root)
         return BuildReport(
             status="PASS",
             gradle_version=prepared.gradle_version,
             commands=tuple(commands),
             jar_path=jar_path,
-            gametest_report=self._gametest_report(prepared.project_root),
+            gametest_report=report_path,
             error=None,
             gametest_mode=gametest_mode,
             gametest_task=gametest_task,
+            source_manifest_sha256=source_manifest,
+            jar_sha256='sha256:' + _sha256(Path(jar_path)),
+            gametest_report_sha256='sha256:' + _sha256(Path(report_path)) if report_path else None,
         )
 
     def _failed_build(
