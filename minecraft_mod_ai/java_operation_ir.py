@@ -762,127 +762,21 @@ class JavaOperations:
                 raise ValueError('CONSTRUCTION_SUPER_CONSTRUCTOR_REQUIRED')
 
     def check_contexts(self):
-        """Iterative lexical use-site validation; inference cannot prove name scope."""
-        returns = "void" if self.declaration["kind"] == "CONSTRUCTOR" else self.declaration.get("return_type", "void")
-        initial = {name: (type_, True, False, "parameter:" + name) for name, type_ in self.member_parameters.items()}
-        initialized = {"parameter:" + name for name in initial}
-        declaration_depth = {binding: 0 for binding in initialized}
-        mutations, captured = Counter(), set()
-        stack = [("visit", key, initial, returns, 0, 0, False) for key in reversed(self.roots)]
-        while stack:
-            action, key, env, returns, loops, switches, write = stack.pop()
+        """Use the same lexical walk as partial-node admission and name choices."""
+        from .construction_lexical import lexical_sites, check_name_use
+        for key, env, writing, context in lexical_sites(self.nodes.values(), self.declaration, self.symbols):
             n = self.nodes[key]
-            op, refs, attrs = n["op"], n["input_refs"], n["attributes"]
-            if action == "for_body":
-                stack.append(("visit", key, dict(env), returns, loops, switches, False))
-                continue
-            if action == "declare":
-                name = attrs["name"]
-                if name in env:
-                    raise ValueError("CONSTRUCTION_LOCAL_DUPLICATE")
-                env[name] = (n["typed_result"], bool(refs), attrs.get("final", False), key)
-                declaration_depth[key] = loops
-                if refs:
-                    initialized.add(key)
-                continue
-            if action == "assigned":
-                target = self.nodes[refs[0]]
-                if target["op"] == "local":
-                    name = target["attributes"]["name"]
-                    type_, assigned, final, binding = env[name]
-                    if final and (assigned or loops > declaration_depth[binding]):
-                        raise ValueError("CONSTRUCTION_FINAL_ASSIGNMENT")
-                    env[name] = (type_, True, final, binding)
-                    mutations[binding] += 2 if loops else 1
-                continue
-            if op in {"local", "parameter"}:
-                name = attrs["name"]
-                if name not in env:
-                    raise ValueError("CONSTRUCTION_" + op.upper() + "_SCOPE")
-                type_, assigned, _, binding = env[name]
-                if binding in env.get("@captures", set()):
-                    captured.add(binding)
-                if type_ != n["typed_result"]:
-                    raise ValueError("CONSTRUCTION_LOCAL_SCOPE_TYPE")
-                if not assigned and not write:
-                    raise ValueError("CONSTRUCTION_LOCAL_UNINITIALIZED")
-            if op == "return":
-                if (returns == "void" and refs) or (returns != "void" and (not refs or not self.assignable(self.types[refs[0]], returns))):
-                    raise ValueError("CONSTRUCTION_RETURN_TYPE")
-            if op == "break" and not loops and not switches:
-                raise ValueError("CONSTRUCTION_BREAK_SCOPE")
-            if op == "continue" and not loops:
-                raise ValueError("CONSTRUCTION_CONTINUE_SCOPE")
-            def push(ref, scope=env, result=returns, loop=loops, switch=switches, writing=False):
-                stack.append(("visit", ref, scope, result, loop, switch, writing))
-            if op == "declare":
-                stack.append(("declare", key, env, returns, loops, switches, False))
-                for ref in reversed(refs):
-                    push(ref)
-            elif op == "block":
-                child = dict(env)
-                for ref in reversed(refs):
-                    push(ref, child)
-            elif op == "lambda":
-                child = dict(env)
-                signature = self.symbols[n["typed_result"]]
-                child["@captures"] = {value[3] for name, value in env.items() if name != "@captures"}
-                for name, type_ in zip(attrs["parameters"], signature["functional_parameters"]):
-                    if name in child:
-                        raise ValueError("CONSTRUCTION_LAMBDA_PARAMETER_COLLISION")
-                    child[name] = (type_, True, False, key + ":" + name)
-                    initialized.add(key + ":" + name)
-                push(refs[0], child, self.lambda_returns[key], 0, 0)
-            elif op == "if":
-                for ref in reversed(refs[1:]):
-                    push(ref, dict(env))
-                push(refs[0])
-            elif op in {"while", "do_while"}:
-                push(refs[1], dict(env), loop=loops + 1)
-                push(refs[0])
-            elif op == "for":
-                child = dict(env)
-                push(refs[2], child, loop=loops + 1)
-                stack.append(("for_body", refs[3], child, returns, loops + 1, switches, False))
-                push(refs[1], child)
-                push(refs[0], child)
-            elif op == "foreach":
-                child = dict(env)
-                name = attrs["name"]
-                if name in child:
-                    raise ValueError("CONSTRUCTION_LOCAL_DUPLICATE")
-                child[name] = (attrs["element_type"], True, False, key)
-                initialized.add(key)
-                push(refs[1], child, loop=loops + 1)
-                push(refs[0])
-            elif op == "switch":
-                for ref in reversed(refs[1:]):
-                    push(ref, dict(env), switch=switches + 1)
-                push(refs[0])
-            elif op == "try":
-                if attrs.get("finally"):
-                    push(refs[-1], dict(env))
-                for catch, ref in reversed(list(zip(attrs.get("catches", []), refs[1:]))):
-                    child = dict(env)
-                    name = catch["name"]
-                    if name in child:
-                        raise ValueError("CONSTRUCTION_LOCAL_DUPLICATE")
-                    child[name] = (catch["type_ref"], True, False, key + ":" + name)
-                    initialized.add(key + ":" + name)
-                    push(ref, child)
-                push(refs[0], dict(env))
-            elif op == "synchronized":
-                push(refs[1], dict(env))
-                push(refs[0])
-            elif op == "assign":
-                stack.append(("assigned", key, env, returns, loops, switches, False))
-                push(refs[1])
-                push(refs[0], writing=attrs.get("operator", "=") == "=")
-            else:
-                for ref in reversed(refs):
-                    push(ref)
-        if any(mutations[binding] and (binding in initialized or mutations[binding] > 1) for binding in captured):
-            raise ValueError("CONSTRUCTION_LAMBDA_CAPTURE_MUTABLE")
+            check_name_use(n, env, writing)
+            op, refs = n['op'], n['input_refs']
+            if op == 'return':
+                returns = context['returns']
+                if ((returns == 'void' and refs)
+                        or (returns != 'void' and (not refs or not self.assignable(self.types[refs[0]], returns)))):
+                    raise ValueError('CONSTRUCTION_RETURN_TYPE')
+            if op == 'break' and not context['loops'] and not context['switches']:
+                raise ValueError('CONSTRUCTION_BREAK_SCOPE')
+            if op == 'continue' and not context['loops']:
+                raise ValueError('CONSTRUCTION_CONTINUE_SCOPE')
 
     def check_completion(self):
         """Conservative structured completion; target javac remains authoritative."""
