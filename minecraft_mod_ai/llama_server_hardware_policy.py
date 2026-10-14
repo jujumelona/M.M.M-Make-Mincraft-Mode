@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from copy import deepcopy
 import os
 import shutil
 import threading
@@ -181,19 +180,12 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
 
     elif getattr(request, "response_format", None) == "json":
         payload["chat_template_kwargs"] = {"enable_thinking": False}
-        response_schema = getattr(request, "response_schema", None)
-        payload["response_format"] = {"type": "json_object"}
-        metadata = getattr(request, "metadata", {})
-        disable_native_schema = (
-            isinstance(metadata, Mapping)
-            and bool(metadata.get("mmm_disable_native_json_schema", False))
-        )
-        if isinstance(response_schema, Mapping) and not disable_native_schema:
-            # The first attempt may use llama.cpp's native schema grammar as an
-            # optimization. Host validation remains authoritative: the adapter can
-            # explicitly drop this strict grammar after a native-format rejection
-            # while retaining bounded JSON-object generation.
-            payload["json_schema"] = deepcopy(dict(response_schema))
+        from .llama_structured_decode_policy import _apply_llama_json_schema
+
+        # Projection is a wire contract, independent of optional tuning wrappers.
+        # Unsupported regex escapes make llama.cpp discard the entire pattern,
+        # including its length bound, so raw host schemas must never go on wire.
+        _apply_llama_json_schema(payload, request, adapter=adapter)
 
     config = getattr(adapter, "config", None)
     extra = getattr(config, "extra", {}) if config is not None else {}

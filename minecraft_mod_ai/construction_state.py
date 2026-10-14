@@ -10,7 +10,9 @@ from collections import deque
 from copy import deepcopy
 
 
-PROTOCOL_VERSION = "mmm/construction-state-v3"
+# Query grammar and page ordering changed. Old inference journals/cursors may
+# not be replayed against them; declaration-bound accepted graphs stay reusable.
+PROTOCOL_VERSION = "mmm/construction-state-v4"
 PAGE_SIZE = 8
 RECENT_SIZE = 4
 LOOKUP_KINDS = frozenset({'symbols', 'declarations', 'nodes', 'node_index', 'source', 'sources', 'bindings'})
@@ -51,8 +53,27 @@ def symbol_page(symbols, query, offset):
     if len(query) < 2:
         raise ValueError("CONSTRUCTION_LOOKUP_QUERY_REQUIRED")
     folded = query.casefold()
-    matches = sorted(key for key, row in symbols.items()
-                     if folded in key.casefold() or folded == str(row.get("name", "")).casefold())
+
+    def rank(key):
+        row = symbols[key]
+        owner = str(row.get('owner', '')).casefold()
+        name = str(row.get('name', '')).casefold()
+        simple_owner = owner.rsplit('.', 1)[-1].rsplit('$', 1)[-1]
+        if key.casefold() == folded or (row.get('kind') == 'CLASS'
+                                       and folded in {name, simple_owner}):
+            return 0, key
+        if name == folded:
+            return 1, key
+        if folded in {owner, simple_owner}:
+            return 2, key
+        return 3, key
+
+    # The first page must expose an exact type before unrelated fields or
+    # method descriptors that merely mention it. Keep every remaining result
+    # and a stable order so subsequent pages still exhaust the same inventory.
+    matches = sorted((key for key, row in symbols.items()
+                      if folded in key.casefold() or folded == str(row.get("name", "")).casefold()),
+                     key=rank)
     # Materialize only this page, never the whole inspected inventory.
     result = page_result(matches, offset, field="matches")
     result["matches"] = [symbol_record(key, symbols[key]) for key in result["matches"]]

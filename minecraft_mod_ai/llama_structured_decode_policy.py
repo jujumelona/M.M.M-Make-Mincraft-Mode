@@ -69,11 +69,18 @@ def _apply_llama_json_schema(
     if getattr(request, "response_format", None) != "json":
         return
 
-    schema = getattr(request, "response_schema", None)
-    projected = project_llama_transport_schema(schema)
-
     payload.pop("grammar", None)
     payload["response_format"] = {"type": "json_object"}
+
+    metadata = getattr(request, "metadata", {})
+    if isinstance(metadata, Mapping) and metadata.get("mmm_disable_native_json_schema"):
+        if metadata.get("mmm_strict_structured_data"):
+            raise ValueError("STRICT_STRUCTURED_DATA_REQUIRES_NATIVE_SCHEMA")
+        payload.pop("json_schema", None)
+        return
+
+    schema = getattr(request, "response_schema", None)
+    projected = project_llama_transport_schema(schema)
 
     if projected:
         payload["json_schema"] = projected

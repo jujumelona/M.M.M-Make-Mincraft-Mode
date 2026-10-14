@@ -5,17 +5,22 @@ schemas closed and expose only choices the current phase can actually accept.
 """
 from __future__ import annotations
 
-import re
 import string
 
 from .construction_author import ID, obj, ask
 from .construction_state import PAGE_SIZE, STATE_INSTRUCTION
 from .java_operation_ir import KEYWORDS, PRIMITIVES
 
+# This limits regex factoring, not identifiers, queries or the excluded set.
+# llama.cpp's pinned compiler accepts at most 100 nested pattern groups.
+_MAX_TRIE_GROUP_DEPTH = 96
+
 
 def _character_class(chars):
     def escape(char):
-        return '\\x' + format(ord(char), '02x') if char in '\\[]^-' else re.escape(char)
+        # Python re.escape also escapes '~', '$', '.', etc. llama.cpp rejects
+        # those class escapes and silently substitutes an unbounded string.
+        return '\\x' + format(ord(char), '02x') if char in '\\[]^-' else char
     runs = []
     values = sorted(ord(char) for char in chars)
     start = end = values[0]
@@ -58,8 +63,9 @@ def string_excluding(forbidden, *, alphabet, first=None, minimum=1, maximum=240,
         node[''] = True
     tail = _character_class(alphabet)
 
-    def suffix(node, depth):
+    def choices(node, depth):
         options = [''] if depth >= minimum and '' not in node else []
+        edges = []
         if depth < maximum:
             allowed = first if depth == 0 else alphabet
             other = {char for char in allowed if normalize(char) not in node}
@@ -73,12 +79,36 @@ def string_excluding(forbidden, *, alphabet, first=None, minimum=1, maximum=240,
                 chars = {char for char in allowed if normalize(char) == key}
                 if not chars:
                     continue
-                rest = suffix(node[key], depth + 1)
-                if rest is not None:
-                    options.append(_character_class(chars) + rest)
+                edges.append((_character_class(chars), node[key]))
+        return options, edges
+
+    def combine(options):
         if not options:
             return None
         return options[0] if len(options) == 1 else '(?:' + '|'.join(options) + ')'
+
+    def flat_suffix(node, depth):
+        options = []
+        pending = [(node, depth, '')]
+        while pending:
+            current, position, prefix = pending.pop()
+            endings, edges = choices(current, position)
+            options.extend(prefix + ending for ending in endings)
+            pending.extend((child, position + 1, prefix + char)
+                           for char, child in reversed(edges))
+        return combine(options)
+
+    def suffix(node, depth):
+        if depth >= _MAX_TRIE_GROUP_DEPTH:
+            # Flatten only the deep tail. Every excluded word and length bound
+            # remains active without crossing the native nesting limit.
+            return flat_suffix(node, depth)
+        options, edges = choices(node, depth)
+        for char, child in edges:
+            rest = suffix(child, depth + 1)
+            if rest is not None:
+                options.append(char + rest)
+        return combine(options)
 
     return {'type': 'string', 'minLength': minimum, 'maxLength': maximum,
             'pattern': '^' + suffix(trie, 0) + '$'}

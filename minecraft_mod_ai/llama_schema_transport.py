@@ -14,6 +14,9 @@ from typing import Any
 _JSON_TYPES = frozenset(
     {"object", "array", "string", "number", "integer", "boolean", "null"}
 )
+# The pinned native schema compiler falls back to an unbounded string above
+# this depth. Reject that pattern locally so its finite length bounds survive.
+_PINNED_MAX_PATTERN_DEPTH = 100
 
 _PINNED_GBNF_ESCAPES = frozenset({"t", "r", "n", "\\", '"', "[", "]"})
 _REGEX_META_ESCAPES = frozenset("^$.[\\]()|{}*+?")
@@ -258,6 +261,8 @@ def _bound_pattern_quantifiers(pattern: str, max_length: int) -> str:
             else:
                 i += 1
             group_depth += 1
+            if group_depth > _PINNED_MAX_PATTERN_DEPTH:
+                raise ValueError("pattern nesting exceeds native compiler support")
             continue
         if char == ")":
             if group_depth <= 0:
