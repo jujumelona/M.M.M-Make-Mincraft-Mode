@@ -85,6 +85,7 @@ def build_target_symbols(classpath, *, java_version: int, namespace: str, classp
                              "interfaces": [canonical_type_name(x) for x in item.interfaces],
                              "package": item.name.replace('/', '.').rpartition('.')[0],
                              'binary_owner': item.name,
+                             'enclosing_owner': canonical_type_name(item.enclosing_class),
                              "access": item.inner_access if item.inner_access is not None else item.access,
                              'enclosing_instance_type': canonical_type_name(item.enclosing_class)
                                 if item.enclosing_class and not (item.inner_access or 0) & 8 else '',
@@ -138,6 +139,7 @@ def build_target_symbols(classpath, *, java_version: int, namespace: str, classp
             row['interfaces'] = [owner_names.get(value, value) for value in row.get('interfaces', ())]
             row['throws'] = [owner_names.get(value, value) for value in row.get('throws', ())]
             row['enclosing_instance_type'] = owner_names.get(row.get('enclosing_instance_type', ''), row.get('enclosing_instance_type', ''))
+            row['enclosing_owner'] = owner_names.get(row.get('enclosing_owner', ''), row.get('enclosing_owner', ''))
         result = remapped
     # Model lambdas may target only inspected single-abstract-method interfaces.
     # Derive the callback shape from the resolved bytecode, never from Fabric names.

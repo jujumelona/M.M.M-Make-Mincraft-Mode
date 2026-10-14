@@ -175,7 +175,7 @@ def execute_checkpointed_job(job, *, context, router, registry, base_dir, execut
             "template": manifest if is_generator else load_template(job.template_id),
             "dependency_hashes": dependencies,
             "materialized_source_hashes": source_hashes,
-            "context": context or {},
+            "context": approved_context,
         }
     )
     job_lock, target_lock = _locks_for(root, job.job_id, relative)

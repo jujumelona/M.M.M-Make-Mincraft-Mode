@@ -280,7 +280,8 @@ class JavaOperations:
                 raise ValueError("CONSTRUCTION_SYMBOL_ACCESS")
             if not access & 7 and not same_package:
                 raise ValueError("CONSTRUCTION_SYMBOL_ACCESS")
-            if access & 4 and not same_package and not self.subtype(current, row["owner"]):
+            access_owner = (row.get('enclosing_owner') or row['owner']) if row['kind'] == 'CLASS' else row['owner']
+            if access & 4 and not same_package and not self.subtype(current, access_owner):
                 raise ValueError("CONSTRUCTION_SYMBOL_ACCESS")
         return row
 

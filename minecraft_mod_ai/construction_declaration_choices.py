@@ -301,7 +301,9 @@ def accessible_type(state, row):
         return False
     access = row.get('access', 0)
     same_package = owner_package(state.symbols, row.get('owner', '')) == owner_package(state.symbols, state.owner)
-    return bool(access & 1 or (same_package and not access & 2))
+    return bool(access & 1 or (same_package and not access & 2)
+                or (access & 4 and state.evidence_index is not None
+                    and state.evidence_index._subtype(state.owner, row.get('enclosing_owner') or row['owner'])))
 
 
 def header_candidates(state):

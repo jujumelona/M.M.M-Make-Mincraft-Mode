@@ -101,6 +101,7 @@ def inspected_project_source_symbols(source_pages, inspected_symbols):
             "superclass": superclass, 'hierarchy_complete': complete,
             'method_contract_complete': True,
             'enclosing_instance_type': unit.get('enclosing_owner', '') if not unit['static'] else '',
+            'enclosing_owner': unit.get('enclosing_owner', ''),
             "interfaces": [value for value in interfaces if value],
             'package': unit.get('package', owner.rpartition('.')[0]),
             "side": unit["side"], "source_hash": unit["source_sha256"],

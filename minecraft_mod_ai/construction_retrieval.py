@@ -260,13 +260,17 @@ class ConstructionEvidenceIndex:
             return False
         if not owner.get('access', 1) & 7 and not same_package:
             return False
+        if (owner.get('access', 1) & 4 and not same_package
+                and not self._subtype(self.owner, owner.get('enclosing_owner') or row['owner'])):
+            return False
         access = row.get('access')
         if access is not None:
             if access & 2 and row['owner'] != self.owner:
                 return False
             if not access & 7 and not same_package:
                 return False
-            if access & 4 and not same_package and (constructor or not self._subtype(self.owner, row['owner'])):
+            access_owner = (row.get('enclosing_owner') or row['owner']) if row['kind'] == 'CLASS' else row['owner']
+            if access & 4 and not same_package and (constructor or not self._subtype(self.owner, access_owner)):
                 return False
         elif row.get('visibility') == 'private' and row['owner'] != self.owner:
             return False
