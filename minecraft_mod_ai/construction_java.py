@@ -70,7 +70,7 @@ def render_task_member(task, nodes, symbols):
                 value = values.pop(0)
                 # Resolve against the inspected owner, retaining subclass types where protected
                 # access requires them. Formal argument casts fix overload selection.
-                protected = row.get("access", 0) & 4 and owner_package(symbols, row['owner']) != owner_package(symbols, graph.declaration['owner'])
+                protected = row.get("access", 0) & 4 and owner_package(symbols, row.get('declaring_owner') or row['owner']) != owner_package(symbols, graph.declaration['owner'])
                 receiver = ("(", value, ")") if protected else ("((", row["owner"], ") ", value, ")")
             if op == "field":
                 return (receiver, ".", identifier(row["name"]))

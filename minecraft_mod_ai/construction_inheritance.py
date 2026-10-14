@@ -29,6 +29,34 @@ def project_inherited_api(symbols):
         parameters = tuple(value['type'] if isinstance(value, dict) else value for value in row.get('parameters', ()))
         return 'METHOD', row['name'], parameters
 
+    def field_members(receiver, name):
+        # Resolve each direct parent separately before combining its fields.
+        # A superclass declaration may hide its own ancestor/interface fields;
+        # a separately implemented interface can still make the child ambiguous.
+        resolved, visiting, pending = {}, set(), [(receiver, False)]
+        while pending:
+            owner, finish = pending.pop()
+            if owner in resolved:
+                continue
+            own = [(key, row) for key, row in members.get(owner, ())
+                   if row['kind'] == 'FIELD' and row['name'] == name]
+            if own:
+                resolved[owner] = own
+                continue
+            row = classes.get(owner, {})
+            parents = [value for value in (row.get('superclass'), *row.get('interfaces', ())) if value]
+            if finish:
+                combined = {key: value for parent in parents for key, value in resolved[parent]}
+                resolved[owner] = list(combined.items())
+                visiting.remove(owner)
+            else:
+                if owner in visiting:
+                    raise ValueError('CONSTRUCTION_INHERITANCE_CYCLE')
+                visiting.add(owner)
+                pending.append((owner, True))
+                pending.extend((parent, False) for parent in reversed(parents) if parent not in resolved)
+        return resolved[receiver]
+
     for receiver, definition in classes.items():
         if not public_type(receiver):
             continue
@@ -43,6 +71,8 @@ def project_inherited_api(symbols):
             ancestors.append(ancestor)
             row = classes.get(ancestor, {})
             frontier.extend(parent for parent in (row.get('superclass'), *row.get('interfaces', ())) if parent)
+        if all(public_type(ancestor) for ancestor in ancestors):
+            continue
         class_depth, current = {}, definition.get('superclass', '')
         while current and current not in class_depth:
             class_depth[current] = len(class_depth)
@@ -62,7 +92,9 @@ def project_inherited_api(symbols):
                 groups[shape].append((key, member))
         for shape, candidates in groups.items():
             class_members = [(key, row) for key, row in candidates if row['owner'] in class_depth]
-            if class_members:
+            if shape[0] == 'FIELD':
+                candidates = field_members(receiver, shape[1])
+            elif class_members:
                 nearest = min(class_depth[row['owner']] for _key, row in class_members)
                 candidates = [(key, row) for key, row in class_members if class_depth[row['owner']] == nearest]
             else:
