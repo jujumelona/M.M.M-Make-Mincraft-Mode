@@ -79,6 +79,8 @@ def pending_input_contracts(nodes, declaration, symbols):
                    'mode': 'expression' if index in expression_indices else 'statement'}
             if api_types is not None and index < len(api_types):
                 row['expected_type'] = api_types[index]
+            elif op == 'assign' and index == 0:
+                row['allowed_operations'] = ['local', 'field', 'array_get']
             elif op == 'declare':
                 row['expected_type'] = node['typed_result']
             elif (op in {'if', 'while', 'do_while', 'ternary'} and index == 0) or (op == 'for' and index == 1):

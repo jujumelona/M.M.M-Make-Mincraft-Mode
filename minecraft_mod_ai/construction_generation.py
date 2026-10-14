@@ -417,7 +417,8 @@ def compose(router, spec, *, source_context=(), construction_context=None,
                     'source_sha256': evidence_hash, 'side': symbols[member_task.owner_symbol]['side']}
         units = [{**metadata, 'kind': 'accepted_member', 'signature': member_task.owner_symbol,
                   'code': json.dumps({'task': member_task.to_dict(), 'node_count': len(nodes),
-                                      'node_ids': [row['node_id'] for row in nodes]}, ensure_ascii=False)}]
+                                      'node_catalogue': {'source_ref': ref, 'first_node_offset': 1,
+                                                         'unit_count': len(nodes)}}, ensure_ascii=False)}]
         units.extend({**metadata, 'kind': 'accepted_node',
                       'signature': member_task.owner_symbol + '::' + row['node_id'] + ' ' + member_task.intent,
                       'code': json.dumps(row, ensure_ascii=False)} for row in nodes)

@@ -17,6 +17,9 @@ TYPE_BOUND_OPERATIONS = frozenset({'declare', 'literal', 'cast', 'ternary', 'arr
 
 def available_types(state, nodes, declaration, requirements):
     types = set(type_candidates(state))
+    selected = state.operation_draft.get('binding_choice', {}).get('base_type')
+    if selected in state.symbols and state.evidence_index.accessible(selected):
+        types.add(selected)
     types.update(row['typed_result'] for row in nodes)
     types.update(parameter_types(declaration))
     types.add(declaration['return_type'])
@@ -70,9 +73,13 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
     ) if value)
     state.prepare_symbols(purpose, kinds=kinds, preserve_scope=True)
     save_author()
+    draft = state.operation_draft
     while True:
         evidence = state.symbol_lookup
         visible = {row['symbol_id']: row for row in [*evidence.get('matches', ()), *state.memory.visible_symbols()]}
+        selected = draft.get('binding_choice', {}).get('symbol_ref') or draft.get('binding_choice', {}).get('type_ref')
+        if selected in state.symbols:
+            visible[selected] = symbol_record(selected, state.symbols[selected])
         matches = [row for row in visible.values() if row['kind'] in kinds
                    and state.evidence_index.accessible(row['symbol_id'], constructor=op == 'new')
                    and (op not in API_KINDS or fits(row['owner'] if op == 'new' else row['return_type']))]
@@ -130,7 +137,7 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
                        for key in ('current_member', 'graph', 'sources') if key in payload['construction_state']}),
                    'api_candidates': matches,
                    'required_by_consumers': requirements}
-        choice = ask(router, 'construction_operation_bind', current, schema,
+        choice = draft.get('binding_choice') or ask(router, 'construction_operation_bind', current, schema,
             'Resolve only this selected operation. Select the real API whose behavior and signature '
             'fit operation_goal, or read a returned source/type/configuration pointer to resolve a '
             'specific missing fact. scopes selects a real package/type branch by meaning when '
@@ -140,6 +147,10 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
             'Another operation is chosen '
             'only after this node is written. ' + instruction)
         if choice['action'] in {'api', 'write', 'write_type', 'functional_type'}:
+            from .fixed_template_generation import _validate_native_arguments
+            _validate_native_arguments(choice, schema)
+            draft['binding_choice'] = dict(choice)
+            save_author()
             break
         read_lookup(choice)
         save_author()
@@ -178,6 +189,11 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
         # only value-producing nodes.
         schema['properties']['typed_result'] = {'enum': result_types}
         attrs = schema['properties']['attributes']['properties']
+        from .construction_lexical import declared_names_at_slot
+        from .construction_declaration_choices import identifier_schema
+        declared_names = declared_names_at_slot(nodes, payload['declaration'], state.symbols, goal['node_id'])
+        if op in {'declare', 'foreach'}:
+            attrs['name'] = identifier_schema(declared_names)
         operators = {
             'binary': ['==', '!=', '&&', '||', '+', '-', '*', '/', '%', '<', '>', '<=', '>=', '&', '|', '^', '<<', '>>', '>>>'],
             'unary': ['!', '+', '-', '~'],
@@ -210,6 +226,8 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
             schema['properties']['typed_result'] = {'const': key}
             schema['properties']['input_refs'].update(minItems=1, maxItems=1)
             prefix = 'lambda_' + hashlib.sha256(goal['node_id'].encode()).hexdigest()[:16] + '_arg'
+            while any(prefix + str(index) in declared_names for index in range(len(row['functional_parameters']))):
+                prefix += '_'
             attrs['parameters'] = {'const': [prefix + str(index) for index in range(len(row['functional_parameters']))]}
             current['functional_signature'] = symbol_record(key, row)
         if op in {'literal', 'parameter', 'local', 'this', 'break', 'continue'}:
@@ -275,13 +293,21 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
                    'while': (2, 2), 'do_while': (2, 2), 'for': (4, 4), 'foreach': (2, 2),
                    'throw': (1, 1), 'synchronized': (2, 2)}
         if op in {'switch', 'try'}:
+            from .construction_sequence import sequence_item, unused_integer_labels
+            sequence_options = dict(nodes=nodes, source_units=source_units, pinned_source=pinned_source,
+                read_lookup=read_lookup, save_author=save_author, instruction=instruction)
             if op == 'switch':
                 selector_types = ['byte', 'short', 'char', 'int']
                 if 'java.lang.String' in state.symbols:
                     selector_types.append('java.lang.String')
-                selector = ask(router, 'construction_switch_selector_type', current,
-                    obj({'selector_type': {'enum': selector_types}}),
-                    'Choose the actual switch selector type; labels and its input are bound to that type. ' + instruction)['selector_type']
+                selector = draft.get('selector_type')
+                if selector is None:
+                    selector = sequence_item(router, state, 'construction_switch_selector_type', current,
+                        obj({'selector_type': {'enum': selector_types}}), [], **sequence_options)['selector_type']
+                    draft['selector_type'] = selector
+                    save_author()
+                if selector not in selector_types:
+                    raise ValueError('CONSTRUCTION_SWITCH_TYPE')
                 if selector == 'java.lang.String':
                     literal = {'type': 'string'}
                 elif selector == 'char':
@@ -289,38 +315,44 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
                 else:
                     bits = {'byte': 8, 'short': 16, 'int': 32}[selector]
                     literal = {'type': 'integer', 'minimum': -(2 ** (bits - 1)), 'maximum': 2 ** (bits - 1) - 1}
-                labels = []
+                labels = draft.setdefault('labels', [])
                 while True:
-                    branches = [action_schema('finish_labels'),
-                                action_schema('value_label', {'value': literal})]
+                    available_literal = (literal if selector in {'char', 'java.lang.String'} else
+                        unused_integer_labels(literal['minimum'], literal['maximum'],
+                                              [row['value'] for row in labels if row['kind'] == 'value']))
+                    branches = [action_schema('finish_labels')]
+                    if available_literal is not None:
+                        branches.append(action_schema('value_label', {'value': available_literal}))
                     if not any(label['kind'] == 'default' for label in labels):
                         branches.append(action_schema('default_label'))
-                    label = ask(router, 'construction_switch_label_next',
+                    label = sequence_item(router, state, 'construction_switch_label_next',
                         {**current, 'selector_type': selector, 'label_count': len(labels), 'recent_labels': labels[-RECENT_SIZE:]},
-                        {'oneOf': branches}, 'Choose one exact value/default label or finish the label sequence. ' + instruction)
+                        {'oneOf': branches}, labels, **sequence_options)
                     if label['action'] == 'finish_labels':
                         break
                     labels.append({'kind': 'default'} if label['action'] == 'default_label' else {'kind': 'value', 'value': label['value']})
+                    save_author()
                 control_attributes = {'selector_type': selector, 'cases': labels}
             else:
                 throwable_types = sorted(key for key, row in state.symbols.items()
                     if row.get('kind') == 'CLASS' and state.evidence_index.accessible(key)
                     and state.evidence_index._subtype(key, 'java.lang.Throwable'))
-                catches = []
+                catches = draft.setdefault('catches', [])
                 while True:
                     available = [type_ for type_ in throwable_types if not any(
                         state.evidence_index._subtype(type_, catch['type_ref']) for catch in catches)]
                     branches = [action_schema('finish_catches', {'finally': {'type': 'boolean'} if catches else {'const': True}})]
                     if available:
                         branches.append(action_schema('catch', {
-                            'name': attrs['catches']['items']['properties']['name'], 'type_ref': {'enum': available}}))
-                    catch = ask(router, 'construction_try_catch_next',
+                            'name': identifier_schema(declared_names), 'type_ref': {'enum': available}}))
+                    catch = sequence_item(router, state, 'construction_try_catch_next',
                         {**current, 'catch_count': len(catches), 'recent_catches': catches[-RECENT_SIZE:]},
-                        {'oneOf': branches}, 'Choose one real catch contract or finish with the finally decision. ' + instruction)
+                        {'oneOf': branches}, catches, **sequence_options)
                     if catch['action'] == 'finish_catches':
                         control_attributes = {'catches': catches, 'finally': catch['finally']}
                         break
                     catches.append({'name': catch['name'], 'type_ref': catch['type_ref']})
+                    save_author()
             schema['properties']['attributes'] = {'const': control_attributes}
             count = (1 + len(control_attributes['cases']) if op == 'switch' else
                      1 + len(control_attributes['catches']) + bool(control_attributes['finally']))
@@ -331,15 +363,22 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
             for branch in schema.get('oneOf', [schema]):
                 branch['properties']['input_refs'].update(minItems=minimum, maxItems=maximum)
         if op == 'block' or (op == 'new_array' and not choice['sized']):
-            references = []
+            from .construction_sequence import sequence_item
+            references = draft.setdefault('input_refs', [])
             while True:
-                reference = ask(router, 'construction_' + op + '_input_next',
+                reference = sequence_item(router, state, 'construction_' + op + '_input_next',
                     {**current, 'input_count': len(references), 'recent_input_refs': references[-RECENT_SIZE:]},
                     {'oneOf': [action_schema('finish_inputs'),
                         action_schema('input', {'node_ref': schema['properties']['input_refs']['items']})]},
-                    'Choose one actual or forward input node reference in execution order, or finish the sequence. ' + instruction)
+                    references, nodes=nodes, source_units=source_units, pinned_source=pinned_source,
+                    read_lookup=read_lookup, save_author=save_author,
+                    instruction='Choose one actual or forward input node reference in execution order, or finish the sequence. ' + instruction)
                 if reference['action'] == 'finish_inputs':
                     break
                 references.append(reference['node_ref'])
+                save_author()
             schema['properties']['input_refs'] = {'const': references}
-    return dict(ask(router, 'construction_operation_' + op, current, schema, instruction))
+    return dict(ask(router, 'construction_operation_' + op,
+        {**current, **state.payload(choice_actions(schema, default_action='write_' + op),
+            **{key: payload['construction_state'][key] for key in ('current_member', 'graph', 'sources')
+               if key in payload['construction_state']})}, schema, instruction))

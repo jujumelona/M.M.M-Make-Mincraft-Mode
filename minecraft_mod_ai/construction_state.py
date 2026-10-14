@@ -139,6 +139,7 @@ class ConstructionState:
         self.evidence_index = evidence_index
         self.symbol_goal = None
         self.operation_goal = None
+        self.operation_draft = {}
         self.selection_goal = None
         from .construction_memory import ConstructionMemory
         self.memory = ConstructionMemory()
@@ -161,6 +162,7 @@ class ConstructionState:
         self.lookup_cursors.clear()
         self.symbol_goal = None
         self.operation_goal = None
+        self.operation_draft = {}
         self.selection_goal = None
 
     def prepare_symbols(self, purpose, *, kinds=('CLASS',), preserve_scope=False):
@@ -307,6 +309,7 @@ class ConstructionState:
                 'last_source_lookup': source,
                 'last_scope_lookup': scope,
                 'symbol_goal': self.symbol_goal, 'operation_goal': deepcopy(self.operation_goal),
+                'operation_draft': deepcopy(self.operation_draft),
                 'selection_goal': deepcopy(self.selection_goal),
                 'memory': self.memory.export(),
                 'binding_lookups': [{'kind': 'bindings', 'query': query, 'offset': offset}
@@ -337,6 +340,10 @@ class ConstructionState:
                     or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,240}', goal['node_id'])):
                 raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
         self.operation_goal = deepcopy(goal)
+        draft = record.get('operation_draft')
+        if not isinstance(draft, dict) or (draft and goal is None):
+            raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
+        self.operation_draft = deepcopy(draft)
         selection = record.get('selection_goal')
         if selection is not None:
             import re
