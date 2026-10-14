@@ -57,7 +57,11 @@ def string_excluding(forbidden, *, alphabet, first=None, minimum=1, maximum=240,
     trie = {}
     for value in forbidden:
         value = normalize(value)
-        if not value or len(value) > maximum:
+        if not value:
+            if minimum == 0:
+                trie[''] = True
+            continue
+        if len(value) > maximum:
             continue
         if any(not any(normalize(char) == key for char in (first if i == 0 else alphabet))
                for i, key in enumerate(value)):

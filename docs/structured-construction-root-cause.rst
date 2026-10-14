@@ -206,6 +206,8 @@ start at zero; subsequent pages are literal successors of real host results.
 The bounded recent-history display no longer controls cursor reachability:
 current query cursors are stored separately and reconstructed against current
 inspected inputs on resume. Persisted selectors contain no source/API rows.
+An empty catalogue query is available for the initial whole-inventory read,
+then excluded from fresh searches like every other consumed selector.
 
 Dependency lookups exclude unmaterialized planned declarations. Own members
 remain available through the current declaration and pageable declaration
