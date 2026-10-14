@@ -336,6 +336,95 @@ def _bound_pattern_quantifiers(pattern: str, max_length: int) -> str:
     return "".join(parts)
 
 
+class _UnboundedPattern(ValueError):
+    pass
+
+
+def _finite_pattern_width(pattern: str) -> int:
+    """Measure bounded groups/alternatives without summing exclusive branches."""
+    position, length = 0, len(pattern)
+
+    def escape():
+        nonlocal position
+        if position + 1 >= length:
+            raise ValueError('truncated regex escape')
+        position += 2 + _HEX_ESCAPE_WIDTH.get(pattern[position + 1], 0)
+        if position > length:
+            raise ValueError('truncated regex escape')
+
+    def expression(depth=0):
+        nonlocal position
+        if depth > _PINNED_MAX_PATTERN_DEPTH:
+            raise ValueError('pattern nesting exceeds native compiler support')
+        widest, width = 0, 0
+        while position < length and pattern[position] != ')':
+            char = pattern[position]
+            if char == '|':
+                widest, width = max(widest, width), 0
+                position += 1
+                continue
+            if char in '^$':
+                if position not in {0, length - 1}:
+                    raise ValueError('anchor inside regex')
+                position += 1
+                continue
+            if char == '(':
+                if pattern.startswith('(?:', position):
+                    position += 3
+                elif pattern.startswith('(?', position):
+                    raise ValueError('unsupported regex group')
+                else:
+                    position += 1
+                atom = expression(depth + 1)
+                if position >= length or pattern[position] != ')':
+                    raise ValueError('unbalanced regex group')
+                position += 1
+            elif char == '[':
+                position += 1
+                while position < length and pattern[position] != ']':
+                    if pattern[position] == '\\':
+                        escape()
+                    else:
+                        position += 1
+                if position == length:
+                    raise ValueError('unterminated character class')
+                position += 1
+                atom = 1
+            elif char == '\\':
+                escape()
+                atom = 1
+            elif char in '*+?{}]':
+                raise ValueError('quantifier without a preceding atom')
+            else:
+                position += 1
+                atom = 1
+            multiplier = 1
+            if position < length:
+                quantifier = pattern[position]
+                if quantifier in '*+':
+                    raise _UnboundedPattern('unbounded regex')
+                if quantifier == '?':
+                    position += 1
+                elif quantifier == '{':
+                    end = pattern.find('}', position + 1)
+                    if end < 0:
+                        raise ValueError('unterminated regex quantifier')
+                    values = pattern[position + 1:end].split(',')
+                    if len(values) not in {1, 2} or any(not value.isdigit() for value in values):
+                        raise ValueError('unsupported regex quantifier')
+                    if int(values[0]) > int(values[-1]):
+                        raise ValueError('reversed regex quantifier')
+                    multiplier = int(values[-1])
+                    position = end + 1
+            width += atom * multiplier
+        return max(widest, width)
+
+    width = expression()
+    if position != length:
+        raise ValueError('unbalanced regex group')
+    return width
+
+
 def _llama_safe_pattern(pattern: str, max_length: int | None) -> str | None:
     """Return a pattern safe for the pinned llama.cpp grammar compiler."""
 
@@ -347,7 +436,13 @@ def _llama_safe_pattern(pattern: str, max_length: int | None) -> str | None:
     if max_length is None:
         return normalized
     try:
-        return _bound_pattern_quantifiers(normalized, max_length)
+        try:
+            width = _finite_pattern_width(normalized)
+        except _UnboundedPattern:
+            return _bound_pattern_quantifiers(normalized, max_length)
+        if width > max_length:
+            raise ValueError('bounded regex exceeds its declared length')
+        return normalized
     except (TypeError, ValueError):
         return None
 

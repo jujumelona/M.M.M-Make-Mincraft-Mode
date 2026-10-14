@@ -80,7 +80,10 @@ def _apply_llama_json_schema(
         return
 
     schema = getattr(request, "response_schema", None)
-    projected = project_llama_transport_schema(schema)
+    from .model_output_atomicity_contract import effective_model_transport_schema
+    # The direct data sampler and its output reserve must use the same finite
+    # schema. Raw host not/enum exclusions require canonical wire productions.
+    projected = effective_model_transport_schema(schema)
 
     if projected:
         payload["json_schema"] = projected
