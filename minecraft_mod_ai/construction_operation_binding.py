@@ -8,10 +8,10 @@ from .construction_author import ask, obj, operation_schema
 from .construction_declaration_choices import action_schema, choice_actions, type_candidates
 from .construction_operation_choices import operation_context_branches
 from .construction_state import symbol_record, RECENT_SIZE
-from .java_operation_ir import parameter_types
+from .java_operation_ir import parameter_types, invocation_parameter_types
 from .construction_operation_contracts import named_values, pending_input_contracts, result_fits
 
-API_KINDS = {'call': 'METHOD', 'new': 'CONSTRUCTOR', 'field': 'FIELD'}
+API_KINDS = {'call': 'METHOD', 'new': 'CONSTRUCTOR', 'field': 'FIELD', 'constructor_call': 'CONSTRUCTOR'}
 TYPE_BOUND_OPERATIONS = frozenset({'declare', 'literal', 'cast', 'ternary', 'array_get', 'new_array'})
 
 
@@ -84,6 +84,19 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
                 if (row['kind'] in kinds and state.evidence_index.accessible(key, constructor=op == 'new')
                         and fits(row['owner'] if op == 'new' else row['return_type'])):
                     matches.append(symbol_record(key, row))
+            if op == 'constructor_call':
+                declaration = payload['declaration']
+                parent = declaration.get('class_superclass') or state.symbols[state.owner].get('superclass') or 'java.lang.Object'
+                matches = [row for row in matches if row['owner'] in {state.owner, parent}
+                           and row['symbol_id'] != declaration['symbol_id']]
+                # The selected header and own declaration set already prove
+                # these exact constructor owners; no guessed-name search.
+                shown = {row['symbol_id'] for row in matches}
+                for key, row in state.symbols.items():
+                    if (key not in shown and key != declaration['symbol_id'] and row.get('kind') == 'CONSTRUCTOR'
+                            and row['owner'] in {state.owner, parent}
+                            and state.evidence_index.accessible(key)):
+                        matches.append(symbol_record(key, row))
         if kinds == ('CLASS',):
             # A previously selected API's input signature is already actual
             # type evidence, including callback interfaces not on this page.
@@ -141,14 +154,16 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
     if op in API_KINDS:
         key = choice['symbol_ref']
         row = state.symbols[key]
-        inputs = [] if op == 'field' else parameter_types(row)
-        if op != 'new' and not row.get('static'):
+        inputs = [] if op == 'field' else invocation_parameter_types(row) if op in {'new', 'constructor_call'} else parameter_types(row)
+        if op not in {'new', 'constructor_call'} and not row.get('static'):
             receiver = row['owner']
             if row.get('access', 0) & 4 and owner_package(state.symbols, row['owner']) != owner_package(state.symbols, state.owner):
                 receiver = state.owner
             inputs = [receiver, *inputs]
         schema['properties']['attributes']['properties']['symbol_ref'] = {'const': key}
-        schema['properties']['typed_result'] = {'const': row['owner'] if op == 'new' else row['return_type']}
+        schema['properties']['typed_result'] = {'const': row['owner'] if op == 'new' else 'void' if op == 'constructor_call' else row['return_type']}
+        if op == 'constructor_call':
+            schema['properties']['attributes']['properties']['target'] = {'const': 'this' if row['owner'] == state.owner else 'super'}
         schema['properties']['input_refs']['minItems'] = len(inputs)
         schema['properties']['input_refs']['maxItems'] = len(inputs)
         current['selected_api'] = symbol_record(key, row)

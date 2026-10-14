@@ -14,6 +14,8 @@ NODE_ID_ALPHABET = string.ascii_letters + string.digits + '_.:-'
 
 def operation_next_schema(state, *, nodes, declaration, can_complete, context_branches=()):
     actions = list(OPERATIONS)
+    if declaration['kind'] != 'CONSTRUCTOR' or any(row['op'] == 'constructor_call' for row in nodes):
+        actions.remove('constructor_call')
     values = named_values(nodes, declaration, state.symbols)
     if not values['parameter']:
         actions.remove('parameter')

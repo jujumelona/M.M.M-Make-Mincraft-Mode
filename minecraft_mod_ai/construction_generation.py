@@ -4,13 +4,13 @@ import hashlib
 import json
 from dataclasses import replace
 from .construction_author import obj, ask
-from .construction_state import ConstructionState, STATE_INSTRUCTION
+from .construction_state import ConstructionState, STATE_INSTRUCTION, symbol_record
 from .construction_declaration_choices import (header_candidates, header_schema, choice_actions,
     member_schema, parameter_schema, consume_lookup_choice, choose_type, with_binding_lookups)
 from .construction_task import ConstructionTask
 from .construction_author import author_task_operations
 from .construction_java import render_task_member, render_task_java
-from .java_operation_ir import PRIMITIVES, identifier
+from .java_operation_ir import PRIMITIVES, identifier, invocation_parameter_types
 
 SIGNATURE = obj({'visibility': {'type': 'string', 'enum': ['public', 'protected', 'private', '']},
                  'static': {'type': 'boolean'}, 'final': {'type': 'boolean'}})
@@ -188,12 +188,26 @@ def compose(router, spec, *, source_context=(), construction_context=None,
     if lifecycle:
         reserved_names.add(lifecycle)
     preferred_body = ''
+    parent_owner = superclass or 'java.lang.Object'
+    parent_constructors = [key for key, row in symbols.items() if row.get('kind') == 'CONSTRUCTOR'
+        and row['owner'] == parent_owner and state.evidence_index.accessible(key)]
+    implicit_super_available = any(not invocation_parameter_types(symbols[key])
+        and not any(not (state.evidence_index._subtype(type_, 'java.lang.RuntimeException')
+                        or state.evidence_index._subtype(type_, 'java.lang.Error'))
+                    for type_ in symbols[key].get('throws', ())) for key in parent_constructors)
     while True:
         state.enter('member_declarations')
         # The page is already bounded; every remaining body still stays queued.
         body_candidates = [key for key in state.declaration_ids if
                            symbols[key].get('body_owner') != 'host_lifecycle'][-8:]
         schema = member_schema(state, reserved_names=reserved_names, body_candidates=body_candidates)
+        if not implicit_super_available and not any(symbols[key]['kind'] == 'CONSTRUCTOR' for key in state.declaration_ids):
+            schema['oneOf'] = [branch for branch in schema['oneOf']
+                               if branch.get('properties', {}).get('action', {}).get('const') != 'begin_bodies']
+            payload['required_constructor_contract'] = {
+                'superclass': parent_owner, 'constructors': [symbol_record(key, symbols[key]) for key in parent_constructors],
+                'obligation': 'Declare a constructor and author its exact superclass invocation before bodies can finish.',
+            }
         actions = choice_actions(schema)
         item = ask(planning_router, 'construction_member_next',
             {**payload, **state.payload(actions, body_candidates=body_candidates)}, schema, MEMBER_INSTRUCTION)
@@ -288,6 +302,7 @@ def compose(router, spec, *, source_context=(), construction_context=None,
     planned_declaration_hash = planned_declarations_fingerprint(symbols, state.declaration_ids)
     input_hash = construction_input_fingerprint(spec, context['authoring_contract'])
     member_invocations = {}
+    constructor_delegations = {}
 
     def author_one(member_task, *, owned_records=(), port_source_ref=''):
         from .construction_progress import ConstructionNodeCheckpoint
@@ -323,9 +338,12 @@ def compose(router, spec, *, source_context=(), construction_context=None,
         member_invocations[member_task.owner_symbol] = {
             node['attributes']['symbol_ref']
             for node in nodes
-            if node['op'] in {'call', 'new', 'field'}
+            if node['op'] in {'call', 'new', 'field', 'constructor_call'}
             and node['attributes'].get('symbol_ref')
         }
+        for node in nodes:
+            if node['op'] == 'constructor_call' and node['attributes']['target'] == 'this':
+                constructor_delegations[member_task.owner_symbol] = node['attributes']['symbol_ref']
         return nodes
 
     body_jobs = []
@@ -397,6 +415,15 @@ def compose(router, spec, *, source_context=(), construction_context=None,
     if missing_donor_calls:
         raise ValueError('CONSTRUCTION_DONOR_GLUE_CALL_MISSING: ' +
                          ','.join(sorted(missing_donor_calls)))
+    checked_delegations = set()
+    for start in constructor_delegations:
+        current, visiting = start, set()
+        while current in constructor_delegations and current not in checked_delegations:
+            if current in visiting:
+                raise ValueError('CONSTRUCTION_CONSTRUCTOR_DELEGATION_CYCLE')
+            visiting.add(current)
+            current = constructor_delegations[current]
+        checked_delegations.update(visiting)
     if registrars:
         lifecycle_calls = '\n'.join('this.' + symbols[key]['name'] + '();'
                                     for key, _ in registrars)

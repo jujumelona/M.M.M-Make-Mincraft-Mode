@@ -83,6 +83,8 @@ class ApiClass:
     side: str
     members: tuple[ApiMember, ...]
     content_hash: str
+    enclosing_class: str = ''
+    inner_access: int | None = None
 
 
 def parse_class(data: bytes, *, default_side: str = "COMMON") -> ApiClass:
@@ -147,6 +149,7 @@ def parse_class(data: bytes, *, default_side: str = "COMMON") -> ApiClass:
     def attributes():
         annotations = []
         exceptions = []
+        inner_classes = []
         for _ in range(r.u2()):
             name, payload = utf(r.u2()), r.take(r.u4())
             if name in {"RuntimeVisibleAnnotations", "RuntimeInvisibleAnnotations"}:
@@ -159,7 +162,14 @@ def parse_class(data: bytes, *, default_side: str = "COMMON") -> ApiClass:
                 exceptions.extend(cname(a.u2()) for _ in range(a.u2()))
                 if a.pos != len(payload):
                     raise ClassFormatError('Trailing exception data')
-        return annotations, tuple(exceptions)
+            elif name == 'InnerClasses':
+                a = _Reader(payload)
+                for _ in range(a.u2()):
+                    inner, outer, simple, flags = a.u2(), a.u2(), a.u2(), a.u2()
+                    inner_classes.append((cname(inner), cname(outer), utf(simple) if simple else '', flags))
+                if a.pos != len(payload):
+                    raise ClassFormatError('Trailing inner class data')
+        return annotations, tuple(exceptions), inner_classes
 
     def side(annotations, fallback):
         values = []
@@ -183,15 +193,17 @@ def parse_class(data: bytes, *, default_side: str = "COMMON") -> ApiClass:
     for kind in ("FIELD", "METHOD"):
         for _ in range(r.u2()):
             flags, member_name, descriptor = r.u2(), utf(r.u2()), utf(r.u2())
-            annotations, exceptions = attributes()
+            annotations, exceptions, _ = attributes()
             raw_members.append((member_name, descriptor, kind, flags, annotations, exceptions))
-    class_annotations, _ = attributes()
+    class_annotations, _, inner_classes = attributes()
     class_side = side(class_annotations, default_side)
     if r.pos != len(data):
         raise ClassFormatError("Trailing class bytes")
     members = tuple(ApiMember(name, n, d, "CONSTRUCTOR" if n == "<init>" else k, f, side(a, class_side), e)
                     for n, d, k, f, a, e in raw_members)
-    return ApiClass(name, superclass, interfaces, access, class_side, members, compute_content_hash(data))
+    own_inner = next((row for row in inner_classes if row[0] == name and row[1]), None)
+    return ApiClass(name, superclass, interfaces, access, class_side, members, compute_content_hash(data),
+                    own_inner[1] if own_inner else '', own_inner[3] if own_inner else None)
 
 
 def inspect_jar(path: Path, *, java_version: int, default_side: str = "COMMON",

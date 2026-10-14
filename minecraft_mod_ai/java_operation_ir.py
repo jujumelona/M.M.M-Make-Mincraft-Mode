@@ -18,7 +18,7 @@ KEYWORDS = frozenset(("abstract assert boolean break byte case catch char class 
 ATTRIBUTES = {
     "literal": {"value"}, "parameter": {"name"}, "local": {"name"}, "this": set(),
     "declare": {"name", "final"}, "field": {"symbol_ref"}, "call": {"symbol_ref"},
-    "new": {"symbol_ref"}, "binary": {"operator"}, "unary": {"operator"},
+    "new": {"symbol_ref"}, 'constructor_call': {'symbol_ref', 'target'}, "binary": {"operator"}, "unary": {"operator"},
     "assign": {"operator"}, "cast": {"type_ref"}, "instanceof": {"type_ref"},
     "array_get": set(), "array_length": set(), "new_array": {"element_type", "sized"},
     "ternary": set(), "return": set(), "block": set(), "if": set(), "while": set(),
@@ -62,6 +62,11 @@ def parameter_records(row):
 
 def parameter_types(row):
     return [p["type"] if isinstance(p, dict) else p for p in row.get("parameters", ())]
+
+
+def invocation_parameter_types(row):
+    enclosing = row.get('enclosing_instance_type')
+    return ([enclosing] if enclosing else []) + parameter_types(row)
 
 
 def java_literal(value, type_name):
@@ -214,6 +219,7 @@ class JavaOperations:
             if count > 1 and self.nodes[key]["op"] not in LEAVES:
                 raise ValueError("CONSTRUCTION_SHARED_EVALUATION: " + key)
         self.check_contexts()
+        self.check_constructor_delegation()
         self.check_completion()
 
     def nonvoid(self, value):
@@ -262,7 +268,8 @@ class JavaOperations:
                 parameters, returns = descriptor_types(row["descriptor"])
             except (ValueError, IndexError, TypeError) as exc:
                 raise ValueError("CONSTRUCTION_SYMBOL_DESCRIPTOR") from exc
-            if parameters != parameter_types(row) or returns != row.get("return_type"):
+            expected_parameters = invocation_parameter_types(row) if row['kind'] == 'CONSTRUCTOR' else parameter_types(row)
+            if parameters != expected_parameters or returns != row.get("return_type"):
                 raise ValueError("CONSTRUCTION_SYMBOL_DESCRIPTOR")
         current = self.symbols[self.task.owner_symbol]["owner"]
         if key != self.task.owner_symbol and "access" in row:
@@ -434,6 +441,20 @@ class JavaOperations:
             if claimed == "void":
                 raise ValueError("CONSTRUCTION_LOCAL_VOID")
             return claimed
+        if op == 'constructor_call':
+            row = self.symbol(attrs['symbol_ref'])
+            owner = self.declaration['owner']
+            parent = self.declaration.get('class_superclass') or self.symbols[owner].get('superclass') or 'java.lang.Object'
+            if (self.declaration['kind'] != 'CONSTRUCTOR' or row['kind'] != 'CONSTRUCTOR'
+                    or attrs['target'] not in {'this', 'super'}
+                    or row['owner'] != (owner if attrs['target'] == 'this' else parent)
+                    or attrs['symbol_ref'] == self.task.owner_symbol):
+                raise ValueError('CONSTRUCTION_CONSTRUCTOR_DELEGATION')
+            expected = invocation_parameter_types(row)
+            self.arity(n, len(expected))
+            if any(not self.assignable(actual, required) for actual, required in zip(types, expected)):
+                raise ValueError('CONSTRUCTION_ARGUMENT_TYPE')
+            return 'void'
         if op in {"call", "new", "field"}:
             row = self.symbol(attrs["symbol_ref"])
             self.type_name(row["owner"])
@@ -452,7 +473,7 @@ class JavaOperations:
                 if row.get("access", 0) & 4 and owner_package(self.symbols, row['owner']) != owner_package(self.symbols, current) and not self.subtype(args[0], current):
                     raise ValueError("CONSTRUCTION_SYMBOL_ACCESS")
                 args = args[1:]
-            expected = [] if op == "field" else parameter_types(row)
+            expected = [] if op == "field" else invocation_parameter_types(row) if op == 'new' else parameter_types(row)
             for type_ in expected:
                 self.nonvoid(type_)
             if len(args) != len(expected):
@@ -615,6 +636,42 @@ class JavaOperations:
         elif op != "block":
             raise ValueError("CONSTRUCTION_OPERATION_UNSUPPORTED")
         return "void"
+
+    def check_constructor_delegation(self):
+        self.body_roots = list(self.roots)
+        self.implicit_constructor = None
+        calls = [key for key, node in self.nodes.items() if node['op'] == 'constructor_call']
+        if self.declaration['kind'] != 'CONSTRUCTOR':
+            if calls:
+                raise ValueError('CONSTRUCTION_CONSTRUCTOR_DELEGATION')
+            return
+        if len(self.roots) == 1 and self.nodes[self.roots[0]]['op'] == 'block':
+            self.body_roots = list(self.nodes[self.roots[0]]['input_refs'])
+        if calls:
+            if len(calls) != 1 or not self.body_roots or calls[0] != self.body_roots[0]:
+                raise ValueError('CONSTRUCTION_CONSTRUCTOR_INVOCATION_POSITION')
+            pending, seen = list(self.nodes[calls[0]]['input_refs']), set()
+            while pending:
+                key = pending.pop()
+                if key in seen:
+                    continue
+                seen.add(key)
+                if self.nodes[key]['op'] == 'this':
+                    raise ValueError('CONSTRUCTION_THIS_BEFORE_SUPER')
+                pending.extend(self.nodes[key]['input_refs'])
+        else:
+            owner = self.declaration['owner']
+            parent = self.declaration.get('class_superclass') or self.symbols[owner].get('superclass') or 'java.lang.Object'
+            for key, row in self.symbols.items():
+                if row.get('kind') == 'CONSTRUCTOR' and row['owner'] == parent and not invocation_parameter_types(row):
+                    try:
+                        self.symbol(key)
+                    except ValueError:
+                        continue
+                    self.implicit_constructor = row
+                    break
+            if self.implicit_constructor is None:
+                raise ValueError('CONSTRUCTION_SUPER_CONSTRUCTOR_REQUIRED')
 
     def check_contexts(self):
         """Iterative lexical use-site validation; inference cannot prove name scope."""

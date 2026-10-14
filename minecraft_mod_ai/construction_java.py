@@ -59,7 +59,11 @@ def render_task_member(task, nodes, symbols):
         if op in {"call", "field", "new"}:
             row = graph.symbol(attrs["symbol_ref"])
             if op == "new":
-                receiver = ("new ", qualified_name(row["owner"]))
+                if row.get('enclosing_instance_type'):
+                    enclosing = values.pop(0)
+                    receiver = ('((', row['enclosing_instance_type'], ') ', enclosing, ').new ', identifier(row['owner'].rsplit('.', 1)[-1]))
+                else:
+                    receiver = ("new ", qualified_name(row["owner"]))
             elif row.get("static"):
                 receiver = qualified_name(row["owner"])
             else:
@@ -109,6 +113,14 @@ def render_task_member(task, nodes, symbols):
         if op == "declare":
             return ("final " if attrs.get("final") else "", n["typed_result"], " ", identifier(attrs["name"]),
                                    (" = ", expr(refs[0])) if refs else "", ";")
+        if op == 'constructor_call':
+            row = graph.symbol(attrs['symbol_ref'])
+            values = [expr(ref) for ref in refs]
+            receiver = attrs['target']
+            if row.get('enclosing_instance_type'):
+                receiver = ('((', row['enclosing_instance_type'], ') ', values.pop(0), ').', receiver)
+            arguments = [('((', type_, ') ', value, ')') for type_, value in zip(parameter_types(row), values)]
+            return (receiver, '(', _join(', ', arguments), ');')
         if op == "return":
             return ("return", (" ", expr(refs[0])) if refs else "", ";")
         if op == "if":
@@ -177,7 +189,7 @@ def render_task_member(task, nodes, symbols):
         header = "\n".join("@" + a for a in annotations) + "\n" + header
     if row.get("throws"):
         header += " throws " + ", ".join(graph.type_name(t) for t in row["throws"])
-    return _flatten((header, " {\n", _join("\n", (stmt(root) for root in graph.roots)), "\n}"))
+    return _flatten((header, " {\n", _join("\n", (stmt(root) for root in graph.body_roots)), "\n}"))
 
 
 def render_task_java(task, nodes, symbols):

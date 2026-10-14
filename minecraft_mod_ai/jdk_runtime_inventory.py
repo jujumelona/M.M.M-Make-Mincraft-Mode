@@ -129,7 +129,8 @@ def _inspect_image(home_text: str, image_text: str, java_version: int, side: str
     # Admit only public classes whose enclosing classes are public too.
     def public_type(name: str) -> bool:
         while name in inspected:
-            if not inspected[name].access & 1:
+            access = inspected[name].inner_access if inspected[name].inner_access is not None else inspected[name].access
+            if not access & 1:
                 return False
             if "$" not in name:
                 break

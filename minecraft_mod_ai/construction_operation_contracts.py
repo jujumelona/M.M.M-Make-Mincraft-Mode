@@ -2,7 +2,7 @@
 from __future__ import annotations
 from .construction_type_contracts import owner_package
 
-from .java_operation_ir import parameter_records, parameter_types
+from .java_operation_ir import parameter_records, parameter_types, invocation_parameter_types
 
 
 def result_fits(type_, consumers, evidence_index):
@@ -69,10 +69,10 @@ def pending_input_contracts(nodes, declaration, symbols):
             'switch': {0}, 'synchronized': {0}, 'lambda': set(), 'block': set(), 'try': set(),
         }.get(op, set(range(len(refs))))
         api_types = None
-        if op in {'call', 'field', 'new'}:
+        if op in {'call', 'field', 'new', 'constructor_call'}:
             row = symbols[attrs['symbol_ref']]
-            api_types = [] if op == 'field' else parameter_types(row)
-            if op != 'new' and not row.get('static'):
+            api_types = [] if op == 'field' else invocation_parameter_types(row) if op in {'new', 'constructor_call'} else parameter_types(row)
+            if op not in {'new', 'constructor_call'} and not row.get('static'):
                 receiver = row['owner']
                 if row.get('access', 0) & 4 and owner_package(symbols, receiver) != owner_package(symbols, declaration['owner']):
                     receiver = declaration['owner']

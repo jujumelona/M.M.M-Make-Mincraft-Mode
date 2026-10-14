@@ -85,11 +85,19 @@ def build_target_symbols(classpath, *, java_version: int, namespace: str, classp
                              "interfaces": [canonical_type_name(x) for x in item.interfaces],
                              "package": item.name.replace('/', '.').rpartition('.')[0],
                              'binary_owner': item.name,
-                             "access": item.access, "source_path": str(path)}
+                             "access": item.inner_access if item.inner_access is not None else item.access,
+                             'enclosing_instance_type': canonical_type_name(item.enclosing_class)
+                                if item.enclosing_class and not (item.inner_access or 0) & 8 else '',
+                             "source_path": str(path)}
             for member in item.members:
                 if not member.access & 5:
                     continue
                 parameters, returns = descriptor_types(member.descriptor)
+                enclosing = result[owner]['enclosing_instance_type'] if member.kind == 'CONSTRUCTOR' else ''
+                if enclosing:
+                    if not parameters or parameters[0] != enclosing:
+                        raise ValueError('CONSTRUCTION_ENCLOSING_CONSTRUCTOR_DESCRIPTOR')
+                    parameters = parameters[1:]
                 key = owner + "#" + member.name + member.descriptor
                 result[key] = {"owner": owner, "name": member.name, "descriptor": member.descriptor,
                     "kind": member.kind, "static": member.is_static, "side": member.side,
@@ -98,6 +106,7 @@ def build_target_symbols(classpath, *, java_version: int, namespace: str, classp
                 result[key]['package'] = result[owner]['package']
                 result[key]['binary_owner'] = item.name
                 result[key]['throws'] = [canonical_type_name(x) for x in member.exceptions]
+                result[key]['enclosing_instance_type'] = enclosing
     if mappings_file is not None:
         from .api_symbol_extractor import APISymbol, MinecraftAPIExtractor
         from .tiny_mappings import TinyMappings
@@ -118,6 +127,8 @@ def build_target_symbols(classpath, *, java_version: int, namespace: str, classp
                        package=after.owner.replace('/', '.').rpartition('.')[0])
             if after.kind != "CLASS":
                 parameters, returns = descriptor_types(after.descriptor)
+                if row.get('enclosing_instance_type') and after.kind == 'CONSTRUCTOR':
+                    parameters = parameters[1:]
                 row.update(descriptor=after.descriptor, parameters=parameters, return_type=returns)
             remapped[owner if after.kind=="CLASS" else owner+"#"+after.name+after.descriptor] = row
         owner_names = {canonical_type_name(before.owner): canonical_type_name(after.owner)
@@ -126,6 +137,7 @@ def build_target_symbols(classpath, *, java_version: int, namespace: str, classp
             row['superclass'] = owner_names.get(row.get('superclass', ''), row.get('superclass', ''))
             row['interfaces'] = [owner_names.get(value, value) for value in row.get('interfaces', ())]
             row['throws'] = [owner_names.get(value, value) for value in row.get('throws', ())]
+            row['enclosing_instance_type'] = owner_names.get(row.get('enclosing_instance_type', ''), row.get('enclosing_instance_type', ''))
         result = remapped
     # Model lambdas may target only inspected single-abstract-method interfaces.
     # Derive the callback shape from the resolved bytecode, never from Fabric names.

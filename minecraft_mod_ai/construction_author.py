@@ -41,6 +41,7 @@ def operation_schema(op, *, node_ids=()):
     node_ref = string_excluding((), alphabet=NODE_ID_ALPHABET)
     attributes = {'value': scalar, 'name': identifier_schema(), 'symbol_ref': ID, 'type_ref': ID, 'element_type': ID,
         'operator': {'type': 'string', 'maxLength': 4}, 'final': {'type': 'boolean'}, 'sized': {'type': 'boolean'},
+        'target': {'enum': ['this', 'super']},
         'finally': {'type': 'boolean'}, 'parameters': array(identifier_schema()),
         'selector_type': ID, 'cases': array({'oneOf': [obj({'kind': {'const': 'default'}}),
                                                     obj({'kind': {'const': 'value'}, 'value': scalar})]}),
