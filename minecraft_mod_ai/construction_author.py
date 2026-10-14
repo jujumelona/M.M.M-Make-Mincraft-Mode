@@ -6,7 +6,7 @@ from itertools import islice
 from .java_operation_ir import ATTRIBUTES, REQUIRED, JavaOperations
 from .fixed_template_generation import _validate_native_arguments
 from .construction_state import (ConstructionState, STATE_INSTRUCTION, PAGE_SIZE,
-                                 page_result, symbol_page, symbol_record)
+                                 page_result, symbol_record)
 
 TEXT = {'type': 'string', 'maxLength': 240}
 ID = {'type': 'string', 'maxLength': 240, 'minLength': 1}
@@ -28,7 +28,7 @@ def ask(router, name, payload, schema, instruction):
         'lookups_since_progress': state.get('lookups_since_progress'),
         'choice': {key: decision[key] for key in
                    ('action', 'complete', 'query', 'offset', 'name', 'symbol_ref', 'type_ref', 'base_type',
-                    'port', 'behavior_id', 'node_id')
+                    'port', 'behavior_id', 'node_id', 'purpose')
                    if key in decision},
     }, ensure_ascii=False), flush=True)
     return decision
@@ -57,6 +57,8 @@ def author_task_operations(router, task, context):
     # after this module is initialized, avoiding a declaration/author cycle.
     from .construction_operation_choices import operation_next_schema
     from .construction_declaration_choices import choice_actions
+    from .construction_operation_binding import bind_operation
+    from .construction_operation_contracts import named_values, pending_input_contracts
     symbols = context['symbols']
     declaration = symbols.get(task.owner_symbol)
     if declaration is None:
@@ -69,12 +71,6 @@ def author_task_operations(router, task, context):
             'donor_call_obligations': context.get('donor_call_obligations', {}),
             'port_source_ref': context.get('port_source_ref', ''),
             'already_implemented_effects': context.get('already_implemented_effects', {})}
-    hints = list(base['authoring_contract'].get('host_requirements', {}).get('symbols', ()))
-    hints.extend(row['lookup_hint'] for row in base['donor_call_obligations'].values())
-    dependency_pages = [symbol_page(symbols, hint, 0, kinds={'CLASS'})
-                        for hint in dict.fromkeys(hints) if isinstance(hint, str) and len(hint.strip()) >= 2]
-    base['dependency_type_pages'] = [page for page in dependency_pages if page['matches']]
-    dependency_types = {row['symbol_id'] for page in base['dependency_type_pages'] for row in page['matches']}
     resume = context.get('resume_nodes')
     existing, stage = resume(task) if callable(resume) else ((), '')
     nodes = [deepcopy(node) for node in existing]
@@ -88,21 +84,30 @@ def author_task_operations(router, task, context):
     if declaration_ids is None:
         declaration_ids = sorted(key for key, row in symbols.items()
                                  if row.get('owner') == declaration['owner'] and row.get('kind') != 'CLASS')
+    source_units = context.get('source_pages', {})
+    evidence_index = context.get('evidence_index')
+    if evidence_index is None:
+        from .construction_retrieval import ConstructionEvidenceIndex
+        evidence_index = ConstructionEvidenceIndex(symbols, source_units, router,
+            target_path=task.target_path, owner=declaration['owner'],
+            authoring_contract=base['authoring_contract'])
     state = ConstructionState(symbols, declaration['owner'], task.target_path,
         declaration_ids=declaration_ids, revision=len(nodes),
-        authoring_contract=context.get('authoring_contract'), binding_pages=context.get('binding_pages'))
+        authoring_contract=context.get('authoring_contract'), binding_pages=context.get('binding_pages'),
+        evidence_index=evidence_index)
     state.enter('operation_graph')
     referenced = {ref for row in nodes for ref in row['input_refs']}
     pending = dict.fromkeys(ref for row in nodes for ref in row['input_refs'] if ref not in by_id)
     roots = dict.fromkeys(key for key in by_id if key not in referenced)
-    source_units = context.get('source_pages', {})
     source_ids = sorted(source_units)
     read_refs = context.get('recorded_source_refs')
     read_sources = set(read_refs() if callable(read_refs) else ())
 
     def lookup_result(action, query, offset):
         if action == 'symbols':
-            return symbol_page(symbols, query, offset)
+            return state.symbol_result(query, offset)
+        if action == 'scopes':
+            return evidence_index.scope_page(query, offset)
         if action == 'declarations':
             return page_result([symbol_record(key, symbols[key]) for key in declaration_ids],
                                offset, field='declarations')
@@ -120,9 +125,7 @@ def author_task_operations(router, task, context):
             return {'nodes': [by_id[key] for key in keys], 'total_count': len(keys),
                     'status': 'matches', 'next_offset': None}
         if action == 'sources':
-            matches = [{'source_ref': key, 'unit_count': len(source_units[key])} for key in source_ids
-                       if query.strip().casefold() in key.casefold()]
-            return page_result(matches, offset, field='sources')
+            return evidence_index.source_page(query, offset)
         if action == 'bindings':
             return state.binding_result(query, offset)
         if action != 'source' or query not in source_units:
@@ -145,11 +148,35 @@ def author_task_operations(router, task, context):
         if callable(callback):
             callback(task, tuple(nodes), state.export())
 
+    def read_lookup(choice):
+        action = choice['action']
+        if action == 'more_symbols':
+            action = 'symbols'
+        query = choice.get('query', '').strip()
+        offset = choice.get('offset', 0)
+        if action == 'scopes':
+            state.lookup_scopes(query, offset)
+        else:
+            state.consume_lookup(action, query, offset, lookup_result(action, query, offset))
+        if action == 'source':
+            callback = context.get('source_read')
+            if callable(callback):
+                callback(task, query)
+            read_sources.add(query)
+
+    if not state.symbol_lookup:
+        state.prepare_symbols(task.intent + '\n' + str(task.effects), kinds=('METHOD', 'FIELD'))
+    if base['port_source_ref'] and base['port_source_ref'] not in read_sources:
+        read_lookup({'action': 'source', 'query': base['port_source_ref'], 'offset': 0})
+    save_author()
+
     instruction = ('Author this current behavior as typed Java operations, one node per turn. No Java source strings. '
-        'Use exact inspected symbol IDs and type names. inspect_dependency selects a real type from '
-        'dependency_type_pages; prefer these target facts to guessed API or mixin names. symbols starts '
-        'a new lexical dependency lookup at offset zero, and more_symbols selects an exact unread successor. '
-        'nodes by ID, or source by ID. Relevant graph nodes are stored on the host; do not recreate them. '
+        'Choose an operation and state its implementation purpose in plain language. Do not guess '
+        'dependency names or issue a search instead of selecting an operation. The host retrieves real '
+        'API/source candidates for this goal; bind the correct actual API before writing its node. '
+        'API signatures fix result types and receiver/argument counts. Required inputs may be forward '
+        'references, and each missing input must be authored. Relevant graph nodes are stored on the '
+        'host; do not recreate them. '
         'Implement only owned runtime records; never duplicate effects already provided by Typed/UI. '
         'When a pinned donor source is installed, use its exact inspected callable symbols '
         'through typed call/field/new operations and implement missing state and event glue. '
@@ -162,8 +189,7 @@ def author_task_operations(router, task, context):
         'Unsupported syntax requires extension, never raw Java. ' + STATE_INSTRUCTION)
     while True:
         recent = [_node_summary(row) for row in nodes[-4:]]
-        schema = operation_next_schema(state, nodes=nodes, source_units=source_units,
-            pinned_source=base['port_source_ref'], dependency_types=dependency_types,
+        schema = operation_next_schema(state, nodes=nodes, declaration=declaration,
             can_complete=bool(nodes) and not pending)
         actions = choice_actions(schema)
         payload = {**base, 'recent_nodes': recent, **state.payload(actions,
@@ -175,32 +201,24 @@ def author_task_operations(router, task, context):
             sources={'total_count': len(source_ids), 'recent_ids': source_ids[:PAGE_SIZE],
                      'lookup_action': 'sources',
                      'pinned_source_read': bool(base['port_source_ref'] in read_sources)})}
-        choice = ask(router, 'construction_operation_next', payload, schema, instruction)
+        contracts = pending_input_contracts(nodes, declaration, symbols)
+        payload['pending_input_contracts'] = {key: contracts[key] for key in list(contracts)[:PAGE_SIZE]}
+        payload['named_values'] = named_values(nodes, declaration, symbols)
+        choice = state.operation_goal or ask(router, 'construction_operation_next', payload, schema, instruction)
         action = choice['action']
-        if action in {'more_symbols', 'inspect_dependency'}:
-            action = 'symbols'
         if action == 'extension':
-            raise ValueError('CONSTRUCTION_RENDERER_EXTENSION_REQUIRED: ' + choice['query'])
+            raise ValueError('CONSTRUCTION_RENDERER_EXTENSION_REQUIRED: ' + choice['purpose'])
         if action == 'complete':
             JavaOperations(task, nodes, symbols)
             if context.get('checkpoint'):
                 context['checkpoint'](task, tuple(nodes), 'validated')
             return tuple(nodes)
-        if action in {'symbols', 'declarations', 'nodes', 'node_index', 'source', 'sources', 'bindings'}:
-            query = choice.get('query', '').strip()
-            if action == 'declarations':
-                query = ''
-            offset = choice.get('offset', 0)
-            state.consume_lookup(action, query, offset, lookup_result(action, query, offset))
-            if action == 'source':
-                callback = context.get('source_read')
-                if callable(callback):
-                    callback(task, query)
-                read_sources.add(query)
-            save_author()
-            continue
-        row = dict(ask(router, 'construction_operation_' + action,
-                       {**payload, 'selected_operation': action}, operation_schema(action, node_ids=by_id), instruction))
+        state.operation_goal = dict(choice)
+        if choice['node_id'] in by_id or (pending and choice['node_id'] not in pending):
+            raise ValueError('CONSTRUCTION_OPERATION_GOAL_NODE_INVALID')
+        row = bind_operation(router, state, goal=choice, payload=payload, nodes=nodes,
+            source_units=source_units, pinned_source=base['port_source_ref'],
+            read_lookup=read_lookup, instruction=instruction, save_author=save_author)
         row['op'] = action
         if row['node_id'] in by_id:
             raise ValueError('CONSTRUCTION_NODE_DUPLICATE')

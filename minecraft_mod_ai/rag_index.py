@@ -153,7 +153,7 @@ class _Candidate:
         )
 
 
-def rank_context_chunks(query, chunks, *, query_vector=None, relation_scores=None):
+def rank_context_chunks(query, chunks, *, query_vector=None, relation_scores=None, prepared_text=None):
     """Rank a host-owned evidence map without requiring an identifier match.
 
     Unlike a sparse hit filter, a navigation map retains zero-overlap entries:
@@ -166,8 +166,10 @@ def rank_context_chunks(query, chunks, *, query_vector=None, relation_scores=Non
     terms = set(_meaningful_terms(query))
     folded = query.casefold()
     relations = relation_scores or {}
+    prepared = prepared_text or {}
     candidates = [
-        _Candidate(chunk, _lexical_score(terms, folded, chunk.text),
+        _Candidate(chunk, _lexical_score(terms, folded, chunk.text,
+                                       prepared=prepared.get(chunk.chunk_id)),
                    _cosine(query_vector, chunk.embedding),
                    relation_score=float(relations.get(chunk.chunk_id, 0.0)))
         for chunk in chunks
@@ -1627,12 +1629,12 @@ def _lexical_score(
     query_terms: set[str],
     query_lower: str,
     text: str,
+    *, prepared=None,
 ) -> float:
     if not query_terms:
         return 0.0
-    chunk_terms = set(_tokens(text))
+    chunk_terms, text_lower = prepared if prepared is not None else (set(_tokens(text)), text.casefold())
     intersection = len(query_terms & chunk_terms)
-    text_lower = text.casefold()
     exact_bonus = sum(
         2.0 for term in query_terms if term and term in text_lower
     )

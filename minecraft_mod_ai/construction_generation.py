@@ -19,7 +19,8 @@ HEADER_INSTRUCTION = ('Choose only inheritance for the current new class. No Jav
     'are planned and authored in later phases. A class with no explicit superclass extends Object implicitly. '
     'Dependency API names in host_requirements are not required supertypes. Use inheritance only when '
     'the artifact responsibility requires this owner to be a subtype, not merely to call or store an API. '
-    'symbols searches class/type names in this phase; inheritance can use only the inspected '
+    'Real type candidates are ranked from this responsibility and related source/type structure. '
+    'more_symbols reads an actual successor page; inheritance can use only the inspected '
     'header_candidates in this page. Methods and fields are looked up while authoring their bodies. '
     'A superclass is a non-final class. An implemented type is an interface. The new owner is neither '
     'an inheritance candidate nor an implementation target in this phase. ' + STATE_INSTRUCTION)
@@ -109,8 +110,12 @@ def compose(router, spec, *, source_context=(), construction_context=None,
     symbols[owner] = {'kind': 'CLASS', 'owner': owner, 'name': name, 'access': 1,
         'superclass': superclass, 'interfaces': interfaces,
         'side': str(spec.get('side', 'COMMON')), 'provenance': 'construction_plan'}
+    from .construction_retrieval import ConstructionEvidenceIndex
+    context['evidence_index'] = ConstructionEvidenceIndex(symbols, context.get('source_pages', {}), router,
+        target_path=task.target_path, owner=owner, authoring_contract=context['authoring_contract'])
     state = ConstructionState(symbols, owner, task.target_path,
-        authoring_contract=context['authoring_contract'], binding_pages=context['binding_pages'])
+        authoring_contract=context['authoring_contract'], binding_pages=context['binding_pages'],
+        evidence_index=context['evidence_index'])
     payload = {'intent': task.intent, 'trigger': task.trigger, 'effects': task.effects,
                'state_reads': task.state_reads, 'state_writes': task.state_writes,
                'owner': owner, 'target_path': task.target_path,
@@ -122,6 +127,7 @@ def compose(router, spec, *, source_context=(), construction_context=None,
         state.advance()
     elif header_policy == 'authored':
         state.enter('class_header')
+        state.prepare_symbols(task.intent, kinds=('CLASS',))
         while True:
             candidates = header_candidates(state)
             schema = header_schema(state, candidates)

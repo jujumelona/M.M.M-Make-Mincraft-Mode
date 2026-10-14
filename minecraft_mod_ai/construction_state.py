@@ -12,10 +12,10 @@ from copy import deepcopy
 
 # Body lookup choices and retained API pages changed. Old journals/cursors may
 # not be replayed against them; declaration-bound accepted graphs stay reusable.
-PROTOCOL_VERSION = "mmm/construction-state-v7"
+PROTOCOL_VERSION = "mmm/construction-state-v8"
 PAGE_SIZE = 8
 RECENT_SIZE = 4
-LOOKUP_KINDS = frozenset({'symbols', 'declarations', 'nodes', 'node_index', 'source', 'sources', 'bindings'})
+LOOKUP_KINDS = frozenset({'symbols', 'scopes', 'declarations', 'nodes', 'node_index', 'source', 'sources', 'bindings'})
 TYPE_LOOKUP_PHASES = frozenset({'class_header', 'member_return_type', 'member_parameter_type'})
 
 
@@ -100,19 +100,23 @@ STATE_INSTRUCTION = (
     "for an existing implementation of a new owner. An empty lookup means no match "
     "for that query, not missing context. A lookup's next_offset=null means its "
     "results are exhausted. Never repeat a consumed query and offset in the same "
-    "phase and revision; choose another dependency query or advance the current "
+    "phase and revision; choose a returned scope/successor or advance the current "
     "declaration/operation. Planned members with a body_owner are already assigned; "
     "add only missing declarations. authoring_contract defines the artifact's responsibility, "
     "identities and implementation requirements. Use bindings with an exact binding_id from "
     "authoring_contract.binding_pages to inspect shared configuration before choosing declarations "
     "or types. binding_lookup retains the latest complete configuration page across phases. "
+    "Dependency discovery is driven by the current implementation purpose. Exact API names come "
+    "from returned candidates, not guesses. Intent selectors identify host-ranked real pages. "
+    "scope_candidates are real package/type branches, including branches whose names do not "
+    "overlap the purpose. Select their literal goal_id to narrow by meaning and inspect actual signatures. "
     "Select only available_actions."
 )
 
 
 class ConstructionState:
     def __init__(self, symbols, owner, target_path, *, declaration_ids=(), revision=0,
-                 authoring_contract=None, binding_pages=None):
+                 authoring_contract=None, binding_pages=None, evidence_index=None):
         self.symbols = symbols
         self.owner = owner
         self.target_path = target_path
@@ -124,9 +128,14 @@ class ConstructionState:
         self.lookup = {}
         self.symbol_lookup = {}
         self.binding_lookup = {}
+        self.source_lookup = {}
+        self.scope_lookup = {}
         self.history = deque(maxlen=PAGE_SIZE)
         self.requests = set()
         self.lookup_cursors = {}
+        self.evidence_index = evidence_index
+        self.symbol_goal = None
+        self.operation_goal = None
 
     def enter(self, phase):
         if phase != self.phase:
@@ -135,18 +144,58 @@ class ConstructionState:
             self.lookup_cursors.clear()
 
     def advance(self, *, preserve_symbols=False):
+        if self.phase == 'class_header' and self.evidence_index is not None:
+            self.evidence_index.include_symbol(self.owner)
         self.revision += 1
         self.lookup = {}
         if not preserve_symbols:
             self.symbol_lookup = {}
+        self.scope_lookup = {}
         self.requests.clear()
         self.lookup_cursors.clear()
+        self.symbol_goal = None
+        self.operation_goal = None
+
+    def prepare_symbols(self, purpose, *, kinds=('CLASS',)):
+        if self.evidence_index is None:
+            return
+        query = '\n'.join(str(value) for value in (
+            self.authoring_contract.get('responsibility', ''),
+            self.authoring_contract.get('implementation_requirements', ''), purpose,
+        ) if value)
+        goal = self.evidence_index.prepare(query, kinds=kinds)
+        current = self.evidence_index.goals.get(self.symbol_goal)
+        if current is None or {**current, 'scope': 'package:'} != self.evidence_index.goals[goal]:
+            self.symbol_goal = goal
+        if _lookup_request('symbols', self.symbol_goal, 0) not in self.requests:
+            self.lookup_symbols(self.symbol_goal, 0)
+        if _lookup_request('scopes', self.symbol_goal, 0) not in self.requests:
+            self.consume_lookup('scopes', self.symbol_goal, 0,
+                                self.evidence_index.scope_page(self.symbol_goal, 0))
 
     def add_declaration(self, key):
         if key in self.declaration_ids:
             raise ValueError("CONSTRUCTION_DECLARATION_DUPLICATE: " + key)
         self.declaration_ids.append(key)
+        if self.evidence_index is not None:
+            self.evidence_index.include_symbol(key)
         self.advance()
+
+    def scope_candidates(self):
+        if self.evidence_index is None or self.symbol_goal is None:
+            return []
+        descriptor = self.evidence_index.goals[self.symbol_goal]
+        result = {}
+        for kind, query, offset in sorted(self.requests):
+            if kind != 'scopes':
+                continue
+            row = self.evidence_index.goals[query]
+            if {**row, 'scope': 'package:'} != {**descriptor, 'scope': 'package:'}:
+                continue
+            for candidate in self.evidence_index.scope_page(query, offset)['scopes']:
+                if ('scopes', candidate['goal_id'], 0) not in self.requests:
+                    result[candidate['goal_id']] = candidate
+        return list(result.values())
 
     def payload(self, available_actions, **cursor):
         row = self.symbols.get(self.owner, {})
@@ -163,11 +212,18 @@ class ConstructionState:
             "recent_lookups": list(self.history),
             "available_actions": list(available_actions), **cursor,
         }, "lookup": self.lookup, "authoring_contract": self.authoring_contract,
+            "scope_candidates": self.scope_candidates(), "scope_lookup": self.scope_lookup,
             "binding_lookup": self.binding_lookup,
+            "source_lookup": self.source_lookup if self.lookup.get('kind') != 'source' else {},
             "symbol_lookup": self.symbol_lookup if self.lookup.get('kind') != 'symbols' else {}}
 
     def _remember_cursor(self, kind, query, offset, result):
         request = _lookup_request(kind, query, offset)
+        previous = self.lookup_cursors.get(request[:2])
+        if previous is not None and previous['offset'] > offset:
+            # A purpose-ranked source pointer can be read out of file order.
+            # The resume cursor still records the greatest consumed offset.
+            return
         self.lookup_cursors[request[:2]] = {
             'kind': kind, 'query': query.strip(), 'offset': offset,
             'next_offset': result['next_offset'],
@@ -195,6 +251,10 @@ class ConstructionState:
             self.symbol_lookup = self.lookup
         if kind == 'bindings':
             self.binding_lookup = self.lookup
+        if kind == 'source':
+            self.source_lookup = self.lookup
+        if kind == 'scopes':
+            self.scope_lookup = self.lookup
         self.history.append({"phase": self.phase, "revision": self.revision,
             "kind": kind, "query": query.strip(), "offset": offset,
             "status": result["status"], "total_count": result["total_count"],
@@ -206,10 +266,16 @@ class ConstructionState:
         last = {key: self.lookup[key] for key in ('kind', 'query', 'offset')} if self.lookup else None
         binding = {key: self.binding_lookup[key] for key in ('kind', 'query', 'offset')} if self.binding_lookup else None
         symbol = {key: self.symbol_lookup[key] for key in ('kind', 'query', 'offset')} if self.symbol_lookup else None
+        source = {key: self.source_lookup[key] for key in ('kind', 'query', 'offset')} if self.source_lookup else None
+        scope = {key: self.scope_lookup[key] for key in ('kind', 'query', 'offset')} if self.scope_lookup else None
         return {'protocol': PROTOCOL_VERSION, 'phase': self.phase, 'revision': self.revision,
                 'requests': [list(row) for row in sorted(self.requests)],
                 'history': deepcopy(list(self.history)), 'last_lookup': last,
                 'last_binding_lookup': binding, 'last_symbol_lookup': symbol,
+                'last_source_lookup': source,
+                'last_scope_lookup': scope,
+                'symbol_goal': self.symbol_goal, 'operation_goal': deepcopy(self.operation_goal),
+                'evidence_goals': self.evidence_index.export_goals() if self.evidence_index else [],
                 'lookup_cursors': [{key: row[key] for key in ('kind', 'query', 'offset')}
                                    for _, row in sorted(self.lookup_cursors.items())]}
 
@@ -218,6 +284,23 @@ class ConstructionState:
                 or record.get('phase') != self.phase or type(record.get('revision')) is not int
                 or record['revision'] != self.revision):
             raise ValueError('CONSTRUCTION_AUTHOR_STATE_BINDING_MISMATCH')
+        if self.evidence_index is not None:
+            self.evidence_index.restore_goals(record.get('evidence_goals'))
+        self.symbol_goal = record.get('symbol_goal')
+        if self.symbol_goal is not None and (self.evidence_index is None
+                or self.symbol_goal not in self.evidence_index.goals):
+            raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
+        goal = record.get('operation_goal')
+        if goal is not None:
+            from .java_operation_ir import OPERATIONS
+            import re
+            if (not isinstance(goal, dict) or set(goal) != {'action', 'purpose', 'node_id'}
+                    or goal['action'] not in OPERATIONS or not isinstance(goal['purpose'], str)
+                    or not 1 <= len(goal['purpose']) <= 240
+                    or not isinstance(goal['node_id'], str)
+                    or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,240}', goal['node_id'])):
+                raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
+        self.operation_goal = deepcopy(goal)
         requests, history = record.get('requests'), record.get('history')
         if (not isinstance(requests, list) or not isinstance(history, list)
                 or len(history) > PAGE_SIZE
@@ -270,15 +353,45 @@ class ConstructionState:
                 raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
             _lookup_request(symbol['kind'], symbol['query'], symbol['offset'])
             self.symbol_lookup = {**self.symbol_result(symbol['query'], symbol['offset']), **symbol}
+        source = record.get('last_source_lookup')
+        self.source_lookup = {}
+        if source is not None:
+            if (not isinstance(source, dict) or set(source) != {'kind', 'query', 'offset'}
+                    or source['kind'] != 'source' or not callable(resolve_lookup)):
+                raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
+            _lookup_request(source['kind'], source['query'], source['offset'])
+            self.source_lookup = {**resolve_lookup(source['kind'], source['query'], source['offset']), **source}
+        scope = record.get('last_scope_lookup')
+        self.scope_lookup = {}
+        if scope is not None:
+            if (not isinstance(scope, dict) or set(scope) != {'kind', 'query', 'offset'}
+                    or scope['kind'] != 'scopes' or self.evidence_index is None):
+                raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
+            _lookup_request(scope['kind'], scope['query'], scope['offset'])
+            self.scope_lookup = {**self.evidence_index.scope_page(scope['query'], scope['offset']), **scope}
         return last
 
     def symbol_result(self, query, offset):
+        if self.evidence_index is not None:
+            return self.evidence_index.page(query, offset)
         kinds = {'CLASS'} if self.phase in TYPE_LOOKUP_PHASES else None
         return symbol_page(self.symbols, query, offset, kinds=kinds)
 
     def lookup_symbols(self, query, offset):
         return self.consume_lookup("symbols", query, offset,
                                    self.symbol_result(query, offset))
+
+    def lookup_scopes(self, query, offset):
+        if self.evidence_index is None:
+            raise ValueError('CONSTRUCTION_RETRIEVAL_GOAL_MISSING')
+        result = self.consume_lookup('scopes', query, offset, self.evidence_index.scope_page(query, offset))
+        self.symbol_goal = query
+        if ('symbols', symbol_query_key(query), 0) not in self.requests:
+            self.lookup_symbols(query, 0)
+        else:
+            cursor = self.lookup_cursors[('symbols', symbol_query_key(query))]
+            self.symbol_lookup = self.symbol_result(query, cursor['offset'])
+        return result
 
     def next_declaration_offset(self):
         # The schema and reader share this cursor. Every page remains reachable,

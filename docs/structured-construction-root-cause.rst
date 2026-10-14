@@ -1,6 +1,47 @@
 Structured construction: native grammar loss
 ===========================================
 
+Follow-up: discovery must start from implementation purpose
+----------------------------------------------------------
+
+The supplied console transcript ``20261014-130354`` runs ``095f1534a33f``.
+It records 101 body decisions without one accepted operation node: 93 symbol
+lookups, five binding reads and three source reads. Two registry bodies keep
+changing invented search strings. The first content node eventually fails
+with ``ARTIFACT_GRAPH_WORK_TIMEOUT``; later background inference does not turn
+that failed node into successful progress.
+
+The old body loop required a literal API/member substring before it could
+return a candidate. Blocking repeated queries still allowed a new invented
+string on every turn. That lookup criterion cannot discover an unknown API
+from the function the author needs to implement.
+
+Construction now ranks actual source/type evidence from the behavior and a
+concrete operation purpose. It exposes the real package/type hierarchy,
+actual class declarations, member signatures and input/output type relations.
+The native author selects among returned branches and signatures by meaning;
+name overlap is an ordering hint rather than an admission requirement.
+Zero-overlap candidates and every source tail remain reachable through literal
+pages. Existing CPU dense policy is preserved; hierarchy selection works with
+the existing native author without loading a new CPU embedding model.
+
+An operation goal includes its exact graph slot. Evidence reads serve that
+goal until the node is written; a fresh guessed search is no longer a primary
+body action. The selected target API fixes its symbol, result and receiver/
+argument count, including signatures above the display page size. Its missing
+inputs become concrete next slots with type/mode obligations. Existing named
+values and callback signatures are bound to actual declarations. Complete
+source reads, assigned bodies, donor obligations and final semantic checks
+remain part of authoring. Resume persists selectors and the unfinished goal,
+then re-resolves them against inspected inputs.
+
+Ranking prepares immutable owner/source terms once, scores members lazily for
+displayed owners and retains one active owner ordering. Source linkage uses
+maximum relevance per owner so repeated imports cannot win by popularity.
+These are static design and code findings. Syntax/diff inspection and an
+independent static review do not certify a new generation, build or gameplay
+run; no such run was performed under the user's standing instruction.
+
 Observed failure
 ----------------
 

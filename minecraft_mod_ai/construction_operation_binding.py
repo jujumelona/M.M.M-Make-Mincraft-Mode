@@ -1,0 +1,204 @@
+"""Bind one authored operation to real API/source evidence and signature facts."""
+from __future__ import annotations
+
+import hashlib
+
+from .construction_author import ask, obj, operation_schema
+from .construction_declaration_choices import action_schema, choice_actions, type_candidates
+from .construction_operation_choices import operation_context_branches
+from .construction_state import symbol_record
+from .java_operation_ir import parameter_types
+from .construction_operation_contracts import named_values, pending_input_contracts, result_fits
+
+API_KINDS = {'call': 'METHOD', 'new': 'CONSTRUCTOR', 'field': 'FIELD'}
+
+
+def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_source,
+                   read_lookup, instruction, save_author):
+    op = goal['action']
+    kinds = (API_KINDS[op],) if op in API_KINDS else ('CLASS',)
+    requirements = pending_input_contracts(nodes, payload['declaration'], state.symbols).get(goal['node_id'], ())
+
+    def fits(type_):
+        return result_fits(type_, requirements, state.evidence_index)
+
+    purpose = '\n'.join(str(value) for value in (
+        goal['purpose'], payload['intent'], payload['effects'],
+        payload['declaration'].get('purpose', ''),
+        *[row.get('expected_type', '') for row in requirements],
+        *payload['state_reads'], *payload['state_writes'],
+    ) if value)
+    state.prepare_symbols(purpose, kinds=kinds)
+    save_author()
+    while True:
+        evidence = state.symbol_lookup
+        matches = [row for row in evidence.get('matches', ()) if row['kind'] in kinds
+                   and (op not in API_KINDS or fits(row['owner'] if op == 'new' else row['return_type']))]
+        if kinds == ('CLASS',):
+            # A previously selected API's input signature is already actual
+            # type evidence, including callback interfaces not on this page.
+            required_types = {row['expected_type'].split('[', 1)[0] for row in requirements if row.get('expected_type')}
+            required_types.update(value.split('[', 1)[0] for row in requirements for value in row.get('expected_types', ()))
+            shown = {row['symbol_id'] for row in matches}
+            matches.extend(symbol_record(key, state.symbols[key]) for key in sorted(required_types - shown)
+                           if state.symbols.get(key, {}).get('kind') == 'CLASS' and state.evidence_index.accessible(key))
+        branches = operation_context_branches(state, nodes=nodes, source_units=source_units,
+                                             pinned_source=pinned_source)
+        if op in API_KINDS:
+            if matches:
+                branches.insert(0, action_schema('api', {'symbol_ref': {'enum': [row['symbol_id'] for row in matches]}}))
+        elif op == 'lambda':
+            functional = [row['symbol_id'] for row in matches
+                          if 'functional_parameters' in row and fits(row['symbol_id'])]
+            if functional:
+                branches.insert(0, action_schema('functional_type', {'type_ref': {'enum': functional}}))
+        else:
+            branches.insert(0, action_schema('write'))
+        if not branches:
+            raise ValueError('CONSTRUCTION_OPERATION_EVIDENCE_MISSING: ' + op)
+        schema = {'oneOf': branches}
+        current = {**payload, 'operation_goal': goal,
+                   **state.payload(choice_actions(schema), **{key: payload['construction_state'][key]
+                       for key in ('current_member', 'graph', 'sources') if key in payload['construction_state']}),
+                   'api_candidates': matches,
+                   'required_by_consumers': requirements}
+        choice = ask(router, 'construction_operation_bind', current, schema,
+            'Resolve only this selected operation. Select the real API whose behavior and signature '
+            'fit operation_goal, or read a returned source/type/configuration pointer to resolve a '
+            'specific missing fact. scopes selects a real package/type branch by meaning when '
+            'the right API is not on the current page. API names are returned candidates, not search guesses. '
+            'When this operation can be written, select api/write now. Another operation is chosen '
+            'only after this node is written. ' + instruction)
+        if choice['action'] in {'api', 'write', 'functional_type'}:
+            break
+        read_lookup(choice)
+        save_author()
+    schema = operation_schema(op, node_ids=(row['node_id'] for row in nodes))
+    schema['properties']['node_id'] = {'const': goal['node_id']}
+    from .construction_declaration_choices import string_excluding
+    from .construction_operation_choices import NODE_ID_ALPHABET
+    schema['properties']['input_refs']['items'] = string_excluding((goal['node_id'],), alphabet=NODE_ID_ALPHABET)
+    types = set(type_candidates(state))
+    types.update(row['typed_result'] for row in nodes)
+    types.update(parameter_types(payload['declaration']))
+    types.add(payload['declaration']['return_type'])
+    types.update(row['expected_type'] for row in requirements if row.get('expected_type'))
+    types.update(value for row in requirements for value in row.get('expected_types', ()))
+    for name in ('java.lang.String', 'java.lang.Object'):
+        if name in state.symbols:
+            types.add(name)
+    if op in API_KINDS:
+        key = choice['symbol_ref']
+        row = state.symbols[key]
+        inputs = [] if op == 'field' else parameter_types(row)
+        if op != 'new' and not row.get('static'):
+            receiver = row['owner']
+            if row.get('access', 0) & 4 and row['owner'].rpartition('.')[0] != state.owner.rpartition('.')[0]:
+                receiver = state.owner
+            inputs = [receiver, *inputs]
+        schema['properties']['attributes']['properties']['symbol_ref'] = {'const': key}
+        schema['properties']['typed_result'] = {'const': row['owner'] if op == 'new' else row['return_type']}
+        schema['properties']['input_refs']['minItems'] = len(inputs)
+        schema['properties']['input_refs']['maxItems'] = len(inputs)
+        current['selected_api'] = symbol_record(key, row)
+        current['required_input_types'] = inputs
+    else:
+        nonvoid = sorted(types - {'void'})
+        result_types = sorted(type_ for type_ in types if fits(type_))
+        # Statement nodes' void result describes syntax; declarations still
+        # carry the actual local type. Consumer expression contracts constrain
+        # only value-producing nodes.
+        schema['properties']['typed_result'] = {'enum': result_types}
+        attrs = schema['properties']['attributes']['properties']
+        operators = {
+            'binary': ['==', '!=', '&&', '||', '+', '-', '*', '/', '%', '<', '>', '<=', '>=', '&', '|', '^', '<<', '>>', '>>>'],
+            'unary': ['!', '+', '-', '~'],
+            'assign': ['=', '+=', '-=', '*=', '/=', '%=', '&=', '|=', '^=', '<<=', '>>=', '>>>='],
+        }
+        if op in operators:
+            attrs['operator'] = {'enum': operators[op]}
+        if op in {'literal', 'parameter', 'local', 'declare', 'binary', 'unary', 'assign',
+                  'cast', 'array_get', 'new_array', 'ternary', 'lambda'}:
+            result_types = [type_ for type_ in result_types if type_ != 'void']
+            schema['properties']['typed_result'] = {'enum': result_types}
+        for field in ('type_ref', 'element_type'):
+            if field in attrs:
+                attrs[field] = {'enum': nonvoid}
+        if op in {'block', 'return', 'if', 'while', 'for', 'do_while', 'foreach', 'switch',
+                  'throw', 'try', 'synchronized', 'break', 'continue'}:
+            schema['properties']['typed_result'] = {'const': 'void'}
+        elif op == 'this':
+            schema['properties']['typed_result'] = {'const': state.owner}
+        elif op == 'array_length':
+            schema['properties']['typed_result'] = {'const': 'int'}
+        elif op == 'instanceof':
+            schema['properties']['typed_result'] = {'const': 'boolean'}
+        elif op == 'lambda':
+            key = choice['type_ref']
+            row = state.symbols[key]
+            schema['properties']['typed_result'] = {'const': key}
+            schema['properties']['input_refs'].update(minItems=1, maxItems=1)
+            prefix = 'lambda_' + hashlib.sha256(goal['node_id'].encode()).hexdigest()[:16] + '_arg'
+            attrs['parameters'] = {'const': [prefix + str(index) for index in range(len(row['functional_parameters']))]}
+            current['functional_signature'] = symbol_record(key, row)
+        if op in {'literal', 'parameter', 'local', 'this', 'break', 'continue'}:
+            schema['properties']['input_refs'].update(minItems=0, maxItems=0)
+        if op in {'parameter', 'local'}:
+            values = named_values(nodes, payload['declaration'], state.symbols)[op]
+            variants = []
+            from copy import deepcopy
+            for name, type_ in values:
+                if not fits(type_):
+                    continue
+                branch = deepcopy(schema)
+                branch['properties']['typed_result'] = {'const': type_}
+                branch['properties']['attributes']['properties']['name'] = {'const': name}
+                variants.append(branch)
+            if not variants:
+                raise ValueError('CONSTRUCTION_OPERATION_NAMED_VALUE_MISSING: ' + op)
+            schema = {'oneOf': variants}
+        if op == 'cast':
+            from copy import deepcopy
+            variants = []
+            for type_ in result_types:
+                if type_ == 'void':
+                    continue
+                branch = deepcopy(schema)
+                branch['properties']['typed_result'] = {'const': type_}
+                branch['properties']['attributes']['properties']['type_ref'] = {'const': type_}
+                variants.append(branch)
+            schema = {'oneOf': variants}
+        if op == 'literal':
+            from copy import deepcopy
+            variants = []
+            for type_ in result_types:
+                value = None
+                if type_ == 'boolean':
+                    value = {'type': 'boolean'}
+                elif type_ in {'byte', 'short', 'int', 'long'}:
+                    bits = {'byte': 8, 'short': 16, 'int': 32, 'long': 64}[type_]
+                    value = {'type': 'integer', 'minimum': -(2 ** (bits - 1)), 'maximum': 2 ** (bits - 1) - 1}
+                elif type_ in {'float', 'double'}:
+                    value = {'type': 'number'}
+                elif type_ == 'char':
+                    value = {'type': 'string', 'minLength': 1, 'maxLength': 1}
+                elif type_ == 'java.lang.String':
+                    value = {'anyOf': [{'type': 'string', 'maxLength': 240}, {'type': 'null'}]}
+                elif type_ != 'void':
+                    value = {'type': 'null'}
+                if value is not None:
+                    branch = deepcopy(schema)
+                    branch['properties']['typed_result'] = {'const': type_}
+                    branch['properties']['attributes']['properties']['value'] = value
+                    variants.append(branch)
+            schema = {'oneOf': variants}
+        arities = {'binary': (2, 2), 'unary': (1, 1), 'assign': (2, 2), 'cast': (1, 1),
+                   'instanceof': (1, 1), 'array_get': (2, 2), 'array_length': (1, 1),
+                   'ternary': (3, 3), 'declare': (0, 1), 'return': (0, 1), 'if': (2, 3),
+                   'while': (2, 2), 'do_while': (2, 2), 'for': (4, 4), 'foreach': (2, 2),
+                   'throw': (1, 1), 'synchronized': (2, 2)}
+        if op in arities:
+            minimum, maximum = arities[op]
+            for branch in schema.get('oneOf', [schema]):
+                branch['properties']['input_refs'].update(minItems=minimum, maxItems=maximum)
+    return dict(ask(router, 'construction_operation_' + op, current, schema, instruction))

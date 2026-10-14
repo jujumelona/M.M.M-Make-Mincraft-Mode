@@ -150,6 +150,26 @@ def choice_actions(schema, *, default_action=None):
 
 
 def symbol_lookup_schemas(state):
+    if state.evidence_index is not None:
+        goal = state.symbol_goal
+        branches = []
+        if goal is not None and ('symbols', symbol_query_key(goal), 0) not in state.requests:
+            branches.append(action_schema('symbols', {'query': {'const': goal}, 'offset': {'const': 0}}))
+        for row in state.lookup_successors('symbols'):
+            if row['query'] == goal:
+                branches.append(action_schema('more_symbols', {
+                    'query': {'const': goal}, 'offset': {'const': row['next_offset']}}))
+        candidates = state.scope_candidates()
+        if candidates:
+            branches.append(action_schema('scopes', {
+                'query': {'enum': [row['goal_id'] for row in candidates]}, 'offset': {'const': 0}}))
+        descriptor = state.evidence_index.goals.get(goal)
+        for row in state.lookup_successors('scopes'):
+            scope_descriptor = state.evidence_index.goals[row['query']]
+            if descriptor and {**scope_descriptor, 'scope': 'package:'} == {**descriptor, 'scope': 'package:'}:
+                branches.append(action_schema('scopes', {
+                    'query': {'const': row['query']}, 'offset': {'const': row['next_offset']}}))
+        return branches
     consumed = {query for kind, query, _offset in state.requests if kind == 'symbols'}
     # The plan/own declarations already have their own view. Dependency lookup
     # cannot manufacture another instance of this uninstalled class.
@@ -185,6 +205,9 @@ def with_binding_lookups(state, schema):
 
 
 def consume_lookup_choice(state, choice):
+    if choice.get('action') == 'scopes':
+        state.lookup_scopes(choice['query'], choice['offset'])
+        return True
     if choice.get('action') in {'symbols', 'more_symbols'}:
         state.lookup_symbols(choice['query'], choice.get('offset', 0))
         return True
@@ -242,10 +265,14 @@ def type_candidates(state):
 
 def choose_type(router, state, payload, *, phase, allow_void=False):
     state.enter(phase)
+    state.prepare_symbols('\n'.join(str(payload[key]) for key in
+        ('intent', 'purpose', 'name', 'parameter_name', 'parameters', 'effects', 'state_reads', 'state_writes')
+        if payload.get(key)), kinds=('CLASS',))
     instruction = ('Choose only the current declaration type. No source code. Use an intrinsic primitive '
-        'or inspected type_candidates; search another dependency with symbols when the needed type is '
-        'absent. In this phase symbols searches class/type names, not method signatures or behavior code. '
-        'Use a simple, qualified or nested class name. type binds a base type and array dimensions (zero means scalar). void is available '
+        'or inspected type_candidates. The host ranked real types from this member purpose and source/type '
+        'relationships. scopes follows the real package/type structure by meaning; more_symbols reads '
+        'the literal next member/type page if needed. Do not invent a type query. '
+        'type binds an actual base type and array dimensions (zero means scalar). void is available '
         'only for a method result. This decision does not add another member or finish a body. ' + STATE_INSTRUCTION)
     while True:
         types = type_candidates(state)

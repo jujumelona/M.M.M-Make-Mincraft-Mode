@@ -9,11 +9,12 @@ import hashlib
 import json
 import re
 from collections import defaultdict
+from bisect import bisect_right
 from dataclasses import replace
 
 from .construction_state import PAGE_SIZE, page_result, symbol_query_key, symbol_record
-from .java_operation_ir import parameter_types
-from .rag_index import RAGChunk, rank_context_chunks, _lexical_score, _meaningful_terms
+from .java_operation_ir import parameter_types, PRIMITIVES, WIDENING, BOXING
+from .rag_index import RAGChunk, rank_context_chunks, _lexical_score, _meaningful_terms, _tokens
 
 
 def _words(text):
@@ -26,6 +27,7 @@ def _description(row):
         row.get('owner', ''), row.get('name', ''), row.get('kind', ''),
         row.get('purpose', ''), row.get('return_type', ''),
         *parameter_types(row), row.get('superclass', ''), *row.get('interfaces', ()),
+        *row.get('functional_parameters', ()), row.get('functional_return_type', ''),
     )))
 
 
@@ -41,9 +43,17 @@ class ConstructionEvidenceIndex:
         self.ordering = None
         self.by_owner = defaultdict(list)
         self.aliases = defaultdict(set)
+        self.member_text = {}
+        self.member_prepared = {}
+        self.scope_children = defaultdict(set)
+        self.scope_owners = defaultdict(set)
+        self.owner_scopes = {}
+        self.eligible = {}
+        self.eligibility_header = None
+        self.member_orderings = {}
         descriptions = defaultdict(list)
         for key, row in symbols.items():
-            if row.get('provenance') == 'construction_plan':
+            if row.get('provenance') == 'construction_plan' and row['owner'] != owner:
                 continue
             self.by_owner[row['owner']].append(key)
             descriptions[row['owner']].append(_description(row))
@@ -52,24 +62,27 @@ class ConstructionEvidenceIndex:
                 self.aliases[symbol_query_key(row['name'])].add(key)
         self.owner_chunks = tuple(RAGChunk(owner, owner, '\n'.join(parts), 1, 1, '', {})
                                   for owner, parts in sorted(descriptions.items()))
+        self.owner_prepared = {row.chunk_id: (frozenset(_tokens(row.text)), row.text.casefold())
+                               for row in self.owner_chunks}
+        for type_owner in self.by_owner:
+            self._add_owner_scope(type_owner)
         self.sources = {}
         for source_ref, units in source_pages.items():
             for offset, unit in enumerate(units):
-                if unit.get('kind') in {'class', 'interface', 'enum', 'record'}:
-                    # Complete member units carry the same code without adding
-                    # a duplicate full compilation unit to every context.
-                    continue
                 if unit.get('side') == 'CLIENT' and not target_path.startswith('src/client/'):
                     continue
                 key = source_ref + ':' + str(offset)
                 self.sources[key] = (source_ref, offset, unit)
         self.source_chunks = tuple(
-            RAGChunk(key, ref, _words(unit.get('signature', '') + '\n' + unit.get('code', '')),
+            RAGChunk(key, ref, _words(unit.get('signature', '') + '\n' +
+                     ('' if unit.get('kind') in {'class', 'interface', 'enum', 'record'} else unit.get('code', ''))),
                      unit.get('start_line', 1), unit.get('end_line', 1),
                      unit.get('source_sha256', ''), {})
             for key, (ref, _offset, unit) in self.sources.items())
         self.source_targets = {key: self._source_targets(unit)
                                for key, (_ref, _offset, unit) in self.sources.items()}
+        self.source_prepared = {row.chunk_id: (frozenset(_tokens(row.text)), row.text.casefold())
+                                for row in self.source_chunks}
         self.dense = self._dense_allowed()
         if self.dense and self.source_chunks:
             vectors = router.embed([row.text for row in self.source_chunks])
@@ -78,6 +91,75 @@ class ConstructionEvidenceIndex:
             self.source_chunks = tuple(replace(row, embedding=tuple(vector))
                                        for row, vector in zip(self.source_chunks, vectors))
         self.query_vectors = {}
+
+    def _add_owner_scope(self, owner):
+        package = owner.rpartition('.')[0]
+        scopes = ['package:']
+        parts = package.split('.') if package else []
+        for index in range(1, len(parts) + 1):
+            scope = 'package:' + '.'.join(parts[:index])
+            self.scope_children[scopes[-1]].add(scope)
+            scopes.append(scope)
+        leaf = 'type:' + owner
+        self.scope_children[scopes[-1]].add(leaf)
+        scopes.append(leaf)
+        self.owner_scopes[owner] = tuple(scopes)
+        for scope in scopes:
+            self.scope_owners[scope].add(owner)
+
+    def include_symbol(self, key):
+        # Declaration authors add only their own real planned signature. This
+        # incremental update avoids rescanning the immutable classpath map.
+        row = self.symbols[key]
+        if row['owner'] != self.owner or row.get('provenance') != 'construction_plan':
+            raise ValueError('CONSTRUCTION_RETRIEVAL_LOCAL_AUTHORITY')
+        if key not in self.by_owner[self.owner]:
+            self.by_owner[self.owner].append(key)
+        self.member_text[key] = _description(row)
+        self.member_prepared[key] = (frozenset(_tokens(self.member_text[key])), self.member_text[key].casefold())
+        self.eligible.clear()
+        self.ordering_goal = None
+
+    def _member_lexical_score(self, key):
+        # Memoize only members of displayed owners. Duplicating every full
+        # symbol's text/token set per concurrent artifact wastes host memory.
+        if key not in self.member_text:
+            text = _description(self.symbols[key])
+            self.member_text[key] = text
+            self.member_prepared[key] = (frozenset(_tokens(text)), text.casefold())
+        return _lexical_score(self.query_terms, self.query_lower, self.member_text[key],
+                              prepared=self.member_prepared[key])
+
+    def _goal(self, descriptor):
+        goal = 'intent:' + hashlib.sha256(json.dumps(descriptor, sort_keys=True).encode()).hexdigest()[:24]
+        self.goals[goal] = descriptor
+        return goal
+
+    def _ensure(self, goal):
+        if goal not in self.goals:
+            raise ValueError('CONSTRUCTION_RETRIEVAL_GOAL_MISSING')
+        row = self.goals[goal]
+        base = self._goal({**row, 'scope': 'package:'})
+        if base != self.ordering_goal:
+            self.prepare(row['purpose'], kinds=row['kinds'])
+        return row
+
+    def _eligible_owners(self, kinds):
+        header = self.symbols.get(self.owner, {})
+        fingerprint = (header.get('superclass', ''), tuple(header.get('interfaces', ())))
+        if fingerprint != self.eligibility_header:
+            self.eligible.clear()
+            self.eligibility_header = fingerprint
+        kinds = tuple(sorted(kinds))
+        if kinds not in self.eligible:
+            rows = defaultdict(list)
+            for owner, keys in self.by_owner.items():
+                for key in keys:
+                    row = self.symbols[key]
+                    if row.get('kind') in kinds and self.accessible(key, constructor=row.get('kind') == 'CONSTRUCTOR'):
+                        rows[owner].append(key)
+            self.eligible[kinds] = dict(rows)
+        return self.eligible[kinds]
 
     def _dense_allowed(self):
         registry = getattr(self.router, 'registry', None)
@@ -93,6 +175,19 @@ class ConstructionEvidenceIndex:
         return config.adapter == 'embedding' and (not device.startswith('cpu') or _dense_opted_in())
 
     def _subtype(self, actual, expected):
+        if actual == expected:
+            return True
+        if actual in PRIMITIVES or expected in PRIMITIVES:
+            return False
+        if expected == 'java.lang.Object':
+            return True
+        if actual.endswith('[]'):
+            if expected in {'java.lang.Cloneable', 'java.io.Serializable'}:
+                return True
+            if expected.endswith('[]'):
+                a, b = actual[:-2], expected[:-2]
+                return a == b or (a not in PRIMITIVES and b not in PRIMITIVES and self._subtype(a, b))
+            return False
         pending, seen = [actual], set()
         while pending:
             current = pending.pop()
@@ -106,6 +201,20 @@ class ConstructionEvidenceIndex:
             for parent in parents:
                 pending.extend(self.aliases.get(symbol_query_key(parent), ()))
         return False
+
+    def assignable(self, actual, expected):
+        # Same Java conversion rules as the final IR admission check, using
+        # actual class parents rather than guessed simple-name compatibility.
+        if 'void' in {actual, expected}:
+            return False
+        if actual == expected or expected in WIDENING.get(actual, ()):
+            return True
+        if actual in BOXING:
+            return self._subtype(BOXING[actual], expected)
+        unboxed = {value: key for key, value in BOXING.items()}.get(actual)
+        if unboxed and (unboxed == expected or expected in WIDENING.get(unboxed, ())):
+            return True
+        return self._subtype(actual, expected)
 
     def accessible(self, key, *, constructor=False):
         row = self.symbols[key]
@@ -153,11 +262,12 @@ class ConstructionEvidenceIndex:
         return result
 
     def prepare(self, purpose, *, kinds):
-        if not isinstance(purpose, str) or not purpose.strip() or not set(kinds) <= {'CLASS', 'METHOD', 'CONSTRUCTOR', 'FIELD'}:
+        if (not isinstance(purpose, str) or not purpose.strip() or not isinstance(kinds, (list, tuple, set, frozenset))
+                or not kinds or any(not isinstance(kind, str) for kind in kinds)
+                or not set(kinds) <= {'CLASS', 'METHOD', 'CONSTRUCTOR', 'FIELD'}):
             raise ValueError('CONSTRUCTION_RETRIEVAL_GOAL_INVALID')
-        descriptor = {'purpose': purpose.strip(), 'kinds': sorted(set(kinds))}
-        goal = 'intent:' + hashlib.sha256(json.dumps(descriptor, sort_keys=True).encode()).hexdigest()[:24]
-        self.goals[goal] = descriptor
+        descriptor = {'purpose': purpose.strip(), 'kinds': sorted(set(kinds)), 'scope': 'package:'}
+        goal = self._goal(descriptor)
         if goal == self.ordering_goal:
             return goal
         query = _words(descriptor['purpose'])
@@ -169,13 +279,15 @@ class ConstructionEvidenceIndex:
                     raise ValueError('CONSTRUCTION_RETRIEVAL_EMBEDDING_SHAPE')
                 self.query_vectors[query] = rows[0]
             vector = self.query_vectors[query]
-        sources = rank_context_chunks(query, self.source_chunks, query_vector=vector)
+        sources = rank_context_chunks(query, self.source_chunks, query_vector=vector,
+                                      prepared_text=self.source_prepared)
         relation = defaultdict(float)
         for hit in sources:
             if hit.score <= 0:
                 continue
             for owner in self.source_targets[hit.chunk_id]:
-                relation[owner] += hit.score
+                # Repeated imports are not independent behavioral evidence.
+                relation[owner] = max(relation[owner], hit.score)
         for hint in self.contract.get('host_requirements', {}).get('symbols', ()):
             for owner in self.aliases.get(symbol_query_key(hint), ()):
                 relation[owner] += 1.0
@@ -192,46 +304,105 @@ class ConstructionEvidenceIndex:
                     for linked in self.aliases.get(symbol_query_key(type_.removesuffix('[]')), ()):
                         if linked != owner:
                             relation[linked] = max(relation[linked], strength / 2)
-        owners = rank_context_chunks(query, self.owner_chunks, relation_scores=relation)
-        owner_scores = {row.chunk_id: row.score for row in owners}
-        # New own declarations are valid local targets, distinct from donor or
-        # installed API authority. Their actual purpose remains visible.
-        terms = set(_meaningful_terms(query))
-        ranked = []
-        for key, row in self.symbols.items():
-            if row.get('kind') not in kinds or not self.accessible(key, constructor=row.get('kind') == 'CONSTRUCTOR'):
-                continue
-            text = _description(row)
-            score = owner_scores.get(row['owner'], 0.0) + _lexical_score(terms, query.casefold(), text)
-            ranked.append((score, key))
-        ranked.sort(key=lambda item: (-item[0], item[1]))
+        owners = rank_context_chunks(query, self.owner_chunks, relation_scores=relation,
+                                     prepared_text=self.owner_prepared)
+        eligible = self._eligible_owners(kinds)
+        ranked = tuple(row.chunk_id for row in owners if row.chunk_id in eligible)
+        self.owner_scores = {row.chunk_id: row.score for row in owners}
+        self.scope_counts = defaultdict(int)
+        self.scope_scores = defaultdict(float)
+        for owner, keys in eligible.items():
+            for scope in self.owner_scopes[owner]:
+                self.scope_counts[scope] += len(keys)
+                self.scope_scores[scope] = max(self.scope_scores[scope], self.owner_scores.get(owner, 0.0))
+        self.query_terms, self.query_lower = set(_meaningful_terms(query)), query.casefold()
+        self.member_orderings = {}
+        self.scoped_orderings = {}
         self.ordering_goal = goal
-        self.ordering = (tuple(key for _score, key in ranked), tuple(row.chunk_id for row in sources))
+        self.ordering = (ranked, tuple(row.chunk_id for row in sources))
         print('CONSTRUCTION RETRIEVAL: ' + json.dumps({
             'goal_id': goal, 'purpose': descriptor['purpose'], 'symbol_kinds': descriptor['kinds'],
-            'candidate_count': len(ranked), 'source_unit_count': len(sources),
-            'source_embeddings_used': bool(vector), 'semantic_selector': 'native_real_candidate_selection',
+            'candidate_count': sum(len(keys) for keys in eligible.values()), 'source_unit_count': len(sources),
+            'source_embeddings_used': bool(vector), 'semantic_selector': 'native_package_type_signature_selection',
         }, ensure_ascii=False), flush=True)
         return goal
 
     def page(self, goal, offset):
-        if goal not in self.goals:
-            raise ValueError('CONSTRUCTION_RETRIEVAL_GOAL_MISSING')
-        if goal != self.ordering_goal:
-            row = self.goals[goal]
-            self.prepare(row['purpose'], kinds=row['kinds'])
-        keys, sources = self.ordering
-        result = page_result(keys, offset, field='matches')
-        result['matches'] = [symbol_record(key, self.symbols[key]) for key in result['matches']]
+        descriptor = self._ensure(goal)
+        eligible = self._eligible_owners(descriptor['kinds'])
+        scope = descriptor['scope']
+        if scope not in self.scoped_orderings:
+            owners = tuple(owner for owner in self.ordering[0] if owner in self.scope_owners[scope])
+            cumulative, total = [], 0
+            for owner in owners:
+                total += len(eligible[owner])
+                cumulative.append(total)
+            self.scoped_orderings[scope] = (owners, tuple(cumulative), total)
+        owners, cumulative, total = self.scoped_orderings[scope]
+        if type(offset) is not int or offset < 0 or (offset and offset >= total):
+            raise ValueError('CONSTRUCTION_LOOKUP_OFFSET_INVALID')
+        selected, cursor = [], offset
+        owner_index = bisect_right(cumulative, offset)
+        # Rank members only for owners on this actual page. A new purpose
+        # never tokenizes or sorts the complete method/field inventory.
+        while owner_index < len(owners) and len(selected) < PAGE_SIZE:
+            owner = owners[owner_index]
+            if owner not in self.member_orderings:
+                self.member_orderings[owner] = tuple(sorted(eligible[owner], key=lambda key: (
+                    -self._member_lexical_score(key), key)))
+            start = cursor - (cumulative[owner_index - 1] if owner_index else 0)
+            page = self.member_orderings[owner][start:start + PAGE_SIZE - len(selected)]
+            selected.extend(page)
+            cursor += len(page)
+            owner_index += 1
+        result = {'matches': [symbol_record(key, self.symbols[key]) for key in selected],
+                  'offset': offset, 'total_count': total, 'status': 'matches' if selected else 'no_matches',
+                  'next_offset': cursor if cursor < total else None}
         return {'kind': 'symbols', 'query': goal, **result,
-                'purpose': self.goals[goal]['purpose'], 'symbol_kinds': self.goals[goal]['kinds'],
-                'source_candidates': [self.source_record(key) for key in sources[:PAGE_SIZE]]}
+                'purpose': descriptor['purpose'], 'symbol_kinds': descriptor['kinds'], 'scope': scope,
+                'source_candidates': [self.source_record(key) for key in self.ordering[1][:PAGE_SIZE]]}
+
+    def scope_page(self, goal, offset):
+        descriptor = self._ensure(goal)
+        scope = descriptor['scope']
+        candidates = set(self.scope_children.get(scope, ()))
+        if scope.startswith('type:'):
+            owner = scope.removeprefix('type:')
+            for key in self.by_owner.get(owner, ()):
+                row = self.symbols[key]
+                for type_ in [row.get('return_type', ''), *parameter_types(row),
+                              row.get('superclass', ''), *row.get('interfaces', ())]:
+                    for linked in self.aliases.get(symbol_query_key(type_.split('[', 1)[0]), ()):
+                        if linked != owner:
+                            candidates.add('type:' + linked)
+        candidates = sorted((key for key in candidates if self.scope_counts.get(key)),
+                            key=lambda key: (-self.scope_scores[key], key))
+        result = page_result(candidates, offset, field='scopes')
+        rows = []
+        for key in result['scopes']:
+            kind, name = key.split(':', 1)
+            child_goal = self._goal({**descriptor, 'scope': key})
+            row = {'goal_id': child_goal, 'scope_id': key, 'kind': kind, 'name': name,
+                   'candidate_count': self.scope_counts[key]}
+            if kind == 'type' and name in self.symbols:
+                row['declaration'] = symbol_record(name, self.symbols[name])
+            rows.append(row)
+        result['scopes'] = rows
+        return {**result, 'scope': scope, 'purpose': descriptor['purpose']}
 
     def source_record(self, key):
         ref, offset, unit = self.sources[key]
         return {'source_ref': ref, 'offset': offset, 'signature': unit.get('signature', ''),
                 'authority': unit.get('authority', 'inspected_materialized_source'),
                 'source_sha256': unit.get('source_sha256', '')}
+
+    def source_page(self, goal, offset):
+        # Source discovery follows the same purpose-ranked complete unit map;
+        # the caller selects returned pointers, never guesses a filename.
+        self._ensure(goal)
+        result = page_result(self.ordering[1], offset, field='sources')
+        result['sources'] = [self.source_record(key) for key in result['sources']]
+        return result
 
     def export_goals(self):
         return [{'goal_id': key, **row} for key, row in sorted(self.goals.items())]
@@ -241,9 +412,14 @@ class ConstructionEvidenceIndex:
             raise ValueError('CONSTRUCTION_RETRIEVAL_GOALS_INVALID')
         seen = set()
         for row in rows:
-            if not isinstance(row, dict) or set(row) != {'goal_id', 'purpose', 'kinds'} or row['goal_id'] in seen:
+            if (not isinstance(row, dict) or set(row) != {'goal_id', 'purpose', 'kinds', 'scope'}
+                    or not isinstance(row['goal_id'], str) or row['goal_id'] in seen
+                    or not isinstance(row['purpose'], str) or not row['purpose'].strip()
+                    or not isinstance(row['kinds'], list) or not row['kinds']
+                    or any(not isinstance(kind, str) for kind in row['kinds'])
+                    or not isinstance(row['scope'], str) or row['scope'] not in self.scope_owners):
                 raise ValueError('CONSTRUCTION_RETRIEVAL_GOALS_INVALID')
-            descriptor = {'purpose': str(row['purpose']).strip(), 'kinds': sorted(set(row['kinds']))}
+            descriptor = {'purpose': row['purpose'].strip(), 'kinds': sorted(set(row['kinds'])), 'scope': row['scope']}
             if not descriptor['purpose'] or not set(descriptor['kinds']) <= {'CLASS', 'METHOD', 'CONSTRUCTOR', 'FIELD'}:
                 raise ValueError('CONSTRUCTION_RETRIEVAL_GOALS_INVALID')
             goal = 'intent:' + hashlib.sha256(json.dumps(descriptor, sort_keys=True).encode()).hexdigest()[:24]

@@ -1,80 +1,91 @@
-"""Operation decisions with selectors derived from real, unread host pages."""
+"""Choose an operation first; literal evidence reads belong to that goal."""
 from __future__ import annotations
 
 import string
 
 from .construction_author import ID, obj
-from .construction_declaration_choices import (
-    action_schema, binding_lookup_schemas, string_excluding, symbol_lookup_schemas,
-)
-from .construction_state import PAGE_SIZE, symbol_query_key
-from .java_operation_ir import OPERATIONS
+from .construction_declaration_choices import action_schema, binding_lookup_schemas, symbol_lookup_schemas, string_excluding
+from .construction_state import PAGE_SIZE
+from .java_operation_ir import OPERATIONS, EXPRESSIONS, STATEMENTS
+from .construction_operation_contracts import named_values, pending_input_contracts, result_fits
 
-_SELECTOR_ALPHABET = ''.join(chr(i) for i in range(33, 127) if chr(i) not in {'"', '\\'})
 NODE_ID_ALPHABET = string.ascii_letters + string.digits + '_.:-'
 
 
-def _catalog_schemas(state, kind, *, alphabet, fold_case=False):
-    consumed = {query for action, query, _offset in state.requests if action == kind}
-    branches = [action_schema(kind, {
-        'query': string_excluding(consumed, alphabet=alphabet, minimum=0, fold_case=fold_case),
-        'offset': {'const': 0},
-    })]
+def operation_next_schema(state, *, nodes, declaration, can_complete):
+    actions = list(OPERATIONS)
+    values = named_values(nodes, declaration, state.symbols)
+    if not values['parameter']:
+        actions.remove('parameter')
+    if not values['local']:
+        actions.remove('local')
+    if declaration.get('static'):
+        actions.remove('this')
+    pending = pending_input_contracts(nodes, declaration, state.symbols)
+    branches = []
+    if pending:
+        # An accepted API/control node creates concrete input obligations.
+        # Fill returned slots before selecting an unrelated new root.
+        for key, consumers in list(pending.items())[:PAGE_SIZE]:
+            allowed = set(actions)
+            for row in consumers:
+                allowed &= EXPRESSIONS if row['mode'] == 'expression' else STATEMENTS
+                if row.get('allowed_operations'):
+                    allowed &= set(row['allowed_operations'])
+            if state.evidence_index is not None:
+                for action in ('parameter', 'local'):
+                    if not any(result_fits(type_, consumers, state.evidence_index) for _name, type_ in values[action]):
+                        allowed.discard(action)
+                if not result_fits(declaration['owner'], consumers, state.evidence_index):
+                    allowed.discard('this')
+            if allowed:
+                branches.append(obj({'action': {'enum': sorted(allowed)}, 'node_id': {'const': key}, 'purpose': ID}))
+    else:
+        root_actions = set(actions) & (EXPRESSIONS if declaration['kind'] == 'FIELD' else STATEMENTS)
+        branches.append(obj({'action': {'enum': sorted(root_actions)}, 'node_id': string_excluding(
+            (row['node_id'] for row in nodes), alphabet=NODE_ID_ALPHABET), 'purpose': ID}))
+    if can_complete:
+        branches.append(action_schema('complete', {'purpose': ID}))
+    return {'oneOf': [*branches, action_schema('extension', {'purpose': ID})]}
+
+
+def _index_schema(state, kind, query):
+    branches = []
+    if (kind, query, 0) not in state.requests:
+        branches.append(action_schema(kind, {'query': {'const': query}, 'offset': {'const': 0}}))
     for row in state.lookup_successors(kind):
-        branches.append(action_schema(kind, {
-            'query': {'const': row['query']}, 'offset': {'const': row['next_offset']},
-        }))
+        if row['query'] == query:
+            branches.append(action_schema(kind, {'query': {'const': query}, 'offset': {'const': row['next_offset']}}))
     return branches
 
 
-def operation_next_schema(state, *, nodes, source_units, pinned_source, dependency_types,
-                          can_complete):
-    actions = [*OPERATIONS, *(['complete'] if can_complete else [])]
-    branches = [obj({'action': {'enum': actions}, 'query': {'const': ''}, 'offset': {'const': 0}}),
-                action_schema('extension', {'query': ID, 'offset': {'const': 0}}),
-                *symbol_lookup_schemas(state), *binding_lookup_schemas(state)]
-    consumed_symbols = {query for kind, query, _offset in state.requests if kind == 'symbols'}
-    available_types = sorted(key for key in dependency_types
-                             if symbol_query_key(key) not in consumed_symbols)
-    if available_types:
-        branches.append(action_schema('inspect_dependency', {
-            'query': {'enum': available_types}, 'offset': {'const': 0},
-        }))
+def operation_context_branches(state, *, nodes, source_units, pinned_source):
+    branches = [*binding_lookup_schemas(state), *symbol_lookup_schemas(state)]
     offset = state.next_declaration_offset()
     if offset is not None:
         branches.append(action_schema('declarations', {'query': {'const': ''}, 'offset': {'const': offset}}))
-
     if nodes:
-        branches.extend(_catalog_schemas(state, 'node_index', alphabet=NODE_ID_ALPHABET))
+        branches.extend(_index_schema(state, 'node_index', ''))
+        visible = {row['node_id'] for row in nodes[-PAGE_SIZE:]}
         referenced = {ref for row in nodes for ref in row['input_refs']}
-        roots = [row['node_id'] for row in nodes if row['node_id'] not in referenced]
-        visible = {row['node_id'] for row in nodes[-PAGE_SIZE:]} | set(roots[:PAGE_SIZE])
+        visible.update(row['node_id'] for row in nodes if row['node_id'] not in referenced)
         for row in state.lookup_cursors.values():
             if row['kind'] == 'node_index':
-                matches = [node for node in nodes if row['query'] in node['node_id']]
-                visible.update(node['node_id'] for node in matches[row['offset']:row['offset'] + PAGE_SIZE])
+                visible.update(node['node_id'] for node in nodes[row['offset']:row['offset'] + PAGE_SIZE])
         unread = sorted(key for key in visible if ('nodes', key, 0) not in state.requests)
         if unread:
-            # One full node per read; every older node remains discoverable by
-            # the complete, pageable index. No graph-size limit is introduced.
             branches.append(action_schema('nodes', {'query': {'enum': unread}, 'offset': {'const': 0}}))
-
-    if source_units:
-        branches.extend(_catalog_schemas(state, 'sources', alphabet=_SELECTOR_ALPHABET, fold_case=True))
-        source_ids = sorted(source_units)
-        visible = set(source_ids[:PAGE_SIZE])
-        if pinned_source in source_units:
-            visible.add(pinned_source)
+    if source_units and state.symbol_goal is not None:
+        goal = state.symbol_goal
+        branches.extend(_index_schema(state, 'sources', goal))
+        pages = [state.evidence_index.source_page(goal, 0)]
         for row in state.lookup_cursors.values():
-            if row['kind'] == 'sources':
-                matches = [key for key in source_ids if row['query'].casefold() in key.casefold()]
-                visible.update(matches[row['offset']:row['offset'] + PAGE_SIZE])
-            elif row['kind'] == 'source':
-                visible.add(row['query'])
-        for key in sorted(visible):
-            consumed = {offset for kind, query, offset in state.requests
-                        if kind == 'source' and query == key}
-            offset = max(consumed) + 1 if consumed else 0
-            if offset < len(source_units[key]):
-                branches.append(action_schema('source', {'query': {'const': key}, 'offset': {'const': offset}}))
-    return {'oneOf': branches}
+            if row['kind'] == 'sources' and row['query'] == goal:
+                pages.append(state.evidence_index.source_page(goal, row['offset']))
+        pointers = {(row['source_ref'], row['offset']) for page in pages for row in page['sources']}
+        if pinned_source in source_units:
+            pointers.add((pinned_source, 0))
+        for ref, offset in sorted(pointers):
+            if ('source', ref, offset) not in state.requests:
+                branches.append(action_schema('source', {'query': {'const': ref}, 'offset': {'const': offset}}))
+    return branches
