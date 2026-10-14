@@ -131,6 +131,7 @@ def execute_checkpointed_job(job, *, context, router, registry, base_dir, execut
             )
         dependencies[name] = digest(port.to_dict())
     source_hashes = {}
+    verified_sources = dict((context or {}).get('_verified_prerequisite_source_hashes') or {})
     if is_generator:
         spec = inputs[spec_port]
         bindings = spec.get("bindings") or {}
@@ -151,6 +152,12 @@ def execute_checkpointed_job(job, *, context, router, registry, base_dir, execut
             from .authored_reuse_bridge import installed_donor_source_context
             for row in installed_donor_source_context(root, donor_caps):
                 source_hashes[row["path"]] = row["sha256"]
+                verified_sources[row['path']] = row['sha256']
+    approved_context = dict(context or {})
+    approved_context.pop('_verified_prerequisite_source_hashes', None)
+    approved_binding = digest({'job': definition,
+                              'template': manifest if is_generator else load_template(job.template_id),
+                              'context': approved_context})
     binding = digest(
         {
             "job": definition,
@@ -173,12 +180,20 @@ def execute_checkpointed_job(job, *, context, router, registry, base_dir, execut
             if resolved is not None:
                 resolved.assert_context(prior["receipt"].get("context_id"), code="REUSE_VERSION_INCOMPATIBLE")
             if prior["input_hash"] != binding:
-                raise ValueError(
-                    f"ARTIFACT_ADAPT_REQUIRED: changed inputs for {job.job_id}"
-                )
+                if prior.get('approved_input_hash') != approved_binding:
+                    raise ValueError(f"ARTIFACT_ADAPT_REQUIRED: changed or unbound approved inputs for {job.job_id}")
+                for source, value in source_hashes.items():
+                    if value == prior.get('materialized_source_hashes', {}).get(source):
+                        continue
+                    proof = _read_path_hash(root, source) or verified_sources.get(source)
+                    if value is None or proof != value:
+                        raise ValueError('ARTIFACT_PREREQUISITE_REFRESH_UNVERIFIED: ' + source)
             if current is None or recorded != current:
                 raise ValueError(f"ARTIFACT_CHECKPOINT_TARGET_DRIFT: {relative}")
-            if prior.get('implementation_fingerprint') == implementation_fingerprint:
+            if current != prior.get('after_hash'):
+                raise ValueError(f"ARTIFACT_CHECKPOINT_TARGET_DRIFT: {relative}")
+            if (prior['input_hash'] == binding
+                    and prior.get('implementation_fingerprint') == implementation_fingerprint):
                 return _restore_checkpoint(job, prior["receipt"], registry)
             # Same approved inputs and verified output, new implementation:
             # regenerate under the normal target lock. Preserve old evidence
@@ -187,11 +202,11 @@ def execute_checkpointed_job(job, *, context, router, registry, base_dir, execut
             raise ValueError(f"ARTIFACT_CHECKPOINT_TARGET_DRIFT: {relative}")
         before = current
         execution_inputs = context
-        if prior is not None and is_generator:
+        if prior is not None and is_generator and spec.get('operation') == 'CREATE_FILE':
             execution_inputs = dict(context or {})
             execution_inputs['_artifact_owned_replacement'] = {
                 'job_id': job.job_id, 'target_path': relative,
-                'before_sha256': before, 'input_hash': binding,
+                'before_sha256': before, 'input_hash': prior['input_hash'],
             }
 
         try:
@@ -220,7 +235,9 @@ def execute_checkpointed_job(job, *, context, router, registry, base_dir, execut
             "template_id": job.template_id,
             "input_hash": binding,
             "implementation_fingerprint": implementation_fingerprint,
+            'approved_input_hash': approved_binding,
             "dependency_hashes": dependencies,
+            'materialized_source_hashes': source_hashes,
             "target_path": relative,
             "before_hash": before,
             "after_hash": after,

@@ -13,9 +13,13 @@ def build_input_manifest_sha256(project_root):
     digest = hashlib.sha256(b'mmm/build-inputs-v1\0')
     for path in sorted(root.rglob('*')):
         relative = path.relative_to(root)
-        if any(part in _OUTPUT_ROOTS for part in relative.parts) or path.is_dir():
+        if relative.parts[0] in _OUTPUT_ROOTS:
             continue
-        if path.is_symlink() or not path.is_file():
+        if path.is_symlink():
+            raise ValueError('BUILD_INPUT_NOT_REGULAR: ' + relative.as_posix())
+        if path.is_dir():
+            continue
+        if not path.is_file():
             raise ValueError('BUILD_INPUT_NOT_REGULAR: ' + relative.as_posix())
         content = hashlib.sha256()
         with path.open('rb') as stream:

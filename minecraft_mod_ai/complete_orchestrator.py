@@ -1988,6 +1988,24 @@ class CompleteProductionOrchestrator:
                         "project_root": project_root, "base_dir": project_root,
                         "resolved_version_context": spec.platform.version_context.to_dict(),
                     }
+                    # Dynamic prerequisites are certified by completed current
+                    # WorkNodes, separately from the approved consumer contract.
+                    planned_nodes = {item.node_id: item for item in work_plan.nodes}
+                    pending_dependencies, seen_dependencies = list(node.dependencies), set()
+                    verified_sources = {}
+                    while pending_dependencies:
+                        dependency_id = pending_dependencies.pop()
+                        if dependency_id in seen_dependencies:
+                            continue
+                        seen_dependencies.add(dependency_id)
+                        dependency = planned_nodes[dependency_id]
+                        pending_dependencies.extend(dependency.dependencies)
+                        completed = ledger.cached_receipt(dependency_id, input_hash=dependency.input_hash)
+                        if not completed or not self._receipt_outputs_exist(completed, project_root=project_root):
+                            continue
+                        verified_sources.update({path: value.removeprefix('sha256:')
+                            for path, value in completed.get('_mmm_output_hashes', {}).items()})
+                    generation_context['_verified_prerequisite_source_hashes'] = verified_sources
                     # Establish the actual Fabric/JDK API before model authoring.
                     # A broken Gradle toolchain must fail here, not after coder work.
                     def _java_generator_job(job: ArtifactJob) -> bool:
