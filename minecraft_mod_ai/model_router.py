@@ -384,7 +384,17 @@ class ModelRouter:
         assert_atomic_model_schema(parameters, surface=f"structured data {data_name}")
         config, adapter = self._generation_adapter(role)
         schema = dict(parameters)
-        outline = _structured_schema_outline(schema)
+        native_schema = str(getattr(config, 'adapter', '')) in {
+            'llama_cpp', 'vllm', 'openai_compatible',
+        }
+        # Transformers generators do not install a schema sampler. Their full
+        # textual schema remains necessary; only native schema transports can
+        # keep lexical productions outside the model's prompt.
+        prompt_schema = _structured_schema_outline(schema) if native_schema else schema
+        schema_hint = (
+            'Lexical patterns are enforced by the decoder. Schema outline: '
+            if native_schema else 'Response schema: '
+        )
         request_messages = fit_messages_to_context(
             [
                 *messages,
@@ -392,9 +402,8 @@ class ModelRouter:
                     "Return ONLY the JSON object for this data page. "
                     "No function call, XML, reasoning, prose or Markdown. "
                     "Populate only the fields in this page; the host assembles the "
-                    "complete result. Lexical patterns are enforced by the decoder. "
-                    "Schema outline: "
-                    + json.dumps(outline, ensure_ascii=False, separators=(",", ":"))
+                    "complete result. " + schema_hint
+                    + json.dumps(prompt_schema, ensure_ascii=False, separators=(",", ":"))
                 )},
             ],
             config=config,

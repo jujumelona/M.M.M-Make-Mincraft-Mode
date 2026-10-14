@@ -110,12 +110,14 @@ is a native trie complement that excludes consumed selectors, not gameplay
 instructions. ``generate_structured_data`` copied it into a textual schema in
 the model prompt, causing the input to grow with lookup bookkeeping.
 
-Structured data prompts now contain the decision fields, exact choices and
+Native structured-data prompts now contain the decision fields, exact choices and
 length/range bounds as a schema outline. Native lexical productions stay in
 the real response schema passed to the sampler and exact host validator. No
 schema constraint, requested behavior or accepted declaration is removed.
 The prompt-only projection walks schema positions so a field or literal
 object named ``pattern`` is preserved.
+Transformers adapters retain the full textual schema because their generation
+path has no native schema sampler.
 
 The construction protocol is advanced to separate previous inference journals
 and lookup cursors from the corrected decisions. Declaration-bound accepted
