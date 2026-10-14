@@ -752,6 +752,8 @@ class CompleteProductionOrchestrator:
                 build = {**build, "diagnostics": diagnostics}
             return build
 
+        from .build_input_identity import build_input_manifest_sha256
+        build_input_manifest = build_input_manifest_sha256(project_root)
         build = run_named_checkpoint(
             ledger,
             "gradle-build",
@@ -759,6 +761,7 @@ class CompleteProductionOrchestrator:
             input_value={
                 "graph_hash": work_plan.graph_hash,
                 "project_manifest": validation_manifest,
+                "build_input_manifest": build_input_manifest,
                 "run_gametest": options.run_gametest,
                 "require_clean_build": approved.schema_version == 'mmm/complete-proposal-v2',
             },
@@ -769,7 +772,7 @@ class CompleteProductionOrchestrator:
                 cached,
                 require_gametest=options.run_gametest,
                 spec=spec,
-                source_manifest_sha256=validation_manifest,
+                build_input_manifest_sha256=build_input_manifest,
             ),
         )
         if build.get('status') != 'PASS':
@@ -789,7 +792,7 @@ class CompleteProductionOrchestrator:
         )
         if not self._cached_build_exists(
             build, require_gametest=options.run_gametest, spec=spec,
-            source_manifest_sha256=final_manifest,
+            build_input_manifest_sha256=build_input_manifest_sha256(project_root),
         ):
             raise CompleteProductionError(
                 'Build evidence no longer matches the actual sources, production JAR or GameTest report.',
@@ -844,7 +847,8 @@ class CompleteProductionOrchestrator:
             'jar_integrity': artifact_receipt['integrity'],
             'mod_metadata': 'PASS',
             'artifact_sha256': artifact_receipt['sha256'],
-            'source_manifest_sha256': build['source_manifest_sha256'],
+            'source_manifest_sha256': final_manifest,
+            'build_input_manifest_sha256': build['build_input_manifest_sha256'],
             'gametest_report_sha256': build.get('gametest_report_sha256'),
             'artifact': artifact_receipt['artifact'],
             'toolchain': {
@@ -3653,7 +3657,7 @@ class CompleteProductionOrchestrator:
         *,
         require_gametest: bool = False,
         spec: Any = None,
-        source_manifest_sha256: str | None = None,
+        build_input_manifest_sha256: str | None = None,
     ) -> bool:
         if not isinstance(build, dict) or build.get('status') != 'PASS':
             return False
@@ -3668,10 +3672,10 @@ class CompleteProductionOrchestrator:
         expected = build.get('jar_sha256')
         if not isinstance(expected, str) or file_sha256(path) != expected:
             return False
-        captured_manifest = build.get('source_manifest_sha256')
+        captured_manifest = build.get('build_input_manifest_sha256')
         if not isinstance(captured_manifest, str) or not captured_manifest.startswith('sha256:'):
             return False
-        if source_manifest_sha256 is not None and captured_manifest != source_manifest_sha256:
+        if build_input_manifest_sha256 is not None and captured_manifest != build_input_manifest_sha256:
             return False
         raw_report = build.get('gametest_report')
         if raw_report is not None:

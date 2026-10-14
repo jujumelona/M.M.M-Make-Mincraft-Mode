@@ -51,7 +51,7 @@ class BuildReport:
     failure_class: str | None = None
     error_code: str | None = None
     repairable: bool | None = None
-    source_manifest_sha256: str | None = None
+    build_input_manifest_sha256: str | None = None
     jar_sha256: str | None = None
     gametest_report_sha256: str | None = None
 
@@ -72,7 +72,7 @@ class BuildReport:
             "failure_class": self.failure_class,
             "error_code": self.error_code,
             "repairable": self.repairable,
-            "source_manifest_sha256": self.source_manifest_sha256,
+            "build_input_manifest_sha256": self.build_input_manifest_sha256,
             "jar_sha256": self.jar_sha256,
             "gametest_report_sha256": self.gametest_report_sha256,
         }
@@ -423,8 +423,8 @@ class GradleRunner:
         build_arguments.append("--stacktrace")
         # Capture the actual build inputs after wrapper setup, before Gradle
         # executes. Receipts must certify these bytes, not paths alone.
-        from .project_index import ProjectIndex
-        source_manifest = ProjectIndex(prepared.project_root).manifest_receipt()['sha256']
+        from .build_input_identity import build_input_manifest_sha256
+        source_manifest = build_input_manifest_sha256(prepared.project_root)
         build_result = self._run(
             name="clean_build" if force_clean else "build",
             executable=prepared.gradle,
@@ -486,7 +486,7 @@ class GradleRunner:
                 "Gradle reported success but no remapped release JAR was found.",
                 include_artifacts=True,
             )
-        final_manifest = ProjectIndex(prepared.project_root).manifest_receipt()['sha256']
+        final_manifest = build_input_manifest_sha256(prepared.project_root)
         if final_manifest != source_manifest:
             return self._failed_build(
                 prepared, commands, "Project source changed during the build.",
@@ -503,7 +503,7 @@ class GradleRunner:
             error=None,
             gametest_mode=gametest_mode,
             gametest_task=gametest_task,
-            source_manifest_sha256=source_manifest,
+            build_input_manifest_sha256=source_manifest,
             jar_sha256='sha256:' + _sha256(Path(jar_path)),
             gametest_report_sha256='sha256:' + _sha256(Path(report_path)) if report_path else None,
         )
