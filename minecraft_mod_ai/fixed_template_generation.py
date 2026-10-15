@@ -439,9 +439,6 @@ def generate_fixed_template_value(
                     f"requested={requested_ceiling} required={required_ceiling}"
                 )
 
-        # The decoder must see the very same finite schema used to prove its
-        # output ceiling. The original logical schema remains the sole authority
-        # for host-side validation and numeric transport decoding below.
         raw = generate_text(
             role,
             messages,
