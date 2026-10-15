@@ -476,9 +476,10 @@ def run_plan_dialog(
 
     prebuilt exercises the saved AuthoredPlan and canonical content graph with no
     planning LLM calls. Source-reuse donor proofs still belong to production.
-    model_path is an opt-in real model-authored plan and reference-retrieval path,
-    not a hand-built CompleteProposal that bypasses the planning contracts.
-    model_replay repeats a recorded real-model AuthoredPlan without another model call.\n    host_smoke remains available for narrow deterministic registry testing.
+    model_path saves the real model-authored design; execution IR and reference
+    retrieval are prepared by ordinary production after the design is saved.
+    model_replay loads a recorded design or compiled AuthoredPlan without another
+    planning call. host_smoke remains available for narrow registry testing.
     """
 
     del input_fn
@@ -532,8 +533,8 @@ def run_plan_dialog(
             reply = session.load_plan(target)
         else:
             model_prompt = prompt.strip() or DEBUG_DEFAULT_PROMPT
-            # The ordinary Full-mode planner owns structured sections, Typed
-            # PlanIR, content discovery and candidate source retrieval.
+            # The ordinary planner authors the design. Its production compiler
+            # owns execution IR, content discovery and candidate source retrieval.
             print_fn(f"DEBUG_MODEL_PATH_PROMPT: {model_prompt}")
             reply = session.plan(model_prompt, save_plan_path=target)
         authored = getattr(reply, "complete_proposal", None)
@@ -548,27 +549,35 @@ def run_plan_dialog(
             )
         if not normalize_structured_sections(authored.structured_sections):
             raise RuntimeError("DEBUG_MODEL_PLAN_STRUCTURED_SECTIONS_MISSING")
-        if not authored.typed_plan_ir:
-            raise RuntimeError("DEBUG_MODEL_PLAN_TYPED_IR_MISSING")
-        validate_typed_plan_ir(
-            authored.typed_plan_ir, capabilities=typed_host_capability_contracts()
-        )
         content = authored.content_design
-        if content.get("modules") and not content.get("_implementation_facts"):
-            raise RuntimeError(
-                "DEBUG_MODEL_PLAN_CONTENT_FACTS_MISSING: content modules cannot "
-                "reach canonical artifact production without implementation facts"
-            )
         has_content = bool(content.get("modules"))
-        has_typed_work = bool(
-            authored.typed_plan_ir.get("functions")
-            or authored.typed_plan_ir.get("initialize")
-            or authored.typed_plan_ir.get("platform_modules")
-        )
-        if not (has_content or has_typed_work):
-            raise RuntimeError(
-                "DEBUG_MODEL_PLAN_EMPTY_IMPLEMENTATION: no executable content "
-                "or typed host operation was authored"
+        if authored.typed_plan_ir:
+            validate_typed_plan_ir(
+                authored.typed_plan_ir, capabilities=typed_host_capability_contracts()
+            )
+            if has_content and not content.get("_implementation_facts"):
+                raise RuntimeError(
+                    "DEBUG_MODEL_PLAN_CONTENT_FACTS_MISSING: content modules cannot "
+                    "reach canonical artifact production without implementation facts"
+                )
+            has_typed_work = bool(
+                authored.typed_plan_ir.get("functions")
+                or authored.typed_plan_ir.get("initialize")
+                or authored.typed_plan_ir.get("platform_modules")
+            )
+            if not (has_content or has_typed_work):
+                raise RuntimeError(
+                    "DEBUG_MODEL_PLAN_EMPTY_IMPLEMENTATION: no executable content "
+                    "or typed host operation was authored"
+                )
+        elif has_content or debug_strategy == "prebuilt":
+            raise RuntimeError("DEBUG_MODEL_PLAN_TYPED_IR_MISSING")
+        else:
+            # Current plans intentionally contain no execution projection yet.
+            # Keep their saved design intact and let compile_for_production()
+            # prepare it at the same boundary used by ordinary Full mode.
+            print_fn(
+                "DEBUG_MODEL_DESIGN_SAVED: 실행 IR·콘텐츠 준비는 일반 제작 단계에서 수행합니다."
             )
         expected_hash = authored.calculate_hash()
         if debug_strategy in {"model_replay", "prebuilt"}:

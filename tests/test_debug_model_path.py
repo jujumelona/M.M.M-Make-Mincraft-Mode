@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -107,6 +108,104 @@ def test_model_path_uses_real_authored_output_and_roundtrip(tmp_path: Path) -> N
     assert isinstance(result.reply.complete_proposal, AuthoredPlan)
     assert result.reply.complete_proposal.content_design["modules"][0]["module_id"] == "crystal_fragment"
     assert json.loads(target.read_text(encoding="utf-8"))["schema_version"] == "mmm/authored-plan-v2"
+
+
+@pytest.mark.parametrize("strategy", ["model_path", "model_replay"])
+def test_debug_design_only_plan_reaches_normal_production_compiler(
+    tmp_path: Path, monkeypatch, strategy: str,
+) -> None:
+    """Replay the planner/API boundary that failed in planning-logs (3).zip."""
+    import minecraft_mod_ai.api as api
+    from minecraft_mod_ai.complete_planner import CompleteGameDesignPlanner
+
+    prompt = "계절마다 다른 작물을 재배하고 요리하는 모드를 만들어줘."
+    structured = _plan(prompt).structured_sections
+    structured["verification"]["specification"]["success_cases"] = [{
+        "given": "A player has a mature seasonal crop and a cooking recipe.",
+        "when": "The player harvests the crop and cooks it.",
+        "then": "The finished dish is added to the player inventory.",
+        "measurement": "Read the inventory after the cooking action.",
+    }]
+    monkeypatch.setattr(api, "_validate_internal_engine_preflight", lambda: None)
+    monkeypatch.setattr(
+        "minecraft_mod_ai.request_scope.author_request_scope", lambda *a, **k: {},
+    )
+    monkeypatch.setattr(
+        "minecraft_mod_ai.authored_structured_design.author_structured_sections",
+        lambda *a, **k: structured,
+    )
+    session = api.CompleteModAISession.__new__(api.CompleteModAISession)
+    session.output_root = tmp_path
+    session.router = SimpleNamespace(profile="fast_test")
+    session.planner = CompleteGameDesignPlanner(session.router)
+    session.existing_input = None
+    session.brief = ""
+    session.complete_proposal = None
+    target = tmp_path / "debug" / "proposal.json"
+
+    if strategy == "model_replay":
+        session.plan(prompt, save_plan_path=target)
+
+        def unexpected_planning(*args, **kwargs):
+            raise AssertionError("Replay must use the saved model design")
+
+        monkeypatch.setattr(session.planner, "plan", unexpected_planning)
+
+    result = run_plan_dialog(
+        session=session, run_mode=FULL_MODE, prompt=prompt,
+        plan_path=target, debug_mode=True, debug_strategy=strategy,
+        print_fn=lambda *a, **k: None,
+    )
+    authored = result.reply.complete_proposal
+    assert result.approved is True
+    assert authored.requested_prompt == prompt
+    assert authored.structured_sections == structured
+    assert authored.typed_plan_ir == {}
+    assert authored.content_design == {}
+    assert json.loads(target.read_text(encoding="utf-8")) == authored.to_dict()
+
+    # Inference/Java compilation are external boundaries here. Keep the real
+    # API and compile_for_production dispatch, and check deferred IR ownership.
+    authored_inputs = []
+    compiled_inputs = []
+    execution = replace(
+        authored,
+        typed_plan_ir=_plan(prompt).typed_plan_ir,
+        content_design=_plan(prompt).content_design,
+    )
+    compiled = SimpleNamespace(assets=())
+
+    def author_execution(plan):
+        authored_inputs.append(plan)
+        return execution
+
+    def compile_execution(router, plan, **kwargs):
+        compiled_inputs.append(plan)
+        return compiled
+
+    monkeypatch.setattr(session.planner, "_author_for_production", author_execution)
+    monkeypatch.setattr(
+        "minecraft_mod_ai.authored_production.compile_authored_design", compile_execution,
+    )
+    assert api._production_proposal(session, authored) is compiled
+    assert authored_inputs == [authored]
+    assert compiled_inputs == [execution]
+
+
+def test_debug_rejects_compiled_content_without_typed_ir(tmp_path: Path) -> None:
+    session = _ModelSession()
+
+    def partial_plan(prompt: str, *, save_plan_path=None):
+        plan = replace(_plan(prompt), typed_plan_ir={})
+        return SimpleNamespace(complete_proposal=plan, message=plan.text)
+
+    session.plan = partial_plan
+    with pytest.raises(RuntimeError, match="DEBUG_MODEL_PLAN_TYPED_IR_MISSING"):
+        run_plan_dialog(
+            session=session, run_mode=FULL_MODE, prompt="partial content",
+            plan_path=tmp_path / "proposal.json", debug_mode=True,
+            print_fn=lambda *a, **k: None,
+        )
 
 
 def test_debug_default_routes_user_prompt_into_real_model(tmp_path: Path) -> None:
