@@ -50,7 +50,7 @@ def _bind_job_dependencies(
 
 
 def _logical_port(
-    logical_name: str | Mapping[str, Any],
+    logical_name: Mapping[str, Any],
     published_name: str,
     values: dict[str, Any],
     template_id: str,
