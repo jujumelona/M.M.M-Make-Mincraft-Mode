@@ -128,3 +128,26 @@ def test_host_validated_argument_page_cannot_be_squeezed_to_fragment(monkeypatch
         )
     assert caught.value.kind == CONTEXT_PRESSURE
     assert caught.value.prompt_tokens == 37
+
+
+def test_overflow_reports_recoverable_context_pressure(monkeypatch):
+    import pytest
+    from minecraft_mod_ai.llama_exact_context import ExactContextOverflow
+    from minecraft_mod_ai.llama_finish_reason_contract import (
+        CONTEXT_PRESSURE, completion_boundary_kind,
+    )
+
+    class OverfilledClient(_Client):
+        def post(self, url, json):
+            self.token_calls += 1
+            return _Response({"input_tokens": 136})
+
+    client = OverfilledClient()
+    _uncached(monkeypatch, client)
+    with pytest.raises(ExactContextOverflow) as caught:
+        capacity_safe_payload(
+            "http://127.0.0.1:8910/v1",
+            {"messages": [{"role": "user", "content": "hello"}]},
+        )
+    assert completion_boundary_kind(caught.value) == CONTEXT_PRESSURE
+    assert caught.value.prompt_tokens == 136
