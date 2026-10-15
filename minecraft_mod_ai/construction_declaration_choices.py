@@ -54,13 +54,6 @@ def symbol_lookup_schemas(state):
             branches.append(action_schema('more_symbols', {
                 'query': {'const': row['query']}, 'offset': {'const': row['offset']}}))
         candidates = state.scope_candidates()
-        # Every displayed representative has a direct route to its complete
-        # owner signatures, even if that owner has no exact query-name anchor.
-        candidates = [*candidates, *(
-            row for row in state.symbol_lookup.get('owner_scopes', ())
-            if ('scopes', row['goal_id'], 0) not in state.requests
-        )]
-        candidates = list({row['goal_id']: row for row in candidates}.values())
         if candidates:
             branches.append(action_schema('scopes', {
                 'query': {'enum': [row['goal_id'] for row in candidates]}, 'offset': {'const': 0}}))
