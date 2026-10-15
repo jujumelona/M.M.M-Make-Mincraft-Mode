@@ -112,8 +112,27 @@ def compose(router, spec, *, source_context=(), construction_context=None,
     # the fully typed, evidence-bound operation author below.
     from .construction_direct_writer import eligible as direct_eligible, compose_feature
     if direct_eligible(bindings, context, behaviors):
+        print('CONSTRUCTION_AUTHOR_ROUTE: ' + json.dumps({
+            'mode': 'direct_java', 'owner': owner,
+            'assigned_behaviors': len(behaviors), 'checkpointed': True,
+            'target_build_verified': False,
+        }, ensure_ascii=False), flush=True)
         return compose_feature(router, spec, context, behaviors,
                                package=package, name=name, owner=owner)
+    if bindings.get('request_feature_entrypoint'):
+        retained = json.loads(bindings.get('retained_typed_behavior_json') or '{}')
+        print('CONSTRUCTION_AUTHOR_ROUTE: ' + json.dumps({
+            'mode': 'typed_ir', 'owner': owner,
+            'assigned_behaviors': len(behaviors),
+            'stateful_behaviors': sum(bool(row.get('state_reads') or row.get('state_writes'))
+                                       for row in behaviors),
+            'donor_capabilities': sorted(context.get('donor_callable_symbols', {})),
+            'port_reference_count': len(context.get('reference_port_obligations', ())),
+            'retained_typed_effects': sum(len(retained.get(key, ())) for key in
+                                          ('functions', 'event_bindings', 'ui_owned_records')),
+            'owned_runtime_record_count': len(json.loads(
+                bindings.get('owned_runtime_records_json') or '[]')),
+        }, ensure_ascii=False), flush=True)
     interfaces, superclass = [], ''
     symbols[owner] = {'kind': 'CLASS', 'owner': owner, 'name': name, 'access': 1,
         'superclass': superclass, 'interfaces': interfaces,
