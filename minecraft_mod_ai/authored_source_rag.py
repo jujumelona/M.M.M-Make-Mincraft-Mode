@@ -32,7 +32,7 @@ class VerifiedSourceRAG:
         from .construction_context import java_source_units
 
         def words(text):
-            split = re.sub(r"([a-z0-9])([A-Z])", r"\\1 \\2", str(text))
+            split = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", str(text))
             return set(re.findall(r"[a-z]{3,}|[가-힣]{2,}", split.casefold())) - {
                 "minecraft", "fabric", "forge", "the", "and", "with", "from",
                 "mod", "code", "source", "implementation", "register", "method",
