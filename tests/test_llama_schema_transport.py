@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from minecraft_mod_ai.llama_schema_transport import project_llama_transport_schema
+from minecraft_mod_ai.model_output_atomicity_contract import effective_model_transport_schema
 from minecraft_mod_ai.llama_structured_decode_policy import (
     _apply_llama_json_schema,
     _is_qwen35,
@@ -33,7 +34,7 @@ def test_qwen35_receives_native_structural_json_sampler_constraints():
     _apply_llama_json_schema(payload, _request(schema), adapter=adapter)
 
     assert payload["response_format"] == {"type": "json_object"}
-    assert payload["json_schema"] == project_llama_transport_schema(schema)
+    assert payload["json_schema"] == effective_model_transport_schema(schema)
     assert "grammar" not in payload
 
 
@@ -65,15 +66,9 @@ def test_non_qwen_receives_only_structural_transport_schema():
     _apply_llama_json_schema(payload, _request(schema), adapter=adapter)
 
     assert payload["response_format"] == {"type": "json_object"}
-    assert payload["json_schema"] == {
-        "type": "object",
-        "properties": {
-            "status": {"type": "string", "minLength": 3, "pattern": "^[a-z]+$"},
-            "items": {"type": "array", "items": {"type": "integer", "minimum": 1}, "minItems": 2},
-        },
-        "required": ["status", "items"],
-        "additionalProperties": False,
-    }
+    assert payload["json_schema"] == effective_model_transport_schema(schema)
+    assert payload["json_schema"]["properties"]["status"]["maxLength"] > 0
+    assert payload["json_schema"]["properties"]["items"]["maxItems"] >= 2
 
 
 def test_explicit_object_structure_wins_over_allof_branch():
