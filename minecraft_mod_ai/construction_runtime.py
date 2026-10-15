@@ -35,6 +35,38 @@ def _symbol_inventory(paths: tuple[str, ...], java_version: int, namespace: str,
                                 classpath_sides={})
 
 
+def _reconcile_project_compiled_sources(symbols, pages, root):
+    """Prefer verified current project source over its own stale compiled outputs.
+
+    Fabric split-client compileClasspath legitimately contains build/classes/java/main.
+    That directory must remain available to javac for linking, but its old
+    AuthoredProgram.class must not be treated as a conflicting external API when
+    the exact current AuthoredProgram.java is included as a materialized source.
+    External jar conflicts remain errors. The cached bytecode index is not mutated.
+    """
+    declarations = {
+        unit['owner'] for collection in pages.values() for unit in collection
+        if unit.get('kind') in {'class', 'interface', 'enum', 'record'}
+    }
+    build_classes = (root / 'build' / 'classes').resolve()
+    local_owners = set()
+    for owner in declarations:
+        existing = symbols.get(owner)
+        if not existing:
+            continue
+        source_path = existing.get('source_path', '')
+        if source_path and Path(source_path).resolve().is_relative_to(build_classes):
+            local_owners.add(owner)
+    if not local_owners:
+        return symbols
+    return {
+        key: row for key, row in symbols.items()
+        if not (row.get('owner') in local_owners
+                and row.get('source_path')
+                and Path(row['source_path']).resolve().is_relative_to(build_classes))
+    }
+
+
 def prepare_construction_context(spec, *, java_classpath, project_root, source_context=(), target_override=None):
     source_context = tuple(source_context)
     bindings = spec.get("bindings") or {}
@@ -87,6 +119,7 @@ def prepare_construction_context(spec, *, java_classpath, project_root, source_c
         if absolute.suffix == ".java":
             pages[relative] = java_source_units(data.decode("utf-8"), path=relative)
     from .construction_source_symbols import inspected_project_source_symbols
+    symbols = _reconcile_project_compiled_sources(symbols, pages, root)
     project_symbols, rejected = inspected_project_source_symbols(pages, symbols)
     if set(project_symbols) & set(symbols):
         raise ValueError("CONSTRUCTION_PROJECT_SYMBOL_COLLISION")
