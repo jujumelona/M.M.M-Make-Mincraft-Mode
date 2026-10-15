@@ -28,6 +28,27 @@ def _sha(payload):
         sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
 
 
+def _read_verified_record(path, error):
+    envelope = json.loads(path.read_text(encoding="utf-8"))
+    record = envelope.get("record")
+    if not isinstance(record, dict) or _sha(record) != envelope.get("sha256"):
+        raise ValueError(error)
+    return record
+
+
+def _publish_json(path, serialized):
+    """Publish a complete checkpoint only after its content is on disk."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name("." + path.name + "." + uuid4().hex + ".tmp")
+    try:
+        temporary.write_text(serialized, encoding="utf-8")
+        with model_execution_publication():
+            temporary.replace(path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
 def planned_declarations_fingerprint(symbols, declaration_ids):
     # A body can call another planned member. Its receiver and result contracts
     # must be stable too, even if this body's own signature did not change.
@@ -77,10 +98,7 @@ class ConstructionNodeCheckpoint:
         with _LOCK:
             if not self.path.exists():
                 return (), ""
-            envelope = json.loads(self.path.read_text(encoding="utf-8"))
-            record = envelope.get("record")
-            if not isinstance(record, dict) or _sha(record) != envelope.get("sha256"):
-                raise ValueError("CONSTRUCTION_CHECKPOINT_CORRUPT")
+            record = _read_verified_record(self.path, "CONSTRUCTION_CHECKPOINT_CORRUPT")
             if record.get("key") != self.key or record.get("task_id") != self.task.task_id:
                 raise ValueError("CONSTRUCTION_CHECKPOINT_BINDING_MISMATCH")
             if record.get("stage") not in {"authoring", "validated"}:
@@ -118,16 +136,8 @@ class ConstructionNodeCheckpoint:
                     raise ValueError('CONSTRUCTION_CHECKPOINT_REVISION_INVALID')
             elif existing and tuple(nodes[:len(existing)]) != existing:
                 raise ValueError("CONSTRUCTION_CHECKPOINT_FORK")
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = self.path.with_name("." + self.path.name + "." + uuid4().hex + ".tmp")
-            try:
-                temporary.write_text(json.dumps(envelope, ensure_ascii=False,
-                    sort_keys=True, separators=(",", ":")), encoding="utf-8")
-                with model_execution_publication():
-                    temporary.replace(self.path)
-            finally:
-                if temporary.exists():
-                    temporary.unlink()
+            _publish_json(self.path, json.dumps(envelope, ensure_ascii=False,
+                sort_keys=True, separators=(",", ":")))
 
     def recorded_source_refs(self):
         path = self.path.with_suffix(".source_refs.json")
@@ -146,20 +156,15 @@ class ConstructionNodeCheckpoint:
         with _LOCK:
             record = None
             if self.author_state_path.exists():
-                envelope = json.loads(self.author_state_path.read_text(encoding='utf-8'))
-                record = envelope.get('record')
-                if not isinstance(record, dict) or _sha(record) != envelope.get('sha256'):
-                    raise ValueError('CONSTRUCTION_AUTHOR_STATE_CORRUPT')
+                record = _read_verified_record(
+                    self.author_state_path, "CONSTRUCTION_AUTHOR_STATE_CORRUPT")
                 if record.get('key') != self.key or record.get('protocol') != PROTOCOL_VERSION:
                     raise ValueError('CONSTRUCTION_AUTHOR_STATE_BINDING_MISMATCH')
             if record is None or record.get('nodes_sha256') != _sha(nodes):
                 # Graph revisions and their initial cursor are one publication.
                 # A separate lookup cursor may still describe the old graph.
                 if self.path.exists():
-                    envelope = json.loads(self.path.read_text(encoding='utf-8'))
-                    body = envelope.get('record')
-                    if not isinstance(body, dict) or _sha(body) != envelope.get('sha256'):
-                        raise ValueError('CONSTRUCTION_CHECKPOINT_CORRUPT')
+                    body = _read_verified_record(self.path, "CONSTRUCTION_CHECKPOINT_CORRUPT")
                     if body.get('key') != self.key or body.get('task_id') != self.task.task_id:
                         raise ValueError('CONSTRUCTION_CHECKPOINT_BINDING_MISMATCH')
                     state = body.get('author_state')
@@ -200,17 +205,8 @@ class ConstructionNodeCheckpoint:
             if tuple(nodes) != existing:
                 raise ValueError('CONSTRUCTION_AUTHOR_STATE_GRAPH_MISMATCH')
             envelope = {'record': record, 'sha256': _sha(record)}
-            self.author_state_path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = self.author_state_path.with_name(
-                '.' + self.author_state_path.name + '.' + uuid4().hex + '.tmp')
-            try:
-                temporary.write_text(json.dumps(envelope, ensure_ascii=False,
-                    sort_keys=True, separators=(',', ':')), encoding='utf-8')
-                with model_execution_publication():
-                    temporary.replace(self.author_state_path)
-            finally:
-                if temporary.exists():
-                    temporary.unlink()
+            _publish_json(self.author_state_path, json.dumps(envelope,
+                ensure_ascii=False, sort_keys=True, separators=(",", ":")))
 
     def record_source_read(self, task, source_ref):
         if task.task_id != self.task.task_id or not source_ref:
@@ -221,12 +217,4 @@ class ConstructionNodeCheckpoint:
             refs.add(source_ref)
             body = {"key": self.key, "refs": sorted(refs)}
             record = {**body, "sha256": _sha(body)}
-            path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = path.with_name("." + path.name + "." + uuid4().hex + ".tmp")
-            try:
-                temporary.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
-                with model_execution_publication():
-                    temporary.replace(path)
-            finally:
-                if temporary.exists():
-                    temporary.unlink()
+            _publish_json(path, json.dumps(record, sort_keys=True))
