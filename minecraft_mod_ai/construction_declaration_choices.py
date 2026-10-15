@@ -9,7 +9,6 @@ import string
 
 from .construction_author import ID, ask, obj
 from .construction_state import PAGE_SIZE, STATE_INSTRUCTION, symbol_query_key
-from .construction_type_contracts import owner_package
 from .java_operation_ir import KEYWORDS, PRIMITIVES
 from .native_string_exclusions import string_excluding
 
