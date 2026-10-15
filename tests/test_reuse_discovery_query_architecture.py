@@ -361,3 +361,22 @@ def test_korean_capability_recovers_english_repository(monkeypatch):
         ("외계인과 싸움 식민지화",), Client()
     )
     assert "example/alien-combat" in result["외계인과 싸움 식민지화"]
+
+
+def test_korean_intent_reaches_implementation_seed_in_index():
+    from types import SimpleNamespace
+    from minecraft_mod_ai.capability_implementation_locator import CapabilityImplementationLocator
+
+    path = "src/main/java/example/AlienCombat.java"
+    index = SimpleNamespace(
+        registry_to_path={}, fqcn_to_path={},
+        symbol_to_paths={"AlienCombat": [path]},
+        method_to_paths={"attackAlien": [path]},
+        api_call_to_paths={}, resource_to_path={},
+        files_by_path={path: object()},
+    )
+    rows = CapabilityImplementationLocator.locate_seeds(
+        "외계인과 싸움 식민지화", index
+    )
+    assert rows and rows[0].node_id == path
+    assert "symbol_declaration_match" in rows[0].evidence_types
