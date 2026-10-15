@@ -260,6 +260,36 @@ def bind_owner_source_context(bindings: dict[str, Any], *, owner: Any,
         capabilities = [row["capability"] for row in reuse_plan.get("capabilities", ())
                         if row.get("mode") == "source_transplant"]
     snippets = rag.context(capabilities, requirement + " " + owner.module_id)
+    # A target-proven Java donor is a mandatory handoff, not an optional RAG
+    # suggestion. Resource-only transplants need no Java method, but an
+    # installed .java donor must never disappear silently at this boundary.
+    proven_java = {
+        row["capability"]
+        for row in reuse_plan.get("capabilities", ())
+        if row.get("mode") == "source_transplant"
+        and row.get("capability") in capabilities
+        and any(str(item.get("path") or "").endswith(".java")
+                for item in (row.get("donor") or {}).get("files", ()))
+    }
+    delivered_java = {
+        row["capability"] for row in snippets
+        if row.get("authority") == "installed_target_adapted_source"
+    }
+    missing = sorted(proven_java - delivered_java)
+    if missing:
+        raise ValueError("SOURCE_RAG_VERIFIED_DONOR_NOT_BOUND: " + ", ".join(missing))
+    bindings["source_reuse_binding_receipt_json"] = json.dumps({
+        "owner": owner.module_id, "required_capabilities": list(dict.fromkeys(capabilities)),
+        "verified_java_expected": sorted(proven_java),
+        "verified_java_delivered": sorted(delivered_java),
+        "snippet_count": len(snippets),
+        "reference_snippets": sum(
+            row.get("authority") == "reference_only_requires_target_adaptation"
+            for row in snippets),
+        "reference_failures": [row for row in rag.reference_failures
+                              if row.get("capability") in capabilities],
+    }, ensure_ascii=False, separators=(",", ":"))
+    print("SOURCE_RAG_OWNER_BINDING: " + bindings["source_reuse_binding_receipt_json"], flush=True)
     if snippets:
         bindings["verified_source_code_json"] = json.dumps(snippets, ensure_ascii=False, separators=(",", ":"))
         bindings["source_integration_instruction"] = (
