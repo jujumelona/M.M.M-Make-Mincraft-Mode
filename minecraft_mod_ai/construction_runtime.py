@@ -36,6 +36,7 @@ def _symbol_inventory(paths: tuple[str, ...], java_version: int, namespace: str,
 
 
 def prepare_construction_context(spec, *, java_classpath, project_root, source_context=(), target_override=None):
+    source_context = tuple(source_context)
     bindings = spec.get("bindings") or {}
     target = json.loads(bindings.get("target_contract_json") or "{}")
     if target_override is not None:
