@@ -529,7 +529,9 @@ def discover_repositories_for_graph(
             for _page_index in range(_discovery_pages()):
                 page = client.search(
                     provider, provider_query, limit=_query_limit(), target_profile="minecraft_mod",
-                    minecraft_version=minecraft_version, loader=loader,
+                    # Source-code discovery must not inherit the requested
+                    # game's binary-release filters. Older Fabric/Forge mods
+                    # are candidates for inspected, adapted source reuse.
                     **({"cursor": cursor} if cursor else {}),
                 )
                 raw = page.get("candidates") if isinstance(page, Mapping) else None
