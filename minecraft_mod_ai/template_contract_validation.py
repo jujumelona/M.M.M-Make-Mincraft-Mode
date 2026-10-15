@@ -86,6 +86,15 @@ def validate_template_contract(template):
                 schema,
                 surface=f"template {identifier!r} schema[{index}]",
             )
+    if "render" in template:
+        ports = template.get("produces", ())
+        if not isinstance(ports, (list, tuple)) or any(
+            not isinstance(port, Mapping)
+            or any(not isinstance(port.get(key), str) or not port[key].strip()
+                   for key in ("name", "kind", "target_type", "value"))
+            for port in ports
+        ):
+            raise ValueError(f"TEMPLATE_PORT_DECLARATION: {identifier} requires explicit typed outputs")
     if "render" in template and "inputs" in template:
         declared = template["inputs"]
         if not isinstance(declared, dict) or placeholders(template["render"]) != set(declared):
