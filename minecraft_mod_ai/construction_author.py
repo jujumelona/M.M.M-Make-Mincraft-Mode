@@ -58,6 +58,23 @@ def _node_summary(row):
         'names': {k: v for k, v in row['attributes'].items() if k in {'name', 'parameters'}}}
 
 
+def _graph_refs(nodes):
+    by_id = {row['node_id']: row for row in nodes}
+    referenced = {ref for row in nodes for ref in row['input_refs']}
+    pending = dict.fromkeys(ref for row in nodes for ref in row['input_refs'] if ref not in by_id)
+    roots = dict.fromkeys(key for key in by_id if key not in referenced)
+    return by_id, referenced, pending, roots
+
+
+def _has_observable_effect(nodes, owner_symbol):
+    # This source-only check is shared by resumed and in-progress bodies.
+    return any(
+        row['op'] in {'assign', 'constructor_call'} or
+        (row['op'] == 'call' and row['attributes']['symbol_ref'] != owner_symbol)
+        for row in nodes
+    )
+
+
 def author_task_operations(router, task, context):
     # Choice helpers import the shared schema primitives above; load them only
     # after this module is initialized, avoiding a declaration/author cycle.
@@ -80,17 +97,14 @@ def author_task_operations(router, task, context):
     resume = context.get('resume_nodes')
     existing, stage = resume(task) if callable(resume) else ((), '')
     nodes = [deepcopy(node) for node in existing]
-    by_id = {row['node_id']: row for row in nodes}
+    by_id, referenced, pending, roots = _graph_refs(nodes)
     if len(by_id) != len(nodes):
         raise ValueError('CONSTRUCTION_CHECKPOINT_NODES_INVALID')
     if stage == 'validated':
         JavaOperations(task, nodes, symbols)
         # Legacy validated graph checkpoints are not proof of the requested
         # gameplay effect. Prevent old return-only bodies bypassing this gate.
-        if task.behavior_id and not any(
-                row['op'] in {'assign', 'constructor_call'} or
-                (row['op'] == 'call' and row['attributes']['symbol_ref'] != task.owner_symbol)
-                for row in nodes):
+        if task.behavior_id and not _has_observable_effect(nodes, task.owner_symbol):
             raise ValueError('CONSTRUCTION_BEHAVIOR_EFFECT_MISSING: ' + task.task_id)
         return tuple(nodes)
     from .construction_feedback import graph_digest, replace_node, rejection, admission
@@ -112,9 +126,6 @@ def author_task_operations(router, task, context):
         authoring_contract=context.get('authoring_contract'), binding_pages=context.get('binding_pages'),
         evidence_index=evidence_index)
     state.enter('operation_graph')
-    referenced = {ref for row in nodes for ref in row['input_refs']}
-    pending = dict.fromkeys(ref for row in nodes for ref in row['input_refs'] if ref not in by_id)
-    roots = dict.fromkeys(key for key in by_id if key not in referenced)
     source_ids = sorted(source_units)
     read_refs = context.get('recorded_source_refs')
     read_sources = set(read_refs() if callable(read_refs) else ())
@@ -301,10 +312,7 @@ def author_task_operations(router, task, context):
         # A gameplay behavior must not certify a syntactically valid no-op.
         # Actual runtime verification remains separate, but a body containing
         # only return/literal/block cannot fulfill an observable effect.
-        observed_effect_node = any(
-            row['op'] in {'assign', 'constructor_call'} or
-            (row['op'] == 'call' and row['attributes']['symbol_ref'] != task.owner_symbol)
-            for row in nodes)
+        observed_effect_node = _has_observable_effect(nodes, task.owner_symbol)
         schema = operation_next_schema(state, nodes=working_nodes, declaration=declaration,
             can_complete=bool(nodes) and not pending and not repair_id
                          and observation.get('status') != 'rejected'
@@ -402,12 +410,9 @@ def author_task_operations(router, task, context):
         previous_ids = set(by_id)
         state.remember_node_purpose(row['node_id'], choice['purpose'], replace=True)
         nodes = list(candidate_nodes)
-        by_id = {node['node_id']: node for node in nodes}
+        by_id, referenced, pending, roots = _graph_refs(nodes)
         if repair_id:
             state.memory.invalidate_nodes((previous_ids - by_id.keys()) | {repair_id})
-        referenced = {ref for node in nodes for ref in node['input_refs']}
-        pending = dict.fromkeys(ref for node in nodes for ref in node['input_refs'] if ref not in by_id)
-        roots = dict.fromkeys(key for key in by_id if key not in referenced)
         live = set(by_id) | referenced
         state.node_purposes = {key: purpose for key, purpose in state.node_purposes.items() if key in live}
         state.advance(preserve_symbols=True)
