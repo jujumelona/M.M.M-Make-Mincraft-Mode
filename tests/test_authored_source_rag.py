@@ -206,10 +206,10 @@ def test_verified_source_fallback_reads_real_java_when_index_finds_nothing(tmp_p
     java = root / "src/main/java/donor/PlanetTravel.java"
     java.parent.mkdir(parents=True)
     java.write_text(
-        "package donor;\\n"
-        "public class PlanetTravel {\\n"
-        "  public void travelToPlanet() { System.out.println(1); }\\n"
-        "}\\n", encoding="utf-8",
+        "package donor;\n"
+        "public class PlanetTravel {\n"
+        "  public void travelToPlanet() { System.out.println(1); }\n"
+        "}\n", encoding="utf-8",
     )
 
     class EmptyIndex:
