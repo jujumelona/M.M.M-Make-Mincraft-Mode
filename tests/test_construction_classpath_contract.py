@@ -137,3 +137,11 @@ def test_jdk_runtime_image_fingerprint_invalidates_compiler_symbol_cache(monkeyp
         assert len(calls) == 2
     finally:
         construction_runtime._symbol_inventory.cache_clear()
+
+
+def test_split_environment_client_compile_classpath_is_inspected():
+    # Fabric Loom 26.x splitEnvironmentSourceSets keeps Minecraft client bytecode
+    # out of sourceSets.main: a main-only symbol inventory rejects valid UI code.
+    assert 'sets.findByName("client")' in probe._INIT
+    assert "inspectedClasspath.from(clientSet.compileClasspath)" in probe._INIT
+    assert "inspectedClasspath.from(sets.main.compileClasspath)" in probe._INIT
