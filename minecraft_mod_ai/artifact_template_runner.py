@@ -49,36 +49,6 @@ def _bind_job_dependencies(
         values[alias] = port.value
 
 
-_STANDARD_PORT_DEFINITIONS: dict[str, tuple[str, str, str]] = {
-    "item_key_symbol": ("JAVA_SYMBOL", "ResourceKey<Item>", "ModItemIds.{constant}_KEY"),
-    "item_registry_id": ("REGISTRY_ID", "Item", "{mod_id}:{registry_path}"),
-    "item_symbol": ("JAVA_SYMBOL", "Item", "ModItems.{constant}"),
-    "model_ref": ("MODEL_REF", "Item", "{mod_id}:item/{registry_path}"),
-    "translation_key": ("TRANSLATION_KEY", "Item", "item.{mod_id}.{registry_path}"),
-    "texture_ref": ("TEXTURE_REF", "Item", "{mod_id}:item/{registry_path}"),
-    "client_item_ref": ("CLIENT_ITEM_REF", "Item", "{mod_id}:items/{registry_path}"),
-    "block_key_symbol": ("JAVA_SYMBOL", "ResourceKey<Block>", "ModBlockIds.{constant}_KEY"),
-    "block_registry_id": ("REGISTRY_ID", "Block", "{mod_id}:{registry_path}"),
-    "block_symbol": ("JAVA_SYMBOL", "Block", "ModBlocks.{constant}"),
-    "blockstate_ref": ("MODEL_REF", "Block", "{mod_id}:block/{registry_path}"),
-    "block_model_ref": ("MODEL_REF", "Block", "{mod_id}:block/{registry_path}"),
-    "block_translation_key": ("TRANSLATION_KEY", "Block", "block.{mod_id}.{registry_path}"),
-    "block_loot_table_ref": ("GENERIC", "LootTable", "{mod_id}:blocks/{registry_path}"),
-    "entity_key_symbol": (
-        "JAVA_SYMBOL",
-        "ResourceKey<EntityType<?>>",
-        "ModEntityIds.{constant}_KEY",
-    ),
-    "entity_registry_id": ("REGISTRY_ID", "EntityType<?>", "{mod_id}:{registry_path}"),
-    "entity_symbol": ("JAVA_SYMBOL", "EntityType<?>", "ModEntities.{constant}"),
-    "entity_translation_key": (
-        "TRANSLATION_KEY",
-        "EntityType<?>",
-        "entity.{mod_id}.{registry_path}",
-    ),
-}
-
-
 def _logical_port(
     logical_name: str | Mapping[str, Any],
     published_name: str,
@@ -88,34 +58,20 @@ def _logical_port(
     from .artifact_ports import PortKind, TypedPort
     from .implementation_template_renderer import render_template
 
-    if isinstance(logical_name, Mapping):
-        for key in ("name", "kind", "target_type", "value"):
-            if not isinstance(logical_name.get(key), str) or not logical_name[key].strip():
-                raise ValueError(
-                    f"TEMPLATE_PORT_DECLARATION: {template_id!r} missing {key}"
-                )
-        kind = PortKind(logical_name["kind"])
-        target_type = logical_name["target_type"]
-        raw_val = logical_name["value"]
-        if isinstance(raw_val, str) and "{{" in raw_val:
-            rendered_val = render_template({"render": raw_val}, values)
-        else:
-            rendered_val = str(raw_val)
-        return TypedPort(published_name, kind, target_type, rendered_val)
-
-    if logical_name in _STANDARD_PORT_DEFINITIONS:
-        kind_name, target_type, pattern = _STANDARD_PORT_DEFINITIONS[logical_name]
-        kind = getattr(PortKind, kind_name)
-        rendered_val = pattern.format(
-            mod_id=str(values.get("mod_id") or ""),
-            registry_path=str(values.get("registry_path") or ""),
-            constant=str(values.get("java_constant") or ""),
+    if not isinstance(logical_name, Mapping):
+        raise ValueError(
+            f"TEMPLATE_PORT_DECLARATION: {template_id!r} must declare port kind, target and value"
         )
-        return TypedPort(published_name, kind, target_type, rendered_val)
-    raise ValueError(
-        f"TEMPLATE_PORT_UNDECLARED_SEMANTICS: template {template_id!r} publishes "
-        f"unknown logical port {logical_name!r}"
+    for key in ("name", "kind", "target_type", "value"):
+        if not isinstance(logical_name.get(key), str) or not logical_name[key].strip():
+            raise ValueError(f"TEMPLATE_PORT_DECLARATION: {template_id!r} missing {key}")
+    kind = PortKind(logical_name["kind"])
+    raw_value = logical_name["value"]
+    rendered = (
+        render_template({"render": raw_value}, values)
+        if "{{" in raw_value else raw_value
     )
+    return TypedPort(published_name, kind, logical_name["target_type"], rendered)
 
 
 def execute_artifact_template(
@@ -451,7 +407,6 @@ def execute_artifact_template(
 
 
 __all__ = [
-    "_STANDARD_PORT_DEFINITIONS",
     "_bind_job_dependencies",
     "_logical_port",
     "execute_artifact_template",
