@@ -15,6 +15,8 @@ from typing import Any
 
 import httpx
 
+from .llama_finish_reason_contract import CONTEXT_PRESSURE, LlamaCompletionBoundaryError
+
 _CONTEXT_CACHE_LOCK = threading.RLock()
 _MANAGED_CONTEXT_CACHE: dict[str, int] = {}
 # A model-facing tool call needs enough decode room to serialize one complete function
@@ -43,8 +45,15 @@ class LiveContextAccounting:
         return self.context_tokens - self.input_tokens
 
 
-class ExactContextOverflow(RuntimeError):
-    pass
+class ExactContextOverflow(LlamaCompletionBoundaryError):
+    """Recoverable, exactly measured context pressure before generation."""
+
+    def __init__(self, message: str, *, prompt_tokens: int = 0,
+                 context_tokens: int = 0) -> None:
+        super().__init__(
+            message, kind=CONTEXT_PRESSURE, prompt_tokens=prompt_tokens,
+            max_tokens=max(0, context_tokens - prompt_tokens),
+        )
 
 
 def _client(server_url: str) -> Any:
@@ -166,7 +175,9 @@ def capacity_safe_payload(
     if remaining <= 0:
         raise ExactContextOverflow(
             "exact llama.cpp chat input exceeds the active runtime slot; "
-            f"input_tokens={accounting.input_tokens} n_ctx={accounting.context_tokens}"
+            f"input_tokens={accounting.input_tokens} n_ctx={accounting.context_tokens}",
+            prompt_tokens=accounting.input_tokens,
+            context_tokens=accounting.context_tokens,
         )
 
     raw_tools = result.get("tools")
