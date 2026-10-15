@@ -170,6 +170,21 @@ class ConstructionState:
         self.operation_draft = {}
         self.selection_goal = None
 
+    def reconsider_operation(self):
+        """Retry the same slot with another operation, preserving real evidence."""
+        if self.phase != 'operation_graph' or self.selection_goal is None:
+            raise ValueError('CONSTRUCTION_OPERATION_RECONSIDER_INVALID')
+        self.lookup = {}
+        self.symbol_lookup = {}
+        self.scope_lookup = {}
+        self.symbol_goal = None
+        self.operation_goal = None
+        self.operation_draft = {}
+        self.requests.clear()
+        self.lookup_cursors.clear()
+        self.memory.reset_navigation()
+        # No graph node was accepted: revision and selected slot must not change.
+
     def prepare_symbols(self, purpose, *, kinds=('CLASS',), preserve_scope=False):
         if self.evidence_index is None:
             return
@@ -359,7 +374,12 @@ class ConstructionState:
         selection = record.get('selection_goal')
         if selection is not None:
             import re
-            if (not isinstance(selection, dict) or set(selection) != {'node_id', 'purpose'}
+            if (not isinstance(selection, dict) or not {'node_id', 'purpose'} <= set(selection)
+                    or set(selection) - {'node_id', 'purpose', 'excluded_operations'}
+                    or not isinstance(selection.get('excluded_operations', []), list)
+                    or len(set(selection.get('excluded_operations', []))) != len(selection.get('excluded_operations', []))
+                    or any(action not in __import__('minecraft_mod_ai.java_operation_ir', fromlist=['OPERATIONS']).OPERATIONS
+                           for action in selection.get('excluded_operations', []))
                     or not isinstance(selection['purpose'], str) or not selection['purpose'].strip()
                     or not isinstance(selection['node_id'], str)
                     or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,240}', selection['node_id'])):
