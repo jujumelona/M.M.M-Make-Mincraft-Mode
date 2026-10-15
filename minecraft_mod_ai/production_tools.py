@@ -25,17 +25,18 @@ def _code_rag_target_or_workspace_result(
     service: Any, target: Path, query: str, limit: int, required_metadata: dict[str, Any] | None
 ) -> tuple[Path, dict[str, Any] | None]:
     canonical = service._resolve("rag/project-index.json", allow_root=True)
-    if not target.exists() and target == canonical:
-        # The current SQLite index wins over an unindexed workspace scan.
+    if target == canonical:
+        # Even if an old JSON index exists, prefer the current SQLite build.
         sqlite_index = service._resolve(".minecraft_ai/project-index.db", allow_root=True)
         if sqlite_index.is_file():
             return sqlite_index, None
-        from .agent_tool_runtime import _looks_like_bound_project
-        from .workspace_code_search import search_workspace_source
-        if _looks_like_bound_project(service.workspace_root):
-            return target, search_workspace_source(
-                service.workspace_root, query, limit=limit, required_metadata=required_metadata
-            )
+        if not target.exists():
+            from .agent_tool_runtime import _looks_like_bound_project
+            from .workspace_code_search import search_workspace_source
+            if _looks_like_bound_project(service.workspace_root):
+                return target, search_workspace_source(
+                    service.workspace_root, query, limit=limit, required_metadata=required_metadata
+                )
     # Directory index discovery belongs to ProjectRAGIndex: it checks that
     # directory's SQLite index before any historical .json path.
     return target, None
