@@ -91,8 +91,8 @@ def test_discovery_is_parallel_provider_aware_and_prefers_cross_capability_repos
 
 
 
-def test_repository_source_search_receives_resolved_minecraft_target(monkeypatch):
-    """Every provider page uses the actual target, including broad source donors."""
+def test_repository_source_search_does_not_hide_older_donor_source(monkeypatch):
+    """Search all source revisions; apply target compatibility during inspection/proof."""
     monkeypatch.delenv("MMM_CURSEFORGE_API_KEY", raising=False)
     monkeypatch.delenv("CURSEFORGE_API_KEY", raising=False)
     client = _FakeDiscovery()
@@ -103,8 +103,8 @@ def test_repository_source_search_receives_resolved_minecraft_target(monkeypatch
     assert client.calls, "source discovery silently skipped every provider"
     for provider, _query, kwargs in client.calls:
         assert provider in {"github", "modrinth"}
-        assert kwargs["minecraft_version"] == "26.2"
-        assert kwargs["loader"] == "fabric"
+        assert "minecraft_version" not in kwargs
+        assert "loader" not in kwargs
         assert kwargs["target_profile"] == "minecraft_mod"
 
 
