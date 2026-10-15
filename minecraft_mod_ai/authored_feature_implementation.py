@@ -18,6 +18,7 @@ from .complete_spec import ProductionModule
 from .implementation_identity import ExecutorType
 from .registered_leaf_binding import require_registered_leaf_binding
 from .request_runtime_records import feature_module_id, owner_records
+from .task_template_catalog import canonical_specification_input
 
 
 def compile_request_feature_jobs(
@@ -81,7 +82,7 @@ def compile_request_feature_jobs(
             minecraft_version=adapter.minecraft_version, context_id=adapter.version_context.context_id,
             source_requirement=feature["statement"], parent_requirement=rid,
         )
-        spec = inputs["event_callback_input"]
+        spec = canonical_specification_input(leaf, inputs)
         bindings = spec["bindings"]
         fqcn = bindings["package_name"] + "." + bindings["class_name"]
         bindings["request_feature_entrypoint"] = fqcn
@@ -138,10 +139,12 @@ def compile_request_feature_jobs(
                     "java_constant", "registry_path",
                 ) if key in job.deterministic_inputs})
                 declarations.append(declaration)
-            for value in job.deterministic_inputs.get("_canonical_inputs", {}).values():
-                if isinstance(value, Mapping) and value.get("language") == "java":
-                    source_paths.append(value["target_path"])
-                    known = value.get("bindings", {})
+            canonical_inputs = job.deterministic_inputs.get("_canonical_inputs")
+            if canonical_inputs is not None:
+                specification = canonical_specification_input(job.canonical_leaf, canonical_inputs)
+                if specification.get("language") == "java":
+                    source_paths.append(specification["target_path"])
+                    known = specification.get("bindings", {})
                     declarations.append({key: known[key] for key in (
                         "package_name", "class_name", "registry_path", "fact_type",
                     ) if key in known})

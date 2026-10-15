@@ -1,4 +1,5 @@
 """Load host-owned task contracts from the single runtime template authority."""
+from collections.abc import Mapping
 from copy import deepcopy
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
@@ -178,6 +179,27 @@ def load_template(identifier: str):
     requested = _canonical_identifier(identifier)
     canonical = _CRITERION_ALIASES.get(requested, requested)
     return _apply_shared_policy(canonical, deepcopy(_load(canonical)))
+
+
+def canonical_specification_input(identifier: str, inputs: Mapping) -> Mapping:
+    """Read the declared specification port, preserving the persisted input object.
+
+    Canonical inputs also contain identifier strings. Their values and ordering
+    cannot identify which port owns the specification.
+    """
+    manifest = load_template(identifier)
+    ports = [port["name"] for port in manifest["inputs"]
+             if port["type"] == "specification"]
+    if len(ports) != 1:
+        raise ValueError(f"CANONICAL_GENERATOR_SPEC_PORT_INVALID: {identifier}")
+    if not isinstance(inputs, Mapping):
+        raise ValueError(f"CANONICAL_GENERATOR_INPUTS_INVALID: {identifier}")
+    specification = inputs.get(ports[0])
+    if not isinstance(specification, Mapping):
+        raise ValueError(f"CANONICAL_GENERATOR_SPEC_INPUT_MISSING: {identifier}/{ports[0]}")
+    if specification.get("leaf_id") != manifest["id"]:
+        raise ValueError(f"CANONICAL_GENERATOR_SPEC_LEAF_MISMATCH: {identifier}")
+    return specification
 
 
 def load_record_template(identifier: str):

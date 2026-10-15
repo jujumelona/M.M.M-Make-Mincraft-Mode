@@ -55,12 +55,14 @@ def artifact_owner_module_ids(jobs: Iterable[Any]) -> frozenset[str]:
 
 def canonical_main_entrypoints(jobs: Iterable["ArtifactJob"]) -> tuple[str, ...]:
     """Only host-persisted feature classes may become common Fabric entrypoints."""
+    from .task_template_catalog import canonical_specification_input
+
     entrypoints = set()
     for job in jobs:
         if job.executor_type is not ExecutorType.PYTHON_GENERATOR or job.canonical_leaf != "minecraft/event/callback":
             continue
         inputs = job.deterministic_inputs.get("_canonical_inputs", {})
-        spec = inputs.get("event_callback_input", {})
+        spec = canonical_specification_input(job.canonical_leaf, inputs)
         bindings = spec.get("bindings", {})
         fqcn = bindings.get("request_feature_entrypoint")
         if not fqcn:
@@ -82,6 +84,8 @@ def canonical_client_entrypoints(
     classes from this same representation instead of a second ad-hoc flag.
     """
 
+    from .task_template_catalog import canonical_specification_input
+
     entrypoints: set[str] = set()
     for job in jobs or ():
         if not isinstance(job, ArtifactJob):
@@ -91,23 +95,21 @@ def canonical_client_entrypoints(
         canonical_inputs = job.deterministic_inputs.get("_canonical_inputs")
         if not isinstance(canonical_inputs, Mapping):
             continue
-        for value in canonical_inputs.values():
-            if not isinstance(value, Mapping):
-                continue
-            if str(value.get("side") or "").strip().upper() != "CLIENT":
-                continue
-            bindings = value.get("bindings")
-            if not isinstance(bindings, Mapping):
-                raise ValueError(
-                    f"CANONICAL_CLIENT_ENTRYPOINT_BINDINGS_REQUIRED: {job.job_id}"
-                )
-            package_name = str(bindings.get("package_name") or "").strip()
-            class_name = str(bindings.get("class_name") or "").strip()
-            if not package_name or not class_name:
-                raise ValueError(
-                    f"CANONICAL_CLIENT_ENTRYPOINT_CLASS_REQUIRED: {job.job_id}"
-                )
-            entrypoints.add(f"{package_name}.{class_name}")
+        specification = canonical_specification_input(job.canonical_leaf, canonical_inputs)
+        if str(specification.get("side") or "").strip().upper() != "CLIENT":
+            continue
+        bindings = specification.get("bindings")
+        if not isinstance(bindings, Mapping):
+            raise ValueError(
+                f"CANONICAL_CLIENT_ENTRYPOINT_BINDINGS_REQUIRED: {job.job_id}"
+            )
+        package_name = str(bindings.get("package_name") or "").strip()
+        class_name = str(bindings.get("class_name") or "").strip()
+        if not package_name or not class_name:
+            raise ValueError(
+                f"CANONICAL_CLIENT_ENTRYPOINT_CLASS_REQUIRED: {job.job_id}"
+            )
+        entrypoints.add(f"{package_name}.{class_name}")
     return tuple(sorted(entrypoints))
 
 

@@ -865,26 +865,12 @@ def _compile_content_artifact_graph(
             if strength is not None:
                 job.deterministic_inputs["authored_block_strength"] = list(strength)
 
-    from .task_template_catalog import load_template
+    from .task_template_catalog import canonical_specification_input
     for job in jobs:
         canonical_inputs = job.deterministic_inputs.get("_canonical_inputs")
         if not isinstance(canonical_inputs, dict):
             continue
-        manifest = load_template(job.canonical_leaf)
-        specification_ports = [
-            str(port.get("name") or "")
-            for port in manifest.get("inputs", ())
-            if port.get("type") == "specification"
-        ]
-        if len(specification_ports) != 1:
-            raise ValueError(
-                f"CANONICAL_GENERATOR_SPEC_PORT_INVALID: {job.canonical_leaf}"
-            )
-        spec_input = canonical_inputs.get(specification_ports[0])
-        if not isinstance(spec_input, dict):
-            raise ValueError(
-                f"CANONICAL_GENERATOR_SPEC_INPUT_MISSING: {job.job_id}"
-            )
+        spec_input = canonical_specification_input(job.canonical_leaf, canonical_inputs)
         bindings = spec_input.get("bindings")
         if not isinstance(bindings, dict):
             raise ValueError(
@@ -1170,9 +1156,13 @@ def compile_authored_design(
         )
         feature_units = []
         feature_lookup = {module.module_id: module for module in feature_modules}
+        from .task_template_catalog import canonical_specification_input
+
         for job in feature_jobs:
             inputs = job.deterministic_inputs['_canonical_inputs']
-            specification = next(value for value in inputs.values() if value.get('language') == 'java')
+            specification = canonical_specification_input(job.canonical_leaf, inputs)
+            if specification.get('language') != 'java':
+                raise ValueError(f"REQUEST_FEATURE_JAVA_SPECIFICATION_REQUIRED: {job.job_id}")
             feature_units.append({
                 'module_id': job.owner_module, 'job_id': job.job_id,
                 'path': specification['target_path'],

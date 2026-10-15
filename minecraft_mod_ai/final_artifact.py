@@ -1058,6 +1058,8 @@ def build_authored_design_coverage_receipt(
     requirement_ids = {row.get('requirement_id') for row in plan.get('request_scope', {}).get('requirements', ())
                        if isinstance(row, Mapping)}
     feature_module_ids = []
+    from .task_template_catalog import canonical_specification_input
+
     for ordinal, unit in enumerate(feature_units, start=1):
         if not isinstance(unit, Mapping):
             findings.append(f'authored request feature {ordinal} is not an object')
@@ -1065,10 +1067,18 @@ def build_authored_design_coverage_receipt(
         module_id = str(unit.get('module_id') or '')
         feature_module_ids.append(module_id)
         job = jobs.get(unit.get('job_id'), {})
-        inputs = job.get('deterministic_inputs', {}).get('_canonical_inputs', {})
-        specifications = [value for value in inputs.values() if isinstance(value, Mapping)
-                          and value.get('language') == 'java']
-        specification = specifications[0] if len(specifications) == 1 else {}
+        deterministic_inputs = job.get('deterministic_inputs')
+        inputs = (deterministic_inputs.get('_canonical_inputs')
+                  if isinstance(deterministic_inputs, Mapping) else None)
+        try:
+            specification = canonical_specification_input(job.get('canonical_leaf'), inputs)
+        except (OSError, ValueError):
+            findings.append(f'authored request feature {module_id or ordinal} has no declared specification input')
+            continue
+        bindings = specification.get('bindings')
+        if not isinstance(bindings, Mapping):
+            findings.append(f'authored request feature {module_id or ordinal} has invalid specification bindings')
+            continue
         requirements = unit.get('requirement_ids', [])
         if (not module_id or job.get('owner_module') != module_id
                 or job.get('canonical_leaf') != unit.get('canonical_leaf')
@@ -1077,10 +1087,13 @@ def build_authored_design_coverage_receipt(
                 or _canonical_sha256(inputs) != unit.get('canonical_input_sha256')
                 or unit.get('source_text_sha256') != source_text_sha256
                 or not isinstance(requirements, list) or not requirements
+                or any(not isinstance(value, str) for value in requirements)
                 or not set(requirements) <= requirement_ids
+                or specification.get('language') != 'java'
+                or specification.get('context_id') != job.get('context_id')
                 or specification.get('target_path') != unit.get('path')
-                or specification.get('bindings', {}).get('request_feature_entrypoint') != unit.get('symbol')
-                or specification.get('bindings', {}).get('parent_requirement_id') not in requirements):
+                or bindings.get('request_feature_entrypoint') != unit.get('symbol')
+                or bindings.get('parent_requirement_id') not in requirements):
             findings.append(f'authored request feature {module_id or ordinal} has inconsistent approved authority')
             continue
         relative = str(unit['path'])
