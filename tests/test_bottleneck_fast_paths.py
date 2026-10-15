@@ -25,6 +25,9 @@ def test_single_artifact_graph_avoids_executor_creation(monkeypatch):
     import minecraft_mod_ai.artifact_graph_executor as executor
     job = ArtifactJob(job_id="one", template_id="test/one", owner_module="m")
     monkeypatch.setattr(executor, "_execute_one", lambda job, **_kwargs: {"status": "PASS", "job_id": job.job_id})
+    # Scheduling is under test; real version authority is exercised elsewhere.
+    monkeypatch.setattr("minecraft_mod_ai.resolved_version_context.execution_context",
+                        lambda _context, _job: None)
     class ForbiddenExecutor:
         def __init__(self, *args, **kwargs):
             raise AssertionError("single artifact graph created a thread pool")
