@@ -13,6 +13,8 @@ import json
 import os
 import re
 import tempfile
+
+import httpx
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -280,14 +282,32 @@ def _proof_admits(donor: DonorSlice, receipt: ReuseProofReceipt) -> bool:
     return True
 
 
+def _inspection_backend_unavailable(exc: Exception) -> bool:
+    """Stop repeated impossible downloads, not semantically rejected donors."""
+    if isinstance(exc, (httpx.ConnectError, httpx.TimeoutException)):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        response = exc.response
+        if response.status_code == 429:
+            return True
+        if response.status_code == 403 and response.headers.get("x-ratelimit-remaining") == "0":
+            return True
+    message = f"{type(exc).__name__}: {exc}".casefold()
+    return ("rate limit" in message or "rate_limit" in message
+            or "api rate" in message or "connection refused" in message)
+
+
 def _inspect_candidate_batch(
     cards: Sequence[Mapping[str, Any]], *, capability: str, terms: Sequence[str],
     adapter: TargetContract, client: EcosystemDiscoveryClient,
     donor_inspector: DonorInspector, inspections: list[dict[str, Any]],
+    outage: dict[str, str] | None = None,
 ) -> list[DonorSlice]:
     """Inspect a small ranked batch before paying for the rest of the frontier."""
     candidates: list[DonorSlice] = []
     for card in cards:
+        if outage is not None and outage:
+            break
         overlap = _candidate_overlap(capability, terms, card)
         explicit_reference = bool(card.get("explicit_reference"))
         if overlap <= 0 and not explicit_reference:
@@ -301,17 +321,21 @@ def _inspect_candidate_batch(
                 discovery_client=client,
             )
         except Exception as exc:  # noqa: BLE001 - fail closed per external donor
-            inspections.append(
-                {
-                    "capability": capability,
-                    "repository": repository,
-                    "page_refs": list(card.get("page_refs", ())),
-                    "explicit_reference": explicit_reference,
-                    "candidate_origin": str(card.get("candidate_origin") or "planning_state_or_explicit"),
-                    "status": "inspection_error",
-                    "error": f"{type(exc).__name__}: {exc}",
-                }
-            )
+            error = f"{type(exc).__name__}: {exc}"[:1200]
+            unavailable = _inspection_backend_unavailable(exc)
+            inspections.append({
+                "capability": capability, "repository": repository,
+                "page_refs": list(card.get("page_refs", ())),
+                "explicit_reference": explicit_reference,
+                "candidate_origin": str(card.get("candidate_origin") or "planning_state_or_explicit"),
+                "status": "inspection_error", "error": error,
+                "provider_unavailable": unavailable,
+            })
+            if unavailable and outage is not None:
+                outage["repository"] = repository
+                outage["error"] = error
+                print("SOURCE_REUSE_INSPECTION_OUTAGE: " + json.dumps(
+                    {"capability": capability, **outage}, ensure_ascii=False), flush=True)
             continue
         admitted = bool(
             donor is not None
@@ -400,6 +424,7 @@ def build_repository_reuse_plan(
         temporary = tempfile.TemporaryDirectory(prefix="mmm_reuse_target_")
         proof_workspace = Path(temporary.name)
     try:
+        inspection_outage: dict[str, str] = {}
         for capability in capabilities:
             terms = terms_by_capability.get(capability, (capability.replace(".", " "),))
             verified: list[tuple[DonorSlice, ReuseProofReceipt]] = []
@@ -413,10 +438,12 @@ def build_repository_reuse_plan(
             # locally. Later batches remain available if every proof rejects;
             # stop downloading as soon as usable code is found.
             for offset in range(0, len(ranked_cards), 2):
+                if inspection_outage:
+                    break
                 candidates = _inspect_candidate_batch(
                     ranked_cards[offset:offset + 2], capability=capability, terms=terms,
                     adapter=adapter, client=client, donor_inspector=donor_inspector,
-                    inspections=inspections,
+                    inspections=inspections, outage=inspection_outage,
                 )
                 for donor in sorted(candidates, key=lambda row: (
                     row.target_compatibility == "exact", -row.adaptation_cost, row.confidence,
@@ -470,7 +497,10 @@ def build_repository_reuse_plan(
                                       and r.get("status") == "inspection_error"]
                 searches = [r for r in discovery_receipts
                             if capability in r.get("capabilities", ())]
-                if failed_proofs:
+                if inspection_outage:
+                    search_status = "provider_error"
+                    failure_code = "DONOR_INSPECTION_PROVIDER_UNAVAILABLE"
+                elif failed_proofs:
                     search_status = "target_compile_failed"
                     failure_code = str(failed_proofs[-1].get("failure_code") or
                                        failed_proofs[-1].get("status"))
@@ -513,6 +543,13 @@ def build_repository_reuse_plan(
                     "status": search_status, "failure_code": failure_code,
                     "reference_sources": sum(row.get("capability") == capability
                                              for row in reference_sources),
+                    "inspection_outage": dict(inspection_outage),
+                    "inspection_errors": [
+                        {"repository": row.get("repository"),
+                         "error": str(row.get("error", ""))[:240]}
+                        for row in inspections
+                        if row.get("capability") == capability and row.get("status") == "inspection_error"
+                    ][:3],
                 }, ensure_ascii=False), flush=True)
                 continue
             donor, receipt = selected
