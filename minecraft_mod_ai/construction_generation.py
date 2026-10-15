@@ -410,7 +410,6 @@ def compose(router, spec, *, source_context=(), construction_context=None,
             'typed_events': typed_owners.get('event_bindings', ()),
         }
         scoped_context['resume_nodes'] = lambda current: progress.load()
-        scoped_context['checkpoint'] = progress.save
         scoped_context['checkpoint_transaction'] = lambda current, accepted, stage, snapshot, expected=None: progress.save(
             current, accepted, stage, author_state=snapshot, expected_graph_sha256=expected)
         scoped_context['resume_author_state'] = progress.load_author_state
