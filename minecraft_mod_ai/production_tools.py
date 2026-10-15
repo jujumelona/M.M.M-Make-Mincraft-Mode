@@ -32,8 +32,8 @@ def _code_rag_target_or_workspace_result(
             return target, search_workspace_source(
                 service.workspace_root, query, limit=limit, required_metadata=required_metadata
             )
-    if target.is_dir():
-        target = canonical if canonical.is_file() else target
+    # Directory index discovery belongs to ProjectRAGIndex: it checks that
+    # directory's SQLite index before any historical .json path.
     return target, None
 
 
