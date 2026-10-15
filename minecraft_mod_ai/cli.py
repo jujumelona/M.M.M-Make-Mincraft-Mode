@@ -6,16 +6,12 @@ import json
 import sys
 from pathlib import Path
 
-from .authored_plan import AuthoredPlan
-from .complete_orchestrator import (
-    CompleteExecutionOptions,
-    CompleteProductionOrchestrator,
-)
-from .complete_planner import CompleteGameDesignPlanner
-from .complete_spec import CompleteProposal
-from .importer import inspect_existing_project_archive
-from .model_router import ModelRouter
-from .plan_render import render_complete_plan
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .authored_plan import AuthoredPlan
+    from .complete_orchestrator import CompleteProductionOrchestrator
+    from .complete_spec import CompleteProposal
 
 _HASH_CHUNK_SIZE = 1024 * 1024
 _SUCCESS_STATUSES = frozenset({"VERIFIED", "SOURCE_READY"})
@@ -123,6 +119,8 @@ def _read_playtest_actions(path: Path | None) -> list[dict]:
 
 
 def _proposal_validation_result(raw: dict) -> dict[str, object]:
+    from .complete_spec import CompleteProposal
+
     schema_version = raw.get("schema_version")
     if schema_version not in _COMPLETE_SCHEMA_VERSIONS:
         raise ValueError(
@@ -159,6 +157,9 @@ def _render_complete_result(result: object) -> str:
 
 
 def _render_plan(proposal: CompleteProposal | AuthoredPlan) -> str:
+    from .authored_plan import AuthoredPlan
+    from .plan_render import render_complete_plan
+
     if isinstance(proposal, AuthoredPlan):
         return proposal.text
     return render_complete_plan(
@@ -175,8 +176,13 @@ def _load_execution_proposal(
     orchestrator: CompleteProductionOrchestrator,
     existing_zip: Path | None,
 ) -> CompleteProposal:
+    from .complete_spec import CompleteProposal
+
     schema_version = str(data.get("schema_version") or "")
     if schema_version in {"mmm/authored-plan-v1", "mmm/authored-plan-v2"}:
+        from .authored_plan import AuthoredPlan
+        from .complete_planner import CompleteGameDesignPlanner
+
         design = AuthoredPlan.from_dict(data)
         planner = CompleteGameDesignPlanner(orchestrator.router_factory())
         proposal = planner.compile_for_production(
@@ -195,6 +201,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "plan":
+            from .complete_planner import CompleteGameDesignPlanner
+            from .model_router import ModelRouter
+
             existing_hash = _sha256_file(args.existing_zip) if args.existing_zip else ""
             proposal = CompleteGameDesignPlanner(
                 ModelRouter(profile=args.profile)
@@ -217,6 +226,11 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.command == "execute":
+            from .complete_orchestrator import (
+                CompleteExecutionOptions,
+                CompleteProductionOrchestrator,
+            )
+
             orchestrator = CompleteProductionOrchestrator(
                 workspace_root=args.output,
                 profile=args.profile,
@@ -258,6 +272,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if result.status in _SUCCESS_STATUSES else 1
 
         if args.command == "inspect-existing":
+            from .importer import inspect_existing_project_archive
+
             sys.stdout.write(
                 _json_dump(
                     inspect_existing_project_archive(args.archive).to_dict()
