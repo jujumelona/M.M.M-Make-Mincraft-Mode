@@ -142,6 +142,10 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
         else:
             branches.insert(0, action_schema('write'))
         if not branches:
+            # A type/callback-specific choice without verified evidence must
+            # return to operation selection instead of failing the entire mod.
+            if op == 'lambda' or op in TYPE_BOUND_OPERATIONS:
+                return None
             raise ValueError('CONSTRUCTION_OPERATION_EVIDENCE_MISSING: ' + op)
         schema = {'oneOf': branches}
         if op in API_KINDS:
