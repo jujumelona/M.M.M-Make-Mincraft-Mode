@@ -95,6 +95,28 @@ def _evidence_tool_names(
     return tuple(name for name in ("external_mcp_call",) if name in names)
 
 
+def _terminal_java_diagnostics_reply(executed, visible_names, *,
+                                     evidence_required, evidence_ready):
+    """Only a diagnostic-only host PASS can terminate this reviewed tool loop."""
+    if (visible_names != frozenset({"java_diagnostics"})
+            or len(executed) != 1
+            or (evidence_required and not evidence_ready)):
+        return None
+    checked_call, checked = executed[0]
+    report = checked.get("result") if isinstance(checked, Mapping) else None
+    if (checked_call.name == "java_diagnostics"
+            and checked.get("ok") is True
+            and isinstance(report, Mapping)
+            and report.get("status") == "PASS"
+            and report.get("diagnostics") == []):
+        return json.dumps({
+            "summary": "Java diagnostics passed generation-time host verification; "
+                       "build, gameplay and release remain unverified.",
+            "verification": "JAVA_DIAGNOSTICS_PASS",
+        })
+    return None
+
+
 def generate_with_reviewed_tools(
     router: Any,
     *,
@@ -249,21 +271,12 @@ def generate_with_reviewed_tools(
                 }
 
         executed = _execute_tool_waves(tuple(turn.tool_calls), execute)
-        if (visible_names == frozenset({"java_diagnostics"})
-                and len(executed) == 1
-                and (not evidence_required or evidence_ready)):
-            checked_call, checked = executed[0]
-            report = checked.get("result") if isinstance(checked, Mapping) else None
-            if (checked_call.name == "java_diagnostics"
-                    and checked.get("ok") is True
-                    and isinstance(report, Mapping)
-                    and report.get("status") == "PASS"
-                    and report.get("diagnostics") == []):
-                return json.dumps({
-                    "summary": "Java diagnostics passed generation-time host verification; "
-                               "build, gameplay and release remain unverified.",
-                    "verification": "JAVA_DIAGNOSTICS_PASS",
-                })
+        terminal = _terminal_java_diagnostics_reply(
+            executed, visible_names, evidence_required=evidence_required,
+            evidence_ready=evidence_ready,
+        )
+        if terminal is not None:
+            return terminal
         for call, payload in executed:
             result = payload.get("result") if isinstance(payload, Mapping) else None
             if bool(payload.get("ok")):
