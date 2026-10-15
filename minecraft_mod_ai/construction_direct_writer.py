@@ -242,6 +242,12 @@ def _compose_claimed(router, spec, context, behaviors, package, name, owner,
         if behavior_id not in saved:
             saved[behavior_id] = member
             _save_checkpoint(checkpoint, identity, saved)
+        print("CONSTRUCTION_MEMBER_PROGRESS: " + json.dumps({
+            "owner_symbol": owner + "#" + method + "()",
+            "rendered_java_bytes": len(member.encode("utf-8")),
+            "checkpointed": True, "target_compiled": False,
+            "author_route": "direct_java",
+        }, ensure_ascii=False), flush=True)
         completed.append({"method": method, "source": member})
         # Source evidence is retrievable by later independent behaviors, but
         # never promoted to a compiled/installable API declaration.
