@@ -25,15 +25,18 @@ def test_memory_index_cannot_repeat_production_16_24_cycle():
         memory.select_index(24)
 
 
-def test_every_memory_page_remains_reachable_without_revisiting_one():
+def test_every_memory_page_remains_reachable_before_repeated_cursor_requires_recall():
     memory, _ = _memory(80)
     seen = {memory.index_offset}
-    while choices := memory.index_choices():
-        memory.select_index(choices[0])
+    while memory.index_offset:
+        memory.select_index(memory.index_choices()[0])
         assert memory.index_offset not in seen
         seen.add(memory.index_offset)
     assert seen == set(range(0, 80, 8))
     assert len(memory.records) == 80
+    memory.select_index(8)
+    assert memory.index_choices() == []
+    assert memory.payload()['recall_before_more_navigation']
 
 
 def test_navigation_deduplication_survives_checkpoint_restore():
@@ -47,21 +50,22 @@ def test_navigation_deduplication_survives_checkpoint_restore():
     assert restored.payload() == memory.payload()
 
 
-def test_recall_cannot_cycle_evicted_facts_in_same_decision():
+def test_previously_recalled_fact_remains_accessible_after_eviction():
     memory, _ = _memory()
     keys = list(memory.records)
     for key in keys[:16]:
         memory.recall(key)
     assert keys[0] not in memory.active
-    with pytest.raises(ValueError, match='CONSTRUCTION_MEMORY_RECALL_INVALID'):
-        memory.recall(keys[0])
+    memory.recall(keys[0])
+    assert keys[0] in memory.active
     state = ConstructionState({}, 'example.Owner', 'Owner.java')
     state.memory = memory
     while memory.index_offset:
         memory.select_index(memory.index_choices()[0])
     recall_ids = [key for branch in memory_schemas(state)
                   for key in branch['properties'].get('evidence_id', {}).get('enum', [])]
-    assert not set(keys[:8]) & set(recall_ids)
+    assert keys[0] not in recall_ids
+    assert keys[1] in recall_ids
 
 
 def test_new_decision_can_recall_old_exact_facts_again():
@@ -70,8 +74,11 @@ def test_new_decision_can_recall_old_exact_facts_again():
     memory, _ = _memory()
     state.memory = memory
     memory.select_index(16)
+    memory.select_index(8)
+    memory.select_index(16)
+    assert memory.index_choices() == []
     state.advance()
-    assert 24 in memory.index_choices()
+    assert memory.index_choices()
     assert len(memory.records) == 32
 
 
@@ -81,6 +88,23 @@ def test_growing_last_catalogue_page_exposes_new_evidence():
     assert 24 not in memory.index_choices()
     memory.remember('symbols', 'more', 0, {'matches': [{'symbol_id': 'example.Added'}]})
     assert memory.index_offset == 24
-    memory.select_index(8)
-    assert 16 not in memory.index_choices()
+    memory.select_index(16)
+    assert memory.index_choices() == []
     assert len(memory.records) == 28
+
+
+def test_older_unrecalled_fact_remains_reachable_after_leaving_its_catalogue():
+    state = ConstructionState({}, 'example.Owner', 'Owner.java')
+    state.memory, _ = _memory()
+    memory = state.memory
+    key = list(memory.records)[16]
+    memory.select_index(16)
+    memory.select_index(8)
+    memory.select_index(16)
+    assert memory.index_choices() == []
+    choices = [key for branch in memory_schemas(state)
+               for key in branch['properties'].get('evidence_id', {}).get('enum', [])]
+    assert key in choices
+    memory.recall(key)
+    assert key in memory.active
+    assert memory.index_choices()

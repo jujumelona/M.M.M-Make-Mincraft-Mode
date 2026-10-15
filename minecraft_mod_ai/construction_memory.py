@@ -31,13 +31,13 @@ class ConstructionMemory:
         self.active = []
         self.index_offset = 0
         self.visited_pages = set()
-        self.recalled = set()
+        self.require_recall = False
 
     def reset_navigation(self):
         # New accepted work may need the same facts. Only navigation within
         # one phase/revision is deduplicated; exact evidence is never deleted.
         self.visited_pages.clear()
-        self.recalled.clear()
+        self.require_recall = False
 
     def _page_identity(self, offset):
         return tuple(list(self.records)[offset:offset + PAGE_SIZE])
@@ -59,12 +59,13 @@ class ConstructionMemory:
             self._activate(key)
         if self.records:
             self.index_offset = ((len(self.records) - 1) // PAGE_SIZE) * PAGE_SIZE
+            self.require_recall = False
 
     def recall(self, key):
-        if key not in self.records or key in self.active or key in self.recalled:
+        if key not in self.records or key in self.active:
             raise ValueError('CONSTRUCTION_MEMORY_RECALL_INVALID')
         self._activate(key)
-        self.recalled.add(key)
+        self.require_recall = False
 
     def catalogue(self):
         result = page_result(list(self.records), self.index_offset, field='records')
@@ -75,17 +76,20 @@ class ConstructionMemory:
             identity = (row.get('symbol_id') or row.get('node_id') or row.get('signature')
                         if isinstance(row, dict) else '')
             headers.append({'evidence_id': key, **selector, 'identity': identity or selector['query'],
-                            'active': key in self.active, 'recalled': key in self.recalled})
+                            'active': key in self.active})
         result['records'] = headers
         return result
 
     def index_choices(self):
+        if self.require_recall:
+            return []
         keys = tuple(self.records)
         unread = [offset for offset in range(0, len(self.records), PAGE_SIZE)
                   if offset != self.index_offset
-                  and keys[offset:offset + PAGE_SIZE] not in self.visited_pages]
-        # Skip inspected neighbours so all earlier/later pages remain reachable
-        # without offering the 16 -> 24 -> 16 cycle from the production trace.
+                  and any(key not in self.active for key in keys[offset:offset + PAGE_SIZE])]
+        # A directory page containing only active facts adds no information.
+        # Revisited pages remain reachable, but must lead to an actual recall
+        # before another directory-only action can repeat the cursor cycle.
         before = [offset for offset in unread if offset < self.index_offset]
         after = [offset for offset in unread if offset > self.index_offset]
         return ([before[-1]] if before else []) + ([after[0]] if after else [])
@@ -95,11 +99,13 @@ class ConstructionMemory:
             raise ValueError('CONSTRUCTION_MEMORY_INDEX_INVALID')
         self.visited_pages.add(self._page_identity(self.index_offset))
         self.index_offset = offset
+        self.require_recall = self._page_identity(offset) in self.visited_pages
         self.visited_pages.add(self._page_identity(offset))
 
     def payload(self):
         return {'working_set': [deepcopy(self.records[key]) for key in self.active],
                 'catalogue': self.catalogue(), 'index_offsets': self.index_choices(),
+                'recall_before_more_navigation': self.require_recall,
                 'meaning': 'Exact previously inspected facts; recall navigates memory, not a new search.'}
 
     def visible_symbols(self):
@@ -110,11 +116,11 @@ class ConstructionMemory:
         return {'records': [{'evidence_id': key, **view['selector']} for key, view in self.records.items()],
                 'active': list(self.active), 'index_offset': self.index_offset,
                 'visited_pages': [list(page) for page in sorted(self.visited_pages)],
-                'recalled': sorted(self.recalled)}
+                'require_recall': self.require_recall}
 
     def restore(self, record, resolve_lookup):
         if (not isinstance(record, dict) or set(record) != {
-                'records', 'active', 'index_offset', 'visited_pages', 'recalled'}
+                'records', 'active', 'index_offset', 'visited_pages', 'require_recall'}
                 or not isinstance(record['records'], list) or not isinstance(record['active'], list)
                 or len(record['active']) > PAGE_SIZE or not callable(resolve_lookup)):
             raise ValueError('CONSTRUCTION_MEMORY_CHECKPOINT_INVALID')
@@ -146,7 +152,7 @@ class ConstructionMemory:
         if (type(offset) is not int or offset < 0 or offset % PAGE_SIZE
                 or (offset and offset >= len(self.records))):
             raise ValueError('CONSTRUCTION_MEMORY_CHECKPOINT_INVALID')
-        pages, recalled = record['visited_pages'], record['recalled']
+        pages = record['visited_pages']
         keys = list(self.records)
         positions = {key: index for index, key in enumerate(keys)}
         if (not isinstance(pages, list) or any(
@@ -156,10 +162,8 @@ class ConstructionMemory:
                 or keys[positions[page[0]]:positions[page[0]] + len(page)] != page
                 for page in pages)
                 or len({tuple(page) for page in pages}) != len(pages)
-                or not isinstance(recalled, list)
-                or any(not isinstance(key, str) or key not in self.records for key in recalled)
-                or len(set(recalled)) != len(recalled)):
+                or type(record['require_recall']) is not bool):
             raise ValueError('CONSTRUCTION_MEMORY_CHECKPOINT_INVALID')
         self.active, self.index_offset = list(active), offset
         self.visited_pages = {tuple(page) for page in pages}
-        self.recalled = set(recalled)
+        self.require_recall = record['require_recall']
