@@ -13,7 +13,8 @@ NODE_ID_ALPHABET = string.ascii_letters + string.digits + '_.:-'
 
 
 def operation_next_schema(state, *, nodes, declaration, can_complete, context_branches=()):
-    actions = list(OPERATIONS)
+    blocked = set((state.selection_goal or {}).get('excluded_operations', ()))
+    actions = [action for action in OPERATIONS if action not in blocked]
     if declaration['kind'] != 'CONSTRUCTOR' or any(row['op'] == 'constructor_call' for row in nodes):
         actions.remove('constructor_call')
     values = named_values(nodes, declaration, state.symbols,
@@ -80,8 +81,19 @@ def _index_schema(state, kind, query):
     return branches
 
 
-def operation_context_branches(state, *, nodes, source_units, pinned_source):
-    branches = [*binding_lookup_schemas(state), *symbol_lookup_schemas(state)]
+MAX_OPERATION_EVIDENCE_READS = 12
+
+
+def operation_context_branches(state, *, nodes, source_units, pinned_source, api_resolution=False):
+    # Selection chooses the Java operation first. Browsing hundreds of thousands
+    # of symbols before choosing an operation caused zero authored graph nodes.
+    # During binding, evidence navigation has a finite no-progress allowance;
+    # accepted nodes reset state.requests, so this is not a token/output limit.
+    if len(state.requests) >= MAX_OPERATION_EVIDENCE_READS:
+        return []
+    branches = [*binding_lookup_schemas(state)]
+    if api_resolution:
+        branches.extend(symbol_lookup_schemas(state))
     offset = state.next_declaration_offset()
     if offset is not None:
         branches.append(action_schema('declarations', {'query': {'const': ''}, 'offset': {'const': offset}}))
