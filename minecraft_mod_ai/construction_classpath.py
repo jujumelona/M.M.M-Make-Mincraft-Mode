@@ -59,6 +59,17 @@ gradle.beforeProject { project ->
             // Keep the FileCollection lazy; resolving it in a global lifecycle
             // callback bypasses Gradle's project lock, even with cache disabled.
             inspectedClasspath.from(sets.main.compileClasspath)
+            // Loom splitEnvironmentSourceSets isolates Minecraft client classes
+            // in sourceSets.client. The main-only compileClasspath omits Screen,
+            // Minecraft, Button, and the client rendering APIs even though the
+            // real Gradle compileClientJava task can resolve them.
+            // Include the declared client compile classpath when that source
+            // set exists; this is the union needed by the construction symbol
+            // inventory, not a replacement for Gradle's per-side compiler.
+            def clientSet = sets.findByName("client")
+            if (clientSet != null) {
+                inspectedClasspath.from(clientSet.compileClasspath)
+            }
             def reportPath = System.getProperty("mmm.compile.classpath.report")
             if (!reportPath) throw new GradleException("MMM compile classpath report path required")
             classpathReport.set(new File(reportPath))
