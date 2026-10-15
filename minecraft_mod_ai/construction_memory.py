@@ -11,6 +11,12 @@ from .construction_state import PAGE_SIZE, page_result
 _FIELDS = {'symbols': 'matches', 'declarations': 'declarations',
            'nodes': 'nodes', 'source': 'source', 'bindings': 'bindings'}
 
+# All retrieved facts remain in records/checkpoints. Only the currently displayed
+# evidence is bounded: otherwise a few large Java source observations can make a
+# single JSON request exceed the active 32K llama.cpp context even after the
+# generic message fitter has run.
+_MAX_ACTIVE_EVIDENCE_BYTES = 16 * 1024
+
 
 def _identity(selector, row):
     kind = selector['kind']
@@ -42,11 +48,24 @@ class ConstructionMemory:
     def _page_identity(self, offset):
         return tuple(list(self.records)[offset:offset + PAGE_SIZE])
 
+    def _active_bytes(self):
+        return sum(len(json.dumps(self.records[key], ensure_ascii=False,
+                                  separators=(',', ':')).encode('utf-8'))
+                   for key in self.active)
+
+    def _enforce_active_budget(self):
+        # Evicted evidence remains addressable through memory_index/recall and
+        # preserved by export/restore. A single oversized fact is kept intact
+        # rather than being silently truncated or replaced with a false summary.
+        while len(self.active) > 1 and self._active_bytes() > _MAX_ACTIVE_EVIDENCE_BYTES:
+            self.active.pop(0)
+
     def _activate(self, key):
         if key in self.active:
             self.active.remove(key)
         self.active.append(key)
         self.active = self.active[-PAGE_SIZE:]
+        self._enforce_active_budget()
 
     def remember(self, kind, query, offset, result):
         field = _FIELDS.get(kind)
@@ -167,3 +186,7 @@ class ConstructionMemory:
         self.active, self.index_offset = list(active), offset
         self.visited_pages = {tuple(page) for page in pages}
         self.require_recall = record['require_recall']
+        # Older checkpoints could contain a large eight-record active view.
+        # Preserve those records, but do not re-inject their entire contents
+        # into the first resumed llama.cpp request.
+        self._enforce_active_budget()
