@@ -82,6 +82,8 @@ def author_task_operations(router, task, context):
     from .construction_declaration_choices import choice_actions
     from .construction_operation_binding import bind_operation
     from .construction_operation_contracts import named_values, pending_input_contracts
+    if not callable(context.get('checkpoint_transaction')):
+        raise ValueError('CONSTRUCTION_CHECKPOINT_TRANSACTION_REQUIRED')
     symbols = context['symbols']
     declaration = symbols.get(task.owner_symbol)
     if declaration is None:
@@ -226,13 +228,7 @@ def author_task_operations(router, task, context):
         save_author()
 
     def checkpoint_graph(stage, expected=None):
-        transaction = context.get('checkpoint_transaction')
-        if callable(transaction):
-            transaction(task, tuple(nodes), stage, state.export(), expected)
-        elif context.get('checkpoint'):
-            if expected is not None:
-                raise ValueError('CONSTRUCTION_CHECKPOINT_REVISION_UNAVAILABLE')
-            context['checkpoint'](task, tuple(nodes), stage)
+        context['checkpoint_transaction'](task, tuple(nodes), stage, state.export(), expected)
 
     if base['port_source_ref'] and base['port_source_ref'] not in read_sources:
         read_lookup({'action': 'source', 'query': base['port_source_ref'], 'offset': 0})
