@@ -441,7 +441,10 @@ def test_generate_turn_keeps_detailed_schema_host_side(monkeypatch) -> None:
     # A JSON-only generation turn may use server-side structural constraints
     # as an optimization; the original host schema remains authoritative.
     assert payload["response_format"] == {"type": "json_object"}
-    assert payload["json_schema"] == schema
+    from minecraft_mod_ai.model_output_atomicity_contract import effective_model_transport_schema
+
+    assert payload["json_schema"] == effective_model_transport_schema(schema)
+    assert request.response_schema == schema
     assert "grammar" not in payload
 
 
