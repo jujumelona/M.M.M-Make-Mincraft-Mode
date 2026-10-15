@@ -85,3 +85,18 @@ def test_rejected_operation_not_offered_again_for_same_slot():
     assert "call" not in actions
     assert "new" not in actions
     assert "return" in actions
+
+
+def test_memory_navigation_also_exhausts_same_no_progress_window():
+    state = _state()
+    state.operation_reads = MAX_OPERATION_EVIDENCE_READS
+    assert not state.requests
+    assert operation_context_branches(
+        state, nodes=[], source_units={}, pinned_source="", api_resolution=True,
+    ) == []
+    saved = state.export()
+    restored = _state()
+    restored.restore(saved)
+    assert restored.operation_reads == MAX_OPERATION_EVIDENCE_READS
+    restored.reconsider_operation()
+    assert restored.operation_reads == 0
