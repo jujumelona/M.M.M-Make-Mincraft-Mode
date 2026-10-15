@@ -26,6 +26,10 @@ def _code_rag_target_or_workspace_result(
 ) -> tuple[Path, dict[str, Any] | None]:
     canonical = service._resolve("rag/project-index.json", allow_root=True)
     if not target.exists() and target == canonical:
+        # The current SQLite index wins over an unindexed workspace scan.
+        sqlite_index = service._resolve(".minecraft_ai/project-index.db", allow_root=True)
+        if sqlite_index.is_file():
+            return sqlite_index, None
         from .agent_tool_runtime import _looks_like_bound_project
         from .workspace_code_search import search_workspace_source
         if _looks_like_bound_project(service.workspace_root):
@@ -103,10 +107,8 @@ class ProductionToolService:
         )
         if workspace_result is not None:
             return workspace_result
-        elif not target.exists():
-            canonical = self._resolve('rag/project-index.json', allow_root=True)
-            if canonical.is_file():
-                target = canonical
+        # An explicitly requested missing index must not silently search an
+        # unrelated canonical path and claim its results as relevant.
         dense = _dense_opted_in()
         effective_semantic = bool(semantic and dense)
         effective_rerank = bool(rerank and dense)
