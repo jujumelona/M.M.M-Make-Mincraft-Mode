@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from copy import deepcopy
 from pathlib import Path
 from threading import RLock
 from uuid import uuid4
@@ -88,11 +89,17 @@ class ConstructionNodeCheckpoint:
                 raise ValueError("CONSTRUCTION_CHECKPOINT_NODES_INVALID")
             return tuple(record["nodes"]), record["stage"]
 
-    def save(self, task, nodes, stage):
+    def save(self, task, nodes, stage, *, author_state=None, expected_graph_sha256=None):
         if task.task_id != self.task.task_id or stage not in {"authoring", "validated"}:
             raise ValueError("CONSTRUCTION_CHECKPOINT_TASK_MISMATCH")
         record = {"key": self.key, "task_id": task.task_id,
                   "stage": stage, "nodes": [dict(n) for n in nodes]}
+        if author_state is not None:
+            if (author_state.get('protocol') != PROTOCOL_VERSION
+                    or author_state.get('phase') != 'operation_graph'
+                    or author_state.get('revision') != len(nodes)):
+                raise ValueError('CONSTRUCTION_AUTHOR_STATE_BINDING_MISMATCH')
+            record['author_state'] = deepcopy(author_state)
         envelope = {"record": record, "sha256": _sha(record)}
         with _LOCK:
             existing, old_stage = self.load()
@@ -100,7 +107,16 @@ class ConstructionNodeCheckpoint:
                 stage != "validated" or tuple(nodes) != existing
             ):
                 raise ValueError("CONSTRUCTION_CHECKPOINT_ALREADY_VALIDATED")
-            if existing and tuple(nodes[:len(existing)]) != existing:
+            if expected_graph_sha256 is not None:
+                from .construction_feedback import replace_node
+                if _sha(existing) != expected_graph_sha256 or old_stage != 'authoring':
+                    raise ValueError('CONSTRUCTION_CHECKPOINT_REVISION_CONFLICT')
+                previous = {node['node_id']: node for node in existing}
+                changed = [node for node in nodes if node['node_id'] in previous
+                           and node != previous[node['node_id']]]
+                if len(changed) != 1 or tuple(nodes) != replace_node(existing, changed[0]):
+                    raise ValueError('CONSTRUCTION_CHECKPOINT_REVISION_INVALID')
+            elif existing and tuple(nodes[:len(existing)]) != existing:
                 raise ValueError("CONSTRUCTION_CHECKPOINT_FORK")
             self.path.parent.mkdir(parents=True, exist_ok=True)
             temporary = self.path.with_name("." + self.path.name + "." + uuid4().hex + ".tmp")
@@ -128,14 +144,29 @@ class ConstructionNodeCheckpoint:
         if task.task_id != self.task.task_id:
             raise ValueError('CONSTRUCTION_CHECKPOINT_TASK_MISMATCH')
         with _LOCK:
-            if not self.author_state_path.exists():
-                return None
-            envelope = json.loads(self.author_state_path.read_text(encoding='utf-8'))
-            record = envelope.get('record')
-            if not isinstance(record, dict) or _sha(record) != envelope.get('sha256'):
-                raise ValueError('CONSTRUCTION_AUTHOR_STATE_CORRUPT')
-            if record.get('key') != self.key or record.get('protocol') != PROTOCOL_VERSION:
-                raise ValueError('CONSTRUCTION_AUTHOR_STATE_BINDING_MISMATCH')
+            record = None
+            if self.author_state_path.exists():
+                envelope = json.loads(self.author_state_path.read_text(encoding='utf-8'))
+                record = envelope.get('record')
+                if not isinstance(record, dict) or _sha(record) != envelope.get('sha256'):
+                    raise ValueError('CONSTRUCTION_AUTHOR_STATE_CORRUPT')
+                if record.get('key') != self.key or record.get('protocol') != PROTOCOL_VERSION:
+                    raise ValueError('CONSTRUCTION_AUTHOR_STATE_BINDING_MISMATCH')
+            if record is None or record.get('nodes_sha256') != _sha(nodes):
+                # Graph revisions and their initial cursor are one publication.
+                # A separate lookup cursor may still describe the old graph.
+                if self.path.exists():
+                    envelope = json.loads(self.path.read_text(encoding='utf-8'))
+                    body = envelope.get('record')
+                    if not isinstance(body, dict) or _sha(body) != envelope.get('sha256'):
+                        raise ValueError('CONSTRUCTION_CHECKPOINT_CORRUPT')
+                    if body.get('key') != self.key or body.get('task_id') != self.task.task_id:
+                        raise ValueError('CONSTRUCTION_CHECKPOINT_BINDING_MISMATCH')
+                    state = body.get('author_state')
+                    if body.get('nodes') == list(nodes) and state is not None:
+                        record = {'state': state, 'nodes_sha256': _sha(nodes)}
+                if record is None:
+                    return None
             if purposes_only:
                 state = record.get('state')
                 if not isinstance(state, dict):

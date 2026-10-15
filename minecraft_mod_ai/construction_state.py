@@ -12,7 +12,7 @@ from copy import deepcopy
 
 # Body lookup choices and retained API pages changed. Old journals/cursors may
 # not be replayed against them; declaration-bound accepted graphs stay reusable.
-PROTOCOL_VERSION = "mmm/construction-state-v14"
+PROTOCOL_VERSION = "mmm/construction-state-v15"
 PAGE_SIZE = 8
 RECENT_SIZE = 4
 LOOKUP_KINDS = frozenset({'symbols', 'scopes', 'declarations', 'nodes', 'node_index', 'source', 'sources', 'bindings'})
@@ -152,6 +152,7 @@ class ConstructionState:
         self.operation_reads = 0
         self.operation_rejections = {}
         self.node_purposes = {}
+        self.validation_observation = None
         from .construction_memory import ConstructionMemory
         self.memory = ConstructionMemory()
 
@@ -180,6 +181,7 @@ class ConstructionState:
         self.selection_goal = None
         self.operation_reads = 0
         self.operation_rejections = {}
+        self.validation_observation = None
 
     def reconsider_operation(self):
         """Retry the same slot with another operation, preserving real evidence."""
@@ -272,6 +274,7 @@ class ConstructionState:
         return list(result.values())
 
     def payload(self, available_actions, **cursor):
+        from .construction_feedback import observation_view
         available_actions = tuple(available_actions)
         row = self.symbols.get(self.owner, {})
         planned = row.get("provenance") == "construction_plan"
@@ -294,6 +297,7 @@ class ConstructionState:
             "authoring_contract": self.authoring_contract,
             "evidence_memory": self.memory.payload(),
             "selection_goal": deepcopy(self.selection_goal),
+            "operation_observation": observation_view(self.validation_observation),
             "scope_candidates": self.scope_candidates() if 'scopes' in available_actions else [],
             "scope_lookup": self.scope_lookup,
             "symbol_page_choices": self.symbol_page_successors() if 'more_symbols' in available_actions else [],
@@ -381,6 +385,7 @@ class ConstructionState:
                 'selection_goal': deepcopy(self.selection_goal),
                 'operation_rejections': deepcopy(self.operation_rejections),
                 'node_purposes': dict(self.node_purposes),
+                'validation_observation': deepcopy(self.validation_observation),
                 'memory': self.memory.export(),
                 'binding_lookups': [{'kind': 'bindings', 'query': query, 'offset': offset}
                                     for query, offset in sorted(self.binding_lookups)],
@@ -447,6 +452,10 @@ class ConstructionState:
             raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
         self.operation_rejections = deepcopy(rejections)
         self.node_purposes = dict(purposes)
+        from .construction_feedback import validate_observation
+        observation = record.get('validation_observation')
+        validate_observation(observation)
+        self.validation_observation = deepcopy(observation)
         self.memory.restore(record.get('memory'), resolve_lookup)
         requests, history = record.get('requests'), record.get('history')
         if (not isinstance(requests, list) or not isinstance(history, list)
