@@ -204,7 +204,8 @@ def memory_schemas(state):
     branches = []
     for offset in state.memory.index_choices():
         branches.append(action_schema('memory_index', {'offset': {'const': offset}}))
-    records = [row['evidence_id'] for row in state.memory.catalogue()['records'] if not row['active']]
+    records = [row['evidence_id'] for row in state.memory.catalogue()['records']
+               if not row['active'] and not row['recalled']]
     if records:
         branches.append(action_schema('recall', {'evidence_id': {'enum': records}}))
     return branches

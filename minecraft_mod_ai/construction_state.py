@@ -12,7 +12,7 @@ from copy import deepcopy
 
 # Body lookup choices and retained API pages changed. Old journals/cursors may
 # not be replayed against them; declaration-bound accepted graphs stay reusable.
-PROTOCOL_VERSION = "mmm/construction-state-v11"
+PROTOCOL_VERSION = "mmm/construction-state-v12"
 PAGE_SIZE = 8
 RECENT_SIZE = 4
 LOOKUP_KINDS = frozenset({'symbols', 'scopes', 'declarations', 'nodes', 'node_index', 'source', 'sources', 'bindings'})
@@ -108,6 +108,8 @@ STATE_INSTRUCTION = (
     "or types. evidence_memory.working_set retains exact inspected facts across phases. "
     "Use memory_index to page its complete catalogue and recall an exact evidence_id when an "
     "earlier fact is outside the active view. Recall is memory navigation, not a new search. "
+    "Already inspected memory pages and recalled facts are not offered again until the "
+    "current phase/revision advances. Exact evidence stays on the host across decisions. "
     "Dependency discovery is driven by the current implementation purpose. Exact API names come "
     "from returned candidates, not guesses. Intent selectors identify host-ranked real pages. "
     "scope_candidates are real package/type branches, including branches whose names do not "
@@ -149,6 +151,7 @@ class ConstructionState:
             self.phase = phase
             self.requests.clear()
             self.lookup_cursors.clear()
+            self.memory.reset_navigation()
 
     def advance(self, *, preserve_symbols=False):
         if self.phase == 'class_header' and self.evidence_index is not None:
@@ -160,6 +163,7 @@ class ConstructionState:
         self.scope_lookup = {}
         self.requests.clear()
         self.lookup_cursors.clear()
+        self.memory.reset_navigation()
         self.symbol_goal = None
         self.operation_goal = None
         self.operation_draft = {}
