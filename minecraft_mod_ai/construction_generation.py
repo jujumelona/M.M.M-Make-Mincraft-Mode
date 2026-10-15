@@ -211,10 +211,17 @@ def compose(router, spec, *, source_context=(), construction_context=None,
                            symbols[key].get('body_owner') != 'host_lifecycle'][-8:]
         schema = member_schema(state, reserved_names=reserved_names, body_candidates=body_candidates)
         if registrars:
-            # The original behavior methods already exist. Only shared-state
-            # fields, or the decision to begin their bodies, are legal here.
-            schema['oneOf'] = [branch for branch in schema['oneOf']
-                               if branch.get('properties', {}).get('action', {}).get('const') in {'field', 'begin_bodies'}]
+            # The shared member schema groups method and field in one enum.
+            # Narrow that branch to field without accidentally deleting it.
+            state_branches = []
+            for branch in schema['oneOf']:
+                action_spec = branch.get('properties', {}).get('action', {})
+                if action_spec.get('const') == 'begin_bodies':
+                    state_branches.append(branch)
+                elif 'field' in action_spec.get('enum', ()):
+                    state_branches.append({**branch, 'properties': {
+                        **branch['properties'], 'action': {'const': 'field'}}})
+            schema['oneOf'] = state_branches
         if not implicit_super_available and not any(symbols[key]['kind'] == 'CONSTRUCTOR' for key in state.declaration_ids):
             schema['oneOf'] = [branch for branch in schema['oneOf']
                                if branch.get('properties', {}).get('action', {}).get('const') != 'begin_bodies']
