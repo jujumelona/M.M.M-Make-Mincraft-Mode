@@ -1,0 +1,58 @@
+name: RAG and Construction Progress Contracts
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'minecraft_mod_ai/grounded_source_reuse.py'
+      - 'minecraft_mod_ai/reuse_discovery.py'
+      - 'minecraft_mod_ai/source_intent_aliases.py'
+      - 'minecraft_mod_ai/capability_implementation_locator.py'
+      - 'minecraft_mod_ai/authored_source_rag.py'
+      - 'minecraft_mod_ai/ecosystem_discovery.py'
+      - 'minecraft_mod_ai/construction_generation.py'
+      - 'minecraft_mod_ai/construction_declaration_choices.py'
+      - 'tests/test_authored_source_rag.py'
+      - 'tests/test_grounded_source_reuse_frontier.py'
+      - 'tests/test_reuse_discovery_query_architecture.py'
+      - 'tests/test_ecosystem_discovery.py'
+      - 'tests/test_construction_operation_progress_gate.py'
+      - '.github/workflows/rag-construction-progress-contract.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rag-construction-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m pip install --prefer-binary -e '.[dev]'
+      - name: Compile changed production entrypoints
+        run: |
+          python -m py_compile \
+            minecraft_mod_ai/reuse_discovery.py \
+            minecraft_mod_ai/source_intent_aliases.py \
+            minecraft_mod_ai/capability_implementation_locator.py \
+            minecraft_mod_ai/grounded_source_reuse.py \
+            minecraft_mod_ai/authored_source_rag.py \
+            minecraft_mod_ai/construction_generation.py \
+            minecraft_mod_ai/construction_declaration_choices.py
+      - name: Run regression contracts
+        run: |
+          python -m pytest -q --maxfail=1 \
+            tests/test_reuse_discovery_query_architecture.py \
+            tests/test_grounded_source_reuse_frontier.py \
+            tests/test_authored_source_rag.py \
+            tests/test_ecosystem_discovery.py \
+            tests/test_construction_operation_progress_gate.py
