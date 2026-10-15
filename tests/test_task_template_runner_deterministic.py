@@ -116,13 +116,22 @@ def test_declared_leaf_fixtures_render_without_execution_authority():
             assert expected in rendered
 
 
-def test_migrated_leaf_ports_do_not_depend_on_central_name_table(monkeypatch):
+def test_migrated_leaf_ports_do_not_depend_on_central_name_table():
     import minecraft_mod_ai.artifact_template_runner as runner
 
-    monkeypatch.setattr(runner, "_STANDARD_PORT_DEFINITIONS", {})
+    assert not hasattr(runner, "_STANDARD_PORT_DEFINITIONS")
     registry = PortRegistry()
     _register_scoped_ports(registry)
     assert registry.resolve("raw_lunite.registry_id", PortKind.REGISTRY_ID, "Item").value == "space:raw_lunite"
+
+
+def test_implicit_legacy_output_port_is_not_admitted():
+    from minecraft_mod_ai.template_contract_validation import validate_template_contract
+
+    template = load_template("fabric/item/register_basic")
+    template["produces"] = ["item_registry_id"]
+    with pytest.raises(ValueError, match="TEMPLATE_PORT_DECLARATION"):
+        validate_template_contract(template)
 
 
 @pytest.mark.parametrize("change", [{"kind": "TYPO"}, {"target_type": ""}, {"value": ""}])
