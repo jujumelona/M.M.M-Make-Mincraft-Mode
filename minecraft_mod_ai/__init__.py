@@ -1,52 +1,12 @@
-"""M.M.M Make Mincraft Mode: scalable multimodal Minecraft mod production tools."""
+"""M.M.M Make Mincraft Mode: scalable multimodal Minecraft mod production tools.
 
-from .api import (
-    CompleteChatReply,
-    CompleteModAISession,
-    supported_minecraft_versions,
-)
-from .complete_orchestrator import (
-    CompleteExecutionOptions,
-    CompletePipelineResult,
-    CompleteProductionOrchestrator,
-)
-from .complete_orchestrator_support import CompleteProductionError
-from .complete_planner import CompleteGameDesignPlanner
-from .authored_plan import AuthoredPlan
-from .complete_spec import AssetRequest, CompleteProposal, ProductionModule
-from .ecosystem_discovery import EcosystemDiscoveryClient
-from .external_mcp import ExternalMCPRegistry
-from .importer import (
-    ExistingProjectImportError,
-    ExistingProjectReport,
-    inspect_existing_project_archive,
-)
-from .mod_development_methods import (
-    ModDevelopmentMethod,
-    mod_development_method_catalog,
-    resolve_mod_development_methods,
-)
-from .model_adapters import ModelBackendError, ModelConfigurationError
-from .model_registry import ModelRegistry
-from .model_router import ModelRouter
-from .production_contract import (
-    ProductionContractCompilation,
-    compile_production_contract,
-    evaluate_quality_contract,
-    quality_contract_summary,
-    quality_unresolved,
-)
-from .production_tools import ProductionToolService
-from .project_index import ProjectIndex
-from .rag_index import ProjectRAGIndex
-from .scalable_generator import ScalableFabricProjectGenerator
-from .scale_policy import ScalePolicy, ScalePolicyError
-from .spec import BossSpec, ContentSpec, ModSpec, PlatformLock, Proposal
-from .technology_radar import (
-    assess_technology_compatibility,
-    build_technology_radar,
-    technology_research_routes,
-)
+Import package submodules without eagerly initializing the full production
+orchestrator, model router, discovery stack or optional runtime integrations.
+Public symbols remain available through lazy attribute resolution.
+"""
+
+from importlib import import_module
+
 
 __all__ = [
     "AssetRequest", "AuthoredPlan", "BossSpec", "CompleteChatReply",
@@ -64,10 +24,64 @@ __all__ = [
     "resolve_mod_development_methods", "supported_minecraft_versions", "technology_research_routes",
 ]
 
+
 __version__ = "0.8.0"
 
+_PUBLIC_MODULES = {
+    "assess_technology_compatibility": ".technology_radar",
+    "AssetRequest": ".complete_spec",
+    "AuthoredPlan": ".authored_plan",
+    "BossSpec": ".spec",
+    "build_technology_radar": ".technology_radar",
+    "compile_production_contract": ".production_contract",
+    "CompleteChatReply": ".api",
+    "CompleteExecutionOptions": ".complete_orchestrator",
+    "CompleteGameDesignPlanner": ".complete_planner",
+    "CompleteModAISession": ".api",
+    "CompletePipelineResult": ".complete_orchestrator",
+    "CompleteProductionError": ".complete_orchestrator_support",
+    "CompleteProductionOrchestrator": ".complete_orchestrator",
+    "CompleteProposal": ".complete_spec",
+    "ContentSpec": ".spec",
+    "EcosystemDiscoveryClient": ".ecosystem_discovery",
+    "evaluate_quality_contract": ".production_contract",
+    "ExistingProjectImportError": ".importer",
+    "ExistingProjectReport": ".importer",
+    "ExternalMCPRegistry": ".external_mcp",
+    "inspect_existing_project_archive": ".importer",
+    "mod_development_method_catalog": ".mod_development_methods",
+    "ModDevelopmentMethod": ".mod_development_methods",
+    "ModelBackendError": ".model_adapters",
+    "ModelConfigurationError": ".model_adapters",
+    "ModelRegistry": ".model_registry",
+    "ModelRouter": ".model_router",
+    "ModSpec": ".spec",
+    "PlatformLock": ".spec",
+    "ProductionContractCompilation": ".production_contract",
+    "ProductionModule": ".complete_spec",
+    "ProductionToolService": ".production_tools",
+    "ProjectIndex": ".project_index",
+    "ProjectRAGIndex": ".rag_index",
+    "Proposal": ".spec",
+    "quality_contract_summary": ".production_contract",
+    "quality_unresolved": ".production_contract",
+    "resolve_mod_development_methods": ".mod_development_methods",
+    "ScalableFabricProjectGenerator": ".scalable_generator",
+    "ScalePolicy": ".scale_policy",
+    "ScalePolicyError": ".scale_policy",
+    "supported_minecraft_versions": ".api",
+    "technology_research_routes": ".technology_radar",
+}
 
 
-# Installer-backed cross-cutting contracts have exactly one package-level owner.
-# Runtime contracts are source-owned. Importing the package must not mutate or
-# rebind production functions through an installer/bootstrap phase.
+def __getattr__(name: str):
+    module = _PUBLIC_MODULES.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(module, __name__), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__():
+    return sorted(set(globals()) | set(__all__))
