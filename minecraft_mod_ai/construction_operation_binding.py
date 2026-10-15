@@ -16,6 +16,26 @@ API_KINDS = {'call': 'METHOD', 'new': 'CONSTRUCTOR', 'field': 'FIELD', 'construc
 TYPE_BOUND_OPERATIONS = frozenset({'declare', 'literal', 'cast', 'ternary', 'array_get', 'new_array'})
 
 
+def forbidden_input_references(nodes, goal_id):
+    """Exclude all consumers of the missing slot, not just the slot itself.
+
+    Forward references are allowed, but an existing node which transitively
+    depends on the selected hole cannot also become that hole's input.
+    """
+    consumers = {}
+    for node in nodes:
+        for ref in node['input_refs']:
+            consumers.setdefault(ref, set()).add(node['node_id'])
+    blocked = {goal_id}
+    pending = [goal_id]
+    while pending:
+        for user in consumers.get(pending.pop(), ()):
+            if user not in blocked:
+                blocked.add(user)
+                pending.append(user)
+    return blocked
+
+
 def available_types(state, nodes, declaration, requirements):
     types = set(type_candidates(state))
     selected = state.operation_draft.get('binding_choice', {}).get('base_type')
@@ -181,7 +201,7 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
     schema['properties']['node_id'] = {'const': goal['node_id']}
     from .construction_declaration_choices import string_excluding
     from .construction_operation_choices import NODE_ID_ALPHABET
-    schema['properties']['input_refs']['items'] = string_excluding((goal['node_id'],), alphabet=NODE_ID_ALPHABET)
+    schema['properties']['input_refs']['items'] = string_excluding(forbidden_input_references(nodes, goal['node_id']), alphabet=NODE_ID_ALPHABET)
     types = available_types(state, nodes, payload['declaration'], requirements)
     selected_type = None
     if op in TYPE_BOUND_OPERATIONS:
