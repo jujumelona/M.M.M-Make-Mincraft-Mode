@@ -45,6 +45,33 @@ _COMPOUND_SHIP_NOUNS = frozenset({
 })
 
 
+# Catalogues predominantly index English repository metadata. Reuse the host's
+# Minecraft bilingual ontology, with search-only aliases for common mechanics.
+# These strings never authorize an implementation or alter approved features.
+_SOURCE_INTENT_ALIASES = (
+    ("외계", "alien"), ("우주선", "spaceship"), ("우주", "space"),
+    ("행성", "planet"), ("식민", "colony"), ("전투", "combat"),
+    ("싸움", "combat"), ("공격", "combat"), ("채굴", "mining"),
+    ("광물", "ore"), ("광석", "ore"), ("거래", "trading"),
+    ("구매", "trading"), ("돈", "economy"), ("선원", "crew"),
+    ("제작", "crafting"), ("조립", "assembly"), ("탐험", "exploration"),
+    ("이동", "travel"), ("포털", "portal"), ("포탈", "portal"),
+    ("차원", "dimension"), ("엔티티", "entity"), ("몹", "mob"),
+)
+
+
+def _source_intent_aliases(capability: str) -> tuple[str, ...]:
+    from .minecraft_knowledge_nodes import FEATURE_TERMS
+
+    phrase = str(capability).casefold()
+    values = [alias for korean, alias in _SOURCE_INTENT_ALIASES if korean in phrase]
+    for _feature, terms in FEATURE_TERMS.items():
+        if any(str(term) in phrase for term in terms if re.search(r"[가-힣]", str(term))):
+            values.extend(str(term).lower() for term in terms
+                          if re.fullmatch(r"[a-z][a-z -]{2,50}", str(term).lower()))
+    return tuple(dict.fromkeys(values))
+
+
 def _singular_source_word(word: str) -> str:
     if len(word) > 4 and word.endswith("ies"):
         return word[:-3] + "y"
@@ -257,11 +284,14 @@ def _specific_search_terms(terms: Sequence[str]) -> tuple[str, ...]:
 
 def _ordered_source_queries(capability: str, terms: Sequence[str]) -> tuple[str, ...]:
     specific = _specific_search_terms(terms)
+    bilingual = _source_intent_aliases(capability)
     aliases = _ontology_search_queries(capability)
     canonical = capability in atomic_capability_definitions()
     authored = tuple(query for query in specific if len(_TOKEN.findall(query)) <= 8)
-    head = aliases[:1] if canonical else authored
-    compact = _short_source_queries(capability) if head else ()
+    head = aliases[:1] if canonical else (
+        bilingual if re.search(r"[가-힣]", capability) and bilingual else authored
+    )
+    compact = _short_source_queries(capability) if head and not bilingual else ()
     ordinary = () if capability.startswith("custom gameplay ") else specific
     semantic = " ".join(_TOKEN.findall(
         capability.replace(".", " ").replace("_", " ").replace("-", " ").replace(":", " ")))
@@ -370,7 +400,7 @@ def _candidate_relevance(candidate: Mapping[str, Any], capability: str) -> float
         "fabric", "forge", "neoforge", "quilt", "system", "feature", "generation",
         "the", "and", "for", "with", "a", "an", "to", "of",
     }
-    terms = _source_words(capability) - stop
+    terms = (_source_words(capability) | set(_source_intent_aliases(capability))) - stop
     if capability in atomic_capability_definitions():
         terms.update(word for query in _ontology_search_queries(capability)
                      for word in _source_words(query) if word not in stop)
