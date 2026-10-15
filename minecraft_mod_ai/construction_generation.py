@@ -191,6 +191,12 @@ def compose(router, spec, *, source_context=(), construction_context=None,
     # Registrars already have behavior-owned method bodies. Do not repeatedly ask
     # the small planner to invent additional helpers before writing any Java.
     preferred_body = registrars[0][0] if registrars else ''
+    # Registrars with persistent state may still need explicit fields; allow
+    # at most one additional field slot per distinct documented state name.
+    shared_state_names = {str(value) for behavior in behaviors if isinstance(behavior, dict)
+                          for kind in ('state_reads', 'state_writes')
+                          for value in behavior.get(kind, ()) if str(value).strip()}
+    remaining_state_fields = len(shared_state_names) if registrars else 0
     parent_owner = superclass or 'java.lang.Object'
     parent_constructors = [key for key, row in symbols.items() if row.get('kind') == 'CONSTRUCTOR'
         and row['owner'] == parent_owner and state.evidence_index.accessible(key)]
@@ -198,12 +204,17 @@ def compose(router, spec, *, source_context=(), construction_context=None,
         and not any(not (state.evidence_index._subtype(type_, 'java.lang.RuntimeException')
                         or state.evidence_index._subtype(type_, 'java.lang.Error'))
                     for type_ in symbols[key].get('throws', ())) for key in parent_constructors)
-    while not registrars:
+    while not registrars or remaining_state_fields:
         state.enter('member_declarations')
         # The page is already bounded; every remaining body still stays queued.
         body_candidates = [key for key in state.declaration_ids if
                            symbols[key].get('body_owner') != 'host_lifecycle'][-8:]
         schema = member_schema(state, reserved_names=reserved_names, body_candidates=body_candidates)
+        if registrars:
+            # The original behavior methods already exist. Only shared-state
+            # fields, or the decision to begin their bodies, are legal here.
+            schema['oneOf'] = [branch for branch in schema['oneOf']
+                               if branch.get('properties', {}).get('action', {}).get('const') in {'field', 'begin_bodies'}]
         if not implicit_super_available and not any(symbols[key]['kind'] == 'CONSTRUCTOR' for key in state.declaration_ids):
             schema['oneOf'] = [branch for branch in schema['oneOf']
                                if branch.get('properties', {}).get('action', {}).get('const') != 'begin_bodies']
@@ -296,6 +307,8 @@ def compose(router, spec, *, source_context=(), construction_context=None,
             'body_owner': task.task_id, 'purpose': item['purpose']}
         declarations.append((key, item['purpose']))
         state.add_declaration(key)
+        if registrars and action == 'field':
+            remaining_state_fields -= 1
         if action in {'method', 'constructor'}:
             # A small model needs a complete executable unit before expanding
             # the surrounding class. Queue this body immediately instead of
