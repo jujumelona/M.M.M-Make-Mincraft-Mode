@@ -182,9 +182,9 @@ def author_task_operations(router, task, context):
 
     instruction = ('Author this current behavior as typed Java operations, one node per turn. No Java source strings. '
         'selection_goal identifies the current missing input or root slot and its implementation purpose. '
-        'Inspect the literal bindings, scopes, symbols and source pointers needed for this slot before '
-        'choosing its operation. Exact API names come from returned declarations. Context reads keep '
-        'the same slot and purpose; when the facts are sufficient, choose its Java operation. '
+        'Choose the needed Java operation first. Only then inspect its specific API, type, '
+        'binding or source dependencies. Exact API names come from returned declarations. '
+        'Do not page through the entire API inventory to decide which operation to use. '
         'State the operation purpose in plain language, then bind the correct actual API before writing its node. '
         'API signatures fix result types and receiver/argument counts. Required inputs may be forward '
         'references, and each missing input must be authored. Relevant graph nodes are stored on the '
@@ -219,8 +219,9 @@ def author_task_operations(router, task, context):
                     api = symbols[parent['attributes']['symbol_ref']]
                     parts.append(api.get('purpose') or api['owner'] + '.' + api['name'])
             purpose = '\n'.join(dict.fromkeys(part for part in parts if part))
-            state.selection_goal = {'node_id': slot, 'purpose': purpose}
-            state.prepare_symbols(purpose, kinds=('CLASS', 'METHOD', 'CONSTRUCTOR', 'FIELD'))
+            state.selection_goal = {'node_id': slot, 'purpose': purpose, 'excluded_operations': []}
+            # Never pre-browse the entire dependency inventory before the model
+            # chooses call/new/field/control flow. API lookup happens in binding.
             save_author()
         slot = state.selection_goal['node_id']
         if slot in by_id or (pending and slot not in pending):
@@ -260,6 +261,23 @@ def author_task_operations(router, task, context):
         row = bind_operation(router, state, goal=choice, payload=payload, nodes=nodes,
             source_units=source_units, pinned_source=base['port_source_ref'],
             read_lookup=read_lookup, instruction=instruction, save_author=save_author)
+        if row is None:
+            # The chosen API-dependent operation lacked verified callable
+            # evidence. Reconsider the same slot rather than endlessly paging
+            # symbols or fabricating a Java registry method. Persist exclusions
+            # so resuming cannot repeat the same dead end.
+            excluded = state.selection_goal.setdefault('excluded_operations', [])
+            if action not in excluded:
+                excluded.append(action)
+            print('CONSTRUCTION OPERATION RECONSIDER: ' + json.dumps({
+                'node_id': slot, 'rejected_operation': action,
+                'excluded_operations': excluded,
+                'reason': 'no_usable_api_evidence',
+            }, ensure_ascii=False), flush=True)
+            state.operation_goal = None
+            state.operation_draft = {}
+            save_author()
+            continue
         row['op'] = action
         if row['node_id'] in by_id:
             raise ValueError('CONSTRUCTION_NODE_DUPLICATE')
