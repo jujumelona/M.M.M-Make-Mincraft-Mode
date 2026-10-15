@@ -14,6 +14,7 @@ from typing import Any
 
 from .canonical_capability_ontology import search_queries_for_capability
 from .repository_artifact_index import RepositoryArtifactIndex
+from .source_intent_aliases import source_intent_aliases
 
 _TOKEN_SPLIT = re.compile(r"[._\-/ ]+")
 _CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
@@ -78,7 +79,13 @@ class CapabilityImplementationLocator:
         """
         if max_seeds is not None and max_seeds < 1:
             raise ValueError("max_seeds must be positive when explicitly configured.")
+        # The repository search might have matched an English alias for a
+        # Korean request. Apply the exact same aliases to immutable source
+        # symbol/registry/callsite matching, otherwise the downloaded donor
+        # becomes a false no-seed rejection.
         cap_tokens = _tokens(capability)
+        cap_tokens.update(token for alias in source_intent_aliases(capability)
+                          for token in _tokens(alias))
         search_terms = search_queries_for_capability(capability)
         term_tokens = {
             token
