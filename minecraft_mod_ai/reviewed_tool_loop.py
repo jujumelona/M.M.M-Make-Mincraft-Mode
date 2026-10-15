@@ -249,6 +249,21 @@ def generate_with_reviewed_tools(
                 }
 
         executed = _execute_tool_waves(tuple(turn.tool_calls), execute)
+        if (visible_names == frozenset({"java_diagnostics"})
+                and len(executed) == 1
+                and (not evidence_required or evidence_ready)):
+            checked_call, checked = executed[0]
+            report = checked.get("result") if isinstance(checked, Mapping) else None
+            if (checked_call.name == "java_diagnostics"
+                    and checked.get("ok") is True
+                    and isinstance(report, Mapping)
+                    and report.get("status") == "PASS"
+                    and report.get("diagnostics") == []):
+                return json.dumps({
+                    "summary": "Java diagnostics passed generation-time host verification; "
+                               "build, gameplay and release remain unverified.",
+                    "verification": "JAVA_DIAGNOSTICS_PASS",
+                })
         for call, payload in executed:
             result = payload.get("result") if isinstance(payload, Mapping) else None
             if bool(payload.get("ok")):
