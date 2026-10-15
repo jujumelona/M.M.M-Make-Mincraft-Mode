@@ -95,6 +95,21 @@ def _evidence_tool_names(
     return tuple(name for name in ("external_mcp_call",) if name in names)
 
 
+def _reviewed_tool_frontier(visible_tools, request, *, force_evidence):
+    """Select only actual evidence tools when a missing prerequisite forces retrieval."""
+    if not force_evidence:
+        return visible_tools, request.tool_choice, request.parallel_tool_calls
+    evidence_names = _evidence_tool_names(visible_tools)
+    if not evidence_names:
+        raise ModelConfigurationError(
+            "FRESH_EVIDENCE_UNAVAILABLE: no reviewed evidence tool remains."
+        )
+    tools = tuple(schema for schema in visible_tools if _tool_name(schema) in evidence_names)
+    choice = ({"type": "function", "function": {"name": evidence_names[0]}}
+              if len(evidence_names) == 1 else "required")
+    return tools, choice, False
+
+
 def _terminal_java_diagnostics_reply(executed, visible_names, *,
                                      evidence_required, evidence_ready):
     """Only a diagnostic-only host PASS can terminate this reviewed tool loop."""
@@ -156,30 +171,9 @@ def generate_with_reviewed_tools(
     force_evidence = False
 
     for round_index in range(_agent_tool_round_limit()):
-        active_tools = visible_tools
-        tool_choice = request.tool_choice
-        parallel = request.parallel_tool_calls
-
-        if force_evidence:
-            evidence_names = _evidence_tool_names(visible_tools)
-            if not evidence_names:
-                raise ModelConfigurationError(
-                    "FRESH_EVIDENCE_UNAVAILABLE: no reviewed evidence tool remains."
-                )
-            active_tools = tuple(
-                schema
-                for schema in visible_tools
-                if _tool_name(schema) in evidence_names
-            )
-            tool_choice = (
-                {
-                    "type": "function",
-                    "function": {"name": evidence_names[0]},
-                }
-                if len(evidence_names) == 1
-                else "required"
-            )
-            parallel = False
+        active_tools, tool_choice, parallel = _reviewed_tool_frontier(
+            visible_tools, request, force_evidence=force_evidence,
+        )
 
         turn_request = replace(
             request,
