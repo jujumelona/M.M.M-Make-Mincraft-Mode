@@ -1,9 +1,20 @@
 from __future__ import annotations
 
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
-from minecraft_mod_ai.planner_checkpoint import PlannerCheckpoint
+import pytest
+
+from minecraft_mod_ai import planner_checkpoint as checkpoint_module
 from minecraft_mod_ai.llama_server_runtime_tuning import _configure_prompt_cache
+from minecraft_mod_ai.model_concurrency import (
+    ModelExecutionBudget,
+    ModelExecutionCancelled,
+    run_with_model_execution_deadline,
+)
+from minecraft_mod_ai.planner_checkpoint import PlannerCheckpoint
 
 
 def _checkpoint(tmp_path, monkeypatch, *, media_paths=(), model_id="qwen"):
@@ -65,6 +76,49 @@ def test_corrupted_checkpoint_is_not_replayed(tmp_path, monkeypatch):
     resumed = _checkpoint(tmp_path, monkeypatch)
     assert resumed.load_sections() is None
     assert resumed.content_progress({"requirements": []}) == {}
+
+
+@pytest.mark.parametrize("replacing", [False, True])
+def test_cancelled_staged_record_keeps_persisted_and_in_memory_progress(
+    tmp_path, monkeypatch, replacing
+):
+    checkpoint = _checkpoint(tmp_path, monkeypatch)
+    catalog = {"requirements": []}
+    checkpoint.content_progress(catalog)
+    checkpoint.save_content_record("accepted", {"entity_id": "existing_item"})
+    before = checkpoint.path.read_bytes()
+    expected = checkpoint.content_progress(catalog)
+    entered = threading.Event()
+    release = threading.Event()
+    original_dump = checkpoint_module.json.dump
+
+    def slow_dump(*args, **kwargs):
+        entered.set()
+        assert release.wait(2)
+        return original_dump(*args, **kwargs)
+
+    monkeypatch.setattr(checkpoint_module.json, "dump", slow_dump)
+    budget = ModelExecutionBudget(time.monotonic() + 30)
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        future = pool.submit(
+            run_with_model_execution_deadline,
+            budget,
+            checkpoint.save_content_record,
+            "accepted" if replacing else "late",
+            {"entity_id": "late_item"},
+        )
+        assert entered.wait(2)
+        budget.cancel()
+        release.set()
+        with pytest.raises(ModelExecutionCancelled):
+            future.result(timeout=2)
+    finally:
+        release.set()
+        pool.shutdown(wait=True)
+    assert checkpoint.path.read_bytes() == before
+    assert checkpoint.content_progress(catalog) == expected
+    assert _checkpoint(tmp_path, monkeypatch).content_progress(catalog) == expected
 
 
 def test_qwen_mtp_flags_do_not_allocate_hidden_prompt_ram(monkeypatch):

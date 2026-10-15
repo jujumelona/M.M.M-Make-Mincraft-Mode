@@ -14,6 +14,11 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from .model_concurrency import (
+    model_execution_publication,
+    raise_if_model_execution_cancelled,
+)
+
 _SCHEMA = "mmm/planner-checkpoint-v1"
 
 
@@ -114,7 +119,10 @@ class PlannerCheckpoint:
                     separators=(",", ":"), allow_nan=False,
                 )
                 handle.write("\n")
-            os.replace(temporary, self.path)
+            # Serialization and file staging may be slow. Only the final rename
+            # shares the cancellation lock, so cancellation can finish promptly.
+            with model_execution_publication():
+                os.replace(temporary, self.path)
         finally:
             temporary.unlink(missing_ok=True)
 
@@ -160,8 +168,21 @@ class PlannerCheckpoint:
 
     def save_content_record(self, binding: str, accepted: Any) -> None:
         with self._lock:
-            self._data["content_progress"][binding] = deepcopy(accepted)
-            self._write()
+            raise_if_model_execution_cancelled()
+            records = self._data["content_progress"]
+            missing = object()
+            previous = records.get(binding, missing)
+            records[binding] = deepcopy(accepted)
+            try:
+                self._write()
+            except BaseException:
+                # A failed/cancelled rename must not leave a new completed
+                # checkpoint visible through this instance's in-memory cache.
+                if previous is missing:
+                    records.pop(binding, None)
+                else:
+                    records[binding] = previous
+                raise
 
     def load_content_design(self, catalog: Mapping[str, Any]) -> dict[str, Any] | None:
         with self._lock:
