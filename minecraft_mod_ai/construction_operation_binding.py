@@ -3,6 +3,7 @@ from __future__ import annotations
 from .construction_type_contracts import owner_package
 
 import hashlib
+import json
 
 from .construction_author import ask, obj, operation_schema
 from .construction_declaration_choices import action_schema, choice_actions, type_candidates
@@ -64,13 +65,15 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
     def fits(type_):
         return result_fits(type_, requirements, state.evidence_index)
 
-    purpose = '\n'.join(str(value) for value in (
-        goal['purpose'], payload['intent'], payload['effects'],
-        payload['declaration'].get('purpose', ''),
+    # Retrieval must describe the specific Java dependency, not the full game
+    # story. Narrative terms such as "fight aliens / colonize planets" diluted
+    # registration-method ranking in the production trace.
+    purpose = '\n'.join(dict.fromkeys(str(value) for value in (
+        goal['purpose'],
         *[row.get('expected_type', '') for row in requirements],
         *[row.get('expected_element_type', '') for row in requirements],
-        *payload['state_reads'], *payload['state_writes'],
-    ) if value)
+        *[value for row in requirements for value in row.get('expected_types', ())],
+    ) if value))
     if op in API_KINDS or op in TYPE_BOUND_OPERATIONS or op == 'lambda':
         # A control-flow/local-value node needs no global API search. Search
         # only after its concrete operation and required result type are known.
@@ -123,7 +126,8 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
             # The author checkpoints this rejection and tries another operation.
             return None
         branches = operation_context_branches(state, nodes=nodes, source_units=source_units,
-                                             pinned_source=pinned_source, api_resolution=True)
+                                             pinned_source=pinned_source,
+                                             api_resolution=(op in API_KINDS or op == 'lambda' or op in TYPE_BOUND_OPERATIONS))
         if op in API_KINDS:
             if matches:
                 branches.insert(0, action_schema('api', {'symbol_ref': {'enum': [row['symbol_id'] for row in matches]}}))
@@ -141,7 +145,7 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
             raise ValueError('CONSTRUCTION_OPERATION_EVIDENCE_MISSING: ' + op)
         schema = {'oneOf': branches}
         if op in API_KINDS:
-            print('CONSTRUCTION API CANDIDATES: ' + __import__('json').dumps({
+            print('CONSTRUCTION API CANDIDATES: ' + json.dumps({
                 'node_id': goal['node_id'], 'operation': op,
                 'candidate_count': len(matches),
                 'selected_page_names': [row['symbol_id'] for row in matches[:8]],
