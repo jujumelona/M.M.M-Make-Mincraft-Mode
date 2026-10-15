@@ -188,7 +188,9 @@ def compose(router, spec, *, source_context=(), construction_context=None,
     reserved_names = {symbols[key]['name'] for key, _behavior in registrars}
     if lifecycle:
         reserved_names.add(lifecycle)
-    preferred_body = ''
+    # Registrars already have behavior-owned method bodies. Do not repeatedly ask
+    # the small planner to invent additional helpers before writing any Java.
+    preferred_body = registrars[0][0] if registrars else ''
     parent_owner = superclass or 'java.lang.Object'
     parent_constructors = [key for key, row in symbols.items() if row.get('kind') == 'CONSTRUCTOR'
         and row['owner'] == parent_owner and state.evidence_index.accessible(key)]
@@ -196,7 +198,7 @@ def compose(router, spec, *, source_context=(), construction_context=None,
         and not any(not (state.evidence_index._subtype(type_, 'java.lang.RuntimeException')
                         or state.evidence_index._subtype(type_, 'java.lang.Error'))
                     for type_ in symbols[key].get('throws', ())) for key in parent_constructors)
-    while True:
+    while not registrars:
         state.enter('member_declarations')
         # The page is already bounded; every remaining body still stays queued.
         body_candidates = [key for key in state.declaration_ids if
@@ -232,9 +234,8 @@ def compose(router, spec, *, source_context=(), construction_context=None,
         state.enter('member_signature')
         schema = obj({**SIGNATURE['properties'], 'return_type': {'const': return_type}})
         if action != 'field':
-            throwable_types = sorted(key for key, row in symbols.items()
-                if row.get('kind') == 'CLASS' and state.evidence_index.accessible(key)
-                and state.evidence_index._subtype(key, 'java.lang.Throwable'))
+            # The body author handles checked exceptions locally. Java permits
+            # methods and overrides to declare no propagated exceptions.
             current['exception_contract'] = {
                 'rule': 'Declare only intended propagated exceptions. Bodies must catch other checked exceptions; overrides cannot broaden inherited throws.',
                 'inherited_methods': [symbol_record(key, row) for key, row in symbols.items()
@@ -255,20 +256,9 @@ def compose(router, spec, *, source_context=(), construction_context=None,
             break
         exact_type(metadata['return_type'], symbols, allow_void=action != 'field')
         if action != 'field':
+            # Avoid an unbounded exception-enumeration loop. Checked exceptions
+            # must be caught by the generated body, not guessed as declarations.
             metadata['throws'] = []
-            from .construction_declaration_choices import action_schema
-            while True:
-                exceptions = [type_ for type_ in throwable_types if type_ not in metadata['throws']]
-                branches = [action_schema('finish_throws')]
-                if exceptions:
-                    branches.append(action_schema('throws', {'type_ref': {'enum': exceptions}}))
-                exception = ask(planning_router, 'construction_member_throws_next',
-                    {**current, 'signature': metadata}, {'oneOf': branches},
-                    'Declare one exact propagated exception or finish this member exception contract. '
-                    'Its body must catch other checked exceptions. Overrides cannot broaden inherited throws. ' + STATE_INSTRUCTION)
-                if exception['action'] == 'finish_throws':
-                    break
-                metadata['throws'].append(exception['type_ref'])
         state.advance()
         parameters = []
         if action != 'field':
