@@ -120,7 +120,7 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
             shown = {row['symbol_id'] for row in matches}
             matches.extend(symbol_record(key, state.symbols[key]) for key in sorted(required_types - shown)
                            if state.symbols.get(key, {}).get('kind') == 'CLASS' and state.evidence_index.accessible(key))
-        if op in API_KINDS and not matches and len(state.requests) >= MAX_OPERATION_EVIDENCE_READS:
+        if op in API_KINDS and not matches and max(len(state.requests), state.operation_reads) >= MAX_OPERATION_EVIDENCE_READS:
             # No verified API found in this evidence window. Return to the
             # operation selector instead of reading 484,405 candidates forever.
             # The author checkpoints this rejection and tries another operation.
@@ -153,7 +153,7 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
                 'node_id': goal['node_id'], 'operation': op,
                 'candidate_count': len(matches),
                 'selected_page_names': [row['symbol_id'] for row in matches[:8]],
-                'evidence_reads': len(state.requests),
+                'evidence_reads': max(len(state.requests), state.operation_reads),
             }, ensure_ascii=False), flush=True)
         current = {**payload, 'operation_goal': goal,
                    **state.payload(choice_actions(schema), **{key: payload['construction_state'][key]
