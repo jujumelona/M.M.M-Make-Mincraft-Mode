@@ -317,3 +317,14 @@ def test_second_query_preserved_after_three_unverified_first_query_hits(monkeypa
     )
     assert "example/working-donor" in result["planet exploration"]
     assert len(result["planet exploration"]) == 4
+
+
+def test_github_project_topics_rescue_real_mod_with_short_description():
+    candidate = {
+        "repository": "example/astral-adventure",
+        "title": "example/astral-adventure",
+        "summary": "Explore planets and build ships",
+        "metadata": {"topics": ["minecraft", "fabric", "space", "mod"]},
+    }
+    assert reuse_discovery._github_candidate_is_minecraft_mod(candidate)
+    assert reuse_discovery._candidate_relevance(candidate, "planet exploration") > 0
