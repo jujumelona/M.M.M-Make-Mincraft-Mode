@@ -85,3 +85,28 @@ def test_rejected_batches_do_not_truncate_later_usable_candidates(monkeypatch, t
     assert inspected == proved == list(repositories)
     assert result["capabilities"][0]["donor"]["repository"] == repositories[-1]
     assert len(result["reference_sources"]) == 11
+
+
+def test_provider_outage_stops_repeated_source_inspections(monkeypatch, tmp_path):
+    import httpx
+
+    repositories = tuple(f"example/travel{index}" for index in range(12))
+    design = _discovery(monkeypatch, repositories)
+    inspected = []
+
+    def inspect(**kwargs):
+        inspected.append(kwargs["repository"])
+        raise httpx.ConnectError("source provider unavailable")
+
+    def cannot_prove(*args, **kwargs):
+        raise AssertionError("No source download, no compile proof")
+
+    receipt = grounded_source_reuse.build_repository_reuse_plan(
+        design, discovery_client=object(), donor_inspector=inspect,
+        proof_executor=cannot_prove, target_workspace=tmp_path,
+    )
+    assert inspected == [repositories[0]]
+    assert receipt["capabilities"][0]["mode"] == "fresh"
+    assert receipt["capabilities"][0]["search_status"] == "provider_error"
+    assert receipt["capabilities"][0]["failure_code"] == "DONOR_INSPECTION_PROVIDER_UNAVAILABLE"
+    assert receipt["inspection_receipts"][0]["provider_unavailable"]
