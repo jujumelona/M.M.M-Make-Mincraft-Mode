@@ -129,6 +129,16 @@ def prepare_construction_context(spec, *, java_classpath, project_root, source_c
     if missing:
         raise ValueError("CONSTRUCTION_INSTALLED_DONOR_CALLABLE_API_MISSING: " +
                          ",".join(sorted(missing)))
+    # Explicitly distinguish empty donor discovery/handoff from a failing
+    # bytecode lookup. A valid target API inventory is not reused mod source.
+    print('CONSTRUCTION SOURCE HANDOFF: ' + json.dumps({
+        'source_context_count': len(source_context),
+        'java_source_unit_count': sum(len(rows) for rows in pages.values()),
+        'installed_donor_capabilities': sorted(donor_members),
+        'reference_port_count': len(reference_members),
+        'requested_verified_source_records': len(json.loads(
+            bindings.get('verified_source_code_json') or '[]')),
+    }, ensure_ascii=False), flush=True)
     return {
         "reference_port_obligations": reference_members,
         "donor_callable_symbols": {cap: sorted(keys) for cap, keys in donor_members.items()},
