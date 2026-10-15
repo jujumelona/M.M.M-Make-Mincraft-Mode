@@ -270,11 +270,17 @@ def compose(router, spec, *, source_context=(), construction_context=None,
         member_name = name if action == 'constructor' else identifier(item['name'])
         if member_name in reserved_names:
             raise ValueError('CONSTRUCTION_HOST_DECLARATION_RESERVED')
-        if action == 'overload':
+        explicit_overload = action == 'overload'
+        if explicit_overload:
             action = 'method'
         current = {**payload, 'kind': action, 'name': member_name, 'purpose': item['purpose']}
-        return_type = 'void' if action == 'constructor' else choose_type(planning_router, state, current,
+        # Fresh, uncalled helper methods have no external signature to infer.
+        # The previous path let a 9B model invent arbitrary return types and
+        # dozens of parameters before a single declaration was accepted.
+        # Only a field or explicit overload needs a free type decision.
+        return_type = (choose_type(planning_router, state, current,
             phase='member_return_type', allow_void=action != 'field')
+            if action == 'field' or explicit_overload else 'void')
         state.enter('member_signature')
         schema = obj({**SIGNATURE['properties'], 'return_type': {'const': return_type}})
         if action != 'field':
@@ -305,7 +311,10 @@ def compose(router, spec, *, source_context=(), construction_context=None,
             metadata['throws'] = []
         state.advance()
         parameters = []
-        if action != 'field':
+        # New helper methods have no incoming Java contract: their first
+        # implementation should take no arguments and use inspected APIs in
+        # the body. Constructors/explicit overloads retain signature authoring.
+        if action == 'constructor' or explicit_overload:
             state.enter('member_parameters')
             while True:
                 # Same-name helpers can be overloaded only by a distinct
