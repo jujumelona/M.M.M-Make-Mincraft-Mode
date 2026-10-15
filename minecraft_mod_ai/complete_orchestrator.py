@@ -25,6 +25,7 @@ from .artifact_job import (
     parse_artifact_jobs,
 )
 from .artifact_materializer import ensure_artifact_scaffolding
+from .task_template_catalog import canonical_specification_input
 from .complete_preflight_contract import (
     REQUIRED_GATE_TO_EVIDENCE as _REQUIRED_GATE_TO_EVIDENCE,
     normalize_required_gate as _normalize_required_gate,
@@ -1970,14 +1971,8 @@ class CompleteProductionOrchestrator:
                         inputs = job.deterministic_inputs.get("_canonical_inputs")
                         if not isinstance(inputs, dict):
                             return True  # Unknown contract remains fail-closed.
-                        specifications = [
-                            value for value in inputs.values()
-                            if isinstance(value, dict)
-                            and "render_mold" in value and "slots" in value
-                        ]
-                        if len(specifications) != 1:
-                            return True
-                        slots = specifications[0]["slots"]
+                        specification = canonical_specification_input(job.canonical_leaf, inputs)
+                        slots = specification.get("slots")
                         return not isinstance(slots, list) or bool(slots)
 
                     generator_router = (
@@ -2012,12 +2007,11 @@ class CompleteProductionOrchestrator:
                     def _java_generator_job(job: ArtifactJob) -> bool:
                         if job.executor_type.value != "python_generator":
                             return False
-                        values = job.deterministic_inputs.get("_canonical_inputs", {})
-                        return isinstance(values, dict) and any(
-                            isinstance(item, dict) and item.get("language") == "java"
-                            and item.get("slots")
-                            for item in values.values()
-                        )
+                        inputs = job.deterministic_inputs.get("_canonical_inputs")
+                        if not isinstance(inputs, dict):
+                            return False
+                        specification = canonical_specification_input(job.canonical_leaf, inputs)
+                        return specification.get("language") == "java" and bool(specification.get("slots"))
                     if any(_java_generator_job(job) for job in artifact_jobs_to_run):
                         from .construction_classpath import resolve_fabric_compile_classpath
                         generation_context["java_classpath"] = list(
@@ -2053,24 +2047,22 @@ class CompleteProductionOrchestrator:
                     for candidate in owned_client_jobs:
                         if candidate.canonical_leaf != "minecraft/block_entity/registry":
                             continue
-                        persisted = candidate.deterministic_inputs.get("_canonical_inputs", {})
-                        if not isinstance(persisted, dict):
+                        persisted = candidate.deterministic_inputs.get("_canonical_inputs")
+                        if persisted is None:
                             continue
-                        for value in persisted.values():
-                            if not isinstance(value, dict):
-                                continue
-                            binding = value.get("bindings")
-                            if not isinstance(binding, dict):
-                                continue
-                            if binding.get("host_block_entity_capability") != "basic_block_entity_with_owned_block":
-                                continue
-                            expected = str(binding.get("host_block_entity_entrypoint") or "")
-                            if expected != (
-                                str(binding.get("package_name") or "") + "."
-                                + str(binding.get("class_name") or "")
-                            ):
-                                raise CompleteProductionError("HOST_BLOCK_ENTITY_ENTRYPOINT_CONTRACT_MISMATCH")
-                            block_entity_main_entrypoints.add(expected)
+                        specification = canonical_specification_input(candidate.canonical_leaf, persisted)
+                        binding = specification.get("bindings")
+                        if not isinstance(binding, dict):
+                            continue
+                        if binding.get("host_block_entity_capability") != "basic_block_entity_with_owned_block":
+                            continue
+                        expected = str(binding.get("host_block_entity_entrypoint") or "")
+                        if expected != (
+                            str(binding.get("package_name") or "") + "."
+                            + str(binding.get("class_name") or "")
+                        ):
+                            raise CompleteProductionError("HOST_BLOCK_ENTITY_ENTRYPOINT_CONTRACT_MISMATCH")
+                        block_entity_main_entrypoints.add(expected)
                     if block_entity_main_entrypoints:
                         ensure_fabric_main_entrypoints(
                             inspect_fabric_project(project_root),
@@ -2593,24 +2585,24 @@ class CompleteProductionOrchestrator:
                 persisted = job.deterministic_inputs.get("_canonical_inputs", {})
                 if not isinstance(persisted, dict):
                     continue
-                for value in persisted.values():
-                    if not isinstance(value, dict) or str(value.get("side") or "").upper() != "CLIENT":
-                        continue
-                    source_rel = str(value.get("target_path") or "").replace("\\", "/")
-                    if not source_rel.startswith("src/client/java/"):
-                        raise CompleteProductionError(
-                            f"CLIENT_GENERATED_SOURCE_SET_MISMATCH: {job.job_id}: {source_rel}"
-                        )
-                    source_file = project_root / source_rel
-                    if not source_file.is_file() or source_file.is_symlink():
-                        raise CompleteProductionError(
-                            f"CLIENT_GENERATED_SOURCE_MISSING: {job.job_id}: {source_rel}"
-                        )
-                    code = source_file.read_text(encoding="utf-8")
-                    if "implements ClientModInitializer" not in code:
-                        raise CompleteProductionError(
-                            f"CLIENT_GENERATED_INITIALIZER_INVALID: {job.job_id}: {source_rel}"
-                        )
+                specification = canonical_specification_input(job.canonical_leaf, persisted)
+                if str(specification.get("side") or "").upper() != "CLIENT":
+                    continue
+                source_rel = str(specification.get("target_path") or "").replace("\\", "/")
+                if not source_rel.startswith("src/client/java/"):
+                    raise CompleteProductionError(
+                        f"CLIENT_GENERATED_SOURCE_SET_MISMATCH: {job.job_id}: {source_rel}"
+                    )
+                source_file = project_root / source_rel
+                if not source_file.is_file() or source_file.is_symlink():
+                    raise CompleteProductionError(
+                        f"CLIENT_GENERATED_SOURCE_MISSING: {job.job_id}: {source_rel}"
+                    )
+                code = source_file.read_text(encoding="utf-8")
+                if "implements ClientModInitializer" not in code:
+                    raise CompleteProductionError(
+                        f"CLIENT_GENERATED_INITIALIZER_INVALID: {job.job_id}: {source_rel}"
+                    )
             entrypoint_receipt = ensure_fabric_client_entrypoints(
                 inspect_fabric_project(project_root),
                 entrypoints=expected_clients,
