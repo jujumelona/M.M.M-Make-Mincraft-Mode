@@ -36,7 +36,6 @@ _TOKEN = re.compile(
 )
 _SQLITE_HEADER = b"SQLite format 3\x00"
 _SQLITE_SCHEMA_VERSION = "mmm/project-rag-index-v2"
-_LEGACY_SCHEMA_VERSION = "mmm/project-rag-index-v1"
 _EMBEDDING_BATCH_SIZE = 64
 _INSERT_BATCH_SIZE = 256
 _MAX_TEXT_FRAGMENT_CHARACTERS = 8 * 1024
@@ -190,11 +189,10 @@ class _PassResult:
 class ProjectRAGIndex:
     """Durable, adaptive, version- and license-aware project retrieval.
 
-    New indexes use SQLite even when an existing caller keeps a ``.json`` path.
-    That preserves the public path contract while avoiding a single JSON payload
-    that must be loaded into memory. Existing v1 JSON indexes remain readable.
-    FTS5 is used when the host SQLite provides it; otherwise search uses a
-    deterministic streaming lexical scan.
+    All indexes use SQLite, including those created at a ``.json`` path.
+    Historical JSON indexes must be rebuilt from source, not silently treated
+    as trusted evidence for a different Minecraft version. FTS5 is used when
+    available; otherwise search uses a deterministic streaming lexical scan.
     """
 
     schema_version = _SQLITE_SCHEMA_VERSION
@@ -388,7 +386,7 @@ class ProjectRAGIndex:
         rerank: bool = False,
         required_metadata: dict[str, Any] | None = None,
     ) -> list[RAGHit]:
-        """Return hits using the adaptive route while preserving the v1 API."""
+        """Return hits using the canonical SQLite-backed retrieval route."""
 
         return list(
             self.search_with_receipt(
@@ -422,36 +420,30 @@ class ProjectRAGIndex:
             requested = "semantic" if semantic else "rerank"
             raise ValueError(f"{requested}=True requires a ModelRouter.")
         if self.index_path.is_dir():
-            candidate = self.index_path / "rag" / "project-index.json"
-            if candidate.is_file():
-                self.index_path = candidate
-            else:
-                db_candidate = self.index_path / ".minecraft_ai" / "project-index.db"
-                if db_candidate.is_file():
-                    self.index_path = db_candidate
-        if not self.index_path.exists():
+            # Prefer the canonical current index over historical JSON files.
+            for candidate in (
+                self.index_path / ".minecraft_ai" / "project-index.db",
+                self.index_path / "rag" / "project-index.json",
+            ):
+                if candidate.is_file():
+                    self.index_path = candidate
+                    break
+        if not self.index_path.is_file():
             raise FileNotFoundError(f"RAG index not found: {self.index_path}")
-
-        route = _route_query(query)
-        required = dict(required_metadata or {})
-        if _is_sqlite(self.index_path):
-            return self._search_sqlite(
-                query,
-                route=route,
-                limit=limit,
-                router=router,
-                semantic=semantic,
-                rerank=rerank,
-                required_metadata=required,
+        if not _is_sqlite(self.index_path):
+            raise ValueError(
+                "RAG_INDEX_REBUILD_REQUIRED: unsupported non-SQLite index at "
+                f"{self.index_path}; rebuild from the source project using ProjectRAGIndex.build()."
             )
-        return self._search_legacy(
+
+        return self._search_sqlite(
             query,
-            route=route,
+            route=_route_query(query),
             limit=limit,
             router=router,
             semantic=semantic,
             rerank=rerank,
-            required_metadata=required,
+            required_metadata=dict(required_metadata or {}),
         )
 
     def _search_sqlite(
@@ -519,136 +511,6 @@ class ProjectRAGIndex:
             )
         finally:
             connection.close()
-
-    def _search_legacy(
-        self,
-        query: str,
-        *,
-        route: str,
-        limit: int,
-        router: ModelRouter | None,
-        semantic: bool,
-        rerank: bool,
-        required_metadata: dict[str, Any],
-    ) -> RAGSearchResult:
-        chunks = [
-            chunk
-            for chunk in self._load_legacy()
-            if _metadata_matches(chunk.metadata, required_metadata)
-        ]
-        if chunks:
-            _validate_metadata(chunks[0].metadata)
-        if semantic and not any(chunk.embedding for chunk in chunks):
-            raise ValueError(
-                "semantic=True was requested, but this legacy index has no "
-                "semantic embeddings."
-            )
-        if not chunks:
-            return _empty_result(
-                query,
-                route=route,
-                semantic=semantic,
-                rerank=rerank,
-                required_metadata=required_metadata,
-                lexical_backend="legacy_scan",
-                warning=(
-                    "required_metadata_mismatch"
-                    if required_metadata
-                    else "no_relevant_chunks"
-                ),
-            )
-
-        return _corrective_search(
-            query,
-            route=route,
-            limit=limit,
-            metadata=chunks[0].metadata,
-            semantic=semantic,
-            rerank=rerank,
-            required_metadata=required_metadata,
-            run_pass=lambda search_query: _legacy_search_pass(
-                chunks,
-                search_query,
-                route=route,
-                limit=limit,
-                router=router,
-                semantic=semantic,
-                rerank=rerank,
-            ),
-        )
-
-    def _load_legacy(self) -> list[RAGChunk]:
-        default_meta = {
-            "minecraft_version": "1.21.1",
-            "loader": "fabric",
-            "mapping_namespace": "yarn",
-            "java_version": "21",
-            "license": "project-local",
-            "source_commit": "HEAD",
-            "path": str(self.index_path),
-        }
-        if self.index_path.is_dir():
-            chunks: list[RAGChunk] = []
-            for file_path in sorted(self.index_path.rglob("*"))[:50]:
-                if file_path.is_file() and file_path.suffix in {".java", ".json", ".toml", ".gradle", ".properties", ".txt", ".md"}:
-                    try:
-                        content = file_path.read_text(encoding="utf-8", errors="replace")
-                        if content.strip():
-                            chunks.append(
-                                RAGChunk(
-                                    chunk_id=f"{file_path.name}:1",
-                                    source_path=str(file_path),
-                                    text=content[:8192],
-                                    start_line=1,
-                                    end_line=len(content.splitlines()),
-                                    sha256=hashlib.sha256(content.encode("utf-8")).hexdigest(),
-                                    metadata={**default_meta, "path": str(file_path)},
-                                    embedding=(),
-                                )
-                            )
-                    except Exception:
-                        continue
-            return chunks
-
-        content = self.index_path.read_text(encoding="utf-8", errors="replace")
-        if not content.strip():
-            return []
-        try:
-            raw = json.loads(content)
-            if isinstance(raw, dict) and raw.get("schema_version") == _LEGACY_SCHEMA_VERSION:
-                result: list[RAGChunk] = []
-                for item in raw.get("chunks", []):
-                    result.append(
-                        RAGChunk(
-                            chunk_id=item["chunk_id"],
-                            source_path=item["source_path"],
-                            text=item["text"],
-                            start_line=int(item["start_line"]),
-                            end_line=int(item["end_line"]),
-                            sha256=item["sha256"],
-                            metadata=dict(item["metadata"]),
-                            embedding=tuple(
-                                float(value) for value in item.get("embedding", [])
-                            ),
-                        )
-                    )
-                return result
-        except (json.JSONDecodeError, ValueError, TypeError):
-            pass
-
-        # If not a legacy JSON RAG database, treat as a direct source code document
-        return [
-            RAGChunk(
-                chunk_id=f"{self.index_path.name}:1",
-                source_path=str(self.index_path),
-                text=content[:8192],
-                start_line=1,
-                end_line=len(content.splitlines()),
-                sha256=hashlib.sha256(content.encode("utf-8")).hexdigest(),
-                metadata=default_meta,
-                embedding=(),
-            )
-        ]
 
 
 def _corrective_search(
@@ -1022,73 +884,6 @@ def _full_sqlite_search_pass(
     )
 
 
-def _legacy_search_pass(
-    chunks: Sequence[RAGChunk],
-    query: str,
-    *,
-    route: str,
-    limit: int,
-    router: ModelRouter | None,
-    semantic: bool,
-    rerank: bool,
-) -> _PassResult:
-    query_terms = set(_meaningful_terms(query))
-    query_lower = query.casefold()
-    query_vector: Sequence[float] | None = None
-    if semantic:
-        assert router is not None
-        query_vector = router.embed([query])[0]
-    budget = _candidate_budget(route, limit)
-    candidates: list[_Candidate] = []
-    for chunk in chunks:
-        lexical = _lexical_score(query_terms, query_lower, chunk.text)
-        semantic_score = (
-            _cosine(query_vector, chunk.embedding)
-            if query_vector is not None and chunk.embedding
-            else 0.0
-        )
-        candidate = _Candidate(
-            chunk=chunk,
-            lexical_score=lexical,
-            semantic_score=semantic_score,
-        )
-        if candidate.score > 0:
-            candidates.append(candidate)
-        if len(candidates) >= budget * 2:
-            candidates = _top_candidates(candidates, budget)
-    candidates = _top_candidates(candidates, budget)
-    if rerank and candidates:
-        assert router is not None
-        scores = router.rerank(
-            query,
-            [candidate.chunk.text for candidate in candidates],
-        )
-        if len(scores) != len(candidates):
-            raise ValueError("Reranker returned the wrong score count.")
-        for candidate, score in zip(candidates, scores, strict=True):
-            candidate.reranker_score = float(score)
-        candidates = _top_candidates(candidates, budget)
-    hits = [
-        _candidate_to_hit(candidate)
-        for candidate in candidates[: max(limit, min(16, budget))]
-    ]
-    related: list[RAGHit] = []
-    if route in {"multi_hop", "global_project"} and hits:
-        related = _expand_legacy_relationships(
-            chunks,
-            query,
-            hits,
-            budget=max(limit, 8),
-        )
-        hits = _merge_hits(hits, related)
-    return _PassResult(
-        hits=tuple(hits),
-        candidates_considered=len(candidates),
-        lexical_backend="legacy_scan",
-        relation_expansions=len(related),
-    )
-
-
 def _fts_rows(
     connection: sqlite3.Connection,
     query: str,
@@ -1199,65 +994,6 @@ def _expand_sqlite_relationships(
                 if len(related) >= budget:
                     return related
     return related
-
-
-def _expand_legacy_relationships(
-    chunks: Sequence[RAGChunk],
-    query: str,
-    seeds: Sequence[RAGHit],
-    *,
-    budget: int,
-) -> list[RAGHit]:
-    relations = _extract_relations(seeds[0].metadata if seeds else {})
-    if not relations:
-        return []
-    by_alias: dict[str, list[RAGChunk]] = {}
-    for chunk in chunks:
-        for alias in _path_aliases(chunk.source_path):
-            by_alias.setdefault(alias, []).append(chunk)
-    existing = {hit.chunk_id for hit in seeds}
-    query_terms = set(_meaningful_terms(query))
-    query_lower = query.casefold()
-    result: list[RAGHit] = []
-    for seed in seeds[:16]:
-        aliases = set(_path_aliases(seed.source_path))
-        for source, target, kind in relations:
-            if source not in aliases:
-                continue
-            for chunk in by_alias.get(target, [])[:2]:
-                if chunk.chunk_id in existing:
-                    continue
-                lexical = _lexical_score(
-                    query_terms,
-                    query_lower,
-                    chunk.text,
-                )
-                relation_score = max(0.1, min(1.0, seed.score * 0.15))
-                metadata = dict(chunk.metadata)
-                metadata["_rag_relation"] = {
-                    "source": seed.source_path,
-                    "target": chunk.source_path,
-                    "kind": kind,
-                }
-                result.append(
-                    RAGHit(
-                        chunk_id=chunk.chunk_id,
-                        source_path=chunk.source_path,
-                        start_line=chunk.start_line,
-                        end_line=chunk.end_line,
-                        score=round(lexical + relation_score, 6),
-                        lexical_score=round(lexical, 6),
-                        semantic_score=0.0,
-                        reranker_score=0.0,
-                        text=chunk.text,
-                        metadata=metadata,
-                        relation_score=round(relation_score, 6),
-                    )
-                )
-                existing.add(chunk.chunk_id)
-                if len(result) >= budget:
-                    return result
-    return result
 
 
 def _extract_relations(
