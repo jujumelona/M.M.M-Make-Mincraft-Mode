@@ -309,7 +309,7 @@ def test_deterministic_lexical_fallback_when_fts_is_unavailable(
     assert result.receipt.lexical_backend == "deterministic_scan"
 
 
-def test_existing_v1_json_index_remains_searchable(tmp_path: Path) -> None:
+def test_existing_v1_json_index_requires_rebuild(tmp_path: Path) -> None:
     index_path = tmp_path / "legacy.json"
     metadata = _metadata()
     index_path.write_text(
@@ -333,11 +333,10 @@ def test_existing_v1_json_index_remains_searchable(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    result = ProjectRAGIndex(index_path).search_with_receipt(
-        "legacy crystal",
-        required_metadata={"source_commit": "abc123"},
-    )
-
-    assert result.hits
-    assert result.hits[0].chunk_id == "sha256:legacy"
-    assert result.receipt.lexical_backend == "legacy_scan"
+    # Old JSON metadata and a permissive full scan must not become current
+    # Minecraft API evidence. An explicit source rebuild is required.
+    with pytest.raises(ValueError, match="RAG_INDEX_REBUILD_REQUIRED"):
+        ProjectRAGIndex(index_path).search_with_receipt(
+            "legacy crystal",
+            required_metadata={"source_commit": "abc123"},
+        )
