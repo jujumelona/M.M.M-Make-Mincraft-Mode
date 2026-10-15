@@ -88,7 +88,9 @@ def author_task_operations(router, task, context):
         # Legacy validated graph checkpoints are not proof of the requested
         # gameplay effect. Prevent old return-only bodies bypassing this gate.
         if task.behavior_id and not any(
-                row['op'] in {'call', 'assign', 'constructor_call'} for row in nodes):
+                row['op'] in {'assign', 'constructor_call'} or
+                (row['op'] == 'call' and row['attributes']['symbol_ref'] != task.owner_symbol)
+                for row in nodes):
             raise ValueError('CONSTRUCTION_BEHAVIOR_EFFECT_MISSING: ' + task.task_id)
         return tuple(nodes)
     declaration_ids = context.get('construction_declaration_ids')
@@ -250,8 +252,10 @@ def author_task_operations(router, task, context):
         # A gameplay behavior must not certify a syntactically valid no-op.
         # Actual runtime verification remains separate, but a body containing
         # only return/literal/block cannot fulfill an observable effect.
-        observed_effect_node = any(row['op'] in {'call', 'assign', 'constructor_call'}
-                                   for row in nodes)
+        observed_effect_node = any(
+            row['op'] in {'assign', 'constructor_call'} or
+            (row['op'] == 'call' and row['attributes']['symbol_ref'] != task.owner_symbol)
+            for row in nodes)
         schema = operation_next_schema(state, nodes=nodes, declaration=declaration,
             can_complete=bool(nodes) and not pending
                          and (not task.behavior_id or observed_effect_node),

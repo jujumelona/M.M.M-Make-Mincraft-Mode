@@ -84,9 +84,19 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
     op = goal['action']
     kinds = (API_KINDS[op],) if op in API_KINDS else ('CLASS',)
     requirements = pending_input_contracts(nodes, payload['declaration'], state.symbols).get(goal['node_id'], ())
+    current_member = payload['declaration']['symbol_id']
 
     def fits(type_):
         return result_fits(type_, requirements, state.evidence_index)
+
+    def usable_api(key, row):
+        # A declaration whose body is being authored is an obligation, not
+        # existing implementation evidence. Keep sibling helpers available.
+        if op == 'call' and (key == current_member or row.get('inherited_from') == current_member):
+            return False
+        return (row['kind'] in kinds
+                and state.evidence_index.accessible(key, constructor=op == 'new')
+                and (op not in API_KINDS or fits(row['owner'] if op == 'new' else row['return_type'])))
 
     # Retrieval must describe the specific Java dependency, not the full game
     # story. Narrative terms such as "fight aliens / colonize planets" diluted
@@ -103,15 +113,19 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
         state.prepare_symbols(purpose, kinds=kinds, preserve_scope=True)
     save_author()
     draft = state.operation_draft
+    saved_binding = draft.get('binding_choice', {})
+    saved_key = saved_binding.get('symbol_ref')
+    if (saved_binding.get('action') == 'api' and saved_key in state.symbols
+            and not usable_api(saved_key, state.symbols[saved_key])):
+        draft.pop('binding_choice')
+        save_author()
     while True:
         evidence = state.symbol_lookup
         visible = {row['symbol_id']: row for row in [*evidence.get('matches', ()), *state.memory.visible_symbols()]}
         selected = draft.get('binding_choice', {}).get('symbol_ref') or draft.get('binding_choice', {}).get('type_ref')
         if selected in state.symbols:
             visible[selected] = symbol_record(selected, state.symbols[selected])
-        matches = [row for row in visible.values() if row['kind'] in kinds
-                   and state.evidence_index.accessible(row['symbol_id'], constructor=op == 'new')
-                   and (op not in API_KINDS or fits(row['owner'] if op == 'new' else row['return_type']))]
+        matches = [row for row in visible.values() if usable_api(row['symbol_id'], row)]
         if op in API_KINDS:
             local_keys = set(state.declaration_ids[-RECENT_SIZE:])
             if state.lookup.get('kind') == 'declarations':
@@ -119,8 +133,7 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
             shown = {row['symbol_id'] for row in matches}
             for key in sorted(local_keys - shown):
                 row = state.symbols[key]
-                if (row['kind'] in kinds and state.evidence_index.accessible(key, constructor=op == 'new')
-                        and fits(row['owner'] if op == 'new' else row['return_type'])):
+                if usable_api(key, row):
                     matches.append(symbol_record(key, row))
             if op == 'constructor_call':
                 declaration = payload['declaration']
@@ -176,6 +189,7 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
         if op in API_KINDS:
             print('CONSTRUCTION API CANDIDATES: ' + json.dumps({
                 'node_id': goal['node_id'], 'operation': op,
+                'current_member_excluded': current_member if op == 'call' else None,
                 'candidate_count': len(matches),
                 'selected_page_names': [row['symbol_id'] for row in matches[:8]],
                 'evidence_reads': max(len(state.requests), state.operation_reads),
