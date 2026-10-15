@@ -141,7 +141,8 @@ class ConstructionMemory:
         if (not isinstance(record, dict) or set(record) != {
                 'records', 'active', 'index_offset', 'visited_pages', 'require_recall'}
                 or not isinstance(record['records'], list) or not isinstance(record['active'], list)
-                or len(record['active']) > PAGE_SIZE or not callable(resolve_lookup)):
+                or len(record['active']) > PAGE_SIZE
+                or (record['records'] and not callable(resolve_lookup))):
             raise ValueError('CONSTRUCTION_MEMORY_CHECKPOINT_INVALID')
         self.records = {}
         pages = {}
