@@ -28,15 +28,18 @@ def _authored_source_path(project_root, target_path):
 
 
 def record_authored_source_calls(project_root, target_path, source, *,
-                                 selected_ports, installed_donor_calls):
-    """Record typed IR's actual invocations; no runtime success is implied."""
+                                 selected_ports, installed_donor_calls, source_kind="typed"):
+    """Record actual source authorship without claiming target build/runtime success."""
+    if source_kind not in {"typed", "direct"}:
+        raise ValueError("CONSTRUCTION_SOURCE_KIND_INVALID")
     output = {
         "schema_version": "mmm/construction-authorship-v1",
         "target_path": target_path,
         "source_sha256": _digest(source.encode("utf-8")),
         "selected_port_tasks": list(selected_ports),
         "installed_donor_symbol_calls": sorted(installed_donor_calls),
-        "status": "TYPED_SOURCE_RENDERED_RUNTIME_UNVERIFIED",
+        "status": ("DIRECT_SOURCE_RENDERED_RUNTIME_UNVERIFIED" if source_kind == "direct"
+                   else "TYPED_SOURCE_RENDERED_RUNTIME_UNVERIFIED"),
     }
     path = _authored_source_path(project_root, target_path)
     path.parent.mkdir(parents=True, exist_ok=True)
