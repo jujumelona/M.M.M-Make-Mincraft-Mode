@@ -412,6 +412,8 @@ def compose(router, spec, *, source_context=(), construction_context=None,
         scoped_context['resume_nodes'] = lambda current: progress.load()
         scoped_context['checkpoint'] = progress.save
         scoped_context['resume_author_state'] = progress.load_author_state
+        scoped_context['resume_node_purposes'] = lambda current, accepted: progress.load_author_state(
+            current, accepted, purposes_only=True)
         scoped_context['checkpoint_author_state'] = progress.save_author_state
         scoped_context['recorded_source_refs'] = progress.recorded_source_refs
         nodes = author_task_operations(router, member_task, scoped_context)

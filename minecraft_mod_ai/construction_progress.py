@@ -124,7 +124,7 @@ class ConstructionNodeCheckpoint:
                 raise ValueError("CONSTRUCTION_SOURCE_LOOKUP_CHECKPOINT_INVALID")
             return tuple(data["refs"])
 
-    def load_author_state(self, task, nodes):
+    def load_author_state(self, task, nodes, *, purposes_only=False):
         if task.task_id != self.task.task_id:
             raise ValueError('CONSTRUCTION_CHECKPOINT_TASK_MISMATCH')
         with _LOCK:
@@ -136,6 +136,23 @@ class ConstructionNodeCheckpoint:
                 raise ValueError('CONSTRUCTION_AUTHOR_STATE_CORRUPT')
             if record.get('key') != self.key or record.get('protocol') != PROTOCOL_VERSION:
                 raise ValueError('CONSTRUCTION_AUTHOR_STATE_BINDING_MISMATCH')
+            if purposes_only:
+                state = record.get('state')
+                if not isinstance(state, dict):
+                    raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
+                revision = state.get('revision')
+                # Sequence child purposes are checkpointed before their parent
+                # node. Recover only those facts from a verified graph prefix;
+                # never replay that older cursor/operation after a node commit.
+                if (type(revision) is not int or not 0 <= revision <= len(nodes)
+                        or record.get('nodes_sha256') != _sha(nodes[:revision])):
+                    return {}
+                purposes = state.get('node_purposes', {})
+                if not isinstance(purposes, dict):
+                    raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
+                live = {node['node_id'] for node in nodes}
+                live.update(ref for node in nodes for ref in node['input_refs'])
+                return {key: value for key, value in purposes.items() if key in live}
             # A crash between node and cursor writes may leave an older cursor.
             # Keep the accepted graph; only that cursor is stale.
             if record.get('nodes_sha256') != _sha(nodes):

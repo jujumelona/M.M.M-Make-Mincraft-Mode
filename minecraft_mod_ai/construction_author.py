@@ -155,6 +155,11 @@ def author_task_operations(router, task, context):
         last = state.restore(saved_state, resolve_lookup=lookup_result)
         if last is not None:
             state.lookup = {**lookup_result(last['kind'], last['query'], last['offset']), **last}
+    else:
+        recover_purposes = context.get('resume_node_purposes')
+        if callable(recover_purposes):
+            for key, purpose in (recover_purposes(task, tuple(nodes)) or {}).items():
+                state.remember_node_purpose(key, purpose)
 
     def save_author():
         callback = context.get('checkpoint_author_state')
