@@ -175,11 +175,10 @@ def _load_execution_proposal(
     orchestrator: CompleteProductionOrchestrator,
     existing_zip: Path | None,
 ) -> CompleteProposal:
-    router = orchestrator.router_factory()
     schema_version = str(data.get("schema_version") or "")
     if schema_version in {"mmm/authored-plan-v1", "mmm/authored-plan-v2"}:
         design = AuthoredPlan.from_dict(data)
-        planner = CompleteGameDesignPlanner(router)
+        planner = CompleteGameDesignPlanner(orchestrator.router_factory())
         proposal = planner.compile_for_production(
             design,
             media_paths=design.media_paths,
