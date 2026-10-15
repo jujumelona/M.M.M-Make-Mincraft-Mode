@@ -212,6 +212,12 @@ class ConstructionState:
             for candidate in self.evidence_index.scope_page(query, offset)['scopes']:
                 if ('scopes', candidate['goal_id'], 0) not in self.requests:
                     result[candidate['goal_id']] = candidate
+                    # The complete frontier is reconstructible from consumed
+                    # selectors on the host. Expose one page; consuming a
+                    # candidate reveals its next waiting sibling. Accumulating
+                    # every visited page here overflowed the live 32K slot.
+                    if len(result) == PAGE_SIZE:
+                        return list(result.values())
         return list(result.values())
 
     def payload(self, available_actions, **cursor):
@@ -229,7 +235,7 @@ class ConstructionState:
             "recent_lookups": list(self.history),
             "available_actions": list(available_actions), **cursor,
         }, "lookup": {key: value for key, value in self.lookup.items()
-                      if key not in {'matches', 'source', 'bindings', 'declarations'}
+                      if key not in {'matches', 'source', 'bindings', 'declarations', 'scopes'}
                       and (key != 'nodes' or self.lookup.get('kind') == 'node_index')},
             "authoring_contract": self.authoring_contract,
             "evidence_memory": self.memory.payload(),
