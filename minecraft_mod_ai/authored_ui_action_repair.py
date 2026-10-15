@@ -84,53 +84,6 @@ __all__ = [
 
 
 
-def _assert_action_mutation_guards(
-    rules: list[dict[str, Any]], actions: tuple[str, ...],
-) -> None:
-    """Demand an action-specific mutating command branch for every UI action."""
-    # Require a distinct guarded *mutation* for every action, not just a GUI
-    # registration or the unrelated generic command state counter.
-    from .typed_host_capabilities import typed_host_capability_contracts
-    mutating_caps = {
-        key for key, contract in typed_host_capability_contracts().items()
-        if contract.get("gameplay_mutation") is True
-    }
-    guarded: set[str] = set()
-
-    def nodes(value: Any):
-        if isinstance(value, Mapping):
-            yield value
-            for child in value.values():
-                yield from nodes(child)
-        elif isinstance(value, (list, tuple)):
-            for child in value:
-                yield from nodes(child)
-
-    for stmt in rules[:-1]:
-        if not isinstance(stmt, Mapping) or stmt.get("op") != "if":
-            continue
-        condition = stmt.get("condition", {})
-        literals = {
-            str(node.get("value") or "")
-            for node in nodes(condition)
-            if node.get("op") == "literal" and node.get("type") == "string"
-        }
-        mutated = any(
-            node.get("op") == "state_set"
-            or (node.get("op") == "capability"
-                and str(node.get("id") or "") in mutating_caps)
-            for node in nodes(stmt.get("then", ()))
-        )
-        if mutated:
-            guarded.update(literals & set(actions))
-    missing = set(actions) - guarded
-    if missing:
-        raise ValueError(
-            "AUTHORED_UI_ACTION_REPAIR_INCOMPLETE: "
-            + ", ".join(sorted(missing))
-        )
-
-
 def _validate_repair_target(
     sections: Mapping[str, Any], ir: Mapping[str, Any],
     actions: tuple[str, ...],
