@@ -610,16 +610,18 @@ def discover_repositories_for_graph(
             for owner_capability in subscribers[key]:
                 register(owner_capability, provider, values)
 
-    run_wave(ordered, 0)
-    for variant_index in range(1, _query_variant_limit()):
-        uncovered = [
-            capability
-            for capability in ordered
-            if len(per_capability[capability]) < _minimum_candidates()
+    # An uninspected repository count is NOT reuse coverage. Previously three
+    # keyword hits stopped all alternate queries, even when every source was
+    # unrelated, unlicensed, or could not compile. Complete the small, bounded
+    # set of semantic query variants before the inspector/proof makes the
+    # authoritative reuse decision.
+    for variant_index in range(_query_variant_limit()):
+        wave_capabilities = [
+            capability for capability in ordered
+            if variant_index < len(variants[capability])
         ]
-        if not uncovered:
-            break
-        run_wave(uncovered, variant_index)
+        if wave_capabilities:
+            run_wave(wave_capabilities, variant_index)
 
     selected = _representative_repositories(evidence, ordered)
     selected_set = set(selected)
