@@ -15,7 +15,9 @@ NODE_ID_ALPHABET = string.ascii_letters + string.digits + '_.:-'
 def operation_next_schema(state, *, nodes, declaration, can_complete, context_branches=()):
     blocked = set((state.selection_goal or {}).get('excluded_operations', ())) | set(state.operation_rejections)
     actions = set(OPERATIONS) - blocked
-    if declaration['kind'] != 'CONSTRUCTOR' or any(row['op'] == 'constructor_call' for row in nodes):
+    if declaration['kind'] != 'CONSTRUCTOR' or any(
+            row['op'] == 'constructor_call'
+            and row['node_id'] != (state.selection_goal or {}).get('node_id') for row in nodes):
         actions.discard('constructor_call')
     values = named_values(nodes, declaration, state.symbols,
                          node_id=state.selection_goal['node_id'] if state.selection_goal else None)
@@ -34,7 +36,8 @@ def operation_next_schema(state, *, nodes, declaration, can_complete, context_br
             actions.discard('continue')
         if not contexts or not all(context['loops'] or context['switches'] for context in contexts):
             actions.discard('break')
-    pending = pending_input_contracts(nodes, declaration, state.symbols)
+    pending = pending_input_contracts(nodes, declaration, state.symbols,
+                                     replacing=(state.selection_goal or {}).get('node_id'))
     branches = []
     if state.selection_goal is None:
         raise ValueError('CONSTRUCTION_SELECTION_GOAL_REQUIRED')

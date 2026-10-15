@@ -33,10 +33,14 @@ def named_values(nodes, declaration, symbols, *, node_id=None):
     return names_at_slot(nodes, declaration, symbols, slot)
 
 
-def pending_input_contracts(nodes, declaration, symbols):
-    by_id = {row['node_id']: row for row in nodes}
+def pending_input_contracts(nodes, declaration, symbols, *, replacing=None):
+    # Replacing an existing node changes its own implementation, not its
+    # enclosing lexical topology. Only contract derivation treats it as a hole.
+    by_id = {row['node_id']: row for row in nodes if row['node_id'] != replacing}
     parents = {}
     for row in nodes:
+        if row['node_id'] == replacing:
+            continue
         for ref in row['input_refs']:
             parents.setdefault(ref, []).append(row)
 
@@ -58,6 +62,8 @@ def pending_input_contracts(nodes, declaration, symbols):
 
     result = {}
     for node in nodes:
+        if node['node_id'] == replacing:
+            continue
         op, refs, attrs = node['op'], node['input_refs'], node['attributes']
         expression_indices = {
             'if': {0}, 'while': {0}, 'do_while': {0}, 'for': {1}, 'foreach': {0},

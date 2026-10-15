@@ -215,7 +215,7 @@ class JavaOperations:
                 raise ValueError("CONSTRUCTION_FIELD_EXPRESSION_REQUIRED")
             self.require_expression(self.roots[0])
             if not self.assignable(self.types[self.roots[0]], self.declaration["return_type"]):
-                raise ValueError("CONSTRUCTION_FIELD_TYPE")
+                raise JavaOperationError("CONSTRUCTION_FIELD_TYPE", self.roots[0])
         else:
             for key in self.roots:
                 self.require_statement(key)
@@ -810,14 +810,17 @@ class JavaOperations:
         from .construction_lexical import lexical_sites, check_name_use, check_control_scope
         for key, env, writing, context in lexical_sites(self.nodes.values(), self.declaration, self.symbols):
             n = self.nodes[key]
-            check_name_use(n, env, writing)
-            check_control_scope(n, context)
+            try:
+                check_name_use(n, env, writing)
+                check_control_scope(n, context)
+            except ValueError as error:
+                raise JavaOperationError(str(error), key) from error
             op, refs = n['op'], n['input_refs']
             if op == 'return':
                 returns = context['returns']
                 if ((returns == 'void' and refs)
                         or (returns != 'void' and (not refs or not self.assignable(self.types[refs[0]], returns)))):
-                    raise ValueError('CONSTRUCTION_RETURN_TYPE')
+                    raise JavaOperationError('CONSTRUCTION_RETURN_TYPE', key)
 
     def check_completion(self):
         """Conservative structured completion; target javac remains authoritative."""
@@ -831,7 +834,7 @@ class JavaOperations:
             elif op == "block":
                 for ref in refs:
                     if not complete:
-                        raise ValueError("CONSTRUCTION_STATEMENT_UNREACHABLE")
+                        raise JavaOperationError("CONSTRUCTION_STATEMENT_UNREACHABLE", key)
                     complete = completes[ref]
                     escaping_break |= breaks[ref]
                     escaping_continue |= continues[ref]
@@ -843,7 +846,7 @@ class JavaOperations:
                 condition, body = (refs[1], refs[3]) if op == "for" else (refs[0], refs[1])
                 c = self.nodes[condition]
                 if op != "do_while" and c["op"] == "literal" and c["attributes"]["value"] is False:
-                    raise ValueError("CONSTRUCTION_STATEMENT_UNREACHABLE")
+                    raise JavaOperationError("CONSTRUCTION_STATEMENT_UNREACHABLE", key)
                 forever = c["op"] == "literal" and c["attributes"]["value"] is True
                 complete = not forever or breaks[body]
                 if op == "do_while" and not completes[body] and not breaks[body] and not continues[body]:
@@ -864,7 +867,7 @@ class JavaOperations:
                 complete, escaping_break, escaping_continue = completes[refs[1]], breaks[refs[1]], continues[refs[1]]
             elif op == "lambda":
                 if self.lambda_returns[key] != "void" and completes[refs[0]]:
-                    raise ValueError("CONSTRUCTION_RETURN_MISSING")
+                    raise JavaOperationError("CONSTRUCTION_RETURN_MISSING", key)
             completes[key], breaks[key], continues[key] = complete, escaping_break, escaping_continue
         self.completes = completes
         if self.declaration["kind"] == "FIELD":
@@ -872,7 +875,7 @@ class JavaOperations:
         complete = True
         for key in self.roots:
             if not complete:
-                raise ValueError("CONSTRUCTION_STATEMENT_UNREACHABLE")
+                raise JavaOperationError("CONSTRUCTION_STATEMENT_UNREACHABLE", key)
             complete = completes[key]
         if self.declaration["kind"] == "METHOD" and self.declaration.get("return_type", "void") != "void" and complete:
             raise ValueError("CONSTRUCTION_RETURN_MISSING")

@@ -83,7 +83,8 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
                    read_lookup, instruction, save_author):
     op = goal['action']
     kinds = (API_KINDS[op],) if op in API_KINDS else ('CLASS',)
-    requirements = pending_input_contracts(nodes, payload['declaration'], state.symbols).get(goal['node_id'], ())
+    requirements = pending_input_contracts(nodes, payload['declaration'], state.symbols,
+                                           replacing=goal['node_id']).get(goal['node_id'], ())
     current_member = payload['declaration']['symbol_id']
 
     def fits(type_):

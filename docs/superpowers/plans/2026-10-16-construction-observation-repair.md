@@ -48,13 +48,15 @@ revision and preserve unrelated work.
 - [x] Feed the rejected node and actual diagnostic into same-slot reconstruction.
 - [x] Reopen provisional parents through the atomic revision callback.
 - [x] Expose validated/deferred counts without claiming gameplay completion.
-- [ ] Run static AST/name/diff checks only, obtain static review, and commit.
+- [x] Run static AST/name/diff checks only, obtain static review, and commit.
 - [ ] Publish main with expected-head verification and byte-identical tree check.
 
 ## Execution ledger
 
-Task 1 and Task 2 implemented and committed. Task 3 wiring implemented; whole-branch static review pending.
+Task 1 and Task 2 implemented and committed. Task 3 wiring implemented; whole-branch static review completed.
 
 Ruling: honor the user instruction not to run tests or model inference. Validation in this session is source/AST/name/diff inspection only; no actual MiMo or Colab success is claimed.
 
 Ruling: use one prepared validator and keep full final gates. Partial admission does not substitute for Java compilation or gameplay/runtime evidence.
+
+Final static review: corrected repair scope projection to preserve for/lambda/try lexical topology, and exempted the currently revised constructor delegation from the duplicate-delegation selection filter. No additional Important/Critical findings reported. Runtime/model behavior remains unverified.

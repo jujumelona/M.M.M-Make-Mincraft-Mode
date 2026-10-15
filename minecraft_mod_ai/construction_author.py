@@ -260,8 +260,8 @@ def author_task_operations(router, task, context):
             raise ValueError('CONSTRUCTION_OBSERVATION_GRAPH_MISMATCH')
         repair_id = (observation.get('node_id') if observation.get('status') == 'rejected'
                      and observation.get('node_id') in by_id else None)
-        working_nodes = [row for row in nodes if row['node_id'] != repair_id] if repair_id else nodes
-        contracts = pending_input_contracts(working_nodes, declaration, symbols)
+        working_nodes = nodes
+        contracts = pending_input_contracts(nodes, declaration, symbols, replacing=repair_id)
         if state.selection_goal is None:
             if repair_id:
                 slot = repair_id
