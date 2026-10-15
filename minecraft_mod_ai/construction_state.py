@@ -144,6 +144,7 @@ class ConstructionState:
         self.operation_goal = None
         self.operation_draft = {}
         self.selection_goal = None
+        self.operation_reads = 0
         from .construction_memory import ConstructionMemory
         self.memory = ConstructionMemory()
 
@@ -153,6 +154,7 @@ class ConstructionState:
             self.requests.clear()
             self.lookup_cursors.clear()
             self.memory.reset_navigation()
+            self.operation_reads = 0
 
     def advance(self, *, preserve_symbols=False):
         if self.phase == 'class_header' and self.evidence_index is not None:
@@ -169,6 +171,7 @@ class ConstructionState:
         self.operation_goal = None
         self.operation_draft = {}
         self.selection_goal = None
+        self.operation_reads = 0
 
     def reconsider_operation(self):
         """Retry the same slot with another operation, preserving real evidence."""
@@ -183,6 +186,7 @@ class ConstructionState:
         self.requests.clear()
         self.lookup_cursors.clear()
         self.memory.reset_navigation()
+        self.operation_reads = 0
         # No graph node was accepted: revision and selected slot must not change.
 
     def prepare_symbols(self, purpose, *, kinds=('CLASS',), preserve_scope=False):
@@ -247,7 +251,8 @@ class ConstructionState:
             "declarations": {"total_count": len(self.declaration_ids),
                 "recent": [symbol_record(key, self.symbols[key])
                            for key in self.declaration_ids[-RECENT_SIZE:]]},
-            "lookups_since_progress": len(self.requests),
+            "lookups_since_progress": max(len(self.requests), self.operation_reads),
+            "operation_context_reads": self.operation_reads,
             "recent_lookups": list(self.history),
             "available_actions": list(available_actions), **cursor,
         }, "lookup": {key: value for key, value in self.lookup.items()
@@ -330,6 +335,7 @@ class ConstructionState:
         source = {key: self.source_lookup[key] for key in ('kind', 'query', 'offset')} if self.source_lookup else None
         scope = {key: self.scope_lookup[key] for key in ('kind', 'query', 'offset')} if self.scope_lookup else None
         return {'protocol': PROTOCOL_VERSION, 'phase': self.phase, 'revision': self.revision,
+                'operation_reads': self.operation_reads,
                 'requests': [list(row) for row in sorted(self.requests)],
                 'history': deepcopy(list(self.history)), 'last_lookup': last,
                 'last_binding_lookup': binding, 'last_symbol_lookup': symbol,
@@ -416,6 +422,10 @@ class ConstructionState:
         if last is not None and (not isinstance(last, dict) or set(last) != {'kind', 'query', 'offset'}
                 or _lookup_request(last['kind'], last['query'], last['offset']) not in restored):
             raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
+        reads = record.get('operation_reads', len(restored) if self.phase == 'operation_graph' else 0)
+        if type(reads) is not int or reads < 0:
+            raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
+        self.operation_reads = reads
         self.requests = restored
         self.history = deque(deepcopy(history), maxlen=PAGE_SIZE)
         self.lookup_cursors = {}
