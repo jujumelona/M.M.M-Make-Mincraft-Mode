@@ -2,7 +2,7 @@
 from __future__ import annotations
 from .construction_type_contracts import owner_package
 
-from .java_operation_ir import parameter_records, parameter_types, invocation_parameter_types
+from .java_operation_ir import parameter_types, invocation_parameter_types
 
 
 def result_fits(type_, consumers, evidence_index):
