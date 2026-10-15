@@ -222,12 +222,19 @@ def author_task_operations(router, task, context):
                 while slot in by_id:
                     index += 1
                     slot = 'operation_' + str(index)
-            parts = [task.intent, declaration.get('purpose', '')]
+            parts = []
+            if slot in state.node_purposes:
+                parts.append(state.node_purposes[slot])
+            elif not contracts.get(slot):
+                parts.extend((task.intent, declaration.get('purpose', '')))
             for consumer in contracts.get(slot, ()):
                 parts.extend(consumer.get(key, '') for key in ('expected_type', 'expected_element_type'))
                 parts.extend(consumer.get('expected_types', ()))
                 parts.extend(consumer.get('allowed_types', ()))
                 parent = by_id[consumer['consumer']]
+                if slot not in state.node_purposes:
+                    parts.append('Input ' + str(consumer['input_index']) + ' for ' +
+                                 state.node_purposes.get(parent['node_id'], task.intent))
                 if parent['op'] in {'call', 'new', 'field'}:
                     api = symbols[parent['attributes']['symbol_ref']]
                     parts.append(api.get('purpose') or api['owner'] + '.' + api['name'])
@@ -311,6 +318,7 @@ def author_task_operations(router, task, context):
             raise ValueError('CONSTRUCTION_NODE_DUPLICATE')
         from .construction_lexical import check_partial_names
         check_partial_names([*nodes, row], declaration, symbols)
+        state.remember_node_purpose(row['node_id'], choice['purpose'], replace=True)
         by_id[row['node_id']] = row
         nodes.append(row)
         pending.pop(row['node_id'], None)

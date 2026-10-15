@@ -13,7 +13,7 @@ NODE_ID_ALPHABET = string.ascii_letters + string.digits + '_.:-'
 
 
 def operation_next_schema(state, *, nodes, declaration, can_complete, context_branches=()):
-    blocked = set((state.selection_goal or {}).get('excluded_operations', ()))
+    blocked = set((state.selection_goal or {}).get('excluded_operations', ())) | set(state.operation_rejections)
     actions = set(OPERATIONS) - blocked
     if declaration['kind'] != 'CONSTRUCTOR' or any(row['op'] == 'constructor_call' for row in nodes):
         actions.discard('constructor_call')
@@ -63,9 +63,12 @@ def operation_next_schema(state, *, nodes, declaration, can_complete, context_br
                 branches.append(obj({'action': {'enum': sorted(allowed)}, 'node_id': {'const': key}, 'purpose': ID}))
     else:
         root_actions = set(actions) & (EXPRESSIONS if declaration['kind'] == 'FIELD' else STATEMENTS)
-        branches.append(obj({'action': {'enum': sorted(root_actions)}, 'node_id': {'const': slot}, 'purpose': ID}))
+        if root_actions:
+            branches.append(obj({'action': {'enum': sorted(root_actions)}, 'node_id': {'const': slot}, 'purpose': ID}))
     if can_complete:
         branches.append(action_schema('complete', {'purpose': ID}))
+    if not branches:
+        raise ValueError('CONSTRUCTION_OPERATION_ALTERNATIVE_MISSING: no compatible implementation for the current slot')
     # Missing information is a literal evidence action for this same slot.
     # A prose request to inspect it cannot claim a renderer deficiency.
     return {'oneOf': [*branches, *context_branches]}

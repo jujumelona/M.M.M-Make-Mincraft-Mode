@@ -5,10 +5,10 @@ from .construction_type_contracts import owner_package
 import hashlib
 import json
 
-from .construction_author import ask, obj, operation_schema
+from .construction_author import ID, ask, obj, operation_schema
 from .construction_declaration_choices import action_schema, choice_actions, type_candidates
 from .construction_operation_choices import operation_context_branches, MAX_OPERATION_EVIDENCE_READS
-from .construction_state import symbol_record, RECENT_SIZE
+from .construction_state import symbol_record, RECENT_SIZE, RESELECTABLE_OPERATIONS
 from .java_operation_ir import parameter_types, invocation_parameter_types
 from .construction_operation_contracts import named_values, pending_input_contracts, result_fits
 
@@ -164,6 +164,8 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
                 available_types(state, nodes, payload['declaration'], requirements), requirements, op)
         else:
             branches.insert(0, action_schema('write'))
+        if op in RESELECTABLE_OPERATIONS:
+            branches.append(action_schema('compose_locally', {'reason': ID}))
         if not branches:
             # A type/callback-specific choice without verified evidence must
             # return to operation selection instead of failing the entire mod.
@@ -189,9 +191,21 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
             'specific missing fact. scopes selects a real package/type branch by meaning when '
             'the right API is not on the current page. API names are returned candidates, not search guesses. '
             'When this operation can be written, select api, write_type, functional_type or write now. '
+            'Do not search for a ready-made implementation of custom gameplay. If this selected '
+            'abstraction is unsuitable, compose_locally returns the same missing slot to Java '
+            'operation selection. Explain the missing behavior and decompose it into concrete '
+            'smaller steps using inspected APIs and supported local operations. This does not '
+            'prove an API is absent and does not implement the slot. Never substitute a null, '
+            'constant success or empty block for the required effect. '
             'write_type binds an actual base type plus array dimensions; new_array also binds sized/initializer form. '
-            'Another operation is chosen '
+            'Outside compose_locally, another operation is chosen '
             'only after this node is written. ' + instruction)
+        if choice['action'] == 'compose_locally':
+            from .fixed_template_generation import _validate_native_arguments
+            _validate_native_arguments(choice, schema)
+            state.reject_operation(goal, choice['reason'])
+            save_author()
+            return None
         if choice['action'] in {'api', 'write', 'write_type', 'functional_type'}:
             from .fixed_template_generation import _validate_native_arguments
             _validate_native_arguments(choice, schema)
@@ -420,17 +434,24 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
             from .construction_sequence import sequence_item
             references = draft.setdefault('input_refs', [])
             while not draft.get('inputs_finished'):
+                input_branches = [action_schema('input', {
+                    'node_ref': schema['properties']['input_refs']['items'], 'purpose': ID})]
+                if references or op != 'block' or not state.operation_rejections:
+                    input_branches.append(action_schema('finish_inputs'))
                 reference = sequence_item(router, state, 'construction_' + op + '_input_next',
                     {**current, 'input_count': len(references), 'recent_input_refs': references[-RECENT_SIZE:]},
-                    {'oneOf': [action_schema('finish_inputs'),
-                        action_schema('input', {'node_ref': schema['properties']['input_refs']['items']})]},
+                    {'oneOf': input_branches},
                     references, nodes=nodes, source_units=source_units, pinned_source=pinned_source,
                     read_lookup=read_lookup, save_author=save_author,
-                    instruction='Choose one actual or forward input node reference in execution order, or finish the sequence. ' + instruction)
+                    instruction='Choose one actual or forward input node reference in execution order. '
+                    'Give that child its own concrete implementation purpose, not the whole gameplay '
+                    'description. Decompose rejected API searches into smaller executable steps. '
+                    'Finish only after every required step has a reference. ' + instruction)
                 if reference['action'] == 'finish_inputs':
                     draft['inputs_finished'] = True
                     save_author()
                     break
+                state.remember_node_purpose(reference['node_ref'], reference['purpose'])
                 references.append(reference['node_ref'])
                 save_author()
             schema['properties']['input_refs'] = {'const': references}

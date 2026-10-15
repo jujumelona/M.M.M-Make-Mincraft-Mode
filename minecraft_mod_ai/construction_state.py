@@ -17,6 +17,7 @@ PAGE_SIZE = 8
 RECENT_SIZE = 4
 LOOKUP_KINDS = frozenset({'symbols', 'scopes', 'declarations', 'nodes', 'node_index', 'source', 'sources', 'bindings'})
 TYPE_LOOKUP_PHASES = frozenset({'class_header', 'member_return_type', 'member_parameter_type'})
+RESELECTABLE_OPERATIONS = frozenset({'call', 'new', 'field', 'lambda'})
 
 
 def symbol_query_key(query):
@@ -149,6 +150,8 @@ class ConstructionState:
         self.operation_draft = {}
         self.selection_goal = None
         self.operation_reads = 0
+        self.operation_rejections = {}
+        self.node_purposes = {}
         from .construction_memory import ConstructionMemory
         self.memory = ConstructionMemory()
 
@@ -176,6 +179,7 @@ class ConstructionState:
         self.operation_draft = {}
         self.selection_goal = None
         self.operation_reads = 0
+        self.operation_rejections = {}
 
     def reconsider_operation(self):
         """Retry the same slot with another operation, preserving real evidence."""
@@ -192,6 +196,29 @@ class ConstructionState:
         self.memory.reset_navigation()
         self.operation_reads = 0
         # No graph node was accepted: revision and selected slot must not change.
+
+
+    def reject_operation(self, goal, reason):
+        if (goal['action'] not in RESELECTABLE_OPERATIONS
+                or any(not isinstance(value, str) or not value.strip() or len(value) > 240
+                       for value in (goal['purpose'], reason))):
+            raise ValueError('CONSTRUCTION_OPERATION_RESELECTION_INVALID')
+        self.operation_rejections[goal['action']] = {'purpose': goal['purpose'], 'reason': reason}
+        # This is a change of implementation strategy for the same missing
+        # slot, not an accepted node or evidence that an API does not exist.
+        self.operation_goal = None
+        self.operation_draft = {}
+        self.symbol_goal = None
+        self.symbol_lookup = {}
+        self.scope_lookup = {}
+        if self.lookup.get('kind') in {'symbols', 'scopes'}:
+            self.lookup = {}
+
+    def remember_node_purpose(self, node_id, purpose, *, replace=False):
+        if not isinstance(purpose, str) or not purpose.strip() or len(purpose) > 240:
+            raise ValueError('CONSTRUCTION_NODE_PURPOSE_INVALID')
+        if replace or node_id not in self.node_purposes:
+            self.node_purposes[node_id] = purpose.strip()
 
     def prepare_symbols(self, purpose, *, kinds=('CLASS',), preserve_scope=False):
         if self.evidence_index is None:
@@ -258,6 +285,7 @@ class ConstructionState:
                            for key in self.declaration_ids[-RECENT_SIZE:]]},
             "lookups_since_progress": max(len(self.requests), self.operation_reads),
             "operation_context_reads": self.operation_reads,
+            "operation_rejections": deepcopy(self.operation_rejections),
             "recent_lookups": list(self.history),
             "available_actions": list(available_actions), **cursor,
         }, "lookup": {key: value for key, value in self.lookup.items()
@@ -351,6 +379,8 @@ class ConstructionState:
                 'symbol_goal': self.symbol_goal, 'operation_goal': deepcopy(self.operation_goal),
                 'operation_draft': deepcopy(self.operation_draft),
                 'selection_goal': deepcopy(self.selection_goal),
+                'operation_rejections': deepcopy(self.operation_rejections),
+                'node_purposes': dict(self.node_purposes),
                 'memory': self.memory.export(),
                 'binding_lookups': [{'kind': 'bindings', 'query': query, 'offset': offset}
                                     for query, offset in sorted(self.binding_lookups)],
@@ -401,6 +431,22 @@ class ConstructionState:
         if goal is not None and (selection is None or selection['node_id'] != goal['node_id']):
             raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
         self.selection_goal = deepcopy(selection)
+        rejections = record.get('operation_rejections', {})
+        purposes = record.get('node_purposes', {})
+        import re
+        if (not isinstance(rejections, dict) or not set(rejections) <= RESELECTABLE_OPERATIONS
+                or (rejections and selection is None)
+                or any(not isinstance(row, dict) or set(row) != {'purpose', 'reason'}
+                       or any(not isinstance(value, str) or not value.strip() or len(value) > 240
+                              for value in row.values()) for row in rejections.values())
+                or (goal is not None and goal['action'] in rejections)
+                or not isinstance(purposes, dict)
+                or any(not isinstance(key, str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,240}', key)
+                       or not isinstance(value, str) or not value.strip() or len(value) > 240
+                       for key, value in purposes.items())):
+            raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
+        self.operation_rejections = deepcopy(rejections)
+        self.node_purposes = dict(purposes)
         self.memory.restore(record.get('memory'), resolve_lookup)
         requests, history = record.get('requests'), record.get('history')
         if (not isinstance(requests, list) or not isinstance(history, list)
