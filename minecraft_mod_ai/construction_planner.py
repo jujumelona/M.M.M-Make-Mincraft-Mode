@@ -128,7 +128,10 @@ def author_behavior_requirements(scope, router, *, checkpoint=None):
                     "source_text": source_text,
                     "source_recovery": bool(requirement.get("source_recovery")),
                     "remaining_source_text": [item[2] for item in remaining],
-                    "previous_behaviors": prior[-16:],
+                    # The host keeps the entire accepted requirement ledger.
+                    # Dropping entries after 16 made later decisions forget
+                    # already claimed source spans and rediscover old actions.
+                    "previous_behaviors": prior,
                 }, ensure_ascii=False)}]
             row = _validate_native_arguments(router.generate_structured_data(
                 "planner", messages, data_name="construction_behavior_next",
