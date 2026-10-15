@@ -96,9 +96,10 @@ class VerifiedSourceRAG:
                 })
             for score, path, unit in ordered[:8]:
                 identity = (str(path), unit["start_line"], unit["end_line"])
-                if identity in seen:
+                bound_identity = (capability, *identity)
+                if bound_identity in seen:
                     continue
-                seen.add(identity)
+                seen.add(bound_identity)
                 selected.append({
                     "capability": capability, "repository": donor["repository"],
                     "source_commit": donor["commit_sha"], "license": donor["license_id"],
