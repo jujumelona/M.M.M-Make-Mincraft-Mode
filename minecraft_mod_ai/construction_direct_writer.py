@@ -13,7 +13,6 @@ from pathlib import Path
 from uuid import uuid4
 
 from .construction_retrieval import ConstructionEvidenceIndex
-from .construction_state import symbol_record
 from .first_pass_java_declarations import declaration_frame, render_declaration
 from .java_region_parser import _parse
 
@@ -71,14 +70,14 @@ def _save_checkpoint(path, identity, members):
             temp.unlink()
 
 
-def _evidence(index, intent):
+def _evidence(index, intent, source_pages):
     """Expose only ranked, inspected target symbols and actual installed source."""
     goal = index.prepare(intent, kinds=("METHOD", "CONSTRUCTOR", "FIELD", "CLASS"))
     page = index.page(goal, 0)
     result = {"target_api": page["matches"][:8], "source": []}
     for candidate in page["source_candidates"][:4]:
         ref, offset = candidate["source_ref"], candidate["offset"]
-        units = index.source_pages.get(ref, ()) if hasattr(index, "source_pages") else ()
+        units = source_pages.get(ref, ())
         if not units or offset >= len(units):
             continue
         unit = units[offset]
@@ -125,7 +124,7 @@ def compose_feature(router, spec, context, behaviors, *, package, name, owner):
         frame = declaration_frame("method", method, metadata)
         evidence = _evidence(index, " ".join((
             str(behavior["intent"]), str(behavior.get("effects", "")),
-            str(behavior.get("trigger", "")))))
+            str(behavior.get("trigger", "")))), sources)
         task = {
             "owner": owner, "method": method, "original_source": behavior["source_quote"],
             "intent": behavior["intent"], "trigger": behavior.get("trigger", ""),
