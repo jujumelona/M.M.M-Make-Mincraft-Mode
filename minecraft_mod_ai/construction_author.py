@@ -61,7 +61,7 @@ def _node_summary(row):
 def author_task_operations(router, task, context):
     # Choice helpers import the shared schema primitives above; load them only
     # after this module is initialized, avoiding a declaration/author cycle.
-    from .construction_operation_choices import operation_next_schema, operation_context_branches
+    from .construction_operation_choices import operation_next_schema, operation_context_branches, MAX_OPERATION_EVIDENCE_READS
     from .construction_declaration_choices import choice_actions
     from .construction_operation_binding import bind_operation
     from .construction_operation_contracts import named_values, pending_input_contracts
@@ -270,6 +270,15 @@ def author_task_operations(router, task, context):
             if context.get('checkpoint'):
                 context['checkpoint'](task, tuple(nodes), 'validated')
             return tuple(nodes)
+        if max(len(state.requests), state.operation_reads) >= MAX_OPERATION_EVIDENCE_READS:
+            # Migrate in-progress checkpoints captured during the historic
+            # 240-page browsing loop to a fresh, operation-specific window.
+            # Keep the selected operation and accepted nodes unchanged.
+            state.reconsider_operation()
+            print('CONSTRUCTION EVIDENCE WINDOW RESET: ' + json.dumps({
+                'node_id': slot, 'operation': action,
+                'reason': 'legacy_or_exhausted_preselection_navigation',
+            }, ensure_ascii=False), flush=True)
         state.operation_goal = dict(choice)
         if choice['node_id'] in by_id or (pending and choice['node_id'] not in pending):
             raise ValueError('CONSTRUCTION_OPERATION_GOAL_NODE_INVALID')
