@@ -73,18 +73,23 @@ class VerifiedSourceRAG:
                     name = words(unit.get("name", ""))
                     signature = words(unit.get("signature", ""))
                     owner = words(unit.get("owner", ""))
-                    score = 4 * len(wanted & name) + 2 * len(wanted & signature) + len(wanted & owner)
+                    # Rank actual member boundaries and call sites, not only
+                    # the nearest index hit. Names/signatures dominate code
+                    # body words so a generic comment cannot outrank a true API.
+                    code = words(unit.get("code", ""))
+                    score = (6 * len(wanted & name) + 3 * len(wanted & signature)
+                             + 2 * len(wanted & owner) + len(wanted & code))
                     choices[identity] = (score, path, unit)
 
             hits = list(index.search(query + " " + capability, limit=8))
             for hit in hits:
                 examine(hit.source_path)
-            # Search snippets frequently rank README/class headers while the
-            # adapted Java method does not share the prose vocabulary. Never
-            # let that turn a VERIFIED donor into an empty coder handoff.
-            if not choices or max(row[0] for row in choices.values()) == 0:
-                for path in sorted(root.rglob("*.java")):
-                    examine(path)
+            # A top-eight text hit is NOT exhaustive code relevance. Search
+            # the entire *pinned, proof-bounded* Java source slice for method
+            # declarations; otherwise a loosely matching class header hides
+            # the actual feature implementation in a different file.
+            for path in sorted(root.rglob("*.java")):
+                examine(path)
             ordered = sorted(choices.values(), key=lambda row: (
                 -row[0], str(row[1]), row[2]["start_line"], row[2]["end_line"],
             ))
