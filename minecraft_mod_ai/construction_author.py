@@ -274,8 +274,7 @@ def author_task_operations(router, task, context):
                 'excluded_operations': excluded,
                 'reason': 'no_usable_api_evidence',
             }, ensure_ascii=False), flush=True)
-            state.operation_goal = None
-            state.operation_draft = {}
+            state.reconsider_operation()
             save_author()
             continue
         row['op'] = action
