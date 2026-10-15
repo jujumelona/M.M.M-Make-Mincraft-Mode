@@ -20,64 +20,108 @@ class VerifiedSourceRAG:
         self.reference_failures: list[dict[str, str]] = []
 
     def context(self, capabilities: Sequence[str], query: str) -> list[dict[str, Any]]:
-        """Return whole AST declarations, never mid-method text fragments.
+        """Retrieve real complete donor declarations, without silent index misses.
 
-        Hits remain discovery hints. A donor becomes callable only when the
-        exact target's installed output and inspected symbols are bound later.
+        The snippet lookup first reads ranked RAG hits. If the index surfaces
+        only class headers or no callable hit, inspect the pinned source slice
+        itself. Only capabilities assigned to this owner may cross this gate.
+        A source-only fallback is explicitly marked, not treated as semantic
+        or target-compile evidence.
         """
+        import re
         from .construction_context import java_source_units
+
+        def words(text):
+            split = re.sub(r"([a-z0-9])([A-Z])", r"\\1 \\2", str(text))
+            return set(re.findall(r"[a-z]{3,}|[가-힣]{2,}", split.casefold())) - {
+                "minecraft", "fabric", "forge", "the", "and", "with", "from",
+                "mod", "code", "source", "implementation", "register", "method",
+            }
 
         selected, seen = [], set()
         for capability, index, root, donor in self.sources:
             if capability not in capabilities:
                 continue
-            for hit in index.search(query + " " + capability, limit=8):
-                path = Path(hit.source_path).resolve()
-                if not path.is_relative_to(root.resolve()) or path.suffix != ".java":
-                    continue
-                if not path.is_file():
-                    raise ValueError("SOURCE_RAG_PINNED_FILE_MISSING: " + str(path))
-                raw = path.read_text(encoding="utf-8")
-                try:
-                    units = java_source_units(raw, path=str(path.relative_to(root)))
-                except (ValueError, RuntimeError) as exc:
-                    self.reference_failures.append({
-                        "capability": capability, "repository": donor["repository"],
-                        "status": "source_parse_failed", "error": str(exc)[:1200],
-                    })
-                    continue
-                first = int(hit.start_line)
-                last = int(getattr(hit, "end_line", None) or first)
-                callable_units = [unit for unit in units
-                                  if unit["kind"] in {"method", "constructor", "field"}]
-                members = [unit for unit in callable_units
-                           if unit["start_line"] <= last and unit["end_line"] >= first]
-                if not members and callable_units:
-                    # RAG can match a class header, import or nearby comment.
-                    # Select the nearest complete declaration, never a slice
-                    # of a method or an unrelated full compilation unit.
-                    members = [min(callable_units, key=lambda unit: (
-                        max(unit["start_line"] - last, first - unit["end_line"], 0),
-                        unit["start_line"],
-                    ))]
-                for unit in members:
-                    identity = (str(path), unit["start_line"], unit["end_line"])
-                    if identity in seen:
+            root = root.resolve()
+            wanted = words(query + " " + capability)
+            parsed = {}
+            choices = {}
+
+            def examine(path):
+                path = Path(path).resolve()
+                if not path.is_relative_to(root) or path.suffix != ".java":
+                    return
+                if path in parsed:
+                    units = parsed[path]
+                else:
+                    if not path.is_file():
+                        raise ValueError("SOURCE_RAG_PINNED_FILE_MISSING: " + str(path))
+                    try:
+                        units = java_source_units(path.read_text(encoding="utf-8"),
+                                                  path=str(path.relative_to(root)))
+                    except (ValueError, RuntimeError) as exc:
+                        self.reference_failures.append({
+                            "capability": capability, "repository": donor["repository"],
+                            "status": "source_parse_failed", "error": str(exc)[:1200],
+                        })
+                        units = []
+                    parsed[path] = units
+                for unit in units:
+                    if unit["kind"] not in {"method", "constructor", "field"}:
                         continue
-                    seen.add(identity)
-                    selected.append({
-                        "capability": capability, "repository": donor["repository"],
-                        "source_commit": donor["commit_sha"], "license": donor["license_id"],
-                        "path": str(path.relative_to(root)), "start_line": unit["start_line"],
-                        "end_line": unit["end_line"], "owner": unit["owner"],
-                        "symbol": unit["name"], "signature": unit["signature"],
-                        "source_unit_kind": unit["kind"],
-                        "adapted_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-                        "code": unit["code"],
-                        "authority": donor.get("_authority", "installed_target_adapted_source"),
-                        **({"migration_diagnostics": donor["_migration_diagnostics"]}
-                           if donor.get("_migration_diagnostics") else {}),
-                    })
+                    identity = (str(path), unit["start_line"], unit["end_line"])
+                    name = words(unit.get("name", ""))
+                    signature = words(unit.get("signature", ""))
+                    owner = words(unit.get("owner", ""))
+                    score = 4 * len(wanted & name) + 2 * len(wanted & signature) + len(wanted & owner)
+                    choices[identity] = (score, path, unit)
+
+            hits = list(index.search(query + " " + capability, limit=8))
+            for hit in hits:
+                examine(hit.source_path)
+            # Search snippets frequently rank README/class headers while the
+            # adapted Java method does not share the prose vocabulary. Never
+            # let that turn a VERIFIED donor into an empty coder handoff.
+            if not choices or max(row[0] for row in choices.values()) == 0:
+                for path in sorted(root.rglob("*.java")):
+                    examine(path)
+            ordered = sorted(choices.values(), key=lambda row: (
+                -row[0], str(row[1]), row[2]["start_line"], row[2]["end_line"],
+            ))
+            if not ordered:
+                self.reference_failures.append({
+                    "capability": capability, "repository": donor["repository"],
+                    "status": "no_callable_java_source",
+                    "error": "The pinned source contains no parseable Java member.",
+                })
+            for score, path, unit in ordered[:8]:
+                identity = (str(path), unit["start_line"], unit["end_line"])
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                selected.append({
+                    "capability": capability, "repository": donor["repository"],
+                    "source_commit": donor["commit_sha"], "license": donor["license_id"],
+                    "path": str(path.relative_to(root)), "start_line": unit["start_line"],
+                    "end_line": unit["end_line"], "owner": unit["owner"],
+                    "symbol": unit["name"], "signature": unit["signature"],
+                    "source_unit_kind": unit["kind"],
+                    "adapted_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                    "code": unit["code"],
+                    "authority": donor.get("_authority", "installed_target_adapted_source"),
+                    "retrieval_method": "verified_semantic_match" if score else "inspected_source_fallback",
+                    "retrieval_score": score,
+                    **({"migration_diagnostics": donor["_migration_diagnostics"]}
+                       if donor.get("_migration_diagnostics") else {}),
+                })
+            print("SOURCE_RAG_HANDOFF: " + json.dumps({
+                "capability": capability, "repository": donor["repository"],
+                "ranked_index_hits": len(hits), "parsed_java_paths": len(parsed),
+                "callable_candidates": len(ordered),
+                "delivered_members": min(len(ordered), 8),
+                "best_match_score": ordered[0][0] if ordered else 0,
+                "authority": donor.get("_authority", "installed_target_adapted_source"),
+            }, ensure_ascii=False), flush=True)
         return selected
 
 @contextmanager
