@@ -6,7 +6,7 @@ import hashlib
 
 from .construction_author import ask, obj, operation_schema
 from .construction_declaration_choices import action_schema, choice_actions, type_candidates
-from .construction_operation_choices import operation_context_branches
+from .construction_operation_choices import operation_context_branches, MAX_OPERATION_EVIDENCE_READS
 from .construction_state import symbol_record, RECENT_SIZE
 from .java_operation_ir import parameter_types, invocation_parameter_types
 from .construction_operation_contracts import named_values, pending_input_contracts, result_fits
@@ -71,7 +71,10 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
         *[row.get('expected_element_type', '') for row in requirements],
         *payload['state_reads'], *payload['state_writes'],
     ) if value)
-    state.prepare_symbols(purpose, kinds=kinds, preserve_scope=True)
+    if op in API_KINDS or op in TYPE_BOUND_OPERATIONS or op == 'lambda':
+        # A control-flow/local-value node needs no global API search. Search
+        # only after its concrete operation and required result type are known.
+        state.prepare_symbols(purpose, kinds=kinds, preserve_scope=True)
     save_author()
     draft = state.operation_draft
     while True:
@@ -114,8 +117,13 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
             shown = {row['symbol_id'] for row in matches}
             matches.extend(symbol_record(key, state.symbols[key]) for key in sorted(required_types - shown)
                            if state.symbols.get(key, {}).get('kind') == 'CLASS' and state.evidence_index.accessible(key))
+        if op in API_KINDS and not matches and len(state.requests) >= MAX_OPERATION_EVIDENCE_READS:
+            # No verified API found in this evidence window. Return to the
+            # operation selector instead of reading 484,405 candidates forever.
+            # The author checkpoints this rejection and tries another operation.
+            return None
         branches = operation_context_branches(state, nodes=nodes, source_units=source_units,
-                                             pinned_source=pinned_source)
+                                             pinned_source=pinned_source, api_resolution=True)
         if op in API_KINDS:
             if matches:
                 branches.insert(0, action_schema('api', {'symbol_ref': {'enum': [row['symbol_id'] for row in matches]}}))
@@ -132,6 +140,13 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
         if not branches:
             raise ValueError('CONSTRUCTION_OPERATION_EVIDENCE_MISSING: ' + op)
         schema = {'oneOf': branches}
+        if op in API_KINDS:
+            print('CONSTRUCTION API CANDIDATES: ' + __import__('json').dumps({
+                'node_id': goal['node_id'], 'operation': op,
+                'candidate_count': len(matches),
+                'selected_page_names': [row['symbol_id'] for row in matches[:8]],
+                'evidence_reads': len(state.requests),
+            }, ensure_ascii=False), flush=True)
         current = {**payload, 'operation_goal': goal,
                    **state.payload(choice_actions(schema), **{key: payload['construction_state'][key]
                        for key in ('current_member', 'graph', 'sources') if key in payload['construction_state']}),
