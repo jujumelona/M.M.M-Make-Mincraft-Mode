@@ -191,9 +191,11 @@ def author_task_operations(router, task, context):
 
     instruction = ('Author this current behavior as typed Java operations, one node per turn. No Java source strings. '
         'selection_goal identifies the current missing input or root slot and its implementation purpose. '
-        'Choose the needed Java operation first. Only then inspect its specific API, type, '
-        'binding or source dependencies. Exact API names come from returned declarations. '
-        'Do not page through the entire API inventory to decide which operation to use. '
+        'Choose the Java operation from the required behavior and known values first. '
+        'Read configuration or source only for a specific missing fact. API and type lookup happens '
+        'after the operation is selected; do not browse APIs to decide whether to implement it. '
+        'Exact API names come from returned declarations. Context reads keep '
+        'the same slot and purpose; when the facts are sufficient, choose its Java operation. '
         'State the operation purpose in plain language, then bind the correct actual API before writing its node. '
         'API signatures fix result types and receiver/argument counts. Required inputs may be forward '
         'references, and each missing input must be authored. Relevant graph nodes are stored on the '
@@ -220,9 +222,11 @@ def author_task_operations(router, task, context):
                 while slot in by_id:
                     index += 1
                     slot = 'operation_' + str(index)
-            parts = [task.intent, str(task.effects), declaration.get('purpose', '')]
+            parts = [task.intent, declaration.get('purpose', '')]
             for consumer in contracts.get(slot, ()):
                 parts.extend(consumer.get(key, '') for key in ('expected_type', 'expected_element_type'))
+                parts.extend(consumer.get('expected_types', ()))
+                parts.extend(consumer.get('allowed_types', ()))
                 parent = by_id[consumer['consumer']]
                 if parent['op'] in {'call', 'new', 'field'}:
                     api = symbols[parent['attributes']['symbol_ref']]
@@ -245,7 +249,8 @@ def author_task_operations(router, task, context):
             can_complete=bool(nodes) and not pending
                          and (not task.behavior_id or observed_effect_node),
             context_branches=operation_context_branches(state, nodes=nodes,
-                source_units=source_units, pinned_source=base['port_source_ref']))
+                source_units=source_units, pinned_source=base['port_source_ref'],
+                resolve_symbols=False))
         actions = choice_actions(schema)
         payload = {**base, 'recent_nodes': recent, **state.payload(actions,
             current_member=task.owner_symbol,

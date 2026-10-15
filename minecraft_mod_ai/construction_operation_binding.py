@@ -14,6 +14,9 @@ from .construction_operation_contracts import named_values, pending_input_contra
 
 API_KINDS = {'call': 'METHOD', 'new': 'CONSTRUCTOR', 'field': 'FIELD', 'constructor_call': 'CONSTRUCTOR'}
 TYPE_BOUND_OPERATIONS = frozenset({'declare', 'literal', 'cast', 'ternary', 'array_get', 'new_array'})
+SYMBOL_BOUND_OPERATIONS = frozenset(API_KINDS) | TYPE_BOUND_OPERATIONS | {
+    'lambda', 'instanceof', 'foreach', 'switch', 'try',
+}
 
 
 def forbidden_input_references(nodes, goal_id):
@@ -93,10 +96,10 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
         *[row.get('expected_type', '') for row in requirements],
         *[row.get('expected_element_type', '') for row in requirements],
         *[value for row in requirements for value in row.get('expected_types', ())],
+        *[value for row in requirements for value in row.get('allowed_types', ())],
     ) if value))
-    if op in API_KINDS or op in TYPE_BOUND_OPERATIONS or op == 'lambda':
-        # A control-flow/local-value node needs no global API search. Search
-        # only after its concrete operation and required result type are known.
+    resolve_symbols = op in SYMBOL_BOUND_OPERATIONS
+    if resolve_symbols:
         state.prepare_symbols(purpose, kinds=kinds, preserve_scope=True)
     save_author()
     draft = state.operation_draft
@@ -147,7 +150,7 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
             return None
         branches = operation_context_branches(state, nodes=nodes, source_units=source_units,
                                              pinned_source=pinned_source,
-                                             api_resolution=(op in API_KINDS or op == 'lambda' or op in TYPE_BOUND_OPERATIONS))
+                                             resolve_symbols=resolve_symbols)
         if op in API_KINDS:
             if matches:
                 branches.insert(0, action_schema('api', {'symbol_ref': {'enum': [row['symbol_id'] for row in matches]}}))
@@ -338,7 +341,8 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
         if op in {'switch', 'try'}:
             from .construction_sequence import sequence_item, unused_integer_labels
             sequence_options = dict(nodes=nodes, source_units=source_units, pinned_source=pinned_source,
-                read_lookup=read_lookup, save_author=save_author, instruction=instruction)
+                read_lookup=read_lookup, save_author=save_author, instruction=instruction,
+                resolve_symbols=resolve_symbols)
             if op == 'switch':
                 selector_types = ['byte', 'short', 'char', 'int']
                 if 'java.lang.String' in state.symbols:

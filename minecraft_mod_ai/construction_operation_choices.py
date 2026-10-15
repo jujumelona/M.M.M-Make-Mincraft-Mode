@@ -84,15 +84,13 @@ def _index_schema(state, kind, query):
 MAX_OPERATION_EVIDENCE_READS = 12
 
 
-def operation_context_branches(state, *, nodes, source_units, pinned_source, api_resolution=False):
-    # Selection chooses the Java operation first. Browsing hundreds of thousands
-    # of symbols before choosing an operation caused zero authored graph nodes.
-    # During binding, evidence navigation has a finite no-progress allowance;
-    # accepted nodes reset state.requests, so this is not a token/output limit.
+def operation_context_branches(state, *, nodes, source_units, pinned_source,
+                               api_resolution=False, resolve_symbols=None):
+    # Count memory/index reads as evidence navigation as well.
     if max(len(state.requests), state.operation_reads) >= MAX_OPERATION_EVIDENCE_READS:
         return []
-    branches = [*binding_lookup_schemas(state)]
-    if api_resolution:
+    branches = binding_lookup_schemas(state)
+    if (api_resolution if resolve_symbols is None else resolve_symbols):
         branches.extend(symbol_lookup_schemas(state))
     offset = state.next_declaration_offset()
     if offset is not None:
@@ -108,8 +106,12 @@ def operation_context_branches(state, *, nodes, source_units, pinned_source, api
         unread = sorted(key for key in visible if ('nodes', key, 0) not in state.requests)
         if unread:
             branches.append(action_schema('nodes', {'query': {'enum': unread}, 'offset': {'const': 0}}))
-    if source_units and state.symbol_goal is not None:
-        goal = state.evidence_index.root_goal(state.symbol_goal)
+    if source_units and state.evidence_index is not None:
+        # Source evidence can explain a behavior before its Java operation/API
+        # is selected. It must not require a global symbol search as a pretext.
+        goal = (state.evidence_index.root_goal(state.symbol_goal)
+                if state.symbol_goal is not None else
+                state.evidence_index.source_goal(state.selection_goal['purpose']))
         branches.extend(_index_schema(state, 'sources', goal))
         pages = [state.evidence_index.source_page(goal, 0)]
         for kind, query, offset in state.requests:

@@ -12,7 +12,7 @@ from copy import deepcopy
 
 # Body lookup choices and retained API pages changed. Old journals/cursors may
 # not be replayed against them; declaration-bound accepted graphs stay reusable.
-PROTOCOL_VERSION = "mmm/construction-state-v13"
+PROTOCOL_VERSION = "mmm/construction-state-v14"
 PAGE_SIZE = 8
 RECENT_SIZE = 4
 LOOKUP_KINDS = frozenset({'symbols', 'scopes', 'declarations', 'nodes', 'node_index', 'source', 'sources', 'bindings'})
@@ -113,6 +113,10 @@ STATE_INSTRUCTION = (
     "remain recoverable; recalling one is not declaring new work. "
     "Dependency discovery is driven by the current implementation purpose. Exact API names come "
     "from returned candidates, not guesses. Intent selectors identify host-ranked real pages. "
+    "Package symbol pages show representative signatures from different owners; they are not "
+    "an exhaustive member scan. Select a returned package/type scope for a specific missing API. "
+    "A type scope retains its complete overload/member pages. Choose a Java operation before "
+    "resolving its API; intrinsic/local operations do not need a dependency search. "
     "scope_candidates are real package/type branches, including branches whose names do not "
     "overlap the purpose. Select their literal goal_id to narrow by meaning and inspect actual signatures. "
     "Select only available_actions."
@@ -241,6 +245,7 @@ class ConstructionState:
         return list(result.values())
 
     def payload(self, available_actions, **cursor):
+        available_actions = tuple(available_actions)
         row = self.symbols.get(self.owner, {})
         planned = row.get("provenance") == "construction_plan"
         return {"construction_state": {
@@ -261,8 +266,9 @@ class ConstructionState:
             "authoring_contract": self.authoring_contract,
             "evidence_memory": self.memory.payload(),
             "selection_goal": deepcopy(self.selection_goal),
-            "scope_candidates": self.scope_candidates(), "scope_lookup": self.scope_lookup,
-            "symbol_page_choices": self.symbol_page_successors(),
+            "scope_candidates": self.scope_candidates() if 'scopes' in available_actions else [],
+            "scope_lookup": self.scope_lookup,
+            "symbol_page_choices": self.symbol_page_successors() if 'more_symbols' in available_actions else [],
             "binding_lookup": {key: value for key, value in self.binding_lookup.items() if key != 'bindings'},
             "source_lookup": {key: value for key, value in self.source_lookup.items() if key != 'source'},
             "symbol_lookup": {key: value for key, value in self.symbol_lookup.items() if key != 'matches'}}
@@ -297,7 +303,8 @@ class ConstructionState:
         result = []
         for row in self.lookup_successors('symbols'):
             descriptor = self.evidence_index.goals[row['query']]
-            if {**descriptor, 'scope': 'package:'} == {**current, 'scope': 'package:'}:
+            if (descriptor['scope'].startswith('type:')
+                    and {**descriptor, 'scope': 'package:'} == {**current, 'scope': 'package:'}):
                 result.append({'query': row['query'], 'offset': row['next_offset'],
                                'scope': descriptor['scope'], 'purpose': descriptor['purpose']})
         return result

@@ -96,6 +96,8 @@ class ConstructionEvidenceIndex:
             self.source_chunks = tuple(replace(row, embedding=tuple(vector))
                                        for row, vector in zip(self.source_chunks, vectors))
         self.query_vectors = {}
+        self.source_ranking_query = None
+        self.source_ranking = None
 
     def _record_document(self, key, row):
         owner, kind = row['owner'], row['kind']
@@ -133,6 +135,7 @@ class ConstructionEvidenceIndex:
                 raise ValueError('CONSTRUCTION_RETRIEVAL_EMBEDDING_SHAPE')
             additions = [replace(row, embedding=tuple(vector)) for row, vector in zip(additions, vectors)]
         self.source_chunks = (*self.source_chunks, *additions)
+        self.source_ranking_query = None
         self.ordering_goal = None
 
     def _add_owner_scope(self, owner):
@@ -321,16 +324,18 @@ class ConstructionEvidenceIndex:
                 result.update(matches)
         return result
 
-    def prepare(self, purpose, *, kinds):
-        if (not isinstance(purpose, str) or not purpose.strip() or not isinstance(kinds, (list, tuple, set, frozenset))
-                or not kinds or any(not isinstance(kind, str) for kind in kinds)
-                or not set(kinds) <= {'CLASS', 'METHOD', 'CONSTRUCTOR', 'FIELD'}):
+    def source_goal(self, purpose):
+        """Register a source selector without searching the target API inventory."""
+        if not isinstance(purpose, str) or not purpose.strip():
             raise ValueError('CONSTRUCTION_RETRIEVAL_GOAL_INVALID')
-        descriptor = {'purpose': purpose.strip(), 'kinds': sorted(set(kinds)), 'scope': 'package:'}
-        goal = self._goal(descriptor)
-        if goal == self.ordering_goal:
-            return goal
-        query = _words(descriptor['purpose'])
+        return self._goal({'purpose': purpose.strip(),
+                           'kinds': ['CLASS', 'CONSTRUCTOR', 'FIELD', 'METHOD'],
+                           'scope': 'package:'})
+
+    def _rank_sources(self, purpose):
+        query = _words(purpose)
+        if query == self.source_ranking_query:
+            return self.source_ranking
         vector = None
         if self.dense and self.source_chunks:
             if query not in self.query_vectors:
@@ -341,6 +346,21 @@ class ConstructionEvidenceIndex:
             vector = self.query_vectors[query]
         sources = rank_context_chunks(query, self.source_chunks, query_vector=vector,
                                       prepared_text=self.source_prepared)
+        self.source_ranking_query = query
+        self.source_ranking = (sources, vector)
+        return self.source_ranking
+
+    def prepare(self, purpose, *, kinds):
+        if (not isinstance(purpose, str) or not purpose.strip() or not isinstance(kinds, (list, tuple, set, frozenset))
+                or not kinds or any(not isinstance(kind, str) for kind in kinds)
+                or not set(kinds) <= {'CLASS', 'METHOD', 'CONSTRUCTOR', 'FIELD'}):
+            raise ValueError('CONSTRUCTION_RETRIEVAL_GOAL_INVALID')
+        descriptor = {'purpose': purpose.strip(), 'kinds': sorted(set(kinds)), 'scope': 'package:'}
+        goal = self._goal(descriptor)
+        if goal == self.ordering_goal:
+            return goal
+        query = _words(descriptor['purpose'])
+        sources, vector = self._rank_sources(descriptor['purpose'])
         relation = defaultdict(float)
         for hit in sources:
             if hit.score <= 0:
@@ -393,6 +413,8 @@ class ConstructionEvidenceIndex:
         print('CONSTRUCTION RETRIEVAL: ' + json.dumps({
             'goal_id': goal, 'purpose': descriptor['purpose'], 'symbol_kinds': descriptor['kinds'],
             'candidate_count': sum(len(keys) for keys in eligible.values()), 'source_unit_count': len(sources),
+            'owner_count': len(ranked), 'retrieval_surface': 'inspected_target_classpath',
+            'discovery_mode': 'owner_representatives_then_package_type_scopes',
             'source_embeddings_used': bool(vector), 'semantic_selector': 'native_package_type_signature_selection',
         }, ensure_ascii=False), flush=True)
         return goal
@@ -401,35 +423,58 @@ class ConstructionEvidenceIndex:
         descriptor = self._ensure(goal)
         eligible = self._eligible_owners(descriptor['kinds'])
         scope = descriptor['scope']
+        representatives = scope.startswith('package:')
         if scope not in self.scoped_orderings:
             owners = tuple(owner for owner in self.ordering[0] if owner in self.scope_owners[scope])
             cumulative, total = [], 0
             for owner in owners:
                 total += len(eligible[owner])
                 cumulative.append(total)
-            self.scoped_orderings[scope] = (owners, tuple(cumulative), total)
+            self.scoped_orderings[scope] = (owners, tuple(cumulative), len(owners) if representatives else total)
         owners, cumulative, total = self.scoped_orderings[scope]
         if type(offset) is not int or offset < 0 or (offset and offset >= total):
             raise ValueError('CONSTRUCTION_LOOKUP_OFFSET_INVALID')
         selected, cursor = [], offset
-        owner_index = bisect_right(cumulative, offset)
-        # Rank members only for owners on this actual page. A new purpose
-        # never tokenizes or sorts the complete method/field inventory.
-        while owner_index < len(owners) and len(selected) < PAGE_SIZE:
-            owner = owners[owner_index]
+
+        def members(owner):
             if owner not in self.member_orderings:
                 self.member_orderings[owner] = tuple(sorted(eligible[owner], key=lambda key: (
                     -self._member_lexical_score(key), key)))
+            return self.member_orderings[owner]
+
+        if representatives:
+            # One owner's thousands of members must not hide every other API.
+            # These are discovery suggestions; full signatures/overloads stay
+            # reachable through the returned verified type scopes.
+            selected = [members(owner)[0] for owner in owners[offset:offset + PAGE_SIZE]]
+            cursor += len(selected)
+        owner_index = bisect_right(cumulative, offset)
+        # Rank members only for owners on this actual page. A new purpose
+        # never tokenizes or sorts the complete method/field inventory.
+        while not representatives and owner_index < len(owners) and len(selected) < PAGE_SIZE:
+            owner = owners[owner_index]
             start = cursor - (cumulative[owner_index - 1] if owner_index else 0)
-            page = self.member_orderings[owner][start:start + PAGE_SIZE - len(selected)]
+            page = members(owner)[start:start + PAGE_SIZE - len(selected)]
             selected.extend(page)
             cursor += len(page)
             owner_index += 1
         result = {'matches': [symbol_record(key, self.symbols[key]) for key in selected],
                   'offset': offset, 'total_count': total, 'status': 'matches' if selected else 'no_matches',
                   'next_offset': cursor if cursor < total else None}
+        owner_scopes = []
+        for owner in dict.fromkeys(self.symbols[key]['owner'] for key in selected):
+            owner_scopes.append({'goal_id': self.scoped_goal(goal, 'type:' + owner),
+                                 'scope_id': 'type:' + owner, 'kind': 'type', 'name': owner,
+                                 'candidate_count': len(eligible[owner])})
+        print('CONSTRUCTION LOOKUP: ' + json.dumps({
+            'goal_id': goal, 'purpose': descriptor['purpose'], 'scope': scope,
+            'offset': offset, 'page_total': total, 'next_offset': result['next_offset'],
+            'mode': 'owner_representatives' if representatives else 'type_members',
+            'returned_symbols': selected,
+        }, ensure_ascii=False), flush=True)
         return {'kind': 'symbols', 'query': goal, **result,
                 'purpose': descriptor['purpose'], 'symbol_kinds': descriptor['kinds'], 'scope': scope,
+                'owner_scopes': owner_scopes,
                 'source_candidates': [self.source_record(key) for key in self.ordering[1][:PAGE_SIZE]]}
 
     def scope_page(self, goal, offset):
@@ -481,8 +526,10 @@ class ConstructionEvidenceIndex:
     def source_page(self, goal, offset):
         # Source discovery follows the same purpose-ranked complete unit map;
         # the caller selects returned pointers, never guesses a filename.
-        self._ensure(goal)
-        result = page_result(self.ordering[1], offset, field='sources')
+        if goal not in self.goals:
+            raise ValueError('CONSTRUCTION_RETRIEVAL_GOAL_MISSING')
+        sources, _vector = self._rank_sources(self.goals[goal]['purpose'])
+        result = page_result(tuple(row.chunk_id for row in sources), offset, field='sources')
         result['sources'] = [self.source_record(key) for key in result['sources']]
         return result
 

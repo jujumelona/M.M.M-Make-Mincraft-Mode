@@ -8,7 +8,7 @@ from .construction_operation_choices import operation_context_branches
 
 
 def sequence_item(router, state, name, current, schema, values, *, nodes, source_units,
-                  pinned_source, read_lookup, save_author, instruction):
+                  pinned_source, read_lookup, save_author, instruction, resolve_symbols=False):
     offset = ((len(values) - 1) // PAGE_SIZE) * PAGE_SIZE if values else 0
     while True:
         page = page_result(values, offset, field='accepted')
@@ -18,7 +18,8 @@ def sequence_item(router, state, name, current, schema, values, *, nodes, source
         branches = [*schema.get('oneOf', [schema]),
                     *[action_schema('sequence_page', {'offset': {'const': value}}) for value in offsets],
                     *operation_context_branches(state, nodes=nodes, source_units=source_units,
-                                                pinned_source=pinned_source)]
+                                                pinned_source=pinned_source,
+                                                resolve_symbols=resolve_symbols)]
         decision_schema = {'oneOf': branches}
         cursor = {key: current['construction_state'][key]
                   for key in ('current_member', 'graph', 'sources') if key in current.get('construction_state', {})}
