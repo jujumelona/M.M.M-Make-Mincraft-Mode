@@ -87,7 +87,8 @@ def _evidence(index, intent, source_pages):
         }:
             continue
         result["source"].append({
-            "path": ref, "signature": unit.get("signature", ""),
+            "path": ref, "authority": unit.get("authority", "inspected_materialized_source"),
+            "signature": unit.get("signature", ""),
             "source_sha256": unit.get("source_sha256", ""),
             "code": unit.get("code", "")[:8000],
         })
@@ -100,6 +101,7 @@ def compose_feature(router, spec, context, behaviors, *, package, name, owner):
     identity = _digest({
         "spec": spec, "owner": owner, "behaviors": behaviors,
         "target": context["target"],
+        "namespace": context.get("namespace", ""),
         "prerequisites": context["prerequisite_hashes"],
         "contract": context.get("authoring_contract", {}),
         "implementation": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
