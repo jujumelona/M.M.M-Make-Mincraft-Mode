@@ -328,3 +328,36 @@ def test_github_project_topics_rescue_real_mod_with_short_description():
     }
     assert reuse_discovery._github_candidate_is_minecraft_mod(candidate)
     assert reuse_discovery._candidate_relevance(candidate, "planet exploration") > 0
+
+
+def test_korean_source_capability_uses_english_retrieval_aliases():
+    variants = reuse_discovery._query_variants(
+        "외계인과 싸움 식민지화", ("외계인과 싸움 식민지화",)
+    )
+    assert "alien" in variants
+    assert "combat" in variants
+    assert "colony" in variants
+    assert reuse_discovery._candidate_relevance(
+        {"title": "Minecraft Fabric mod", "summary": "Alien combat world expansion"},
+        "외계인과 싸움 식민지화",
+    ) > 0
+
+
+def test_korean_capability_recovers_english_repository(monkeypatch):
+    monkeypatch.setenv("MMM_REUSE_QUERY_VARIANTS", "3")
+    monkeypatch.delenv("MMM_CURSEFORGE_API_KEY", raising=False)
+    monkeypatch.delenv("CURSEFORGE_API_KEY", raising=False)
+
+    class Client:
+        def search(self, provider, query, **kwargs):
+            if provider == "github" and "alien" in query:
+                return {"candidates": [{
+                    "repository": "example/alien-combat",
+                    "title": "Minecraft Fabric alien combat mod",
+                }]}
+            return {"candidates": []}
+
+    result = reuse_discovery.discover_repositories_for_graph(
+        ("외계인과 싸움 식민지화",), Client()
+    )
+    assert "example/alien-combat" in result["외계인과 싸움 식민지화"]
