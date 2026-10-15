@@ -231,8 +231,14 @@ def author_task_operations(router, task, context):
         if slot in by_id or (pending and slot not in pending):
             raise ValueError('CONSTRUCTION_SELECTION_GOAL_NODE_INVALID')
         recent = [_node_summary(row) for row in nodes[-4:]]
+        # A gameplay behavior must not certify a syntactically valid no-op.
+        # Actual runtime verification remains separate, but a body containing
+        # only return/literal/block cannot fulfill an observable effect.
+        observed_effect_node = any(row['op'] in {'call', 'assign', 'constructor_call'}
+                                   for row in nodes)
         schema = operation_next_schema(state, nodes=nodes, declaration=declaration,
-            can_complete=bool(nodes) and not pending,
+            can_complete=bool(nodes) and not pending
+                         and (not task.behavior_id or observed_effect_node),
             context_branches=operation_context_branches(state, nodes=nodes,
                 source_units=source_units, pinned_source=base['port_source_ref']))
         actions = choice_actions(schema)
