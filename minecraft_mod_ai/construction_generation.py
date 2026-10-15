@@ -452,6 +452,12 @@ def compose(router, spec, *, source_context=(), construction_context=None,
         nodes = author_one(member_task, **options)
         render_task_java(member_task, nodes, symbols)
         rendered[member_task.owner_symbol] = render_task_member(member_task, nodes, symbols)
+        print('CONSTRUCTION_MEMBER_PROGRESS: ' + json.dumps({
+            'owner_symbol': member_task.owner_symbol,
+            'accepted_operation_count': len(nodes),
+            'rendered_java_bytes': len(rendered[member_task.owner_symbol].encode('utf-8')),
+            'target_compiled': False,
+        }, ensure_ascii=False), flush=True)
         # A following member must be able to inspect decisions already accepted
         # here (state encodings, callbacks and helper logic), not only signatures.
         ref = 'accepted-member:' + hashlib.sha256(member_task.owner_symbol.encode()).hexdigest()[:24]
