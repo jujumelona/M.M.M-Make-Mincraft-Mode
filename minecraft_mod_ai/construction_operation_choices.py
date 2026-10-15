@@ -89,7 +89,7 @@ def operation_context_branches(state, *, nodes, source_units, pinned_source, api
     # of symbols before choosing an operation caused zero authored graph nodes.
     # During binding, evidence navigation has a finite no-progress allowance;
     # accepted nodes reset state.requests, so this is not a token/output limit.
-    if len(state.requests) >= MAX_OPERATION_EVIDENCE_READS:
+    if max(len(state.requests), state.operation_reads) >= MAX_OPERATION_EVIDENCE_READS:
         return []
     branches = [*binding_lookup_schemas(state)]
     if api_resolution:
