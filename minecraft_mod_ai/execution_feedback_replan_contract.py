@@ -27,8 +27,6 @@ from functools import wraps
 from pathlib import Path
 from typing import Any
 
-_MAX_LEDGER_TASK_PAGES = 10_000
-
 from .compiler_diagnostics import (
     compiler_log_diagnostics as _compiler_log_diagnostics,
 )
@@ -504,15 +502,10 @@ def _ledger_task_rows(ledger: Any) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     cursor = ""
     seen_cursors: set[str] = set()
-    page_count = 0
     while True:
-        if page_count >= _MAX_LEDGER_TASK_PAGES:
-            raise RuntimeError(
-                "EXECUTION_FEEDBACK_PAGINATION_LIMIT: ledger task pagination exceeded "
-                f"{_MAX_LEDGER_TASK_PAGES} pages"
-            )
+        # Stop only on the ledger's terminal cursor. An arbitrary page ceiling
+        # previously rejected valid large work graphs despite forward progress.
         page = ledger.tasks(cursor=cursor, limit=1000)
-        page_count += 1
         rows.extend(
             dict(task)
             for task in page.get("tasks", ())
