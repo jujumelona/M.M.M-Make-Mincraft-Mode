@@ -85,6 +85,11 @@ def author_task_operations(router, task, context):
         raise ValueError('CONSTRUCTION_CHECKPOINT_NODES_INVALID')
     if stage == 'validated':
         JavaOperations(task, nodes, symbols)
+        # Legacy validated graph checkpoints are not proof of the requested
+        # gameplay effect. Prevent old return-only bodies bypassing this gate.
+        if task.behavior_id and not any(
+                row['op'] in {'call', 'assign', 'constructor_call'} for row in nodes):
+            raise ValueError('CONSTRUCTION_BEHAVIOR_EFFECT_MISSING: ' + task.task_id)
         return tuple(nodes)
     declaration_ids = context.get('construction_declaration_ids')
     if declaration_ids is None:
