@@ -346,6 +346,7 @@ class ConstructionState:
                                    for _, row in sorted(self.lookup_cursors.items())]}
 
     def restore(self, record, *, resolve_lookup=None):
+        from .java_operation_ir import OPERATIONS
         if (not isinstance(record, dict) or record.get('protocol') != PROTOCOL_VERSION
                 or record.get('phase') != self.phase or type(record.get('revision')) is not int
                 or record['revision'] != self.revision):
@@ -377,9 +378,9 @@ class ConstructionState:
             if (not isinstance(selection, dict) or not {'node_id', 'purpose'} <= set(selection)
                     or set(selection) - {'node_id', 'purpose', 'excluded_operations'}
                     or not isinstance(selection.get('excluded_operations', []), list)
-                    or len(set(selection.get('excluded_operations', []))) != len(selection.get('excluded_operations', []))
-                    or any(action not in __import__('minecraft_mod_ai.java_operation_ir', fromlist=['OPERATIONS']).OPERATIONS
+                    or any(not isinstance(action, str) or action not in OPERATIONS
                            for action in selection.get('excluded_operations', []))
+                    or len(set(selection.get('excluded_operations', []))) != len(selection.get('excluded_operations', []))
                     or not isinstance(selection['purpose'], str) or not selection['purpose'].strip()
                     or not isinstance(selection['node_id'], str)
                     or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,240}', selection['node_id'])):
