@@ -30,23 +30,31 @@ revision and preserve unrelated work.
 
 ### Task 1: Shared partial validation
 
-- [ ] Refactor `java_operation_ir.py` contract preparation from node validation.
-- [ ] Add partial validation with explicit holes, cycle checks, and located errors.
-- [ ] Retain final roots/return/control/exception validation unchanged.
-- [ ] Inspect AST and diff statically, then commit.
+- [x] Refactor `java_operation_ir.py` contract preparation from node validation.
+- [x] Add partial validation with explicit holes, cycle checks, and located errors.
+- [x] Retain final roots/return/control/exception validation unchanged.
+- [x] Inspect AST and diff statically, then commit.
 
 ### Task 2: Durable observations and revisions
 
-- [ ] Add `construction_feedback.py` for exact diagnostics and node replacement.
-- [ ] Extend `construction_progress.py` with graph CAS and atomic author snapshots.
-- [ ] Extend state payload/export/restore for one bounded observation/repair target.
-- [ ] Inspect callers and persistence boundaries, then commit.
+- [x] Add `construction_feedback.py` for exact diagnostics and node replacement.
+- [x] Extend `construction_progress.py` with graph CAS and atomic author snapshots.
+- [x] Extend state payload/export/restore for one bounded observation/repair target.
+- [x] Inspect callers and persistence boundaries, then commit.
 
 ### Task 3: Wire action/observation/local repair
 
-- [ ] Validate candidate nodes before normal append and handle located diagnostics.
-- [ ] Feed the rejected node and actual diagnostic into same-slot reconstruction.
-- [ ] Reopen provisional parents through the atomic revision callback.
-- [ ] Expose validated/deferred counts without claiming gameplay completion.
+- [x] Validate candidate nodes before normal append and handle located diagnostics.
+- [x] Feed the rejected node and actual diagnostic into same-slot reconstruction.
+- [x] Reopen provisional parents through the atomic revision callback.
+- [x] Expose validated/deferred counts without claiming gameplay completion.
 - [ ] Run static AST/name/diff checks only, obtain static review, and commit.
 - [ ] Publish main with expected-head verification and byte-identical tree check.
+
+## Execution ledger
+
+Task 1 and Task 2 implemented and committed. Task 3 wiring implemented; whole-branch static review pending.
+
+Ruling: honor the user instruction not to run tests or model inference. Validation in this session is source/AST/name/diff inspection only; no actual MiMo or Colab success is claimed.
+
+Ruling: use one prepared validator and keep full final gates. Partial admission does not substitute for Java compilation or gameplay/runtime evidence.

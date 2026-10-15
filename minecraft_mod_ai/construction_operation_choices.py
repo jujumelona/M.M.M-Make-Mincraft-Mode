@@ -39,7 +39,7 @@ def operation_next_schema(state, *, nodes, declaration, can_complete, context_br
     if state.selection_goal is None:
         raise ValueError('CONSTRUCTION_SELECTION_GOAL_REQUIRED')
     slot = state.selection_goal['node_id']
-    if pending:
+    if slot in pending:
         # An accepted API/control node creates concrete input obligations.
         # Fill returned slots before selecting an unrelated new root.
         for key, consumers in pending.items():
@@ -67,6 +67,13 @@ def operation_next_schema(state, *, nodes, declaration, can_complete, context_br
             branches.append(obj({'action': {'enum': sorted(root_actions)}, 'node_id': {'const': slot}, 'purpose': ID}))
     if can_complete:
         branches.append(action_schema('complete', {'purpose': ID}))
+    if (state.validation_observation or {}).get('status') == 'rejected':
+        visible = {row['node_id'] for row in nodes[-PAGE_SIZE:]}
+        if state.lookup.get('kind') == 'nodes':
+            visible.update(row['node_id'] for row in state.lookup.get('nodes', ()))
+        if visible:
+            branches.append(action_schema('revise_node', {
+                'node_ref': {'enum': sorted(visible)}, 'purpose': ID}))
     if not branches:
         raise ValueError('CONSTRUCTION_OPERATION_ALTERNATIVE_MISSING: no compatible implementation for the current slot')
     # Missing information is a literal evidence action for this same slot.

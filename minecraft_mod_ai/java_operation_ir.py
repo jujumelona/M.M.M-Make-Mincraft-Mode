@@ -274,11 +274,11 @@ class JavaOperations:
 
     def require_expression(self, key):
         if self.nodes[key]["op"] not in EXPRESSIONS:
-            raise ValueError("CONSTRUCTION_EXPRESSION_REQUIRED: " + key)
+            raise JavaOperationError("CONSTRUCTION_EXPRESSION_REQUIRED: " + key, key)
 
     def require_statement(self, key):
         if self.nodes[key]["op"] not in STATEMENTS:
-            raise ValueError("CONSTRUCTION_STATEMENT_REQUIRED: " + key)
+            raise JavaOperationError("CONSTRUCTION_STATEMENT_REQUIRED: " + key, key)
 
     def type_name(self, value):
         if not isinstance(value, str):

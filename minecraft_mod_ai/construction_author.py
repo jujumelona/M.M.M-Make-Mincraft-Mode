@@ -93,6 +93,9 @@ def author_task_operations(router, task, context):
                 for row in nodes):
             raise ValueError('CONSTRUCTION_BEHAVIOR_EFFECT_MISSING: ' + task.task_id)
         return tuple(nodes)
+    from .construction_feedback import graph_digest, replace_node, rejection, admission
+    validator = JavaOperations(task, (), symbols, partial=True)
+    validation = validator.validate(nodes)
     declaration_ids = context.get('construction_declaration_ids')
     if declaration_ids is None:
         declaration_ids = sorted(key for key, row in symbols.items()
@@ -192,6 +195,34 @@ def author_task_operations(router, task, context):
                 callback(task, query)
             read_sources.add(query)
 
+    def reject_candidate(error, *, candidate=None, phase='partial'):
+        observation = rejection(error, nodes, candidate=candidate, phase=phase)
+        state.validation_observation = observation
+        state.reconsider_operation()
+        state.operation_rejections = {}
+        target = observation['node_id']
+        if target in by_id:
+            state.selection_goal = {'node_id': target,
+                'purpose': state.node_purposes.get(target, task.intent), 'excluded_operations': []}
+        elif candidate is None:
+            state.selection_goal = None
+        else:
+            state.selection_goal['excluded_operations'] = []
+        print('CONSTRUCTION OPERATION OBSERVATION: ' + json.dumps({
+            'status': 'rejected', 'phase': phase, 'node_id': target,
+            'diagnostic': observation['diagnostic'], 'graph_changed': False,
+        }, ensure_ascii=False), flush=True)
+        save_author()
+
+    def checkpoint_graph(stage, expected=None):
+        transaction = context.get('checkpoint_transaction')
+        if callable(transaction):
+            transaction(task, tuple(nodes), stage, state.export(), expected)
+        elif context.get('checkpoint'):
+            if expected is not None:
+                raise ValueError('CONSTRUCTION_CHECKPOINT_REVISION_UNAVAILABLE')
+            context['checkpoint'](task, tuple(nodes), stage)
+
     if base['port_source_ref'] and base['port_source_ref'] not in read_sources:
         read_lookup({'action': 'source', 'query': base['port_source_ref'], 'offset': 0})
     save_author()
@@ -210,6 +241,11 @@ def author_task_operations(router, task, context):
         'Implement only owned runtime records; never duplicate effects already provided by Typed/UI. '
         'When a pinned donor source is installed, use its exact inspected callable symbols '
         'through typed call/field/new operations and implement missing state and event glue. '
+        'operation_observation is the actual result of the previous operation. A rejected node '
+        'was not admitted: correct its diagnostic in the same slot. If an earlier provisional '
+        'parent is the cause, revise that node while preserving independent work. revise_node '
+        'selects a visible existing node for a local replacement. Partial admission proves only '
+        'closed type/access constraints, not the requested gameplay effect. '
         'Only the latest four node summaries are shown. Use node_index to discover older node IDs, '
         'then nodes to read one complete known node. Use sources to discover source IDs, then source '
         'to read one complete unit. Use bindings with a binding_id from authoring_contract.binding_pages '
@@ -219,9 +255,17 @@ def author_task_operations(router, task, context):
         'Only the supported typed operations can be authored; the host validates operation/type/access '
         'and complete behavior contracts before rendering. No raw Java or placeholder success. ' + STATE_INSTRUCTION)
     while True:
-        contracts = pending_input_contracts(nodes, declaration, symbols)
+        observation = state.validation_observation or {}
+        if observation and observation['graph_sha256'] != graph_digest(nodes):
+            raise ValueError('CONSTRUCTION_OBSERVATION_GRAPH_MISMATCH')
+        repair_id = (observation.get('node_id') if observation.get('status') == 'rejected'
+                     and observation.get('node_id') in by_id else None)
+        working_nodes = [row for row in nodes if row['node_id'] != repair_id] if repair_id else nodes
+        contracts = pending_input_contracts(working_nodes, declaration, symbols)
         if state.selection_goal is None:
-            if pending:
+            if repair_id:
+                slot = repair_id
+            elif pending:
                 slot = next(iter(pending))
             else:
                 index = len(nodes)
@@ -251,7 +295,7 @@ def author_task_operations(router, task, context):
             # chooses call/new/field/control flow. API lookup happens in binding.
             save_author()
         slot = state.selection_goal['node_id']
-        if slot in by_id or (pending and slot not in pending):
+        if slot != repair_id and (slot in by_id or (pending and slot not in pending)):
             raise ValueError('CONSTRUCTION_SELECTION_GOAL_NODE_INVALID')
         recent = [_node_summary(row) for row in nodes[-4:]]
         # A gameplay behavior must not certify a syntactically valid no-op.
@@ -261,8 +305,9 @@ def author_task_operations(router, task, context):
             row['op'] in {'assign', 'constructor_call'} or
             (row['op'] == 'call' and row['attributes']['symbol_ref'] != task.owner_symbol)
             for row in nodes)
-        schema = operation_next_schema(state, nodes=nodes, declaration=declaration,
-            can_complete=bool(nodes) and not pending
+        schema = operation_next_schema(state, nodes=working_nodes, declaration=declaration,
+            can_complete=bool(nodes) and not pending and not repair_id
+                         and observation.get('status') != 'rejected'
                          and (not task.behavior_id or observed_effect_node),
             context_branches=operation_context_branches(state, nodes=nodes,
                 source_units=source_units, pinned_source=base['port_source_ref'],
@@ -272,13 +317,16 @@ def author_task_operations(router, task, context):
             current_member=task.owner_symbol,
             graph={'accepted_node_count': len(nodes), 'resumed_node_count': len(existing),
                    'checkpoint_stage': stage or 'new',
+                   'validated_node_count': len(validation.validated_node_ids),
+                   'deferred_node_count': len(validation.deferred_node_ids),
+                   'behavior_verified': False, 'repair_node_id': repair_id,
                    'pending_input_ref_count': len(pending), 'pending_input_refs': list(islice(pending, PAGE_SIZE)),
                    'root_count': len(roots), 'root_ids': list(islice(roots, PAGE_SIZE))},
             sources={'total_count': len(source_ids), 'recent_ids': source_ids[:PAGE_SIZE],
                      'lookup_action': 'sources',
                      'pinned_source_read': bool(base['port_source_ref'] in read_sources)})}
         payload['pending_input_contracts'] = {key: contracts[key] for key in list(contracts)[:PAGE_SIZE]}
-        payload['named_values'] = named_values(nodes, declaration, symbols, node_id=slot)
+        payload['named_values'] = named_values(working_nodes, declaration, symbols, node_id=slot)
         choice = state.operation_goal or ask(router, 'construction_operation_next', payload, schema, instruction)
         action = choice['action']
         if action in {'symbols', 'more_symbols', 'scopes', 'bindings', 'source', 'sources',
@@ -286,10 +334,21 @@ def author_task_operations(router, task, context):
             read_lookup(choice)
             save_author()
             continue
+        if action == 'revise_node':
+            state.validation_observation['node_id'] = choice['node_ref']
+            state.selection_goal = {'node_id': choice['node_ref'], 'purpose': choice['purpose'],
+                                    'excluded_operations': []}
+            state.reconsider_operation()
+            state.operation_rejections = {}
+            save_author()
+            continue
         if action == 'complete':
-            JavaOperations(task, nodes, symbols)
-            if context.get('checkpoint'):
-                context['checkpoint'](task, tuple(nodes), 'validated')
+            try:
+                validator.validate(nodes, partial=False)
+            except ValueError as error:
+                reject_candidate(error, phase='complete')
+                continue
+            checkpoint_graph('validated')
             return tuple(nodes)
         if max(len(state.requests), state.operation_reads) >= MAX_OPERATION_EVIDENCE_READS:
             # Migrate in-progress checkpoints captured during the historic
@@ -301,11 +360,19 @@ def author_task_operations(router, task, context):
                 'reason': 'legacy_or_exhausted_preselection_navigation',
             }, ensure_ascii=False), flush=True)
         state.operation_goal = dict(choice)
-        if choice['node_id'] in by_id or (pending and choice['node_id'] not in pending):
+        if choice['node_id'] != repair_id and (choice['node_id'] in by_id or (pending and choice['node_id'] not in pending)):
             raise ValueError('CONSTRUCTION_OPERATION_GOAL_NODE_INVALID')
-        row = bind_operation(router, state, goal=choice, payload=payload, nodes=nodes,
-            source_units=source_units, pinned_source=base['port_source_ref'],
-            read_lookup=read_lookup, instruction=instruction, save_author=save_author)
+        try:
+            row = bind_operation(router, state, goal=choice, payload=payload, nodes=working_nodes,
+                source_units=source_units, pinned_source=base['port_source_ref'],
+                read_lookup=read_lookup, instruction=instruction, save_author=save_author)
+        except ValueError as error:
+            if not str(error).startswith(('CONSTRUCTION_OPERATION_NAMED_VALUE_MISSING',
+                                          'CONSTRUCTION_OPERATION_EVIDENCE_MISSING')):
+                raise
+            reject_candidate(error, candidate={'node_id': slot, 'op': action,
+                'input_refs': [], 'attributes': {}, 'purpose': choice['purpose']})
+            continue
         if row is None:
             # The chosen API-dependent operation lacked verified callable
             # evidence. Reconsider the same slot rather than endlessly paging
@@ -323,24 +390,35 @@ def author_task_operations(router, task, context):
             save_author()
             continue
         row['op'] = action
-        if row['node_id'] in by_id:
+        if row['node_id'] in by_id and row['node_id'] != repair_id:
             raise ValueError('CONSTRUCTION_NODE_DUPLICATE')
-        from .construction_lexical import check_partial_names
-        check_partial_names([*nodes, row], declaration, symbols)
+        try:
+            candidate_nodes = replace_node(nodes, row) if repair_id else (*nodes, row)
+            candidate_validation = validator.validate(candidate_nodes)
+        except ValueError as error:
+            reject_candidate(error, candidate=row)
+            continue
+        expected = graph_digest(nodes) if repair_id else None
+        previous_ids = set(by_id)
         state.remember_node_purpose(row['node_id'], choice['purpose'], replace=True)
-        by_id[row['node_id']] = row
-        nodes.append(row)
-        pending.pop(row['node_id'], None)
-        for ref in row['input_refs']:
-            if ref not in by_id:
-                pending.setdefault(ref, None)
-        if row['node_id'] not in referenced:
-            roots[row['node_id']] = None
-        for ref in row['input_refs']:
-            roots.pop(ref, None)
-        referenced.update(row['input_refs'])
+        nodes = list(candidate_nodes)
+        by_id = {node['node_id']: node for node in nodes}
+        if repair_id:
+            state.memory.invalidate_nodes((previous_ids - by_id.keys()) | {repair_id})
+        referenced = {ref for node in nodes for ref in node['input_refs']}
+        pending = dict.fromkeys(ref for node in nodes for ref in node['input_refs'] if ref not in by_id)
+        roots = dict.fromkeys(key for key in by_id if key not in referenced)
+        live = set(by_id) | referenced
+        state.node_purposes = {key: purpose for key, purpose in state.node_purposes.items() if key in live}
         state.advance(preserve_symbols=True)
+        state.revision = len(nodes)
+        state.validation_observation = admission(nodes, candidate_validation, row['node_id'])
+        validation = candidate_validation
         stage = 'authoring'
-        if context.get('checkpoint'):
-            context['checkpoint'](task, tuple(nodes), 'authoring')
+        checkpoint_graph('authoring', expected)
+        print('CONSTRUCTION OPERATION OBSERVATION: ' + json.dumps({
+            'status': 'admitted', 'node_id': row['node_id'], 'revised': bool(repair_id),
+            'validated_node_count': len(validation.validated_node_ids),
+            'deferred_node_count': len(validation.deferred_node_ids), 'behavior_verified': False,
+        }, ensure_ascii=False), flush=True)
         save_author()

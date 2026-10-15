@@ -45,6 +45,19 @@ class ConstructionMemory:
         self.visited_pages.clear()
         self.require_recall = False
 
+    def invalidate_nodes(self, node_ids):
+        """A revised node/query is no longer evidence about the current graph."""
+        node_ids = set(node_ids)
+        stale = {key for key, view in self.records.items()
+                 if view['selector']['kind'] == 'nodes'
+                 and node_ids.intersection(part.strip() for part in view['selector']['query'].split(','))}
+        if not stale:
+            return
+        self.records = {key: value for key, value in self.records.items() if key not in stale}
+        self.active = [key for key in self.active if key not in stale]
+        self.index_offset = ((len(self.records) - 1) // PAGE_SIZE) * PAGE_SIZE if self.records else 0
+        self.reset_navigation()
+
     def _page_identity(self, offset):
         return tuple(list(self.records)[offset:offset + PAGE_SIZE])
 
