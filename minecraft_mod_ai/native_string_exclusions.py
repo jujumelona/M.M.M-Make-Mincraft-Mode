@@ -1,13 +1,15 @@
-"""Canonical JSON-wire complements for exact decoded string exclusions.
+"""Native-compatible string exclusions for host-owned authored choices.
 
-The host keeps ordinary JSON Schema ``not/enum``. Native patterns describe
+For arbitrary text, the host keeps ordinary JSON Schema ``not/enum``. Native patterns describe
 canonical wire spellings, because llama.cpp emits patterns inside JSON quotes.
 Ordinary Unicode remains literal; quote, backslash and controls use exactly one
 escape spelling, so alternative escapes cannot bypass decoded exclusions.
+
+Finite identifier alphabets use bounded trie-complement patterns directly.
 """
 from __future__ import annotations
-from collections.abc import Mapping
 
+from collections.abc import Mapping
 
 BMP_SCALAR_PATTERN = r'^[\u0000-\ud7ff\ue000-\uffff]$'
 DECODED_SCHEMA_KEY = 'mmm_decoded_string_schema'
@@ -122,3 +124,111 @@ def wire_string_schema(schema):
     result.update(pattern='^(' + '|'.join(alternatives) + ')$', maxLength=6 * maximum_length)
     result[DECODED_SCHEMA_KEY] = dict(schema)
     return result
+
+
+# This limits regex factoring, not identifiers, queries or the excluded set.
+# llama.cpp's pinned compiler accepts at most 100 nested pattern groups.
+_MAX_TRIE_GROUP_DEPTH = 96
+
+
+def _character_class(chars):
+    def escape(char):
+        # Python re.escape also escapes '~', '$', '.', etc. llama.cpp rejects
+        # those class escapes and silently substitutes an unbounded string.
+        return '\\x' + format(ord(char), '02x') if char in '\\[]^-' else char
+    runs = []
+    values = sorted(ord(char) for char in chars)
+    start = end = values[0]
+    for value in values[1:]:
+        if value == end + 1:
+            end = value
+            continue
+        runs.append((start, end))
+        start = end = value
+    runs.append((start, end))
+    parts = []
+    for start, end in runs:
+        if end - start >= 2:
+            parts.append(escape(chr(start)) + '-' + escape(chr(end)))
+        else:
+            parts.extend(escape(chr(value)) for value in range(start, end + 1))
+    return '[' + ''.join(parts) + ']'
+
+
+def string_excluding(forbidden, *, alphabet, first=None, minimum=1, maximum=240,
+                     fold_case=False, normalizer=None):
+    """Finite trie complement; no unsupported lookahead/not or unbounded regex.
+
+    Each branch either ends at an allowed prefix, takes a forbidden-word edge,
+    or diverges from that trie and fills only its remaining length budget.
+    """
+    first = set(first or alphabet)
+    alphabet = set(alphabet)
+    normalize = normalizer or (str.casefold if fold_case else lambda value: value)
+    trie = {}
+    for value in forbidden:
+        value = normalize(value)
+        if not value:
+            if minimum == 0:
+                trie[''] = True
+            continue
+        if len(value) > maximum:
+            continue
+        if any(not any(normalize(char) == key for char in (first if i == 0 else alphabet))
+               for i, key in enumerate(value)):
+            continue
+        node = trie
+        for key in value:
+            node = node.setdefault(key, {})
+        node[''] = True
+    tail = _character_class(alphabet)
+
+    def choices(node, depth):
+        options = [''] if depth >= minimum and '' not in node else []
+        edges = []
+        if depth < maximum:
+            allowed = first if depth == 0 else alphabet
+            other = {char for char in allowed if normalize(char) not in node}
+            remaining = maximum - depth - 1
+            if other and remaining >= max(0, minimum - depth - 1):
+                option = _character_class(other)
+                if remaining:
+                    option += tail + '{' + str(max(0, minimum - depth - 1)) + ',' + str(remaining) + '}'
+                options.append(option)
+            for key in sorted(key for key in node if key):
+                chars = {char for char in allowed if normalize(char) == key}
+                if not chars:
+                    continue
+                edges.append((_character_class(chars), node[key]))
+        return options, edges
+
+    def combine(options):
+        if not options:
+            return None
+        return options[0] if len(options) == 1 else '(?:' + '|'.join(options) + ')'
+
+    def flat_suffix(node, depth):
+        options = []
+        pending = [(node, depth, '')]
+        while pending:
+            current, position, prefix = pending.pop()
+            endings, edges = choices(current, position)
+            options.extend(prefix + ending for ending in endings)
+            pending.extend((child, position + 1, prefix + char)
+                           for char, child in reversed(edges))
+        return combine(options)
+
+    def suffix(node, depth):
+        if depth >= _MAX_TRIE_GROUP_DEPTH:
+            # Flatten only the deep tail. Every excluded word and length bound
+            # remains active without crossing the native nesting limit.
+            return flat_suffix(node, depth)
+        options, edges = choices(node, depth)
+        for char, child in edges:
+            rest = suffix(child, depth + 1)
+            if rest is not None:
+                options.append(char + rest)
+        return combine(options)
+
+    return {'type': 'string', 'minLength': minimum, 'maxLength': maximum,
+            'pattern': '^' + suffix(trie, 0) + '$'}

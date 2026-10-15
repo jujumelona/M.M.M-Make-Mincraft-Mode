@@ -5,7 +5,6 @@ from typing import Any
 
 from minecraft_mod_ai.single_record_template import run_single_record_template
 
-
 _IDENTIFIER = "feature/algorithm/atomic_mutations"
 _CONTEXT = {
     "requirement_id": "req_004",
@@ -37,7 +36,8 @@ def _assert_field_contract(messages, schema, tool_name: str, index: int) -> str:
         "submit_one_feature_algorithm_atomic_mutations"
         f"_part_{index + 1}_of_{len(_FIELDS)}"
     )
-    assert len(messages) == 2 + index
+    # One system message carries all previously accepted fields together.
+    assert len(messages) == 2 + int(index > 0)
     context = json.loads(str(messages[1]["content"]))
     assert context["requirement_id"] == "req_004"
     assert all(

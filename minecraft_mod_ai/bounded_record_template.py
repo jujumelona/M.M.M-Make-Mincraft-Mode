@@ -7,10 +7,12 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
+from .deadline_executor import iter_completed_with_deadlines
 from .design_generation_schema import context_bound_record_schema
 from .execution_contract_policy import PLANNER_RECORD_COUNT_OUTPUT_TOKEN_CEILING
 from .fixed_template_generation import generate_fixed_template_value
-from .parallel_model_tasks import deterministic_model_map, serialized_callback
+from .model_concurrency import raise_if_model_execution_cancelled
+from .parallel_model_tasks import serialized_callback
 from .single_record_template import run_single_record_template
 from .task_template_catalog import load_record_template
 from .task_template_input import task_binding, task_context
@@ -110,13 +112,28 @@ def _record_count_messages(
     ]
 
 
-def _record_key(record: dict[str, Any]) -> str:
+def _record_key(record: dict[str, Any], *, identifier: str) -> str:
+    # A content owner is identified by entity_id. Changing its description or
+    # kind does not make a second owner within the same authored record set.
+    identity = record["entity_id"] if identifier == "design/content_entity" else record
     return json.dumps(
-        record,
+        identity,
         sort_keys=True,
         ensure_ascii=False,
         separators=(",", ":"),
     )
+
+
+def _admit_record_key(
+    record: dict[str, Any], *, identifier: str, accepted_keys: set[str]
+) -> None:
+    key = _record_key(record, identifier=identifier)
+    if key in accepted_keys:
+        raise ValueError(
+            f"TEMPLATE_RECORD_SET_DUPLICATE: {identifier} returned a duplicate "
+            f"at ordinal {len(accepted_keys) + 1}"
+        )
+    accepted_keys.add(key)
 
 
 def _validate_record_semantics(
@@ -158,7 +175,7 @@ def run_bounded_record_template(
     checkpoint=None,
     minimum_count: int = 0,
 ):
-    """Generate a finite record set as tiny count + host-owned ordinal record jobs."""
+    """Generate a finite record set from a validated, host-owned accepted prefix."""
 
     template = load_record_template(identifier)
     normalized_context = task_context(template, context)
@@ -170,7 +187,9 @@ def run_bounded_record_template(
     )
     record_validator = Draft202012Validator(record_schema)
     minimum = _validated_minimum_count(minimum_count)
-    binding = f"record-set-v3:min={minimum}:" + task_binding(
+    # v3 aggregates could be saved before distinctness validation. Do not reuse
+    # them as proof that accepted-prefix authoring has completed successfully.
+    binding = f"record-set-v4:min={minimum}:" + task_binding(
         template,
         normalized_context,
         admitted_refs,
@@ -242,6 +261,7 @@ def run_bounded_record_template(
                 f"TEMPLATE_RECORD_SET_CARDINALITY_DRIFT: expected {expected}, "
                 f"saved {len(records)} records"
             )
+        accepted_keys: set[str] = set()
         for record in records:
             _validate_record_semantics(
                 record,
@@ -249,6 +269,7 @@ def run_bounded_record_template(
                 schema=record_schema,
                 validator=record_validator,
             )
+            _admit_record_key(record, identifier=identifier, accepted_keys=accepted_keys)
     else:
         if isinstance(saved, dict) and type(saved.get("count")) is int:
             count = int(saved["count"])
@@ -272,6 +293,7 @@ def run_bounded_record_template(
             )
             count = int(count_value["count"])
             if checkpoint is not None:
+                raise_if_model_execution_cancelled()
                 checkpoint(binding, {"count": count})
 
         if count < minimum or count > _MAX_RECORD_SET_ITEMS:
@@ -281,10 +303,18 @@ def run_bounded_record_template(
             )
 
         safe_checkpoint = serialized_callback(checkpoint)
-        ordinals = tuple(range(count))
+        records = []
+        accepted_keys = set()
+        # Free semantic ordinals depend on the identities already assigned in
+        # this set. An ordinal number alone does not partition the requirement.
+        # Independently keyed slots/sets remain parallel at their caller.
+        def author_record(index: int) -> tuple[dict[str, Any], dict[str, Any]]:
+            pending_writes: dict[str, Any] = {}
 
-        def author_record(index: int) -> dict[str, Any]:
-            return run_single_record_template(
+            def buffer_checkpoint(key: str, value: Any) -> None:
+                pending_writes[key] = deepcopy(value)
+
+            record = run_single_record_template(
                 router,
                 identifier,
                 context={
@@ -292,35 +322,45 @@ def run_bounded_record_template(
                     "record_index": index,
                     "record_ordinal": index + 1,
                     "record_count": count,
-                    # Ordinal identity makes sibling calls independent. The host checks
-                    # distinctness after collection instead of growing later prompts.
-                    "accepted_records": [],
+                    "accepted_records": deepcopy(records),
                 },
                 progress=progress,
-                checkpoint=safe_checkpoint,
+                checkpoint=buffer_checkpoint if safe_checkpoint is not None else None,
             )
-
-        records = deterministic_model_map(
-            router,
-            ordinals,
-            author_record,
-            role="planner",
-            thread_name_prefix="bounded-record",
-        )
-
-        if len(records) != count:
-            raise RuntimeError(
-                f"TEMPLATE_RECORD_SET_CARDINALITY_DRIFT: expected {count}, "
-                f"received {len(records)}"
-            )
-        for record in records:
             _validate_record_semantics(
                 record,
                 identifier=identifier,
                 schema=record_schema,
                 validator=record_validator,
             )
+            # Workers return staged data only. A timed-out worker cannot mutate
+            # the accepted prefix or persist anything when it eventually returns.
+            return deepcopy(record), pending_writes
+
+        def raise_record_error(_index: int, error: BaseException) -> None:
+            raise error
+
+        # Keep one active ordinal while retaining the scheduler's renewable
+        # leases, parent cancellation, and bounded shutdown for a stuck call.
+        for _index, (record, pending_writes) in iter_completed_with_deadlines(
+            range(count),
+            author_record,
+            max_workers=1,
+            stage="bounded-record",
+            on_error=raise_record_error,
+        ):
+            raise_if_model_execution_cancelled()
+            _admit_record_key(record, identifier=identifier, accepted_keys=accepted_keys)
+            records.append(record)
+            # The caller admits each result before publishing its singleton.
+            # Checkpoint I/O stays outside the worker's cancellation locks, and
+            # the iterator cannot start the next ordinal until this loop resumes.
+            if safe_checkpoint is not None:
+                for key, value in pending_writes.items():
+                    raise_if_model_execution_cancelled()
+                    safe_checkpoint(key, value)
         if checkpoint is not None:
+            raise_if_model_execution_cancelled()
             checkpoint(
                 binding,
                 {
@@ -329,13 +369,7 @@ def run_bounded_record_template(
                 },
             )
 
-    keys = [_record_key(record) for record in records]
-    if len(keys) != len(set(keys)):
-        raise ValueError(
-            f"TEMPLATE_RECORD_SET_DUPLICATE: {identifier} returned duplicate "
-            "ordinal records"
-        )
-
+    raise_if_model_execution_cancelled()
     return {
         "records": records,
         "reason": "" if records else _EMPTY_REASON,

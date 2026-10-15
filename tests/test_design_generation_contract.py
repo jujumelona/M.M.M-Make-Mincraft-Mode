@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import re
+
 import pytest
 from jsonschema import Draft202012Validator, ValidationError
 
 from minecraft_mod_ai.content_design_contract import (
     CONTENT_KIND_TO_FACT_TYPE,
-    CONTENT_KINDS,
+    PRIMARY_CONTENT_KINDS,
 )
 from minecraft_mod_ai.design_generation_schema import context_bound_record_schema
+from minecraft_mod_ai.model_output_atomicity_contract import (
+    assert_atomic_model_schema,
+    effective_model_transport_schema,
+)
 from minecraft_mod_ai.single_record_template import run_single_record_template
 from minecraft_mod_ai.task_template_catalog import load_record_template
 
@@ -19,7 +25,7 @@ def test_content_entity_kind_is_generation_time_closed_vocabulary():
         template["record_schema"],
         {},
     )
-    assert schema["properties"]["kind"]["enum"] == list(CONTENT_KINDS)
+    assert schema["properties"]["kind"]["enum"] == list(PRIMARY_CONTENT_KINDS)
     assert "economy_resource_management" not in schema["properties"]["kind"]["enum"]
 
 
@@ -90,3 +96,45 @@ def test_host_closed_sets_become_actual_model_schema_enums():
         },
     )
     assert prop_schema["properties"]["property"]["enum"] == ["main_color"]
+
+
+def test_entity_prefix_excludes_owned_ids_in_both_host_and_native_schema():
+    template = load_record_template("design/content_entity")
+    accepted = [
+        {"entity_id": "red_key", "kind": "item", "role": "Unlock the hangar."},
+        {"entity_id": "key_" + "a" * 60, "kind": "item", "role": "Unlock the vault."},
+    ]
+    schema = context_bound_record_schema(
+        "design/content_entity", template["record_schema"], {"accepted_records": accepted}
+    )
+    assert_atomic_model_schema(schema, surface="entity accepted prefix")
+    native = effective_model_transport_schema(schema)
+    pattern = native["properties"]["entity_id"]["pattern"]
+
+    for entity_id in (record["entity_id"] for record in accepted):
+        assert not re.fullmatch(pattern, entity_id)
+        with pytest.raises(ValidationError):
+            Draft202012Validator(schema).validate({**accepted[0], "entity_id": entity_id})
+
+    # Distinct concrete owners may share descriptive roles. Do not force a
+    # paraphrase merely to create the second owner.
+    for entity_id in ("blue_key", "red_keys", "aa", "a" * 64):
+        record = {**accepted[0], "entity_id": entity_id}
+        Draft202012Validator(schema).validate(record)
+        assert re.fullmatch(pattern, entity_id)
+    for entity_id in ("a", "1red_key", "Red_key", "red-key", "a" * 65):
+        assert not re.fullmatch(pattern, entity_id)
+    assert template["record_schema"]["properties"]["entity_id"]["pattern"] == (
+        "^[a-z][a-z0-9_]+$"
+    )
+
+
+def test_existing_entity_can_be_reused_outside_current_prefix():
+    template = load_record_template("design/content_entity")
+    existing = {"entity_id": "red_key", "kind": "item", "role": "Unlock the hangar."}
+    schema = context_bound_record_schema(
+        "design/content_entity",
+        template["record_schema"],
+        {"existing_entities": [existing], "accepted_records": []},
+    )
+    Draft202012Validator(schema).validate(existing)

@@ -3,22 +3,21 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from copy import deepcopy
-from typing import Any, Callable
+from typing import Any
 
 from jsonschema import Draft202012Validator
 
 from .design_generation_schema import context_bound_record_schema
 from .fixed_template_generation import generate_fixed_template_value
 from .model_output_atomicity_contract import (
-    effective_model_transport_schema,
     assert_atomic_model_schema,
+    effective_model_transport_schema,
     structured_output_token_ceiling,
 )
 from .task_template_catalog import load_record_template
 from .task_template_input import task_binding, task_context
-
 
 _READ_ONLY_CONTEXT_CONTRACT = (
     "The user message is READ_ONLY_INPUT_CONTEXT, not an output example. "
@@ -54,7 +53,11 @@ def _ordinal_instruction(context: dict[str, Any]) -> str:
         return (
             f"\nThe host has established exactly {count} records. Return only record "
             f"{index + 1} of {count}, using stable source/authored order. Do not return a "
-            "different ordinal and do not make any continuation or completion decision."
+            "different ordinal and do not make any continuation or completion decision. "
+            "accepted_records contains the host-validated earlier records in this set. "
+            "Choose the next distinct, still-uncovered authored entity or obligation. "
+            "Do not repeat an accepted record, paraphrase the same entity into a new "
+            "record, or add an ordinal/suffix to disguise a duplicate."
         )
     entity_count = context.get("entity_count")
     entity_ordinal = context.get("entity_ordinal")

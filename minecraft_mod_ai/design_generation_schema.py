@@ -4,17 +4,18 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
+from string import ascii_lowercase, digits
 from typing import Any
 
 from jsonschema import Draft202012Validator
 
 from .content_design_contract import (
     CONTENT_KIND_TO_FACT_TYPE,
-    PRIMARY_CONTENT_KINDS,
     CONTENT_PROPERTY_VALUE_ENUMS,
     CONTENT_PROPERTY_VALUE_PATTERNS,
+    PRIMARY_CONTENT_KINDS,
 )
-
+from .native_string_exclusions import string_excluding
 
 _CONTEXT_ENUM_BINDINGS = {
     "slot_id": "allowed_slots",
@@ -55,6 +56,28 @@ def _bind_content_entity_kind(
     ):
         raise DesignGenerationSchemaError("CONTENT_PRIMARY_KIND_SCOPE_INVALID")
     kind_schema["enum"] = list(dict.fromkeys(allowed))
+
+
+def _bind_content_entity_identity(
+    properties: dict[str, Any], context: Mapping[str, Any],
+) -> None:
+    accepted = context.get("accepted_records", ())
+    excluded = [
+        record["entity_id"] for record in accepted
+        if isinstance(record, Mapping) and isinstance(record.get("entity_id"), str)
+    ]
+    if not excluded:
+        return
+    entity_id = properties["entity_id"]
+    # Preserve the declared lowercase identifier language and finite bound in
+    # the native grammar. Raw not/enum with this pattern is not transportable.
+    entity_id["pattern"] = string_excluding(
+        excluded,
+        alphabet=ascii_lowercase + digits + "_",
+        first=ascii_lowercase,
+        minimum=max(2, entity_id.get("minLength", 1)),
+        maximum=entity_id["maxLength"],
+    )["pattern"]
 
 
 def _bind_content_capability(
@@ -101,6 +124,7 @@ def context_bound_record_schema(
     _bind_context_enums(properties, context)
     if identifier == "design/content_entity":
         _bind_content_entity_kind(properties, context)
+        _bind_content_entity_identity(properties, context)
     elif identifier == "design/content_capability":
         _bind_content_capability(properties, context)
     elif identifier == "design/content_property":

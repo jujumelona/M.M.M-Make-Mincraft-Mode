@@ -1,10 +1,11 @@
+import json
 from copy import deepcopy
 
 import pytest
 
 from minecraft_mod_ai import bounded_record_template as bounded
 from minecraft_mod_ai import design_record_runtime as runtime
-
+from minecraft_mod_ai import single_record_template as single
 
 IDENTIFIER = "feature/behavior_contract/entry_conditions"
 
@@ -72,7 +73,7 @@ def test_interruption_resumes_from_host_owned_count_without_reasking(monkeypatch
     assert len(record_calls) == 1
     assert len(progress) == 1
     binding = next(iter(progress))
-    assert binding.startswith("record-set-v3:")
+    assert binding.startswith("record-set-v4:")
     assert progress[binding] == {"count": 2}
 
     _patch_count(
@@ -96,6 +97,79 @@ def test_interruption_resumes_from_host_owned_count_without_reasking(monkeypatch
         failure=AssertionError("completed records regenerated"),
     )
     assert runtime.run_record_template(None, IDENTIFIER, **kwargs) == result
+
+
+def test_interruption_reconstructs_validated_prefix_from_singleton_checkpoints(monkeypatch):
+    progress = {}
+    count_calls = _patch_count(monkeypatch, 2)
+    field_calls = []
+    interrupted = False
+
+    def generate_field(_router, _role, messages, *, response_schema, **_kwargs):
+        nonlocal interrupted
+        context = json.loads(messages[1]["content"])
+        index = len(context["accepted_records"])
+        field = next(iter(response_schema["properties"]))
+        if index == 1 and not interrupted:
+            interrupted = True
+            raise TimeoutError("second record interrupted")
+        field_calls.append((index, field))
+        return {field: _record(index)[field]}
+
+    monkeypatch.setattr(single, "generate_fixed_template_value", generate_field)
+    kwargs = {
+        "context": {"requirement": "Two independent entry triggers."},
+        "progress": progress,
+        "checkpoint": lambda key, value: progress.update({key: deepcopy(value)}),
+    }
+    with pytest.raises(TimeoutError, match="second record interrupted"):
+        runtime.run_record_template(None, IDENTIFIER, **kwargs)
+
+    assert len(count_calls) == 1
+    assert len([key for key in progress if key.startswith("single:")]) == 1
+    aggregate_key = next(key for key in progress if key.startswith("record-set-v4:"))
+    assert progress[aggregate_key] == {"count": 2}
+    prior_calls = list(field_calls)
+    _patch_count(monkeypatch, AssertionError("count already checkpointed"))
+    result = runtime.run_record_template(None, IDENTIFIER, **kwargs)
+
+    assert result["records"] == [_record(0), _record(1)]
+    assert field_calls == prior_calls + [(1, "trigger"), (1, "owner")]
+    assert progress[aggregate_key]["records"] == result["records"]
+
+
+def test_rejected_duplicate_never_poison_singleton_resume(monkeypatch):
+    progress = {}
+    _patch_count(monkeypatch, 2)
+    corrected = False
+    field_calls = []
+
+    def generate_field(_router, _role, messages, *, response_schema, **_kwargs):
+        context = json.loads(messages[1]["content"])
+        index = len(context["accepted_records"])
+        field = next(iter(response_schema["properties"]))
+        field_calls.append((index, field))
+        return {field: _record(index if corrected else 0)[field]}
+
+    monkeypatch.setattr(single, "generate_fixed_template_value", generate_field)
+    kwargs = {
+        "context": {"requirement": "Two independent entry triggers."},
+        "progress": progress,
+        "checkpoint": lambda key, value: progress.update({key: deepcopy(value)}),
+    }
+    with pytest.raises(ValueError, match="TEMPLATE_RECORD_SET_DUPLICATE"):
+        runtime.run_record_template(None, IDENTIFIER, **kwargs)
+
+    assert len([key for key in progress if key.startswith("single:")]) == 1
+    aggregate_key = next(key for key in progress if key.startswith("record-set-v4:"))
+    assert progress[aggregate_key] == {"count": 2}
+
+    corrected = True
+    prior_calls = list(field_calls)
+    _patch_count(monkeypatch, AssertionError("count already checkpointed"))
+    result = runtime.run_record_template(None, IDENTIFIER, **kwargs)
+    assert result["records"] == [_record(0), _record(1)]
+    assert field_calls == prior_calls + [(1, "trigger"), (1, "owner")]
 
 
 @pytest.mark.parametrize("changed", ["context", "allowed_refs"])
@@ -158,7 +232,7 @@ def test_saved_record_set_is_revalidated_before_any_model_call(monkeypatch):
         checkpoint=lambda key, value: progress.update({key: deepcopy(value)}),
     )
     runtime.run_record_template(None, IDENTIFIER, **kwargs)
-    key = next(item for item in progress if item.startswith("record-set-v3:"))
+    key = next(item for item in progress if item.startswith("record-set-v4:"))
     progress[key]["records"][0]["trigger"] = "   "
 
     _patch_count(
