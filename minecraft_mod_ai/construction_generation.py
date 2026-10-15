@@ -296,6 +296,12 @@ def compose(router, spec, *, source_context=(), construction_context=None,
             'body_owner': task.task_id, 'purpose': item['purpose']}
         declarations.append((key, item['purpose']))
         state.add_declaration(key)
+        if action in {'method', 'constructor'}:
+            # A small model needs a complete executable unit before expanding
+            # the surrounding class. Queue this body immediately instead of
+            # generating an unlimited catalogue of speculative helpers.
+            preferred_body = key
+            break
     if lifecycle and not registrars:
         declarations.append((owner + '#' + lifecycle + '()', task.intent))
     if not declarations and not registrars:
