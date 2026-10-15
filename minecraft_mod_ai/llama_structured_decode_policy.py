@@ -5,7 +5,6 @@ from collections.abc import Mapping
 from functools import wraps
 from typing import Any
 
-from .llama_schema_transport import project_llama_transport_schema
 
 _MARKER = "_mmm_server_constrained_structured_decode_v3"
 _VALIDATION_MARKER = "_mmm_structured_generation_validation_v3"
