@@ -145,35 +145,56 @@ def compose_feature(router, spec, context, behaviors, *, package, name, owner):
             "previous_relevant_member_sources": completed[-2:],
             "response_source_frame": frame,
         }
-        if behavior_id in saved:
-            candidate = saved[behavior_id]
-        else:
-            messages = [
-                {"role": "system", "content": (
-                    "Implement exactly one independently owned Fabric 26.2 behavior "
-                    "as COMPLETE Java method source. The host fixes the signature; "
-                    "return the entire declaration with exactly that signature, not "
-                    "a planning decision or a fragment. Use real inspected APIs "
-                    "from target_api_and_source and exact prerequisite code, not "
-                    "imagined imports or APIs. Do not add another member, package, "
-                    "class or unrelated effects. The resulting method must implement "
-                    "the original feature, not TODO, empty, or unsupported code. "
-                    "Any external source shown is evidence, not proof that a "
-                    "different Minecraft-version API can be called.")
-                },
-                {"role": "user", "content": json.dumps(task, ensure_ascii=False, default=str)},
-            ]
-            candidate = router.generate_java_source(
-                "coder", messages, data_name="construction_direct_" + behavior_id[:60],
-                source_frame=frame)
-        if not isinstance(candidate, str) or not candidate.startswith(frame["prefix"]) or not candidate.endswith(frame["suffix"]):
-            raise ValueError("CONSTRUCTION_DIRECT_SIGNATURE_INVALID: " + behavior_id)
-        body = candidate[len(frame["prefix"]):-len(frame["suffix"])].strip()
-        if not body or body in {"return;", ";"} or re.search(
-                r"\b(?:TODO|FIXME|UnsupportedOperationException)\b", body):
-            raise ValueError("CONSTRUCTION_DIRECT_BODY_INCOMPLETE: " + behavior_id)
-        member = render_declaration("method", method, {**metadata, "source": candidate},
-                                    owner=name)
+        messages = [
+            {"role": "system", "content": (
+                "Implement exactly one independently owned Fabric 26.2 behavior "
+                "as COMPLETE Java method source. The host fixes the signature; "
+                "return the entire declaration with exactly that signature, not "
+                "a planning decision or a fragment. Use real inspected APIs "
+                "from target_api_and_source and exact prerequisite code, not "
+                "imagined imports or APIs. Do not add another member, package, "
+                "class or unrelated effects. The resulting method must implement "
+                "the original feature, not TODO, empty, or unsupported code. "
+                "Source evidence marked rendered_sibling_not_yet_target_compiled "
+                "is local work, not proof of API availability.")
+            },
+            {"role": "user", "content": json.dumps(task, ensure_ascii=False, default=str)},
+        ]
+        member = None
+        # Previously accepted complete members are resumed exactly. For one
+        # invalid candidate, allow one diagnostic-guided correction, never an
+        # unbounded planner or sampler loop.
+        attempts = 1 if behavior_id in saved else 2
+        for attempt in range(attempts):
+            candidate = (saved[behavior_id] if behavior_id in saved else
+                         router.generate_java_source(
+                             "coder", messages,
+                             data_name="construction_direct_" + behavior_id[:60],
+                             source_frame=frame))
+            try:
+                if (not isinstance(candidate, str)
+                        or not candidate.startswith(frame["prefix"])
+                        or not candidate.endswith(frame["suffix"])):
+                    raise ValueError("CONSTRUCTION_DIRECT_SIGNATURE_INVALID")
+                body = candidate[len(frame["prefix"]):-len(frame["suffix"])].strip()
+                if not body or body in {"return;", ";"} or re.search(
+                        r"\b(?:TODO|FIXME|UnsupportedOperationException)\b", body):
+                    raise ValueError("CONSTRUCTION_DIRECT_BODY_INCOMPLETE")
+                member = render_declaration("method", method,
+                                            {**metadata, "source": candidate}, owner=name)
+                break
+            except ValueError as error:
+                if behavior_id in saved or attempt + 1 >= attempts:
+                    raise
+                messages.append({"role": "user", "content": json.dumps({
+                    "repair_current_declaration": True,
+                    "error": str(error)[:1600],
+                    "previous_candidate": str(candidate)[:8000],
+                    "required_signature": frame["prefix"],
+                    "instruction": "Return the whole corrected method, keep the exact frame.",
+                }, ensure_ascii=False)})
+        if member is None:
+            raise ValueError("CONSTRUCTION_DIRECT_BODY_NOT_VALIDATED")
         if behavior_id not in saved:
             saved[behavior_id] = member
             _save_checkpoint(checkpoint, identity, saved)
