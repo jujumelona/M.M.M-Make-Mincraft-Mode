@@ -414,10 +414,17 @@ def compose(router, spec, *, source_context=(), construction_context=None,
             sort_keys=True, separators=(',', ':')).encode()).hexdigest()
         metadata = {'owner': owner, 'authority': 'accepted_sibling_graph',
                     'source_sha256': evidence_hash, 'side': symbols[member_task.owner_symbol]['side']}
+        # Make the *actual rendered Java* retrievable for the next member.
+        # The graph remains canonical; this is read-only sibling evidence,
+        # never an assertion that the source has already compiled or run.
         units = [{**metadata, 'kind': 'accepted_member', 'signature': member_task.owner_symbol,
                   'code': json.dumps({'task': member_task.to_dict(), 'node_count': len(nodes),
-                                      'node_catalogue': {'source_ref': ref, 'first_node_offset': 1,
-                                                         'unit_count': len(nodes)}}, ensure_ascii=False)}]
+                                      'node_catalogue': {'source_ref': ref, 'first_node_offset': 2,
+                                                         'unit_count': len(nodes)}}, ensure_ascii=False)},
+                 {**metadata, 'kind': 'accepted_java_member',
+                  'authority': 'rendered_sibling_not_yet_target_compiled',
+                  'signature': member_task.owner_symbol,
+                  'code': rendered[member_task.owner_symbol]}]
         units.extend({**metadata, 'kind': 'accepted_node',
                       'signature': member_task.owner_symbol + '::' + row['node_id'] + ' ' + member_task.intent,
                       'code': json.dumps(row, ensure_ascii=False)} for row in nodes)
