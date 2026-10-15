@@ -155,6 +155,10 @@ def author_task_operations(router, task, context):
             callback(task, tuple(nodes), state.export())
 
     def read_lookup(choice):
+        # Memory navigation is a model decision too. Counting only symbol
+        # requests allowed infinite recall/index cycles with zero Java nodes.
+        if state.phase == 'operation_graph':
+            state.operation_reads += 1
         action = choice['action']
         if action == 'memory_index':
             state.memory.select_index(choice['offset'])
