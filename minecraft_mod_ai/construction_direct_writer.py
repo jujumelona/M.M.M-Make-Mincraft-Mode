@@ -35,7 +35,8 @@ def eligible(bindings, context, behaviors):
         return False
     if json.loads(bindings.get("owned_runtime_records_json") or "[]"):
         return False
-    if json.loads(bindings.get("retained_typed_behavior_json") or "{}"):
+    retained = json.loads(bindings.get("retained_typed_behavior_json") or "{}")
+    if any(retained.get(key) for key in ("functions", "event_bindings", "ui_owned_records")):
         return False
     return True
 
