@@ -92,13 +92,18 @@ def test_modrinth_inspection_does_not_accept_off_target_or_ambiguous_files() -> 
     assert 'off_target_minecraft_version_or_loader' in version['unresolved_or_rejected_gates']
     assert 'exactly_one_primary_file_is_required' in version['unresolved_or_rejected_gates']
 
-def test_github_search_skips_missing_and_unasserted_licenses() -> None:
+def test_github_discovery_retains_unasserted_license_until_source_inspection() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.host == 'api.github.com'
         return httpx.Response(200, json={'total_count': 3, 'items': [{'id': 1, 'full_name': 'example/no-license', 'html_url': 'https://github.com/example/no-license', 'archived': False, 'license': None}, {'id': 2, 'full_name': 'example/noassertion', 'html_url': 'https://github.com/example/noassertion', 'archived': False, 'license': {'spdx_id': 'NOASSERTION'}}, {'id': 3, 'full_name': 'example/reviewable', 'html_url': 'https://github.com/example/reviewable', 'description': 'Reviewable source', 'default_branch': 'main', 'archived': False, 'license': {'spdx_id': 'BSD-3-Clause'}, 'topics': ['minecraft', 'fabric']}]})
     page = _client(handler).search('github', 'trade economy', limit=10)
-    assert [item['candidate_id'] for item in page['candidates']] == ['github:example/reviewable']
+    assert [item['candidate_id'] for item in page['candidates']] == [
+        'github:example/no-license', 'github:example/noassertion',
+        'github:example/reviewable',
+    ]
+    assert page['candidates'][0]['reuse_status'] == 'candidate_only_not_cloned'
+    assert page['candidates'][1]['license_id'] == 'NOASSERTION'
     assert page['candidates'][0]['reuse_status'] == 'candidate_only_not_cloned'
     assert page['download_performed'] is False
 
