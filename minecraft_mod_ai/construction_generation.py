@@ -107,6 +107,13 @@ def compose(router, spec, *, source_context=(), construction_context=None,
     # Never relabel installed source or bytecode as a provisional declaration.
     if owner in symbols or any(row.get('owner') == owner for row in symbols.values()):
         raise ValueError('CONSTRUCTION_OWNER_ALREADY_EXISTS: ' + owner)
+    # The model's existing grammar-constrained Java writer is the default for
+    # independent behaviors. Stateful features and donor/port integration keep
+    # the fully typed, evidence-bound operation author below.
+    from .construction_direct_writer import eligible as direct_eligible, compose_feature
+    if direct_eligible(bindings, context, behaviors):
+        return compose_feature(router, spec, context, behaviors,
+                               package=package, name=name, owner=owner)
     interfaces, superclass = [], ''
     symbols[owner] = {'kind': 'CLASS', 'owner': owner, 'name': name, 'access': 1,
         'superclass': superclass, 'interfaces': interfaces,
