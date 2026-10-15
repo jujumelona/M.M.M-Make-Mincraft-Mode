@@ -9,6 +9,7 @@ is reference-only: a candidate is pinned, license/closure checked, materialized,
 compiled against the selected target before its source is attached to a generation task.
 """
 
+import json
 import os
 import re
 import tempfile
@@ -480,8 +481,12 @@ def build_repository_reuse_plan(
                     search_status = "provider_error"
                     failure_code = "ALL_DISCOVERY_PROVIDERS_FAILED"
                 elif searches and all(r["status"] in {"search_empty", "provider_error"} for r in searches):
-                    search_status = "search_empty" if any(r["status"] == "search_empty" for r in searches) else "provider_error"
-                    failure_code = "NO_SOURCE_CANDIDATES" if search_status == "search_empty" else "ALL_DISCOVERY_PROVIDERS_FAILED"
+                    # A successful empty page cannot certify that no source
+                    # exists when another provider could not be queried.
+                    incomplete = any(r["status"] == "provider_error" for r in searches)
+                    search_status = "provider_error" if incomplete else "search_empty"
+                    failure_code = ("INCOMPLETE_PROVIDER_SEARCH" if incomplete
+                                    else "NO_SOURCE_CANDIDATES")
                 else:
                     search_status, failure_code = "unresolved", "NO_VERIFIED_DONOR"
                 decisions.append(
@@ -499,6 +504,16 @@ def build_repository_reuse_plan(
                         ),
                     }
                 )
+                print("SOURCE_REUSE_CAPABILITY: " + json.dumps({
+                    "capability": capability, "mode": "fresh",
+                    "discovered_repositories": len(discovered.get(capability, ())),
+                    "ranked_candidates": len(ranked_cards),
+                    "inspected": sum(row.get("capability") == capability for row in inspections),
+                    "proof_attempts": sum(row.get("capability") == capability for row in proofs),
+                    "status": search_status, "failure_code": failure_code,
+                    "reference_sources": sum(row.get("capability") == capability
+                                             for row in reference_sources),
+                }, ensure_ascii=False), flush=True)
                 continue
             donor, receipt = selected
             decisions.append(
@@ -515,6 +530,15 @@ def build_repository_reuse_plan(
                     ),
                 }
             )
+            print("SOURCE_REUSE_CAPABILITY: " + json.dumps({
+                "capability": capability, "mode": "source_transplant",
+                "selected_repository": donor.repository,
+                "selected_commit": donor.commit_sha,
+                "discovered_repositories": len(discovered.get(capability, ())),
+                "ranked_candidates": len(ranked_cards),
+                "inspected": sum(row.get("capability") == capability for row in inspections),
+                "proof_attempts": sum(row.get("capability") == capability for row in proofs),
+            }, ensure_ascii=False), flush=True)
     finally:
         if temporary is not None:
             temporary.cleanup()
