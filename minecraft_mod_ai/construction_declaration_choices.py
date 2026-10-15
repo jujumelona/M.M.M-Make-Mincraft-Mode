@@ -152,11 +152,14 @@ def member_schema(state, *, reserved_names, body_candidates):
 
 
 def parameter_schema(parameters, *, state, can_complete=True):
+    # A parameter *count* decision needs no codebase browsing. Allowing
+    # memory_index/bindings here produced cycles with zero declarations even
+    # after type evidence had already been read in choose_type().
     branches = [obj({'complete': {'const': False},
                      'name': identifier_schema(p['name'] for p in parameters)})]
     if can_complete:
         branches.append(obj({'complete': {'const': True}}))
-    return with_binding_lookups(state, {'oneOf': branches})
+    return {'oneOf': branches}
 
 
 def type_candidates(state):
