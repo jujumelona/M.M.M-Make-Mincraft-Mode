@@ -338,9 +338,13 @@ def _github_candidate_is_minecraft_mod(candidate: Mapping[str, Any]) -> bool:
     name = repository.rsplit("/", 1)[-1]
     if name.startswith(("awesome-", "list-of-", "awesome_")):
         return False
+    metadata = candidate.get("metadata")
+    topics = metadata.get("topics", ()) if isinstance(metadata, Mapping) else ()
     description = (
-        str(candidate.get("title") or "")
-        + " " + str(candidate.get("summary") or "")
+        str(candidate.get("title") or "") + " "
+        + str(candidate.get("summary") or "") + " "
+        + " ".join(str(value) for value in topics) + " "
+        + str(candidate.get("topics") or "")
     ).casefold()
     if not re.search(r"\b(minecraft|fabricmc|neoforge|quiltmc|mc[-_]?mod)\b", description):
         return False
@@ -370,9 +374,11 @@ def _candidate_relevance(candidate: Mapping[str, Any], capability: str) -> float
     if capability in atomic_capability_definitions():
         terms.update(word for query in _ontology_search_queries(capability)
                      for word in _source_words(query) if word not in stop)
+    metadata = candidate.get("metadata")
+    topics = metadata.get("topics", ()) if isinstance(metadata, Mapping) else ()
     text = " ".join(str(candidate.get(key) or "") for key in (
         "title", "summary", "description", "body", "repository", "source_url", "topics",
-    ))
+    )) + " " + " ".join(str(value) for value in topics)
     matched = terms & _source_words(text)
     return len(matched) / max(1, len(terms))
 
