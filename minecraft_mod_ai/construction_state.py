@@ -256,6 +256,18 @@ class ConstructionState:
             return []
         descriptor = self.evidence_index.goals[self.symbol_goal]
         result = {}
+        # The currently visible representative owners are direct, verified
+        # type scopes. They share the same bounded frontier as package scopes;
+        # a second model-visible list must not double its cardinality.
+        for candidate in self.symbol_lookup.get('owner_scopes', ()):
+            goal = candidate['goal_id']
+            row = self.evidence_index.goals.get(goal)
+            if (row is not None
+                    and {**row, 'scope': 'package:'} == {**descriptor, 'scope': 'package:'}
+                    and ('scopes', goal, 0) not in self.requests):
+                result[goal] = candidate
+                if len(result) == PAGE_SIZE:
+                    return list(result.values())
         for kind, query, offset in sorted(self.requests):
             if kind != 'scopes':
                 continue
