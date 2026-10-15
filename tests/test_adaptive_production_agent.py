@@ -87,7 +87,7 @@ def test_bound_production_coder_cannot_finalize_before_fresh_rag(monkeypatch, tm
     assert adapter.count == 3
 
 
-def test_causal_frontier_never_mixes_retrieve_and_inspect_actions(monkeypatch) -> None:
+def test_nonforced_generation_frontier_exposes_only_reviewed_read_actions(monkeypatch) -> None:
     class Runtime:
         def tool_schemas(self, stage):
             return (_schema("search_code_rag"), _schema("java_workspace_symbols"))
@@ -104,7 +104,7 @@ def test_causal_frontier_never_mixes_retrieve_and_inspect_actions(monkeypatch) -
             self.count += 1
             if self.count == 1:
                 assert [item["function"]["name"] for item in request.tools] == [
-                    "search_code_rag"
+                    "search_code_rag", "java_workspace_symbols"
                 ]
                 return GenerationResponse(
                     tool_calls=(
