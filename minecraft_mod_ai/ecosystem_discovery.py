@@ -279,7 +279,10 @@ class EcosystemDiscoveryClient:
             project_id = str(hit.get('project_id', '')).strip()
             slug = str(hit.get('slug', '')).strip()
             license_id = str(hit.get('license', '')).strip()
-            if not project_id or not slug or (not license_id):
+            # Catalogue license metadata may be missing even when the pinned
+            # repository has a valid LICENSE. Discovery is not the license gate:
+            # source inspection must verify the actual license before reuse.
+            if not project_id or not slug:
                 continue
             project_type = str(hit.get('project_type', 'mod'))
             stable = {'project_id': project_id, 'slug': slug, 'title': str(hit.get('title', '')), 'description': str(hit.get('description', '')), 'license': license_id, 'versions': sorted(str(v) for v in hit.get('versions', [])), 'categories': sorted(str(v) for v in hit.get('categories', []))}
@@ -301,8 +304,9 @@ class EcosystemDiscoveryClient:
                 continue
             license_value = item.get('license')
             license_id = str(license_value.get('spdx_id', '')).strip() if isinstance(license_value, dict) else ''
-            if not license_id or license_id == 'NOASSERTION':
-                continue
+            # A blank/NOASSERTION catalogue SPDX is not proof of an
+            # unlicensed repository. Keep a reference-only candidate and let
+            # pinned license inspection reject it if genuinely unsupported.
             full_name = str(item.get('full_name', '')).strip()
             source_url = _safe_https_url(item.get('html_url'))
             if not full_name or urlparse(source_url).hostname != 'github.com':
