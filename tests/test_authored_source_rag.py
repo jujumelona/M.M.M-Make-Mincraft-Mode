@@ -197,3 +197,55 @@ def test_unavailable_installed_donor_still_aborts_production(monkeypatch):
             plan, adapter=host_target("26.1.2"), package_name="test.space", mod_id="space",
         ):
             pass
+
+
+def test_verified_source_fallback_reads_real_java_when_index_finds_nothing(tmp_path):
+    from minecraft_mod_ai.authored_source_rag import VerifiedSourceRAG
+
+    root = tmp_path / "source"
+    java = root / "src/main/java/donor/PlanetTravel.java"
+    java.parent.mkdir(parents=True)
+    java.write_text(
+        "package donor;\\n"
+        "public class PlanetTravel {\\n"
+        "  public void travelToPlanet() { System.out.println(1); }\\n"
+        "}\\n", encoding="utf-8",
+    )
+
+    class EmptyIndex:
+        def search(self, query, limit=8):
+            return []
+
+    rag = VerifiedSourceRAG()
+    rag.sources.append(("space travel", EmptyIndex(), root, {
+        "repository": "example/space", "commit_sha": "a" * 40,
+        "license_id": "MIT",
+    }))
+    result = rag.context(["space travel"], "travelToPlanet")
+    assert result and result[0]["symbol"] == "travelToPlanet"
+    assert result[0]["authority"] == "installed_target_adapted_source"
+    assert result[0]["retrieval_score"] > 0
+    assert rag.context(["trading"], "travelToPlanet") == []
+
+
+def test_verified_java_donor_cannot_be_silently_dropped_by_owner_rag():
+    from minecraft_mod_ai.authored_source_rag import VerifiedSourceRAG, bind_owner_source_context
+
+    owner = SimpleNamespace(module_id="planet", config={"requirement_refs": ["req-planet"]})
+    plan = {
+        "capability_graph": {"requirement_bindings": [
+            {"requirement_id": "req-planet", "capability": "space travel"},
+        ]},
+        "capabilities": [{
+            "capability": "space travel", "mode": "source_transplant",
+            "donor": {"files": [{"path": "src/main/java/PlanetTravel.java"}]},
+        }],
+    }
+    with pytest.raises(ValueError, match="SOURCE_RAG_VERIFIED_DONOR_NOT_BOUND"):
+        bind_owner_source_context(
+            {}, owner=owner,
+            request_scope={"requirements": [
+                {"requirement_id": "req-planet", "statement": "Travel to planets"},
+            ]},
+            reuse_plan=plan, rag=VerifiedSourceRAG(), requirement="Travel to planets",
+        )
