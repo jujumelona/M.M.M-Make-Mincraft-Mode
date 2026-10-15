@@ -109,6 +109,9 @@ def compose_feature(router, spec, context, behaviors, *, package, name, owner):
     expected = {str(row["behavior_id"]) for row in behaviors}
     if set(saved) - expected:
         raise ValueError("CONSTRUCTION_DIRECT_CHECKPOINT_UNKNOWN_MEMBER")
+    # Never accept duplicate logical behaviors under different dictionary keys.
+    if len(expected) != len(behaviors):
+        raise ValueError("CONSTRUCTION_DIRECT_BEHAVIOR_DUPLICATE")
     symbols = dict(context["symbols"])
     sources = context.get("source_pages", {})
     index = ConstructionEvidenceIndex(symbols, sources, router,
@@ -131,7 +134,13 @@ def compose_feature(router, spec, context, behaviors, *, package, name, owner):
             "intent": behavior["intent"], "trigger": behavior.get("trigger", ""),
             "effects": behavior["effects"], "target_api_and_source": evidence,
             "authoring_contract": context.get("authoring_contract", {}),
-            "already_completed_members": completed,
+            # Preserve the full accepted work in the checkpoint; send a
+            # repository-map-like compact member catalogue to the small model.
+            "accepted_member_catalogue": [
+                {"method": item["method"], "source_sha256": hashlib.sha256(
+                    item["source"].encode("utf-8")).hexdigest()}
+                for item in completed],
+            "previous_relevant_member_sources": completed[-2:],
             "response_source_frame": frame,
         }
         if behavior_id in saved:
@@ -167,6 +176,20 @@ def compose_feature(router, spec, context, behaviors, *, package, name, owner):
             saved[behavior_id] = member
             _save_checkpoint(checkpoint, identity, saved)
         completed.append({"method": method, "source": member})
+        # Source evidence is retrievable by later independent behaviors, but
+        # never promoted to a compiled/installable API declaration.
+        ref = "direct-accepted:" + hashlib.sha256(behavior_id.encode()).hexdigest()[:20]
+        index.include_source(ref, [{
+            "kind": "accepted_java_member", "owner": owner,
+            "signature": method + "()", "code": member,
+            "source_sha256": hashlib.sha256(member.encode("utf-8")).hexdigest(),
+            "authority": "rendered_sibling_not_yet_target_compiled",
+        }])
+        sources[ref] = [{
+            "signature": method + "()", "code": member,
+            "source_sha256": hashlib.sha256(member.encode("utf-8")).hexdigest(),
+            "authority": "rendered_sibling_not_yet_target_compiled",
+        }]
     lifecycle = "\n".join(
         "this." + row["method"] + "();" for row in completed
     )
