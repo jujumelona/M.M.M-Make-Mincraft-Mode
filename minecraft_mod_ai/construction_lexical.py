@@ -187,5 +187,9 @@ def check_partial_names(nodes, declaration, symbols):
     for key, env, writing, context in lexical_sites(nodes, declaration, symbols):
         node = by_id.get(key)
         if node is not None:
-            check_name_use(node, env, writing)
-            check_control_scope(node, context)
+            try:
+                check_name_use(node, env, writing)
+                check_control_scope(node, context)
+            except ValueError as error:
+                from .java_operation_ir import JavaOperationError
+                raise JavaOperationError(str(error), key) from error

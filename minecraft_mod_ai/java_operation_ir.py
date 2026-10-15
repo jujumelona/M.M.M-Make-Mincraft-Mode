@@ -99,23 +99,25 @@ def java_literal(value, type_name):
     raise ValueError("CONSTRUCTION_LITERAL_TYPE: " + type_name)
 
 
+class JavaOperationError(ValueError):
+    """A semantic diagnostic located at one typed operation, not a model failure."""
+
+    def __init__(self, diagnostic, node_id):
+        super().__init__(diagnostic)
+        self.node_id = node_id
+
+
 class JavaOperations:
-    def __init__(self, task, nodes, symbols):
+    def __init__(self, task, nodes, symbols, *, partial=False):
+        self._prepare_contract(task, symbols)
+        self._validate_nodes(nodes, partial=partial)
+
+    def _prepare_contract(self, task, symbols):
         self.task, self.symbols = task, symbols
-        if not isinstance(nodes, (list, tuple)) or any(not isinstance(n, dict) for n in nodes):
-            raise ValueError("CONSTRUCTION_NODE_FIELDS")
-        self.nodes = {}
-        for n in nodes:
-            key = n.get("node_id")
-            if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]+", key):
-                raise ValueError("CONSTRUCTION_NODE_ID_INVALID")
-            if key in self.nodes:
-                raise ValueError("CONSTRUCTION_NODE_DUPLICATE")
-            self.nodes[key] = n
         if task.owner_symbol not in symbols:
             raise ValueError("CONSTRUCTION_SYMBOL_MISSING: " + task.owner_symbol)
         self.declaration = self.symbol(task.owner_symbol)
-        self.types, self.locals, self.parameters, self.lambda_returns = {}, defaultdict(set), defaultdict(set), {}
+        self.parameters = defaultdict(set)
         self.known_types = set(symbols)
         for row in symbols.values():
             for value in [row.get("owner"), row.get("return_type"), row.get("functional_return_type"),
@@ -137,71 +139,74 @@ class JavaOperations:
             self.type_name(self.declaration.get("return_type", "void"))
         elif self.declaration["kind"] != "CONSTRUCTOR":
             raise ValueError("CONSTRUCTION_DECLARATION_KIND")
+
+    def validate(self, nodes, *, partial=True):
+        """Reuse immutable task/classpath facts; never rescan the inventory per node."""
+        from copy import copy
+        graph = copy(self)
+        graph._validate_nodes(nodes, partial=partial)
+        return graph
+
+    def _validate_nodes(self, nodes, *, partial):
+        if not isinstance(nodes, (list, tuple)) or any(not isinstance(n, dict) for n in nodes):
+            raise ValueError("CONSTRUCTION_NODE_FIELDS")
+        self.nodes = {}
+        for n in nodes:
+            key = n.get("node_id")
+            if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]+", key):
+                raise ValueError("CONSTRUCTION_NODE_ID_INVALID")
+            if key in self.nodes:
+                raise ValueError("CONSTRUCTION_NODE_DUPLICATE")
+            self.nodes[key] = n
+        self.types, self.locals, self.lambda_returns = {}, defaultdict(set), {}
+        self.parameters = defaultdict(set, {name: {type_} for name, type_ in self.member_parameters.items()})
         for key, n in self.nodes.items():
-            op = n.get("op")
-            if not isinstance(op, str) or op not in ATTRIBUTES:
-                raise ValueError("CONSTRUCTION_OPERATION_UNSUPPORTED: " + str(op))
-            if set(n) != {"node_id", "op", "input_refs", "typed_result", "attributes"}:
-                raise ValueError("CONSTRUCTION_NODE_FIELDS")
-            attrs = n["attributes"]
-            if not isinstance(attrs, dict) or set(attrs) - ATTRIBUTES[op] or REQUIRED[op] - set(attrs):
-                raise ValueError("CONSTRUCTION_OPERATION_ATTRIBUTES")
-            if "operator" in attrs and not isinstance(attrs["operator"], str):
-                raise ValueError("CONSTRUCTION_OPERATOR_INVALID")
-            if "symbol_ref" in attrs and not isinstance(attrs["symbol_ref"], str):
-                raise ValueError("CONSTRUCTION_SYMBOL_MISSING")
-            for flag in {"final", "sized", "finally"} & set(attrs):
-                if type(attrs[flag]) is not bool:
-                    raise ValueError("CONSTRUCTION_OPERATION_ATTRIBUTES")
-            if not isinstance(n["input_refs"], list) or any(not isinstance(x, str) or x not in self.nodes for x in n["input_refs"]):
-                raise ValueError("CONSTRUCTION_NODE_REFERENCE_MISSING")
-            self.type_name(n["typed_result"])
-            if op in {"declare", "foreach"}:
-                self.locals[identifier(attrs["name"])].add(self.nonvoid(attrs.get("element_type", n["typed_result"])))
-            if op == "lambda":
-                functional = self.symbols.get(n["typed_result"], {})
-                types, names = functional.get("functional_parameters"), attrs["parameters"]
-                if types is None or not isinstance(names, list) or len(names) != len(types):
-                    raise ValueError("CONSTRUCTION_LAMBDA_SIGNATURE_REQUIRED")
-                for name in names:
-                    identifier(name)
-                if len(set(names)) != len(names):
-                    raise ValueError("CONSTRUCTION_LAMBDA_PARAMETER_COLLISION")
-                for name, type_ in zip(names, types):
-                    self.parameters[identifier(name)].add(self.nonvoid(type_))
-                self.lambda_returns[key] = self.type_name(functional["functional_return_type"])
-            if op == "try":
-                catches = attrs.get("catches", [])
-                if not isinstance(catches, list):
-                    raise ValueError("CONSTRUCTION_CATCH_INVALID")
-                for catch in catches:
-                    if not isinstance(catch, dict) or set(catch) != {"name", "type_ref"}:
-                        raise ValueError("CONSTRUCTION_CATCH_INVALID")
-                    self.locals[identifier(catch["name"])].add(self.nonvoid(catch["type_ref"]))
-        # Linear Kahn traversal; forward references and arbitrary graph counts are legal.
-        dependencies = {key: set(n["input_refs"]) for key, n in self.nodes.items()}
+            try:
+                self._index_node(key, n, partial=partial)
+            except ValueError as error:
+                raise JavaOperationError(str(error), key) from error
+        # Unknown inputs are explicit holes. Kahn traversal still detects cycles
+        # among known nodes; a hole defers its entire dependent closure.
+        dependencies = {key: set(n["input_refs"]) & self.nodes.keys() for key, n in self.nodes.items()}
         users = defaultdict(list)
         for key, refs in dependencies.items():
             for ref in refs:
                 users[ref].append(key)
         pending = {key: len(refs) for key, refs in dependencies.items()}
         ready = deque(key for key, count in pending.items() if not count)
-        self.order = []
+        self.order, deferred = [], []
         while ready:
             key = ready.popleft()
-            actual = self.infer(self.nodes[key])
-            expected = self.type_name(self.nodes[key]["typed_result"])
-            if actual != expected:
-                raise ValueError("CONSTRUCTION_NODE_TYPE: " + key + ": " + actual + " != " + expected)
-            self.types[key] = actual
+            if all(ref in self.types for ref in self.nodes[key]['input_refs']):
+                try:
+                    actual = self.infer(self.nodes[key])
+                    expected = self.type_name(self.nodes[key]["typed_result"])
+                    if actual != expected:
+                        raise ValueError("CONSTRUCTION_NODE_TYPE: " + key + ": " + actual + " != " + expected)
+                except ValueError as error:
+                    raise JavaOperationError(str(error), key) from error
+                self.types[key] = actual
+            else:
+                deferred.append(key)
             self.order.append(key)
             for user in users[key]:
                 pending[user] -= 1
                 if not pending[user]:
                     ready.append(user)
         if len(self.order) != len(self.nodes):
-            raise ValueError("CONSTRUCTION_NODE_CYCLE")
+            key = next(key for key, count in pending.items() if count)
+            raise JavaOperationError("CONSTRUCTION_NODE_CYCLE", key)
         consumed = Counter(r for n in self.nodes.values() for r in n["input_refs"])
+        # Authors must explicitly store and reference shared computed values.
+        for key, count in consumed.items():
+            if key in self.nodes and count > 1 and self.nodes[key]["op"] not in LEAVES:
+                raise JavaOperationError("CONSTRUCTION_SHARED_EVALUATION: " + key, key)
+        self.validated_node_ids = tuple(self.types)
+        self.deferred_node_ids = tuple(deferred)
+        if partial:
+            from .construction_lexical import check_partial_names
+            check_partial_names(nodes, self.declaration, self.symbols)
+            return
         self.roots = [key for key in self.nodes if not consumed[key]]
         if not self.roots:
             raise ValueError("CONSTRUCTION_BODY_EMPTY")
@@ -214,14 +219,52 @@ class JavaOperations:
         else:
             for key in self.roots:
                 self.require_statement(key)
-        # Authors must explicitly store and reference shared computed values.
-        for key, count in consumed.items():
-            if count > 1 and self.nodes[key]["op"] not in LEAVES:
-                raise ValueError("CONSTRUCTION_SHARED_EVALUATION: " + key)
         self.check_contexts()
         self.check_constructor_delegation()
         self.check_completion()
         self.check_exception_effects()
+
+    def _index_node(self, key, n, *, partial):
+        op = n.get("op")
+        if not isinstance(op, str) or op not in ATTRIBUTES:
+            raise ValueError("CONSTRUCTION_OPERATION_UNSUPPORTED: " + str(op))
+        if set(n) != {"node_id", "op", "input_refs", "typed_result", "attributes"}:
+            raise ValueError("CONSTRUCTION_NODE_FIELDS")
+        attrs = n["attributes"]
+        if not isinstance(attrs, dict) or set(attrs) - ATTRIBUTES[op] or REQUIRED[op] - set(attrs):
+            raise ValueError("CONSTRUCTION_OPERATION_ATTRIBUTES")
+        if "operator" in attrs and not isinstance(attrs["operator"], str):
+            raise ValueError("CONSTRUCTION_OPERATOR_INVALID")
+        if "symbol_ref" in attrs and not isinstance(attrs["symbol_ref"], str):
+            raise ValueError("CONSTRUCTION_SYMBOL_MISSING")
+        for flag in {"final", "sized", "finally"} & set(attrs):
+            if type(attrs[flag]) is not bool:
+                raise ValueError("CONSTRUCTION_OPERATION_ATTRIBUTES")
+        if not isinstance(n["input_refs"], list) or any(not isinstance(x, str) or (not partial and x not in self.nodes) for x in n["input_refs"]):
+            raise ValueError("CONSTRUCTION_NODE_REFERENCE_MISSING")
+        self.type_name(n["typed_result"])
+        if op in {"declare", "foreach"}:
+            self.locals[identifier(attrs["name"])].add(self.nonvoid(attrs.get("element_type", n["typed_result"])))
+        if op == "lambda":
+            functional = self.symbols.get(n["typed_result"], {})
+            types, names = functional.get("functional_parameters"), attrs["parameters"]
+            if types is None or not isinstance(names, list) or len(names) != len(types):
+                raise ValueError("CONSTRUCTION_LAMBDA_SIGNATURE_REQUIRED")
+            for name in names:
+                identifier(name)
+            if len(set(names)) != len(names):
+                raise ValueError("CONSTRUCTION_LAMBDA_PARAMETER_COLLISION")
+            for name, type_ in zip(names, types):
+                self.parameters[identifier(name)].add(self.nonvoid(type_))
+            self.lambda_returns[key] = self.type_name(functional["functional_return_type"])
+        if op == "try":
+            catches = attrs.get("catches", [])
+            if not isinstance(catches, list):
+                raise ValueError("CONSTRUCTION_CATCH_INVALID")
+            for catch in catches:
+                if not isinstance(catch, dict) or set(catch) != {"name", "type_ref"}:
+                    raise ValueError("CONSTRUCTION_CATCH_INVALID")
+                self.locals[identifier(catch["name"])].add(self.nonvoid(catch["type_ref"]))
 
     def nonvoid(self, value):
         value = self.type_name(value)
