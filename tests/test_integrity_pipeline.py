@@ -377,7 +377,6 @@ def test_native_scalar_source_wrapper_preserves_root_profile():
 @pytest.mark.parametrize("valid_source", [True, False])
 def test_real_candidate_source_contract_uses_transport_schema_and_host_validation(leaf, valid_source):
     from minecraft_mod_ai.artifact_expansion import _canonical_candidate_inputs
-    from minecraft_mod_ai.execution_contract_policy import SOURCE_REPAIR_HARD_ATTEMPTS
     from minecraft_mod_ai.integrity_bootstrap import bootstrap_integrity
     from minecraft_mod_ai.model_output_atomicity_contract import assert_atomic_model_schema
     from minecraft_mod_ai.task_template_catalog import load_template
@@ -418,5 +417,7 @@ def test_real_candidate_source_contract_uses_transport_schema_and_host_validatio
         from jsonschema import ValidationError
         with pytest.raises(ValidationError):
             execute()
-    assert router.calls == (1 if valid_source else SOURCE_REPAIR_HARD_ATTEMPTS)
+    # A decoder-valid source with a rejected canonical identity fails at the
+    # host authority; repeating the same model call cannot authorize it.
+    assert router.calls == 1
     assert "pattern" in spec["slots"][0]["schema"]
