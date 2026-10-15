@@ -267,11 +267,18 @@ def test_deadline_executor_timeout_cancels_before_nonblocking_shutdown(monkeypat
 
     monkeypatch.setattr(deadline, "ThreadPoolExecutor", NeverCompletingExecutor)
     monkeypatch.setattr(deadline, "planning_work_unit_timeout_seconds", lambda: 60.0)
-    monkeypatch.setattr(
-        deadline,
-        "planning_stage_deadline",
-        lambda *, work_units, workers, started_at: started_at,
-    )
+    def expired(active, *, stage, unit_timeout):
+        # Current scheduler owns per-work-unit renewable leases, not the
+        # retired stage-wide deadline helper. Simulate its real expiry signal
+        # to verify cancellation and nonblocking executor shutdown.
+        raise deadline.ParallelExecutionTimeout(
+            stage=stage, item=next(iter(active.values())).item,
+            elapsed_seconds=unit_timeout,
+            work_unit_timeout_seconds=unit_timeout,
+            deadline_kind="work_unit",
+        )
+
+    monkeypatch.setattr(deadline, "_next_completed_batch", expired)
 
     with pytest.raises(deadline.ParallelExecutionTimeout):
         deadline.collect_completed_with_deadlines(
