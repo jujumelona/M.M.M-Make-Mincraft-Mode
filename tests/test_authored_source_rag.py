@@ -49,7 +49,7 @@ def test_downloaded_adapted_source_is_retrieved_by_owning_feature(monkeypatch, t
             "capabilities": [{"mode": "source_transplant", "capability": "space travel"}]}
     with authored_source_rag.verified_source_rag(plan, adapter=adapter, package_name="test.mod", mod_id="test") as rag:
         result = rag.context(["space travel"], "travelToPlanet")
-        assert result and "test.mod" in result[0]["code"]
+        assert result and "test.mod" in result[0]["owner"]
         assert "travelToPlanet" in result[0]["code"]
         assert result[0]["repository"] == "example/space"
         assert result[0]["source_commit"] == "a" * 40
@@ -109,7 +109,7 @@ def test_older_source_with_failed_proof_reaches_model_as_adaptation_reference(mo
         snippets = rag.context(["space travel"], "travelToPlanet")
         assert snippets[0]["authority"] == "reference_only_requires_target_adaptation"
         assert "Yarn API" in snippets[0]["migration_diagnostics"]
-        assert "old.space" in snippets[0]["code"]
+        assert "old.space" in snippets[0]["owner"]
         plan["reference_license_notices"] = rag.license_notices
     receipt = materialize_verified_authored_sources(str(tmp_path), plan,
                                                   minecraft_version="26.1.2", loader="fabric")
