@@ -324,16 +324,21 @@ def generation_output_token_budget(
     else:
         budget = max(floor, _DEFAULT_DYNAMIC_OUTPUT_TOKENS)
 
-    # Only genuinely non-expansive effects receive the compact action ceiling. Source
-    # mutation is allowed to use the remaining context; its scalar protocol is protected
-    # by the structural minimum above rather than by a small hard maximum.
-    if tools and not tools_require_expansive_output(tools):
+    # Static profiles retain compact action ceilings. Dynamic local profiles,
+    # including MiMo, use the live context even for structured decisions. Source
+    # mutation is protected by the structural minimum rather than a hard cap.
+    if tools and not tools_require_expansive_output(tools) and not dynamic_output_budget_enabled(config):
+        # Only static profiles impose a fixed per-action page limit. Dynamic
+        # local profiles let even structured decisions use the currently free
+        # context instead of the arbitrary 2048..8192 token clamp.
         budget = min(budget, tool_action_token_budget(config))
 
     from .planner_operation import current_output_limit
 
     operation_limit = current_output_limit()
-    if operation_limit is not None:
+    if operation_limit is not None and not dynamic_output_budget_enabled(config):
+        # Model-capability and physical context safety still apply below;
+        # an internal planner page hint is not a decode ceiling for MiMo.
         budget = min(budget, operation_limit)
 
     _assert_structural_budget_viable(
