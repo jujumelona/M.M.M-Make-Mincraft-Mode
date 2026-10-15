@@ -3,10 +3,18 @@ from __future__ import annotations
 
 import ast
 import hashlib
+from functools import cache
 from pathlib import Path
 
 
+@cache
 def construction_implementation_fingerprint():
+    """Hash installed construction code once per process, not once per body.
+
+    Production writes generated projects, not the installed Python package.
+    A new deployment/process computes a new fingerprint, while independent
+    members in the same run share the same implementation identity.
+    """
     # Follow actual local imports, including imports inside functions. An
     # executor's own source hash cannot certify the implementations it calls.
     package = Path(__file__).resolve().parent
