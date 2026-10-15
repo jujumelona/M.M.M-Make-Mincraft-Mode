@@ -7,6 +7,11 @@ from enum import Enum
 from threading import RLock
 from typing import Any
 
+from .model_concurrency import (
+    model_execution_publication,
+    raise_if_model_execution_cancelled,
+)
+
 
 class PortKind(str, Enum):
     REGISTRY_ID = "REGISTRY_ID"
@@ -94,9 +99,11 @@ class PortRegistry:
             self._context_id = context_id
 
     def publish(self, port: TypedPort) -> None:
+        raise_if_model_execution_cancelled()
         if not port.name or not port.value:
             raise PortConnectionError("PORT_EMPTY: published ports need non-empty name and value")
-        with self._lock:
+        with model_execution_publication(), self._lock:
+            raise_if_model_execution_cancelled()
             if self._context_id and port.context_id != self._context_id:
                 raise PortConnectionError("VERSION_CONTEXT_MISMATCH: cannot publish a foreign port")
             existing = self._ports.get(port.name)

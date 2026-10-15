@@ -25,8 +25,11 @@ from .llama_sse_protocol import (
     is_recoverable_native_format_error,
     sse_error_from_line,
 )
-from .model_concurrency import refresh_model_execution_deadline
 from .model_completion_trace import CompletionTrace
+from .model_concurrency import (
+    raise_if_model_execution_cancelled,
+    refresh_model_execution_deadline,
+)
 
 _MARKER = "_mmm_progress_aware_completion_transport_v1"
 _STREAM_MARKER = "_mmm_progress_aware_completion_stream_v1"
@@ -455,6 +458,7 @@ class _ProgressCheckedResponse:
         watchdog = _SemanticProgressWatchdog(self._idle_seconds, clock=time.monotonic)
         try:
             for raw_line in self._response.iter_lines(*args, **kwargs):
+                raise_if_model_execution_cancelled()
                 if self._trace is not None:
                     self._trace.observe_line(raw_line)
                 now = time.monotonic()

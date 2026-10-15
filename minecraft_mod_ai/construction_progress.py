@@ -12,7 +12,7 @@ from threading import RLock
 from uuid import uuid4
 
 from .construction_state import PROTOCOL_VERSION
-
+from .model_concurrency import model_execution_publication
 
 _LOCK = RLock()
 _MEMBER_FIELDS = (
@@ -107,7 +107,8 @@ class ConstructionNodeCheckpoint:
             try:
                 temporary.write_text(json.dumps(envelope, ensure_ascii=False,
                     sort_keys=True, separators=(",", ":")), encoding="utf-8")
-                temporary.replace(self.path)
+                with model_execution_publication():
+                    temporary.replace(self.path)
             finally:
                 if temporary.exists():
                     temporary.unlink()
@@ -157,7 +158,8 @@ class ConstructionNodeCheckpoint:
             try:
                 temporary.write_text(json.dumps(envelope, ensure_ascii=False,
                     sort_keys=True, separators=(',', ':')), encoding='utf-8')
-                temporary.replace(self.author_state_path)
+                with model_execution_publication():
+                    temporary.replace(self.author_state_path)
             finally:
                 if temporary.exists():
                     temporary.unlink()
@@ -175,7 +177,8 @@ class ConstructionNodeCheckpoint:
             temporary = path.with_name("." + path.name + "." + uuid4().hex + ".tmp")
             try:
                 temporary.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
-                temporary.replace(path)
+                with model_execution_publication():
+                    temporary.replace(path)
             finally:
                 if temporary.exists():
                     temporary.unlink()

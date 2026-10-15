@@ -15,8 +15,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from .artifact_job import ArtifactJob
+from .model_concurrency import (
+    model_execution_publication,
+    raise_if_model_execution_cancelled,
+)
 
 
 class MaterializeError(RuntimeError):
@@ -50,6 +55,21 @@ def _resolve_path(path: Path | str, base_dir: Path | None = None) -> Path:
     return p
 
 
+def _publish_bytes(path: Path, data: bytes) -> None:
+    raise_if_model_execution_cancelled()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f'.{path.name}.{uuid4().hex}.tmp')
+    try:
+        temporary.write_bytes(data)
+        if path.exists():
+            temporary.chmod(path.stat().st_mode & 0o777)
+        with model_execution_publication():
+            temporary.replace(path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
 def materialize_whole_file(
     target_path: Path | str,
     content: str | bytes,
@@ -69,8 +89,7 @@ def materialize_whole_file(
                 f"SHA_MISMATCH: Target file {p} sha256 is {before_sha}, expected {expected_sha256}"
             )
 
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_bytes(data)
+    _publish_bytes(p, data)
     after_sha = _sha256(data)
 
     return MaterializeReceipt(
@@ -116,7 +135,7 @@ def materialize_java_patch(
 
     updated_text = original_text.replace(anchor, replacement, 1)
     updated_bytes = updated_text.encode("utf-8")
-    p.write_bytes(updated_bytes)
+    _publish_bytes(p, updated_bytes)
     after_sha = _sha256(updated_bytes)
 
     return MaterializeReceipt(
@@ -173,8 +192,7 @@ def materialize_json_merge(
     formatted = json.dumps(merged, indent=2, ensure_ascii=False) + "\n"
     updated_bytes = formatted.encode("utf-8")
 
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_bytes(updated_bytes)
+    _publish_bytes(p, updated_bytes)
     after_sha = _sha256(updated_bytes)
 
     return MaterializeReceipt(
@@ -199,8 +217,7 @@ def materialize_binary_asset(
     if p.is_file():
         before_sha = _sha256(p.read_bytes())
 
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_bytes(data)
+    _publish_bytes(p, data)
     after_sha = _sha256(data)
 
     return MaterializeReceipt(

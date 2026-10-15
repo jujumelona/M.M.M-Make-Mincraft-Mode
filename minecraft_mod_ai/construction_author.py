@@ -18,8 +18,11 @@ def array(items, maximum=None):
     return {'type': 'array', 'items': items, **({'maxItems': maximum} if maximum is not None else {})}
 
 def ask(router, name, payload, schema, instruction):
+    from .model_concurrency import raise_if_model_execution_cancelled
+    raise_if_model_execution_cancelled()
     messages = [{'role': 'system', 'content': instruction}, {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)}]
     decision = _validate_native_arguments(router.generate_structured_data('coder', messages, data_name=name, parameters=schema), schema)
+    raise_if_model_execution_cancelled()
     state = payload.get('construction_state', {})
     print('CONSTRUCTION DECISION: ' + json.dumps({
         'decision': name, 'phase': state.get('phase'), 'revision': state.get('revision'),

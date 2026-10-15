@@ -245,12 +245,19 @@ class ModelRouter:
 
     @contextmanager
     def _generation_scope(self, config: Any):
+        from .model_concurrency import raise_if_model_execution_cancelled
+
+        raise_if_model_execution_cancelled()
         if self._shared_native_llama(config):
             with _LLAMA_INFERENCE_SLOTS, _GPU_EXCLUSIVE_LOCK.shared():
+                raise_if_model_execution_cancelled()
                 yield
+                raise_if_model_execution_cancelled()
             return
         with self._gpu_scope(config.exclusive_gpu):
+            raise_if_model_execution_cancelled()
             yield
+            raise_if_model_execution_cancelled()
 
     def input_context_accounting(
         self,

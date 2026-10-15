@@ -19,7 +19,7 @@ from uuid import uuid4
 from .construction_retrieval import ConstructionEvidenceIndex
 from .first_pass_java_declarations import declaration_frame, render_declaration
 from .java_region_parser import _parse
-
+from .model_concurrency import model_execution_publication
 
 _CLAIM_MUTEX = threading.Lock()
 _CLAIM_LOCKS = {}
@@ -102,7 +102,8 @@ def _save_checkpoint(path, identity, members):
     try:
         temp.write_text(json.dumps(envelope, ensure_ascii=False, sort_keys=True),
                         encoding="utf-8")
-        temp.replace(path)
+        with model_execution_publication():
+            temp.replace(path)
     finally:
         if temp.exists():
             temp.unlink()

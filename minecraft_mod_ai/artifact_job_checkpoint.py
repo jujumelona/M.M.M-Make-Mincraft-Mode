@@ -8,6 +8,10 @@ from threading import RLock
 from uuid import uuid4
 
 from .artifact_ports import TypedPort
+from .model_concurrency import (
+    model_execution_publication,
+    raise_if_model_execution_cancelled,
+)
 from .task_template_catalog import load_template
 
 _LOCK = RLock()
@@ -49,7 +53,8 @@ def _write_record(root, namespace, key, value):
             json.dumps(envelope, sort_keys=True, default=str),
             encoding="utf-8",
         )
-        temp.replace(path)
+        with model_execution_publication():
+            temp.replace(path)
     finally:
         if temp.exists():
             temp.unlink()
@@ -100,6 +105,7 @@ def _restore_checkpoint(job, receipt, registry):
 
 
 def execute_checkpointed_job(job, *, context, router, registry, base_dir, execute):
+    raise_if_model_execution_cancelled()
     from .resolved_version_context import execution_context
 
     resolved = execution_context(context, job)
@@ -235,6 +241,7 @@ def execute_checkpointed_job(job, *, context, router, registry, base_dir, execut
             job.status = "FAILED"
             raise
 
+        raise_if_model_execution_cancelled()
         after = _current_sha256(target)
         if after is None:
             raise ValueError(f"ARTIFACT_CHECKPOINT_TARGET_MISSING: {relative}")

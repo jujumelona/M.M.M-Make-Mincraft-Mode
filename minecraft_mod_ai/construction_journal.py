@@ -12,6 +12,7 @@ from threading import RLock
 from uuid import uuid4
 
 from .construction_state import PROTOCOL_VERSION
+from .model_concurrency import model_execution_publication
 
 _LOCK = RLock()
 
@@ -88,7 +89,8 @@ class JournaledConstructionRouter:
             tmp = self.path.with_name("." + self.path.name + "." + uuid4().hex + ".tmp")
             try:
                 tmp.write_text(_json(envelope), encoding="utf-8")
-                tmp.replace(self.path)
+                with model_execution_publication():
+                    tmp.replace(self.path)
             finally:
                 if tmp.exists():
                     tmp.unlink()

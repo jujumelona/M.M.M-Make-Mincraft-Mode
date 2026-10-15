@@ -10,6 +10,8 @@ import json
 from pathlib import Path
 from uuid import uuid4
 
+from .model_concurrency import model_execution_publication
+
 
 def _digest(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
@@ -49,7 +51,8 @@ def record_authored_source_calls(project_root, target_path, source, *,
     try:
         temporary.write_text(json.dumps(output, ensure_ascii=False,
                              sort_keys=True, indent=2) + "\n", encoding="utf-8")
-        temporary.replace(path)
+        with model_execution_publication():
+            temporary.replace(path)
     finally:
         if temporary.exists():
             temporary.unlink()
@@ -155,7 +158,8 @@ def record_constructed_requirement(project_root, spec, source, *, materialized_s
     try:
         temp.write_text(json.dumps(receipt, ensure_ascii=False,
                         sort_keys=True, indent=2) + "\n", encoding="utf-8")
-        temp.replace(path)
+        with model_execution_publication():
+            temp.replace(path)
     finally:
         if temp.exists():
             temp.unlink()

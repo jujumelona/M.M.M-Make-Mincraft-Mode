@@ -16,6 +16,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
 
+from .model_concurrency import model_execution_publication
+
 try:
     import fcntl  # Linux / Colab
 except ImportError:  # pragma: no cover - Windows execution
@@ -235,6 +237,7 @@ class BehaviorPlanningCheckpoint:
                 output, ensure_ascii=False, sort_keys=True,
                 separators=(",", ":"), allow_nan=False,
             ) + "\n", encoding="utf-8")
-            temporary.replace(path)
+            with model_execution_publication():
+                temporary.replace(path)
         finally:
             temporary.unlink(missing_ok=True)

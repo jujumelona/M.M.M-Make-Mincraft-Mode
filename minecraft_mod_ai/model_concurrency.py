@@ -5,13 +5,13 @@ import os
 import threading
 import time
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
-
 _T = TypeVar("_T")
-_MODEL_EXECUTION_DEADLINE: ContextVar[float | None] = ContextVar(
+_MODEL_EXECUTION_DEADLINE: ContextVar[ModelExecutionBudget | None] = ContextVar(
     "mmm_model_execution_deadline",
     default=None,
 )
@@ -20,6 +20,51 @@ _DEFAULT_PLANNING_WORK_UNIT_TIMEOUT_SECONDS = 600.0
 
 class ModelExecutionDeadlineExceeded(TimeoutError):
     """The current model-backed work unit exhausted its monotonic execution budget."""
+
+
+class ModelExecutionCancelled(RuntimeError):
+    """The owning scheduler has abandoned this work unit."""
+
+
+@dataclass
+class ModelExecutionBudget:
+    """Shared lease/cancellation state visible to both worker and scheduler."""
+
+    deadline: float
+    parent: ModelExecutionBudget | None = field(default_factory=lambda: _MODEL_EXECUTION_DEADLINE.get())
+    cancelled: threading.Event = field(default_factory=threading.Event, repr=False)
+    publication_lock: Any = field(default_factory=threading.RLock, repr=False)
+
+    def cancel(self) -> None:
+        with self.publication_lock:
+            self.cancelled.set()
+
+
+def raise_if_model_execution_cancelled() -> None:
+    budget = _MODEL_EXECUTION_DEADLINE.get()
+    while budget is not None:
+        if budget.cancelled.is_set():
+            raise ModelExecutionCancelled('model execution cancelled by its owning scheduler')
+        budget = budget.parent
+
+
+@contextmanager
+def model_execution_publication() -> Iterator[None]:
+    """Serialize short final publication with cancellation of every owner.
+
+    Inference, compilation and temporary-file staging stay outside these locks.
+    Once cancel() returns, an abandoned worker cannot publish another result.
+    """
+    owners = []
+    budget = _MODEL_EXECUTION_DEADLINE.get()
+    while budget is not None:
+        owners.append(budget)
+        budget = budget.parent
+    with ExitStack() as stack:
+        for budget in reversed(owners):
+            stack.enter_context(budget.publication_lock)
+        raise_if_model_execution_cancelled()
+        yield
 
 
 def _positive_float_env(name: str, default: float) -> float:
@@ -65,12 +110,14 @@ def planning_stage_deadline(
 
 
 def current_model_execution_deadline() -> float | None:
-    return _MODEL_EXECUTION_DEADLINE.get()
+    budget = _MODEL_EXECUTION_DEADLINE.get()
+    return budget.deadline if budget is not None else None
 
 
 def remaining_model_execution_seconds(
     deadline_monotonic: float | None = None,
 ) -> float | None:
+    raise_if_model_execution_cancelled()
     deadline = (
         current_model_execution_deadline()
         if deadline_monotonic is None
@@ -100,26 +147,37 @@ def refresh_model_execution_deadline(
     if not math.isfinite(window) or window <= 0.0:
         raise ValueError("minimum_remaining_seconds must be a positive finite number")
     refreshed = max(existing, time.monotonic() + window)
-    _MODEL_EXECUTION_DEADLINE.set(refreshed)
+    raise_if_model_execution_cancelled()
+    budget = _MODEL_EXECUTION_DEADLINE.get()
+    assert budget is not None
+    # Nested planning/model workers renew their owning artifact lease too;
+    # otherwise its scheduler can abandon a healthy child stream.
+    while budget is not None:
+        budget.deadline = max(budget.deadline, refreshed)
+        budget = budget.parent
     return refreshed
 
 
 @contextmanager
-def bind_model_execution_deadline(deadline_monotonic: float) -> Iterator[float]:
+def bind_model_execution_deadline(deadline_monotonic: float | ModelExecutionBudget) -> Iterator[float]:
     """Bind the earliest execution deadline to the current context."""
 
-    requested = float(deadline_monotonic)
+    budget = (deadline_monotonic if isinstance(deadline_monotonic, ModelExecutionBudget)
+              else ModelExecutionBudget(float(deadline_monotonic)))
+    requested = budget.deadline
     existing = current_model_execution_deadline()
     effective = requested if existing is None else min(existing, requested)
-    token = _MODEL_EXECUTION_DEADLINE.set(effective)
+    budget.deadline = effective
+    token = _MODEL_EXECUTION_DEADLINE.set(budget)
     try:
+        raise_if_model_execution_cancelled()
         yield effective
     finally:
         _MODEL_EXECUTION_DEADLINE.reset(token)
 
 
 def run_with_model_execution_deadline(
-    deadline_monotonic: float,
+    deadline_monotonic: float | ModelExecutionBudget,
     function: Callable[..., _T],
     /,
     *args: Any,
@@ -138,7 +196,9 @@ def _condition_wait(condition: threading.Condition) -> None:
             raise ModelExecutionDeadlineExceeded(
                 "model execution deadline expired while waiting for shared model capacity"
             )
-        condition.wait(timeout=remaining)
+        # Cancellation must also wake queued model callers, even if no slot
+        # owner releases its capacity after the graph has already failed.
+        condition.wait(timeout=min(remaining, 0.10))
         if remaining_model_execution_seconds() == 0.0:
             raise ModelExecutionDeadlineExceeded(
                 "model execution deadline expired while waiting for shared model capacity"
@@ -322,16 +382,20 @@ def router_native_model_parallelism(router: Any, *, role: str = "planner") -> in
 
 
 __all__ = [
+    "ModelExecutionBudget",
+    "ModelExecutionCancelled",
     "ModelExecutionDeadlineExceeded",
     "ReentrantCapacityGate",
     "ReentrantReadWriteLock",
     "active_llama_parallelism",
     "bind_model_execution_deadline",
     "current_model_execution_deadline",
+    "model_execution_publication",
     "planning_stage_deadline",
     "planning_work_unit_timeout_seconds",
-    "remaining_model_execution_seconds",
+    "raise_if_model_execution_cancelled",
     "refresh_model_execution_deadline",
+    "remaining_model_execution_seconds",
     "router_native_model_parallelism",
     "router_owns_native_model",
     "run_with_model_execution_deadline",

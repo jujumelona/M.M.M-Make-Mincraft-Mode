@@ -13,11 +13,12 @@ from typing import Any
 from .artifact_job import ArtifactJob
 from .artifact_job_checkpoint import execute_checkpointed_job
 from .artifact_ports import PortRegistry
+from .model_completion_trace import completion_trace_context, report_active_completions
 from .model_concurrency import (
+    ModelExecutionBudget,
     planning_work_unit_timeout_seconds,
     run_with_model_execution_deadline,
 )
-from .model_completion_trace import completion_trace_context, report_active_completions
 from .task_template_runner import execute_artifact_template
 
 
@@ -155,8 +156,8 @@ def execute_artifact_graph(
     Readiness is maintained with producer indegrees and a deterministic heap. No job
     list is rescanned after each completion, so scheduler work grows with graph edges
     instead of degenerating toward quadratic work on large artifact sets. Generation
-    and validation both carry wall-clock deadlines and executor teardown never waits
-    for an uncooperative worker.
+    and validation carry shared, progress-refreshable deadlines. Teardown cancels
+    their model/publication scopes without waiting for an uncooperative worker.
     """
     ordered_jobs = list(jobs)
     from .resolved_version_context import execution_context
@@ -244,7 +245,7 @@ def execute_artifact_graph(
     pending_ids = set(by_id)
     generation_futures: dict[Future[dict[str, Any]], ArtifactJob] = {}
     validation_futures: dict[Future[None], tuple[ArtifactJob, dict[str, Any]]] = {}
-    future_deadlines: dict[Future[Any], float] = {}
+    future_deadlines: dict[Future[Any], ModelExecutionBudget] = {}
     results: dict[str, dict[str, Any]] = {}
     validated_jobs: set[str] = set()
     generation_workers = _parallelism(len(ordered_jobs))
@@ -259,7 +260,7 @@ def execute_artifact_graph(
                 continue
             pending_ids.remove(job_id)
             job = by_id[job_id]
-            deadline = time.monotonic() + planning_work_unit_timeout_seconds()
+            deadline = ModelExecutionBudget(time.monotonic() + planning_work_unit_timeout_seconds())
             future = pool.submit(
                 run_with_model_execution_deadline,
                 deadline,
@@ -300,7 +301,7 @@ def execute_artifact_graph(
                 raise ArtifactGraphError(f"ARTIFACT_GRAPH_DEADLOCK: {blocked}")
 
             active = tuple(generation_futures) + tuple(validation_futures)
-            nearest_deadline = min(future_deadlines[future] for future in active)
+            nearest_deadline = min(future_deadlines[future].deadline for future in active)
             timeout = max(0.0, nearest_deadline - time.monotonic())
             done, _ = wait(
                 active,
@@ -312,7 +313,7 @@ def execute_artifact_graph(
                 expired = [
                     future
                     for future in active
-                    if now >= future_deadlines[future]
+                    if now >= future_deadlines[future].deadline
                 ]
                 if not expired:
                     continue
@@ -324,6 +325,7 @@ def execute_artifact_graph(
                 ]
                 report_active_completions(owners, reason="ARTIFACT_GRAPH_WORK_TIMEOUT")
                 for future in expired:
+                    future_deadlines[future].cancel()
                     future.cancel()
                 raise ArtifactGraphError(f"ARTIFACT_GRAPH_WORK_TIMEOUT: {owners}")
 
@@ -333,7 +335,7 @@ def execute_artifact_graph(
                 if future in generation_futures:
                     job = generation_futures.pop(future)
                     receipt = future.result(timeout=0)
-                    validation_deadline = (
+                    validation_deadline = ModelExecutionBudget(
                         time.monotonic() + planning_work_unit_timeout_seconds()
                     )
                     validation_future = validation_pool.submit(
@@ -374,6 +376,8 @@ def execute_artifact_graph(
             # unrelated generation keeps all available slots busy.
             submit_ready(generation_pool)
     finally:
+        for budget in future_deadlines.values():
+            budget.cancel()
         for future in generation_futures:
             future.cancel()
         for future in validation_futures:

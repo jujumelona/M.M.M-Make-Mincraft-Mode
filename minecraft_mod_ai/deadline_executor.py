@@ -3,25 +3,24 @@ from __future__ import annotations
 """Deadline-aware parallel execution for model-backed planning work.
 
 Callers retain semantic ownership of retries, checkpoints, and failure policy. This
-module owns bounded scheduling, monotonic work/stage deadlines, context propagation,
+module owns bounded scheduling, progress-aware work leases, context propagation,
 cancellation, and executor shutdown. Streaming callers receive each completed result
 as soon as it is ready so executor-side result retention stays bounded by active model
 parallelism instead of growing with the full planning workload.
 """
 
+import time
 from collections.abc import Callable, Iterable, Iterator, Sized
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from contextvars import copy_context
 from dataclasses import dataclass
-import time
 from typing import Generic, TypeVar
 
 from .model_concurrency import (
-    planning_stage_deadline,
+    ModelExecutionBudget,
     planning_work_unit_timeout_seconds,
     run_with_model_execution_deadline,
 )
-
 
 _Item = TypeVar("_Item")
 _Result = TypeVar("_Result")
@@ -31,7 +30,7 @@ _Result = TypeVar("_Result")
 class _ActiveTask(Generic[_Item]):
     sequence: int
     item: _Item
-    deadline: float
+    deadline: ModelExecutionBudget
     submitted_at: float
 
 
@@ -88,7 +87,6 @@ def _submit_next(
     worker: Callable[[_Item], _Result],
     *,
     unit_timeout: float,
-    stage_deadline: float | None,
 ) -> bool:
     if state.exhausted:
         return False
@@ -100,20 +98,21 @@ def _submit_next(
 
     submitted_at = time.monotonic()
     deadline = submitted_at + unit_timeout
-    if stage_deadline is not None:
-        deadline = min(stage_deadline, deadline)
+    # A later wave gets a fresh work lease. An initial stage estimate cannot
+    # truncate work after a healthy predecessor legitimately renewed its lease.
+    budget = ModelExecutionBudget(deadline)
     context = copy_context()
     future = pool.submit(
         context.run,
         run_with_model_execution_deadline,
-        deadline,
+        budget,
         worker,
         item,
     )
     active[future] = _ActiveTask(
         sequence=state.sequence,
         item=item,
-        deadline=deadline,
+        deadline=budget,
         submitted_at=submitted_at,
     )
     state.sequence += 1
@@ -128,7 +127,6 @@ def _fill_active_slots(
     *,
     workers: int,
     unit_timeout: float,
-    stage_deadline: float | None,
 ) -> None:
     while len(active) < workers and _submit_next(
         state,
@@ -136,7 +134,6 @@ def _fill_active_slots(
         pool,
         worker,
         unit_timeout=unit_timeout,
-        stage_deadline=stage_deadline,
     ):
         pass
 
@@ -146,12 +143,9 @@ def _next_completed_batch(
     *,
     stage: str,
     unit_timeout: float,
-    stage_deadline: float | None,
 ) -> set[Future[_Result]]:
     now = time.monotonic()
-    wake_deadline = min(meta.deadline for meta in active.values())
-    if stage_deadline is not None:
-        wake_deadline = min(stage_deadline, wake_deadline)
+    wake_deadline = min(meta.deadline.deadline for meta in active.values())
     done, _ = wait(
         tuple(active),
         timeout=max(0.0, wake_deadline - now),
@@ -161,18 +155,16 @@ def _next_completed_batch(
         return done
 
     now = time.monotonic()
-    deadline_kind = (
-        "stage"
-        if stage_deadline is not None and now >= stage_deadline
-        else "work_unit"
-    )
-    expired = min(active.values(), key=lambda meta: (meta.deadline, meta.sequence))
+    if all(now < meta.deadline.deadline for meta in active.values()):
+        # A worker renewed its shared lease while wait() used the old wakeup.
+        return set()
+    expired = min(active.values(), key=lambda meta: (meta.deadline.deadline, meta.sequence))
     raise ParallelExecutionTimeout(
         stage=stage,
         item=expired.item,
         elapsed_seconds=now - expired.submitted_at,
         work_unit_timeout_seconds=unit_timeout,
-        deadline_kind=deadline_kind,
+        deadline_kind="work_unit",
     )
 
 
@@ -204,7 +196,8 @@ def _shutdown_pool(
     pool: ThreadPoolExecutor,
     active: dict[Future[_Result], _ActiveTask[_Item]],
 ) -> None:
-    for future in active:
+    for future, meta in active.items():
+        meta.deadline.cancel()
         future.cancel()
     active.clear()
     pool.shutdown(wait=False, cancel_futures=True)
@@ -218,7 +211,6 @@ class _DrainContext(Generic[_Item, _Result]):
     worker: Callable[[_Item], _Result]
     workers: int
     unit_timeout: float
-    stage_deadline: float | None
     stage: str
     sort_key: Callable[[_Item], object] | None
     on_result: Callable[[_Item, _Result], None] | None
@@ -234,7 +226,6 @@ def _drain_active_tasks(
                 context.active,
                 stage=context.stage,
                 unit_timeout=context.unit_timeout,
-                stage_deadline=context.stage_deadline,
             )
         except ParallelExecutionTimeout as exc:
             if context.on_error is None:
@@ -266,7 +257,6 @@ def _drain_active_tasks(
             context.worker,
             workers=context.workers,
             unit_timeout=context.unit_timeout,
-            stage_deadline=context.stage_deadline,
         )
 
 
@@ -286,23 +276,11 @@ def _iter_completed_with_deadlines_impl(
         return
 
     workers = _resolve_worker_count(total_units, max_workers)
-    started_at = time.monotonic()
     unit_timeout = (
         planning_work_unit_timeout_seconds()
         if work_unit_timeout_seconds is None
         else max(0.001, float(work_unit_timeout_seconds))
     )
-    stage_deadline = None
-    if total_units is not None:
-        if work_unit_timeout_seconds is None:
-            stage_deadline = planning_stage_deadline(
-                work_units=total_units,
-                workers=workers,
-                started_at=started_at,
-            )
-        else:
-            waves = max(1, (total_units + workers - 1) // workers)
-            stage_deadline = started_at + unit_timeout * waves
     state = _SubmissionState(iter(items))
     active: dict[Future[_Result], _ActiveTask[_Item]] = {}
     pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix=stage)
@@ -315,7 +293,6 @@ def _iter_completed_with_deadlines_impl(
             worker,
             workers=workers,
             unit_timeout=unit_timeout,
-            stage_deadline=stage_deadline,
         )
         context = _DrainContext(
             state=state,
@@ -324,7 +301,6 @@ def _iter_completed_with_deadlines_impl(
             worker=worker,
             workers=workers,
             unit_timeout=unit_timeout,
-            stage_deadline=stage_deadline,
             stage=stage,
             sort_key=sort_key,
             on_result=on_result,
