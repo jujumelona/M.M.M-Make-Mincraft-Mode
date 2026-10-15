@@ -8,13 +8,50 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import threading
+import time
+from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
 
 from .construction_retrieval import ConstructionEvidenceIndex
 from .first_pass_java_declarations import declaration_frame, render_declaration
 from .java_region_parser import _parse
+
+
+_CLAIM_MUTEX = threading.Lock()
+_CLAIM_LOCKS = {}
+
+
+@contextmanager
+def _claim_checkpoint(path):
+    """One notebook/kernel owns inference and publication for this feature."""
+    from .runner_lock_contract import _acquire, _release
+
+    lock_path = path.with_suffix(".lock")
+    with _CLAIM_MUTEX:
+        mutex = _CLAIM_LOCKS.setdefault(str(lock_path), threading.RLock())
+    with mutex:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        acquired = False
+        deadline = time.monotonic() + 1800
+        try:
+            while not acquired:
+                try:
+                    _acquire(descriptor)
+                    acquired = True
+                except (BlockingIOError, OSError) as error:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("CONSTRUCTION_DIRECT_CHECKPOINT_LOCK_TIMEOUT") from error
+                    time.sleep(0.2)
+            yield
+        finally:
+            if acquired:
+                _release(descriptor)
+            os.close(descriptor)
 
 
 def _digest(value):
@@ -107,6 +144,13 @@ def compose_feature(router, spec, context, behaviors, *, package, name, owner):
         "implementation": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
     })
     checkpoint = root / ".mmm" / "construction_direct" / (identity + ".json")
+    with _claim_checkpoint(checkpoint):
+        return _compose_claimed(router, spec, context, behaviors, package, name,
+                                owner, root, checkpoint, identity)
+
+
+def _compose_claimed(router, spec, context, behaviors, package, name, owner,
+                     root, checkpoint, identity):
     saved = _read_checkpoint(checkpoint, identity)
     expected = {str(row["behavior_id"]) for row in behaviors}
     if set(saved) - expected:
