@@ -286,3 +286,34 @@ def test_provider_result_from_canonical_first_query_reaches_donor_frontier(
     assert result["space.travel"] == ("example/space-minecraft-mod",)
     github_queries = [query for provider, query in client.calls if provider == "github"]
     assert github_queries[0] == "space travel"
+
+
+def test_second_query_preserved_after_three_unverified_first_query_hits(monkeypatch):
+    monkeypatch.setenv("MMM_REUSE_QUERY_VARIANTS", "2")
+    monkeypatch.delenv("MMM_CURSEFORGE_API_KEY", raising=False)
+    monkeypatch.delenv("CURSEFORGE_API_KEY", raising=False)
+    monkeypatch.setattr(reuse_discovery, "_query_variants",
+                        lambda *args: ("first", "second"))
+
+    class Client:
+        def search(self, provider, query, **kwargs):
+            if provider != "github":
+                return {"candidates": []}
+            if query == "first":
+                return {"candidates": [
+                    {"repository": f"example/planet{index}",
+                     "title": "Minecraft planet exploration mod"}
+                    for index in range(3)
+                ]}
+            if query == "second":
+                return {"candidates": [
+                    {"repository": "example/working-donor",
+                     "title": "Minecraft planet exploration mod"}
+                ]}
+            return {"candidates": []}
+
+    result = reuse_discovery.discover_repositories_for_graph(
+        ("planet exploration",), Client(),
+    )
+    assert "example/working-donor" in result["planet exploration"]
+    assert len(result["planet exploration"]) == 4
