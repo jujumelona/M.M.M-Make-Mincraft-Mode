@@ -134,6 +134,25 @@ def test_debug_design_only_plan_reaches_normal_production_compiler(
         "minecraft_mod_ai.authored_structured_design.author_structured_sections",
         lambda *a, **k: structured,
     )
+    # Debug must preserve the new host-only receipt without contacting live
+    # providers or weakening the deferred production/typed-IR contract.
+    from minecraft_mod_ai.pre_design_research_pipeline import _canonical_sha256
+    lookup_calls = []
+    def fake_search(_router, requested):
+        lookup_calls.append(requested)
+        return {
+            "schema_version": "mmm/pre-design-source-candidate-handoff-v1",
+            "prompt_sha256": _canonical_sha256(requested),
+            "repository_candidates": [],
+            "candidate_count": 0,
+            "model_called": False,
+            "status": "searched_empty",
+        }
+
+    monkeypatch.setattr(
+        "minecraft_mod_ai.pre_design_research_pipeline.collect_source_candidate_handoff",
+        fake_search,
+    )
     session = api.CompleteModAISession.__new__(api.CompleteModAISession)
     session.output_root = tmp_path
     session.router = SimpleNamespace(profile="fast_test")
@@ -161,7 +180,12 @@ def test_debug_design_only_plan_reaches_normal_production_compiler(
     assert authored.requested_prompt == prompt
     assert authored.structured_sections == structured
     assert authored.typed_plan_ir == {}
-    assert authored.content_design == {}
+    assert set(authored.content_design) == {"_pre_design_source_handoff"}
+    receipt = authored.content_design["_pre_design_source_handoff"]
+    assert receipt["prompt_sha256"] == _canonical_sha256(prompt)
+    assert receipt["repository_candidates"] == []
+    assert receipt["model_called"] is False
+    assert lookup_calls == [prompt]  # Replay must not start a second search.
     assert json.loads(target.read_text(encoding="utf-8")) == authored.to_dict()
 
     # Inference/Java compilation are external boundaries here. Keep the real
