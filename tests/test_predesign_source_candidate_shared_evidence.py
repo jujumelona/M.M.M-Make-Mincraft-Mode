@@ -173,3 +173,81 @@ def test_donor_cache_fingerprint_changes_with_new_grounded_evidence():
     ]
     assert source_candidate_fingerprint(updated) != before
     assert source_candidate_fingerprint(()) != before
+
+
+def test_live_handoff_projector_reuses_grounded_catalog_result_without_model(monkeypatch):
+    from minecraft_mod_ai import pre_design_research_pipeline as pipeline
+
+    calls = []
+
+    def fake_bundle(_backend, router, research_brief):
+        calls.append((router, research_brief))
+        return {"domains": [{
+            "domain_id": "request",
+            "queries": [{
+                "query": "space travel",
+                "external_rag": {"sources": [{
+                    "source_id": "curseforge:42",
+                    "title": "Planet Travel",
+                    "url": "https://www.curseforge.com/minecraft/mc-mods/planet-travel",
+                    "content": "Visit other planets with spaceship crafting",
+                    "metadata": {
+                        "source_url": "https://github.com/example/planet-source",
+                    },
+                }]},
+            }],
+        }]}
+
+    monkeypatch.setattr(pipeline, "forced_rag_bundle", fake_bundle)
+    receipt = pipeline.collect_source_candidate_handoff(
+        object(), "Create a spaceship travel mod",
+    )
+    assert receipt["model_called"] is False
+    assert receipt["candidate_count"] == 1
+    assert receipt["repository_candidates"][0]["repository"] == "example/planet-source"
+    assert receipt["repository_candidates"][0]["reference_only"] is True
+    assert len(calls) == 1
+
+
+def test_production_handoff_is_collected_once_and_reused_from_content_design(monkeypatch):
+    from minecraft_mod_ai import pre_design_research_pipeline as pipeline
+    from minecraft_mod_ai.research_reuse_candidates import ensure_authored_source_handoff
+
+    calls = []
+
+    def fake_collect(_router, prompt):
+        calls.append(prompt)
+        return {
+            "schema_version": "mmm/pre-design-source-candidate-handoff-v1",
+            "prompt_sha256": pipeline._canonical_sha256(prompt),
+            "repository_candidates": _projected(),
+            "model_called": False,
+        }
+
+    monkeypatch.setattr(pipeline, "collect_source_candidate_handoff", fake_collect)
+    original, initial = ensure_authored_source_handoff(
+        {}, router=object(), prompt="planet travel",
+    )
+    restored, again = ensure_authored_source_handoff(
+        original, router=object(), prompt="planet travel",
+    )
+    assert len(calls) == 1
+    assert again == initial
+    assert restored == original
+    assert initial[0]["source_reuse_authority"] == "verification_required"
+
+
+def test_handoff_discovery_failure_is_not_a_fake_success(monkeypatch):
+    from minecraft_mod_ai import pre_design_research_pipeline as pipeline
+    from minecraft_mod_ai.research_reuse_candidates import ensure_authored_source_handoff
+
+    def raise_error(_router, _prompt):
+        raise OSError("network disconnected")
+
+    monkeypatch.setattr(pipeline, "collect_source_candidate_handoff", raise_error)
+    design, candidates = ensure_authored_source_handoff(
+        {}, router=object(), prompt="planet travel",
+    )
+    assert candidates == []
+    assert design["_pre_design_source_handoff"]["status"] == "provider_error"
+    assert design["_pre_design_source_handoff"]["error_type"] == "OSError"
