@@ -217,11 +217,9 @@ def author_task_operations(router, task, context):
         state.validation_observation = observation
         old_slot = (state.selection_goal or {}).get('node_id')
         target = observation['node_id']
-        # A failed candidate is evidence against its specific API, not
-        # against every invocation operation. Keep it across a restart.
-        rejected_api = (candidate or {}).get('attributes', {}).get('symbol_ref')
-        if target and rejected_api in symbols:
-            state.reject_api(target, rejected_api, str(error)[:240])
+        # A node diagnostic can concern its authored inputs or placement, not
+        # the selected API. Only an explicit strategy decision rejects an API;
+        # keep the callable available when correcting this actual diagnostic.
         state.reconsider_operation()
         if target != old_slot:
             state.operation_rejections = {}
