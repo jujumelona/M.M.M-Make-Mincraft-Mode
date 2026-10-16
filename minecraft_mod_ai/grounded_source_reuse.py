@@ -547,7 +547,7 @@ def build_repository_reuse_plan(
                       else ("modrinth", "sourcegraph", "github"))
     print("SOURCE_REUSE_DISCOVERY_ROUTE: " + json.dumps({
         "provider_order": provider_order, "curseforge_key_present": provider_order[0] == "curseforge",
-        "fallback_policy": "inspect_current_provider_before_searching_next",
+        "fallback_policy": "merge_independent_catalog_and_code_hits_then_inspect_github_last",
         "minecraft_version": adapter.minecraft_version, "loader": adapter.loader,
     }), flush=True)
     # Combine independent catalogue and indexed-code evidence before choosing donors.
@@ -567,8 +567,8 @@ def build_repository_reuse_plan(
                 (card for card in cards if str(card["repository"]).casefold() not in seen),
                 key=lambda card: (
                     bool(card.get("explicit_reference")),
-                    -card.get("catalog_provider_priority", {}).get(capability, 2),
                     _candidate_overlap(capability, terms, card),
+                    -card.get("catalog_provider_priority", {}).get(capability, 2),
                 ), reverse=True,
             )
             ranked_cards.extend(stage_cards)
