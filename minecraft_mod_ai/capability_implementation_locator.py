@@ -148,20 +148,19 @@ class CapabilityImplementationLocator:
                 scores[path] = scores.get(path, 0.0) + 2.0
                 ev_types.setdefault(path, []).append("path_token_match")
 
-        # Filter out seeds that ONLY have path token match with low score
+        # A matching source path is weak evidence worth inspecting. Do not
+        # demand that class/method names repeat the requested gameplay wording.
         ranked: list[CapabilitySeedEvidence] = []
         for path, score in scores.items():
             types = tuple(dict.fromkeys(ev_types.get(path, [])))
-            # Require at least one structural evidence type if score is low
-            if types == ("path_token_match",) and score < 4.0:
-                continue
             ranked.append(
                 CapabilitySeedEvidence(
                     capability=capability,
                     node_id=path,
                     score=score,
                     evidence_types=types,
-                    provenance={"path": path},
+                    provenance={"path": path, "fit": "source_candidate",
+                                "structural_match": types != ("path_token_match",)},
                 )
             )
 

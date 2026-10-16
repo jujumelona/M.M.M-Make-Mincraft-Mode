@@ -125,7 +125,7 @@ class EcosystemDiscoveryClient:
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         self.close()
 
-    def search(self, provider: str, query: str, *, cursor: str='', limit: int=20, minecraft_version: str | None=None, loader: str | None=None, target_profile: str='minecraft_mod') -> dict[str, Any]:
+    def search(self, provider: str, query: str, *, cursor: str='', limit: int=20, minecraft_version: str | None=None, loader: str | None=None, target_profile: str='minecraft_mod', source_reference: bool=False) -> dict[str, Any]:
         provider = provider.strip().lower()
         query = query.strip()
         target_profile = target_profile.strip().lower()
@@ -138,18 +138,21 @@ class EcosystemDiscoveryClient:
         if type(limit) is not int or not 1 <= limit <= _MAX_PAGE_ITEMS:
             raise SpecValidationError(f'limit must be between 1 and {_MAX_PAGE_ITEMS}.')
         target = _normalize_discovery_target(minecraft_version, loader, target_profile=target_profile)
+        if source_reference and (target_profile != 'minecraft_mod' or not target.exact):
+            raise SpecValidationError('Source-reference discovery requires an exact Minecraft target.')
+        cursor_query = query + '\x00mmm/source-reference' if source_reference else query
         if provider in {'huggingface_models', 'openalex_works', 'crossref_works'}:
             position_kind = 'token'
-            provider_cursor = _decode_token_cursor(cursor, provider=provider, query=query, target_profile=target_profile, minecraft_version=target.minecraft_version, loader=target.loader)
+            provider_cursor = _decode_token_cursor(cursor, provider=provider, query=cursor_query, target_profile=target_profile, minecraft_version=target.minecraft_version, loader=target.loader)
         else:
             position_kind = 'offset' if provider in {'modrinth', 'wikipedia'} else 'page'
-            position = _decode_cursor(cursor, provider=provider, query=query, position_kind=position_kind, target_profile=target_profile, minecraft_version=target.minecraft_version, loader=target.loader)
+            position = _decode_cursor(cursor, provider=provider, query=cursor_query, position_kind=position_kind, target_profile=target_profile, minecraft_version=target.minecraft_version, loader=target.loader)
         if provider == 'huggingface_models':
             candidates, total, next_position = self._search_huggingface_models(query, cursor=provider_cursor, limit=limit)
         elif provider == 'modrinth':
-            candidates, total, next_position = self._search_modrinth(query, offset=position, limit=limit, target=target)
+            candidates, total, next_position = self._search_modrinth(query, offset=position, limit=limit, target=target, source_reference=source_reference)
         elif provider == 'github':
-            candidates, total, next_position = self._search_github(query, page=position or 1, limit=limit, target_profile=target_profile, target=target)
+            candidates, total, next_position = self._search_github(query, page=position or 1, limit=limit, target_profile=target_profile, target=target, source_reference=source_reference)
         elif provider == 'openverse_images':
             candidates, total, next_position = self._search_openverse(query, media_type='images', page=position or 1, limit=limit)
         elif provider == 'wikipedia':
@@ -159,10 +162,13 @@ class EcosystemDiscoveryClient:
         else:
             candidates, total, next_position = self._search_crossref_works(query, cursor=provider_cursor, limit=limit)
         if provider in {'huggingface_models', 'openalex_works', 'crossref_works'}:
-            next_cursor = _encode_token_cursor(provider=provider, query=query, target_profile=target_profile, token=next_position, minecraft_version=target.minecraft_version, loader=target.loader) if next_position is not None else ''
+            next_cursor = _encode_token_cursor(provider=provider, query=cursor_query, target_profile=target_profile, token=next_position, minecraft_version=target.minecraft_version, loader=target.loader) if next_position is not None else ''
         else:
-            next_cursor = _encode_cursor(provider=provider, query=query, position_kind=position_kind, position=next_position, target_profile=target_profile, minecraft_version=target.minecraft_version, loader=target.loader) if next_position is not None else ''
+            next_cursor = _encode_cursor(provider=provider, query=cursor_query, position_kind=position_kind, position=next_position, target_profile=target_profile, minecraft_version=target.minecraft_version, loader=target.loader) if next_position is not None else ''
         payload = {'schema_version': 'mmm/ecosystem-discovery-page-v2', 'provider': provider, 'query': query, 'query_sha256': _sha256_text(query), 'minecraft_version': target.minecraft_version, 'loader': target.loader, 'target_exact': target.exact, 'target_profile': target_profile, 'candidates': [candidate.to_dict() for candidate in candidates], 'returned': len(candidates), 'provider_total_estimate': total, 'provider_truncated': bool(provider == 'github' and isinstance(total, int) and (total > 1000)), 'provider_result_limit': 1000 if provider == 'github' else None, 'next_cursor': next_cursor, 'download_performed': False, 'authorization': 'none', 'selection_policy': 'Targetless results are metadata hypotheses only. Exact-target candidates are still not selected or downloaded until origin-license, dependency closure and immutable-file-hash gates pass.'}
+        if source_reference:
+            payload['source_reference'] = True
+            payload['selection_policy'] = 'Source candidates may use another loader; pinned source-module Minecraft version must exactly match before reference or installation admission.'
         payload['page_sha256'] = _sha256_text(canonical_json(payload))
         return payload
 
@@ -189,7 +195,10 @@ class EcosystemDiscoveryClient:
         payload['inspection_sha256'] = _sha256_text(canonical_json(payload))
         return payload
 
-    def inspect_github_repository(self, full_name: str) -> dict[str, Any]:
+    def inspect_github_repository_for_target(self, full_name: str, *, minecraft_version: str, loader: str) -> dict[str, Any]:
+        return self.inspect_github_repository(full_name, minecraft_version=minecraft_version, loader=loader)
+
+    def inspect_github_repository(self, full_name: str, *, minecraft_version: str='', loader: str='') -> dict[str, Any]:
         if not _GITHUB_REPOSITORY.fullmatch(full_name):
             raise SpecValidationError('Invalid GitHub owner/repository name.')
         repository_url = f'https://api.github.com/repos/{full_name}'
@@ -201,7 +210,27 @@ class EcosystemDiscoveryClient:
         default_branch = str(repository.get('default_branch') or '').strip()
         if not default_branch or len(default_branch.encode('utf-8')) > 512:
             raise EcosystemDiscoveryUnavailable('GitHub repository has no usable default branch.')
-        commit = self._get_json(repository_url + '/commits/' + quote(default_branch, safe=''), provider='github')
+        selected_branch = default_branch
+        if minecraft_version:
+            version_name = re.compile(r'(?<![0-9.])' + re.escape(minecraft_version) + r'(?![0-9.]|-(?:pre|rc)[0-9])')
+            if not version_name.search(default_branch):
+                page = 1
+                matches = []
+                while True:
+                    branches = self._get_json(repository_url + '/branches',
+                        params={'per_page': '100', 'page': str(page)}, provider='github')
+                    if not isinstance(branches, list):
+                        raise EcosystemDiscoveryUnavailable('GitHub returned invalid branch evidence.')
+                    matches.extend(row['name'] for row in branches if isinstance(row, dict)
+                                   and isinstance(row.get('name'), str) and version_name.search(row['name']))
+                    if len(branches) < 100:
+                        break
+                    page += 1
+                if matches:
+                    selected_branch = max(matches, key=lambda name: (
+                        loader.casefold() in name.casefold() if loader else False,
+                        name == minecraft_version, -len(name), name))
+        commit = self._get_json(repository_url + '/commits/' + quote(selected_branch, safe=''), provider='github')
         if not isinstance(commit, dict):
             raise EcosystemDiscoveryUnavailable('GitHub returned invalid commit evidence.')
         commit_sha = str(commit.get('sha') or '').strip().lower()
@@ -232,7 +261,10 @@ class EcosystemDiscoveryClient:
         if not license_path or license_path.startswith('/') or '..' in license_path.split('/'):
             raise EcosystemDiscoveryUnavailable('GitHub license path is invalid.')
         payload = {'schema_version': 'mmm/github-repository-inspection-v1', 'full_name': str(repository.get('full_name') or full_name), 'source_url': source_url, 'default_branch': default_branch, 'commit_sha': commit_sha, 'commit_verified': bool(isinstance(verification, dict) and verification.get('verified') is True), 'license_id': license_id, 'license_url': f'https://github.com/{full_name}/blob/{commit_sha}/' + quote(license_path, safe='/_.-'), 'license_blob_sha': str(license_data.get('sha') or ''), 'license_text_sha256': 'sha256:' + hashlib.sha256(license_bytes).hexdigest(), 'license_policy': _code_license_policy(license_id), 'download_performed': False, 'compatibility': 'unverified_until_pinned_metadata_and_build_pass', 'required_next_gate': 'Read platform metadata and build files at this commit, bind an exact host-selected target, resolve dependencies, then verify any selected release file with its own immutable SHA-256 or stronger digest.'}
-        payload['inspection_sha256'] = _sha256_text(canonical_json(payload))
+        payload['selected_branch'] = selected_branch
+        payload['requested_minecraft_version'] = minecraft_version
+        payload['inspection_sha256'] = _sha256_text(canonical_json({
+            key: value for key, value in payload.items() if key != 'inspection_sha256'}))
         return payload
 
     def inspect_huggingface_model(self, repo_id: str) -> dict[str, Any]:
@@ -263,10 +295,12 @@ class EcosystemDiscoveryClient:
         payload['inspection_sha256'] = _sha256_text(canonical_json(payload))
         return payload
 
-    def _search_modrinth(self, query: str, *, offset: int, limit: int, target: _DiscoveryTarget) -> tuple[list[EcosystemCandidate], int, int | None]:
+    def _search_modrinth(self, query: str, *, offset: int, limit: int, target: _DiscoveryTarget, source_reference: bool=False) -> tuple[list[EcosystemCandidate], int, int | None]:
         facets: list[list[str]] = []
         if target.exact:
-            facets.extend([[f'versions:{target.minecraft_version}'], [f'categories:{target.loader}']])
+            facets.append([f'versions:{target.minecraft_version}'])
+            if not source_reference:
+                facets.append([f'categories:{target.loader}'])
         facets.extend([['project_type:mod'], ['open_source:true']])
         raw = self._get_json('https://api.modrinth.com/v2/search', params={'query': query, 'facets': json.dumps(facets, separators=(',', ':')), 'index': 'relevance', 'offset': str(offset), 'limit': str(limit)})
         if not isinstance(raw, dict) or not isinstance(raw.get('hits'), list):
@@ -286,17 +320,30 @@ class EcosystemDiscoveryClient:
                 continue
             project_type = str(hit.get('project_type', 'mod'))
             stable = {'project_id': project_id, 'slug': slug, 'title': str(hit.get('title', '')), 'description': str(hit.get('description', '')), 'license': license_id, 'versions': sorted(str(v) for v in hit.get('versions', [])), 'categories': sorted(str(v) for v in hit.get('categories', []))}
-            candidates.append(EcosystemCandidate(candidate_id=f'modrinth:{project_id}', provider='modrinth', resource_kind=project_type, title=stable['title'], summary=stable['description'], source_url=f'https://modrinth.com/{project_type}/{slug}', api_url=f'https://api.modrinth.com/v2/project/{project_id}', license_id=license_id, license_url='', license_policy=_code_license_policy(license_id), minecraft_version=target.minecraft_version, loader=target.loader, compatibility='search_metadata_exact; version_file_inspection_required' if target.exact else 'platform_neutral_metadata; target_hypothesis_required', attribution='', preview_urls=_safe_preview_urls([hit.get('icon_url'), *hit.get('gallery', [])], allowed_hosts={'cdn.modrinth.com'}), reuse_status='candidate_only_not_downloaded', evidence_sha256=_sha256_text(canonical_json(stable))))
+            candidates.append(EcosystemCandidate(candidate_id=f'modrinth:{project_id}', provider='modrinth', resource_kind=project_type, title=stable['title'], summary=stable['description'], source_url=f'https://modrinth.com/{project_type}/{slug}', api_url=f'https://api.modrinth.com/v2/project/{project_id}', license_id=license_id, license_url='', license_policy=_code_license_policy(license_id), minecraft_version=target.minecraft_version, loader='unverified' if source_reference else target.loader, compatibility='source_reference; pinned_module_version_inspection_required' if source_reference else 'search_metadata_exact; version_file_inspection_required' if target.exact else 'platform_neutral_metadata; target_hypothesis_required', attribution='', preview_urls=_safe_preview_urls([hit.get('icon_url'), *hit.get('gallery', [])], allowed_hosts={'cdn.modrinth.com'}), reuse_status='candidate_only_not_downloaded', evidence_sha256=_sha256_text(canonical_json(stable))))
         next_offset = offset + limit if offset + limit < total else None
         return (candidates, total, next_offset)
 
-    def _search_github(self, query: str, *, page: int, limit: int, target_profile: str, target: _DiscoveryTarget) -> tuple[list[EcosystemCandidate], int, int | None]:
+    def _search_github(self, query: str, *, page: int, limit: int, target_profile: str, target: _DiscoveryTarget, source_reference: bool=False) -> tuple[list[EcosystemCandidate], int, int | None]:
         scoped_query = query
         if target_profile == 'minecraft_mod':
-            scoped_query += f' minecraft {target.loader}' if target.exact else ' minecraft mod'
+            scoped_query += (f' minecraft "{target.minecraft_version}"' if source_reference else
+                             f' minecraft {target.loader} "{target.minecraft_version}"'
+                             if target.exact else ' minecraft mod')
         raw = self._get_json('https://api.github.com/search/repositories', params={'q': f'{scoped_query} in:name,description,readme fork:false archived:false', 'sort': 'stars', 'order': 'desc', 'page': str(page), 'per_page': str(limit)}, provider='github')
         if not isinstance(raw, dict) or not isinstance(raw.get('items'), list):
             raise EcosystemDiscoveryUnavailable('GitHub returned an invalid repository search response.')
+        query_scope = 'version_metadata' if source_reference else 'default'
+        if source_reference and not raw['items'] and not _nonnegative_int(raw.get('total_count')):
+            # Repository search sees the default README, not version branches.
+            # Keep normal pagination while letting pinned source inspection
+            # decide the version of a repository absent from this text query.
+            raw = self._get_json('https://api.github.com/search/repositories', params={
+                'q': f'{query} minecraft mod in:name,description,readme fork:false archived:false',
+                'sort': 'stars', 'order': 'desc', 'page': str(page), 'per_page': str(limit)}, provider='github')
+            if not isinstance(raw, dict) or not isinstance(raw.get('items'), list):
+                raise EcosystemDiscoveryUnavailable('GitHub returned an invalid repository search response.')
+            query_scope = 'version_text_free_fallback'
         total = _nonnegative_int(raw.get('total_count'))
         candidates: list[EcosystemCandidate] = []
         for item in raw['items']:
@@ -313,7 +360,7 @@ class EcosystemDiscoveryClient:
                 continue
             stable = {'id': item.get('id'), 'full_name': full_name, 'description': str(item.get('description') or ''), 'default_branch': str(item.get('default_branch', '')), 'license': license_id, 'topics': sorted(str(value) for value in item.get('topics', []))}
             is_minecraft = target_profile == 'minecraft_mod'
-            candidates.append(EcosystemCandidate(candidate_id=f'github:{full_name.lower()}', provider='github', resource_kind='repository', title=full_name, summary=stable['description'], source_url=source_url, api_url=f'https://api.github.com/repos/{full_name}', license_id=license_id, license_url=f'https://api.github.com/repos/{full_name}/license', license_policy=_code_license_policy(license_id), minecraft_version=target.minecraft_version if is_minecraft else 'not_applicable', loader=target.loader if is_minecraft else 'not_applicable', compatibility='unverified; exact commit, platform metadata and build inspection required' if is_minecraft and target.exact else 'platform_neutral_metadata; target_hypothesis_required' if is_minecraft else 'unverified; pin commit, inspect license and benchmark runtime', attribution='', preview_urls=(), reuse_status='candidate_only_not_cloned', evidence_sha256=_sha256_text(canonical_json(stable)), metadata={'topics': stable['topics']}))
+            candidates.append(EcosystemCandidate(candidate_id=f'github:{full_name.lower()}', provider='github', resource_kind='repository', title=full_name, summary=stable['description'], source_url=source_url, api_url=f'https://api.github.com/repos/{full_name}', license_id=license_id, license_url=f'https://api.github.com/repos/{full_name}/license', license_policy=_code_license_policy(license_id), minecraft_version=target.minecraft_version if is_minecraft else 'not_applicable', loader='unverified' if source_reference else target.loader if is_minecraft else 'not_applicable', compatibility='unverified; exact commit, platform metadata and build inspection required' if is_minecraft and target.exact else 'platform_neutral_metadata; target_hypothesis_required' if is_minecraft else 'unverified; pin commit, inspect license and benchmark runtime', attribution='', preview_urls=(), reuse_status='candidate_only_not_cloned', evidence_sha256=_sha256_text(canonical_json(stable)), metadata={'topics': stable['topics'], **({'query_scope': query_scope} if source_reference else {})}))
         next_page = page + 1 if page * limit < min(total, 1000) else None
         return (candidates, total, next_page)
 

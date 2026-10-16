@@ -33,7 +33,7 @@ _MINECRAFT_GAME_ID = 432
 _HTTP_CLIENT_LOCK = Lock()
 _HTTP_CLIENT: httpx.Client | None = None
 _GITHUB_QUERY_BOILERPLATE = frozenset(
-    {"minecraft", "mod", "mods", "custom", "implementation", "source"}
+    {"minecraft", "mod", "mods", "custom", "implementation", "source", "fabric", "forge", "neoforge"}
 )
 _QUERY_ACTION_WORDS = frozenset({
     "gameplay", "feature", "system", "entity", "generation", "construction",
@@ -292,6 +292,8 @@ def _provider_query(provider: str, query: str) -> str:
     retain the richer full-text phrase.
     """
 
+    query = re.sub(r'\bminecraft\s+(?:fabric|forge|neoforge)\b', 'minecraft', query, flags=re.IGNORECASE)
+    query = re.sub(r'\b(?:fabric|forge|neoforge)\s+mods?\b', 'mod', query, flags=re.IGNORECASE)
     if provider != "github":
         return query
     tokens = [
@@ -301,11 +303,7 @@ def _provider_query(provider: str, query: str) -> str:
     ]
     if not tokens:
         return query
-    if "fabric" in tokens and len(tokens) > 2:
-        semantic = [token for token in tokens if token != "fabric"][:1]
-        tokens = [*semantic, "fabric"]
-    else:
-        tokens = tokens[:2]
+    tokens = tokens[:2]
     return " ".join(tokens)
 
 
@@ -374,7 +372,9 @@ def _candidate_relevance(candidate: Mapping[str, Any], capability: str) -> float
         "fabric", "forge", "neoforge", "quilt", "system", "feature", "generation",
         "the", "and", "for", "with", "a", "an", "to", "of",
     }
-    terms = (_source_words(capability) | set(_source_intent_aliases(capability))) - stop
+    terms = (_source_words(capability) | {
+        word for alias in _source_intent_aliases(capability) for word in _source_words(alias)
+    }) - stop
     if capability in atomic_capability_definitions():
         terms.update(word for query in _ontology_search_queries(capability)
                      for word in _source_words(query) if word not in stop)
@@ -445,7 +445,7 @@ def _ascii_search_query(value: str) -> str:
     return re.sub(r"\s+", " ", ascii_text).strip()
 
 
-def _search_curseforge(query: str, *, limit: int, with_metadata=False) -> list:
+def _search_curseforge(query: str, *, limit: int, with_metadata=False, minecraft_version=None) -> list:
     api_key = _curseforge_api_key()
     if not api_key:
         return []
@@ -460,6 +460,8 @@ def _search_curseforge(query: str, *, limit: int, with_metadata=False) -> list:
         "pageSize": str(min(limit, 50)),
         "index": "0",
     }
+    if minecraft_version:
+        params['gameVersion'] = minecraft_version
     try:
         response = _pooled_http_client().get(
             "https://api.curseforge.com/v1/mods/search",
@@ -512,8 +514,8 @@ def discover_repositories_for_graph(
     def register(capability: str, provider: str, values: Sequence) -> None:
         for repository, rank, metadata in values:
             relevance = _candidate_relevance(metadata, capability)
-            if relevance == 0:
-                continue
+            # Search relevance orders inspection; a short catalogue description
+            # cannot veto the actual code before it has been inspected.
             rank += 2 * relevance
             repository = _github_repository(repository)
             if not repository:
@@ -529,19 +531,17 @@ def discover_repositories_for_graph(
     def provider_search(capability: str, provider: str, query: str) -> tuple[str, str, list[tuple[str, float]]]:
         provider_query = _provider_query(provider, query)
         if provider == "curseforge":
-            return capability, provider, _search_curseforge(provider_query, limit=_query_limit(), with_metadata=True)
+            return capability, provider, _search_curseforge(provider_query, limit=_query_limit(),
+                with_metadata=True, minecraft_version=minecraft_version)
         candidates = []
         cursor = ""
         try:
-            # This finds source to adapt, not installable binary releases. Exact
-            # target checks belong to donor inspection and compile proof; catalog
-            # release filters would hide useful code from older mods/loaders.
+            # The user requires the requested MC release. Catalogue filters
+            # narrow discovery; pinned source metadata verifies it independently.
             for _page_index in range(_discovery_pages()):
                 page = client.search(
                     provider, provider_query, limit=_query_limit(), target_profile="minecraft_mod",
-                    # Source-code discovery must not inherit the requested
-                    # game's binary-release filters. Older Fabric/Forge mods
-                    # are candidates for inspected, adapted source reuse.
+                    minecraft_version=minecraft_version, loader=loader, source_reference=True,
                     **({"cursor": cursor} if cursor else {}),
                 )
                 raw = page.get("candidates") if isinstance(page, Mapping) else None
@@ -616,6 +616,8 @@ def discover_repositories_for_graph(
                     "capabilities": list(subscribers[key]),
                     "status": "provider_error" if error else ("found" if values else "search_empty"),
                     "error": error, "repository_count": len(values),
+                    "minecraft_version": minecraft_version, "loader": loader,
+                    "relevance_policy": "rank_candidates_then_inspect_actual_source",
                 })
             for owner_capability in subscribers[key]:
                 register(owner_capability, provider, values)

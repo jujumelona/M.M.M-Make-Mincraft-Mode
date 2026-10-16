@@ -20,7 +20,7 @@ import zipfile
 from collections import OrderedDict, deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from threading import Event, Lock
 from typing import Any
 from urllib.parse import quote, urlparse
@@ -56,9 +56,15 @@ _KOTLIN_FUN_DECL = re.compile(
     r"\bfun\s+(?:<[^>]+>\s*)?(?:[A-Za-z_][A-Za-z0-9_?.<>]*\.)?"
     r"([A-Za-z_][A-Za-z0-9_]*)\s*\("
 )
-_MINECRAFT_PROP = re.compile(
-    r"(?mi)^\s*(?:minecraft_version|minecraftVersion|minecraft\.version)\s*=\s*([^\s#]+)"
-)
+_MINECRAFT_PROPERTIES = frozenset({
+    "minecraft_version", "minecraftVersion", "minecraft.version", "mc_version", "mcVersion",
+})
+_MINECRAFT_VERSION = re.compile(r"(?:\d+(?:\.\d+)+(?:-(?:pre|rc)\d+)?|\d{2}w\d{2}[a-z])")
+_METADATA_NAMES = frozenset({
+    "gradle.properties", "build.gradle", "build.gradle.kts", "settings.gradle",
+    "settings.gradle.kts", "libs.versions.toml", "fabric.mod.json", "mods.toml",
+    "neoforge.mods.toml",
+})
 _GRADLE_DEP = re.compile(
     r"(?m)^\s*(?:modImplementation|implementation|api|compileOnly|runtimeOnly)"
     r"\s*[\( ]\s*['\"]([^'\"]+)"
@@ -142,8 +148,8 @@ def _materialization_download_workers() -> int:
 
 
 _SNAPSHOT_LOCK = Lock()
-_SNAPSHOT_CACHE: OrderedDict[str, Mapping[str, Any]] = OrderedDict()
-_SNAPSHOT_INFLIGHT: dict[str, Event] = {}
+_SNAPSHOT_CACHE: OrderedDict[tuple[str, str, str], Mapping[str, Any]] = OrderedDict()
+_SNAPSHOT_INFLIGHT: dict[tuple[str, str, str], Event] = {}
 _BLOB_LOCK = Lock()
 _BLOB_CACHE: OrderedDict[tuple[str, str], bytes] = OrderedDict()
 _BLOB_CACHE_BYTES = 0
@@ -508,7 +514,8 @@ def inspect_repository_slice(
 ) -> DonorSlice | None:
     """Inspect one repo and return a pinned minimal Java/Kotlin closure when evidence suffices."""
 
-    snapshot = _repository_snapshot(repository, discovery_client)
+    snapshot = _repository_snapshot(repository, discovery_client,
+        minecraft_version=adapter.minecraft_version, loader=adapter.loader)
     if not isinstance(snapshot, Mapping):
         return None
     license_id = str(snapshot.get("license_id") or "")
@@ -524,26 +531,39 @@ def inspect_repository_slice(
     token = str(getattr(discovery_client, "github_token", "") or "").strip()
     client = _github_client(token)
     try:
-        metadata_text = _build_metadata_text(client, repository=repository, blobs=blobs)
-        compatibility = _target_compatibility(metadata_text, adapter=adapter)
-        # A donor with no target evidence is not an adaptation plan; it is an
-        # unverified repository hit. Do not admit it into reuse scoring.
-        if compatibility not in {"exact", "adapt"}:
+        metadata = _build_metadata_sources(client, repository=repository, blobs=blobs)
+
+        def source_contexts():
+            contexts = {}
+            for path in blobs:
+                if path.casefold().endswith((".java", ".kt")):
+                    module = _source_module(path, metadata)
+                    if module not in contexts:
+                        contexts[module] = _module_metadata_context(metadata, module)
+            return contexts
+
+        contexts = source_contexts()
+        if (not any(version == adapter.minecraft_version for version, _text in contexts.values())
+                and snapshot.get('selected_branch') != snapshot.get('default_branch')):
+            fallback = _repository_snapshot(repository, discovery_client)
+            if fallback:
+                snapshot = fallback
+                commit_sha, license_id, blobs = snapshot['commit_sha'], snapshot['license_id'], snapshot['blobs']
+                metadata = _build_metadata_sources(client, repository=repository, blobs=blobs)
+                contexts = source_contexts()
+        if not any(version == adapter.minecraft_version for version, _text in contexts.values()):
+            print('SOURCE_REUSE_VERSION: ' + json.dumps({
+                'repository': repository, 'requested': adapter.minecraft_version,
+                'declared': sorted({version for version, _text in contexts.values()}),
+                'status': 'source_version_mismatch',
+            }), flush=True)
             return None
-        required_dependencies = _declared_dependencies(metadata_text)
-        donor_tests = _donor_test_paths(blobs)
-        source_paths = tuple(
-            path
-            for path in blobs
-            if path.casefold().endswith((".java", ".kt"))
-            and "/src/" in f"/{path.casefold()}"
-        )
-        if not source_paths:
-            source_paths = tuple(
-                path for path in blobs if path.casefold().endswith((".java", ".kt"))
-            )
-        if not source_paths:
-            return None
+
+        def version_for(path):
+            module = _source_module(path, metadata)
+            if module not in contexts:
+                contexts[module] = _module_metadata_context(metadata, module)
+            return contexts[module][0]
 
         tree_items = tuple(
             {"path": path, "sha": blob_sha, "type": "blob"}
@@ -568,6 +588,7 @@ def inspect_repository_slice(
             evidence.node_id
             for evidence in seed_evidence
             if evidence.node_id in graph.nodes
+            and version_for(evidence.node_id) == adapter.minecraft_version
         )
         if not seed_paths:
             return None
@@ -599,6 +620,15 @@ def inspect_repository_slice(
                     )
                 )
         for path in selected:
+            # Missing or foreign-version dependencies make a partial reference;
+            # a sibling module must never lend its version to these bytes.
+            if (_metadata_scope(path) is None and not _is_license_path(path)
+                    and version_for(path) != adapter.minecraft_version):
+                unresolved_edges.append(UnresolvedArtifactEdge(
+                    source_id="closure_root", requested_target=path,
+                    relation="source_version", reason="SOURCE_TRANSPLANT_MINECRAFT_VERSION_MISMATCH",
+                ))
+                continue
             raw = index.artifact_bytes(path)
             if raw is None:
                 unresolved_edges.append(
@@ -651,6 +681,15 @@ def inspect_repository_slice(
         if not selected:
             return None
 
+        selected_modules = {_source_module(path, metadata) for path in selected
+                            if _metadata_scope(path) is None and not _is_license_path(path)}
+        metadata_text = "\n".join(contexts[module][1] for module in sorted(selected_modules))
+        ev = _compatibility_evidence(metadata_text, adapter.minecraft_version, adapter=adapter)
+        compatibility = "exact" if ev.status == "metadata_exact" else "adapt"
+        required_dependencies = _declared_dependencies(metadata_text)
+        donor_tests = _donor_test_paths({path: sha for path, sha in blobs.items()
+                                       if version_for(path) == adapter.minecraft_version})
+
         files: list[DonorFile] = []
         symbols: set[str] = set()
         for path in selected:
@@ -694,15 +733,13 @@ def inspect_repository_slice(
             + (15.0 if not closure_complete else 0.0),
             2,
         )
-        ev = _target_compatibility_evidence(metadata_text, adapter=adapter)
-
         return DonorSlice(
             capability=capability,
             repository=repository,
             commit_sha=commit_sha,
             license_id=license_id,
             source_url=str(snapshot.get("source_url") or f"https://github.com/{repository}"),
-            target_compatibility=compatibility if closure_complete else "unverified",
+            target_compatibility=compatibility,
             files=tuple(files),
             seed_files=seed_paths,
             source_symbols=tuple(sorted(symbols)),
@@ -735,10 +772,16 @@ def materialize_source_slices(
         return {"schema_version": "mmm/reuse-materialization-v1", "donors": [], "count": 0}
 
     validated: list[tuple[Mapping[str, Any], DonorSlice]] = []
+    bound_target = reuse_plan.get("bound_target")
+    target_version = str(bound_target.get("minecraft_version") or "") if isinstance(bound_target, Mapping) else ""
     for decision in decisions:
         if not isinstance(decision, Mapping) or decision.get("mode") not in {"source_transplant", "adapt"}:
             continue
-        validated.append((decision, validated_reuse_donor(decision)))
+        donor = validated_reuse_donor(decision)
+        if (not target_version or donor.compatibility_evidence is None
+                or donor.compatibility_evidence.minecraft_version != target_version):
+            raise SourceTransplantError("Pinned donor Minecraft version does not match the bound target.")
+        validated.append((decision, donor))
     if not validated:
         return {"schema_version": "mmm/reuse-materialization-v1", "donors": [], "count": 0}
 
@@ -909,28 +952,32 @@ def _donor_materialization_key(
     return hashlib.sha256(encoded).hexdigest()[:20]
 
 
-def _repository_snapshot(repository: str, discovery_client: Any) -> Mapping[str, Any] | None:
+def _repository_snapshot(repository: str, discovery_client: Any, *, minecraft_version="", loader="") -> Mapping[str, Any] | None:
     """Cache immutable repository metadata/tree across capability evaluation."""
 
+    cache_key = (repository, minecraft_version, loader)
     owner = False
     with _SNAPSHOT_LOCK:
-        if repository in _SNAPSHOT_CACHE:
-            cached = _SNAPSHOT_CACHE[repository]
-            _SNAPSHOT_CACHE.move_to_end(repository)
+        if cache_key in _SNAPSHOT_CACHE:
+            cached = _SNAPSHOT_CACHE[cache_key]
+            _SNAPSHOT_CACHE.move_to_end(cache_key)
             return cached
-        event = _SNAPSHOT_INFLIGHT.get(repository)
+        event = _SNAPSHOT_INFLIGHT.get(cache_key)
         if event is None:
             event = Event()
-            _SNAPSHOT_INFLIGHT[repository] = event
+            _SNAPSHOT_INFLIGHT[cache_key] = event
             owner = True
     if not owner:
         event.wait(timeout=30.0)
         with _SNAPSHOT_LOCK:
-            return _SNAPSHOT_CACHE.get(repository)
+            return _SNAPSHOT_CACHE.get(cache_key)
 
     snapshot: Mapping[str, Any] | None = None
     try:
-        evidence = discovery_client.inspect_github_repository(repository)
+        target_inspector = getattr(discovery_client, 'inspect_github_repository_for_target', None)
+        evidence = (target_inspector(repository, minecraft_version=minecraft_version, loader=loader)
+                    if minecraft_version and callable(target_inspector) else
+                    discovery_client.inspect_github_repository(repository))
         if not isinstance(evidence, Mapping):
             return None
         commit_sha = str(evidence.get("commit_sha") or "")
@@ -965,6 +1012,8 @@ def _repository_snapshot(repository: str, discovery_client: Any) -> Mapping[str,
             "license_id": license_id,
             "source_url": str(evidence.get("source_url") or f"https://github.com/{repository}"),
             "blobs": blobs,
+            "default_branch": evidence.get("default_branch", ""),
+            "selected_branch": evidence.get("selected_branch", ""),
         }
         return snapshot
     except SourceTransplantError:
@@ -972,13 +1021,13 @@ def _repository_snapshot(repository: str, discovery_client: Any) -> Mapping[str,
     finally:
         with _SNAPSHOT_LOCK:
             if snapshot is not None:
-                _SNAPSHOT_CACHE[repository] = snapshot
-                _SNAPSHOT_CACHE.move_to_end(repository)
+                _SNAPSHOT_CACHE[cache_key] = snapshot
+                _SNAPSHOT_CACHE.move_to_end(cache_key)
                 while len(_SNAPSHOT_CACHE) > _snapshot_cache_entries():
                     _SNAPSHOT_CACHE.popitem(last=False)
             else:
-                _SNAPSHOT_CACHE.pop(repository, None)
-            pending = _SNAPSHOT_INFLIGHT.pop(repository, None)
+                _SNAPSHOT_CACHE.pop(cache_key, None)
+            pending = _SNAPSHOT_INFLIGHT.pop(cache_key, None)
             if pending is not None:
                 pending.set()
 
@@ -1289,45 +1338,277 @@ def materialize_pinned_donor(
             client.close()
 
 
-def _build_metadata_text(
-    client: httpx.Client,
-    *,
-    repository: str,
-    blobs: Mapping[str, str],
-) -> str:
-    metadata_paths = (
-        "gradle.properties",
-        "fabric.mod.json",
-        "src/main/resources/fabric.mod.json",
-        "src/main/resources/META-INF/mods.toml",
-        "src/main/resources/META-INF/neoforge.mods.toml",
-        "build.gradle",
-        "build.gradle.kts",
-        "settings.gradle",
-        "settings.gradle.kts",
-        "gradle/libs.versions.toml",
-    )
-    chunks: list[str] = []
-    for path in metadata_paths:
-        blob = blobs.get(path)
-        if not blob:
+def _metadata_scope(path: str) -> str | None:
+    """Return the Gradle/source module owning a conventional metadata path."""
+    parts = PurePosixPath(path).parts
+    if not parts or parts[-1] not in _METADATA_NAMES:
+        return None
+    if "src" in parts and parts[-1] in {"fabric.mod.json", "mods.toml", "neoforge.mods.toml"}:
+        return "/".join(parts[:parts.index("src")])
+    if len(parts) >= 2 and parts[-2:] == ("gradle", "libs.versions.toml"):
+        return "/".join(parts[:-2])
+    return "/".join(parts[:-1])
+
+
+def _is_license_path(path: str) -> bool:
+    return PurePosixPath(path).name.casefold() in {
+        "license", "license.txt", "license.md", "copying", "copying.txt", "copying.md",
+    }
+
+
+def _source_module(path: str, metadata: Mapping[str, str | None]) -> str:
+    parts = PurePosixPath(path).parts
+    if "src" in parts:
+        return "/".join(parts[:parts.index("src")])
+    scopes = {scope for item in metadata if (scope := _metadata_scope(item)) is not None}
+    return max((scope for scope in scopes if not scope or path.startswith(scope + "/")),
+               key=len, default="")
+
+
+def _build_metadata_sources(client: httpx.Client, *, repository: str,
+                            blobs: Mapping[str, str]) -> dict[str, str | None]:
+    sources = {}
+    for path, blob in sorted(blobs.items()):
+        if _metadata_scope(path) is None:
             continue
         try:
-            content = _fetch_blob_bytes(client, repository, blob).decode(
-                "utf-8", errors="replace"
-            )
+            sources[path] = _fetch_blob_bytes(client, repository, blob).decode("utf-8", errors="replace")
         except SourceTransplantError:
+            # An unreadable overriding module file cannot inherit a sibling's
+            # or ancestor's version as though the missing evidence were empty.
+            sources[path] = None
+    return sources
+
+
+def _build_metadata_text(client: httpx.Client, *, repository: str,
+                         blobs: Mapping[str, str]) -> str:
+    return "\n".join(f"\n# MMM_METADATA_PATH {path}\n{text}"
+                     for path, text in _build_metadata_sources(
+                         client, repository=repository, blobs=blobs).items() if text is not None)
+
+
+def _without_metadata_comments(text: str) -> str:
+    # Preserve quoted strings (including URLs and Gradle interpolation) while
+    # removing comments before extracting any version authority.
+    return re.sub(r'''(?:"""[\s\S]*?"""|\x27\x27\x27[\s\S]*?\x27\x27\x27)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|(/\*[\s\S]*?\*/|//[^\n]*|\#[^\n]*)''',
+                  lambda match: match.group(1) or "\n" * match.group(0).count("\n"), text)
+
+
+def _metadata_assignments(path: str, text: str) -> dict[str, str]:
+    if path.endswith("libs.versions.toml"):
+        section = ""
+        lines = []
+        for line in text.splitlines():
+            if line.strip().startswith("["):
+                section = line.strip()
+            elif section == "[versions]":
+                lines.append(line)
+        text = "\n".join(lines)
+    separator = r"[=:]" if path.endswith("gradle.properties") else "="
+    pattern = (r"(?m)^\s*(?:(?:val|var|def)\s+)?(?:(?:ext|project|rootProject)\.)?"
+               r"([A-Za-z_][\w.-]*)(?:[ \t]*:[ \t]*[\w?.<>]+)?[ \t]*" + separator + r"[ \t]*([^\n]+)")
+    values = {match[1]: match[2].strip().rstrip(";") for match in re.finditer(pattern, text)}
+    for match in re.finditer(r'''\b(?:extra|ext)\[(["'])([A-Za-z_][\w.-]*)\1\]\s*=\s*([^\n]+)''', text):
+        values[match[2]] = match[3].strip().rstrip(";")
+    if path.endswith("libs.versions.toml"):
+        values = {"libs.versions." + key: value for key, value in values.items()}
+    return values
+
+
+def _resolve_metadata_value(value: str, properties: Mapping[str, str], seen=frozenset()) -> str:
+    value = value.strip().rstrip(";").strip()
+    if len(value) >= 2 and value[0] in {"'", '"'} and value[-1] == value[0]:
+        value = value[1:-1]
+    key = re.sub(r"^(?:project\.|ext\.)+", "", value)
+    key = key.replace("rootProject.ext.", "rootProject.", 1)
+    accessor = re.fullmatch(
+        r'''(?:(rootProject|project)\.)?(?:findProperty|property)\(["']([\w.-]+)["']\)(?:\s+as\s+String)?''', value)
+    provider = re.fullmatch(r'''providers\.gradleProperty\(["']([\w.-]+)["']\)\.get\(\)''', value)
+    if accessor:
+        key = ("rootProject." if accessor[1] == "rootProject" else "") + accessor[2]
+    elif provider:
+        key = provider[1]
+    if key.startswith("libs.versions.") and key.endswith(".get()"):
+        key = key[:-6]
+    if key in properties and key not in seen:
+        return _resolve_metadata_value(properties[key], properties, seen | {key})
+
+    def interpolate(match):
+        reference = match[1] or match[2]
+        resolved = _resolve_metadata_value(reference, properties, seen)
+        # Missing variables must stay unresolved; replacing them with empty
+        # text could turn an unknown version expression into an exact release.
+        return resolved if resolved != reference else match[0]
+
+    return re.sub(r"\$\{([^{}]+)\}|\$([A-Za-z_][\w.]*)", interpolate, value)
+
+
+def _single_minecraft_version(values: Sequence[str]) -> str:
+    versions = set(values)
+    if len(versions) != 1:
+        return ""
+    value = next(iter(versions))
+    return value if _MINECRAFT_VERSION.fullmatch(value) else ""
+
+
+def _gradle_owned_metadata(text: str, *, inherited: bool) -> tuple[str, str] | None:
+    """Separate local dependencies from explicitly shared project configuration.
+
+    Project selectors and conditional Minecraft mutations need Gradle evaluation;
+    they cannot supply global version authority to an unrelated source module.
+    """
+    quoted = re.compile(r'''"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*' '''.rstrip())
+    masked = quoted.sub(lambda match: ' ' * len(match[0]), text)
+    properties, coordinates = [], []
+    stack = [(True, not inherited, False, 0)]
+    previous = header_start = 0
+    authority = re.compile(r'(?:com\.mojang:minecraft:|net\.minecraftforge:forge:)')
+    for token in re.finditer(r'[{}]', masked):
+        start = token.start()
+        include_properties, include_coordinates, unknown, opened = stack[-1]
+        segment = text[previous:start]
+        blank = ''.join('\n' if char == '\n' else ' ' for char in segment)
+        properties.append(segment if include_properties else blank)
+        coordinates.append(segment if include_coordinates else blank)
+        if token[0] == '{':
+            header = masked[header_start:start]
+            shared = bool(re.search(r'\b(?:allprojects|subprojects)\s*$', header))
+            subprojects = bool(re.search(r'\bsubprojects\s*$', header))
+            # Only these declarative project contexts grant authority. A task,
+            # function, conditional or project selector is not a global scope.
+            scoped = not bool(re.search(r'(?<![\w.])(?:ext|dependencies|allprojects|subprojects)\s*$', header))
+            stack.append((include_properties and not scoped and not (subprojects and not inherited),
+                          (include_coordinates or (shared and inherited)) and not scoped
+                          and not (subprojects and not inherited), scoped, token.end()))
+        elif len(stack) > 1:
+            if unknown:
+                body = text[opened:start]
+                if authority.search(body):
+                    return None
+                mutations = set(_metadata_assignments('build.gradle', body))
+                mutations.update(match[1] for match in re.finditer(
+                    r'''(?:setProperty|extraProperties\.set|extra\.set)\(\s*["']([\w.-]+)["']''', body))
+                # Keep unknown writes in the property graph. Silently dropping
+                # an alias write would revive its earlier literal version.
+                properties.append('\n' + '\n'.join(
+                    key + ' = <unresolved-scoped-mutation>' for key in sorted(mutations)) + '\n')
+            stack.pop()
+        else:
+            return None
+        # Braces are not version literals. Keeping line boundaries is enough
+        # for the assignment/dependency extractor, including inline blocks.
+        properties.append('\n')
+        coordinates.append('\n')
+        previous = token.end()
+        header_start = previous
+    if len(stack) != 1:
+        return None
+    tail = text[previous:]
+    properties.append(tail)
+    coordinates.append(tail if not inherited else ''.join('\n' if char == '\n' else ' ' for char in tail))
+    return ''.join(properties), ''.join(coordinates)
+
+
+def _module_metadata_context(metadata: Mapping[str, str | None], module: str) -> tuple[str, str]:
+    """Resolve declarative module/ancestor properties, never sibling modules.
+
+    This handles conventional properties, simple Gradle interpolation and version
+    catalogs; executable Gradle expressions remain unknown rather than guessed.
+    """
+    groups: dict[str, list[tuple[str, str | None]]] = {}
+    for path, text in metadata.items():
+        scope = _metadata_scope(path)
+        if scope is None or (scope and module != scope and not module.startswith(scope + "/")):
             continue
-        # Keep the path in the evidence text so loader-specific metadata filenames
-        # (notably NeoForge) remain observable even when their body uses generic keys.
-        chunks.append(f"\n# MMM_METADATA_PATH {path}\n{content}")
-    return "\n".join(chunks)
+        if PurePosixPath(path).name in {"fabric.mod.json", "mods.toml", "neoforge.mods.toml"} and scope != module:
+            continue  # Resource manifests are not inherited by child projects.
+        groups.setdefault(scope, []).append((path, text))
+    properties: dict[str, str] = {}
+    version = ""
+    has_build_version = False
+    shared_coordinates: list[str] = []
+    chunks = []
+    for scope in sorted(groups, key=lambda value: (len(value), value)):
+        files = groups[scope]
+        if any(text is None for _path, text in files):
+            return "", ""  # Missing nearer metadata cannot authorize inherited source.
+        assigned = set()
+        cleaned = []
+        root_properties = {}
+        for path, text in sorted(files, key=lambda item: (not item[0].endswith("gradle.properties"), item[0])):
+            chunks.append(f"\n# MMM_METADATA_PATH {path}\n{text}")
+            clean = _without_metadata_comments(text)
+            if scope and re.search(r"\brootProject\.(?:ext\.)?[\w.]+\s*=", clean):
+                return "", ""  # Cross-project mutations require executing Gradle.
+            property_text = dependency_text = clean
+            if path.endswith(('.gradle', '.gradle.kts')):
+                owned = _gradle_owned_metadata(clean, inherited=scope != module)
+                if owned is None:
+                    return '', ''
+                property_text, dependency_text = owned
+            cleaned.append((path, clean, dependency_text))
+            if not scope:
+                root_property_text = clean
+                if path.endswith(('.gradle', '.gradle.kts')):
+                    root_owned = _gradle_owned_metadata(clean, inherited=False)
+                    if root_owned is None:
+                        return '', ''
+                    root_property_text = root_owned[0]
+                for key, value in _metadata_assignments(path, root_property_text).items():
+                    root_properties[key] = _resolve_metadata_value(value, root_properties)
+            for key, value in _metadata_assignments(path, property_text).items():
+                properties[key] = _resolve_metadata_value(value, properties)
+                assigned.add(key)
+        if not scope:
+            for key, value in root_properties.items():
+                resolved = _resolve_metadata_value(value, root_properties)
+                properties["rootProject." + key] = (
+                    resolved if "$" not in resolved else "<unresolved-root-property>" + resolved)
+        declarations = [properties[key] for key in assigned if key in _MINECRAFT_PROPERTIES or
+                        (key.startswith("libs.versions.") and key[14:] in _MINECRAFT_PROPERTIES | {"minecraft", "mc"})]
+        own_coordinates = []
+        for path, _clean, dependency_text in cleaned:
+            if not path.endswith((".gradle", ".gradle.kts")):
+                continue
+            for match in re.finditer(
+                r'''\b(?:minecraft|modImplementation|implementation|api|compileOnly)\s*(?:\(\s*)?(["'])((?:com\.mojang:minecraft|net\.minecraftforge:forge):[^"']+)\1''', dependency_text):
+                own_coordinates.append(match[2])
+        if scope != module:
+            shared_coordinates.extend(own_coordinates)
+        coordinates = []
+        for raw_coordinate in dict.fromkeys([*shared_coordinates, *(own_coordinates if scope == module else [])]):
+            coordinate = _resolve_metadata_value(raw_coordinate, properties)
+            group, artifact, declared = coordinate.split(":", 2)
+            if (group, artifact) == ("net.minecraftforge", "forge"):
+                match = re.fullmatch(r'(\d+(?:\.\d+)+(?:-(?:pre|rc)\d+)?)-[0-9][A-Za-z0-9.+-]*', declared)
+                declared = match[1] if match else ''
+            coordinates.append(declared)
+        if coordinates or declarations:
+            # An actual dependency declaration overrides inherited default
+            # properties. Conflicting/unknown values never select the target.
+            version = _single_minecraft_version(coordinates or [
+                _resolve_metadata_value(value, properties) for value in declarations])
+            has_build_version = True
+        for _path, clean, _dependency_text in cleaned:
+            try:
+                manifest = json.loads(clean)
+            except (ValueError, TypeError):
+                continue
+            depends = manifest.get("depends") if isinstance(manifest, Mapping) else None
+            declared = depends.get("minecraft") if isinstance(depends, Mapping) else None
+            values = declared if isinstance(declared, list) else [declared]
+            exact = _single_minecraft_version([
+                _resolve_metadata_value(value, properties) if isinstance(value, str) else ""
+                for value in values])
+            if exact and has_build_version and version != exact:
+                version = ""
+            elif exact and not has_build_version:
+                version = exact
+    return version, "\n".join(chunks)
 
 
-def _target_compatibility_evidence(text: str, *, adapter: PlatformAdapter) -> CompatibilityEvidence:
-    if not text:
-        return CompatibilityEvidence(minecraft_version="", loader="", status="unverified")
-    folded = text.casefold()
+def _compatibility_evidence(text: str, minecraft_version: str, *, adapter: PlatformAdapter) -> CompatibilityEvidence:
+    folded = _without_metadata_comments(text).casefold()
     loader = adapter.loader.casefold()
     loader_aliases = {
         "fabric": ("fabric", "fabricloader", "fabric.mod.json"),
@@ -1337,22 +1618,14 @@ def _target_compatibility_evidence(text: str, *, adapter: PlatformAdapter) -> Co
     loader_evidenced = any(
         alias in folded for alias in loader_aliases.get(loader, (loader,))
     )
-    prop = _MINECRAFT_PROP.search(text)
-    minecraft_version = prop.group(1).strip() if prop else ""
-    if not minecraft_version:
-        for version in (adapter.minecraft_version, "1.21", "1.20", "1.19"):
-            if version in text:
-                minecraft_version = version
-                break
     mixin_count = len(re.findall(r"\bmixins?\b", folded))
     has_access_widener = ".accesswidener" in folded or "accesswidener" in folded
 
     if (
         minecraft_version == adapter.minecraft_version
-        or adapter.minecraft_version in text
     ) and loader_evidenced:
         status = "metadata_exact"
-    elif loader_evidenced or minecraft_version or adapter.minecraft_version in text:
+    elif loader_evidenced or minecraft_version:
         status = "metadata_adapt"
     else:
         status = "unverified"
@@ -1364,6 +1637,14 @@ def _target_compatibility_evidence(text: str, *, adapter: PlatformAdapter) -> Co
         has_access_widener=has_access_widener,
         status=status,
     )
+
+
+def _target_compatibility_evidence(text: str, *, adapter: PlatformAdapter) -> CompatibilityEvidence:
+    matches = list(re.finditer(r"(?m)^# MMM_METADATA_PATH (.+)\n", text))
+    metadata = {match[1]: text[match.end():matches[index + 1].start() if index + 1 < len(matches) else len(text)]
+                for index, match in enumerate(matches)} if matches else {"build.gradle": text}
+    version, scoped_text = _module_metadata_context(metadata, "")
+    return _compatibility_evidence(scoped_text, version, adapter=adapter)
 
 
 def _target_compatibility(text: str, *, adapter: PlatformAdapter) -> str:
