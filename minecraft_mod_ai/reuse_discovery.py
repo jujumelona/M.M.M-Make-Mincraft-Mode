@@ -30,7 +30,8 @@ from .curseforge_catalog import (
 )
 from .curseforge_catalog import (
     curseforge_mod_metadata,
-    curseforge_target_filters,
+    curseforge_mods_class_id,
+    curseforge_next_index,
 )
 from .deadline_executor import iter_completed_with_deadlines
 from .ecosystem_discovery import provider_request_failure
@@ -38,7 +39,7 @@ from .source_intent_aliases import source_intent_aliases as _source_intent_alias
 
 _TOKEN = re.compile(r"[\w]+", re.UNICODE)
 _MINECRAFT_GAME_ID = 432
-_PROVIDER_PRIORITY = {"curseforge": 0, "modrinth": 1, "github": 2}
+_PROVIDER_PRIORITY = {"curseforge": 0, "modrinth": 1, "sourcegraph": 1, "github": 2}
 _HTTP_CLIENT_LOCK = Lock()
 _HTTP_CLIENT: httpx.Client | None = None
 _GITHUB_QUERY_BOILERPLATE = frozenset(
@@ -281,16 +282,15 @@ def _query_variants(capability: str, terms: Sequence[str]) -> tuple[str, ...]:
 def _provider_query(provider: str, query: str) -> str:
     """Adapt one semantic query to the provider's search semantics.
 
-    GitHub repository search is an AND-heavy metadata search and the ecosystem
-    client already appends ``minecraft mod``. Passing ontology phrases that already
-    contain those words made queries needlessly over-constrained (and duplicated
-    the suffix). Keep at most two semantic terms there; Modrinth and CurseForge
-    retain the richer full-text phrase.
+    GitHub/Sourcegraph are code or repository discovery rather than catalogues.
+    The GitHub client appends ``minecraft mod``. Passing phrases that already
+    contain those words over-constrains queries. Keep at most two semantic
+    terms for code search and GitHub; Modrinth retains its own full-text search.
     """
 
     query = re.sub(r'\bminecraft\s+(?:fabric|forge|neoforge)\b', 'minecraft', query, flags=re.IGNORECASE)
     query = re.sub(r'\b(?:fabric|forge|neoforge)\s+mods?\b', 'mod', query, flags=re.IGNORECASE)
-    if provider != "github":
+    if provider not in {"github", "sourcegraph"}:
         return query
     tokens = [
         token
@@ -489,63 +489,180 @@ def _search_curseforge(
     minecraft_version=None,
     loader=None,
 ) -> list:
+    """Browse real Minecraft mod listings, not invented feature-name queries.
+
+    Version/loader constraints are verified against pinned source during donor
+    inspection; applying them here would lose useful porting references.
+    Catalogue results without source links never acquire reuse authority.
+    """
     api_key = _curseforge_api_key()
     if not api_key:
         return []
-    clean_query = _ascii_search_query(query)
-    if not clean_query or len(clean_query) < 2:
-        clean_query = "minecraft mod"
-    params = {
-        "gameId": str(_MINECRAFT_GAME_ID),
-        "searchFilter": clean_query[:80],
-        "sortField": "2",
-        "sortOrder": "desc",
-        "pageSize": str(min(limit, 50)),
-        "index": "0",
-    }
-    params.update(curseforge_target_filters(minecraft_version, loader))
+    client = _pooled_http_client()
+    headers = {"Accept": "application/json", "x-api-key": api_key}
+    try:
+        category_response = client.get(
+            "https://api.curseforge.com/v1/categories",
+            params={"gameId": str(_MINECRAFT_GAME_ID)},
+            headers=headers, timeout=10.0,
+        )
+        category_response.raise_for_status()
+        category_payload = category_response.json()
+        category_rows = category_payload.get("data") if isinstance(category_payload, Mapping) else None
+        mods_class_id = curseforge_mods_class_id(category_rows)
+    except (httpx.HTTPError, ValueError):
+        # The search endpoint may remain functional even if categories do not.
+        # Results without a known Mods class must not masquerade as exhaustive.
+        mods_class_id = None
+
+    result = []
+    seen_ids: set[int] = set()
+    page_size = 50  # Each browse page can expose candidates beyond a single shortlist.
+    for sort_field in (2, 3, 11):  # popularity, updated, released
+        index = 0
+        for _ in range(_discovery_pages()):
+            params = {
+                "gameId": str(_MINECRAFT_GAME_ID),
+                "sortField": str(sort_field),
+                "sortOrder": "desc",
+                "pageSize": str(page_size),
+                "index": str(index),
+            }
+            if mods_class_id is not None:
+                params["classId"] = str(mods_class_id)
+            try:
+                response = client.get(
+                    "https://api.curseforge.com/v1/mods/search",
+                    params=params, headers=headers, timeout=10.0,
+                )
+                response.raise_for_status()
+                raw = response.json()
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code
+                raise _CurseForgeSearchError(
+                    f"CurseForge search failed (HTTP {status}).", http_status=status,
+                    request_failure=provider_request_failure(exc, provider="curseforge"),
+                ) from None
+            except httpx.HTTPError as exc:
+                raise _CurseForgeSearchError(
+                    f"CurseForge search transport failed ({type(exc).__name__}).",
+                    request_failure=provider_request_failure(exc, provider="curseforge"),
+                ) from None
+            except ValueError:
+                raise _CurseForgeSearchError("CurseForge search returned invalid JSON.") from None
+
+            rows = raw.get("data") if isinstance(raw, Mapping) else None
+            if not isinstance(rows, list):
+                raise _CurseForgeSearchError("CurseForge search returned no valid data list.")
+            for position, item in enumerate(rows):
+                if not isinstance(item, Mapping) or type(item.get("id")) is not int:
+                    continue
+                mod_id = item["id"]
+                if mod_id in seen_ids:
+                    continue
+                if mods_class_id is not None and item.get("classId") not in (None, mods_class_id):
+                    continue
+                seen_ids.add(mod_id)
+                links = item.get("links")
+                source_url = links.get("sourceUrl") if isinstance(links, Mapping) else ""
+                repository = _github_repository(source_url)
+                result.append((repository, 1.0 / (1 + len(result)), {
+                    "title": item.get("name", ""), "summary": item.get("summary", ""),
+                    "repository": repository, "sort_field": sort_field,
+                    "catalog_class_verified": mods_class_id is not None,
+                    **curseforge_mod_metadata(
+                        item, minecraft_version=minecraft_version, loader=loader
+                    ),
+                }))
+            try:
+                next_index = curseforge_next_index(
+                    raw.get("pagination") if isinstance(raw, Mapping) else None,
+                    index=index, page_size=page_size, row_count=len(rows),
+                )
+            except ValueError as exc:
+                raise _CurseForgeSearchError(str(exc)) from None
+            if next_index is None:
+                break
+            index = next_index
+    return result if with_metadata else [(repo, rank) for repo, rank, _meta in result if repo]
+
+
+def _search_sourcegraph(query: str, *, limit: int, with_metadata=False) -> list:
+    """Find actual Java code in public GitHub projects using Sourcegraph's SSE API.
+
+    A code hit is an untrusted candidate, not a proof of Minecraft feature
+    compatibility. Missing public service access is a recoverable provider error.
+    """
+    tokens = [
+        word for word in _TOKEN.findall(query.casefold())
+        if re.fullmatch(r"[a-z][a-z0-9_]{3,40}", word)
+        and word not in _GITHUB_QUERY_BOILERPLATE | _QUERY_ACTION_WORDS
+    ]
+    if not tokens:
+        return []
+    term = tokens[0]
+    search = f'lang:Java type:file "net.minecraft" "{term}" count:{min(50, max(1, limit))} patternType:keyword'
     try:
         response = _pooled_http_client().get(
-            "https://api.curseforge.com/v1/mods/search",
-            params=params,
-            headers={"Accept": "application/json", "x-api-key": api_key},
-            timeout=10.0,
+            "https://sourcegraph.com/.api/search/stream",
+            params={"q": search, "v": "V3"},
+            headers={"Accept": "text/event-stream"},
+            timeout=15.0,
         )
         response.raise_for_status()
-        raw = response.json()
-    except httpx.HTTPStatusError as exc:
-        status = exc.response.status_code
-        raise _CurseForgeSearchError(
-            f"CurseForge search failed (HTTP {status}).", http_status=status,
-            request_failure=provider_request_failure(exc, provider="curseforge"),
-        ) from None
     except httpx.HTTPError as exc:
-        raise _CurseForgeSearchError(
-            f"CurseForge search transport failed ({type(exc).__name__}).",
-            request_failure=provider_request_failure(exc, provider="curseforge"),
+        raise RuntimeError(
+            f"Sourcegraph code search unavailable ({type(exc).__name__})."
         ) from None
-    except ValueError:
-        raise _CurseForgeSearchError("CurseForge search returned invalid JSON.") from None
-    data = raw.get("data") if isinstance(raw, Mapping) else None
-    if not isinstance(data, list):
-        raise _CurseForgeSearchError("CurseForge search returned no valid data list.")
-    result = []
-    for index, item in enumerate(data):
-        if not isinstance(item, Mapping):
+    results = []
+    seen: set[str] = set()
+    completed = False
+    for event in re.split(r"\r?\n\r?\n", response.text):
+        event_type = ""
+        fragments = []
+        for line in event.splitlines():
+            if line.startswith("event:"):
+                event_type = line[6:].strip()
+            elif line.startswith("data:"):
+                fragments.append(line[5:].strip())
+        if event_type == "done":
+            completed = True
+        if event_type != "matches" or not fragments:
             continue
-        links = item.get("links")
-        source_url = links.get("sourceUrl") if isinstance(links, Mapping) else ""
-        repository = _github_repository(source_url)
-        # Catalog matches remain traceable even when no supported source link
-        # exists. Only a nonempty repository can enter the donor frontier.
-        result.append((repository, 1.0 / (1 + index), {
-            "title": item.get("name", ""), "summary": item.get("summary", ""),
-            "repository": repository,
-            **curseforge_mod_metadata(
-                item, minecraft_version=minecraft_version, loader=loader
-            ),
-        }))
-    return result if with_metadata else [(repo, rank) for repo, rank, _meta in result if repo]
+        try:
+            entries = __import__("json").loads("\n".join(fragments))
+        except ValueError:
+            continue
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, Mapping) or entry.get("type") != "content":
+                continue
+            source = str(entry.get("repository") or "")
+            repository = _github_repository("https://" + source)
+            path = str(entry.get("path") or "")
+            if not repository or not path.endswith(".java") or repository in seen:
+                continue
+            seen.add(repository)
+            matches = entry.get("lineMatches")
+            snippets = [
+                str(match.get("line") or "")[:300]
+                for match in matches if isinstance(match, Mapping)
+            ][:3] if isinstance(matches, list) else []
+            metadata = {
+                "repository": repository,
+                "title": path.rsplit("/", 1)[-1],
+                "summary": " ".join(snippets),
+                "source_url": "https://github.com/" + repository,
+                "source_id": "github:" + repository,
+                "code_search_path": path,
+                "code_search_query": term,
+                "source_reuse_authority": "verification_required",
+            }
+            results.append((repository, 1.0 / (1 + len(results)), metadata))
+    if not completed:
+        raise RuntimeError("Sourcegraph returned an incomplete search stream.")
+    return results if with_metadata else [(repo, rank) for repo, rank, _meta in results]
 
 
 def discover_repositories_for_graph(
@@ -604,6 +721,9 @@ def discover_repositories_for_graph(
         if provider == "curseforge":
             return capability, provider, _search_curseforge(provider_query, limit=_query_limit(),
                 with_metadata=True, minecraft_version=minecraft_version, loader=loader), [], False
+        if provider == "sourcegraph":
+            return capability, provider, _search_sourcegraph(provider_query, limit=_query_limit(),
+                with_metadata=True), [], False
         candidates = []
         errors: list[dict[str, Any]] = []
         cursor = ""
@@ -642,7 +762,7 @@ def discover_repositories_for_graph(
         raise TypeError("Reuse discovery providers must be a sequence of provider names.")
     provider_order = tuple(dict.fromkeys(
         str(provider).strip().casefold()
-        for provider in (providers if providers is not None else _PROVIDER_PRIORITY)
+        for provider in (providers if providers is not None else ("curseforge", "modrinth", "github"))
     ))
     if any(provider not in _PROVIDER_PRIORITY for provider in provider_order):
         raise ValueError("Reuse discovery received an unsupported provider.")
@@ -753,7 +873,9 @@ def discover_repositories_for_graph(
             query_list = variants[capability]
             if variant_index >= len(query_list):
                 continue
-            query = _provider_query(provider, query_list[variant_index])
+            query = "" if provider == "curseforge" else _provider_query(provider, query_list[variant_index])
+            if provider == "curseforge" and variant_index != 0:
+                continue
             key = (provider, query)
             subscribers.setdefault(key, []).append(capability)
 
