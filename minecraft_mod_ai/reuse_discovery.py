@@ -516,13 +516,29 @@ def _search_curseforge(
         # The search endpoint may remain functional even if categories do not.
         # Results without a known Mods class must not masquerade as exhaustive.
         mods_class_id = None
+        category_rows = None
 
     result = []
     seen_ids: set[int] = set()
     page_size = 50  # Each browse page can expose candidates beyond a single shortlist.
-    for sort_field in (2, 3, 11):  # popularity, updated, released
+    # Categories reveal less popular projects that broad popularity/recency
+    # windows miss. Keep names out of searchFilter for every browse window.
+    child_categories = sorted({
+        row["id"]
+        for row in (category_rows if isinstance(category_rows, list) else ())
+        if isinstance(row, Mapping)
+        and row.get("gameId") == _MINECRAFT_GAME_ID
+        and row.get("classId") == mods_class_id
+        and row.get("isClass") is not True
+        and type(row.get("id")) is int and row["id"] > 0
+    }) if mods_class_id is not None else []
+    windows = [
+        (sort_field, None, _discovery_pages()) for sort_field in (2, 3, 11)
+    ]
+    windows.extend((3, category_id, 1) for category_id in child_categories)
+    for sort_field, category_id, max_pages in windows:
         index = 0
-        for _ in range(_discovery_pages()):
+        for _ in range(max_pages):
             params = {
                 "gameId": str(_MINECRAFT_GAME_ID),
                 "sortField": str(sort_field),
@@ -532,6 +548,8 @@ def _search_curseforge(
             }
             if mods_class_id is not None:
                 params["classId"] = str(mods_class_id)
+            if category_id is not None:
+                params["categoryId"] = str(category_id)
             try:
                 response = client.get(
                     "https://api.curseforge.com/v1/mods/search",
