@@ -616,8 +616,15 @@ def _search_sourcegraph(query: str, *, limit: int, with_metadata=False) -> list:
     ]
     if not tokens:
         return []
-    term = tokens[0]
-    search = f'lang:Java type:file "net.minecraft" "{term}" count:{min(50, max(1, limit))} patternType:keyword'
+    # Search actual Java content using alternatives, not a single invented name.
+    # Requiring an import and feature name in the same file misses feature
+    # implementations whose Minecraft references live in another class.
+    terms = tuple(dict.fromkeys(tokens))[:2]
+    content_query = " or ".join(f'content:"{term}"' for term in terms)
+    search = (
+        f'lang:Java type:file repo:github.com ({content_query}) '
+        f'count:{min(50, max(1, limit))} patternType:keyword'
+    )
     try:
         response = _pooled_http_client().get(
             "https://sourcegraph.com/.api/search/stream",
@@ -677,7 +684,7 @@ def _search_sourcegraph(query: str, *, limit: int, with_metadata=False) -> list:
                 "source_url": "https://github.com/" + repository,
                 "source_id": "github:" + repository,
                 "code_search_path": path,
-                "code_search_query": term,
+                "code_search_query": " OR ".join(terms),
                 "source_reuse_authority": "verification_required",
             }
             results.append((repository, 1.0 / (1 + len(results)), metadata))
