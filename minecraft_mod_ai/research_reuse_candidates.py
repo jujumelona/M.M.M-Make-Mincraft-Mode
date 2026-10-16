@@ -140,9 +140,25 @@ def _catalog_evidence(record: Mapping[str, Any], query_sha: str) -> dict[str, An
 
 def _source_code_domain(domain: Mapping[str, Any]) -> bool:
     kinds = domain.get("evidence_kinds")
-    return isinstance(kinds, Sequence) and not isinstance(kinds, (str, bytes, bytearray)) and (
-        "source_code" in {str(value) for value in kinds}
+    labels = (
+        {str(value) for value in kinds}
+        if isinstance(kinds, Sequence)
+        and not isinstance(kinds, (str, bytes, bytearray))
+        else set()
     )
+    if "source_code" in labels:
+        return True
+    providers = domain.get("providers")
+    catalogues = (
+        {str(value) for value in providers}
+        if isinstance(providers, Sequence)
+        and not isinstance(providers, (str, bytes, bytearray))
+        else set()
+    )
+    # A catalogue-first Minecraft API research domain may already contain an
+    # exact GitHub sourceUrl. Project THAT actual link without converting
+    # the entire predesign domain into a broad GitHub search provider.
+    return "minecraft_api" in labels and bool(catalogues & {"curseforge", "modrinth"})
 
 
 def _optional_limit(rows: list[dict[str, Any]], limit: int | None) -> list[dict[str, Any]]:
