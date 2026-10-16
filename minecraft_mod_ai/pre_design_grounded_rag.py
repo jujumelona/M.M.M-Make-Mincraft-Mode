@@ -37,7 +37,7 @@ from .knowledge import (
     target_neutral_evidence_catalog,
 )
 from .rag_index import ProjectRAGIndex
-from .source_intent_aliases import source_intent_aliases, source_intent_terms, source_query_variants
+from .source_intent_aliases import source_intent_terms, source_query_variants
 
 _TIMEOUT = 8.0
 _UA = "MMM-PreDesignResearch/3.0 (+https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode)"
