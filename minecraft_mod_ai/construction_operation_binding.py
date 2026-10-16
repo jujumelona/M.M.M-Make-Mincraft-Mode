@@ -21,6 +21,19 @@ SYMBOL_BOUND_OPERATIONS = frozenset(API_KINDS) | TYPE_BOUND_OPERATIONS | {
 }
 
 
+def _usable_api_candidate(key, row, *, op, kinds, current_member, rejected_symbols, state, fits):
+    # A declaration whose body is being authored is an obligation, not
+    # existing implementation evidence. Keep sibling helpers available.
+    if op == 'call' and (key == current_member or row.get('inherited_from') == current_member):
+        return False
+    if key in rejected_symbols or row.get('inherited_from') in rejected_symbols:
+        return False
+    return (row['kind'] in kinds
+            and state.evidence_index.accessible(key, constructor=op == 'new')
+            and (op != 'call' or state.evidence_index.intent_compatible(key))
+            and (op not in API_KINDS or fits(row['owner'] if op == 'new' else row['return_type'])))
+
+
 def forbidden_input_references(nodes, goal_id, *, declaration=None, symbols=None):
     """Exclude all consumers of the missing slot, not just the slot itself.
 
@@ -114,17 +127,10 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
     def fits(type_):
         return result_fits(type_, requirements, state.evidence_index)
 
-    def usable_api(key, row):
-        # A declaration whose body is being authored is an obligation, not
-        # existing implementation evidence. Keep sibling helpers available.
-        if op == 'call' and (key == current_member or row.get('inherited_from') == current_member):
-            return False
-        if key in rejected_symbols or row.get('inherited_from') in rejected_symbols:
-            return False
-        return (row['kind'] in kinds
-                and state.evidence_index.accessible(key, constructor=op == 'new')
-                and (op != 'call' or state.evidence_index.intent_compatible(key))
-                and (op not in API_KINDS or fits(row['owner'] if op == 'new' else row['return_type'])))
+    from functools import partial
+    usable_api = partial(_usable_api_candidate, op=op, kinds=kinds,
+                         current_member=current_member, rejected_symbols=rejected_symbols,
+                         state=state, fits=fits)
 
     # Retrieval must describe the specific Java dependency, not the full game
     # story. Narrative terms such as "fight aliens / colonize planets" diluted

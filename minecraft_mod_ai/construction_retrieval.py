@@ -112,10 +112,7 @@ class ConstructionEvidenceIndex:
                 continue
             self.by_owner[row['owner']].append(key)
             self._record_document(key, row)
-            if row.get('kind') == 'METHOD':
-                for part in _name_parts(row):
-                    if len(part) >= 5:
-                        self.member_name_owners[part[:5]].add(row['owner'])
+            self._index_name_owner(row)
             if row.get('kind') == 'CLASS':
                 self.aliases[symbol_query_key(key)].add(key)
                 self.aliases[symbol_query_key(row['name'])].add(key)
@@ -152,6 +149,12 @@ class ConstructionEvidenceIndex:
         self.query_vectors = {}
         self.source_ranking_query = None
         self.source_ranking = None
+
+    def _index_name_owner(self, row):
+        if row.get('kind') == 'METHOD':
+            for part in _name_parts(row):
+                if len(part) >= 5:
+                    self.member_name_owners[part[:5]].add(row['owner'])
 
     def _record_document(self, key, row):
         owner, kind = row['owner'], row['kind']
@@ -224,10 +227,7 @@ class ConstructionEvidenceIndex:
         if key not in self.by_owner[self.owner]:
             self.by_owner[self.owner].append(key)
         self._record_document(key, row)
-        if row.get('kind') == 'METHOD':
-            for part in _name_parts(row):
-                if len(part) >= 5:
-                    self.member_name_owners[part[:5]].add(row['owner'])
+        self._index_name_owner(row)
         self.member_text[key] = _description(row)
         self.member_prepared[key] = (frozenset(_tokens(self.member_text[key])), self.member_text[key].casefold())
         self.eligible.clear()
@@ -456,6 +456,37 @@ class ConstructionEvidenceIndex:
         self.source_ranking = (sources, vector)
         return self.source_ranking
 
+    def _rank_method_intent(self, query, kinds, eligible, relation):
+        self.name_weights = _purpose_name_weights(query)
+        self.strong_name_prefixes = frozenset(prefix for prefix, weight in self.name_weights.items()
+                                              if weight > 1 and prefix in self.member_name_owners)
+        self.exact_action_available = False
+        if 'METHOD' in kinds:
+            focus = self.strong_name_prefixes or self.name_weights.keys()
+            matched_owners = set()
+            for prefix in focus:
+                matched_owners.update(self.member_name_owners.get(prefix, ()))
+            for owner in matched_owners:
+                keys = eligible.get(owner, ())
+                if not keys:
+                    continue
+                best = 0.0
+                for key in keys:
+                    row = self.symbols[key]
+                    if row['kind'] != 'METHOD':
+                        continue
+                    score = self._member_name_score(key)
+                    best = max(best, score)
+                    parts = _name_parts(row)
+                    if (self.strong_name_prefixes and len(parts) == 1
+                            and parts[0][:5] in self.strong_name_prefixes):
+                        self.exact_action_available = True
+                if best:
+                    # A real matching callable outranks a class whose *name*
+                    # merely resembles the requested operation. Name precision
+                    # discourages registerDebugValues for "registration".
+                    relation[owner] += (8.0 if self.strong_name_prefixes else 2.0) * best
+
     def prepare(self, purpose, *, kinds, selection=None):
         if (not isinstance(purpose, str) or not purpose.strip() or not isinstance(kinds, (list, tuple, set, frozenset))
                 or not kinds or any(not isinstance(kind, str) for kind in kinds)
@@ -503,35 +534,7 @@ class ConstructionEvidenceIndex:
                 hits = sum(counts[kind][term] for kind in kinds for term in terms)
                 relation[owner] += hits / (documents * len(terms))
         eligible = self._eligible_owners(kinds, descriptor.get('selection'))
-        self.name_weights = _purpose_name_weights(query)
-        self.strong_name_prefixes = frozenset(prefix for prefix, weight in self.name_weights.items()
-                                              if weight > 1 and prefix in self.member_name_owners)
-        self.exact_action_available = False
-        if 'METHOD' in kinds:
-            focus = self.strong_name_prefixes or self.name_weights.keys()
-            matched_owners = set()
-            for prefix in focus:
-                matched_owners.update(self.member_name_owners.get(prefix, ()))
-            for owner in matched_owners:
-                keys = eligible.get(owner, ())
-                if not keys:
-                    continue
-                best = 0.0
-                for key in keys:
-                    row = self.symbols[key]
-                    if row['kind'] != 'METHOD':
-                        continue
-                    score = self._member_name_score(key)
-                    best = max(best, score)
-                    parts = _name_parts(row)
-                    if (self.strong_name_prefixes and len(parts) == 1
-                            and parts[0][:5] in self.strong_name_prefixes):
-                        self.exact_action_available = True
-                if best:
-                    # A real matching callable outranks a class whose *name*
-                    # merely resembles the requested operation. Name precision
-                    # discourages registerDebugValues for "registration".
-                    relation[owner] += (8.0 if self.strong_name_prefixes else 2.0) * best
+        self._rank_method_intent(query, kinds, eligible, relation)
         owners = rank_context_chunks(query, self.owner_chunks.values(), relation_scores=relation,
                                      prepared_text=self.owner_prepared)
         ranked = tuple(row.chunk_id for row in owners if row.chunk_id in eligible)
