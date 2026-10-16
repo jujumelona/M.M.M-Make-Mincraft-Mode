@@ -251,3 +251,62 @@ def test_handoff_discovery_failure_is_not_a_fake_success(monkeypatch):
     assert candidates == []
     assert design["_pre_design_source_handoff"]["status"] == "provider_error"
     assert design["_pre_design_source_handoff"]["error_type"] == "OSError"
+
+
+def test_outdated_prompt_handoff_is_discarded_before_candidate_projection(monkeypatch):
+    from minecraft_mod_ai import pre_design_research_pipeline as pipeline
+    from minecraft_mod_ai.research_reuse_candidates import ensure_authored_source_handoff
+
+    calls = []
+
+    def replacement(_router, prompt):
+        calls.append(prompt)
+        return {
+            "schema_version": "mmm/pre-design-source-candidate-handoff-v1",
+            "prompt_sha256": pipeline._canonical_sha256(prompt),
+            "repository_candidates": [],
+            "model_called": False,
+        }
+
+    monkeypatch.setattr(pipeline, "collect_source_candidate_handoff", replacement)
+    stale = {
+        "_pre_design_source_handoff": {
+            "schema_version": "mmm/pre-design-source-candidate-handoff-v1",
+            "prompt_sha256": pipeline._canonical_sha256("old feature"),
+            "repository_candidates": _projected(),
+        },
+    }
+    content, candidates = ensure_authored_source_handoff(
+        stale, router=object(), prompt="new unrelated feature",
+    )
+    assert calls == ["new unrelated feature"]
+    assert candidates == []
+    assert content["_pre_design_source_handoff"]["repository_candidates"] == []
+
+
+def test_generic_architecture_background_is_not_nominated_as_a_donor(monkeypatch):
+    from minecraft_mod_ai import pre_design_research_pipeline as pipeline
+
+    def fake_bundle(_backend, _router, research_brief):
+        return {"domains": [{
+            "domain_id": "request",
+            "queries": [{
+                "query": "A completely new spaceship feature",
+                "external_rag": {"sources": []},
+            }, {
+                "query": "Minecraft Fabric architecture items entities dimensions world interaction networking persistence data components testing patterns",
+                "external_rag": {"sources": [{
+                    "source_id": "modrinth:unrelated",
+                    "title": "Generic Network Utilities",
+                    "content": "Utilities for Minecraft networking",
+                    "metadata": {"source_url": "https://github.com/example/unrelated"},
+                }]},
+            }],
+        }]}
+
+    monkeypatch.setattr(pipeline, "forced_rag_bundle", fake_bundle)
+    receipt = pipeline.collect_source_candidate_handoff(
+        object(), "A completely new spaceship feature",
+    )
+    assert receipt["candidate_count"] == 0
+    assert receipt["repository_candidates"] == []
