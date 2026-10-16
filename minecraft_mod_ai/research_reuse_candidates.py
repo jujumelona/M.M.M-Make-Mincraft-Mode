@@ -286,6 +286,28 @@ def merge_repository_candidates(
     return _optional_limit(ranked, global_limit)
 
 
+def authored_design_repository_candidates(
+    content_design: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Join existing planning candidates with actual predesign research receipts.
+
+    Input may be absent on an initial run; never invent a catalogue or pre-
+    approved donor. This only projects host-stamped reference-only candidates.
+    """
+    state = content_design.get("_planning_state")
+    state_rows = state.get("repository_candidates", ()) if isinstance(state, Mapping) else ()
+    research = content_design.get("_pre_design_research")
+    deterministic = research.get("deterministic") if isinstance(research, Mapping) else None
+    research_rows = (
+        deterministic.get("repository_candidates", ())
+        if isinstance(deterministic, Mapping) else ()
+    )
+    return merge_repository_candidates(
+        state_rows if isinstance(state_rows, (list, tuple)) else (),
+        research_rows if isinstance(research_rows, (list, tuple)) else (),
+    )
+
+
 def planning_state_repository_cards(design: Mapping[str, Any]) -> tuple[dict[str, Any], ...]:
     """Read every host-stamped candidate receipt from the planning-state SSOT."""
     state = design.get("_planning_state")
@@ -325,6 +347,7 @@ def planning_state_repository_cards(design: Mapping[str, Any]) -> tuple[dict[str
 
 
 __all__ = [
+    "authored_design_repository_candidates",
     "merge_repository_candidates",
     "planning_state_repository_cards",
     "project_repository_candidates",
