@@ -29,11 +29,13 @@ def _index(*, with_registry=True):
         entity + '#get': _row(entity, 'get', result='java.lang.Object'),
         entity + '#registerDebugValues': _row(entity, 'registerDebugValues'),
         entity_type + '#create': _row(entity_type, 'create', result=entity),
-        renderer_registry + '#register': _row(renderer_registry, 'register'),
-        block_renderer_registry + '#register': _row(block_renderer_registry, 'register'),
     }
     if with_registry:
+        # The populated fixture verifies ranking among several same-verb APIs.
+        # The empty-action fixture must not retain other exact register methods.
         symbols[registry + '#register'] = _row(registry, 'register', result=entity_type)
+        symbols[renderer_registry + '#register'] = _row(renderer_registry, 'register')
+        symbols[block_renderer_registry + '#register'] = _row(block_renderer_registry, 'register')
     return ConstructionEvidenceIndex(symbols, {}, SimpleNamespace(),
         target_path='src/main/java/example/GeneratedRegistry.java',
         owner=owner, authoring_contract={})
