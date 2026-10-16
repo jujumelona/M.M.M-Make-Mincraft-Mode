@@ -318,9 +318,20 @@ def authored_design_repository_candidates(
         deterministic.get("repository_candidates", ())
         if isinstance(deterministic, Mapping) else ()
     )
-    return merge_repository_candidates(
+    source_handoff = content_design.get("_pre_design_source_handoff")
+    source_rows = (
+        source_handoff.get("repository_candidates", ())
+        if isinstance(source_handoff, Mapping)
+        and source_handoff.get("schema_version") == "mmm/pre-design-source-candidate-handoff-v1"
+        else ()
+    )
+    combined = merge_repository_candidates(
         state_rows if isinstance(state_rows, (list, tuple)) else (),
         research_rows if isinstance(research_rows, (list, tuple)) else (),
+    )
+    return merge_repository_candidates(
+        combined,
+        source_rows if isinstance(source_rows, (list, tuple)) else (),
     )
 
 
