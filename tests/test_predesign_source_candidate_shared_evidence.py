@@ -144,9 +144,20 @@ def test_actual_predesign_request_domain_is_source_code_eligible():
 
     brief = _pre_design_brief("Create a spaceship with planet travel")
     request = next(row for row in brief["domains"] if row["domain_id"] == "request")
-    assert "source_code" in request["evidence_kinds"]
+    assert "minecraft_api" in request["evidence_kinds"]
     assert "curseforge" in request["providers"]
     assert "modrinth" in request["providers"]
+    assert "github" not in request["providers"]
+    grounded = {"queries": [{
+        "query": "planet travel", "evidence_records": [{
+            "source_id": "curseforge:42",
+            "title": "Planet Travel",
+            "content": "Spaceship launch and planet travel",
+            "metadata": {"source_url": "https://github.com/example/planet-source"},
+        }],
+    }]}
+    projected = project_repository_candidates(request, grounded)
+    assert [row["repository"] for row in projected] == ["example/planet-source"]
 
 
 def test_donor_cache_fingerprint_changes_with_new_grounded_evidence():
