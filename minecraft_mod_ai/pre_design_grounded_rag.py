@@ -37,7 +37,7 @@ from .knowledge import (
     target_neutral_evidence_catalog,
 )
 from .rag_index import ProjectRAGIndex
-from .source_intent_aliases import source_intent_aliases
+from .source_intent_aliases import source_intent_aliases, source_intent_terms, source_query_variants
 
 _TIMEOUT = 8.0
 _UA = "MMM-PreDesignResearch/3.0 (+https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode)"
@@ -182,153 +182,162 @@ def _search_modrinth(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     seen_records: set[str] = set()
     seen_search_keys: set[str] = set()
     covered: set[str] = set()
-    wanted = set(_search_terms(query))
-    offset = 0
+    wanted = set(_search_terms(query)) | set(source_intent_terms(query))
+    search_variants = source_query_variants(query) or (query,)
     search_requests = 0
     source_requests = 0
     provider_total = 0
     result_limit = _provider_result_limit()
     page_limit = _provider_page_limit()
 
-    while not _limit_reached(search_requests, page_limit) and not _limit_reached(
-        len(records), result_limit
-    ):
-        page_size = _semantic_page_size(query, 100, result_limit, len(records))
-        if page_size <= 0:
-            break
-        params = urllib.parse.urlencode(
-            {
-                "query": _query_terms(query),
-                "limit": page_size,
-                "offset": offset,
-                "index": "relevance",
-                "facets": json.dumps([["project_type:mod"]]),
-            }
-        )
-        try:
-            payload = _json(f"https://api.modrinth.com/v2/search?{params}")
-        except (OSError, ValueError) as exc:
-            if not records:
-                raise
-            errors.append(f"partial_search_page:{type(exc).__name__}:{exc}")
-            break
-        search_requests += 1
-        raw_hits = payload.get("hits", []) if isinstance(payload, Mapping) else []
-        hits = (
-            [hit for hit in raw_hits if isinstance(hit, Mapping)]
-            if isinstance(raw_hits, list)
-            else []
-        )
-        if not hits:
-            break
-
-        try:
-            provider_total = max(provider_total, int(payload.get("total_hits", 0) or 0))
-        except (TypeError, ValueError, OverflowError):
-            provider_total = max(provider_total, offset + len(hits))
-
-        search_keys = {
-            str(hit.get("project_id") or hit.get("slug") or "").strip()
-            for hit in hits
-            if str(hit.get("project_id") or hit.get("slug") or "").strip()
-        }
-        if search_keys and not (search_keys - seen_search_keys):
-            errors.append("duplicate_only_search_page")
-            break
-        seen_search_keys.update(search_keys)
-
-        project_ids = list(
-            dict.fromkeys(
-                str(hit.get("project_id") or "").strip()
-                for hit in hits
-                if str(hit.get("project_id") or "").strip()
-            )
-        )
-        details: dict[str, Mapping[str, Any]] = {}
-        if project_ids:
-            source_requests += 1
-            try:
-                detail_params = urllib.parse.urlencode(
-                    {"ids": json.dumps(project_ids, separators=(",", ":"))}
-                )
-                fetched = _json(f"https://api.modrinth.com/v2/projects?{detail_params}")
-                if isinstance(fetched, list):
-                    details = {
-                        str(item.get("id") or "").strip(): item
-                        for item in fetched
-                        if isinstance(item, Mapping) and str(item.get("id") or "").strip()
-                    }
-            except Exception as exc:
-                errors.append(f"bulk-projects:{type(exc).__name__}:{exc}")
-
-        coverage_values: list[str] = []
-        for hit in hits:
-            project_id = str(hit.get("project_id") or "").strip()
-            slug = str(hit.get("slug") or project_id).strip()
-            detail = details.get(project_id, hit)
-            body = str(detail.get("body") or hit.get("description") or "").strip()
-            coverage_values.extend(
-                [
-                    str(detail.get("title") or hit.get("title") or slug),
-                    str(hit.get("description") or ""),
-                    body,
-                ]
-            )
-            source_key = project_id or slug
-            if not body or not source_key or source_key in seen_records:
-                continue
-            seen_records.add(source_key)
-            game_versions = detail.get("game_versions")
-            if not isinstance(game_versions, list):
-                game_versions = hit.get("versions")
-            records.append(
+    # Search each semantic variant independently. A Korean request must not
+    # become one long, untranslated Modrinth search phrase; the host performs
+    # these queries, not the small model.
+    for search_phrase in search_variants:
+        offset = 0
+        variant_requests = 0
+        while not _limit_reached(variant_requests, page_limit) and not _limit_reached(
+            len(records), result_limit
+        ):
+            page_size = _semantic_page_size(query, 100, result_limit, len(records))
+            if page_size <= 0:
+                break
+            params = urllib.parse.urlencode(
                 {
-                    "source_id": f"modrinth:{source_key}",
-                    "source_type": "modrinth_project_body",
-                    "source_locator": f"modrinth:{source_key}",
-                    "url": f"https://modrinth.com/mod/{slug}",
-                    "title": str(detail.get("title") or hit.get("title") or slug),
-                    "content": body,
-                    "content_sha256": _sha256_text(body),
-                    "body_retrieved": True,
-                    "evidence_origin": "modrinth_project_body",
-                    "metadata": {
-                        "project_id": project_id,
-                        "slug": slug,
-                        "versions": list(game_versions or []),
-                        "loaders": list(detail.get("loaders") or []),
-                        "license": detail.get("license"),
-                        "source_url": str(detail.get("source_url") or ""),
-                    },
+                    "query": _query_terms(search_phrase),
+                    "limit": page_size,
+                    "offset": offset,
+                    "index": "relevance",
+                    "facets": json.dumps([["project_type:mod"]]),
                 }
             )
-            if _limit_reached(len(records), result_limit):
+            try:
+                payload = _json(f"https://api.modrinth.com/v2/search?{params}")
+            except (OSError, ValueError) as exc:
+                if not records:
+                    raise
+                errors.append(f"partial_search_page:{type(exc).__name__}:{exc}")
+                break
+            search_requests += 1
+            variant_requests += 1
+            raw_hits = payload.get("hits", []) if isinstance(payload, Mapping) else []
+            hits = (
+                [hit for hit in raw_hits if isinstance(hit, Mapping)]
+                if isinstance(raw_hits, list)
+                else []
+            )
+            if not hits:
                 break
 
-        _coverage_gain(wanted, covered, coverage_values)
-        try:
-            server_offset = int(payload.get("offset", offset) or offset)
-        except (TypeError, ValueError, OverflowError):
-            server_offset = offset
-        next_offset = server_offset + len(hits)
-        if next_offset <= offset:
-            errors.append("nonadvancing_search_offset")
-            break
-        if provider_total and next_offset >= provider_total:
-            break
-        if len(hits) < page_size and not provider_total:
-            break
-        offset = next_offset
+            try:
+                provider_total = max(provider_total, int(payload.get("total_hits", 0) or 0))
+            except (TypeError, ValueError, OverflowError):
+                provider_total = max(provider_total, offset + len(hits))
+
+            search_keys = {
+                str(hit.get("project_id") or hit.get("slug") or "").strip()
+                for hit in hits
+                if str(hit.get("project_id") or hit.get("slug") or "").strip()
+            }
+            if search_keys and not (search_keys - seen_search_keys):
+                errors.append("duplicate_only_search_page")
+                break
+            seen_search_keys.update(search_keys)
+
+            project_ids = list(
+                dict.fromkeys(
+                    str(hit.get("project_id") or "").strip()
+                    for hit in hits
+                    if str(hit.get("project_id") or "").strip()
+                )
+            )
+            details: dict[str, Mapping[str, Any]] = {}
+            if project_ids:
+                source_requests += 1
+                try:
+                    detail_params = urllib.parse.urlencode(
+                        {"ids": json.dumps(project_ids, separators=(",", ":"))}
+                    )
+                    fetched = _json(f"https://api.modrinth.com/v2/projects?{detail_params}")
+                    if isinstance(fetched, list):
+                        details = {
+                            str(item.get("id") or "").strip(): item
+                            for item in fetched
+                            if isinstance(item, Mapping) and str(item.get("id") or "").strip()
+                        }
+                except Exception as exc:
+                    errors.append(f"bulk-projects:{type(exc).__name__}:{exc}")
+
+            coverage_values: list[str] = []
+            for hit in hits:
+                project_id = str(hit.get("project_id") or "").strip()
+                slug = str(hit.get("slug") or project_id).strip()
+                detail = details.get(project_id, hit)
+                body = str(detail.get("body") or hit.get("description") or "").strip()
+                coverage_values.extend(
+                    [
+                        str(detail.get("title") or hit.get("title") or slug),
+                        str(hit.get("description") or ""),
+                        body,
+                    ]
+                )
+                source_key = project_id or slug
+                if not body or not source_key or source_key in seen_records:
+                    continue
+                seen_records.add(source_key)
+                game_versions = detail.get("game_versions")
+                if not isinstance(game_versions, list):
+                    game_versions = hit.get("versions")
+                records.append(
+                    {
+                        "source_id": f"modrinth:{source_key}",
+                        "source_type": "modrinth_project_body",
+                        "source_locator": f"modrinth:{source_key}",
+                        "url": f"https://modrinth.com/mod/{slug}",
+                        "title": str(detail.get("title") or hit.get("title") or slug),
+                        "content": body,
+                        "content_sha256": _sha256_text(body),
+                        "body_retrieved": True,
+                        "evidence_origin": "modrinth_project_body",
+                        "metadata": {
+                            "project_id": project_id,
+                            "slug": slug,
+                            "versions": list(game_versions or []),
+                            "loaders": list(detail.get("loaders") or []),
+                            "license": detail.get("license"),
+                            "source_url": str(detail.get("source_url") or ""),
+                        },
+                    }
+                )
+                if _limit_reached(len(records), result_limit):
+                    break
+
+            _coverage_gain(wanted, covered, coverage_values)
+            try:
+                server_offset = int(payload.get("offset", offset) or offset)
+            except (TypeError, ValueError, OverflowError):
+                server_offset = offset
+            next_offset = server_offset + len(hits)
+            if next_offset <= offset:
+                errors.append("nonadvancing_search_offset")
+                break
+            if provider_total and next_offset >= provider_total:
+                break
+            if len(hits) < page_size and not provider_total:
+                break
+            offset = next_offset
 
     return records, {
         "provider": "modrinth",
         "status": "available",
         "result_count": len(records),
         "provider_total": provider_total,
+        "search_variants": list(search_variants),
         "search_requests": search_requests,
         "source_requests": source_requests,
         "detail_errors": errors,
-        "retrieval_complete": not errors and (not provider_total or len(seen_search_keys) >= provider_total),
+        "retrieval_complete": (len(search_variants) == 1 and not errors
+                               and (not provider_total or len(seen_search_keys) >= provider_total)),
         "retrieval_stop": "provider_exhaustion_or_explicit_budget",
     }
 
@@ -391,9 +400,7 @@ def _search_curseforge(
     except (OSError, ValueError) as exc:
         errors.append("categories_unavailable:" + type(exc).__name__)
 
-    wanted = set(_search_terms(query))
-    for alias in source_intent_aliases(query):
-        wanted.update(_search_terms(alias))
+    wanted = set(_search_terms(query)) | set(source_intent_terms(query))
     seen_ids: set[int] = set()
     candidates: list[tuple[int, int, Mapping[str, Any]]] = []
     search_requests = 0
@@ -449,7 +456,7 @@ def _search_curseforge(
                     str(row.get("summary") or ""),
                     categories_text,
                 ))
-                overlap = len(wanted & set(_search_terms(indexed_text)))
+                overlap = len(wanted & (set(_search_terms(indexed_text)) | set(source_intent_terms(indexed_text))))
                 if overlap == 0:
                     continue  # Avoid handing irrelevant broad catalogue rows to the model.
                 links = row.get("links") if isinstance(row.get("links"), Mapping) else {}
