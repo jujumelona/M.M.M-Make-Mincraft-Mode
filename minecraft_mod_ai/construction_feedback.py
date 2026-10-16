@@ -12,6 +12,22 @@ def graph_digest(nodes):
         separators=(',', ':'), allow_nan=False).encode()).hexdigest()
 
 
+def consumer_ancestors(nodes, node_id):
+    """Nearest existing strategies which depend on this input, in graph order."""
+    consumers = {}
+    for node in nodes:
+        for ref in node['input_refs']:
+            consumers.setdefault(ref, []).append(node['node_id'])
+    seen, pending, result = {node_id}, [node_id], []
+    for current in pending:
+        for parent in consumers.get(current, ()):
+            if parent not in seen:
+                seen.add(parent)
+                pending.append(parent)
+                result.append(parent)
+    return result
+
+
 def replace_node(nodes, replacement):
     """Keep original roots/shared inputs; remove only newly orphaned descendants."""
     by_id = {node['node_id']: node for node in nodes}

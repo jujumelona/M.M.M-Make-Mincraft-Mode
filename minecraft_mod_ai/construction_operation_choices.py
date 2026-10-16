@@ -5,11 +5,46 @@ import string
 
 from .construction_author import ID, obj
 from .construction_declaration_choices import action_schema, binding_lookup_schemas, symbol_lookup_schemas
-from .construction_state import PAGE_SIZE
+from .construction_state import PAGE_SIZE, symbol_record
 from .java_operation_ir import OPERATIONS, EXPRESSIONS, STATEMENTS
 from .construction_operation_contracts import named_values, pending_input_contracts, result_fits
 
 NODE_ID_ALPHABET = string.ascii_letters + string.digits + '_.:-'
+
+
+def dependency_revision_choices(state, nodes):
+    """Expose actual parent strategies even when their type check was deferred."""
+    from .construction_feedback import consumer_ancestors
+    if state.selection_goal is None:
+        return []
+    ancestors = consumer_ancestors(nodes, state.selection_goal['node_id'])
+    by_id = {node['node_id']: node for node in nodes}
+    inspected = [row['node_id'] for row in state.lookup.get('nodes', ())]
+    inspected.extend(view['record']['node_id'] for key in reversed(state.memory.active)
+                     if (view := state.memory.records[key])['selector']['kind'] == 'nodes')
+    # Older parents remain reachable through the existing graph index. A
+    # deliberate node inspection promotes that parent into this local view.
+    visible = list(dict.fromkeys([key for key in inspected if key in ancestors] + ancestors))[:PAGE_SIZE]
+    result = []
+    for key in visible:
+        node = by_id[key]
+        refs = node['input_refs']
+        api = node['attributes'].get('symbol_ref')
+        result.append({'node_id': key, 'op': node['op'],
+                       'purpose': state.node_purposes.get(key, ''),
+                       'typed_result': node['typed_result'],
+                       'selected_api': symbol_record(api, state.symbols[api]) if api in state.symbols else None,
+                       'input_ref_count': len(refs), 'input_refs': refs[:PAGE_SIZE],
+                       'missing_input_refs': [ref for ref in refs if ref not in by_id][:PAGE_SIZE]})
+    return result
+
+
+def dependency_revision_schema(state, nodes):
+    choices = dependency_revision_choices(state, nodes)
+    if not choices:
+        return []
+    return [action_schema('reconsider_parent', {
+        'node_ref': {'enum': [row['node_id'] for row in choices]}, 'reason': ID})]
 
 
 def operation_next_schema(state, *, nodes, declaration, can_complete, context_branches=()):
@@ -38,7 +73,7 @@ def operation_next_schema(state, *, nodes, declaration, can_complete, context_br
             actions.discard('break')
     pending = pending_input_contracts(nodes, declaration, state.symbols,
                                      replacing=(state.selection_goal or {}).get('node_id'))
-    branches = []
+    branches = dependency_revision_schema(state, nodes)
     if state.selection_goal is None:
         raise ValueError('CONSTRUCTION_SELECTION_GOAL_REQUIRED')
     slot = state.selection_goal['node_id']

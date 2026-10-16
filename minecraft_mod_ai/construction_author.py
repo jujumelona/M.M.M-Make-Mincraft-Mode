@@ -78,7 +78,8 @@ def _has_observable_effect(nodes, owner_symbol):
 def author_task_operations(router, task, context):
     # Choice helpers import the shared schema primitives above; load them only
     # after this module is initialized, avoiding a declaration/author cycle.
-    from .construction_operation_choices import operation_next_schema, operation_context_branches, MAX_OPERATION_EVIDENCE_READS
+    from .construction_operation_choices import (operation_next_schema, operation_context_branches,
+                                               MAX_OPERATION_EVIDENCE_READS, dependency_revision_choices)
     from .construction_declaration_choices import choice_actions
     from .construction_operation_binding import bind_operation
     from .construction_operation_contracts import named_values, pending_input_contracts
@@ -169,6 +170,9 @@ def author_task_operations(router, task, context):
     saved_state = resume_author(task, tuple(nodes)) if callable(resume_author) else None
     if saved_state is not None:
         last = state.restore(saved_state, resolve_lookup=lookup_result)
+        if not set(state.symbol_rejections) <= (by_id.keys() | referenced | {
+                (state.selection_goal or {}).get('node_id')}):
+            raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
         if last is not None:
             state.lookup = {**lookup_result(last['kind'], last['query'], last['offset']), **last}
     else:
@@ -222,7 +226,9 @@ def author_task_operations(router, task, context):
         if target != old_slot:
             state.operation_rejections = {}
         if target in by_id:
-            state.selection_goal = {'node_id': target,
+            previous = state.selection_goal or {}
+            revision = previous if previous.get('node_id') == target and previous.get('revising') else {}
+            state.selection_goal = {**revision, 'node_id': target,
                 'purpose': state.node_purposes.get(target, task.intent), 'excluded_operations': []}
         elif candidate is None:
             state.selection_goal = None
@@ -236,6 +242,36 @@ def author_task_operations(router, task, context):
 
     def checkpoint_graph(stage, expected=None):
         context['checkpoint_transaction'](task, tuple(nodes), stage, state.export(), expected)
+
+    def reconsider_node(choice):
+        key = choice['node_ref']
+        if key not in by_id:
+            raise ValueError('CONSTRUCTION_REVISION_TARGET_INVALID')
+        if choice['action'] == 'reconsider_parent' and key not in {
+                row['node_id'] for row in dependency_revision_choices(state, nodes)}:
+            raise ValueError('CONSTRUCTION_REVISION_TARGET_INVALID')
+        purpose = state.node_purposes.get(key, choice.get('purpose', task.intent))
+        api = by_id[key]['attributes'].get('symbol_ref')
+        reason = choice.get('reason', choice.get('purpose', ''))
+        if choice['action'] == 'reconsider_parent':
+            # Inherited aliases are the same API strategy, not independent
+            # alternatives. Exclude the inspected alias and its declaration.
+            if api in symbols:
+                state.reject_api(key, api, reason)
+        rejected = list(state.rejected_apis(key))
+        state.remember_node_purpose(key, purpose)
+        state.selection_goal = {'node_id': key, 'purpose': purpose, 'excluded_operations': [],
+                                'revising': True,
+                                'revision_reason': reason,
+                                'rejected_symbol_refs': rejected}
+        state.reconsider_operation()
+        state.operation_rejections = {}
+        print('CONSTRUCTION STRATEGY RECONSIDER: ' + json.dumps({
+            'node_id': key, 'reason': state.selection_goal['revision_reason'],
+            'rejected_symbol_refs': state.selection_goal['rejected_symbol_refs'],
+            'graph_changed': False,
+        }, ensure_ascii=False), flush=True)
+        save_author()
 
     if base['port_source_ref'] and base['port_source_ref'] not in read_sources:
         read_lookup({'action': 'source', 'query': base['port_source_ref'], 'offset': 0})
@@ -257,8 +293,11 @@ def author_task_operations(router, task, context):
         'through typed call/field/new operations and implement missing state and event glue. '
         'operation_observation is the actual result of the previous operation. A rejected node '
         'was not admitted: correct its diagnostic in the same slot. If an earlier provisional '
-        'parent is the cause, revise that node while preserving independent work. revise_node '
-        'selects a visible existing node for a local replacement. Partial admission proves only '
+        'parent is the cause, reconsider_parent returns to that actual parent strategy with its '
+        'original purpose, even when no type error has occurred. It may be replaced while keeping '
+        'independent work. revise_node selects a visible existing node to correct a diagnostic. '
+        'A parent that needs an unavailable input must not force endless construction of that input. '
+        'Partial admission proves only '
         'closed type/access constraints, not the requested gameplay effect. '
         'Only the latest four node summaries are shown. Use node_index to discover older node IDs, '
         'then nodes to read one complete known node. Use sources to discover source IDs, then source '
@@ -274,6 +313,10 @@ def author_task_operations(router, task, context):
             raise ValueError('CONSTRUCTION_OBSERVATION_GRAPH_MISMATCH')
         repair_id = (observation.get('node_id') if observation.get('status') == 'rejected'
                      and observation.get('node_id') in by_id else None)
+        if (state.selection_goal or {}).get('revising'):
+            repair_id = state.selection_goal['node_id']
+            if repair_id not in by_id:
+                raise ValueError('CONSTRUCTION_REVISION_TARGET_INVALID')
         working_nodes = nodes
         contracts = pending_input_contracts(nodes, declaration, symbols, replacing=repair_id)
         if state.selection_goal is None:
@@ -337,6 +380,7 @@ def author_task_operations(router, task, context):
                      'lookup_action': 'sources',
                      'pinned_source_read': bool(base['port_source_ref'] in read_sources)})}
         payload['pending_input_contracts'] = {key: contracts[key] for key in list(contracts)[:PAGE_SIZE]}
+        payload['provisional_parent_strategies'] = dependency_revision_choices(state, nodes)
         payload['named_values'] = named_values(working_nodes, declaration, symbols, node_id=slot)
         choice = state.operation_goal or ask(router, 'construction_operation_next', payload, schema, instruction)
         action = choice['action']
@@ -345,13 +389,8 @@ def author_task_operations(router, task, context):
             read_lookup(choice)
             save_author()
             continue
-        if action == 'revise_node':
-            state.validation_observation['node_id'] = choice['node_ref']
-            state.selection_goal = {'node_id': choice['node_ref'], 'purpose': choice['purpose'],
-                                    'excluded_operations': []}
-            state.reconsider_operation()
-            state.operation_rejections = {}
-            save_author()
+        if action in {'revise_node', 'reconsider_parent'}:
+            reconsider_node(choice)
             continue
         if action == 'complete':
             try:
@@ -384,43 +423,13 @@ def author_task_operations(router, task, context):
             reject_candidate(error, candidate={'node_id': slot, 'op': action,
                 'input_refs': [], 'attributes': {}, 'purpose': choice['purpose']})
             continue
+        if row is not None and row.get('action') == 'reconsider_parent':
+            reconsider_node(row)
+            continue
         if row is None:
-            # A forward input may have been demanded by a bad provisional
-            # parent API. Reopening the parent is better than repeatedly
-            # looking for a nonexistent receiver/argument implementation.
-            # This is local graph repair, not evidence that the API is absent.
-            parent = None
-            if slot in pending and action in {'call', 'new', 'field', 'lambda'}:
-                for dependency in contracts.get(slot, ()):
-                    candidate_parent = by_id.get(dependency['consumer'])
-                    if (candidate_parent is not None
-                            and candidate_parent['op'] in {'call', 'new', 'field'}
-                            and candidate_parent.get('attributes', {}).get('symbol_ref') in symbols):
-                        parent = candidate_parent
-                        break
-            if parent is not None:
-                symbol_ref = parent['attributes']['symbol_ref']
-                reason = 'required input could not be constructed from verified evidence'
-                state.reject_api(parent['node_id'], symbol_ref, reason)
-                state.validation_observation = rejection(
-                    ValueError('CONSTRUCTION_PARENT_API_RESELECT_REQUIRED: ' + reason),
-                    nodes, candidate={'node_id': parent['node_id']}, phase='partial')
-                state.reconsider_operation()
-                state.operation_rejections = {}
-                state.selection_goal = {
-                    'node_id': parent['node_id'],
-                    'purpose': state.node_purposes.get(parent['node_id'], task.intent),
-                    'excluded_operations': [],
-                }
-                print('CONSTRUCTION PARENT API RESELECT: ' + json.dumps({
-                    'blocked_input': slot, 'parent_id': parent['node_id'],
-                    'rejected_symbol': symbol_ref, 'graph_changed': False,
-                }, ensure_ascii=False), flush=True)
-                save_author()
-                continue
-            # No provisional API parent to repair. Keep this slot and preserve
-            # the ability to select other operation types, without an invented
-            # callable or a placeholder success.
+            # Keep the slot available for a different implementation or an
+            # explicit reconsider_parent decision. Exhausting a local evidence
+            # window is not a compiler diagnostic against the parent API.
             excluded = state.selection_goal.setdefault('excluded_operations', [])
             if action not in excluded:
                 excluded.append(action)
@@ -443,13 +452,15 @@ def author_task_operations(router, task, context):
             continue
         expected = graph_digest(nodes) if repair_id else None
         previous_ids = set(by_id)
-        state.remember_node_purpose(row['node_id'], choice['purpose'], replace=True)
+        responsibility = state.selection_goal['purpose'] if repair_id else choice['purpose']
+        state.remember_node_purpose(row['node_id'], responsibility, replace=True)
         nodes = list(candidate_nodes)
         by_id, referenced, pending, roots = _graph_refs(nodes)
         if repair_id:
             state.memory.invalidate_nodes((previous_ids - by_id.keys()) | {repair_id})
         live = set(by_id) | referenced
         state.node_purposes = {key: purpose for key, purpose in state.node_purposes.items() if key in live}
+        state.symbol_rejections = {key: rows for key, rows in state.symbol_rejections.items() if key in live}
         state.advance(preserve_symbols=True)
         state.revision = len(nodes)
         state.validation_observation = admission(nodes, candidate_validation, row['node_id'])

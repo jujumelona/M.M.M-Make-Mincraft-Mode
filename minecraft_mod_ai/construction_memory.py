@@ -8,7 +8,7 @@ from copy import deepcopy
 
 from .construction_state import PAGE_SIZE, page_result
 
-_FIELDS = {'symbols': 'matches', 'declarations': 'declarations',
+_FIELDS = {'symbols': 'matches', 'scopes': 'scopes', 'declarations': 'declarations',
            'nodes': 'nodes', 'source': 'source', 'bindings': 'bindings'}
 
 # All retrieved facts remain in records/checkpoints. Only the currently displayed
@@ -105,7 +105,7 @@ class ConstructionMemory:
         for key in result['records']:
             view = self.records[key]
             row, selector = view['record'], view['selector']
-            identity = (row.get('symbol_id') or row.get('node_id') or row.get('signature')
+            identity = (row.get('symbol_id') or row.get('scope_id') or row.get('node_id') or row.get('signature')
                         if isinstance(row, dict) else '')
             headers.append({'evidence_id': key, **selector, 'identity': identity or selector['query'],
                             'active': key in self.active})
@@ -143,6 +143,17 @@ class ConstructionMemory:
     def visible_symbols(self):
         return [view['record'] for key in self.active
                 if (view := self.records[key])['selector']['kind'] in {'symbols', 'declarations'}]
+
+    def visible_scopes(self):
+        pages = {}
+        for key in reversed(self.active):
+            view = self.records[key]
+            selector = view['selector']
+            if selector['kind'] == 'scopes':
+                page = (selector['query'], selector['offset'])
+                pages.setdefault(page, []).append(view)
+        return [view['record'] for rows in pages.values()
+                for view in sorted(rows, key=lambda row: row['selector']['index'])]
 
     def export(self):
         return {'records': [{'evidence_id': key, **view['selector']} for key, view in self.records.items()],

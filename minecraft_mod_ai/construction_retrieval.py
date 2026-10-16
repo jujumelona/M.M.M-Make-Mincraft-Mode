@@ -32,6 +32,28 @@ def _description(row):
     )))
 
 
+def _selection_contract(value):
+    if value is None:
+        return None
+    if (not isinstance(value, dict) or set(value) != {'contracts', 'excluded_symbols', 'constructor_result'}
+            or not isinstance(value['contracts'], list) or not isinstance(value['excluded_symbols'], list)
+            or any(not isinstance(key, str) for key in value['excluded_symbols'])
+            or type(value['constructor_result']) is not bool):
+        raise ValueError('CONSTRUCTION_RETRIEVAL_SELECTION_INVALID')
+    scalar = {'mode', 'expected_type', 'expected_element_type', 'required_shape'}
+    sequences = {'expected_types', 'allowed_types'}
+    for row in value['contracts']:
+        if (not isinstance(row, dict) or set(row) - scalar - sequences
+                or row.get('mode') not in {'expression', 'statement'}
+                or any(not isinstance(row[key], str) for key in scalar & row.keys())
+                or any(not isinstance(row[key], list) or any(not isinstance(item, str) for item in row[key])
+                       for key in sequences & row.keys())):
+            raise ValueError('CONSTRUCTION_RETRIEVAL_SELECTION_INVALID')
+    return {'contracts': [dict(row) for row in value['contracts']],
+            'excluded_symbols': sorted(set(value['excluded_symbols'])),
+            'constructor_result': value['constructor_result']}
+
+
 class ConstructionEvidenceIndex:
     def __init__(self, symbols, source_pages, router, *, target_path, owner, authoring_contract):
         self.symbols, self.router = symbols, router
@@ -51,6 +73,7 @@ class ConstructionEvidenceIndex:
         self.owner_scopes = {}
         self.eligible = {}
         self.eligibility_header = None
+        self.selection_eligible = None
         self.member_orderings = {}
         self.owner_term_counts = defaultdict(lambda: defaultdict(Counter))
         self.owner_document_counts = defaultdict(Counter)
@@ -173,6 +196,7 @@ class ConstructionEvidenceIndex:
         self.member_text[key] = _description(row)
         self.member_prepared[key] = (frozenset(_tokens(self.member_text[key])), self.member_text[key].casefold())
         self.eligible.clear()
+        self.selection_eligible = None
         self.ordering_goal = None
 
     def _member_lexical_score(self, key):
@@ -196,7 +220,7 @@ class ConstructionEvidenceIndex:
         row = self.goals[goal]
         base = self._goal({**row, 'scope': 'package:'})
         if base != self.ordering_goal:
-            self.prepare(row['purpose'], kinds=row['kinds'])
+            self.prepare(row['purpose'], kinds=row['kinds'], selection=row.get('selection'))
         return row
 
     def root_goal(self, goal):
@@ -207,11 +231,12 @@ class ConstructionEvidenceIndex:
             raise ValueError('CONSTRUCTION_RETRIEVAL_SCOPE_MISSING')
         return self._goal({**self.goals[goal], 'scope': scope})
 
-    def _eligible_owners(self, kinds):
+    def _eligible_owners(self, kinds, selection=None):
         header = self.symbols.get(self.owner, {})
         fingerprint = (header.get('superclass', ''), tuple(header.get('interfaces', ())))
         if fingerprint != self.eligibility_header:
             self.eligible.clear()
+            self.selection_eligible = None
             self.eligibility_header = fingerprint
         kinds = tuple(sorted(kinds))
         if kinds not in self.eligible:
@@ -222,7 +247,32 @@ class ConstructionEvidenceIndex:
                     if row.get('kind') in kinds and self.accessible(key, constructor=row.get('kind') == 'CONSTRUCTOR'):
                         rows[owner].append(key)
             self.eligible[kinds] = dict(rows)
-        return self.eligible[kinds]
+        base = self.eligible[kinds]
+        if selection is None:
+            return base
+        cache_key = (kinds, json.dumps(selection, sort_keys=True))
+        if self.selection_eligible is not None and self.selection_eligible[0] == cache_key:
+            return self.selection_eligible[1]
+        from .construction_operation_contracts import result_fits
+        excluded = set(selection['excluded_symbols'])
+        fits = {}
+        rows = {}
+        for owner, keys in base.items():
+            selected = []
+            for key in keys:
+                row = self.symbols[key]
+                if key in excluded or row.get('inherited_from') in excluded:
+                    continue
+                type_ = owner if row['kind'] == 'CLASS' or selection['constructor_result'] else row['return_type']
+                if type_ not in fits:
+                    fits[type_] = result_fits(type_, selection['contracts'], self)
+                if fits[type_]:
+                    selected.append(key)
+            if selected:
+                rows[owner] = selected
+        # Retain one active filtered view, not another full classpath per slot.
+        self.selection_eligible = (cache_key, rows)
+        return rows
 
     def _dense_allowed(self):
         registry = getattr(self.router, 'registry', None)
@@ -350,12 +400,14 @@ class ConstructionEvidenceIndex:
         self.source_ranking = (sources, vector)
         return self.source_ranking
 
-    def prepare(self, purpose, *, kinds):
+    def prepare(self, purpose, *, kinds, selection=None):
         if (not isinstance(purpose, str) or not purpose.strip() or not isinstance(kinds, (list, tuple, set, frozenset))
                 or not kinds or any(not isinstance(kind, str) for kind in kinds)
                 or not set(kinds) <= {'CLASS', 'METHOD', 'CONSTRUCTOR', 'FIELD'}):
             raise ValueError('CONSTRUCTION_RETRIEVAL_GOAL_INVALID')
         descriptor = {'purpose': purpose.strip(), 'kinds': sorted(set(kinds)), 'scope': 'package:'}
+        if selection is not None:
+            descriptor['selection'] = _selection_contract(selection)
         goal = self._goal(descriptor)
         if goal == self.ordering_goal:
             return goal
@@ -396,7 +448,7 @@ class ConstructionEvidenceIndex:
                 relation[owner] += hits / (documents * len(terms))
         owners = rank_context_chunks(query, self.owner_chunks.values(), relation_scores=relation,
                                      prepared_text=self.owner_prepared)
-        eligible = self._eligible_owners(kinds)
+        eligible = self._eligible_owners(kinds, descriptor.get('selection'))
         ranked = tuple(row.chunk_id for row in owners if row.chunk_id in eligible)
         self.owner_scores = {row.chunk_id: row.score for row in owners}
         self.scope_counts = defaultdict(int)
@@ -421,7 +473,7 @@ class ConstructionEvidenceIndex:
 
     def page(self, goal, offset):
         descriptor = self._ensure(goal)
-        eligible = self._eligible_owners(descriptor['kinds'])
+        eligible = self._eligible_owners(descriptor['kinds'], descriptor.get('selection'))
         scope = descriptor['scope']
         representatives = scope.startswith('package:')
         if scope not in self.scoped_orderings:
@@ -541,7 +593,8 @@ class ConstructionEvidenceIndex:
             raise ValueError('CONSTRUCTION_RETRIEVAL_GOALS_INVALID')
         seen = set()
         for row in rows:
-            if (not isinstance(row, dict) or set(row) != {'goal_id', 'purpose', 'kinds', 'scope'}
+            if (not isinstance(row, dict) or not {'goal_id', 'purpose', 'kinds', 'scope'} <= set(row)
+                    or set(row) - {'goal_id', 'purpose', 'kinds', 'scope', 'selection'}
                     or not isinstance(row['goal_id'], str) or row['goal_id'] in seen
                     or not isinstance(row['purpose'], str) or not row['purpose'].strip()
                     or not isinstance(row['kinds'], list) or not row['kinds']
@@ -549,6 +602,8 @@ class ConstructionEvidenceIndex:
                     or not isinstance(row['scope'], str) or row['scope'] not in self.scope_owners):
                 raise ValueError('CONSTRUCTION_RETRIEVAL_GOALS_INVALID')
             descriptor = {'purpose': row['purpose'].strip(), 'kinds': sorted(set(row['kinds'])), 'scope': row['scope']}
+            if 'selection' in row:
+                descriptor['selection'] = _selection_contract(row['selection'])
             if not descriptor['purpose'] or not set(descriptor['kinds']) <= {'CLASS', 'METHOD', 'CONSTRUCTOR', 'FIELD'}:
                 raise ValueError('CONSTRUCTION_RETRIEVAL_GOALS_INVALID')
             goal = 'intent:' + hashlib.sha256(json.dumps(descriptor, sort_keys=True).encode()).hexdigest()[:24]

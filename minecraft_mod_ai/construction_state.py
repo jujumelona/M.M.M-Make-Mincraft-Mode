@@ -12,7 +12,7 @@ from copy import deepcopy
 
 # Body lookup choices and retained API pages changed. Old journals/cursors may
 # not be replayed against them; declaration-bound accepted graphs stay reusable.
-PROTOCOL_VERSION = "mmm/construction-state-v15"
+PROTOCOL_VERSION = "mmm/construction-state-v16"
 PAGE_SIZE = 8
 RECENT_SIZE = 4
 LOOKUP_KINDS = frozenset({'symbols', 'scopes', 'declarations', 'nodes', 'node_index', 'source', 'sources', 'bindings'})
@@ -224,7 +224,12 @@ class ConstructionState:
                 or symbol_ref not in self.symbols or not isinstance(reason, str)
                 or not reason.strip() or len(reason) > 240):
             raise ValueError('CONSTRUCTION_API_REJECTION_INVALID')
-        self.symbol_rejections.setdefault(node_id, {})[symbol_ref] = reason.strip()
+        rows = self.symbol_rejections.setdefault(node_id, {})
+        seen = set()
+        while symbol_ref in self.symbols and symbol_ref not in seen:
+            seen.add(symbol_ref)
+            rows[symbol_ref] = reason.strip()
+            symbol_ref = self.symbols[symbol_ref].get('inherited_from')
 
     def rejected_apis(self, node_id):
         return self.symbol_rejections.get(node_id, {})
@@ -235,17 +240,18 @@ class ConstructionState:
         if replace or node_id not in self.node_purposes:
             self.node_purposes[node_id] = purpose.strip()
 
-    def prepare_symbols(self, purpose, *, kinds=('CLASS',), preserve_scope=False):
+    def prepare_symbols(self, purpose, *, kinds=('CLASS',), preserve_scope=False, selection=None):
         if self.evidence_index is None:
             return
         # Authoring rules/negative examples are constraints, not the positive
         # behavior to retrieve. They remain in authoring_contract unchanged.
         query = purpose
-        goal = self.evidence_index.prepare(query, kinds=kinds)
+        goal = self.evidence_index.prepare(query, kinds=kinds, selection=selection)
         current = self.evidence_index.goals.get(self.symbol_goal)
         if current is None or {**current, 'scope': 'package:'} != self.evidence_index.goals[goal]:
             self.symbol_goal = (self.evidence_index.scoped_goal(goal, current['scope'])
-                                if preserve_scope and current is not None else goal)
+                                if preserve_scope and current is not None
+                                and current['purpose'] == self.evidence_index.goals[goal]['purpose'] else goal)
         if self.symbol_goal != goal and _lookup_request('scopes', goal, 0) not in self.requests:
             # Narrowing to a kind keeps the inspected scope, with a real root
             # frontier still available if its relevant member lives elsewhere.
@@ -269,6 +275,17 @@ class ConstructionState:
             return []
         descriptor = self.evidence_index.goals[self.symbol_goal]
         result = {}
+        # Directory reads expose their new rows, rather than leaving old
+        # representative owners in front of every newly consumed scope page.
+        for candidate in [*self.memory.visible_scopes(), *self.scope_lookup.get('scopes', ())]:
+            goal = candidate['goal_id']
+            row = self.evidence_index.goals.get(goal)
+            if (row is not None
+                    and {**row, 'scope': 'package:'} == {**descriptor, 'scope': 'package:'}
+                    and ('scopes', goal, 0) not in self.requests):
+                result[goal] = candidate
+                if len(result) == PAGE_SIZE:
+                    return list(result.values())
         # The currently visible representative owners are direct, verified
         # type scopes. They share the same bounded frontier as package scopes;
         # a second model-visible list must not double its cardinality.
@@ -314,7 +331,8 @@ class ConstructionState:
             "lookups_since_progress": max(len(self.requests), self.operation_reads),
             "operation_context_reads": self.operation_reads,
             "operation_rejections": deepcopy(self.operation_rejections),
-            "symbol_rejections": deepcopy(self.symbol_rejections),
+            "symbol_rejections": deepcopy(self.rejected_apis(
+                (self.selection_goal or {}).get('node_id'))),
             "recent_lookups": list(self.history),
             "available_actions": list(available_actions), **cursor,
         }, "lookup": {key: value for key, value in self.lookup.items()
@@ -451,11 +469,20 @@ class ConstructionState:
         if selection is not None:
             import re
             if (not isinstance(selection, dict) or not {'node_id', 'purpose'} <= set(selection)
-                    or set(selection) - {'node_id', 'purpose', 'excluded_operations'}
+                    or set(selection) - {'node_id', 'purpose', 'excluded_operations',
+                                         'revising', 'revision_reason', 'rejected_symbol_refs'}
                     or not isinstance(selection.get('excluded_operations', []), list)
                     or any(not isinstance(action, str) or action not in OPERATIONS
                            for action in selection.get('excluded_operations', []))
                     or len(set(selection.get('excluded_operations', []))) != len(selection.get('excluded_operations', []))
+                    or type(selection.get('revising', False)) is not bool
+                    or not isinstance(selection.get('revision_reason', ''), str)
+                    or (selection.get('revising') and not selection.get('revision_reason', '').strip())
+                    or not isinstance(selection.get('rejected_symbol_refs', []), list)
+                    or any(not isinstance(key, str) or key not in self.symbols
+                           for key in selection.get('rejected_symbol_refs', []))
+                    or (not selection.get('revising') and
+                        (selection.get('revision_reason') or selection.get('rejected_symbol_refs')))
                     or not isinstance(selection['purpose'], str) or not selection['purpose'].strip()
                     or not isinstance(selection['node_id'], str)
                     or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,240}', selection['node_id'])):
@@ -600,9 +627,8 @@ class ConstructionState:
         self.symbol_goal = query
         if ('symbols', symbol_query_key(query), 0) not in self.requests:
             self.lookup_symbols(query, 0)
-        else:
-            cursor = self.lookup_cursors[('symbols', symbol_query_key(query))]
-            self.symbol_lookup = self.symbol_result(query, cursor['offset'])
+        # A directory successor is not a fresh read of the same symbol page.
+        # Previous exact symbols remain in memory; new scopes are visible above.
         return result
 
     def next_declaration_offset(self):

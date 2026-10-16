@@ -7,7 +7,8 @@ import json
 
 from .construction_author import ID, ask, obj, operation_schema
 from .construction_declaration_choices import action_schema, choice_actions, type_candidates
-from .construction_operation_choices import operation_context_branches, MAX_OPERATION_EVIDENCE_READS
+from .construction_operation_choices import (operation_context_branches, MAX_OPERATION_EVIDENCE_READS,
+                                           dependency_revision_schema, dependency_revision_choices)
 from .construction_state import symbol_record, RECENT_SIZE, RESELECTABLE_OPERATIONS
 from .java_operation_ir import parameter_types, invocation_parameter_types
 from .construction_operation_contracts import named_values, pending_input_contracts, result_fits
@@ -86,6 +87,8 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
     requirements = pending_input_contracts(nodes, payload['declaration'], state.symbols,
                                            replacing=goal['node_id']).get(goal['node_id'], ())
     current_member = payload['declaration']['symbol_id']
+    rejected_symbols = set((state.selection_goal or {}).get('rejected_symbol_refs', ()))
+    rejected_symbols.update(state.rejected_apis(goal['node_id']))
 
     def fits(type_):
         return result_fits(type_, requirements, state.evidence_index)
@@ -95,8 +98,9 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
         # existing implementation evidence. Keep sibling helpers available.
         if op == 'call' and (key == current_member or row.get('inherited_from') == current_member):
             return False
+        if key in rejected_symbols or row.get('inherited_from') in rejected_symbols:
+            return False
         return (row['kind'] in kinds
-                and key not in state.rejected_apis(goal['node_id'])
                 and state.evidence_index.accessible(key, constructor=op == 'new')
                 and (op not in API_KINDS or fits(row['owner'] if op == 'new' else row['return_type'])))
 
@@ -111,8 +115,25 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
         *[value for row in requirements for value in row.get('allowed_types', ())],
     ) if value))
     resolve_symbols = op in SYMBOL_BOUND_OPERATIONS
-    if resolve_symbols:
-        state.prepare_symbols(purpose, kinds=kinds, preserve_scope=True)
+
+    def prepare_selection():
+        rejected_symbols.update(state.rejected_apis(goal['node_id']))
+        if not resolve_symbols:
+            return
+        selection = None
+        if op in API_KINDS:
+            fields = {'mode', 'expected_type', 'expected_types', 'allowed_types',
+                      'expected_element_type', 'required_shape'}
+            selection = {'contracts': [{key: value for key, value in row.items() if key in fields}
+                                       for row in requirements],
+                         'excluded_symbols': sorted(rejected_symbols | ({current_member} if op == 'call' else set())),
+                         'constructor_result': op == 'new'}
+        # Apply the real slot contract before selecting representatives or
+        # scopes. Filtering an incompatible page afterwards made a healthy
+        # classpath look empty to the small author.
+        state.prepare_symbols(purpose, kinds=kinds, preserve_scope=True, selection=selection)
+
+    prepare_selection()
     save_author()
     draft = state.operation_draft
     saved_binding = draft.get('binding_choice', {})
@@ -148,7 +169,7 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
                 for key, row in state.symbols.items():
                     if (key not in shown and key != declaration['symbol_id'] and row.get('kind') == 'CONSTRUCTOR'
                             and row['owner'] in {state.owner, parent}
-                            and state.evidence_index.accessible(key)):
+                            and usable_api(key, row)):
                         matches.append(symbol_record(key, row))
         if kinds == ('CLASS',):
             # A previously selected API's input signature is already actual
@@ -166,6 +187,7 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
         branches = operation_context_branches(state, nodes=nodes, source_units=source_units,
                                              pinned_source=pinned_source,
                                              resolve_symbols=resolve_symbols)
+        branches.extend(dependency_revision_schema(state, nodes))
         if op in API_KINDS:
             if matches:
                 candidates = [row['symbol_id'] for row in matches]
@@ -207,6 +229,7 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
                    **state.payload(choice_actions(schema), **{key: payload['construction_state'][key]
                        for key in ('current_member', 'graph', 'sources') if key in payload['construction_state']}),
                    'api_candidates': matches,
+                   'provisional_parent_strategies': dependency_revision_choices(state, nodes),
                    'required_by_consumers': requirements}
         choice = draft.get('binding_choice') or ask(router, 'construction_operation_bind', current, schema,
             'Resolve only this selected operation. Select the real API whose behavior and signature '
@@ -223,12 +246,16 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
             'prove an API is absent and does not implement the slot. Never substitute a null, '
             'constant success or empty block for the required effect. '
             'write_type binds an actual base type plus array dimensions; new_array also binds sized/initializer form. '
-            'Outside compose_locally, another operation is chosen '
+            'If the parent API creates an input which does not serve the requested behavior or '
+            'cannot be obtained here, reconsider_parent selects that actual parent for replacement. '
+            'Partial admission is provisional; it does not prove its inputs are constructible. '
+            'Outside compose_locally or reconsider_parent, another operation is chosen '
             'only after this node is written. ' + instruction)
         if choice['action'] == 'reject_api':
             from .fixed_template_generation import _validate_native_arguments
             _validate_native_arguments(choice, schema)
             state.reject_api(goal['node_id'], choice['symbol_ref'], choice['reason'])
+            prepare_selection()
             save_author()
             continue
         if choice['action'] == 'compose_locally':
@@ -237,6 +264,10 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
             state.reject_operation(goal, choice['reason'])
             save_author()
             return None
+        if choice['action'] == 'reconsider_parent':
+            from .fixed_template_generation import _validate_native_arguments
+            _validate_native_arguments(choice, schema)
+            return dict(choice)
         if choice['action'] in {'api', 'write', 'write_type', 'functional_type'}:
             from .fixed_template_generation import _validate_native_arguments
             _validate_native_arguments(choice, schema)
