@@ -137,3 +137,28 @@ def test_content_design_does_not_accept_arbitrary_unverified_candidate_authority
     assert authored_design_repository_candidates(
         {"_pre_design_research": {"deterministic": {"repository_candidates": rows}}}
     ) == []
+
+
+def test_actual_predesign_request_domain_is_source_code_eligible():
+    from minecraft_mod_ai.pre_design_research_pipeline import _pre_design_brief
+
+    brief = _pre_design_brief("Create a spaceship with planet travel")
+    request = next(row for row in brief["domains"] if row["domain_id"] == "request")
+    assert "source_code" in request["evidence_kinds"]
+    assert "curseforge" in request["providers"]
+    assert "modrinth" in request["providers"]
+
+
+def test_donor_cache_fingerprint_changes_with_new_grounded_evidence():
+    from minecraft_mod_ai.authored_reuse_bridge import source_candidate_fingerprint
+
+    candidates = _projected()
+    before = source_candidate_fingerprint(candidates)
+    assert before == source_candidate_fingerprint(_projected())
+    updated = [dict(candidates[0])]
+    updated[0]["catalog_evidence"] = [
+        *updated[0]["catalog_evidence"],
+        {"provider": "sourcegraph", "content_sha256": "sha256:new"},
+    ]
+    assert source_candidate_fingerprint(updated) != before
+    assert source_candidate_fingerprint(()) != before
