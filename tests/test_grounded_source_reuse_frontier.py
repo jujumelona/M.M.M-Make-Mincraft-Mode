@@ -110,3 +110,78 @@ def test_provider_outage_stops_repeated_source_inspections(monkeypatch, tmp_path
     assert receipt["capabilities"][0]["search_status"] == "provider_error"
     assert receipt["capabilities"][0]["failure_code"] == "DONOR_INSPECTION_PROVIDER_UNAVAILABLE"
     assert receipt["inspection_receipts"][0]["provider_unavailable"]
+
+
+def test_predesign_candidate_is_proved_before_any_new_provider_search(monkeypatch, tmp_path):
+    """A real research candidate should be inspected, not re-discovered."""
+    design = _discovery(monkeypatch, ())
+    design["_planning_state"] = {"repository_candidates": [{
+        "repository": "example/predesign-source",
+        "source_ids": ["curseforge:42"],
+        "source_urls": ["https://github.com/example/predesign-source"],
+        "query_sha256": ["sha256:research"],
+        "domain_ids": ["space-travel"],
+        "origin": "host_grounded_retrieval",
+        "reference_only": True,
+        "source_reuse_authority": "verification_required",
+        "evidence_text": "Spaceship and planet travel gameplay",
+        "evidence_tokens": ["spaceship", "planet", "travel"],
+        "candidate_score": 2.0,
+        "catalog_evidence": [{
+            "provider": "curseforge", "source_id": "curseforge:42",
+            "title": "Planet Travel", "summary": "Spaceship and planet travel",
+            "source_url": "https://github.com/example/predesign-source",
+        }],
+    }]}
+    attempted = []
+
+    def fail_discovery(*args, **kwargs):
+        attempted.append(True)
+        raise AssertionError("Already proven predesign donor must not trigger a new search")
+
+    monkeypatch.setattr(
+        "minecraft_mod_ai.reuse_discovery.discover_repositories_for_graph",
+        fail_discovery,
+    )
+    inspected = []
+
+    def inspect(**kwargs):
+        inspected.append(kwargs["repository"])
+        return _donor(kwargs["repository"])
+
+    result = grounded_source_reuse.build_repository_reuse_plan(
+        design, discovery_client=object(), donor_inspector=inspect,
+        proof_executor=lambda donor, **kwargs: _proof(donor),
+        target_workspace=tmp_path,
+    )
+    assert inspected == ["example/predesign-source"]
+    assert not attempted
+    assert result["capabilities"][0]["mode"] == "source_transplant"
+    assert result["planning_rag_candidate_repository_count"] == 1
+
+
+def test_unusable_predesign_candidate_then_expands_search(monkeypatch, tmp_path):
+    """A research hit that cannot be inspected must not stop fresh discovery."""
+    design = _discovery(monkeypatch, ("example/fallback",))
+    design["_planning_state"] = {"repository_candidates": [{
+        "repository": "example/unusable",
+        "origin": "host_grounded_retrieval", "reference_only": True,
+        "source_reuse_authority": "verification_required",
+        "source_ids": ["modrinth:foo"],
+        "source_urls": ["https://github.com/example/unusable"],
+    }]}
+    inspected = []
+
+    def inspect(**kwargs):
+        inspected.append(kwargs["repository"])
+        if kwargs["repository"] == "example/unusable":
+            return None
+        return _donor(kwargs["repository"])
+
+    result = grounded_source_reuse.build_repository_reuse_plan(
+        design, discovery_client=object(), donor_inspector=inspect,
+        proof_executor=lambda donor, **kwargs: _proof(donor),
+        target_workspace=tmp_path,
+    )
+    assert inspected == ["example/unusable", "example/fallback"]
+    assert result["capabilities"][0]["mode"] == "source_transplant"
