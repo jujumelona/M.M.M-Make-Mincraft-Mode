@@ -18,6 +18,15 @@ def _sha(payload: Any) -> str:
     ).hexdigest()
 
 
+def source_candidate_fingerprint(
+    repository_candidates: Sequence[Mapping[str, Any]],
+) -> str:
+    """Invalidate reuse decisions when host-provided research inputs change."""
+    return "sha256:" + _sha([
+        dict(item) for item in repository_candidates if isinstance(item, Mapping)
+    ])
+
+
 def authored_capability_graph(
     requested_prompt: str,
     structured_sections: Mapping[str, Any],
@@ -141,6 +150,7 @@ def resolve_authored_source_reuse(
     receipt = build_repository_reuse_plan(design)
     return {
         **receipt,
+        "pre_design_candidates_sha256": source_candidate_fingerprint(repository_candidates),
         "bound_target": {
             "minecraft_version": minecraft_version,
             "loader": loader,
