@@ -97,6 +97,49 @@ def test_curseforge_reuse_discovers_second_page_without_name_search(monkeypatch)
                for params in searches)
 
 
+
+def test_later_curseforge_failure_keeps_completed_page_candidates(monkeypatch):
+    monkeypatch.setattr(reuse_discovery, "_curseforge_api_key", lambda: "dummy")
+    monkeypatch.setattr(reuse_discovery, "_discovery_pages", lambda: 2)
+
+    class Response:
+        def __init__(self, url, params):
+            self.url, self.params = url, params
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            if "/categories" in self.url:
+                return {"data": [
+                    {"id": 6, "gameId": 432, "name": "Mods",
+                     "slug": "mc-mods", "isClass": True},
+                ]}
+            if int(self.params["index"]) != 0:
+                return {"data": None}  # Malformed second page.
+            return {
+                "data": [
+                    {"id": 51, "classId": 6, "name": "Spaceship",
+                     "summary": "Ship implementation",
+                     "links": {"sourceUrl": "https://github.com/owner/ship"}},
+                ],
+                "pagination": {"index": 0, "resultCount": 1,
+                               "pageSize": 50, "totalCount": 10},
+            }
+
+    class Client:
+        def get(self, url, **kwargs):
+            return Response(url, kwargs.get("params") or {})
+
+    monkeypatch.setattr(reuse_discovery, "_pooled_http_client", lambda: Client())
+    errors = []
+    found = reuse_discovery._search_curseforge(
+        "spaceship", limit=8, with_metadata=True, errors=errors,
+    )
+    assert found and found[0][0] == "owner/ship"
+    assert errors and errors[0]["stage"] == "later_page"
+
+
 def test_sourcegraph_stream_extracts_real_java_source_evidence(monkeypatch):
     entry = {
         "type": "content",
