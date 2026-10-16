@@ -709,16 +709,29 @@ def discover_repositories_for_graph(
     evidence: dict[str, _RepositoryEvidence] = {}
     per_capability: dict[str, dict[str, float]] = {capability: {} for capability in ordered}
     per_capability_priority: dict[str, dict[str, int]] = {capability: {} for capability in ordered}
+    per_capability_rrf: dict[str, dict[str, dict[str, float]]] = {
+        capability: {} for capability in ordered
+    }
 
     def register(capability: str, provider: str, values: Sequence) -> None:
         for repository, rank, metadata in values:
             relevance = _candidate_relevance(metadata, capability)
-            # Search relevance orders inspection; a short catalogue description
-            # cannot veto the actual code before it has been inspected.
-            rank += 2 * relevance
+            # A broad catalogue listing is not evidence for *every* capability.
+            # Unmatched listings may still be recovered by independently indexed code.
+            if provider == "curseforge" and relevance <= 0.0:
+                continue
             repository = _github_repository(repository)
             if not repository:
                 continue
+            # Reciprocal rank fusion over independent provider lanes. Repeated
+            # queries to the same provider retain the best rank, not extra votes.
+            position = max(1, round(1.0 / max(rank, 1e-9)))
+            provider_scores = per_capability_rrf[capability].setdefault(repository, {})
+            provider_scores[provider] = max(
+                provider_scores.get(provider, 0.0), 1.0 / (60.0 + position)
+            )
+            # The actual mod summary or code hit decides semantic inspection order.
+            rank += 2 * relevance
             cap_scores = per_capability[capability]
             cap_scores[repository] = max(cap_scores.get(repository, 0.0), rank)
             cap_priorities = per_capability_priority[capability]
@@ -970,11 +983,12 @@ def discover_repositories_for_graph(
         ranked = sorted(
             per_capability[capability],
             key=lambda repo: (
-                -per_capability_priority[capability][repo],
+                per_capability[capability][repo],
+                sum(per_capability_rrf[capability].get(repo, {}).values()),
+                len(evidence[repo].providers),
                 repo in selected_set,
                 len(evidence[repo].capabilities),
-                len(evidence[repo].providers),
-                per_capability[capability][repo],
+                -per_capability_priority[capability][repo],
                 evidence[repo].rank_score,
                 repo,
             ),
