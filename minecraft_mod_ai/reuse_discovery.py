@@ -736,7 +736,7 @@ def discover_repositories_for_graph(
             relevance = _candidate_relevance(metadata, capability)
             # A broad catalogue listing is not evidence for *every* capability.
             # Unmatched listings may still be recovered by independently indexed code.
-            if provider == "curseforge" and relevance <= 0.0:
+            if provider in {"curseforge", "github"} and relevance <= 0.0:
                 continue
             repository = _github_repository(repository)
             if not repository:
