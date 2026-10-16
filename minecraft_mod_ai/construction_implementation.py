@@ -18,7 +18,10 @@ def construction_implementation_fingerprint():
     # Follow actual local imports, including imports inside functions. An
     # executor's own source hash cannot certify the implementations it calls.
     package = Path(__file__).resolve().parent
+    # Canonical checkpoints also cover resource generators and their imported
+    # renderers/validators. Their helpers must invalidate old receipts too.
     pending = [package / 'construction_generation.py', package / 'construction_runtime.py',
+               package / 'canonical_generators.py',
                Path(__file__).resolve()]
     sources = {}
     while pending:
