@@ -196,6 +196,7 @@ def _search_modrinth(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     for search_phrase in search_variants:
         offset = 0
         variant_requests = 0
+        variant_total = 0
         while not _limit_reached(variant_requests, page_limit) and not _limit_reached(
             len(records), result_limit
         ):
@@ -230,9 +231,10 @@ def _search_modrinth(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
                 break
 
             try:
-                provider_total = max(provider_total, int(payload.get("total_hits", 0) or 0))
+                variant_total = max(variant_total, int(payload.get("total_hits", 0) or 0))
             except (TypeError, ValueError, OverflowError):
-                provider_total = max(provider_total, offset + len(hits))
+                variant_total = max(variant_total, offset + len(hits))
+            provider_total = max(provider_total, variant_total)
 
             search_keys = {
                 str(hit.get("project_id") or hit.get("slug") or "").strip()
@@ -240,8 +242,9 @@ def _search_modrinth(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
                 if str(hit.get("project_id") or hit.get("slug") or "").strip()
             }
             if search_keys and not (search_keys - seen_search_keys):
-                errors.append("duplicate_only_search_page")
-                break
+                if variant_requests > 1:
+                    errors.append("duplicate_only_search_page")
+                break  # Another semantic variant may find new donors.
             seen_search_keys.update(search_keys)
 
             project_ids = list(
@@ -321,11 +324,22 @@ def _search_modrinth(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
             if next_offset <= offset:
                 errors.append("nonadvancing_search_offset")
                 break
-            if provider_total and next_offset >= provider_total:
+            if variant_total and next_offset >= variant_total:
                 break
-            if len(hits) < page_size and not provider_total:
+            if len(hits) < page_size and not variant_total:
                 break
             offset = next_offset
+
+    if len(search_variants) > 1:
+        # Real title/body evidence outranks search result position. Run this
+        # only after collecting all independent search variants.
+        requested = set(source_intent_terms(query))
+        records.sort(key=lambda record: (
+            len(requested & set(source_intent_terms(
+                str(record.get("title") or "") + " " + str(record.get("content") or "")
+            ))),
+            bool((record.get("metadata") or {}).get("source_url")),
+        ), reverse=True)
 
     return records, {
         "provider": "modrinth",
