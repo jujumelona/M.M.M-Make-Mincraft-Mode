@@ -67,8 +67,10 @@ def validate_canonical_output(job, source, *, resolved, context, authority, targ
         raise ValueError("CANONICAL_OUTPUT_TARGET_MISMATCH")
     receipts = [validate_semantic_contract(source, contract=spec, context_id=resolved.context_id, leaf_id=job.canonical_leaf)]
     if spec["language"] == "json":
-        from .artifact_validators.json_resource import validate_json_resource
+        from .artifact_validators.json_resource import validate_json_resource, validate_dimension_definition
         receipts.append(validate_json_resource(source, resource_kind=job.canonical_leaf))
+        if job.canonical_leaf == "minecraft/dimension/registry":
+            receipts.append(validate_dimension_definition(source))
     if spec["language"] == "java":
         from .canonical_java_target_contract import assert_canonical_java_target
 
@@ -222,8 +224,10 @@ def execute_generator_job(job, *, context, router, port_registry=None, base_dir=
             "sources": [{"path": row["path"], "sha256": row["sha256"]} for row in source_context],
         })
     if spec["language"] == "json":
-        from .artifact_validators.json_resource import validate_json_resource
+        from .artifact_validators.json_resource import validate_json_resource, validate_dimension_definition
         validations.append(validate_json_resource(source, resource_kind=job.canonical_leaf))
+        if job.canonical_leaf == "minecraft/dimension/registry":
+            validations.append(validate_dimension_definition(source, base_dir=base_dir))
     if spec["language"] == "java":
         from .canonical_java_target_contract import assert_canonical_java_target
 
