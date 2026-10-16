@@ -151,6 +151,9 @@ class ConstructionState:
         self.selection_goal = None
         self.operation_reads = 0
         self.operation_rejections = {}
+        # API-level rejections survive local revisions and checkpoint resumes.
+        # Never confuse one bad symbol with the entire 'call' operation.
+        self.symbol_rejections = {}
         self.node_purposes = {}
         self.validation_observation = None
         from .construction_memory import ConstructionMemory
@@ -215,6 +218,16 @@ class ConstructionState:
         self.scope_lookup = {}
         if self.lookup.get('kind') in {'symbols', 'scopes'}:
             self.lookup = {}
+
+    def reject_api(self, node_id, symbol_ref, reason):
+        if (not isinstance(node_id, str) or not node_id.strip()
+                or symbol_ref not in self.symbols or not isinstance(reason, str)
+                or not reason.strip() or len(reason) > 240):
+            raise ValueError('CONSTRUCTION_API_REJECTION_INVALID')
+        self.symbol_rejections.setdefault(node_id, {})[symbol_ref] = reason.strip()
+
+    def rejected_apis(self, node_id):
+        return self.symbol_rejections.get(node_id, {})
 
     def remember_node_purpose(self, node_id, purpose, *, replace=False):
         if not isinstance(purpose, str) or not purpose.strip() or len(purpose) > 240:
@@ -301,6 +314,7 @@ class ConstructionState:
             "lookups_since_progress": max(len(self.requests), self.operation_reads),
             "operation_context_reads": self.operation_reads,
             "operation_rejections": deepcopy(self.operation_rejections),
+            "symbol_rejections": deepcopy(self.symbol_rejections),
             "recent_lookups": list(self.history),
             "available_actions": list(available_actions), **cursor,
         }, "lookup": {key: value for key, value in self.lookup.items()
@@ -396,6 +410,7 @@ class ConstructionState:
                 'operation_draft': deepcopy(self.operation_draft),
                 'selection_goal': deepcopy(self.selection_goal),
                 'operation_rejections': deepcopy(self.operation_rejections),
+                'symbol_rejections': deepcopy(self.symbol_rejections),
                 'node_purposes': dict(self.node_purposes),
                 'validation_observation': deepcopy(self.validation_observation),
                 'memory': self.memory.export(),
@@ -462,7 +477,17 @@ class ConstructionState:
                        or not isinstance(value, str) or not value.strip() or len(value) > 240
                        for key, value in purposes.items())):
             raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
+        rejected_symbols = record.get('symbol_rejections', {})
+        if (not isinstance(rejected_symbols, dict)
+                or any(not isinstance(node_id, str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,240}', node_id)
+                       or not isinstance(rows, dict)
+                       or any(ref not in self.symbols or not isinstance(reason, str)
+                              or not reason.strip() or len(reason) > 240
+                              for ref, reason in rows.items())
+                       for node_id, rows in rejected_symbols.items())):
+            raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
         self.operation_rejections = deepcopy(rejections)
+        self.symbol_rejections = deepcopy(rejected_symbols)
         self.node_purposes = dict(purposes)
         from .construction_feedback import validate_observation
         observation = record.get('validation_observation')
