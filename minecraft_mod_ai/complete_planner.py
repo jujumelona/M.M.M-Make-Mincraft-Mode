@@ -134,9 +134,16 @@ class CompleteGameDesignPlanner:
             structured_sections = normalize_structured_sections(structured_sections)
             checkpoint.save_sections(structured_sections)
 
-        # A plan is the authored design, not a partially compiled runtime.
-        # RAG reuse, implementation selection, Typed PlanIR and build checks
-        # belong to production after the plan has been saved.
+        # The saved plan must carry the real, host-owned catalogue evidence
+        # discovered for this exact prompt. No model is called by this handoff,
+        # and provider failures are recorded rather than blocking authorship.
+        # Full code inspection, license admission and compile proof remain
+        # production-only decisions.
+        from .research_reuse_candidates import ensure_authored_source_handoff
+
+        research_design, _research_candidates = ensure_authored_source_handoff(
+            {}, router=self.router, prompt=prompt,
+        )
         text = request_scope_context(request_scope).strip() + "\n\n" + render_structured_sections(structured_sections)
         return AuthoredPlan(
             requested_prompt=prompt,
@@ -144,6 +151,7 @@ class CompleteGameDesignPlanner:
             existing_input_sha256=existing_input_sha256,
             media_paths=tuple(str(path) for path in media_paths),
             structured_sections=structured_sections,
+            content_design=research_design,
             request_scope=request_scope,
         )
 
