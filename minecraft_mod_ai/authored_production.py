@@ -1054,39 +1054,16 @@ def compile_authored_design(
         resolve_authored_source_reuse,
         source_candidate_fingerprint,
     )
-    from .research_reuse_candidates import authored_design_repository_candidates
+    from .research_reuse_candidates import ensure_authored_source_handoff
 
-    candidate_rows = authored_design_repository_candidates(content_design)
-    if not candidate_rows:
-        from .pre_design_research_pipeline import (
-            _canonical_sha256, collect_source_candidate_handoff,
-        )
-
-        cached_handoff = content_design.get("_pre_design_source_handoff")
-        expected_prompt = _canonical_sha256(plan.requested_prompt)
-        if (
-            not isinstance(cached_handoff, Mapping)
-            or cached_handoff.get("prompt_sha256") != expected_prompt
-        ):
-            try:
-                cached_handoff = collect_source_candidate_handoff(
-                    router, plan.requested_prompt,
-                )
-            except Exception as exc:  # A catalogue outage cannot veto code authoring.
-                cached_handoff = {
-                    "schema_version": "mmm/pre-design-source-candidate-handoff-v1",
-                    "prompt_sha256": expected_prompt,
-                    "repository_candidates": [],
-                    "status": "provider_error",
-                    "error_type": type(exc).__name__,
-                }
-        content_design = deepcopy(dict(content_design))
-        content_design["_pre_design_source_handoff"] = dict(cached_handoff)
+    content_design, candidate_rows = ensure_authored_source_handoff(
+        content_design, router=router, prompt=plan.requested_prompt,
+    )
+    if content_design != plan.content_design:
         from dataclasses import replace
 
         plan = replace(plan, content_design=content_design)
         design["authored_plan"] = plan.to_dict()
-        candidate_rows = authored_design_repository_candidates(content_design)
 
     expected_candidate_fingerprint = source_candidate_fingerprint(candidate_rows)
     source_reuse = content_design.get("_host_source_reuse")
