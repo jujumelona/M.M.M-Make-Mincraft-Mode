@@ -22,6 +22,11 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from .curseforge_catalog import (
+    curseforge_api_key,
+    curseforge_mod_metadata,
+    curseforge_target_filters,
+)
 from .deadline_executor import iter_completed_with_deadlines
 from .knowledge import (
     AuthoritativeEvidenceRetriever,
@@ -324,8 +329,13 @@ def _search_modrinth(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     }
 
 
-def _search_curseforge(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    key = os.environ.get("CURSEFORGE_API_KEY", "").strip()
+def _search_curseforge(
+    query: str,
+    *,
+    minecraft_version: str | None = None,
+    loader: str | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    key = curseforge_api_key()
     if not key:
         return [], {
             "provider": "curseforge",
@@ -334,6 +344,7 @@ def _search_curseforge(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]
         }
 
     headers = {"x-api-key": key}
+    target_filters = curseforge_target_filters(minecraft_version, loader)
     records: list[dict[str, Any]] = []
     errors: list[str] = []
     seen_records: set[int] = set()
@@ -374,6 +385,7 @@ def _search_curseforge(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]
                 "pageSize": page_size,
                 "sortField": 2,
                 "sortOrder": "desc",
+                **target_filters,
             }
         )
         payload = _json(f"https://api.curseforge.com/v1/mods/search?{params}", headers)
@@ -449,19 +461,9 @@ def _search_curseforge(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]
                     "content_sha256": _sha256_text(body),
                     "body_retrieved": True,
                     "evidence_origin": "curseforge_mod_body",
-                    "metadata": {
-                        "mod_id": mod_id,
-                        "slug": str(row.get("slug") or ""),
-                        "source_url": str(links.get("sourceUrl") or ""),
-                        "versions": sorted(
-                            {
-                                str(version)
-                                for file in row.get("latestFiles", [])
-                                if isinstance(file, Mapping)
-                                for version in file.get("gameVersions", [])
-                            }
-                        ),
-                    },
+                    "metadata": curseforge_mod_metadata(
+                        row, minecraft_version=minecraft_version, loader=loader
+                    ),
                 }
             )
             if _limit_reached(len(records), result_limit):
@@ -502,6 +504,7 @@ def _search_curseforge(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]
         "source_requests": source_requests,
         "detail_errors": errors,
         "authenticated": True,
+        "target_filters": target_filters,
         "retrieval_stop": "provider_exhaustion_or_explicit_budget",
     }
 

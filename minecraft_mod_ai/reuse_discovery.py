@@ -2,10 +2,10 @@ from __future__ import annotations
 
 """Adaptive, capability-level discovery for reusable Minecraft source donors.
 
-Discovery is intentionally cheap-first: query catalogues/repository metadata in
-parallel, resolve upstream source origins, deduplicate by immutable repository
-identity, then pass only a small coverage-diverse representative set to the
-expensive source-transplant inspector.
+Discovery queries CurseForge first, then Modrinth and GitHub, with independent
+queries parallel within each provider stage. Upstream source identities are
+deduplicated and representatives inspected first; every fallback candidate stays
+available until source verification and reuse proof decide coverage.
 """
 
 import atexit
@@ -25,11 +25,20 @@ from .canonical_capability_ontology import (
     resolve_capabilities_from_phrase_structured,
     search_queries_for_capability,
 )
+from .curseforge_catalog import (
+    curseforge_api_key as _curseforge_api_key,
+)
+from .curseforge_catalog import (
+    curseforge_mod_metadata,
+    curseforge_target_filters,
+)
 from .deadline_executor import iter_completed_with_deadlines
+from .ecosystem_discovery import provider_request_failure
 from .source_intent_aliases import source_intent_aliases as _source_intent_aliases
 
 _TOKEN = re.compile(r"[\w]+", re.UNICODE)
 _MINECRAFT_GAME_ID = 432
+_PROVIDER_PRIORITY = {"curseforge": 0, "modrinth": 1, "github": 2}
 _HTTP_CLIENT_LOCK = Lock()
 _HTTP_CLIENT: httpx.Client | None = None
 _GITHUB_QUERY_BOILERPLATE = frozenset(
@@ -82,6 +91,10 @@ class _RepositoryEvidence:
     providers: set[str] = field(default_factory=set)
     hits: int = 0
     rank_score: float = 0.0
+
+    @property
+    def provider_priority(self) -> int:
+        return min((_PROVIDER_PRIORITY[provider] for provider in self.providers), default=2)
 
 
 def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
@@ -149,23 +162,6 @@ def _close_pooled_http_client() -> None:
 
 
 atexit.register(_close_pooled_http_client)
-
-
-def _curseforge_api_key() -> str:
-    """Return the optional host-owned CurseForge credential without exposing it."""
-
-    key = (
-        os.environ.get("MMM_CURSEFORGE_API_KEY", "").strip()
-        or os.environ.get("CURSEFORGE_API_KEY", "").strip()
-    )
-    if not key:
-        try:
-            import google.colab.userdata as _colab_userdata  # type: ignore
-
-            key = str(_colab_userdata.get("CURSEFORGE_API_KEY") or "").strip()
-        except Exception:
-            key = ""
-    return key
 
 
 def _graph_search_terms(
@@ -387,7 +383,34 @@ def _candidate_relevance(candidate: Mapping[str, Any], capability: str) -> float
     return len(matched) / max(1, len(terms))
 
 
-def _resolve_modrinth_candidates(candidates: Sequence[Mapping[str, Any]], *, with_metadata=False) -> list:
+def _discovery_provider_error(provider: str, exc: BaseException, *, stage: str) -> dict[str, Any]:
+    """Retain typed transport facts without exception prose or response bodies."""
+
+    failure = provider_request_failure(exc, provider=provider)
+    status = failure.status_code if failure is not None else getattr(exc, "http_status", None)
+    status = status if isinstance(status, int) else None
+    unavailable = bool(failure is not None and failure.backend_unavailable)
+    unavailable = unavailable or provider == "curseforge" and status in {401, 403, 429}
+    return {
+        "provider": provider,
+        "stage": stage,
+        "exception_type": type(exc).__name__,
+        "http_status": status,
+        "backend_unavailable": unavailable,
+        "request_failure": failure.to_dict() if failure is not None else None,
+        "error": (
+            f"{provider} {stage} failed ({type(exc).__name__}"
+            + (f", HTTP {status}" if status is not None else "") + ")."
+        ),
+    }
+
+
+def _resolve_modrinth_candidates(
+    candidates: Sequence[Mapping[str, Any]],
+    *,
+    with_metadata=False,
+    errors: list[dict[str, Any]] | None = None,
+) -> list:
     jobs: list[tuple[int, str]] = []
     direct = []
     for index, candidate in enumerate(candidates):
@@ -410,13 +433,13 @@ def _resolve_modrinth_candidates(candidates: Sequence[Mapping[str, Any]], *, wit
             response.raise_for_status()
             value = response.json()
             if not isinstance(value, Mapping):
-                return "", 0.0, {}
+                raise TypeError("Modrinth project detail was not an object.")
             return _github_repository(value.get("source_url")), 1.0 / (1 + index), {
                 **candidates[index], "description": value.get("description", ""),
                 "body": str(value.get("body") or "")[:6000],
-            }
-        except Exception:
-            return "", 0.0, {}
+            }, None
+        except Exception as exc:  # noqa: BLE001 - preserve one failed detail alongside successful sources.
+            return "", 0.0, {}, _discovery_provider_error("modrinth", exc, stage="source_resolution")
 
     for _job, result in iter_completed_with_deadlines(
         jobs,
@@ -425,7 +448,9 @@ def _resolve_modrinth_candidates(candidates: Sequence[Mapping[str, Any]], *, wit
         stage="reuse-modrinth-source-resolution",
         sort_key=lambda item: item[0],
     ):
-        repository, score, metadata = result
+        repository, score, metadata, error = result
+        if error is not None and errors is not None:
+            errors.append(error)
         if repository:
             direct.append((repository, score, metadata))
     return direct if with_metadata else [(repo, rank) for repo, rank, _meta in direct]
@@ -445,7 +470,25 @@ def _ascii_search_query(value: str) -> str:
     return re.sub(r"\s+", " ", ascii_text).strip()
 
 
-def _search_curseforge(query: str, *, limit: int, with_metadata=False, minecraft_version=None) -> list:
+class _CurseForgeSearchError(RuntimeError):
+    """Provider failure containing no credential or response-body text."""
+
+    def __init__(
+        self, message: str, *, http_status: int | None = None, request_failure: Any = None
+    ) -> None:
+        super().__init__(message)
+        self.http_status = http_status
+        self.request_failure = request_failure
+
+
+def _search_curseforge(
+    query: str,
+    *,
+    limit: int,
+    with_metadata=False,
+    minecraft_version=None,
+    loader=None,
+) -> list:
     api_key = _curseforge_api_key()
     if not api_key:
         return []
@@ -460,8 +503,7 @@ def _search_curseforge(query: str, *, limit: int, with_metadata=False, minecraft
         "pageSize": str(min(limit, 50)),
         "index": "0",
     }
-    if minecraft_version:
-        params['gameVersion'] = minecraft_version
+    params.update(curseforge_target_filters(minecraft_version, loader))
     try:
         response = _pooled_http_client().get(
             "https://api.curseforge.com/v1/mods/search",
@@ -471,24 +513,39 @@ def _search_curseforge(query: str, *, limit: int, with_metadata=False, minecraft
         )
         response.raise_for_status()
         raw = response.json()
-    except Exception:
-        return []
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        raise _CurseForgeSearchError(
+            f"CurseForge search failed (HTTP {status}).", http_status=status,
+            request_failure=provider_request_failure(exc, provider="curseforge"),
+        ) from None
+    except httpx.HTTPError as exc:
+        raise _CurseForgeSearchError(
+            f"CurseForge search transport failed ({type(exc).__name__}).",
+            request_failure=provider_request_failure(exc, provider="curseforge"),
+        ) from None
+    except ValueError:
+        raise _CurseForgeSearchError("CurseForge search returned invalid JSON.") from None
     data = raw.get("data") if isinstance(raw, Mapping) else None
     if not isinstance(data, list):
-        return []
-    result: list[tuple[str, float]] = []
+        raise _CurseForgeSearchError("CurseForge search returned no valid data list.")
+    result = []
     for index, item in enumerate(data):
         if not isinstance(item, Mapping):
             continue
         links = item.get("links")
         source_url = links.get("sourceUrl") if isinstance(links, Mapping) else ""
         repository = _github_repository(source_url)
-        if repository:
-            result.append((repository, 1.0 / (1 + index), {
-                "title": item.get("name", ""), "summary": item.get("summary", ""),
-                "repository": repository,
-            }))
-    return result if with_metadata else [(repo, rank) for repo, rank, _meta in result]
+        # Catalog matches remain traceable even when no supported source link
+        # exists. Only a nonempty repository can enter the donor frontier.
+        result.append((repository, 1.0 / (1 + index), {
+            "title": item.get("name", ""), "summary": item.get("summary", ""),
+            "repository": repository,
+            **curseforge_mod_metadata(
+                item, minecraft_version=minecraft_version, loader=loader
+            ),
+        }))
+    return result if with_metadata else [(repo, rank) for repo, rank, _meta in result if repo]
 
 
 def discover_repositories_for_graph(
@@ -499,8 +556,16 @@ def discover_repositories_for_graph(
     minecraft_version: str | None = None,
     loader: str | None = None,
     diagnostics: list[dict[str, Any]] | None = None,
+    providers: Sequence[str] | None = None,
+    query_cache: dict[tuple[str, str, str, str], Any] | None = None,
 ) -> dict[str, tuple[str, ...]]:
-    """Adaptive discovery. Provider errors are distinct from successful zero hits."""
+    """Discover requested provider stages without treating keyword hits as reuse.
+
+    A caller may request one provider at a time and inspect its sources before
+    paying for fallback discovery. The default retains the complete provider
+    sequence. A caller-owned query cache preserves results and provider failures
+    across lazy stages. Provider errors remain distinct from successful zero hits.
+    """
 
     ordered = tuple(dict.fromkeys(str(item).strip() for item in capabilities if str(item).strip()))
     result: dict[str, tuple[str, ...]] = {capability: () for capability in ordered}
@@ -510,6 +575,7 @@ def discover_repositories_for_graph(
     variants = {capability: _query_variants(capability, terms[capability]) for capability in ordered}
     evidence: dict[str, _RepositoryEvidence] = {}
     per_capability: dict[str, dict[str, float]] = {capability: {} for capability in ordered}
+    per_capability_priority: dict[str, dict[str, int]] = {capability: {} for capability in ordered}
 
     def register(capability: str, provider: str, values: Sequence) -> None:
         for repository, rank, metadata in values:
@@ -522,18 +588,24 @@ def discover_repositories_for_graph(
                 continue
             cap_scores = per_capability[capability]
             cap_scores[repository] = max(cap_scores.get(repository, 0.0), rank)
+            cap_priorities = per_capability_priority[capability]
+            cap_priorities[repository] = min(
+                cap_priorities.get(repository, _PROVIDER_PRIORITY[provider]),
+                _PROVIDER_PRIORITY[provider],
+            )
             item = evidence.setdefault(repository, _RepositoryEvidence(repository=repository))
             item.capabilities.add(capability)
             item.providers.add(provider)
             item.hits += 1
             item.rank_score += rank
 
-    def provider_search(capability: str, provider: str, query: str) -> tuple[str, str, list[tuple[str, float]]]:
+    def provider_search(capability: str, provider: str, query: str):
         provider_query = _provider_query(provider, query)
         if provider == "curseforge":
             return capability, provider, _search_curseforge(provider_query, limit=_query_limit(),
-                with_metadata=True, minecraft_version=minecraft_version)
+                with_metadata=True, minecraft_version=minecraft_version, loader=loader), [], False
         candidates = []
+        errors: list[dict[str, Any]] = []
         cursor = ""
         try:
             # The user requires the requested MC release. Catalogue filters
@@ -551,13 +623,12 @@ def discover_repositories_for_graph(
                 if not next_cursor or next_cursor == cursor:
                     break
                 cursor = next_cursor
-        except Exception:
-            # Preserve partial successful pages, but never turn first-page
-            # provider failure into the evidence claim "zero results".
-            if not candidates:
-                raise
+        except Exception as exc:  # noqa: BLE001 - preserve prior pages and their incomplete retrieval status.
+            errors.append(_discovery_provider_error(provider, exc, stage="search"))
+        partial_search = bool(errors and candidates)
         if provider == "modrinth":
-            return capability, provider, _resolve_modrinth_candidates(candidates, with_metadata=True)
+            values = _resolve_modrinth_candidates(candidates, with_metadata=True, errors=errors)
+            return capability, provider, values, errors, partial_search or bool(values and errors)
         values = []
         for index, candidate in enumerate(candidates):
             if provider == "github" and not _github_candidate_is_minecraft_mod(candidate):
@@ -565,75 +636,194 @@ def discover_repositories_for_graph(
             repository = _candidate_repository(candidate)
             if repository:
                 values.append((repository, 1.0 / (1 + index), candidate))
-        return capability, provider, values
+        return capability, provider, values, errors, partial_search
 
-    providers = ["github", "modrinth"]
-    if _curseforge_api_key():
-        providers.append("curseforge")
+    if isinstance(providers, (str, bytes)):
+        raise TypeError("Reuse discovery providers must be a sequence of provider names.")
+    provider_order = tuple(dict.fromkeys(
+        str(provider).strip().casefold()
+        for provider in (providers if providers is not None else _PROVIDER_PRIORITY)
+    ))
+    if any(provider not in _PROVIDER_PRIORITY for provider in provider_order):
+        raise ValueError("Reuse discovery received an unsupported provider.")
+    if "curseforge" in provider_order and not _curseforge_api_key():
+        provider_order = tuple(provider for provider in provider_order if provider != "curseforge")
+        if diagnostics is not None:
+            diagnostics.append({
+                "provider": "curseforge", "provider_priority": _PROVIDER_PRIORITY["curseforge"],
+                "query": "", "capabilities": list(ordered), "status": "not_configured",
+                "error": "", "http_status": None, "repository_count": 0,
+                "catalog_result_count": 0, "usable_source_repository_count": 0,
+                "source_repository_missing_count": 0,
+                "repositories": [], "repository_evidence": [],
+                "minecraft_version": minecraft_version, "loader": loader,
+                "relevance_policy": "rank_candidates_then_inspect_actual_source",
+            })
     query_results: dict[tuple[str, str], list] = {}
+    query_receipts: dict[tuple[str, str], dict[str, Any]] = {}
+    provider_blocks: dict[str, dict[str, Any]] = {}
+    cache_target = (str(minecraft_version or "").strip(), str(loader or "").strip().casefold())
+    if query_cache is not None:
+        for cached_key, cached in query_cache.items():
+            if len(cached_key) != 4 or cached_key[2:] != cache_target or not isinstance(cached, Mapping):
+                continue
+            for error in cached.get("errors", ()):
+                if isinstance(error, Mapping) and error.get("backend_unavailable"):
+                    provider_blocks[cached_key[0]] = dict(error)
+                    break
 
-    def run_wave(capability_set: Sequence[str], variant_index: int) -> None:
-        jobs: list[tuple[str, str, str]] = []
+    def cache_key(provider: str, query: str) -> tuple[str, str, str, str]:
+        return provider, query, *cache_target
+
+    def consume_result(
+        job: tuple[str, str, str],
+        owners: Sequence[str],
+        values: list,
+        errors: list[dict[str, Any]],
+        partial_results: bool,
+        *,
+        cache_hit: bool = False,
+        deferred: bool = False,
+    ) -> None:
+        _capability, provider, query = job
+        key = (provider, query)
+        query_results[key] = values
+        blocking = next((error for error in errors if error.get("backend_unavailable")), None)
+        if blocking is not None:
+            provider_blocks[provider] = blocking
+        main_error = blocking or next(iter(errors), {})
+        source_repository_rows = [
+            _github_repository(repository) for repository, _rank, _metadata in values
+        ]
+        repositories = list(dict.fromkeys(repo for repo in source_repository_rows if repo))
+        receipt = {
+            "provider": provider, "query": query,
+            "provider_priority": _PROVIDER_PRIORITY[provider],
+            "capabilities": list(owners),
+            "status": "provider_error" if errors else ("found" if values else "search_empty"),
+            "error": "; ".join(str(error["error"]) for error in errors),
+            "errors": [dict(error) for error in errors],
+            "partial_results": partial_results,
+            "backend_unavailable": blocking is not None,
+            "request_failure": main_error.get("request_failure"),
+            "http_status": main_error.get("http_status"),
+            "deferred": deferred,
+            "deferred_reason": "provider_backend_unavailable" if deferred else "",
+            "cache_hit": cache_hit,
+            "search_executed": not cache_hit and not deferred,
+            "repository_count": len(repositories),
+            "usable_source_repository_count": len(repositories),
+            "source_repository_missing_count": sum(not repo for repo in source_repository_rows),
+            **({"catalog_result_count": len(values)} if provider == "curseforge" else {}),
+            "repositories": repositories,
+            "repository_evidence": [
+                {
+                    "repository": _github_repository(repository),
+                    "provider": provider,
+                    "provider_priority": _PROVIDER_PRIORITY[provider],
+                    **{
+                        field: metadata[field]
+                        for field in (
+                            "source_id", "catalog_id", "catalog_url", "source_url",
+                            "versions", "version_indexes", "requested_minecraft_version",
+                            "requested_loader", "source_reuse_authority",
+                        )
+                        if field in metadata
+                    },
+                }
+                for repository, _rank, metadata in values
+            ],
+            "minecraft_version": minecraft_version, "loader": loader,
+            "relevance_policy": "rank_candidates_then_inspect_actual_source",
+        }
+        query_receipts[key] = receipt
+        if diagnostics is not None:
+            diagnostics.append(receipt)
+        if query_cache is not None and not deferred and not cache_hit:
+            query_cache[cache_key(provider, query)] = {
+                "values": list(values), "errors": [dict(error) for error in errors],
+                "partial_results": partial_results, "receipt": dict(receipt),
+            }
+        for capability in owners:
+            register(capability, provider, values)
+
+    def run_wave(capability_set: Sequence[str], variant_index: int, provider: str) -> None:
         subscribers: dict[tuple[str, str], list[str]] = {}
         for capability in capability_set:
             query_list = variants[capability]
             if variant_index >= len(query_list):
                 continue
-            for provider in providers:
-                query = _provider_query(provider, query_list[variant_index])
-                key = (provider, query)
-                if key in query_results:
+            query = _provider_query(provider, query_list[variant_index])
+            key = (provider, query)
+            subscribers.setdefault(key, []).append(capability)
+
+        pending: list[tuple[str, str, str]] = []
+        for key, owners in subscribers.items():
+            if key in query_results:
+                for capability in owners:
                     register(capability, provider, query_results[key])
-                    continue
-                if key not in subscribers:
-                    jobs.append((capability, provider, query))
-                subscribers.setdefault(key, []).append(capability)
+                    prior_receipt = query_receipts[key]
+                    if capability not in prior_receipt["capabilities"]:
+                        prior_receipt["capabilities"].append(capability)
+                continue
+            query = key[1]
+            job = (owners[0], provider, query)
+            cached = query_cache.get(cache_key(provider, query)) if query_cache is not None else None
+            if isinstance(cached, Mapping):
+                consume_result(
+                    job, owners, list(cached["values"]),
+                    [dict(error) for error in cached["errors"]], bool(cached["partial_results"]),
+                    cache_hit=True,
+                )
+            else:
+                pending.append(job)
+
+        jobs: list[tuple[str, str, str]] = []
+        for job in pending:
+            if provider in provider_blocks:
+                consume_result(
+                    job, subscribers[(provider, job[2])], [], [provider_blocks[provider]],
+                    False, deferred=True,
+                )
+            else:
+                jobs.append(job)
         if not jobs:
             return
+
         def safe_provider_search(
             job: tuple[str, str, str],
         ):
             capability, provider, query = job
             try:
-                owner, backend, values = provider_search(capability, provider, query)
-                return owner, backend, values, ""
-            except Exception as exc:
-                return capability, provider, [], f"{type(exc).__name__}: {exc}"[:1200]
+                return provider_search(capability, provider, query)
+            except Exception as exc:  # noqa: BLE001 - preserve provider failure as data for staged fallback.
+                error = _discovery_provider_error(provider, exc, stage="search")
+                return capability, provider, [], [error], False
 
         for _job, result_row in iter_completed_with_deadlines(
             jobs,
             safe_provider_search,
             max_workers=min(_workers(), len(jobs)),
-            stage=f"reuse-catalog-wave-{variant_index}",
+            stage=f"reuse-{provider}-wave-{variant_index}",
             sort_key=lambda item: (item[0], item[1], item[2]),
         ):
-            capability, provider, values, error = result_row
+            _capability, provider, values, errors, partial_results = result_row
             key = (_job[1], _job[2])
-            query_results[key] = values
-            if diagnostics is not None:
-                diagnostics.append({
-                    "provider": provider, "query": _job[2],
-                    "capabilities": list(subscribers[key]),
-                    "status": "provider_error" if error else ("found" if values else "search_empty"),
-                    "error": error, "repository_count": len(values),
-                    "minecraft_version": minecraft_version, "loader": loader,
-                    "relevance_policy": "rank_candidates_then_inspect_actual_source",
-                })
-            for owner_capability in subscribers[key]:
-                register(owner_capability, provider, values)
+            consume_result(_job, subscribers[key], values, errors, partial_results)
 
     # An uninspected repository count is NOT reuse coverage. Previously three
     # keyword hits stopped all alternate queries, even when every source was
     # unrelated, unlicensed, or could not compile. Complete the small, bounded
     # set of semantic query variants before the inspector/proof makes the
     # authoritative reuse decision.
-    for variant_index in range(_query_variant_limit()):
-        wave_capabilities = [
-            capability for capability in ordered
-            if variant_index < len(variants[capability])
-        ]
-        if wave_capabilities:
-            run_wave(wave_capabilities, variant_index)
+    for provider in provider_order:
+        for variant_index in range(_query_variant_limit()):
+            wave_capabilities = [
+                capability for capability in ordered
+                if variant_index < len(variants[capability])
+            ]
+            if wave_capabilities:
+                run_wave(wave_capabilities, variant_index, provider)
 
     selected = _representative_repositories(evidence, ordered)
     selected_set = set(selected)
@@ -641,6 +831,7 @@ def discover_repositories_for_graph(
         ranked = sorted(
             per_capability[capability],
             key=lambda repo: (
+                -per_capability_priority[capability][repo],
                 repo in selected_set,
                 len(evidence[repo].capabilities),
                 len(evidence[repo].providers),
@@ -650,12 +841,9 @@ def discover_repositories_for_graph(
             ),
             reverse=True,
         )
-        selected_for_capability = [repo for repo in ranked if repo in selected_set]
-        if not selected_for_capability and ranked:
-            selected_for_capability.append(ranked[0])
         # Representatives are the first inspection batch. Keep every ranked
         # candidate so proof failure can continue to a different source donor.
-        result[capability] = tuple(selected_for_capability + [repo for repo in ranked if repo not in selected_for_capability])
+        result[capability] = tuple(ranked)
     return result
 
 
@@ -674,6 +862,7 @@ def _representative_repositories(
         best = max(
             available,
             key=lambda repo: (
+                -evidence[repo].provider_priority,
                 100.0 * len(evidence[repo].capabilities & remaining)
                 + 10.0 * len(evidence[repo].capabilities)
                 + 3.0 * len(evidence[repo].providers)

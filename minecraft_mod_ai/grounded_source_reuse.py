@@ -152,12 +152,15 @@ def _merge_card(cards: list[dict[str, Any]], by_repository: dict[str, int], raw:
     existing["explicit_reference"] = bool(existing.get("explicit_reference")) or bool(
         raw.get("explicit_reference")
     )
-    for field in ("page_refs", "source_ids", "source_urls"):
+    for field in ("page_refs", "source_ids", "source_urls", "catalog_evidence"):
         target = existing.setdefault(field, [])
         values = raw.get(field)
         for value in values if isinstance(values, list) else ():
             if value and value not in target:
                 target.append(value)
+    priorities = existing.setdefault("catalog_provider_priority", {})
+    for capability, priority in raw.get("catalog_provider_priority", {}).items():
+        priorities[capability] = min(priorities.get(capability, priority), priority)
     merged = f"{existing.get('evidence_text', '')} {raw.get('evidence_text', '')}".strip()
     existing["evidence_text"] = merged[:1280]
     existing["evidence_tokens"] = sorted(_tokens(existing["evidence_text"]))
@@ -472,32 +475,55 @@ def build_repository_reuse_plan(
     # Host-owned discovery feeds reference-only repository identities into the
     # existing immutable source, license, closure and compile-proof gates.
     # A search hit has ZERO reuse authority until the proof below passes.
+    from .curseforge_catalog import curseforge_api_key
     from .reuse_discovery import discover_repositories_for_graph
 
     discovery_receipts: list[dict[str, Any]] = []
-    discovered = discover_repositories_for_graph(
-        tuple(str(node) for node in graph.get("nodes", ()) if str(node).strip()),
-        client,
-        capability_graph=graph,
-        minecraft_version=adapter.minecraft_version,
-        loader=adapter.loader,
-        diagnostics=discovery_receipts,
-    )
+    query_cache: dict[tuple[str, str, str, str], Any] = {}
+    discovered: dict[str, tuple[str, ...]] = {}
     by_repository = {str(card["repository"]).casefold(): i for i, card in enumerate(cards)}
-    for capability, repositories in discovered.items():
-        for repository in repositories:
-            _merge_card(cards, by_repository, {
-                "repository": repository,
-                "page_refs": ["host:ecosystem_discovery"],
-                "source_ids": ["github:" + repository],
-                "source_urls": ["https://github.com/" + repository],
-                "evidence_text": capability,
-                "evidence_tokens": sorted(_tokens(capability)),
-                "explicit_reference": False,
-                "candidate_origin": "host_ecosystem_discovery",
-                "reference_only": True,
-                "source_reuse_authority": "verification_required",
-            })
+
+    def discover_stage(capability_set: Sequence[str], provider: str) -> None:
+        receipts: list[dict[str, Any]] = []
+        results = discover_repositories_for_graph(
+            capability_set, client, capability_graph=graph,
+            minecraft_version=adapter.minecraft_version, loader=adapter.loader,
+            diagnostics=receipts, providers=(provider,), query_cache=query_cache,
+        )
+        discovery_receipts.extend(receipts)
+        for capability, repositories in results.items():
+            discovered[capability] = tuple(dict.fromkeys(
+                (*discovered.get(capability, ()), *repositories)))
+            for repository in repositories:
+                provenance = [
+                    dict(item) for receipt in receipts
+                    if capability in receipt.get("capabilities", ())
+                    for item in receipt.get("repository_evidence", ())
+                    if str(item.get("repository") or "").casefold() == repository.casefold()
+                ]
+                priority = min((item["provider_priority"] for item in provenance), default=2)
+                source_ids = ["github:" + repository]
+                source_urls = ["https://github.com/" + repository]
+                for item in provenance:
+                    if item.get("source_id"):
+                        source_ids.append(item["source_id"])
+                    for field in ("catalog_url", "source_url"):
+                        if item.get(field):
+                            source_urls.append(item[field])
+                _merge_card(cards, by_repository, {
+                    "repository": repository,
+                    "page_refs": ["host:ecosystem_discovery"],
+                    "source_ids": list(dict.fromkeys(source_ids)),
+                    "source_urls": list(dict.fromkeys(source_urls)),
+                    "evidence_text": capability,
+                    "evidence_tokens": sorted(_tokens(capability)),
+                    "explicit_reference": False,
+                    "candidate_origin": "host_ecosystem_discovery",
+                    "reference_only": True,
+                    "source_reuse_authority": "verification_required",
+                    "catalog_evidence": provenance,
+                    "catalog_provider_priority": {capability: priority},
+                })
     terms_by_capability = _search_terms(graph)
     capabilities = tuple(
         dict.fromkeys(
@@ -508,6 +534,33 @@ def build_repository_reuse_plan(
     )
     if not capabilities:
         raise ValueError("Repository reuse requires at least one frozen capability.")
+
+    provider_order = (("curseforge", "modrinth", "github") if curseforge_api_key()
+                      else ("modrinth", "github"))
+    print("SOURCE_REUSE_DISCOVERY_ROUTE: " + json.dumps({
+        "provider_order": provider_order, "curseforge_key_present": provider_order[0] == "curseforge",
+        "fallback_policy": "inspect_current_provider_before_searching_next",
+        "minecraft_version": adapter.minecraft_version, "loader": adapter.loader,
+    }), flush=True)
+    discover_stage(capabilities, provider_order[0])
+
+    def candidate_batches(capability, terms, ranked_cards):
+        seen: set[str] = set()
+        for stage, provider in enumerate(provider_order):
+            if stage:
+                discover_stage((capability,), provider)
+            stage_cards = sorted(
+                (card for card in cards if str(card["repository"]).casefold() not in seen),
+                key=lambda card: (
+                    bool(card.get("explicit_reference")),
+                    -card.get("catalog_provider_priority", {}).get(capability, 2),
+                    _candidate_overlap(capability, terms, card),
+                ), reverse=True,
+            )
+            ranked_cards.extend(stage_cards)
+            seen.update(str(card["repository"]).casefold() for card in stage_cards)
+            for offset in range(0, len(stage_cards), 2):
+                yield stage_cards[offset:offset + 2]
 
     decisions: list[dict[str, Any]] = []
     inspections: list[dict[str, Any]] = []
@@ -524,19 +577,16 @@ def build_repository_reuse_plan(
         for capability in capabilities:
             terms = terms_by_capability.get(capability, (capability.replace(".", " "),))
             verified: list[tuple[DonorSlice, ReuseProofReceipt]] = []
-            ranked_cards = sorted(
-                cards,
-                key=lambda card: (bool(card.get("explicit_reference")),
-                                  _candidate_overlap(capability, terms, card)), reverse=True,
-            )
+            ranked_cards: list[dict[str, Any]] = []
+
             # Rank a small batch locally. Once pinned source can guide partial
             # authoring, hand it off instead of exhausting the frontier looking
             # for a donor that can be installed unchanged.
-            for offset in range(0, len(ranked_cards), 2):
+            for candidate_batch in candidate_batches(capability, terms, ranked_cards):
                 if inspection_outage and donor_inspector is not inspect_repository_slice:
                     break
                 candidates = _inspect_candidate_batch(
-                    ranked_cards[offset:offset + 2], capability=capability, terms=terms,
+                    candidate_batch, capability=capability, terms=terms,
                     adapter=adapter, client=client, donor_inspector=donor_inspector,
                     inspections=inspections, reference_sources=reference_sources,
                     outage=inspection_outage,

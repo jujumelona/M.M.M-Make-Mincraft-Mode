@@ -14,11 +14,11 @@ shared deadline executor. Provider/source retrieval remains independently bounde
 transport timeouts, while deterministic output order is reconstructed from authored specs.
 """
 
-import os
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
+from .curseforge_catalog import curseforge_api_key
 from .deadline_executor import iter_completed_with_deadlines
 from .planning_mod_discovery import CATALOG_PROVIDERS
 
@@ -72,6 +72,9 @@ def _run_catalogs(
     backend: Any,
     query: str,
     allowed: set[str],
+    *,
+    minecraft_version: str | None = None,
+    loader: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]]]:
     """Run catalogs in authority order; leaf source retrieval owns parallelism."""
 
@@ -80,8 +83,11 @@ def _run_catalogs(
     errors: list[dict[str, Any]] = []
 
     if "curseforge" in allowed:
-        if os.environ.get("CURSEFORGE_API_KEY", "").strip():
-            calls["curseforge"] = lambda: backend._search_curseforge(query)
+        if curseforge_api_key():
+            target = {"minecraft_version": minecraft_version} if minecraft_version else {}
+            if minecraft_version and loader:
+                target["loader"] = loader
+            calls["curseforge"] = lambda: backend._search_curseforge(query, **target)
         else:
             receipts["curseforge"] = {
                 "provider": "curseforge",
@@ -154,9 +160,13 @@ def _query_bundle(
 
     catalog_allowed = bool(allowed & {"curseforge", "modrinth"})
     catalog_records: list[dict[str, Any]] = []
+    versions = backend._versions(router)
+    requested_version = str(getattr(router, "_mmm_requested_minecraft_version", "") or "").strip()
+    loader = str(getattr(router, "_mmm_requested_loader" if requested_version else "_mmm_existing_loader", "") or "").strip()
     if catalog_allowed:
         catalog_records, catalog_receipts, catalog_errors = _run_catalogs(
-            backend, query, allowed
+            backend, query, allowed, minecraft_version=versions[0] if versions else None,
+            loader=loader or None,
         )
         records.extend(catalog_records)
         receipts.update(catalog_receipts)
@@ -238,7 +248,6 @@ def _query_bundle(
                 receipts["github"] = receipt
                 errors.append(receipt)
 
-    versions = backend._versions(router)
     project_rag = (
         backend._search_authoritative_catalog(query, versions)
         if allowed & {"official_docs", "project_rag"}
