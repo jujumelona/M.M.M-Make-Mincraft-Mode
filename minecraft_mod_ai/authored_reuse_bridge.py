@@ -23,6 +23,11 @@ def source_discovery_algorithm_version() -> str:
     return "shared-source-candidate-retrieval-v1"
 
 
+def source_reference_fingerprint(reference_repositories: Sequence[str]) -> str:
+    """Bind optional source references to the exact reuse decision."""
+    return "sha256:" + _sha(list(reference_repositories))
+
+
 def source_candidate_fingerprint(
     repository_candidates: Sequence[Mapping[str, Any]],
 ) -> str:
@@ -157,6 +162,7 @@ def resolve_authored_source_reuse(
         **receipt,
         "pre_design_candidates_sha256": source_candidate_fingerprint(repository_candidates),
         "discovery_algorithm_version": source_discovery_algorithm_version(),
+        "reference_repositories_sha256": source_reference_fingerprint(reference_repositories),
         "bound_target": {
             "minecraft_version": minecraft_version,
             "loader": loader,
