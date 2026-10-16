@@ -96,6 +96,7 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
         if op == 'call' and (key == current_member or row.get('inherited_from') == current_member):
             return False
         return (row['kind'] in kinds
+                and key not in state.rejected_apis(goal['node_id'])
                 and state.evidence_index.accessible(key, constructor=op == 'new')
                 and (op not in API_KINDS or fits(row['owner'] if op == 'new' else row['return_type'])))
 
@@ -167,7 +168,14 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
                                              resolve_symbols=resolve_symbols)
         if op in API_KINDS:
             if matches:
-                branches.insert(0, action_schema('api', {'symbol_ref': {'enum': [row['symbol_id'] for row in matches]}}))
+                candidates = [row['symbol_id'] for row in matches]
+                branches.insert(0, action_schema('api', {'symbol_ref': {'enum': candidates}}))
+                # Reject just the incompatible symbol; a different callable
+                # remains eligible for the same call/new/field operation.
+                branches.append(action_schema('reject_api', {
+                    'symbol_ref': {'enum': candidates},
+                    'reason': {'type': 'string', 'minLength': 1, 'maxLength': 240},
+                }))
         elif op == 'lambda':
             functional = [row['symbol_id'] for row in matches
                           if 'functional_parameters' in row and fits(row['symbol_id'])]
@@ -207,6 +215,8 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
             'the right API is not on the current page. API names are returned candidates, not search guesses. '
             'When this operation can be written, select api, write_type, functional_type or write now. '
             'Do not search for a ready-made implementation of custom gameplay. If this selected '
+            'candidate is semantically incorrect or its input cannot be constructed, reject_api '
+            'rejects only that exact symbol; continue with other actual candidates. If the entire '
             'abstraction is unsuitable, compose_locally returns the same missing slot to Java '
             'operation selection. Explain the missing behavior and decompose it into concrete '
             'smaller steps using inspected APIs and supported local operations. This does not '
@@ -215,6 +225,12 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
             'write_type binds an actual base type plus array dimensions; new_array also binds sized/initializer form. '
             'Outside compose_locally, another operation is chosen '
             'only after this node is written. ' + instruction)
+        if choice['action'] == 'reject_api':
+            from .fixed_template_generation import _validate_native_arguments
+            _validate_native_arguments(choice, schema)
+            state.reject_api(goal['node_id'], choice['symbol_ref'], choice['reason'])
+            save_author()
+            continue
         if choice['action'] == 'compose_locally':
             from .fixed_template_generation import _validate_native_arguments
             _validate_native_arguments(choice, schema)
