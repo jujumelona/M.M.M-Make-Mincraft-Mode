@@ -29,8 +29,6 @@ from .canonical_capability_ontology import (
 )
 from .curseforge_catalog import (
     curseforge_api_key as _curseforge_api_key,
-)
-from .curseforge_catalog import (
     curseforge_browse_windows,
     curseforge_mod_metadata,
     curseforge_mods_class_id,
@@ -612,7 +610,12 @@ def _search_sourcegraph(query: str, *, limit: int, with_metadata=False) -> list:
     tokens = [
         word for word in _TOKEN.findall(query.casefold())
         if re.fullmatch(r"[a-z][a-z0-9_]{3,40}", word)
-        and word not in _GITHUB_QUERY_BOILERPLATE | _QUERY_ACTION_WORDS
+        # "travel", "crafting", "entity", etc. are real source concepts:
+        # never discard them as generic action boilerplate.
+        and word not in _GITHUB_QUERY_BOILERPLATE | {
+            "gameplay", "feature", "system", "implementation", "example",
+            "please", "should", "make", "build", "with", "from", "that",
+        }
     ]
     if not tokens:
         return []
