@@ -46,15 +46,19 @@ def validate_dimension_definition(content: str, *, base_dir=None) -> dict[str, A
     if not isinstance(value, dict) or set(value) != {"type", "generator"}:
         raise JsonResourceValidationError("DIMENSION_ROOT: type and generator required")
     id_pattern = re.compile(r"^[a-z0-9_.-]+:[a-z0-9_./-]+$")
+    deferred_refs = []
 
     def ref(value, kind, vanilla=()):
         if not isinstance(value, str) or not id_pattern.fullmatch(value):
             raise JsonResourceValidationError(f"DIMENSION_REFERENCE_INVALID: {kind}")
         if value in vanilla:
             return
-        if base_dir is None:
-            return
         namespace, name = value.split(":", 1)
+        if base_dir is None or namespace == "minecraft":
+            # Vanilla IDs require target-game registry validation; do not
+            # mistake absence from the mod's own data pack for a missing file.
+            deferred_refs.append(value)
+            return
         root = Path(base_dir).resolve()
         target = (root / "src/main/resources/data" / namespace / kind /
                   (name + ".json")).resolve()
@@ -111,6 +115,7 @@ def validate_dimension_definition(content: str, *, base_dir=None) -> dict[str, A
     return {
         "validator": "dimension_definition",
         "status": "PASS",
-        "reference_validation": "PROJECT_CHECKED" if base_dir is not None else "DEFERRED",
+        "reference_validation": "DEFERRED" if deferred_refs else "PROJECT_CHECKED",
+        "unverified_registry_ids": sorted(set(deferred_refs)),
         "generator_type": kind,
     }
