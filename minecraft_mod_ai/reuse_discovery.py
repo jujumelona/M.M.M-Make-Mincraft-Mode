@@ -475,6 +475,7 @@ def _search_curseforge(
     with_metadata=False,
     minecraft_version=None,
     loader=None,
+    errors: list[dict[str, Any]] | None = None,
 ) -> list:
     """Browse real Minecraft mod listings, not invented feature-name queries.
 
@@ -521,74 +522,82 @@ def _search_curseforge(
         (sort_field, None, _discovery_pages()) for sort_field in (2, 3, 11)
     ]
     windows.extend((3, category_id, 1) for category_id in child_categories)
-    for sort_field, category_id, max_pages in windows:
-        index = 0
-        for _ in range(max_pages):
-            params = {
-                "gameId": str(_MINECRAFT_GAME_ID),
-                "sortField": str(sort_field),
-                "sortOrder": "desc",
-                "pageSize": str(page_size),
-                "index": str(index),
-            }
-            if mods_class_id is not None:
-                params["classId"] = str(mods_class_id)
-            if category_id is not None:
-                params["categoryId"] = str(category_id)
-            try:
-                response = client.get(
-                    "https://api.curseforge.com/v1/mods/search",
-                    params=params, headers=headers, timeout=10.0,
-                )
-                response.raise_for_status()
-                raw = response.json()
-            except httpx.HTTPStatusError as exc:
-                status = exc.response.status_code
-                raise _CurseForgeSearchError(
-                    f"CurseForge search failed (HTTP {status}).", http_status=status,
-                    request_failure=provider_request_failure(exc, provider="curseforge"),
-                ) from None
-            except httpx.HTTPError as exc:
-                raise _CurseForgeSearchError(
-                    f"CurseForge search transport failed ({type(exc).__name__}).",
-                    request_failure=provider_request_failure(exc, provider="curseforge"),
-                ) from None
-            except ValueError:
-                raise _CurseForgeSearchError("CurseForge search returned invalid JSON.") from None
+    try:
+        for sort_field, category_id, max_pages in windows:
+            index = 0
+            for _ in range(max_pages):
+                params = {
+                    "gameId": str(_MINECRAFT_GAME_ID),
+                    "sortField": str(sort_field),
+                    "sortOrder": "desc",
+                    "pageSize": str(page_size),
+                    "index": str(index),
+                }
+                if mods_class_id is not None:
+                    params["classId"] = str(mods_class_id)
+                if category_id is not None:
+                    params["categoryId"] = str(category_id)
+                try:
+                    response = client.get(
+                        "https://api.curseforge.com/v1/mods/search",
+                        params=params, headers=headers, timeout=10.0,
+                    )
+                    response.raise_for_status()
+                    raw = response.json()
+                except httpx.HTTPStatusError as exc:
+                    status = exc.response.status_code
+                    raise _CurseForgeSearchError(
+                        f"CurseForge search failed (HTTP {status}).", http_status=status,
+                        request_failure=provider_request_failure(exc, provider="curseforge"),
+                    ) from None
+                except httpx.HTTPError as exc:
+                    raise _CurseForgeSearchError(
+                        f"CurseForge search transport failed ({type(exc).__name__}).",
+                        request_failure=provider_request_failure(exc, provider="curseforge"),
+                    ) from None
+                except ValueError:
+                    raise _CurseForgeSearchError("CurseForge search returned invalid JSON.") from None
 
-            rows = raw.get("data") if isinstance(raw, Mapping) else None
-            if not isinstance(rows, list):
-                raise _CurseForgeSearchError("CurseForge search returned no valid data list.")
-            for position, item in enumerate(rows):
-                if not isinstance(item, Mapping) or type(item.get("id")) is not int:
-                    continue
-                mod_id = item["id"]
-                if mod_id in seen_ids:
-                    continue
-                if mods_class_id is not None and item.get("classId") not in (None, mods_class_id):
-                    continue
-                seen_ids.add(mod_id)
-                links = item.get("links")
-                source_url = links.get("sourceUrl") if isinstance(links, Mapping) else ""
-                repository = _github_repository(source_url)
-                result.append((repository, 1.0 / (1 + len(result)), {
-                    "title": item.get("name", ""), "summary": item.get("summary", ""),
-                    "repository": repository, "sort_field": sort_field,
-                    "catalog_class_verified": mods_class_id is not None,
-                    **curseforge_mod_metadata(
-                        item, minecraft_version=minecraft_version, loader=loader
-                    ),
-                }))
-            try:
-                next_index = curseforge_next_index(
-                    raw.get("pagination") if isinstance(raw, Mapping) else None,
-                    index=index, page_size=page_size, row_count=len(rows),
-                )
-            except ValueError as exc:
-                raise _CurseForgeSearchError(str(exc)) from None
-            if next_index is None:
-                break
-            index = next_index
+                rows = raw.get("data") if isinstance(raw, Mapping) else None
+                if not isinstance(rows, list):
+                    raise _CurseForgeSearchError("CurseForge search returned no valid data list.")
+                for position, item in enumerate(rows):
+                    if not isinstance(item, Mapping) or type(item.get("id")) is not int:
+                        continue
+                    mod_id = item["id"]
+                    if mod_id in seen_ids:
+                        continue
+                    if mods_class_id is not None and item.get("classId") not in (None, mods_class_id):
+                        continue
+                    seen_ids.add(mod_id)
+                    links = item.get("links")
+                    source_url = links.get("sourceUrl") if isinstance(links, Mapping) else ""
+                    repository = _github_repository(source_url)
+                    result.append((repository, 1.0 / (1 + len(result)), {
+                        "title": item.get("name", ""), "summary": item.get("summary", ""),
+                        "repository": repository, "sort_field": sort_field,
+                        "catalog_class_verified": mods_class_id is not None,
+                        **curseforge_mod_metadata(
+                            item, minecraft_version=minecraft_version, loader=loader
+                        ),
+                    }))
+                try:
+                    next_index = curseforge_next_index(
+                        raw.get("pagination") if isinstance(raw, Mapping) else None,
+                        index=index, page_size=page_size, row_count=len(rows),
+                    )
+                except ValueError as exc:
+                    raise _CurseForgeSearchError(str(exc)) from None
+                if next_index is None:
+                    break
+                index = next_index
+    except _CurseForgeSearchError as exc:
+        if not result:
+            raise
+        if errors is not None:
+            errors.append(_discovery_provider_error("curseforge", exc, stage="later_page"))
+        else:
+            raise
     return result if with_metadata else [(repo, rank) for repo, rank, _meta in result if repo]
 
 
@@ -751,8 +760,12 @@ def discover_repositories_for_graph(
     def provider_search(capability: str, provider: str, query: str):
         provider_query = _provider_query(provider, query)
         if provider == "curseforge":
-            return capability, provider, _search_curseforge(provider_query, limit=_query_limit(),
-                with_metadata=True, minecraft_version=minecraft_version, loader=loader), [], False
+            errors: list[dict[str, Any]] = []
+            values = _search_curseforge(
+                provider_query, limit=_query_limit(), with_metadata=True,
+                minecraft_version=minecraft_version, loader=loader, errors=errors,
+            )
+            return capability, provider, values, errors, bool(errors and values)
         if provider == "sourcegraph":
             return capability, provider, _search_sourcegraph(provider_query, limit=_query_limit(),
                 with_metadata=True), [], False
