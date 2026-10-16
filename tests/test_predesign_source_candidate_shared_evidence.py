@@ -310,3 +310,16 @@ def test_generic_architecture_background_is_not_nominated_as_a_donor(monkeypatch
     )
     assert receipt["candidate_count"] == 0
     assert receipt["repository_candidates"] == []
+
+
+def test_reference_changes_invalidate_cached_source_plan_identity():
+    from minecraft_mod_ai.authored_reuse_bridge import (
+        source_discovery_algorithm_version,
+        source_reference_fingerprint,
+    )
+
+    assert source_discovery_algorithm_version()
+    assert source_reference_fingerprint(()) == source_reference_fingerprint([])
+    assert source_reference_fingerprint(("example/source-one",)) != (
+        source_reference_fingerprint(("example/source-two",))
+    )
