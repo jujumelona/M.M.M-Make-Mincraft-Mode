@@ -46,18 +46,28 @@ def test_modrinth_paginates_and_bulk_fetches_full_projects(monkeypatch):
     assert sum("/v2/projects?" in call for call in calls) == 2
 
 
-def test_curseforge_paginates_and_fetches_all_descriptions(monkeypatch):
+def test_curseforge_paginates_browse_windows_and_fetches_ranked_descriptions(monkeypatch):
+    calls = []
+
     def fake_json(url, headers=None):
+        calls.append(url)
+        if "/categories?" in url:
+            return {"data": [
+                {"id": 6, "gameId": 432, "name": "Mods", "slug": "mc-mods", "isClass": True},
+            ]}
         if "/mods/search?" in url:
-            index = int(_query(url).get("index", ["0"])[0])
+            query = _query(url)
+            assert "searchFilter" not in query
+            assert query["classId"] == ["6"]
+            index = int(query.get("index", ["0"])[0])
             if index == 0:
                 return {"data": [
-                    {"id": 1, "name": "one", "summary": "s1", "links": {}},
-                    {"id": 2, "name": "two", "summary": "s2", "links": {}},
+                    {"id": 1, "name": "space one", "summary": "space trading", "links": {}},
+                    {"id": 2, "name": "space two", "summary": "space trading", "links": {}},
                 ], "pagination": {"index": 0, "pageSize": 50, "resultCount": 2, "totalCount": 3}}
             if index == 2:
                 return {"data": [
-                    {"id": 3, "name": "three", "summary": "s3", "links": {}},
+                    {"id": 3, "name": "space three", "summary": "space trading", "links": {}},
                 ], "pagination": {"index": 2, "pageSize": 50, "resultCount": 1, "totalCount": 3}}
         if "/description" in url:
             mod_id = url.split("/mods/", 1)[1].split("/", 1)[0]
@@ -66,10 +76,11 @@ def test_curseforge_paginates_and_fetches_all_descriptions(monkeypatch):
 
     monkeypatch.setenv("CURSEFORGE_API_KEY", "test")
     monkeypatch.setattr(rag, "_json", fake_json)
+    monkeypatch.setattr(rag, "_provider_page_limit", lambda: 2)
     records, receipt = rag._search_curseforge("space trading")
     assert [record["source_id"] for record in records] == ["curseforge:1", "curseforge:2", "curseforge:3"]
     assert [record["content"] for record in records] == ["full-1", "full-2", "full-3"]
-    assert receipt["search_requests"] == 2
+    assert receipt["search_requests"] == 6
     assert receipt["source_requests"] == 3
     assert receipt["provider_total"] == 3
 
