@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
+from fractions import Fraction
 import hashlib
 import json
 from math import isfinite
@@ -159,7 +160,8 @@ def prepare_resource_context(manifest, spec, *, java_classpath, project_root):
     else:
         requested_type = ""
     return {"registries": registries, "minecraft_version": expected_version,
-            "authored_type_ref": requested_type}
+            "authored_type_ref": requested_type,
+            "authored_type_overrides": _authored_type_overrides(manifest, spec)}
 
 
 def bind_resource_schema(schema, resource_context):
@@ -200,6 +202,13 @@ def bind_resource_schema(schema, resource_context):
                     bind(item)
 
     bind(result)
+    overrides = resource_context.get('authored_type_overrides', {})
+    override_schema = result.get('properties', {}).get('dimension_type_overrides')
+    if overrides and isinstance(override_schema, dict):
+        for name, value in overrides.items():
+            override_schema['properties'][name]['const'] = value
+        override_schema['required'] = sorted(overrides)
+        result['required'] = list(dict.fromkeys([*result.get('required', ()), 'dimension_type_overrides']))
     return result
 
 
@@ -213,10 +222,21 @@ def _authored_type_overrides(manifest, spec):
             continue
         value = authored[name]
         if isinstance(value, str):
-            try:
-                value = float(value)
-            except ValueError as exc:
-                raise ValueError("CANONICAL_RESOURCE_AUTHORED_NUMBER_INVALID: " + name) from exc
+            # Legacy design properties were untyped strings, sometimes prose
+            # or IDs. Only exact numeric syntax can become a host constraint;
+            # the complete original properties remain in the model context.
+            decimal = r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?'
+            text = value.strip()
+            if re.fullmatch(decimal, text):
+                value = float(text)
+            elif name == 'coordinate_scale' and re.fullmatch(decimal + r'\s*:\s*' + decimal, text):
+                left, right = text.split(':')
+                try:
+                    value = float(Fraction(left.strip()) / Fraction(right.strip()))
+                except ZeroDivisionError as exc:
+                    raise ValueError("CANONICAL_RESOURCE_AUTHORED_NUMBER_INVALID: " + name) from exc
+            else:
+                continue
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(value):
             raise ValueError("CANONICAL_RESOURCE_AUTHORED_NUMBER_INVALID: " + name)
         validate_json_schema(value, schema)
@@ -233,7 +253,8 @@ def render_resource_artifact(manifest, spec, values, resource_context):
         definition = json.loads(values["resource_definition_json"])
     validate_json_schema(definition, bind_resource_schema(
         manifest["resource_contract"]["model_schema"], resource_context))
-    overrides = _authored_type_overrides(manifest, spec)
+    overrides = definition.pop('dimension_type_overrides', {})
+    overrides.update(_authored_type_overrides(manifest, spec))
     if overrides:
         resource = resource_context["registries"]["dimension_type"][definition["type"]]
         dimension_type = deepcopy(resource["value"])
@@ -268,11 +289,17 @@ def validate_resource_artifact(manifest, spec, source, resource_context):
         reference("dimension_type", dimension_type)
     else:
         matches = []
+        fields = manifest['resource_contract'].get('authored_type_fields', {})
+        for name, schema in fields.items():
+            if name in dimension_type:
+                validate_json_schema(dimension_type[name], schema)
         for identifier, row in resource_context["registries"]["dimension_type"].items():
             if requested_type and identifier != requested_type:
                 continue
             expected = deepcopy(row["value"])
             if isinstance(expected, dict) and set(overrides) <= set(expected):
+                expected.update({name: dimension_type[name] for name in fields
+                                 if name in expected and name in dimension_type})
                 expected.update(overrides)
                 if expected == dimension_type:
                     matches.append(identifier)

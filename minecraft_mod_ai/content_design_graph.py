@@ -847,7 +847,9 @@ def compile_content_graph(
             FactType.BLOCK_ENTITY_EXISTS: {"display_name", "sync_type", "container_size"},
             FactType.DATA_COMPONENT: {"display_name", "component_name", "value_type", "codec"},
             FactType.WORLDGEN_FEATURE: {"display_name", "feature_type", "step", "biomes"},
-            FactType.DIMENSION: {"display_name", "dimension_type", "ambient_light", "coordinate_scale"},
+            # Resolve optional environment numbers in the target-bound resource
+            # schema, rather than forcing arbitrary string facts at design time.
+            FactType.DIMENSION: {"display_name", "dimension_type"},
             FactType.BIOME: {"display_name", "temperature", "downfall", "precipitation"},
             FactType.STATUS_EFFECT: {"display_name", "category", "color", "beneficial"},
             FactType.SOUND_EVENT: {"display_name", "sound_id", "category"},

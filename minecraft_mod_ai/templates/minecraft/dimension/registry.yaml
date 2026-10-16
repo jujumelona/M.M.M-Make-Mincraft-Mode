@@ -35,6 +35,12 @@ resource_contract:
     an overworld clone merely to produce a valid file. Preserve concrete supplied
     dimension_type IDs. The host preserves authored ambient_light and
     coordinate_scale in an inline copy of the selected target dimension type.
+    Use dimension_type_overrides only for environmental properties grounded in
+    the active requirement or meaningful authored design. Express darkness as
+    numeric ambient light and a coordinate ratio as a numeric scale. Opaque ID
+    fragments in legacy properties are not numeric facts; leave unspecified
+    overrides absent so the selected real type supplies them. Never invent
+    environmental numbers merely to fill optional properties.
     Custom terrain or biome definitions must already exist as prerequisite resources.
   authored_type_fields:
     ambient_light:
@@ -54,6 +60,18 @@ resource_contract:
         type: string
         pattern: '^[a-z0-9_.-]+:[a-z0-9_./-]+$'
         x-mmm-resource-registry: dimension_type
+      dimension_type_overrides:
+        type: object
+        additionalProperties: false
+        properties:
+          ambient_light:
+            type: number
+            minimum: 0
+            maximum: 1
+          coordinate_scale:
+            type: number
+            minimum: 0.00001
+            maximum: 30000000
       generator: &dimension_generator
         type: object
         additionalProperties: false
