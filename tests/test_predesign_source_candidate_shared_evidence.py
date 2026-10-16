@@ -371,3 +371,24 @@ def test_stale_research_prompt_also_invalidates_old_planning_donor(monkeypatch):
     )
     assert selected == []
     assert content["_planning_state"] == {"other_progress": "keep"}
+
+
+def test_full_research_and_production_share_source_nomination_scope():
+    from minecraft_mod_ai.pre_design_research_pipeline import _requested_source_queries
+
+    domain = {"requirements": ["spaceship travel"], "evidence_kinds": ["minecraft_api"],
+              "providers": ["curseforge", "modrinth"], "domain_id": "request"}
+    grounded = {"queries": [
+        {"query": "spaceship travel", "evidence_records": [
+            {"source_id": "curseforge:42", "content": "travel spaceship",
+             "metadata": {"source_url": "https://github.com/owner/space"}},
+        ]},
+        {"query": "Minecraft Fabric architecture items entities dimensions", "evidence_records": [
+            {"source_id": "modrinth:generic", "content": "generic utilities",
+             "metadata": {"source_url": "https://github.com/owner/unrelated"}},
+        ]},
+    ]}
+    narrowed = _requested_source_queries(domain, grounded)
+    assert len(narrowed["queries"]) == 1
+    candidates = project_repository_candidates(domain, narrowed)
+    assert [row["repository"] for row in candidates] == ["owner/space"]
