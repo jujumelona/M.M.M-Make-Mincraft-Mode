@@ -378,10 +378,42 @@ def author_task_operations(router, task, context):
                 'input_refs': [], 'attributes': {}, 'purpose': choice['purpose']})
             continue
         if row is None:
-            # The chosen API-dependent operation lacked verified callable
-            # evidence. Reconsider the same slot rather than endlessly paging
-            # symbols or fabricating a Java registry method. Persist exclusions
-            # so resuming cannot repeat the same dead end.
+            # A forward input may have been demanded by a bad provisional
+            # parent API. Reopening the parent is better than repeatedly
+            # looking for a nonexistent receiver/argument implementation.
+            # This is local graph repair, not evidence that the API is absent.
+            parent = None
+            if slot in pending and action in {'call', 'new', 'field', 'lambda'}:
+                for dependency in contracts.get(slot, ()):
+                    candidate_parent = by_id.get(dependency['consumer'])
+                    if (candidate_parent is not None
+                            and candidate_parent['op'] in {'call', 'new', 'field'}
+                            and candidate_parent.get('attributes', {}).get('symbol_ref') in symbols):
+                        parent = candidate_parent
+                        break
+            if parent is not None:
+                symbol_ref = parent['attributes']['symbol_ref']
+                reason = 'required input could not be constructed from verified evidence'
+                state.reject_api(parent['node_id'], symbol_ref, reason)
+                state.validation_observation = rejection(
+                    ValueError('CONSTRUCTION_PARENT_API_RESELECT_REQUIRED: ' + reason),
+                    nodes, candidate={'node_id': parent['node_id']}, phase='partial')
+                state.reconsider_operation()
+                state.operation_rejections = {}
+                state.selection_goal = {
+                    'node_id': parent['node_id'],
+                    'purpose': state.node_purposes.get(parent['node_id'], task.intent),
+                    'excluded_operations': [],
+                }
+                print('CONSTRUCTION PARENT API RESELECT: ' + json.dumps({
+                    'blocked_input': slot, 'parent_id': parent['node_id'],
+                    'rejected_symbol': symbol_ref, 'graph_changed': False,
+                }, ensure_ascii=False), flush=True)
+                save_author()
+                continue
+            # No provisional API parent to repair. Keep this slot and preserve
+            # the ability to select other operation types, without an invented
+            # callable or a placeholder success.
             excluded = state.selection_goal.setdefault('excluded_operations', [])
             if action not in excluded:
                 excluded.append(action)
