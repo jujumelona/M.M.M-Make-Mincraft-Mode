@@ -23,6 +23,27 @@ def _words(text):
     return re.sub(r'[.$#/_:<>(),;\[\]-]+', ' ', text)
 
 
+def _name_parts(row):
+    """Callable-name words are different evidence from an owner's type name."""
+    return tuple(_meaningful_terms(_words(row.get('name', ''))))
+
+
+def _purpose_name_weights(purpose):
+    """Use matching, inspected method names to bridge inflected goal terms.
+
+    Morphological prefixes nominate *inspected* callables, never guessed APIs.
+    Action-noun/gerund terms weigh more than incidental type nouns.
+    """
+    weights = {}
+    for term in _meaningful_terms(_words(purpose)):
+        if len(term) < 5:
+            continue
+        prefix = term[:5]
+        weight = 4 if term.endswith(('tion', 'sion', 'ment', 'ing')) else 1
+        weights[prefix] = max(weight, weights.get(prefix, 0))
+    return weights
+
+
 def _description(row):
     return _words(' '.join(str(value) for value in (
         row.get('owner', ''), row.get('name', ''), row.get('kind', ''),
@@ -65,6 +86,12 @@ class ConstructionEvidenceIndex:
         self.ordering_goal = None
         self.ordering = None
         self.by_owner = defaultdict(list)
+        # Postings contain owners, not duplicate copies of the entire
+        # classpath index. Query-local scoring inspects only matching owners.
+        self.member_name_owners = defaultdict(set)
+        self.name_weights = {}
+        self.strong_name_prefixes = frozenset()
+        self.exact_action_available = False
         self.aliases = defaultdict(set)
         self.member_text = {}
         self.member_prepared = {}
@@ -85,6 +112,10 @@ class ConstructionEvidenceIndex:
                 continue
             self.by_owner[row['owner']].append(key)
             self._record_document(key, row)
+            if row.get('kind') == 'METHOD':
+                for part in _name_parts(row):
+                    if len(part) >= 5:
+                        self.member_name_owners[part[:5]].add(row['owner'])
             if row.get('kind') == 'CLASS':
                 self.aliases[symbol_query_key(key)].add(key)
                 self.aliases[symbol_query_key(row['name'])].add(key)
@@ -193,11 +224,36 @@ class ConstructionEvidenceIndex:
         if key not in self.by_owner[self.owner]:
             self.by_owner[self.owner].append(key)
         self._record_document(key, row)
+        if row.get('kind') == 'METHOD':
+            for part in _name_parts(row):
+                if len(part) >= 5:
+                    self.member_name_owners[part[:5]].add(row['owner'])
         self.member_text[key] = _description(row)
         self.member_prepared[key] = (frozenset(_tokens(self.member_text[key])), self.member_text[key].casefold())
         self.eligible.clear()
         self.selection_eligible = None
         self.ordering_goal = None
+
+    def _member_name_score(self, key):
+        parts = _name_parts(self.symbols[key])
+        if not parts:
+            return 0.0
+        matches = sum(self.name_weights.get(part[:5], 0)
+                      for part in parts if len(part) >= 5)
+        return matches / (1.0 + 0.65 * (len(parts) - 1))
+
+    def intent_compatible(self, key):
+        """Abstain from unrelated call names when an exact action API exists.
+
+        No exact action-name evidence means the author retains normal discovery.
+        """
+        if not self.exact_action_available or not self.strong_name_prefixes:
+            return True
+        parts = _name_parts(self.symbols[key])
+        if not any(part[:5] in self.strong_name_prefixes for part in parts):
+            return False
+        return all(part[:5] in self.strong_name_prefixes or part in self.query_terms
+                   for part in parts)
 
     def _member_lexical_score(self, key):
         # Memoize only members of displayed owners. Duplicating every full
@@ -446,9 +502,38 @@ class ConstructionEvidenceIndex:
             if documents and terms:
                 hits = sum(counts[kind][term] for kind in kinds for term in terms)
                 relation[owner] += hits / (documents * len(terms))
+        eligible = self._eligible_owners(kinds, descriptor.get('selection'))
+        self.name_weights = _purpose_name_weights(query)
+        self.strong_name_prefixes = frozenset(prefix for prefix, weight in self.name_weights.items()
+                                              if weight > 1 and prefix in self.member_name_owners)
+        self.exact_action_available = False
+        if 'METHOD' in kinds:
+            focus = self.strong_name_prefixes or self.name_weights.keys()
+            matched_owners = set()
+            for prefix in focus:
+                matched_owners.update(self.member_name_owners.get(prefix, ()))
+            for owner in matched_owners:
+                keys = eligible.get(owner, ())
+                if not keys:
+                    continue
+                best = 0.0
+                for key in keys:
+                    row = self.symbols[key]
+                    if row['kind'] != 'METHOD':
+                        continue
+                    score = self._member_name_score(key)
+                    best = max(best, score)
+                    parts = _name_parts(row)
+                    if (self.strong_name_prefixes and len(parts) == 1
+                            and parts[0][:5] in self.strong_name_prefixes):
+                        self.exact_action_available = True
+                if best:
+                    # A real matching callable outranks a class whose *name*
+                    # merely resembles the requested operation. Name precision
+                    # discourages registerDebugValues for "registration".
+                    relation[owner] += (8.0 if self.strong_name_prefixes else 2.0) * best
         owners = rank_context_chunks(query, self.owner_chunks.values(), relation_scores=relation,
                                      prepared_text=self.owner_prepared)
-        eligible = self._eligible_owners(kinds, descriptor.get('selection'))
         ranked = tuple(row.chunk_id for row in owners if row.chunk_id in eligible)
         self.owner_scores = {row.chunk_id: row.score for row in owners}
         self.scope_counts = defaultdict(int)
@@ -491,7 +576,7 @@ class ConstructionEvidenceIndex:
         def members(owner):
             if owner not in self.member_orderings:
                 self.member_orderings[owner] = tuple(sorted(eligible[owner], key=lambda key: (
-                    -self._member_lexical_score(key), key)))
+                    -self._member_name_score(key), -self._member_lexical_score(key), key)))
             return self.member_orderings[owner]
 
         if representatives:

@@ -123,6 +123,7 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
             return False
         return (row['kind'] in kinds
                 and state.evidence_index.accessible(key, constructor=op == 'new')
+                and (op != 'call' or state.evidence_index.intent_compatible(key))
                 and (op not in API_KINDS or fits(row['owner'] if op == 'new' else row['return_type'])))
 
     # Retrieval must describe the specific Java dependency, not the full game
