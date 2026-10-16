@@ -71,7 +71,9 @@ def curseforge_mods_class_id(categories: Any) -> int | None:
             continue
         if row.get("isClass") is not True:
             continue
-        if str(row.get("slug") or row.get("name") or "").strip().casefold() != "mods":
+        label = str(row.get("name") or "").strip().casefold()
+        slug = str(row.get("slug") or "").strip().casefold()
+        if label != "mods" and slug not in {"mods", "mc-mods"}:
             continue
         class_id = row.get("id")
         if type(class_id) is int and class_id > 0:
