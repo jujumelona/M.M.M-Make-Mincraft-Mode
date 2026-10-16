@@ -893,6 +893,7 @@ def discover_repositories_for_graph(
                     "repository": _github_repository(repository),
                     "provider": provider,
                     "provider_priority": _PROVIDER_PRIORITY[provider],
+                    "rank_position": position + 1,
                     **{
                         field: metadata[field]
                         for field in (
@@ -904,7 +905,7 @@ def discover_repositories_for_graph(
                         if field in metadata
                     },
                 }
-                for repository, _rank, metadata in values
+                for position, (repository, _rank, metadata) in enumerate(values)
             ],
             "minecraft_version": minecraft_version, "loader": loader,
             "relevance_policy": "rank_candidates_then_inspect_actual_source",
