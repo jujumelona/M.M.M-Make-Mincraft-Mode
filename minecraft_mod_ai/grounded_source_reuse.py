@@ -23,6 +23,7 @@ import httpx
 
 from .ecosystem_discovery import EcosystemDiscoveryClient, provider_request_failure
 from .platform_catalog import adapter_for_target
+from .source_intent_aliases import source_intent_terms
 from .research_reuse_candidates import planning_state_repository_cards
 from .reuse_proof_executor import ReuseProofReceipt, execute_reuse_proof
 from .source_transplant import (
@@ -68,11 +69,11 @@ ProofExecutor = Callable[..., ReuseProofReceipt]
 
 def _tokens(value: Any) -> set[str]:
     text = re.sub(r"[_./:+-]+", " ", str(value or "").casefold())
-    return {
+    return ({
         token
         for token in _TOKEN_RE.findall(text)
         if len(token) > 1 and token not in _STOP
-    }
+    } | (set(source_intent_terms(value)) - _STOP))
 
 
 def _github_repository(source_id: str, source_url: str) -> str:
