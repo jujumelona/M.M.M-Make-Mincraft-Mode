@@ -333,7 +333,7 @@ def _search_modrinth(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
 
 
 _CURSEFORGE_BROWSE_LOCK = Lock()
-_CURSEFORGE_BROWSE_CACHE: dict[tuple[int, str, str], tuple[float, Any]] = {}
+_CURSEFORGE_BROWSE_CACHE: dict[tuple[Callable[..., Any], str, str], tuple[float, Any]] = {}
 
 
 def _curseforge_browse_json(url: str, headers: Mapping[str, str]) -> Any:
@@ -345,7 +345,7 @@ def _curseforge_browse_json(url: str, headers: Mapping[str, str]) -> Any:
     credential_hash = hashlib.sha256(
         str(headers.get("x-api-key") or "").encode("utf-8")
     ).hexdigest()
-    cache_key = (id(_json), credential_hash, url)
+    cache_key = (_json, credential_hash, url)
     with _CURSEFORGE_BROWSE_LOCK:
         now = time.monotonic()
         cached = _CURSEFORGE_BROWSE_CACHE.get(cache_key)
