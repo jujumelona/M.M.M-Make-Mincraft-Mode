@@ -18,6 +18,11 @@ def _sha(payload: Any) -> str:
     ).hexdigest()
 
 
+def source_discovery_algorithm_version() -> str:
+    """Change when provider discovery or donor handoff semantics change."""
+    return "shared-source-candidate-retrieval-v1"
+
+
 def source_candidate_fingerprint(
     repository_candidates: Sequence[Mapping[str, Any]],
 ) -> str:
@@ -151,6 +156,7 @@ def resolve_authored_source_reuse(
     return {
         **receipt,
         "pre_design_candidates_sha256": source_candidate_fingerprint(repository_candidates),
+        "discovery_algorithm_version": source_discovery_algorithm_version(),
         "bound_target": {
             "minecraft_version": minecraft_version,
             "loader": loader,
