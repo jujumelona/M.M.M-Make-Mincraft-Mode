@@ -163,8 +163,10 @@ def test_sourcegraph_stream_extracts_real_java_source_evidence(monkeypatch):
     class Client:
         def get(self, url, **kwargs):
             assert url == "https://sourcegraph.com/.api/search/stream"
-            assert '"net.minecraft"' in kwargs["params"]["q"]
-            assert '"spaceship"' in kwargs["params"]["q"]
+            assert 'lang:Java' in kwargs["params"]["q"]
+            assert 'repo:github.com' in kwargs["params"]["q"]
+            assert 'content:"spaceship"' in kwargs["params"]["q"]
+            assert '"net.minecraft"' not in kwargs["params"]["q"]
             return Response()
 
     monkeypatch.setattr(reuse_discovery, "_pooled_http_client", lambda: Client())
