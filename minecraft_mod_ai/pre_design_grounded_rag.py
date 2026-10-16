@@ -3,9 +3,9 @@ from __future__ import annotations
 """Transport and evidence storage for host-owned Minecraft research.
 
 Retrieval policy intentionally lives in ``catalog_first_grounded_rag``. This module owns
-provider I/O and exact evidence materialization only. Retrieval breadth is derived from
-the authored query and provider progress; optional environment values are operator
-ceilings, not hidden built-in caps.
+provider I/O and exact evidence materialization only. CurseForge browsing
+is intentionally bounded to multiple catalogue windows; receipts identify these
+samples as incomplete. Other providers retain their own retrieval budgets.
 """
 
 import hashlib
@@ -17,6 +17,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from threading import Lock
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict
 from pathlib import Path
@@ -331,6 +332,32 @@ def _search_modrinth(query: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     }
 
 
+_CURSEFORGE_BROWSE_LOCK = Lock()
+_CURSEFORGE_BROWSE_CACHE: dict[tuple[int, str, str], tuple[float, Any]] = {}
+
+
+def _curseforge_browse_json(url: str, headers: Mapping[str, str]) -> Any:
+    """Deduplicate one-run catalogue requests across independent feature queries.
+
+    This cache contains recently fetched API metadata, not previously verified
+    source code. A test-supplied transport is isolated by its function identity.
+    """
+    credential_hash = hashlib.sha256(
+        str(headers.get("x-api-key") or "").encode("utf-8")
+    ).hexdigest()
+    cache_key = (id(_json), credential_hash, url)
+    with _CURSEFORGE_BROWSE_LOCK:
+        now = time.monotonic()
+        cached = _CURSEFORGE_BROWSE_CACHE.get(cache_key)
+        if cached is not None and now - cached[0] < 300:
+            return cached[1]
+        result = _json(url, headers)
+        if len(_CURSEFORGE_BROWSE_CACHE) >= 128:
+            _CURSEFORGE_BROWSE_CACHE.clear()
+        _CURSEFORGE_BROWSE_CACHE[cache_key] = (time.monotonic(), result)
+        return result
+
+
 def _search_curseforge(
     query: str,
     *,
@@ -353,7 +380,7 @@ def _search_curseforge(
     errors: list[str] = []
     mods_class = None
     try:
-        categories = _json(
+        categories = _curseforge_browse_json(
             "https://api.curseforge.com/v1/categories?gameId=432", headers
         )
         mods_class = curseforge_mods_class_id(
@@ -385,7 +412,7 @@ def _search_curseforge(
             if mods_class is not None:
                 params["classId"] = mods_class
             url = "https://api.curseforge.com/v1/mods/search?" + urllib.parse.urlencode(params)
-            payload = _json(url, headers)
+            payload = _curseforge_browse_json(url, headers)
             search_requests += 1
             raw_rows = payload.get("data") if isinstance(payload, Mapping) else None
             if not isinstance(raw_rows, list):
