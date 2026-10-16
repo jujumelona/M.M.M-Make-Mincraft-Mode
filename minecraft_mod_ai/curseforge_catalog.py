@@ -110,6 +110,39 @@ def curseforge_next_index(
         return None
     return next_index
 
+
+def curseforge_browse_windows(
+    categories: Any,
+    mods_class_id: int | None,
+    *,
+    broad_pages: int = 2,
+    category_pages: int = 1,
+) -> tuple[tuple[int, int | None, int], ...]:
+    """One authoritative list of catalogue discovery windows for both callers.
+
+    Every returned window specifies (sortField, categoryId, maximum pages).
+    These samples cannot establish exhaustive catalogue coverage.
+    """
+    if broad_pages < 1 or category_pages < 1:
+        raise ValueError("Catalogue page budgets must be positive.")
+    windows: list[tuple[int, int | None, int]] = [
+        (sort_field, None, broad_pages) for sort_field in (2, 3, 11)
+    ]
+    if mods_class_id is None or not isinstance(categories, list):
+        return tuple(windows)
+    children: set[int] = set()
+    for item in categories:
+        if not isinstance(item, Mapping):
+            continue
+        if item.get("gameId") != 432 or item.get("classId") != mods_class_id:
+            continue
+        category_id = item.get("id")
+        if item.get("isClass") is not True and type(category_id) is int and category_id > 0:
+            children.add(category_id)
+    windows.extend((3, category_id, category_pages) for category_id in sorted(children))
+    return tuple(windows)
+
+
 def curseforge_mod_metadata(
     mod: Mapping[str, Any],
     *,
@@ -155,4 +188,4 @@ def curseforge_mod_metadata(
     }
 
 
-__all__ = ["curseforge_api_key", "curseforge_mod_metadata", "curseforge_target_filters", "curseforge_mods_class_id", "curseforge_next_index"]
+__all__ = ["curseforge_api_key", "curseforge_mod_metadata", "curseforge_target_filters", "curseforge_mods_class_id", "curseforge_next_index", "curseforge_browse_windows"]
