@@ -154,13 +154,20 @@ def _materialization_download_workers() -> int:
     )
 
 
+@dataclass
+class _SourceRequestFlight:
+    event: Event = field(default_factory=Event)
+    value: Any = None
+    error: Exception | None = None
+
+
 _SNAPSHOT_LOCK = Lock()
 _SNAPSHOT_CACHE: OrderedDict[tuple[str, str, str], Mapping[str, Any]] = OrderedDict()
-_SNAPSHOT_INFLIGHT: dict[tuple[str, str, str], Event] = {}
+_SNAPSHOT_INFLIGHT: dict[tuple[str, str, str], _SourceRequestFlight] = {}
 _BLOB_LOCK = Lock()
 _BLOB_CACHE: OrderedDict[tuple[str, str], bytes] = OrderedDict()
 _BLOB_CACHE_BYTES = 0
-_BLOB_INFLIGHT: dict[tuple[str, str], Event] = {}
+_BLOB_INFLIGHT: dict[tuple[str, str], _SourceRequestFlight] = {}
 
 
 @dataclass(frozen=True)
@@ -1084,15 +1091,29 @@ def _repository_snapshot(repository: str, discovery_client: Any, *, minecraft_ve
                 return cached
         if session is not None and cache_key in session.snapshot_errors:
             raise session.snapshot_errors[cache_key]
-        event = _SNAPSHOT_INFLIGHT.get(cache_key)
-        if event is None:
-            event = Event()
-            _SNAPSHOT_INFLIGHT[cache_key] = event
+        flight = _SNAPSHOT_INFLIGHT.get(cache_key)
+        if flight is None:
+            flight = _SourceRequestFlight()
+            _SNAPSHOT_INFLIGHT[cache_key] = flight
             owner = True
     if not owner:
-        event.wait(timeout=30.0)
-        with _SNAPSHOT_LOCK:
-            return _SNAPSHOT_CACHE.get(cache_key)
+        if not flight.event.wait(timeout=30.0):
+            raise SourceTransplantError("Timed out waiting for a concurrent repository inspection.")
+        if flight.error is not None:
+            if session is not None:
+                failure = session.remember_failure(flight.error, hostname="api.github.com")
+                if minecraft_version and failure is not None and failure.backend_unavailable:
+                    default_key = (repository, "", "")
+                    with _SNAPSHOT_LOCK:
+                        cached = session.snapshots.get(default_key) or _SNAPSHOT_CACHE.get(default_key)
+                    if cached is not None:
+                        session.snapshots[cache_key] = cached
+                        return cached
+                session.snapshot_errors[cache_key] = flight.error
+            raise flight.error
+        if session is not None:
+            session.snapshots[cache_key] = flight.value
+        return flight.value
 
     snapshot: Mapping[str, Any] | None = None
     failure_error: Exception | None = None
@@ -1179,7 +1200,9 @@ def _repository_snapshot(repository: str, discovery_client: Any, *, minecraft_ve
                 _SNAPSHOT_CACHE.pop(cache_key, None)
             pending = _SNAPSHOT_INFLIGHT.pop(cache_key, None)
             if pending is not None:
-                pending.set()
+                pending.value = snapshot
+                pending.error = failure_error
+                pending.event.set()
 
 
 def _github_client(token: str) -> httpx.Client:
@@ -1313,22 +1336,29 @@ def _fetch_blob_bytes(client: httpx.Client, repository: str, blob_sha: str) -> b
             return cached
         if session is not None and key in session.blob_errors:
             raise session.blob_errors[key]
-        event = _BLOB_INFLIGHT.get(key)
-        if event is None:
-            event = Event()
-            _BLOB_INFLIGHT[key] = event
+        flight = _BLOB_INFLIGHT.get(key)
+        if flight is None:
+            flight = _SourceRequestFlight()
+            _BLOB_INFLIGHT[key] = flight
             owner = True
     if not owner:
-        if not event.wait(timeout=30.0):
+        if not flight.event.wait(timeout=30.0):
             raise SourceTransplantError("Timed out waiting for a concurrent donor blob download.")
         with _BLOB_LOCK:
             cached = _BLOB_CACHE.get(key)
-        if cached is None:
-            if session is not None and key in session.blob_errors:
-                raise session.blob_errors[key]
-            raise SourceTransplantError("Concurrent donor blob download failed.")
-        return cached
+        if cached is not None:
+            return cached
+        if flight.error is not None:
+            if session is not None:
+                session.blob_errors[key] = flight.error
+                session.remember_failure(flight.error, hostname="api.github.com")
+            raise flight.error
+        if flight.value is not None:
+            return flight.value
+        raise SourceTransplantError("Concurrent donor blob download failed.")
 
+    fetched: bytes | None = None
+    failure_error: Exception | None = None
     try:
         value = _github_json(
             client,
@@ -1349,8 +1379,10 @@ def _fetch_blob_bytes(client: httpx.Client, repository: str, blob_sha: str) -> b
                 f"Single donor blob exceeded configured byte budget ({single_blob_budget} bytes)."
             )
         _remember_verified_blob(repository, blob_sha, raw)
+        fetched = raw
         return raw
     except (SourceTransplantError, httpx.HTTPError, OSError) as exc:
+        failure_error = exc
         if session is not None:
             session.blob_errors[key] = exc
             session.remember_failure(exc)
@@ -1359,7 +1391,9 @@ def _fetch_blob_bytes(client: httpx.Client, repository: str, blob_sha: str) -> b
         with _BLOB_LOCK:
             pending = _BLOB_INFLIGHT.pop(key, None)
             if pending is not None:
-                pending.set()
+                pending.value = fetched
+                pending.error = failure_error
+                pending.event.set()
 
 
 def validate_donor_slice_manifest(donor_slice: DonorSlice) -> None:
