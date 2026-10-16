@@ -31,6 +31,7 @@ from .curseforge_catalog import (
     curseforge_api_key as _curseforge_api_key,
 )
 from .curseforge_catalog import (
+    curseforge_browse_windows,
     curseforge_mod_metadata,
     curseforge_mods_class_id,
     curseforge_next_index,
@@ -511,19 +512,9 @@ def _search_curseforge(
     page_size = 50  # Each browse page can expose candidates beyond a single shortlist.
     # Categories reveal less popular projects that broad popularity/recency
     # windows miss. Keep names out of searchFilter for every browse window.
-    child_categories = sorted({
-        row["id"]
-        for row in (category_rows if isinstance(category_rows, list) else ())
-        if isinstance(row, Mapping)
-        and row.get("gameId") == _MINECRAFT_GAME_ID
-        and row.get("classId") == mods_class_id
-        and row.get("isClass") is not True
-        and type(row.get("id")) is int and row["id"] > 0
-    }) if mods_class_id is not None else []
-    windows = [
-        (sort_field, None, _discovery_pages()) for sort_field in (2, 3, 11)
-    ]
-    windows.extend((3, category_id, 1) for category_id in child_categories)
+    windows = curseforge_browse_windows(
+        category_rows, mods_class_id, broad_pages=_discovery_pages()
+    )
     try:
         for sort_field, category_id, max_pages in windows:
             index = 0
