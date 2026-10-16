@@ -126,7 +126,6 @@ def _pre_design_brief(prompt: str) -> dict[str, Any]:
                     "minecraft_api",
                     "runtime_behavior",
                     "local_project",
-                    "source_code",
                     "testing",
                 ],
                 "queries": queries,
