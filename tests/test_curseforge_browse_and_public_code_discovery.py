@@ -217,7 +217,7 @@ def test_sourcegraph_action_word_does_not_silently_disable_code_search(monkeypat
     observed = []
 
     class Response:
-        text = "event: done\\ndata: {}\\n\\n"
+        text = "event: done\ndata: {}\n\n"
 
         def raise_for_status(self):
             pass
