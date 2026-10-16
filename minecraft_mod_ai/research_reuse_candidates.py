@@ -117,6 +117,27 @@ def _evidence_text(record: Mapping[str, Any]) -> str:
     return _text(" ".join(_text(part) for part in parts if _text(part)))
 
 
+def _catalog_evidence(record: Mapping[str, Any], query_sha: str) -> dict[str, Any]:
+    """Carry the real pre-design evidence, never the requested feature as evidence."""
+    metadata = record.get("metadata")
+    metadata = metadata if isinstance(metadata, Mapping) else {}
+    source_id = _text(record.get("source_id"))
+    return {
+        "provider": source_id.split(":", 1)[0] if ":" in source_id else "unknown",
+        "source_id": source_id,
+        "catalog_url": _text(record.get("url")),
+        "source_url": _text(metadata.get("source_url") or record.get("source_url")),
+        "title": _text(record.get("title")),
+        "summary": _text(record.get("description") or metadata.get("description") or
+                         record.get("content"))[:_MAX_EVIDENCE_CHARS],
+        "content_sha256": _text(record.get("content_sha256")),
+        "evidence_origin": _text(record.get("evidence_origin")),
+        "body_retrieved": record.get("body_retrieved") is True,
+        "query_sha256": query_sha,
+        "source_reuse_authority": "verification_required",
+    }
+
+
 def _source_code_domain(domain: Mapping[str, Any]) -> bool:
     kinds = domain.get("evidence_kinds")
     return isinstance(kinds, Sequence) and not isinstance(kinds, (str, bytes, bytearray)) and (
@@ -177,6 +198,7 @@ def project_repository_candidates(
             key = repository.casefold()
             source_id = _text(record.get("source_id")) or f"github:{repository}"
             source_url = _record_url(record, repository)
+            provenance = _catalog_evidence(record, query_sha)
             current = by_repo.get(key)
             if current is None:
                 by_repo[key] = {
@@ -188,6 +210,7 @@ def project_repository_candidates(
                     "query_sha256": [query_sha],
                     "evidence_text": evidence_text,
                     "evidence_tokens": sorted(_tokens(evidence_text)),
+                    "catalog_evidence": [provenance],
                     "candidate_score": round(rank_score, 6),
                     "origin": "host_grounded_retrieval",
                     "reference_only": True,
@@ -196,6 +219,8 @@ def project_repository_candidates(
                 }
                 continue
             current["candidate_score"] = max(float(current["candidate_score"]), round(rank_score, 6))
+            if provenance not in current["catalog_evidence"]:
+                current["catalog_evidence"].append(provenance)
             for field, value in (
                 ("source_ids", source_id),
                 ("source_urls", source_url),
@@ -243,7 +268,7 @@ def merge_repository_candidates(
             float(current.get("candidate_score", 0.0) or 0.0),
             float(candidate.get("candidate_score", 0.0) or 0.0),
         )
-        for field in ("domain_ids", "source_ids", "source_urls", "query_sha256"):
+        for field in ("domain_ids", "source_ids", "source_urls", "query_sha256", "catalog_evidence"):
             values = candidate.get(field)
             if not isinstance(values, list):
                 continue
@@ -284,6 +309,12 @@ def planning_state_repository_cards(design: Mapping[str, Any]) -> tuple[dict[str
                 "source_urls": list(raw.get("source_urls") or []),
                 "evidence_text": _text(raw.get("evidence_text"))[:_MAX_EVIDENCE_CHARS],
                 "evidence_tokens": list(raw.get("evidence_tokens") or [])[:64],
+                "catalog_evidence": [
+                    dict(item) for item in raw.get("catalog_evidence", [])
+                    if isinstance(item, Mapping)
+                ] if isinstance(raw.get("catalog_evidence"), list) else [],
+                "domain_ids": list(raw.get("domain_ids") or []),
+                "candidate_score": float(raw.get("candidate_score") or 0.0),
                 "explicit_reference": False,
                 "candidate_origin": "host_grounded_retrieval",
                 "reference_only": True,
