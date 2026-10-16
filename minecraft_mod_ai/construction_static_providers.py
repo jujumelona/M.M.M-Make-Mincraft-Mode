@@ -10,40 +10,60 @@ def _terms(value):
     return set(_meaningful_terms(_words(value)))
 
 
-def preferred_static_field(symbols, evidence_index, consumers, purpose, *, excluded=()):
-    """Return one uniquely supported field symbol, otherwise abstain."""
-    if evidence_index is None or not consumers:
+def _required_type(consumers):
+    if not consumers:
         return None
     expected = {row['expected_type'] for row in consumers if row.get('expected_type')}
     if len(expected) != 1 or any(row.get('allowed_types') or row.get('expected_types')
                                  or row.get('expected_element_type') for row in consumers):
         return None
-    expected_type = next(iter(expected))
-    if expected_type in {'java.lang.String', 'java.lang.Object', 'void',
-                         'boolean', 'byte', 'char', 'short', 'int', 'long', 'float', 'double'}:
+    type_ = next(iter(expected))
+    if type_ in {'java.lang.String', 'java.lang.Object', 'void',
+                'boolean', 'byte', 'char', 'short', 'int', 'long', 'float', 'double'}:
         return None
+    return type_
+
+
+def _candidate_score(key, row, *, index, consumers, purpose_terms):
+    """Use exact inspected field type first, semantic owner/name evidence second."""
+    if (row.get('kind') != 'FIELD' or row.get('provenance') == 'construction_plan'
+            or not (row.get('static') or (row.get('access', 0) & 8))):
+        return None
+    name_terms = _terms(row.get('name', ''))
+    if len(name_terms) < 2 or not name_terms <= purpose_terms:
+        return None
+    if not index.accessible(key) or not result_fits(row['return_type'], consumers, index):
+        return None
+    owner_terms = _terms(row['owner'].rsplit('.', 1)[-1])
+    role_match = len({term[:5] for term in owner_terms if len(term) >= 5}
+                     & {term[:5] for term in purpose_terms if len(term) >= 5})
+    return len(name_terms) * 10 + role_match
+
+
+def preferred_static_field(symbols, evidence_index, consumers, purpose, *, excluded=()):
+    """Return one unambiguous, type-correct field symbol, otherwise abstain."""
+    required = _required_type(consumers)
+    if evidence_index is None or required is None:
+        return None
+    cache = getattr(evidence_index, '_static_provider_cache', None)
+    if cache is None:
+        cache = {}
+        evidence_index._static_provider_cache = cache
+    cache_key = (required, purpose, tuple(sorted(excluded)))
+    if cache_key in cache:
+        return cache[cache_key]
     purpose_terms = _terms(purpose)
-    if not purpose_terms:
-        return None
-    excluded = set(excluded)
     choices = []
+    excluded_set = set(excluded)
     for key, row in symbols.items():
-        if (row.get('kind') != 'FIELD' or key in excluded
-                or row.get('provenance') == 'construction_plan'
-                or not (row.get('static') or (row.get('access', 0) & 8))):
+        if key in excluded_set:
             continue
-        name_terms = _terms(row.get('name', ''))
-        if len(name_terms) < 2 or not name_terms <= purpose_terms:
-            continue
-        if not evidence_index.accessible(key) or not result_fits(row['return_type'], consumers, evidence_index):
-            continue
-        owner_terms = _terms(row['owner'].rsplit('.', 1)[-1])
-        role_match = len({term[:5] for term in owner_terms if len(term) >= 5}
-                         & {term[:5] for term in purpose_terms if len(term) >= 5})
-        choices.append((len(name_terms) * 10 + role_match, key))
-    if not choices:
-        return None
+        score = _candidate_score(key, row, index=evidence_index,
+                                 consumers=consumers, purpose_terms=purpose_terms)
+        if score is not None:
+            choices.append((score, key))
     choices.sort(key=lambda item: (-item[0], item[1]))
-    if len(choices) > 1 and choices[0][0] == choices[1][0]:
-        return None
-    return choices[0][1]
+    result = (choices[0][1] if choices and
+              (len(choices) == 1 or choices[0][0] > choices[1][0]) else None)
+    cache[cache_key] = result
+    return result
