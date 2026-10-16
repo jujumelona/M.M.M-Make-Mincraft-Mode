@@ -171,10 +171,40 @@ class CompleteGameDesignPlanner:
         request_scope = plan.request_scope
         from .research_reuse_candidates import authored_design_repository_candidates
 
-        prior_content_design = (
+        prior_content_design = dict(
             plan.content_design if isinstance(plan.content_design, Mapping) else {}
         )
         research_candidates = authored_design_repository_candidates(prior_content_design)
+        if not research_candidates:
+            # The default CLI plan has no prior research receipt. Run the same
+            # host-only catalogue evidence route at production time, before
+            # source inspection, without calling the researcher LLM.
+            from .pre_design_research_pipeline import (
+                _canonical_sha256, collect_source_candidate_handoff,
+            )
+
+            cached_handoff = prior_content_design.get("_pre_design_source_handoff")
+            expected_prompt = _canonical_sha256(prompt)
+            if (
+                not isinstance(cached_handoff, Mapping)
+                or cached_handoff.get("prompt_sha256") != expected_prompt
+            ):
+                try:
+                    cached_handoff = collect_source_candidate_handoff(
+                        self.router, prompt,
+                    )
+                except Exception as exc:  # Optional search must not block production.
+                    cached_handoff = {
+                        "schema_version": "mmm/pre-design-source-candidate-handoff-v1",
+                        "prompt_sha256": expected_prompt,
+                        "repository_candidates": [],
+                        "status": "provider_error",
+                        "error_type": type(exc).__name__,
+                    }
+            prior_content_design["_pre_design_source_handoff"] = dict(cached_handoff)
+            research_candidates = authored_design_repository_candidates(
+                prior_content_design
+            )
         adapter = self.adapter
         deterministic_module_kinds = self.deterministic_module_kinds
         budget = PlannerBudget()
@@ -294,7 +324,9 @@ class CompleteGameDesignPlanner:
         # they remain reference-only until source inspection and compile proof.
         from copy import deepcopy
 
-        for field in ("_pre_design_research", "_planning_state"):
+        for field in (
+            "_pre_design_research", "_pre_design_source_handoff", "_planning_state",
+        ):
             prior = prior_content_design.get(field)
             if isinstance(prior, Mapping):
                 content_design[field] = deepcopy(dict(prior))
