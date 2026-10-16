@@ -492,6 +492,29 @@ def _deferred_technology_receipt(
 
 
 
+def _requested_source_queries(
+    domain: Mapping[str, Any], grounded: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Only actual request queries can nominate mod-source donors.
+
+    Generic architecture queries remain available to full research, but cannot
+    certify that the unrelated projects implement this user's feature.
+    """
+    active = {
+        " ".join(str(value).split())
+        for value in domain.get("requirements", ())
+        if str(value).strip()
+    }
+    return {
+        **grounded,
+        "queries": [
+            row for row in grounded.get("queries", ())
+            if isinstance(row, Mapping)
+            and " ".join(str(row.get("query") or "").split()) in active
+        ],
+    }
+
+
 def collect_source_candidate_handoff(router: Any, prompt: str) -> dict[str, Any]:
     """Host-only source discovery for the actual authored production route.
 
@@ -514,23 +537,7 @@ def collect_source_candidate_handoff(router: Any, prompt: str) -> dict[str, Any]
             continue
         domain_id = str(domain.get("domain_id") or "").strip()
         grounded = _grounded_domain_evidence(domain_id, bundle)
-        # The second query in the request brief is generic architecture
-        # background. It is not evidence that an unrelated mod implements
-        # the user's requested mechanic. Keep it available to full research,
-        # but do not nominate its repositories as production donors.
-        user_queries = {
-            " ".join(str(value).split())
-            for value in domain.get("requirements", ())
-            if str(value).strip()
-        }
-        donor_grounded = {
-            **grounded,
-            "queries": [
-                row for row in grounded.get("queries", [])
-                if isinstance(row, Mapping)
-                and " ".join(str(row.get("query") or "").split()) in user_queries
-            ],
-        }
+        donor_grounded = _requested_source_queries(domain, grounded)
         candidates = merge_repository_candidates(
             candidates, project_repository_candidates(domain, donor_grounded),
         )
@@ -605,7 +612,9 @@ def collect_design_research(
             continue
         domain_id = str(domain.get("domain_id") or "").strip()
         grounded = _grounded_domain_evidence(domain_id, grounded_bundle)
-        projected = project_repository_candidates(domain, grounded)
+        projected = project_repository_candidates(
+            domain, _requested_source_queries(domain, grounded),
+        )
         if projected:
             repository_candidates = merge_repository_candidates(
                 repository_candidates, projected,
