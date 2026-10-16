@@ -1052,7 +1052,12 @@ def compile_authored_design(
     from .authored_reuse_bridge import (
         authored_capability_graph,
         resolve_authored_source_reuse,
+        source_candidate_fingerprint,
     )
+    from .research_reuse_candidates import authored_design_repository_candidates
+
+    candidate_rows = authored_design_repository_candidates(content_design)
+    expected_candidate_fingerprint = source_candidate_fingerprint(candidate_rows)
     source_reuse = content_design.get("_host_source_reuse")
     exact_reuse_target = {
         "minecraft_version": str(adapter.minecraft_version),
@@ -1072,6 +1077,7 @@ def compile_authored_design(
     if (
         not isinstance(source_reuse, Mapping)
         or source_reuse.get("bound_target") != exact_reuse_target
+        or source_reuse.get("pre_design_candidates_sha256") != expected_candidate_fingerprint
         or not isinstance(cached_graph, Mapping)
         or any(
             cached_graph.get(key) != expected_reuse_graph.get(key)
@@ -1097,10 +1103,7 @@ def compile_authored_design(
                 ):
                     raise ValueError("DEBUG_REFERENCE_CANDIDATE_INVALID")
                 reference_repositories.append(row["repository"])
-        # Reuse real, host-stamped research candidates without fresh discovery.
-        from .research_reuse_candidates import authored_design_repository_candidates
-
-        candidate_rows = authored_design_repository_candidates(content_design)
+        # Reuse real research candidates without re-fetching their catalogues.
         source_reuse = resolve_authored_source_reuse(
             plan.requested_prompt,
             plan.structured_sections,
