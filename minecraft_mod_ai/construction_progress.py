@@ -69,6 +69,7 @@ class ConstructionNodeCheckpoint:
                  declaration, owner_header, planned_declaration_hash, construction_input_hash):
         self.root = Path(project_root).resolve()
         self.task = task
+        self.declaration = deepcopy(declaration)
         if (declaration.get('owner') != owner_header.get('owner')
                 or owner_header.get('kind') != 'CLASS'):
             raise ValueError('CONSTRUCTION_CHECKPOINT_DECLARATION_INVALID')
@@ -132,7 +133,9 @@ class ConstructionNodeCheckpoint:
                 previous = {node['node_id']: node for node in existing}
                 changed = [node for node in nodes if node['node_id'] in previous
                            and node != previous[node['node_id']]]
-                if len(changed) != 1 or tuple(nodes) != replace_node(existing, changed[0]):
+                from .construction_shared_inputs import is_shared_binding_revision
+                binding = is_shared_binding_revision(existing, nodes, self.declaration)
+                if not binding and (len(changed) != 1 or tuple(nodes) != replace_node(existing, changed[0])):
                     raise ValueError('CONSTRUCTION_CHECKPOINT_REVISION_INVALID')
             elif existing and tuple(nodes[:len(existing)]) != existing:
                 raise ValueError("CONSTRUCTION_CHECKPOINT_FORK")

@@ -10,7 +10,8 @@ from .construction_declaration_choices import action_schema, choice_actions, typ
 from .construction_operation_choices import (operation_context_branches, MAX_OPERATION_EVIDENCE_READS,
                                            dependency_revision_schema, dependency_revision_choices)
 from .construction_state import symbol_record, RECENT_SIZE, RESELECTABLE_OPERATIONS
-from .java_operation_ir import parameter_types, invocation_parameter_types
+from .java_operation_ir import parameter_types, invocation_parameter_types, LEAVES
+from .construction_shared_inputs import input_use_count, VALUE_READS
 from .construction_operation_contracts import named_values, pending_input_contracts, result_fits
 
 API_KINDS = {'call': 'METHOD', 'new': 'CONSTRUCTOR', 'field': 'FIELD', 'constructor_call': 'CONSTRUCTOR'}
@@ -20,7 +21,7 @@ SYMBOL_BOUND_OPERATIONS = frozenset(API_KINDS) | TYPE_BOUND_OPERATIONS | {
 }
 
 
-def forbidden_input_references(nodes, goal_id):
+def forbidden_input_references(nodes, goal_id, *, declaration=None, symbols=None):
     """Exclude all consumers of the missing slot, not just the slot itself.
 
     Forward references are allowed, but an existing node which transitively
@@ -37,6 +38,23 @@ def forbidden_input_references(nodes, goal_id):
             if user not in blocked:
                 blocked.add(user)
                 pending.append(user)
+    used = {ref for node in nodes if node['node_id'] != goal_id for ref in node['input_refs']}
+    blocked.update(node['node_id'] for node in nodes
+                   if node['op'] not in LEAVES and node['node_id'] in used)
+    if declaration is not None:
+        from .construction_lexical import lexical_sites
+        visible = None
+        for key, env, _writing, _context in lexical_sites(nodes, declaration, symbols, slot=goal_id):
+            if key != goal_id:
+                continue
+            bindings = {(name, value[0], value[1], value[3]) for name, value in env.items()}
+            visible = bindings if visible is None else visible & bindings
+        values = {(name, type_, kind) for name, type_, kind, _identity in visible or ()}
+        # Input roles decide definite assignment. An uninitialized local is a
+        # valid assignment target, while a name absent from this scope is not.
+        blocked.update(node['node_id'] for node in nodes
+                       if node['op'] in {'local', 'parameter'}
+                       and (node['attributes']['name'], node['typed_result'], node['op']) not in values)
     return blocked
 
 
@@ -83,6 +101,9 @@ def type_binding_branches(state, types, requirements, op):
 def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_source,
                    read_lookup, instruction, save_author):
     op = goal['action']
+    if input_use_count(nodes, goal['node_id']) > 1 and op not in VALUE_READS:
+        # A stale operation draft cannot bypass the current slot's shape.
+        return {'action': 'resolve_shared_input'}
     kinds = (API_KINDS[op],) if op in API_KINDS else ('CLASS',)
     requirements = pending_input_contracts(nodes, payload['declaration'], state.symbols,
                                            replacing=goal['node_id']).get(goal['node_id'], ())
@@ -280,7 +301,9 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
     schema['properties']['node_id'] = {'const': goal['node_id']}
     from .construction_declaration_choices import string_excluding
     from .construction_operation_choices import NODE_ID_ALPHABET
-    schema['properties']['input_refs']['items'] = string_excluding(forbidden_input_references(nodes, goal['node_id']), alphabet=NODE_ID_ALPHABET)
+    schema['properties']['input_refs']['items'] = string_excluding(
+        forbidden_input_references(nodes, goal['node_id'], declaration=payload['declaration'],
+                                   symbols=state.symbols), alphabet=NODE_ID_ALPHABET)
     types = available_types(state, nodes, payload['declaration'], requirements)
     selected_type = None
     if op in TYPE_BOUND_OPERATIONS:

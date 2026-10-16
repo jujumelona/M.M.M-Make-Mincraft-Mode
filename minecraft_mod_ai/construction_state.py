@@ -12,7 +12,7 @@ from copy import deepcopy
 
 # Body lookup choices and retained API pages changed. Old journals/cursors may
 # not be replayed against them; declaration-bound accepted graphs stay reusable.
-PROTOCOL_VERSION = "mmm/construction-state-v16"
+PROTOCOL_VERSION = "mmm/construction-state-v17"
 PAGE_SIZE = 8
 RECENT_SIZE = 4
 LOOKUP_KINDS = frozenset({'symbols', 'scopes', 'declarations', 'nodes', 'node_index', 'source', 'sources', 'bindings'})
@@ -470,7 +470,8 @@ class ConstructionState:
             import re
             if (not isinstance(selection, dict) or not {'node_id', 'purpose'} <= set(selection)
                     or set(selection) - {'node_id', 'purpose', 'excluded_operations',
-                                         'revising', 'revision_reason', 'rejected_symbol_refs'}
+                                         'revising', 'revision_reason', 'rejected_symbol_refs',
+                                         'rejected_shared_bindings'}
                     or not isinstance(selection.get('excluded_operations', []), list)
                     or any(not isinstance(action, str) or action not in OPERATIONS
                            for action in selection.get('excluded_operations', []))
@@ -483,6 +484,12 @@ class ConstructionState:
                            for key in selection.get('rejected_symbol_refs', []))
                     or (not selection.get('revising') and
                         (selection.get('revision_reason') or selection.get('rejected_symbol_refs')))
+                    or not isinstance(selection.get('rejected_shared_bindings', []), list)
+                    or any(not isinstance(row, dict) or set(row) != {'placement_ref', 'type_ref'}
+                           or not isinstance(row['placement_ref'], str)
+                           or not re.fullmatch(r'shared-placement:[a-f0-9]{24}', row['placement_ref'])
+                           or not isinstance(row['type_ref'], str) or not row['type_ref']
+                           for row in selection.get('rejected_shared_bindings', []))
                     or not isinstance(selection['purpose'], str) or not selection['purpose'].strip()
                     or not isinstance(selection['node_id'], str)
                     or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,240}', selection['node_id'])):

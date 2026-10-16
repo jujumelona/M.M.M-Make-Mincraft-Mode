@@ -83,6 +83,7 @@ def author_task_operations(router, task, context):
     from .construction_declaration_choices import choice_actions
     from .construction_operation_binding import bind_operation
     from .construction_operation_contracts import named_values, pending_input_contracts
+    from .construction_shared_inputs import shared_input_choices, bind_shared_input
     if not callable(context.get('checkpoint_transaction')):
         raise ValueError('CONSTRUCTION_CHECKPOINT_TRANSACTION_REQUIRED')
     symbols = context['symbols']
@@ -241,6 +242,33 @@ def author_task_operations(router, task, context):
     def checkpoint_graph(stage, expected=None):
         context['checkpoint_transaction'](task, tuple(nodes), stage, state.export(), expected)
 
+    def accept_graph(candidate_nodes, checked, *, node_id, purposes, expected=None,
+                     changed=(), initializer=None):
+        nonlocal nodes, by_id, referenced, pending, roots, validation, stage
+        previous_ids = set(by_id)
+        for key, purpose in purposes.items():
+            state.remember_node_purpose(key, purpose, replace=True)
+        nodes = list(candidate_nodes)
+        by_id, referenced, pending, roots = _graph_refs(nodes)
+        state.memory.invalidate_nodes((previous_ids - by_id.keys()) | set(changed))
+        live = set(by_id) | referenced
+        state.node_purposes = {key: purpose for key, purpose in state.node_purposes.items() if key in live}
+        state.symbol_rejections = {key: rows for key, rows in state.symbol_rejections.items() if key in live}
+        state.advance(preserve_symbols=True)
+        state.revision = len(nodes)
+        if initializer:
+            state.selection_goal = {'node_id': initializer, 'purpose': purposes[initializer],
+                                    'excluded_operations': []}
+        state.validation_observation = admission(nodes, checked, node_id)
+        validation, stage = checked, 'authoring'
+        checkpoint_graph('authoring', expected)
+        print('CONSTRUCTION OPERATION OBSERVATION: ' + json.dumps({
+            'status': 'admitted', 'node_id': node_id, 'revised': expected is not None,
+            'validated_node_count': len(validation.validated_node_ids),
+            'deferred_node_count': len(validation.deferred_node_ids), 'behavior_verified': False,
+        }, ensure_ascii=False), flush=True)
+        save_author()
+
     def reconsider_node(choice):
         key = choice['node_ref']
         if key not in by_id:
@@ -286,6 +314,10 @@ def author_task_operations(router, task, context):
         'API signatures fix result types and receiver/argument counts. Required inputs may be forward '
         'references, and each missing input must be authored. Relevant graph nodes are stored on the '
         'host; do not recreate them. '
+        'A shared input cannot contain a repeated computation. bind_shared_input explicitly chooses '
+        'one evaluation before the supplied statement, stores it in a final local and exposes a new '
+        'initializer slot. Check its prior_evaluation_refs before choosing this order. Otherwise '
+        'use a local/parameter/this value, a requirement-grounded literal, or revise its consumers. '
         'Implement only owned runtime records; never duplicate effects already provided by Typed/UI. '
         'When a pinned donor source is installed, use its exact inspected callable symbols '
         'through typed call/field/new operations and implement missing state and event glue. '
@@ -379,6 +411,7 @@ def author_task_operations(router, task, context):
                      'pinned_source_read': bool(base['port_source_ref'] in read_sources)})}
         payload['pending_input_contracts'] = {key: contracts[key] for key in list(contracts)[:PAGE_SIZE]}
         payload['provisional_parent_strategies'] = dependency_revision_choices(state, nodes)
+        payload['shared_input_resolution'] = shared_input_choices(state, nodes, declaration)
         payload['named_values'] = named_values(working_nodes, declaration, symbols, node_id=slot)
         choice = state.operation_goal or ask(router, 'construction_operation_next', payload, schema, instruction)
         action = choice['action']
@@ -389,6 +422,37 @@ def author_task_operations(router, task, context):
             continue
         if action in {'revise_node', 'reconsider_parent'}:
             reconsider_node(choice)
+            continue
+        if action == 'bind_shared_input':
+            shared = shared_input_choices(state, nodes, declaration)
+            if (not shared or not shared['placement']
+                    or choice['placement_ref'] != shared['placement']['placement_ref']
+                    or choice['type_ref'] not in shared['binding_types']
+                    or choice['evaluation_policy'] != shared['evaluation_policy']):
+                raise ValueError('CONSTRUCTION_SHARED_BINDING_INVALID')
+            try:
+                candidate_nodes, binding = bind_shared_input(nodes, slot, choice['type_ref'],
+                                                           choice['placement_ref'], declaration)
+                checked = validator.validate(candidate_nodes)
+            except ValueError as error:
+                reject_candidate(error, candidate={'node_id': slot, 'op': 'local',
+                    'input_refs': [], 'typed_result': choice['type_ref'], 'attributes': {}})
+                state.selection_goal.setdefault('rejected_shared_bindings', []).append(
+                    {key: choice[key] for key in ('placement_ref', 'type_ref')})
+                save_author()
+                continue
+            initializer = binding['initializer']
+            if slot in state.symbol_rejections:
+                state.symbol_rejections[initializer] = state.symbol_rejections.pop(slot)
+            accept_graph(candidate_nodes, checked, node_id=slot, expected=graph_digest(nodes),
+                         purposes={key: choice['purpose'] for key in
+                                   (slot, binding['declaration'], initializer)},
+                         changed=binding['changed_nodes'] | {slot}, initializer=initializer)
+            print('CONSTRUCTION SHARED INPUT BOUND: ' + json.dumps({
+                'node_id': slot, 'initializer': initializer, 'declaration': binding['declaration'],
+                'name': binding['name'], 'type_ref': choice['type_ref'],
+                'placement_ref': choice['placement_ref'], 'behavior_verified': False,
+            }, ensure_ascii=False), flush=True)
             continue
         if action == 'complete':
             try:
@@ -424,6 +488,10 @@ def author_task_operations(router, task, context):
         if row is not None and row.get('action') == 'reconsider_parent':
             reconsider_node(row)
             continue
+        if row is not None and row.get('action') == 'resolve_shared_input':
+            state.reconsider_operation()
+            save_author()
+            continue
         if row is None:
             # Keep the slot available for a different implementation or an
             # explicit reconsider_parent decision. Exhausting a local evidence
@@ -448,26 +516,8 @@ def author_task_operations(router, task, context):
         except ValueError as error:
             reject_candidate(error, candidate=row)
             continue
-        expected = graph_digest(nodes) if repair_id else None
-        previous_ids = set(by_id)
         responsibility = state.selection_goal['purpose'] if repair_id else choice['purpose']
-        state.remember_node_purpose(row['node_id'], responsibility, replace=True)
-        nodes = list(candidate_nodes)
-        by_id, referenced, pending, roots = _graph_refs(nodes)
-        if repair_id:
-            state.memory.invalidate_nodes((previous_ids - by_id.keys()) | {repair_id})
-        live = set(by_id) | referenced
-        state.node_purposes = {key: purpose for key, purpose in state.node_purposes.items() if key in live}
-        state.symbol_rejections = {key: rows for key, rows in state.symbol_rejections.items() if key in live}
-        state.advance(preserve_symbols=True)
-        state.revision = len(nodes)
-        state.validation_observation = admission(nodes, candidate_validation, row['node_id'])
-        validation = candidate_validation
-        stage = 'authoring'
-        checkpoint_graph('authoring', expected)
-        print('CONSTRUCTION OPERATION OBSERVATION: ' + json.dumps({
-            'status': 'admitted', 'node_id': row['node_id'], 'revised': bool(repair_id),
-            'validated_node_count': len(validation.validated_node_ids),
-            'deferred_node_count': len(validation.deferred_node_ids), 'behavior_verified': False,
-        }, ensure_ascii=False), flush=True)
-        save_author()
+        accept_graph(candidate_nodes, candidate_validation, node_id=row['node_id'],
+                     purposes={row['node_id']: responsibility},
+                     expected=graph_digest(nodes) if repair_id else None,
+                     changed={repair_id} if repair_id else ())

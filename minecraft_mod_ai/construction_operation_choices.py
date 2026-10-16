@@ -8,6 +8,7 @@ from .construction_declaration_choices import action_schema, binding_lookup_sche
 from .construction_state import PAGE_SIZE, symbol_record
 from .java_operation_ir import OPERATIONS, EXPRESSIONS, STATEMENTS
 from .construction_operation_contracts import named_values, pending_input_contracts, result_fits
+from .construction_shared_inputs import shared_input_choices, input_use_count, VALUE_READS
 
 NODE_ID_ALPHABET = string.ascii_letters + string.digits + '_.:-'
 
@@ -77,6 +78,16 @@ def operation_next_schema(state, *, nodes, declaration, can_complete, context_br
     if state.selection_goal is None:
         raise ValueError('CONSTRUCTION_SELECTION_GOAL_REQUIRED')
     slot = state.selection_goal['node_id']
+    shared = shared_input_choices(state, nodes, declaration)
+    if input_use_count(nodes, slot) > 1:
+        # Revisions of an existing shared leaf need the same shape constraint
+        # as a missing hole, even though only missing holes can be bound.
+        actions &= VALUE_READS
+    if shared and shared['placement'] and shared['binding_types']:
+        branches.insert(0, action_schema('bind_shared_input', {
+            'placement_ref': {'const': shared['placement']['placement_ref']},
+            'type_ref': {'enum': shared['binding_types']},
+            'evaluation_policy': {'const': shared['evaluation_policy']}, 'purpose': ID}))
     if slot in pending:
         # An accepted API/control node creates concrete input obligations.
         # Fill returned slots before selecting an unrelated new root.
