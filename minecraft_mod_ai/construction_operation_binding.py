@@ -21,12 +21,39 @@ SYMBOL_BOUND_OPERATIONS = frozenset(API_KINDS) | TYPE_BOUND_OPERATIONS | {
 }
 
 
-def _usable_api_candidate(key, row, *, op, kinds, current_member, rejected_symbols, state, fits):
+def _requires_missing_self_receiver(row, requirements, evidence_index):
+    """Returning a receiver's type does not construct the required receiver."""
+    if not requirements or row.get('static') or row.get('access', 0) & 8:
+        return False
+    return (evidence_index.assignable(row.get('return_type', 'void'), row['owner'])
+            and result_fits(row['owner'], requirements, evidence_index))
+
+
+def _automatic_literal_type(op, requirements, branches):
+    """Bind a unique scalar type without wasting a model completion."""
+    if op != 'literal' or not requirements:
+        return None
+    options = [branch['properties'] for branch in branches
+               if branch['properties'].get('action', {}).get('const') == 'write_type']
+    if len(options) != 1:
+        return None
+    dim = options[0]['array_dimensions']
+    if not (dim.get('enum') == [0] or
+            (dim.get('minimum') == 0 and dim.get('maximum') == 0)):
+        return None
+    return {'action': 'write_type', 'base_type': options[0]['base_type']['const'],
+            'array_dimensions': 0}
+
+
+def _usable_api_candidate(key, row, *, op, kinds, current_member, rejected_symbols, state, fits,
+                          requirements=()):
     # A declaration whose body is being authored is an obligation, not
     # existing implementation evidence. Keep sibling helpers available.
     if op == 'call' and (key == current_member or row.get('inherited_from') == current_member):
         return False
     if key in rejected_symbols or row.get('inherited_from') in rejected_symbols:
+        return False
+    if op == 'call' and _requires_missing_self_receiver(row, requirements, state.evidence_index):
         return False
     return (row['kind'] in kinds
             and state.evidence_index.accessible(key, constructor=op == 'new')
@@ -130,7 +157,7 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
     from functools import partial
     usable_api = partial(_usable_api_candidate, op=op, kinds=kinds,
                          current_member=current_member, rejected_symbols=rejected_symbols,
-                         state=state, fits=fits)
+                         state=state, fits=fits, requirements=requirements)
 
     # Retrieval must describe the specific Java dependency, not the full game
     # story. Narrative terms such as "fight aliens / colonize planets" diluted
@@ -142,7 +169,12 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
         *[value for row in requirements for value in row.get('expected_types', ())],
         *[value for row in requirements for value in row.get('allowed_types', ())],
     ) if value))
-    resolve_symbols = op in SYMBOL_BOUND_OPERATIONS
+    # A literal is a typed value, not an API lookup. The prior search paged
+    # 33,169 unrelated classes before writing a java.lang.String literal.
+    resolve_symbols = op in SYMBOL_BOUND_OPERATIONS and op != 'literal'
+    preferred_field = (state.selection_goal or {}).get('preferred_api') if op == 'field' else None
+    if preferred_field in state.symbols:
+        resolve_symbols = False
 
     def prepare_selection():
         rejected_symbols.update(state.rejected_apis(goal['node_id']))
@@ -176,6 +208,8 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
         selected = draft.get('binding_choice', {}).get('symbol_ref') or draft.get('binding_choice', {}).get('type_ref')
         if selected in state.symbols:
             visible[selected] = symbol_record(selected, state.symbols[selected])
+        if preferred_field in state.symbols:
+            visible[preferred_field] = symbol_record(preferred_field, state.symbols[preferred_field])
         matches = [row for row in visible.values() if usable_api(row['symbol_id'], row)]
         if op in API_KINDS:
             local_keys = set(state.declaration_ids[-RECENT_SIZE:])
@@ -259,7 +293,11 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
                    'api_candidates': matches,
                    'provisional_parent_strategies': dependency_revision_choices(state, nodes),
                    'required_by_consumers': requirements}
-        choice = draft.get('binding_choice') or ask(router, 'construction_operation_bind', current, schema,
+        choice = (draft.get('binding_choice')
+                  or ({'action': 'api', 'symbol_ref': preferred_field}
+                      if preferred_field in {row['symbol_id'] for row in matches} else None)
+                  or _automatic_literal_type(op, requirements, branches)
+                  or ask(router, 'construction_operation_bind', current, schema,
             'Resolve only this selected operation. Select the real API whose behavior and signature '
             'fit operation_goal, or read a returned source/type/configuration pointer to resolve a '
             'specific missing fact. scopes selects a real package/type branch by meaning when '
