@@ -23,7 +23,7 @@ host_requirements:
   schemas: []
 implementation_key: fabric/dimension/registry
 validators:
-- java_parse
+- json_parse
 context_projection:
   max_bytes: 4096
   include:
@@ -54,7 +54,9 @@ rules:
 - Target side must remain server; reject cross-side symbol leakage.
 - Fail closed if required dimension prerequisite receipt is missing; never invent
   defaults.
-- Output must satisfy java_parse validator before completion.
+- The dimension definition is a data-pack JSON resource, not a Java registry method.
+- Include a dimension type reference and an executable world generator definition.
+- Output must satisfy json_parse and the host-owned dimension object schema before completion.
 postconditions:
-- dimension registry matches host version contract
+- dimension JSON definition matches host version contract
 - dimension registry receipts emitted with verified context
