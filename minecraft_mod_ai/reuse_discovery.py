@@ -776,12 +776,13 @@ def discover_repositories_for_graph(
         errors: list[dict[str, Any]] = []
         cursor = ""
         try:
-            # The user requires the requested MC release. Catalogue filters
-            # narrow discovery; pinned source metadata verifies it independently.
+            # Discovery stays version-neutral so older mod sources remain
+            # discoverable as references. Donor inspection/proof independently
+            # enforces the host-selected target before any code is reused.
             for _page_index in range(_discovery_pages()):
                 page = client.search(
-                    provider, provider_query, limit=_query_limit(), target_profile="minecraft_mod",
-                    minecraft_version=minecraft_version, loader=loader, source_reference=True,
+                    provider, provider_query, limit=_query_limit(),
+                    target_profile="minecraft_mod",
                     **({"cursor": cursor} if cursor else {}),
                 )
                 raw = page.get("candidates") if isinstance(page, Mapping) else None
