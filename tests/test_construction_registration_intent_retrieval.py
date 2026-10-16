@@ -14,15 +14,23 @@ def _index(*, with_registry=True):
     entity = 'net.minecraft.world.entity.Entity'
     entity_type = 'net.minecraft.world.entity.EntityType'
     registry = 'net.minecraft.core.Registry'
+    renderer_registry = 'net.fabricmc.fabric.api.client.rendering.v1.EntityRendererRegistry'
+    block_renderer_registry = 'net.fabricmc.fabric.api.client.rendering.v1.BlockEntityRendererRegistry'
     symbols = {
         owner: {'owner': owner, 'kind': 'CLASS', 'name': 'GeneratedRegistry',
                 'access': 1, 'provenance': 'construction_plan'},
         entity: {'owner': entity, 'kind': 'CLASS', 'name': 'Entity', 'access': 1},
         entity_type: {'owner': entity_type, 'kind': 'CLASS', 'name': 'EntityType', 'access': 1},
         registry: {'owner': registry, 'kind': 'CLASS', 'name': 'Registry', 'access': 1},
+        renderer_registry: {'owner': renderer_registry, 'kind': 'CLASS',
+                            'name': 'EntityRendererRegistry', 'access': 1},
+        block_renderer_registry: {'owner': block_renderer_registry, 'kind': 'CLASS',
+                                  'name': 'BlockEntityRendererRegistry', 'access': 1},
         entity + '#get': _row(entity, 'get', result='java.lang.Object'),
         entity + '#registerDebugValues': _row(entity, 'registerDebugValues'),
         entity_type + '#create': _row(entity_type, 'create', result=entity),
+        renderer_registry + '#register': _row(renderer_registry, 'register'),
+        block_renderer_registry + '#register': _row(block_renderer_registry, 'register'),
     }
     if with_registry:
         symbols[registry + '#register'] = _row(registry, 'register', result=entity_type)

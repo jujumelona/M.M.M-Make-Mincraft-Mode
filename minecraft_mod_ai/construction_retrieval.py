@@ -44,6 +44,13 @@ def _purpose_name_weights(purpose):
     return weights
 
 
+def _owner_name_precision(owner, query_terms):
+    """Match the actual declaring class role, not its package path."""
+    name = owner.rsplit('.', 1)[-1].replace('$', '.')
+    parts = set(_meaningful_terms(_words(name)))
+    return len(parts & query_terms) / len(parts) if parts else 0.0
+
+
 def _description(row):
     return _words(' '.join(str(value) for value in (
         row.get('owner', ''), row.get('name', ''), row.get('kind', ''),
@@ -458,6 +465,7 @@ class ConstructionEvidenceIndex:
 
     def _rank_method_intent(self, query, kinds, eligible, relation):
         self.name_weights = _purpose_name_weights(query)
+        query_terms = set(_meaningful_terms(query))
         self.strong_name_prefixes = frozenset(prefix for prefix, weight in self.name_weights.items()
                                               if weight > 1 and prefix in self.member_name_owners)
         self.exact_action_available = False
@@ -485,7 +493,8 @@ class ConstructionEvidenceIndex:
                     # A real matching callable outranks a class whose *name*
                     # merely resembles the requested operation. Name precision
                     # discourages registerDebugValues for "registration".
-                    relation[owner] += (8.0 if self.strong_name_prefixes else 2.0) * best
+                    relation[owner] += ((8.0 if self.strong_name_prefixes else 2.0) * best
+                                        + 14.0 * min(best, 1.0) * _owner_name_precision(owner, query_terms))
 
     def prepare(self, purpose, *, kinds, selection=None):
         if (not isinstance(purpose, str) or not purpose.strip() or not isinstance(kinds, (list, tuple, set, frozenset))
