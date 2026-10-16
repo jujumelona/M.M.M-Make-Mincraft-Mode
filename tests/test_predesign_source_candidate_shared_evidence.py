@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from minecraft_mod_ai.research_reuse_candidates import (
+    authored_design_repository_candidates,
     merge_repository_candidates,
     planning_state_repository_cards,
     project_repository_candidates,
@@ -113,3 +114,26 @@ def test_repository_candidate_handoff_rejects_unstamped_rows():
         ]}
     }
     assert planning_state_repository_cards(polluted) == ()
+
+
+def test_authored_content_design_combines_research_and_planning_without_duplication():
+    rows = _projected()
+    design = {
+        "_planning_state": {"repository_candidates": rows},
+        "_pre_design_research": {
+            "deterministic": {"repository_candidates": rows},
+        },
+    }
+    collected = authored_design_repository_candidates(design)
+    assert len(collected) == 1
+    assert len(collected[0]["catalog_evidence"]) == 2
+    assert collected[0]["reference_only"] is True
+    assert authored_design_repository_candidates({}) == []
+
+
+def test_content_design_does_not_accept_arbitrary_unverified_candidate_authority():
+    rows = [{"repository": "example/unsafe", "origin": "model_claim",
+             "reference_only": False, "source_reuse_authority": "compile_verified"}]
+    assert authored_design_repository_candidates(
+        {"_pre_design_research": {"deterministic": {"repository_candidates": rows}}}
+    ) == []
