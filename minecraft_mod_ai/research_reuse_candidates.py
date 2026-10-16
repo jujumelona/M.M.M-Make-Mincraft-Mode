@@ -335,6 +335,46 @@ def authored_design_repository_candidates(
     )
 
 
+
+def ensure_authored_source_handoff(
+    content_design: Mapping[str, Any],
+    *,
+    router: Any,
+    prompt: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """One shared producer/consumer boundary for both authored compile routes.
+
+    Never calls a generative model. Retains a host-produced source-evidence
+    receipt by prompt identity and leaves all candidates proof-required.
+    """
+    content = dict(content_design)
+    candidates = authored_design_repository_candidates(content)
+    if candidates:
+        return content, candidates
+
+    from .pre_design_research_pipeline import (
+        _canonical_sha256, collect_source_candidate_handoff,
+    )
+
+    expected_prompt = _canonical_sha256(prompt)
+    cached = content.get("_pre_design_source_handoff")
+    if not isinstance(cached, Mapping) or cached.get("prompt_sha256") != expected_prompt:
+        try:
+            cached = collect_source_candidate_handoff(router, prompt)
+        except Exception as exc:
+            # Provider failure is evidence, never a production-blocking exception.
+            cached = {
+                "schema_version": "mmm/pre-design-source-candidate-handoff-v1",
+                "prompt_sha256": expected_prompt,
+                "repository_candidates": [],
+                "status": "provider_error",
+                "error_type": type(exc).__name__,
+            }
+    content["_pre_design_source_handoff"] = dict(cached)
+    return content, authored_design_repository_candidates(content)
+
+
+
 def planning_state_repository_cards(design: Mapping[str, Any]) -> tuple[dict[str, Any], ...]:
     """Read every host-stamped candidate receipt from the planning-state SSOT."""
     state = design.get("_planning_state")
@@ -375,6 +415,7 @@ def planning_state_repository_cards(design: Mapping[str, Any]) -> tuple[dict[str
 
 __all__ = [
     "authored_design_repository_candidates",
+    "ensure_authored_source_handoff",
     "merge_repository_candidates",
     "planning_state_repository_cards",
     "project_repository_candidates",
