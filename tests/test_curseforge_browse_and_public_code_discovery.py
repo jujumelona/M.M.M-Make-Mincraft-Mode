@@ -213,6 +213,25 @@ def test_sourcegraph_stream_extracts_real_java_source_evidence(monkeypatch):
     assert metadata["source_reuse_authority"] == "verification_required"
 
 
+def test_sourcegraph_action_word_does_not_silently_disable_code_search(monkeypatch):
+    observed = []
+
+    class Response:
+        text = "event: done\\ndata: {}\\n\\n"
+
+        def raise_for_status(self):
+            pass
+
+    class Client:
+        def get(self, url, **kwargs):
+            observed.append(kwargs["params"]["q"])
+            return Response()
+
+    monkeypatch.setattr(reuse_discovery, "_pooled_http_client", lambda: Client())
+    assert reuse_discovery._search_sourcegraph("travel", limit=5) == []
+    assert observed and 'content:"travel"' in observed[0]
+
+
 def test_predesign_browses_metadata_before_budgeted_descriptions(monkeypatch):
     monkeypatch.setattr(pre_design_grounded_rag, "curseforge_api_key", lambda: "dummy")
     monkeypatch.setattr(pre_design_grounded_rag, "_provider_page_limit", lambda: 1)
