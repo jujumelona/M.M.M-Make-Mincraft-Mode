@@ -343,3 +343,31 @@ def test_research_receipt_without_matching_prompt_hash_is_not_carried_to_new_req
     content, rows = ensure_authored_source_handoff(stale, router=object(), prompt=prompt)
     assert rows == []
     assert "_pre_design_research" not in content
+
+
+def test_stale_research_prompt_also_invalidates_old_planning_donor(monkeypatch):
+    from minecraft_mod_ai import pre_design_research_pipeline as pipeline
+    from minecraft_mod_ai.research_reuse_candidates import ensure_authored_source_handoff
+
+    monkeypatch.setattr(pipeline, "collect_source_candidate_handoff", lambda _r, p: {
+        "schema_version": "mmm/pre-design-source-candidate-handoff-v1",
+        "prompt_sha256": pipeline._canonical_sha256(p),
+        "repository_candidates": [],
+        "model_called": False,
+    })
+    prior = {
+        "_planning_state": {
+            "repository_candidates": _projected(),
+            "other_progress": "keep",
+        },
+        "_pre_design_source_handoff": {
+            "schema_version": "mmm/pre-design-source-candidate-handoff-v1",
+            "prompt_sha256": pipeline._canonical_sha256("old request"),
+            "repository_candidates": _projected(),
+        },
+    }
+    content, selected = ensure_authored_source_handoff(
+        prior, router=object(), prompt="different request",
+    )
+    assert selected == []
+    assert content["_planning_state"] == {"other_progress": "keep"}
