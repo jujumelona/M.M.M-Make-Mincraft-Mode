@@ -51,6 +51,9 @@ class ProviderRequestFailure:
     retry_after: str = ''
     rate_limit_remaining: str = ''
     rate_limit_reset: str = ''
+    rate_limit_limit: str = ''
+    rate_limit_resource: str = ''
+    authenticated: bool | None = None
 
     @property
     def backend_unavailable(self) -> bool:
@@ -66,10 +69,16 @@ class ProviderRequestFailure:
     @classmethod
     def from_response(cls, response: httpx.Response, *, provider: str='') -> ProviderRequestFailure:
         hostname = response.url.host or ''
+        try:
+            authenticated = bool(response.request.headers.get('authorization'))
+        except RuntimeError:
+            authenticated = None
         return cls(provider or hostname, hostname, 'http_status', response.status_code,
                    response.headers.get('retry-after', ''),
                    response.headers.get('x-ratelimit-remaining', ''),
-                   response.headers.get('x-ratelimit-reset', ''))
+                   response.headers.get('x-ratelimit-reset', ''),
+                   response.headers.get('x-ratelimit-limit', ''),
+                   response.headers.get('x-ratelimit-resource', ''), authenticated)
 
 
 def provider_request_failure(exc: BaseException, *, provider: str='', hostname: str='') -> ProviderRequestFailure | None:
@@ -168,7 +177,8 @@ class EcosystemDiscoveryClient:
             raise ValueError('timeout_seconds must be positive.')
         self.transport = transport
         self.timeout_seconds = timeout_seconds
-        self.github_token = github_token or os.environ.get('GITHUB_TOKEN', '')
+        self.github_token = str(github_token or os.environ.get('GITHUB_TOKEN')
+                                or os.environ.get('GH_TOKEN') or '').strip()
         self.openverse_token = openverse_token or os.environ.get('MMM_OPENVERSE_TOKEN', '')
         # httpx.Client is thread-safe and owns connection pooling. Keep one client for
         # the discovery lifetime instead of rebuilding a TCP/TLS pool per API request.
@@ -658,7 +668,7 @@ def _serial_discover_seed_bundle(prompt: str, game_design: dict[str, Any], *, re
     query = _seed_query(prompt, game_design)
     if research_brief is None:
         routes = [{'domain_id': 'request', 'provider': provider, 'query': query, 'target_profile': 'media' if provider in {'openverse_images'} else 'minecraft_mod'} for provider in ['modrinth', 'openverse_images']]
-        if client is not None and client.github_token or os.environ.get('GITHUB_TOKEN'):
+        if client is not None and client.github_token or os.environ.get('GITHUB_TOKEN') or os.environ.get('GH_TOKEN'):
             routes.append({'domain_id': 'request', 'provider': 'github', 'query': query, 'target_profile': 'minecraft_mod'})
     else:
         routes = list(external_discovery_routes(research_brief))
