@@ -109,6 +109,7 @@ def resolve_authored_source_reuse(
     loader: str,
     reference_repositories: Sequence[str] = (),
     request_scope: Mapping[str, Any] | None = None,
+    repository_candidates: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     from .grounded_source_reuse import build_repository_reuse_plan
 
@@ -122,6 +123,14 @@ def resolve_authored_source_reuse(
         # Debug-authored references have zero reuse authority. The normal host
         # inspector and target compile proof still decide source_transplant.
         "_preselected_reference_repositories": list(reference_repositories),
+        # Candidates must be host-stamped; the existing reader validates
+        # reference_only / verification_required before an inspection starts.
+        "_planning_state": {
+            "repository_candidates": [
+                dict(item) for item in repository_candidates
+                if isinstance(item, Mapping)
+            ],
+        },
         "_platform_selection": {
             "target": {
                 "minecraft_version": minecraft_version,
