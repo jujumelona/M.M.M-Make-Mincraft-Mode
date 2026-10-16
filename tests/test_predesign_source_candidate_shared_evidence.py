@@ -185,7 +185,7 @@ def test_live_handoff_projector_reuses_grounded_catalog_result_without_model(mon
         return {"domains": [{
             "domain_id": "request",
             "queries": [{
-                "query": "space travel",
+                "query": "Create a spaceship travel mod",
                 "external_rag": {"sources": [{
                     "source_id": "curseforge:42",
                     "title": "Planet Travel",
