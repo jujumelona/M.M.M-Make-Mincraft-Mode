@@ -514,8 +514,25 @@ def collect_source_candidate_handoff(router: Any, prompt: str) -> dict[str, Any]
             continue
         domain_id = str(domain.get("domain_id") or "").strip()
         grounded = _grounded_domain_evidence(domain_id, bundle)
+        # The second query in the request brief is generic architecture
+        # background. It is not evidence that an unrelated mod implements
+        # the user's requested mechanic. Keep it available to full research,
+        # but do not nominate its repositories as production donors.
+        user_queries = {
+            " ".join(str(value).split())
+            for value in domain.get("requirements", ())
+            if str(value).strip()
+        }
+        donor_grounded = {
+            **grounded,
+            "queries": [
+                row for row in grounded.get("queries", [])
+                if isinstance(row, Mapping)
+                and " ".join(str(row.get("query") or "").split()) in user_queries
+            ],
+        }
         candidates = merge_repository_candidates(
-            candidates, project_repository_candidates(domain, grounded),
+            candidates, project_repository_candidates(domain, donor_grounded),
         )
         for row in grounded.get("queries", []):
             for provider, raw in row.get("provider_receipts", {}).items():
