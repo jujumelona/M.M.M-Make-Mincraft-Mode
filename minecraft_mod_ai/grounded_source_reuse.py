@@ -158,6 +158,10 @@ def _merge_card(cards: list[dict[str, Any]], by_repository: dict[str, int], raw:
         for value in values if isinstance(values, list) else ():
             if value and value not in target:
                 target.append(value)
+    existing["candidate_score"] = max(
+        float(existing.get("candidate_score") or 0.0),
+        float(raw.get("candidate_score") or 0.0),
+    )
     priorities = existing.setdefault("catalog_provider_priority", {})
     for capability, priority in raw.get("catalog_provider_priority", {}).items():
         priorities[capability] = min(priorities.get(capability, priority), priority)
@@ -570,25 +574,20 @@ def build_repository_reuse_plan(
         "fallback_policy": "merge_independent_catalog_and_code_hits_then_inspect_github_last",
         "minecraft_version": adapter.minecraft_version, "loader": adapter.loader,
     }), flush=True)
-    # Combine independent catalogue and indexed-code evidence before choosing donors.
-    # GitHub repository search remains the final fallback after source inspection.
-    preloaded_providers = provider_order[:-1]
-    for initial_provider in preloaded_providers:
-        discover_stage(capabilities, initial_provider)
-
+    # Pre-design has already materialized some source candidates. Verify them
+    # before making any new provider request; a successful proof avoids repeating
+    # the same catalogue and README discovery work.
     def candidate_batches(capability, terms, ranked_cards):
         seen: set[str] = set()
-        for stage, provider in enumerate(provider_order):
-            if stage and provider in preloaded_providers:
-                continue  # Already merged across the complete frozen capability graph.
-            if provider not in preloaded_providers:
-                discover_stage((capability,), provider)
+
+        def uninspected_batches():
             stage_cards = sorted(
                 (card for card in cards if str(card["repository"]).casefold() not in seen),
                 key=lambda card: (
                     bool(card.get("explicit_reference")),
                     _candidate_overlap(capability, terms, card),
                     _candidate_provider_rrf(card),
+                    float(card.get("candidate_score") or 0.0),
                     -card.get("catalog_provider_priority", {}).get(capability, 2),
                 ), reverse=True,
             )
@@ -596,6 +595,13 @@ def build_repository_reuse_plan(
             seen.update(str(card["repository"]).casefold() for card in stage_cards)
             for offset in range(0, len(stage_cards), 2):
                 yield stage_cards[offset:offset + 2]
+
+        yield from uninspected_batches()
+        # Preserve recall after failed proof: only then broaden with independent
+        # catalogue and public code discovery. These are not verified donors.
+        for provider in provider_order:
+            discover_stage((capability,), provider)
+            yield from uninspected_batches()
 
     decisions: list[dict[str, Any]] = []
     inspections: list[dict[str, Any]] = []
