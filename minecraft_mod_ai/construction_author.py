@@ -211,15 +211,22 @@ def author_task_operations(router, task, context):
     def reject_candidate(error, *, candidate=None, phase='partial'):
         observation = rejection(error, nodes, candidate=candidate, phase=phase)
         state.validation_observation = observation
-        state.reconsider_operation()
-        state.operation_rejections = {}
+        old_slot = (state.selection_goal or {}).get('node_id')
         target = observation['node_id']
+        # A failed candidate is evidence against its specific API, not
+        # against every invocation operation. Keep it across a restart.
+        rejected_api = (candidate or {}).get('attributes', {}).get('symbol_ref')
+        if target and rejected_api in symbols:
+            state.reject_api(target, rejected_api, str(error)[:240])
+        state.reconsider_operation()
+        if target != old_slot:
+            state.operation_rejections = {}
         if target in by_id:
             state.selection_goal = {'node_id': target,
                 'purpose': state.node_purposes.get(target, task.intent), 'excluded_operations': []}
         elif candidate is None:
             state.selection_goal = None
-        else:
+        elif state.selection_goal is not None and target != old_slot:
             state.selection_goal['excluded_operations'] = []
         print('CONSTRUCTION OPERATION OBSERVATION: ' + json.dumps({
             'status': 'rejected', 'phase': phase, 'node_id': target,
