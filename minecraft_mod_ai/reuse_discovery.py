@@ -36,7 +36,7 @@ from .curseforge_catalog import (
 )
 from .deadline_executor import iter_completed_with_deadlines
 from .ecosystem_discovery import provider_request_failure
-from .source_intent_aliases import source_intent_aliases as _source_intent_aliases
+from .source_intent_aliases import source_intent_aliases as _source_intent_aliases, source_intent_terms
 
 _TOKEN = re.compile(r"[\w]+", re.UNICODE)
 _MINECRAFT_GAME_ID = 432
@@ -70,7 +70,9 @@ def _source_words(text: str) -> set[str]:
     text = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", text).replace("_", " ")
     words = set(_TOKEN.findall(text.casefold()))
     roots = {_singular_source_word(word) for word in words}
-    return words | roots | ({"ship"} if roots & _COMPOUND_SHIP_NOUNS else set())
+    return words | roots | set(source_intent_terms(text)) | (
+        {"ship", "space"} if roots & _COMPOUND_SHIP_NOUNS else set()
+    )
 
 
 def _short_source_queries(capability: str) -> tuple[str, ...]:
