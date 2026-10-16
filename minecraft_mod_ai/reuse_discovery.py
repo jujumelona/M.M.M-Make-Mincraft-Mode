@@ -2,8 +2,10 @@ from __future__ import annotations
 
 """Adaptive, capability-level discovery for reusable Minecraft source donors.
 
-Discovery queries CurseForge first, then Modrinth and GitHub, with independent
-queries parallel within each provider stage. Upstream source identities are
+Discovery browses CurseForge Mods catalogue windows without feature-name
+search, then uses Modrinth and public Sourcegraph Java-content search before
+GitHub fallback. Independent queries run in bounded provider waves.
+Upstream source identities are
 deduplicated and representatives inspected first; every fallback candidate stays
 available until source verification and reuse proof decide coverage.
 """
@@ -865,7 +867,10 @@ def discover_repositories_for_graph(
             "provider": provider, "query": query,
             "provider_priority": _PROVIDER_PRIORITY[provider],
             "capabilities": list(owners),
-            "status": "provider_error" if errors else ("found" if values else "search_empty"),
+            "status": "provider_error" if errors else (
+                "found" if values else
+                "bounded_listing_no_source" if provider == "curseforge" else "search_empty"
+            ),
             "error": "; ".join(str(error["error"]) for error in errors),
             "errors": [dict(error) for error in errors],
             "partial_results": partial_results,
@@ -877,6 +882,10 @@ def discover_repositories_for_graph(
             "cache_hit": cache_hit,
             "search_executed": not cache_hit and not deferred,
             "repository_count": len(repositories),
+            "search_exhaustiveness": (
+                "bounded_category_and_multi_sort_sample" if provider == "curseforge"
+                else "provider_ranked_pages_not_verified_exhaustive"
+            ),
             "usable_source_repository_count": len(repositories),
             "source_repository_missing_count": sum(not repo for repo in source_repository_rows),
             **({"catalog_result_count": len(values)} if provider == "curseforge" else {}),
