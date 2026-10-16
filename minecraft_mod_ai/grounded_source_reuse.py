@@ -296,7 +296,12 @@ def _inspection_backend_unavailable(exc: Exception) -> bool:
         if response.status_code == 403 and response.headers.get("x-ratelimit-remaining") == "0":
             return True
     message = f"{type(exc).__name__}: {exc}".casefold()
+    # EcosystemDiscoveryClient wraps HTTP errors as text, for example
+    # "EcosystemDiscoveryUnavailable: api.github.com discovery returned HTTP 429".
+    # Failing to recognize that wrapper inspected all 160 candidates despite
+    # the provider already rejecting every request.
     return ("rate limit" in message or "rate_limit" in message
+            or "http 429" in message or "too many requests" in message
             or "api rate" in message or "connection refused" in message)
 
 
