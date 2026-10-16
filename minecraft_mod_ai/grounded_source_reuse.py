@@ -673,8 +673,25 @@ def build_repository_reuse_plan(
                             reference_sources, inspections)
                         _record_inspection_outage(inspection_outage, capability, donor.repository)
 
-                if verified or any(row['capability'] == capability for row in reference_sources):
+                if verified:
                     break
+                # A readable reference is NOT proof that it implements the
+                # mechanic. Keep searching when the metadata/source evidence
+                # does not cover even the two most basic requested concepts.
+                refs = {
+                    str(row.get("donor", {}).get("repository") or "").casefold()
+                    for row in reference_sources if row.get("capability") == capability
+                }
+                if refs:
+                    required = min(2, len(_tokens(" ".join((capability, *terms)))))
+                    sufficient_reference = any(
+                        str(card.get("repository") or "").casefold() in refs
+                        and (bool(card.get("explicit_reference"))
+                             or _candidate_overlap(capability, terms, card) >= required)
+                        for card in ranked_cards
+                    )
+                    if sufficient_reference:
+                        break
 
             selected = verified[0] if verified else None
             if selected is None:
