@@ -6,8 +6,9 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from minecraft_mod_ai import pre_design_grounded_rag, reuse_discovery
+from minecraft_mod_ai import grounded_source_reuse, pre_design_grounded_rag, reuse_discovery
 from minecraft_mod_ai.curseforge_catalog import (
+    curseforge_browse_windows,
     curseforge_mods_class_id,
     curseforge_next_index,
 )
@@ -21,6 +22,38 @@ def test_curseforge_mod_class_resolved_from_live_category_response():
     assert curseforge_mods_class_id([
         {"id": 6, "gameId": 999, "name": "Mods", "slug": "mods", "isClass": True},
     ]) is None
+
+
+def test_one_browse_plan_shared_by_reuse_and_predesign():
+    categories = [
+        {"id": 6, "gameId": 432, "name": "Mods",
+         "slug": "mc-mods", "isClass": True},
+        {"id": 24, "gameId": 432, "name": "World Gen",
+         "isClass": False, "classId": 6},
+        {"id": 25, "gameId": 432, "name": "Technology",
+         "isClass": False, "classId": 6},
+        {"id": 91, "gameId": 999, "isClass": False, "classId": 6},
+        {"id": 94, "gameId": 432, "isClass": False, "classId": 7},
+    ]
+    assert curseforge_browse_windows(categories, 6) == (
+        (2, None, 2), (3, None, 2), (11, None, 2),
+        (3, 24, 1), (3, 25, 1),
+    )
+
+
+def test_provider_rank_fusion_does_not_multiply_repeated_single_provider_hits():
+    single = {"catalog_evidence": [
+        {"provider": "curseforge", "rank_position": 2},
+        {"provider": "curseforge", "rank_position": 2},
+    ]}
+    multi = {"catalog_evidence": [
+        {"provider": "curseforge", "rank_position": 2},
+        {"provider": "sourcegraph", "rank_position": 7},
+    ]}
+    assert grounded_source_reuse._candidate_provider_rrf(single) == 1.0 / 62
+    assert grounded_source_reuse._candidate_provider_rrf(multi) > (
+        grounded_source_reuse._candidate_provider_rrf(single)
+    )
 
 
 def test_curseforge_pagination_advances_and_never_crosses_provider_window():
