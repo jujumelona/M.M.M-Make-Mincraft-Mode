@@ -208,8 +208,8 @@ def project_repository_candidates(
                     "source_ids": [source_id],
                     "source_urls": [source_url],
                     "query_sha256": [query_sha],
-                    "evidence_text": evidence_text,
-                    "evidence_tokens": sorted(_tokens(evidence_text)),
+                    "evidence_text": evidence_text[:_MAX_EVIDENCE_CHARS],
+                    "evidence_tokens": sorted(_tokens(evidence_text))[:64],
                     "catalog_evidence": [provenance],
                     "candidate_score": round(rank_score, 6),
                     "origin": "host_grounded_retrieval",
@@ -229,8 +229,8 @@ def project_repository_candidates(
                 if value and value not in current[field]:
                     current[field].append(value)
             merged_text = _text(f"{current['evidence_text']} {evidence_text}")
-            current["evidence_text"] = merged_text
-            current["evidence_tokens"] = sorted(_tokens(merged_text))
+            current["evidence_text"] = merged_text[:_MAX_EVIDENCE_CHARS]
+            current["evidence_tokens"] = sorted(_tokens(merged_text))[:64]
 
     ranked = sorted(
         by_repo.values(),
@@ -277,8 +277,8 @@ def merge_repository_candidates(
                 if value and value not in target:
                     target.append(value)
         merged_text = _text(f"{current.get('evidence_text', '')} {candidate.get('evidence_text', '')}")
-        current["evidence_text"] = merged_text
-        current["evidence_tokens"] = sorted(_tokens(merged_text))
+        current["evidence_text"] = merged_text[:_MAX_EVIDENCE_CHARS]
+        current["evidence_tokens"] = sorted(_tokens(merged_text))[:64]
     ranked = sorted(
         by_repo.values(),
         key=lambda row: (-float(row.get("candidate_score", 0.0) or 0.0), str(row.get("repository", "")).casefold()),
