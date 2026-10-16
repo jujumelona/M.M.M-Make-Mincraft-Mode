@@ -391,7 +391,7 @@ def _canonical_candidate_inputs(
         json_slot_schema = {
             "type": "string", "minLength": 2,
             "maxLength": SOURCE_REPAIR_MAX_SOURCE_CHARS,
-            "pattern": r"(?s)^\\s*\\{.*\\}\\s*$",
+            "pattern": r"(?s)^\s*\{.*\}\s*$",
             SCHEMA_CONTRACT_PROFILE_KEY: SOURCE_REPAIR_SCHEMA_PROFILE,
             SCHEMA_STRING_CLASS_KEY: STRING_CLASS_SOURCE,
         }
