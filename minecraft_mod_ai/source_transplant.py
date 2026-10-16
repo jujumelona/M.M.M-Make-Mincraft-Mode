@@ -47,6 +47,11 @@ from .ecosystem_discovery import (
     ProviderRequestFailure,
     provider_request_failure,
 )
+from .github_public_source import (
+    PublicGitSourceError,
+    inspect_public_repository,
+    public_git_available,
+)
 from .platform_catalog import PlatformAdapter
 from .repository_artifact_index import RepositoryArtifactIndex
 from .reuse_license import is_reusable_source_license
@@ -111,6 +116,13 @@ def _response_byte_budget() -> int:
         16 * 1024 * 1024,
         minimum=256 * 1024,
         maximum=512 * 1024 * 1024,
+    )
+
+
+def _archive_byte_budget() -> int:
+    return _env_int(
+        "MMM_SOURCE_ARCHIVE_BYTE_BUDGET", 64 * 1024 * 1024,
+        minimum=64 * 1024, maximum=512 * 1024 * 1024,
     )
 
 
@@ -451,7 +463,7 @@ def repository_inspection_failures() -> tuple[ProviderRequestFailure, ...]:
 def repository_inspection_requires_unavailable_network(
     repository: str, *, minecraft_version: str, loader: str,
 ) -> bool:
-    """Let callers continue with cached snapshots after the API becomes unavailable."""
+    """Defer only if neither cached evidence nor public Git can supply a snapshot."""
     session = _INSPECTION_SESSION.get()
     if session is None or "api.github.com" not in session.provider_failures:
         return False
@@ -459,7 +471,9 @@ def repository_inspection_requires_unavailable_network(
     if any(session.snapshots.get(key) is not None for key in keys):
         return False
     with _SNAPSHOT_LOCK:
-        return not any(key in _SNAPSHOT_CACHE for key in keys)
+        if any(key in _SNAPSHOT_CACHE for key in keys):
+            return False
+    return not public_git_available() or "github.com" in session.provider_failures
 
 
 def _client_inspection_session(client: httpx.Client) -> _RepositoryInspectionSession | None:
@@ -467,6 +481,21 @@ def _client_inspection_session(client: httpx.Client) -> _RepositoryInspectionSes
     # inherited. Bind the plan state to the client as well as the calling context.
     session = _INSPECTION_SESSION.get() or getattr(client, "_mmm_inspection_session", None)
     return session if session is not None and session.active else None
+
+
+def _raise_unavailable_blob_failure(
+    client: httpx.Client, repository: str, blobs: Mapping[str, str], paths: Sequence[str],
+) -> None:
+    """Propagate the transport that actually failed, preserving semantic no-match."""
+    session = _client_inspection_session(client)
+    if session is None:
+        return
+    for path in paths:
+        error = session.blob_errors.get((repository, blobs.get(path, "")))
+        if error is not None:
+            failure = provider_request_failure(error)
+            if failure is not None and failure.backend_unavailable:
+                raise error
 
 
 def _donor_test_paths(blobs: Mapping[str, str]) -> tuple[str, ...]:
@@ -628,7 +657,8 @@ def inspect_repository_slice(
     token = str(getattr(discovery_client, "github_token", "") or "").strip()
     client = _github_client(token)
     try:
-        metadata = _build_metadata_sources(client, repository=repository, blobs=blobs)
+        metadata = _build_metadata_sources(
+            client, repository=repository, blobs=blobs, commit_sha=commit_sha)
 
         def source_contexts():
             contexts = {}
@@ -646,13 +676,12 @@ def inspect_repository_slice(
             if fallback:
                 snapshot = fallback
                 commit_sha, license_id, blobs = snapshot['commit_sha'], snapshot['license_id'], snapshot['blobs']
-                metadata = _build_metadata_sources(client, repository=repository, blobs=blobs)
+                metadata = _build_metadata_sources(
+                    client, repository=repository, blobs=blobs, commit_sha=commit_sha)
                 contexts = source_contexts()
         if not any(version == adapter.minecraft_version for version, _text in contexts.values()):
-            if any(text is None for text in metadata.values()):
-                session = _client_inspection_session(client)
-                if session is not None:
-                    session.require_network("api.github.com")
+            _raise_unavailable_blob_failure(
+                client, repository, blobs, tuple(path for path, text in metadata.items() if text is None))
             print('SOURCE_REUSE_VERSION: ' + json.dumps({
                 'repository': repository, 'requested': adapter.minecraft_version,
                 'declared': sorted({version for version, _text in contexts.values()}),
@@ -672,12 +701,13 @@ def inspect_repository_slice(
             {"path": path, "sha": blob_sha, "type": "blob"}
             for path, blob_sha in blobs.items()
         )
+        blob_paths = {blob_sha: path for path, blob_sha in blobs.items()}
         index = RepositoryArtifactIndex.build_from_tree(
             repository,
             commit_sha,
             tree_items,
             blob_fetcher=lambda repo, blob_sha: _fetch_blob_bytes(
-                client, repo, blob_sha
+                client, repo, blob_sha, commit_sha=commit_sha, path=blob_paths.get(blob_sha, "")
             ),
             resolver_scope=session,
         )
@@ -695,10 +725,7 @@ def inspect_repository_slice(
             and version_for(evidence.node_id) == adapter.minecraft_version
         )
         if not seed_paths:
-            if unreadable:
-                session = _client_inspection_session(client)
-                if session is not None:
-                    session.require_network("api.github.com")
+            _raise_unavailable_blob_failure(client, repository, blobs, unreadable)
             return None
 
         selected = list(_closure_paths(graph, seed_paths))
@@ -787,9 +814,7 @@ def inspect_repository_slice(
         )
 
         if not selected:
-            session = _client_inspection_session(client)
-            if session is not None:
-                session.require_network("api.github.com")
+            _raise_unavailable_blob_failure(client, repository, blobs, unreadable)
             return None
 
         selected_modules = {_source_module(path, metadata) for path in selected
@@ -902,7 +927,7 @@ def materialize_source_slices(
     target_root = root / ".minecraft_ai" / "reuse" / "donors"
     target_root.mkdir(parents=True, exist_ok=True)
 
-    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    token = str(os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip()
     client = _github_client(token)
     download_workers = _materialization_download_workers()
     receipts: list[dict[str, Any]] = []
@@ -944,7 +969,8 @@ def materialize_source_slices(
                     repository_name,
                     pinned_commit,
                 ) = spec
-                raw = _fetch_blob_bytes(client, repository_name, blob_sha)
+                raw = _fetch_blob_bytes(
+                    client, repository_name, blob_sha, commit_sha=pinned_commit, path=path)
                 if not raw:
                     raise SourceTransplantError(
                         f"Pinned donor blob is empty for {repository_name}@{pinned_commit}:{path}."
@@ -1177,6 +1203,19 @@ def _repository_snapshot(repository: str, discovery_client: Any, *, minecraft_ve
                 # a new plan must be able to resolve its intended branch again.
                 cache_snapshot_globally = False
                 return snapshot
+        if unavailable and public_git_available():
+            try:
+                snapshot = _public_repository_snapshot(
+                    repository, discovery_client, minecraft_version=minecraft_version, loader=loader)
+                return snapshot
+            except (PublicGitSourceError, SourceTransplantError, httpx.HTTPError, OSError) as git_exc:
+                git_failure = (session.remember_failure(git_exc, hostname="github.com")
+                               if session is not None else provider_request_failure(git_exc))
+                failure_error = SourceTransplantError(
+                    "GitHub API is unavailable and public Git source inspection failed.",
+                    request_failure=git_failure or failure,
+                )
+                raise failure_error from git_exc
         if isinstance(exc, SourceTransplantError) and not unavailable:
             return None
         failure_error = exc
@@ -1205,6 +1244,48 @@ def _repository_snapshot(repository: str, discovery_client: Any, *, minecraft_ve
                 pending.event.set()
 
 
+def _public_repository_snapshot(
+    repository: str, discovery_client: Any, *, minecraft_version: str, loader: str,
+) -> Mapping[str, Any] | None:
+    """Get immutable tree/license evidence without spending the REST API quota."""
+    session = _INSPECTION_SESSION.get()
+    if session is not None:
+        session.require_network("github.com")
+    evidence = inspect_public_repository(
+        repository, minecraft_version=minecraft_version, loader=loader,
+        response_byte_budget=_response_byte_budget(), archive_byte_budget=_archive_byte_budget(),
+        single_blob_byte_budget=_single_blob_byte_budget(),
+    )
+    if not isinstance(evidence, Mapping):
+        return None
+    snapshot = {key: value for key, value in evidence.items()
+                if key not in {"verified_blobs", "verified_license_bytes"}}
+    commit_sha = str(snapshot.get("commit_sha") or "")
+    blobs = snapshot.get("blobs")
+    if (not is_reusable_source_license(snapshot.get("license_id"))
+            or not re.fullmatch(r"[0-9a-f]{40,64}", commit_sha) or not isinstance(blobs, Mapping)):
+        return None
+    for blob_sha, raw in evidence.get("verified_blobs", {}).items():
+        _verify_git_blob(blob_sha, raw)
+        _remember_verified_blob(repository, blob_sha, raw)
+    client = _github_client(str(getattr(discovery_client, "github_token", "") or "").strip())
+    try:
+        try:
+            _prefetch_pinned_archive(client, repository, commit_sha, blobs)
+        except (httpx.HTTPError, SourceTransplantError, OSError, zipfile.BadZipFile) as exc:
+            # Pinned raw reads below retain the independent Git tree hash gate.
+            if session is not None:
+                session.remember_failure(exc, hostname="codeload.github.com")
+    finally:
+        client.close()
+    snapshot["source_transport"] = "public_git"
+    print("SOURCE_REUSE_SOURCE_ROUTE: " + json.dumps({
+        "repository": repository, "transport": "public_git", "commit_sha": commit_sha,
+        "license_id": snapshot["license_id"], "api_quota_required": False,
+    }), flush=True)
+    return snapshot
+
+
 def _github_client(token: str) -> httpx.Client:
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "mmm-source-transplant"}
     if token:
@@ -1216,8 +1297,13 @@ def _github_client(token: str) -> httpx.Client:
 
 def _github_json(client: httpx.Client, url: str, *, params: Mapping[str, str] | None = None) -> Any:
     session = _client_inspection_session(client)
+    hostname = urlparse(url).hostname or ""
+    client_failure = getattr(client, "_mmm_api_request_failure", None)
+    if hostname == "api.github.com" and isinstance(client_failure, ProviderRequestFailure):
+        raise SourceTransplantError(
+            "GitHub API is unavailable for this source download client.", request_failure=client_failure)
     if session is not None:
-        session.require_network(urlparse(url).hostname or "")
+        session.require_network(hostname)
     try:
         response = client.get(url, params=params)
         if response.status_code in {301, 302, 307, 308}:
@@ -1242,6 +1328,8 @@ def _github_json(client: httpx.Client, url: str, *, params: Mapping[str, str] | 
         hostname = urlparse(url).hostname or ""
         failure = (session.remember_failure(exc, hostname=hostname) if session is not None
                    else provider_request_failure(exc, provider="github", hostname=hostname))
+        if hostname == "api.github.com" and failure is not None and failure.backend_unavailable:
+            client._mmm_api_request_failure = failure
         raise SourceTransplantError(
             f"GitHub donor request failed: {url}", request_failure=failure,
         ) from exc
@@ -1273,6 +1361,16 @@ def _remember_verified_blob(repository: str, blob_sha: str, raw: bytes) -> None:
         _BLOB_CACHE_BYTES += len(raw)
 
 
+def _verify_git_blob(blob_sha: str, raw: bytes) -> None:
+    if not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", blob_sha):
+        raise SourceTransplantError("Donor blob has no valid immutable Git identity.")
+    identity = b"blob " + str(len(raw)).encode("ascii") + b"\0" + raw
+    actual = (hashlib.sha1(identity).hexdigest() if len(blob_sha) == 40
+              else hashlib.sha256(identity).hexdigest())
+    if actual != blob_sha:
+        raise SourceTransplantError("Pinned source Git blob hash mismatch.")
+
+
 def _prefetch_pinned_archive(client: httpx.Client, repository: str, commit_sha: str,
                              blobs: Mapping[str, str]) -> int:
     """One commit archive replaces API-per-file downloads, retaining Git hashes."""
@@ -1285,8 +1383,7 @@ def _prefetch_pinned_archive(client: httpx.Client, repository: str, commit_sha: 
         session.require_network("codeload.github.com")
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) or not re.fullmatch(r"[0-9a-f]{40,64}", commit_sha):
         raise SourceTransplantError("Archive source is not an immutable repository commit.")
-    budget = _env_int("MMM_SOURCE_ARCHIVE_BYTE_BUDGET", 64 * 1024 * 1024,
-                      minimum=64 * 1024, maximum=512 * 1024 * 1024)
+    budget = _archive_byte_budget()
     verified: list[tuple[str, bytes]] = []
     with tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024) as downloaded:
         with client.stream("GET", f"https://codeload.github.com/{repository}/zip/{commit_sha}",
@@ -1303,7 +1400,8 @@ def _prefetch_pinned_archive(client: httpx.Client, repository: str, commit_sha: 
             decoded = 0
             for member in archive.infolist():
                 _root, separator, path = member.filename.partition("/")
-                if not separator or path not in blobs or not _is_repository_artifact(path):
+                if (not separator or path not in blobs
+                        or not (_is_repository_artifact(path) or _is_license_path(path))):
                     continue
                 if member.file_size > _single_blob_byte_budget():
                     raise SourceTransplantError("Pinned source archive file exceeded blob byte budget.")
@@ -1311,18 +1409,46 @@ def _prefetch_pinned_archive(client: httpx.Client, repository: str, commit_sha: 
                 if decoded > _blob_cache_byte_budget():
                     raise SourceTransplantError("Pinned source archive exceeded decoded byte budget.")
                 raw = archive.read(member)
-                identity = b"blob " + str(len(raw)).encode("ascii") + b"\0" + raw
-                actual = (hashlib.sha1(identity).hexdigest() if len(blobs[path]) == 40
-                          else hashlib.sha256(identity).hexdigest())
-                if actual != blobs[path]:
-                    raise SourceTransplantError("Pinned source archive Git blob hash mismatch: " + path)
+                _verify_git_blob(blobs[path], raw)
                 verified.append((blobs[path], raw))
     for blob_sha, raw in verified:
         _remember_verified_blob(repository, blob_sha, raw)
     return len(verified)
 
 
-def _fetch_blob_bytes(client: httpx.Client, repository: str, blob_sha: str) -> bytes:
+def _fetch_pinned_raw_blob(
+    client: httpx.Client, repository: str, blob_sha: str, *, commit_sha: str, path: str,
+) -> bytes:
+    """Fetch a pinned public file without sending the REST token to another host."""
+    if (not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository)
+            or any(part in {".", ".."} for part in repository.split("/"))
+            or not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", commit_sha)
+            or not path or "\\" in path or any(part in {"", ".", ".."} for part in path.split("/"))):
+        raise SourceTransplantError("Pinned raw donor location is invalid.")
+    session = _client_inspection_session(client)
+    if session is not None:
+        session.require_network("raw.githubusercontent.com")
+    url = f"https://raw.githubusercontent.com/{repository}/{commit_sha}/{quote(path, safe='/')}"
+    data = bytearray()
+    try:
+        with client.stream("GET", url, headers={"Authorization": ""}, timeout=30.0) as response:
+            response.raise_for_status()
+            for chunk in response.iter_bytes(64 * 1024):
+                if len(data) + len(chunk) > _single_blob_byte_budget():
+                    raise SourceTransplantError("Pinned raw donor exceeded the single blob byte budget.")
+                data.extend(chunk)
+    except httpx.HTTPError as exc:
+        failure = (session.remember_failure(exc, hostname="raw.githubusercontent.com")
+                   if session is not None else provider_request_failure(exc, provider="github"))
+        raise SourceTransplantError("Pinned raw source request failed.", request_failure=failure) from exc
+    raw = bytes(data)
+    _verify_git_blob(blob_sha, raw)
+    return raw
+
+
+def _fetch_blob_bytes(
+    client: httpx.Client, repository: str, blob_sha: str, *, commit_sha: str = "", path: str = "",
+) -> bytes:
 
     if not re.fullmatch(r"[0-9a-f]{40,64}", blob_sha):
         raise SourceTransplantError("Donor blob is not immutable.")
@@ -1360,24 +1486,31 @@ def _fetch_blob_bytes(client: httpx.Client, repository: str, blob_sha: str) -> b
     fetched: bytes | None = None
     failure_error: Exception | None = None
     try:
-        value = _github_json(
-            client,
-            f"https://api.github.com/repos/{repository}/git/blobs/{quote(blob_sha, safe='')}",
-        )
-        if not isinstance(value, Mapping) or value.get("encoding") != "base64":
-            raise SourceTransplantError("GitHub donor blob is not base64 encoded.")
         try:
-            raw = base64.b64decode(
-                str(value.get("content") or "").replace("\n", ""),
-                validate=True,
+            value = _github_json(
+                client,
+                f"https://api.github.com/repos/{repository}/git/blobs/{quote(blob_sha, safe='')}",
             )
-        except (binascii.Error, ValueError) as exc:
-            raise SourceTransplantError("GitHub donor blob contained invalid base64.") from exc
+            if not isinstance(value, Mapping) or value.get("encoding") != "base64":
+                raise SourceTransplantError("GitHub donor blob is not base64 encoded.")
+            try:
+                raw = base64.b64decode(
+                    str(value.get("content") or "").replace("\n", ""), validate=True,
+                )
+            except (binascii.Error, ValueError) as exc:
+                raise SourceTransplantError("GitHub donor blob contained invalid base64.") from exc
+        except (SourceTransplantError, httpx.HTTPError) as api_exc:
+            failure = provider_request_failure(api_exc)
+            if not commit_sha or not path or failure is None or not failure.backend_unavailable:
+                raise
+            raw = _fetch_pinned_raw_blob(
+                client, repository, blob_sha, commit_sha=commit_sha, path=path)
         single_blob_budget = _single_blob_byte_budget()
         if len(raw) > single_blob_budget:
             raise SourceTransplantError(
                 f"Single donor blob exceeded configured byte budget ({single_blob_budget} bytes)."
             )
+        _verify_git_blob(blob_sha, raw)
         _remember_verified_blob(repository, blob_sha, raw)
         fetched = raw
         return raw
@@ -1516,7 +1649,8 @@ def materialize_pinned_donor(
 ) -> dict[str, bytes]:
     """Fetch and verify all files in a donor slice using immutable blob SHAs."""
     validate_donor_slice_manifest(donor_slice)
-    token = str(os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or "").strip()
+    token = str(getattr(discovery_client, "github_token", "") or os.environ.get("GITHUB_TOKEN")
+                or os.environ.get("GH_TOKEN") or "").strip()
     client = getattr(discovery_client, "_client", None)
     own_client = False
     if client is None:
@@ -1526,7 +1660,9 @@ def materialize_pinned_donor(
     try:
         materialized: dict[str, bytes] = {}
         for donor_file in donor_slice.files:
-            raw = _fetch_blob_bytes(client, donor_slice.repository, donor_file.blob_sha)
+            raw = _fetch_blob_bytes(
+                client, donor_slice.repository, donor_file.blob_sha,
+                commit_sha=donor_slice.commit_sha, path=donor_file.path)
             if not raw:
                 raise SourceTransplantError(f"Failed to fetch blob for {donor_file.path}")
             actual_sha = "sha256:" + hashlib.sha256(raw).hexdigest()
@@ -1573,13 +1709,15 @@ def _source_module(path: str, metadata: Mapping[str, str | None]) -> str:
 
 
 def _build_metadata_sources(client: httpx.Client, *, repository: str,
-                            blobs: Mapping[str, str]) -> dict[str, str | None]:
+                            blobs: Mapping[str, str], commit_sha: str = "") -> dict[str, str | None]:
     sources = {}
     for path, blob in sorted(blobs.items()):
         if _metadata_scope(path) is None:
             continue
         try:
-            sources[path] = _fetch_blob_bytes(client, repository, blob).decode("utf-8", errors="replace")
+            sources[path] = _fetch_blob_bytes(
+                client, repository, blob, commit_sha=commit_sha, path=path,
+            ).decode("utf-8", errors="replace")
         except SourceTransplantError:
             # An unreadable overriding module file cannot inherit a sibling's
             # or ancestor's version as though the missing evidence were empty.
