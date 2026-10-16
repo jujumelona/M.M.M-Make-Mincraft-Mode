@@ -79,3 +79,37 @@ def test_metadata_only_cannot_create_a_source_repository_candidate():
          "content": "Planet travel", "metadata": {"source_url": ""}},
     ]}]}
     assert project_repository_candidates(domain, grounded) == []
+
+
+def test_authored_reuse_resolver_accepts_host_stamped_research_candidates(monkeypatch):
+    from minecraft_mod_ai import authored_reuse_bridge, grounded_source_reuse
+
+    captured = []
+
+    def capture(design):
+        captured.append(design)
+        return {"schema_version": "mmm/grounded-repository-reuse-plan-v2"}
+
+    monkeypatch.setattr(grounded_source_reuse, "build_repository_reuse_plan", capture)
+    receipts = _projected()
+    outcome = authored_reuse_bridge.resolve_authored_source_reuse(
+        "Build a spaceship travel mod", {},
+        minecraft_version="26.1.2", loader="fabric",
+        repository_candidates=receipts,
+    )
+    assert outcome["schema_version"] == "mmm/grounded-repository-reuse-plan-v2"
+    assert len(captured) == 1
+    assert captured[0]["_planning_state"]["repository_candidates"] == receipts
+    assert captured[0]["_platform_selection"]["target"]["minecraft_version"] == "26.1.2"
+
+
+def test_repository_candidate_handoff_rejects_unstamped_rows():
+    polluted = {
+        "_planning_state": {"repository_candidates": [
+            {"repository": "example/unsafe",
+             "origin": "model_claim",
+             "reference_only": False,
+             "source_reuse_authority": "compile_verified"},
+        ]}
+    }
+    assert planning_state_repository_cards(polluted) == ()
