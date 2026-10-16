@@ -348,16 +348,21 @@ def ensure_authored_source_handoff(
     receipt by prompt identity and leaves all candidates proof-required.
     """
     content = dict(content_design)
-    candidates = authored_design_repository_candidates(content)
-    if candidates:
-        return content, candidates
-
     from .pre_design_research_pipeline import (
         _canonical_sha256, collect_source_candidate_handoff,
     )
 
     expected_prompt = _canonical_sha256(prompt)
     cached = content.get("_pre_design_source_handoff")
+    if isinstance(cached, Mapping) and cached.get("prompt_sha256") != expected_prompt:
+        # Never reuse candidates from a different user requirement, even when
+        # the stored catalogue link itself remains reachable.
+        content.pop("_pre_design_source_handoff", None)
+        cached = None
+
+    candidates = authored_design_repository_candidates(content)
+    if candidates:
+        return content, candidates
     if not isinstance(cached, Mapping) or cached.get("prompt_sha256") != expected_prompt:
         try:
             cached = collect_source_candidate_handoff(router, prompt)
