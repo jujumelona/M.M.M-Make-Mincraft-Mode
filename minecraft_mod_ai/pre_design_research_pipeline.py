@@ -491,6 +491,55 @@ def _deferred_technology_receipt(
     }
 
 
+
+def collect_source_candidate_handoff(router: Any, prompt: str) -> dict[str, Any]:
+    """Host-only source discovery for the actual authored production route.
+
+    Reuses the pre-design catalog-first retrieval pipeline but does not call
+    the researcher LLM. Entries are reference-only and may never grant compile
+    or source-reuse authority. A failed external provider leaves the regular
+    source-discovery fallback available.
+    """
+    from . import pre_design_grounded_rag as backend
+    from .research_reuse_candidates import (
+        merge_repository_candidates, project_repository_candidates,
+    )
+
+    brief = _pre_design_brief(prompt)
+    bundle = forced_rag_bundle(backend, router, brief)
+    candidates: list[dict[str, Any]] = []
+    catalog_status: dict[str, dict[str, Any]] = {}
+    for domain in brief.get("domains", []):
+        if not isinstance(domain, Mapping):
+            continue
+        domain_id = str(domain.get("domain_id") or "").strip()
+        grounded = _grounded_domain_evidence(domain_id, bundle)
+        candidates = merge_repository_candidates(
+            candidates, project_repository_candidates(domain, grounded),
+        )
+        for row in grounded.get("queries", []):
+            for provider, raw in row.get("provider_receipts", {}).items():
+                if provider not in {"curseforge", "modrinth"} or not isinstance(raw, Mapping):
+                    continue
+                aggregate = catalog_status.setdefault(provider, {
+                    "search_requests": 0, "source_requests": 0, "errors": 0,
+                })
+                aggregate["search_requests"] += int(raw.get("search_requests") or 0)
+                aggregate["source_requests"] += int(raw.get("source_requests") or 0)
+                if str(raw.get("status") or "") in {"error", "provider_error"}:
+                    aggregate["errors"] += 1
+
+    return {
+        "schema_version": "mmm/pre-design-source-candidate-handoff-v1",
+        "prompt_sha256": _canonical_sha256(prompt),
+        "repository_candidates": candidates,
+        "provider_status": catalog_status,
+        "candidate_count": len(candidates),
+        "source_reuse_authority": "verification_required",
+        "model_called": False,
+    }
+
+
 def collect_design_research(
     router: Any,
     prompt: str,
@@ -663,4 +712,5 @@ __all__ = [
     "_grounded_domain_evidence",
     "_validate_document_grounding",
     "collect_design_research",
+    "collect_source_candidate_handoff",
 ]
