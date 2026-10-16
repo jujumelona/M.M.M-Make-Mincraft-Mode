@@ -1097,6 +1097,29 @@ def compile_authored_design(
                 ):
                     raise ValueError("DEBUG_REFERENCE_CANDIDATE_INVALID")
                 reference_repositories.append(row["repository"])
+        # Pass source candidates obtained during pre-design instead of forcing
+        # the host to rediscover every named repository. Never pass unverified
+        # candidates as a compiled reuse receipt.
+        from .research_reuse_candidates import merge_repository_candidates
+
+        plan_state = content_design.get("_planning_state")
+        state_rows = (
+            plan_state.get("repository_candidates", ())
+            if isinstance(plan_state, Mapping) else ()
+        )
+        researched = content_design.get("_pre_design_research")
+        research_deterministic = (
+            researched.get("deterministic")
+            if isinstance(researched, Mapping) else None
+        )
+        research_rows = (
+            research_deterministic.get("repository_candidates", ())
+            if isinstance(research_deterministic, Mapping) else ()
+        )
+        candidate_rows = merge_repository_candidates(
+            state_rows if isinstance(state_rows, (tuple, list)) else (),
+            research_rows if isinstance(research_rows, (tuple, list)) else (),
+        )
         source_reuse = resolve_authored_source_reuse(
             plan.requested_prompt,
             plan.structured_sections,
@@ -1104,6 +1127,7 @@ def compile_authored_design(
             loader=exact_reuse_target["loader"],
             reference_repositories=tuple(reference_repositories),
             request_scope=plan.request_scope,
+            repository_candidates=candidate_rows,
         )
     if source_reuse.get("schema_version") != "mmm/grounded-repository-reuse-plan-v2":
         raise ValueError("AUTHORED_SOURCE_REUSE_CONTRACT_INVALID")
