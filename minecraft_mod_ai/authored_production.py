@@ -1054,6 +1054,7 @@ def compile_authored_design(
         resolve_authored_source_reuse,
         source_candidate_fingerprint,
         source_discovery_algorithm_version,
+        source_reference_fingerprint,
     )
     from .research_reuse_candidates import ensure_authored_source_handoff
 
@@ -1066,6 +1067,30 @@ def compile_authored_design(
         plan = replace(plan, content_design=content_design)
         design["authored_plan"] = plan.to_dict()
 
+    # Validate user/debug references before consulting a prior reuse decision.
+    # A changed selected reference is a real search-input change.
+    # A debug fixture may preselect reference-only repository identities.
+    # The normal inspector must still establish closure/license/compile proof;
+    # preselection is never a donor admission or a reusable proof receipt.
+    debug_selection = content_design.get("_debug_reference_selection")
+    reference_repositories: list[str] = []
+    if isinstance(debug_selection, Mapping):
+        if debug_selection.get("policy") != "reference_only_until_host_inspection_and_proof":
+            raise ValueError("DEBUG_REFERENCE_SELECTION_POLICY_INVALID")
+        rows = debug_selection.get("reference_candidates", ())
+        if not isinstance(rows, list):
+            raise ValueError("DEBUG_REFERENCE_CANDIDATES_INVALID")
+        for row in rows:
+            if (
+                not isinstance(row, Mapping)
+                or row.get("selection_role") != "reference_only"
+                or not isinstance(row.get("repository"), str)
+            ):
+                raise ValueError("DEBUG_REFERENCE_CANDIDATE_INVALID")
+            reference_repositories.append(row["repository"])
+    expected_reference_fingerprint = source_reference_fingerprint(
+        tuple(reference_repositories)
+    )
     expected_candidate_fingerprint = source_candidate_fingerprint(candidate_rows)
     source_reuse = content_design.get("_host_source_reuse")
     exact_reuse_target = {
@@ -1088,31 +1113,13 @@ def compile_authored_design(
         or source_reuse.get("bound_target") != exact_reuse_target
         or source_reuse.get("pre_design_candidates_sha256") != expected_candidate_fingerprint
         or source_reuse.get("discovery_algorithm_version") != source_discovery_algorithm_version()
+        or source_reuse.get("reference_repositories_sha256") != expected_reference_fingerprint
         or not isinstance(cached_graph, Mapping)
         or any(
             cached_graph.get(key) != expected_reuse_graph.get(key)
             for key in ("nodes", "search_terms", "retrieval_policy_version")
         )
     ):
-        # A debug fixture may preselect reference-only repository identities.
-        # The normal inspector must still establish closure/license/compile proof;
-        # preselection is never a donor admission or a reusable proof receipt.
-        debug_selection = content_design.get("_debug_reference_selection")
-        reference_repositories: list[str] = []
-        if isinstance(debug_selection, Mapping):
-            if debug_selection.get("policy") != "reference_only_until_host_inspection_and_proof":
-                raise ValueError("DEBUG_REFERENCE_SELECTION_POLICY_INVALID")
-            rows = debug_selection.get("reference_candidates", ())
-            if not isinstance(rows, list):
-                raise ValueError("DEBUG_REFERENCE_CANDIDATES_INVALID")
-            for row in rows:
-                if (
-                    not isinstance(row, Mapping)
-                    or row.get("selection_role") != "reference_only"
-                    or not isinstance(row.get("repository"), str)
-                ):
-                    raise ValueError("DEBUG_REFERENCE_CANDIDATE_INVALID")
-                reference_repositories.append(row["repository"])
         # Reuse real research candidates without re-fetching their catalogues.
         source_reuse = resolve_authored_source_reuse(
             plan.requested_prompt,
