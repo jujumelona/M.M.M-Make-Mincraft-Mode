@@ -391,7 +391,8 @@ def _discovery_provider_error(provider: str, exc: BaseException, *, stage: str) 
     status = failure.status_code if failure is not None else getattr(exc, "http_status", None)
     status = status if isinstance(status, int) else None
     unavailable = bool(failure is not None and failure.backend_unavailable)
-    unavailable = unavailable or provider == "curseforge" and status in {401, 403, 429}
+    unavailable = unavailable or bool(getattr(exc, "backend_unavailable", False))
+    unavailable = unavailable or provider in {"curseforge", "sourcegraph"} and status in {401, 403, 429, 500, 502, 503, 504}
     return {
         "provider": provider,
         "stage": stage,
@@ -588,6 +589,15 @@ def _search_curseforge(
     return result if with_metadata else [(repo, rank) for repo, rank, _meta in result if repo]
 
 
+class _SourcegraphSearchError(RuntimeError):
+    """A recoverable external provider failure without response or token contents."""
+
+    def __init__(self, message: str, *, http_status: int | None = None) -> None:
+        super().__init__(message)
+        self.http_status = http_status
+        self.backend_unavailable = True
+
+
 def _search_sourcegraph(query: str, *, limit: int, with_metadata=False) -> list:
     """Find actual Java code in public GitHub projects using Sourcegraph's SSE API.
 
@@ -611,9 +621,14 @@ def _search_sourcegraph(query: str, *, limit: int, with_metadata=False) -> list:
             timeout=15.0,
         )
         response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise _SourcegraphSearchError(
+            f"Sourcegraph code search HTTP {exc.response.status_code}.",
+            http_status=exc.response.status_code,
+        ) from None
     except httpx.HTTPError as exc:
-        raise RuntimeError(
-            f"Sourcegraph code search unavailable ({type(exc).__name__})."
+        raise _SourcegraphSearchError(
+            f"Sourcegraph transport unavailable ({type(exc).__name__})."
         ) from None
     results = []
     seen: set[str] = set()
@@ -662,7 +677,7 @@ def _search_sourcegraph(query: str, *, limit: int, with_metadata=False) -> list:
             }
             results.append((repository, 1.0 / (1 + len(results)), metadata))
     if not completed:
-        raise RuntimeError("Sourcegraph returned an incomplete search stream.")
+        raise _SourcegraphSearchError("Sourcegraph returned an incomplete search stream.")
     return results if with_metadata else [(repo, rank) for repo, rank, _meta in results]
 
 
