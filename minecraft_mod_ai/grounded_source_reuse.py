@@ -515,8 +515,16 @@ def build_repository_reuse_plan(
                     "page_refs": ["host:ecosystem_discovery"],
                     "source_ids": list(dict.fromkeys(source_ids)),
                     "source_urls": list(dict.fromkeys(source_urls)),
-                    "evidence_text": capability,
-                    "evidence_tokens": sorted(_tokens(capability)),
+                    "evidence_text": " ".join(
+                        str(item.get(field) or "")
+                        for item in provenance
+                        for field in ("title", "summary", "code_search_path")
+                    )[:1280],
+                    "evidence_tokens": sorted(_tokens(" ".join(
+                        str(item.get(field) or "")
+                        for item in provenance
+                        for field in ("title", "summary", "code_search_path")
+                    ))),
                     "explicit_reference": False,
                     "candidate_origin": "host_ecosystem_discovery",
                     "reference_only": True,
@@ -535,19 +543,25 @@ def build_repository_reuse_plan(
     if not capabilities:
         raise ValueError("Repository reuse requires at least one frozen capability.")
 
-    provider_order = (("curseforge", "modrinth", "github") if curseforge_api_key()
-                      else ("modrinth", "github"))
+    provider_order = (("curseforge", "modrinth", "sourcegraph", "github") if curseforge_api_key()
+                      else ("modrinth", "sourcegraph", "github"))
     print("SOURCE_REUSE_DISCOVERY_ROUTE: " + json.dumps({
         "provider_order": provider_order, "curseforge_key_present": provider_order[0] == "curseforge",
         "fallback_policy": "inspect_current_provider_before_searching_next",
         "minecraft_version": adapter.minecraft_version, "loader": adapter.loader,
     }), flush=True)
-    discover_stage(capabilities, provider_order[0])
+    # Combine independent catalogue and indexed-code evidence before choosing donors.
+    # GitHub repository search remains the final fallback after source inspection.
+    preloaded_providers = provider_order[:-1]
+    for initial_provider in preloaded_providers:
+        discover_stage(capabilities, initial_provider)
 
     def candidate_batches(capability, terms, ranked_cards):
         seen: set[str] = set()
         for stage, provider in enumerate(provider_order):
-            if stage:
+            if stage and provider in preloaded_providers:
+                continue  # Already merged across the complete frozen capability graph.
+            if provider not in preloaded_providers:
                 discover_stage((capability,), provider)
             stage_cards = sorted(
                 (card for card in cards if str(card["repository"]).casefold() not in seen),
