@@ -263,6 +263,26 @@ def _candidate_overlap(
     return len(wanted & available)
 
 
+def _candidate_provider_rrf(card: Mapping[str, Any]) -> float:
+    """Fuse distinct provider rankings, not repeated queries or query wording."""
+    best: dict[str, int] = {}
+    raw = card.get("catalog_evidence")
+    for item in raw if isinstance(raw, list) else ():
+        if not isinstance(item, Mapping):
+            continue
+        provider = str(item.get("provider") or "").strip()
+        if not provider:
+            continue
+        try:
+            position = int(item.get("rank_position") or 0)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if position < 1:
+            continue
+        best[provider] = min(best.get(provider, position), position)
+    return sum(1.0 / (60 + position) for position in best.values())
+
+
 def _target_context(adapter: TargetContract) -> dict[str, Any]:
     return {
         "minecraft_version": adapter.minecraft_version,
@@ -568,6 +588,7 @@ def build_repository_reuse_plan(
                 key=lambda card: (
                     bool(card.get("explicit_reference")),
                     _candidate_overlap(capability, terms, card),
+                    _candidate_provider_rrf(card),
                     -card.get("catalog_provider_priority", {}).get(capability, 2),
                 ), reverse=True,
             )
