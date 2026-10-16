@@ -354,16 +354,30 @@ def ensure_authored_source_handoff(
 
     expected_prompt = _canonical_sha256(prompt)
     old_research = content.get("_pre_design_research")
-    if isinstance(old_research, Mapping) and old_research.get("prompt_sha256") != expected_prompt:
-        # Old receipts without a bound prompt are not safe to project into
-        # a newly authored plan. Re-discover rather than trust ambiguous input.
+    stale_research = (
+        isinstance(old_research, Mapping)
+        and old_research.get("prompt_sha256") != expected_prompt
+    )
+    if stale_research:
+        # An explicitly mismatched prompt invalidates its derived candidates.
         content.pop("_pre_design_research", None)
     cached = content.get("_pre_design_source_handoff")
-    if isinstance(cached, Mapping) and cached.get("prompt_sha256") != expected_prompt:
-        # Never reuse candidates from a different user requirement, even when
-        # the stored catalogue link itself remains reachable.
+    stale_handoff = (
+        isinstance(cached, Mapping)
+        and cached.get("prompt_sha256") != expected_prompt
+    )
+    if stale_handoff:
         content.pop("_pre_design_source_handoff", None)
         cached = None
+    if stale_research or stale_handoff:
+        # Previous planning candidates may derive from the same stale search.
+        # Preserve unrelated planning state, not its unbound donor identities.
+        state = content.get("_planning_state")
+        if isinstance(state, Mapping) and "repository_candidates" in state:
+            content["_planning_state"] = {
+                key: value for key, value in state.items()
+                if key != "repository_candidates"
+            }
 
     candidates = authored_design_repository_candidates(content)
     if candidates:
