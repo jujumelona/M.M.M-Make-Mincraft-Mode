@@ -19,6 +19,8 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 from urllib.parse import urlparse
 
+from .source_intent_aliases import source_intent_terms
+
 _SCHEMA = "mmm/repository-candidate-receipt-v1"
 _MAX_EVIDENCE_CHARS = 640
 _REPOSITORY_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$")
@@ -47,11 +49,11 @@ def _sha(value: Any) -> str:
 
 def _tokens(value: Any) -> set[str]:
     folded = re.sub(r"[_./:+-]+", " ", _text(value).casefold())
-    return {
+    return ({
         token
         for token in _TOKEN_RE.findall(folded)
         if len(token) > 1 and token not in _STOP
-    }
+    } | (set(source_intent_terms(value)) - _STOP))
 
 
 def _repository_from_value(value: Any) -> str:
@@ -210,7 +212,10 @@ def project_repository_candidates(
                 continue
             evidence_text = _evidence_text(record)
             overlap = len(wanted & _tokens(evidence_text))
-            rank_score = (1.0 / (1.0 + query_index + record_index)) + min(overlap, 8) * 0.125
+            # Semantic feature coverage dominates raw search position.
+            # An Alien Pets search hit must not outrank a Space Combat hit just
+            # because it appeared first in the provider's catalogue.
+            rank_score = min(overlap, 8) * 1.0 + (1.0 / (1.0 + query_index + record_index))
             key = repository.casefold()
             source_id = _text(record.get("source_id")) or f"github:{repository}"
             source_url = _record_url(record, repository)
