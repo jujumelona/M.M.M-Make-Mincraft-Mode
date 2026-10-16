@@ -20,6 +20,9 @@ def array(items, maximum=None):
 def ask(router, name, payload, schema, instruction):
     from .model_concurrency import raise_if_model_execution_cancelled
     raise_if_model_execution_cancelled()
+    if payload.get('construction_state', {}).get('phase') == 'operation_graph':
+        from .construction_operation_context import focused_operation_payload
+        payload = focused_operation_payload(payload)
     messages = [{'role': 'system', 'content': instruction}, {'role': 'user', 'content': json.dumps(payload, ensure_ascii=False)}]
     decision = _validate_native_arguments(router.generate_structured_data('coder', messages, data_name=name, parameters=schema), schema)
     raise_if_model_execution_cancelled()
@@ -31,8 +34,10 @@ def ask(router, name, payload, schema, instruction):
         'lookups_since_progress': state.get('lookups_since_progress'),
         'choice': {key: decision[key] for key in
                    ('action', 'complete', 'query', 'offset', 'name', 'symbol_ref', 'type_ref', 'base_type',
-                    'port', 'behavior_id', 'node_id', 'purpose')
+                    'port', 'behavior_id', 'node_id', 'purpose', 'intended_contribution', 'input_purposes')
                    if key in decision},
+        **({'api_use_semantic_status': 'model_authored_unverified'}
+           if 'intended_contribution' in decision else {}),
     }, ensure_ascii=False), flush=True)
     return decision
 
@@ -84,20 +89,25 @@ def author_task_operations(router, task, context):
     from .construction_operation_binding import bind_operation
     from .construction_operation_contracts import named_values, pending_input_contracts
     from .construction_shared_inputs import shared_input_choices, bind_shared_input
+    from .construction_operation_context import (API_KINDS, api_use_claim, slot_context,
+                                                 body_progress, task_context_bindings)
     if not callable(context.get('checkpoint_transaction')):
         raise ValueError('CONSTRUCTION_CHECKPOINT_TRANSACTION_REQUIRED')
     symbols = context['symbols']
     declaration = symbols.get(task.owner_symbol)
     if declaration is None:
         raise ValueError('CONSTRUCTION_SYMBOL_MISSING: ' + task.owner_symbol)
-    base = {'task_id': task.task_id, 'intent': task.intent, 'trigger': task.trigger, 'effects': task.effects,
-            'state_reads': list(task.state_reads), 'state_writes': list(task.state_writes),
+    task_pages, task_pointers = task_context_bindings(context)
+    binding_pages = {**(context.get('binding_pages') or {}), **task_pages}
+    authoring_contract = deepcopy(context.get('authoring_contract', {}))
+    authoring_contract['binding_pages'] = [*authoring_contract.get('binding_pages', ()), *task_pointers]
+    base = {'required_task': {'intent': task.intent, 'trigger': task.trigger, 'effects': task.effects,
+                             'state_reads': list(task.state_reads), 'state_writes': list(task.state_writes),
+                             'meaning': 'Immutable required behavior; each local slot serves this task.'},
+            'task_id': task.task_id,
             'declaration': symbol_record(task.owner_symbol, declaration), 'target_path': task.target_path,
-            'authoring_contract': context.get('authoring_contract', {}),
-            'owned_runtime_records': context.get('owned_runtime_records', ()),
-            'donor_call_obligations': context.get('donor_call_obligations', {}),
-            'port_source_ref': context.get('port_source_ref', ''),
-            'already_implemented_effects': context.get('already_implemented_effects', {})}
+            'task_context_bindings': task_pointers,
+            'port_source_ref': context.get('port_source_ref', '')}
     resume = context.get('resume_nodes')
     existing, stage = resume(task) if callable(resume) else ((), '')
     nodes = [deepcopy(node) for node in existing]
@@ -124,10 +134,10 @@ def author_task_operations(router, task, context):
         from .construction_retrieval import ConstructionEvidenceIndex
         evidence_index = ConstructionEvidenceIndex(symbols, source_units, router,
             target_path=task.target_path, owner=declaration['owner'],
-            authoring_contract=base['authoring_contract'])
+            authoring_contract=authoring_contract)
     state = ConstructionState(symbols, declaration['owner'], task.target_path,
         declaration_ids=declaration_ids, revision=len(nodes),
-        authoring_contract=context.get('authoring_contract'), binding_pages=context.get('binding_pages'),
+        authoring_contract=authoring_contract, binding_pages=binding_pages,
         evidence_index=evidence_index)
     state.enter('operation_graph')
     source_ids = sorted(source_units)
@@ -153,7 +163,8 @@ def author_task_operations(router, task, context):
                 raise ValueError('CONSTRUCTION_LOOKUP_OFFSET_INVALID')
             if len(keys) > PAGE_SIZE or any(key not in by_id for key in keys):
                 raise ValueError('CONSTRUCTION_NODE_REFERENCE_MISSING')
-            return {'nodes': [by_id[key] for key in keys], 'total_count': len(keys),
+            return {'nodes': [{**by_id[key], 'api_use_claim': state.node_api_uses.get(key)} for key in keys],
+                    'total_count': len(keys),
                     'status': 'matches', 'next_offset': None}
         if action == 'sources':
             return evidence_index.source_page(query, offset)
@@ -173,6 +184,11 @@ def author_task_operations(router, task, context):
         last = state.restore(saved_state, resolve_lookup=lookup_result)
         if not set(state.symbol_rejections) <= (by_id.keys() | referenced | {
                 (state.selection_goal or {}).get('node_id')}):
+            raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
+        if any(key not in by_id or claim['operation'] != by_id[key]['op']
+               or claim['symbol_ref'] != by_id[key]['attributes'].get('symbol_ref')
+               or len(claim['input_purposes']) != len(by_id[key]['input_refs'])
+               for key, claim in state.node_api_uses.items()):
             raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
         if last is not None:
             state.lookup = {**lookup_result(last['kind'], last['query'], last['offset']), **last}
@@ -243,7 +259,7 @@ def author_task_operations(router, task, context):
         context['checkpoint_transaction'](task, tuple(nodes), stage, state.export(), expected)
 
     def accept_graph(candidate_nodes, checked, *, node_id, purposes, expected=None,
-                     changed=(), initializer=None):
+                     changed=(), initializer=None, api_use=None):
         nonlocal nodes, by_id, referenced, pending, roots, validation, stage
         previous_ids = set(by_id)
         for key, purpose in purposes.items():
@@ -253,6 +269,10 @@ def author_task_operations(router, task, context):
         state.memory.invalidate_nodes((previous_ids - by_id.keys()) | set(changed))
         live = set(by_id) | referenced
         state.node_purposes = {key: purpose for key, purpose in state.node_purposes.items() if key in live}
+        state.node_api_uses = {key: claim for key, claim in state.node_api_uses.items()
+                              if key in by_id and key != node_id}
+        if api_use is not None:
+            state.node_api_uses[node_id] = api_use
         state.symbol_rejections = {key: rows for key, rows in state.symbol_rejections.items() if key in live}
         state.advance(preserve_symbols=True)
         state.revision = len(nodes)
@@ -305,6 +325,9 @@ def author_task_operations(router, task, context):
 
     instruction = ('Author this current behavior as typed Java operations, one node per turn. No Java source strings. '
         'selection_goal identifies the current missing input or root slot and its implementation purpose. '
+        'required_task is the immutable intended behavior. slot_context states this local value or '
+        'statement purpose and shows the exact selected signatures which consume it; do not replace '
+        'a receiver or argument value purpose with the whole task effect. '
         'Choose the Java operation from the required behavior and known values first. '
         'Read configuration or source only for a specific missing fact. API and type lookup happens '
         'after the operation is selected; do not browse APIs to decide whether to implement it. '
@@ -314,11 +337,18 @@ def author_task_operations(router, task, context):
         'API signatures fix result types and receiver/argument counts. Required inputs may be forward '
         'references, and each missing input must be authored. Relevant graph nodes are stored on the '
         'host; do not recreate them. '
+        'body_progress shows accepted root operations, their actual input values and structural status. '
+        'Review this work before adding another root. Repair an existing root when it has the wrong '
+        'inputs or strategy; add a new root only for a distinct remaining contribution. '
+        'A typed root is not proof of the intended effect, and using the same API for different '
+        'required values is permitted. '
         'A shared input cannot contain a repeated computation. bind_shared_input explicitly chooses '
         'one evaluation before the supplied statement, stores it in a final local and exposes a new '
         'initializer slot. Check its prior_evaluation_refs before choosing this order. Otherwise '
         'use a local/parameter/this value, a requirement-grounded literal, or revise its consumers. '
         'Implement only owned runtime records; never duplicate effects already provided by Typed/UI. '
+        'task_context_bindings points to the exact owned records, existing effects and donor obligations; '
+        'read their bindings pages when those records determine this slot. '
         'When a pinned donor source is installed, use its exact inspected callable symbols '
         'through typed call/field/new operations and implement missing state and event glue. '
         'operation_observation is the actual result of the previous operation. A rejected node '
@@ -360,23 +390,15 @@ def author_task_operations(router, task, context):
                 while slot in by_id:
                     index += 1
                     slot = 'operation_' + str(index)
-            parts = []
             if slot in state.node_purposes:
-                parts.append(state.node_purposes[slot])
+                purpose = state.node_purposes[slot]
             elif not contracts.get(slot):
-                parts.extend((task.intent, declaration.get('purpose', '')))
-            for consumer in contracts.get(slot, ()):
-                parts.extend(consumer.get(key, '') for key in ('expected_type', 'expected_element_type'))
-                parts.extend(consumer.get('expected_types', ()))
-                parts.extend(consumer.get('allowed_types', ()))
-                parent = by_id[consumer['consumer']]
-                if slot not in state.node_purposes:
-                    parts.append('Input ' + str(consumer['input_index']) + ' for ' +
-                                 state.node_purposes.get(parent['node_id'], task.intent))
-                if parent['op'] in {'call', 'new', 'field'}:
-                    api = symbols[parent['attributes']['symbol_ref']]
-                    parts.append(api.get('purpose') or api['owner'] + '.' + api['name'])
-            purpose = '\n'.join(dict.fromkeys(part for part in parts if part))
+                purpose = task.intent
+            else:
+                # Older accepted graphs may lack per-input purposes. Their
+                # exact consumer roles/types are shown separately below; the
+                # enclosing task effect is not itself a receiver/argument value.
+                purpose = 'Provide the value or statement required by the shown consumer inputs.'
             state.selection_goal = {'node_id': slot, 'purpose': purpose, 'excluded_operations': []}
             # Never pre-browse the entire dependency inventory before the model
             # chooses call/new/field/control flow. API lookup happens in binding.
@@ -389,15 +411,15 @@ def author_task_operations(router, task, context):
         # Actual runtime verification remains separate, but a body containing
         # only return/literal/block cannot fulfill an observable effect.
         observed_effect_node = _has_observable_effect(nodes, task.owner_symbol)
+        can_complete = bool(nodes) and not pending and not repair_id and observation.get('status') != 'rejected' \
+                       and (not task.behavior_id or observed_effect_node)
         schema = operation_next_schema(state, nodes=working_nodes, declaration=declaration,
-            can_complete=bool(nodes) and not pending and not repair_id
-                         and observation.get('status') != 'rejected'
-                         and (not task.behavior_id or observed_effect_node),
+            can_complete=can_complete,
             context_branches=operation_context_branches(state, nodes=nodes,
                 source_units=source_units, pinned_source=base['port_source_ref'],
                 resolve_symbols=False))
         actions = choice_actions(schema)
-        payload = {**base, 'recent_nodes': recent, **state.payload(actions,
+        payload = {**base, 'operation_context_phase': 'select', 'recent_nodes': recent, **state.payload(actions,
             current_member=task.owner_symbol,
             graph={'accepted_node_count': len(nodes), 'resumed_node_count': len(existing),
                    'checkpoint_stage': stage or 'new',
@@ -409,7 +431,8 @@ def author_task_operations(router, task, context):
             sources={'total_count': len(source_ids), 'recent_ids': source_ids[:PAGE_SIZE],
                      'lookup_action': 'sources',
                      'pinned_source_read': bool(base['port_source_ref'] in read_sources)})}
-        payload['pending_input_contracts'] = {key: contracts[key] for key in list(contracts)[:PAGE_SIZE]}
+        payload['slot_context'] = slot_context(state, working_nodes, declaration, contracts)
+        payload['body_progress'] = body_progress(state, nodes, validation, can_complete=can_complete)
         payload['provisional_parent_strategies'] = dependency_revision_choices(state, nodes)
         payload['shared_input_resolution'] = shared_input_choices(state, nodes, declaration)
         payload['named_values'] = named_values(working_nodes, declaration, symbols, node_id=slot)
@@ -528,8 +551,16 @@ def author_task_operations(router, task, context):
         except ValueError as error:
             reject_candidate(error, candidate=row)
             continue
-        responsibility = state.selection_goal['purpose'] if repair_id else choice['purpose']
+        responsibility = state.node_purposes.get(row['node_id'], choice['purpose'])
+        purposes = {row['node_id']: responsibility}
+        api_use = None
+        if action in API_KINDS:
+            api_use = api_use_claim(action, state.operation_draft['binding_choice'],
+                                    author=state.operation_draft.get('binding_author', 'model'))
+            for reference, value_purpose in zip(row['input_refs'], api_use['input_purposes']):
+                if reference not in by_id:
+                    purposes[reference] = value_purpose
         accept_graph(candidate_nodes, candidate_validation, node_id=row['node_id'],
-                     purposes={row['node_id']: responsibility},
+                     purposes=purposes, api_use=api_use,
                      expected=graph_digest(nodes) if repair_id else None,
                      changed={repair_id} if repair_id else ())

@@ -10,9 +10,9 @@ from collections import deque
 from copy import deepcopy
 
 
-# Body lookup choices and retained API pages changed. Old journals/cursors may
-# not be replayed against them; declaration-bound accepted graphs stay reusable.
-PROTOCOL_VERSION = "mmm/construction-state-v17"
+# API-use decisions now carry per-signature input purposes and focused evidence
+# references. Old journals/drafts cannot be replayed against the changed schema.
+PROTOCOL_VERSION = "mmm/construction-state-v18"
 PAGE_SIZE = 8
 RECENT_SIZE = 4
 LOOKUP_KINDS = frozenset({'symbols', 'scopes', 'declarations', 'nodes', 'node_index', 'source', 'sources', 'bindings'})
@@ -155,6 +155,7 @@ class ConstructionState:
         # Never confuse one bad symbol with the entire 'call' operation.
         self.symbol_rejections = {}
         self.node_purposes = {}
+        self.node_api_uses = {}
         self.validation_observation = None
         from .construction_memory import ConstructionMemory
         self.memory = ConstructionMemory()
@@ -430,6 +431,7 @@ class ConstructionState:
                 'operation_rejections': deepcopy(self.operation_rejections),
                 'symbol_rejections': deepcopy(self.symbol_rejections),
                 'node_purposes': dict(self.node_purposes),
+                'node_api_uses': deepcopy(self.node_api_uses),
                 'validation_observation': deepcopy(self.validation_observation),
                 'memory': self.memory.export(),
                 'binding_lookups': [{'kind': 'bindings', 'query': query, 'offset': offset}
@@ -471,7 +473,7 @@ class ConstructionState:
             if (not isinstance(selection, dict) or not {'node_id', 'purpose'} <= set(selection)
                     or set(selection) - {'node_id', 'purpose', 'excluded_operations',
                                          'revising', 'revision_reason', 'rejected_symbol_refs',
-                                         'rejected_shared_bindings'}
+                                         'rejected_shared_bindings', 'preferred_api'}
                     or not isinstance(selection.get('excluded_operations', []), list)
                     or any(not isinstance(action, str) or action not in OPERATIONS
                            for action in selection.get('excluded_operations', []))
@@ -494,6 +496,13 @@ class ConstructionState:
                     or not isinstance(selection['node_id'], str)
                     or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,240}', selection['node_id'])):
                 raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
+            if 'preferred_api' in selection:
+                preferred = selection['preferred_api']
+                if not isinstance(preferred, str) or preferred not in self.symbols:
+                    raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
+                api = self.symbols[preferred]
+                if api.get('kind') != 'FIELD' or not (api.get('static') or api.get('access', 0) & 8):
+                    raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
         if goal is not None and (selection is None or selection['node_id'] != goal['node_id']):
             raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
         self.selection_goal = deepcopy(selection)
@@ -523,6 +532,14 @@ class ConstructionState:
         self.operation_rejections = deepcopy(rejections)
         self.symbol_rejections = deepcopy(rejected_symbols)
         self.node_purposes = dict(purposes)
+        from .construction_operation_context import valid_api_use
+        api_uses = record.get('node_api_uses')
+        if (not isinstance(api_uses, dict)
+                or any(not isinstance(key, str) or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,240}', key)
+                       or not valid_api_use(claim, self.symbols, self.owner)
+                       for key, claim in api_uses.items())):
+            raise ValueError('CONSTRUCTION_AUTHOR_STATE_INVALID')
+        self.node_api_uses = deepcopy(api_uses)
         from .construction_feedback import validate_observation
         observation = record.get('validation_observation')
         validate_observation(observation)

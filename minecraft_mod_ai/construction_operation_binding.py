@@ -1,7 +1,5 @@
 """Bind one authored operation to real API/source evidence and signature facts."""
 from __future__ import annotations
-from .construction_type_contracts import owner_package
-
 import hashlib
 import json
 
@@ -10,11 +8,12 @@ from .construction_declaration_choices import action_schema, choice_actions, typ
 from .construction_operation_choices import (operation_context_branches, MAX_OPERATION_EVIDENCE_READS,
                                            dependency_revision_schema, dependency_revision_choices)
 from .construction_state import symbol_record, RECENT_SIZE, RESELECTABLE_OPERATIONS
-from .java_operation_ir import parameter_types, invocation_parameter_types, LEAVES
+from .java_operation_ir import parameter_types, LEAVES
 from .construction_shared_inputs import input_use_count, VALUE_READS
 from .construction_operation_contracts import named_values, pending_input_contracts, result_fits
+from .construction_operation_context import (API_KINDS, api_input_slots,
+                                            focus_selected_api_memory)
 
-API_KINDS = {'call': 'METHOD', 'new': 'CONSTRUCTOR', 'field': 'FIELD', 'constructor_call': 'CONSTRUCTOR'}
 TYPE_BOUND_OPERATIONS = frozenset({'declare', 'literal', 'cast', 'ternary', 'array_get', 'new_array'})
 SYMBOL_BOUND_OPERATIONS = frozenset(API_KINDS) | TYPE_BOUND_OPERATIONS | {
     'lambda', 'instanceof', 'foreach', 'switch', 'try',
@@ -253,7 +252,16 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
         if op in API_KINDS:
             if matches:
                 candidates = [row['symbol_id'] for row in matches]
-                branches.insert(0, action_schema('api', {'symbol_ref': {'enum': candidates}}))
+                api_branches = []
+                for row in matches:
+                    count = len(api_input_slots(op, row, state.owner, state.symbols))
+                    api_branches.append(action_schema('api', {
+                        'symbol_ref': {'const': row['symbol_id']},
+                        'intended_contribution': ID,
+                        'input_purposes': {'type': 'array', 'items': ID,
+                                           'minItems': count, 'maxItems': count},
+                    }))
+                branches[0:0] = api_branches
                 # Reject just the incompatible symbol; a different callable
                 # remains eligible for the same call/new/field operation.
                 branches.append(action_schema('reject_api', {
@@ -287,20 +295,31 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
                 'selected_page_names': [row['symbol_id'] for row in matches[:8]],
                 'evidence_reads': max(len(state.requests), state.operation_reads),
             }, ensure_ascii=False), flush=True)
-        current = {**payload, 'operation_goal': goal,
+        current = {**payload, 'operation_context_phase': 'bind', 'operation_goal': goal,
                    **state.payload(choice_actions(schema), **{key: payload['construction_state'][key]
                        for key in ('current_member', 'graph', 'sources') if key in payload['construction_state']}),
-                   'api_candidates': matches,
-                   'provisional_parent_strategies': dependency_revision_choices(state, nodes),
-                   'required_by_consumers': requirements}
-        choice = (draft.get('binding_choice')
-                  or ({'action': 'api', 'symbol_ref': preferred_field}
-                      if preferred_field in {row['symbol_id'] for row in matches} else None)
+                   'api_candidates': [{'signature': row,
+                                       'signature_inputs': api_input_slots(op, row, state.owner, state.symbols)}
+                                      if op in API_KINDS else {'signature': row} for row in matches],
+                   'provisional_parent_strategies': dependency_revision_choices(state, nodes)}
+        automatic_api = None
+        if (preferred_field in {row['symbol_id'] for row in matches}
+                and not api_input_slots(op, state.symbols[preferred_field], state.owner, state.symbols)):
+            automatic_api = {'action': 'api', 'symbol_ref': preferred_field,
+                             'intended_contribution': 'Read the uniquely selected target static field as this input value.',
+                             'input_purposes': []}
+        saved_choice = draft.get('binding_choice')
+        choice = (saved_choice or automatic_api
                   or _automatic_literal_type(op, requirements, branches)
                   or ask(router, 'construction_operation_bind', current, schema,
             'Resolve only this selected operation. Select the real API whose behavior and signature '
             'fit operation_goal, or read a returned source/type/configuration pointer to resolve a '
-            'specific missing fact. scopes selects a real package/type branch by meaning when '
+            'specific missing fact. For api, state intended_contribution to the immutable required_task '
+            'through this local slot, and one concrete value purpose for every signature_inputs entry '
+            'in its exact input_index order. A receiver purpose names the needed object value; an '
+            'argument purpose names the needed argument value. These are model-authored, unverified '
+            'claims, not proof from a method name or a successful partial admission. '
+            'scopes selects a real package/type branch by meaning when '
             'the right API is not on the current page. API names are returned candidates, not search guesses. '
             'When this operation can be written, select api, write_type, functional_type or write now. '
             'Do not search for a ready-made implementation of custom gameplay. If this selected '
@@ -317,6 +336,10 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
             'Partial admission is provisional; it does not prove its inputs are constructible. '
             'Outside compose_locally or reconsider_parent, another operation is chosen '
             'only after this node is written. ' + instruction))
+        if choice is automatic_api:
+            draft['binding_author'] = 'host_static_provider'
+        elif not saved_choice:
+            draft.pop('binding_author', None)
         if choice['action'] == 'reject_api':
             from .fixed_template_generation import _validate_native_arguments
             _validate_native_arguments(choice, schema)
@@ -357,12 +380,8 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
     if op in API_KINDS:
         key = choice['symbol_ref']
         row = state.symbols[key]
-        inputs = [] if op == 'field' else invocation_parameter_types(row) if op in {'new', 'constructor_call'} else parameter_types(row)
-        if op not in {'new', 'constructor_call'} and not row.get('static'):
-            receiver = row['owner']
-            if row.get('access', 0) & 4 and owner_package(state.symbols, row.get('declaring_owner') or row['owner']) != owner_package(state.symbols, state.owner):
-                receiver = state.owner
-            inputs = [receiver, *inputs]
+        input_slots = api_input_slots(op, row, state.owner, state.symbols)
+        inputs = [slot['expected_type'] for slot in input_slots]
         schema['properties']['attributes']['properties']['symbol_ref'] = {'const': key}
         schema['properties']['typed_result'] = {'const': row['owner'] if op == 'new' else 'void' if op == 'constructor_call' else row['return_type']}
         if op == 'constructor_call':
@@ -370,7 +389,13 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
         schema['properties']['input_refs']['minItems'] = len(inputs)
         schema['properties']['input_refs']['maxItems'] = len(inputs)
         current['selected_api'] = symbol_record(key, row)
-        current['required_input_types'] = inputs
+        current['signature_inputs'] = [{**slot, 'value_purpose': purpose}
+                                       for slot, purpose in zip(input_slots, choice['input_purposes'])]
+        current['api_use_claim'] = {
+            'intended_contribution': choice['intended_contribution'],
+            'author': draft.get('binding_author', 'model'), 'semantic_status': 'unverified'}
+        focus_selected_api_memory(state, key)
+        save_author()
     else:
         nonvoid = sorted(types - {'void'})
         result_types = sorted(type_ for type_ in types if fits(type_))
@@ -597,6 +622,7 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
             _validate_native_arguments(result, schema)
             return result
     return dict(ask(router, 'construction_operation_' + op,
-        {**current, **state.payload(choice_actions(schema, default_action='write_' + op),
+        {**current, 'operation_context_phase': 'write',
+         **state.payload(choice_actions(schema, default_action='write_' + op),
             **{key: payload['construction_state'][key] for key in ('current_member', 'graph', 'sources')
                if key in payload['construction_state']})}, schema, instruction))
