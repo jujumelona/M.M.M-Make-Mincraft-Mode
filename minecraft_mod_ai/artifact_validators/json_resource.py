@@ -52,6 +52,9 @@ def validate_dimension_definition(content: str, *, base_dir=None) -> dict[str, A
         if not isinstance(value, str) or not id_pattern.fullmatch(value):
             raise JsonResourceValidationError(f"DIMENSION_REFERENCE_INVALID: {kind}")
         if value in vanilla:
+            # Packaged vanilla registries are validated by the actual 26.x
+            # game/registry loader, not by our mod source tree.
+            deferred_refs.append(value)
             return
         namespace, name = value.split(":", 1)
         if base_dir is None or namespace == "minecraft":
