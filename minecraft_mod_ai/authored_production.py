@@ -1053,6 +1053,7 @@ def compile_authored_design(
         authored_capability_graph,
         resolve_authored_source_reuse,
         source_candidate_fingerprint,
+        source_discovery_algorithm_version,
     )
     from .research_reuse_candidates import ensure_authored_source_handoff
 
@@ -1086,6 +1087,7 @@ def compile_authored_design(
         not isinstance(source_reuse, Mapping)
         or source_reuse.get("bound_target") != exact_reuse_target
         or source_reuse.get("pre_design_candidates_sha256") != expected_candidate_fingerprint
+        or source_reuse.get("discovery_algorithm_version") != source_discovery_algorithm_version()
         or not isinstance(cached_graph, Mapping)
         or any(
             cached_graph.get(key) != expected_reuse_graph.get(key)
