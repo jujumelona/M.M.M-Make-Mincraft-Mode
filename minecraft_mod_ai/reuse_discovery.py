@@ -552,7 +552,7 @@ def _search_curseforge(
                 rows = raw.get("data") if isinstance(raw, Mapping) else None
                 if not isinstance(rows, list):
                     raise _CurseForgeSearchError("CurseForge search returned no valid data list.")
-                for position, item in enumerate(rows):
+                for item in rows:
                     if not isinstance(item, Mapping) or type(item.get("id")) is not int:
                         continue
                     mod_id = item["id"]
