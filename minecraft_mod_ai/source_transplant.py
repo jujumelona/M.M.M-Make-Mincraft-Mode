@@ -19,7 +19,9 @@ import tempfile
 import zipfile
 from collections import OrderedDict, deque
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from threading import Event, Lock
 from typing import Any
@@ -39,6 +41,11 @@ from .deadline_executor import (
     ParallelExecutionTimeout,
     ParallelTaskError,
     iter_completed_with_deadlines,
+)
+from .ecosystem_discovery import (
+    EcosystemDiscoveryUnavailable,
+    ProviderRequestFailure,
+    provider_request_failure,
 )
 from .platform_catalog import PlatformAdapter
 from .repository_artifact_index import RepositoryArtifactIndex
@@ -376,7 +383,83 @@ class DonorSlice:
 
 
 class SourceTransplantError(RuntimeError):
-    pass
+    def __init__(self, message: str = "", *, request_failure: ProviderRequestFailure | None = None) -> None:
+        super().__init__(message)
+        self.request_failure = request_failure
+
+
+@dataclass
+class _RepositoryInspectionSession:
+    """Plan-local observations; immutable successes remain in the shared caches."""
+
+    snapshots: dict[tuple[str, str, str], Mapping[str, Any] | None] = field(default_factory=dict)
+    snapshot_errors: dict[tuple[str, str, str], Exception] = field(default_factory=dict)
+    rejected_targets: set[tuple[str, str, str]] = field(default_factory=set)
+    blob_errors: dict[tuple[str, str], Exception] = field(default_factory=dict)
+    provider_failures: dict[str, ProviderRequestFailure] = field(default_factory=dict)
+    active: bool = True
+
+    def remember_failure(self, exc: BaseException, *, hostname: str = "") -> ProviderRequestFailure | None:
+        failure = provider_request_failure(exc, provider="github", hostname=hostname)
+        if self.active and failure is not None and failure.backend_unavailable and failure.hostname:
+            self.provider_failures.setdefault(failure.hostname, failure)
+        return failure
+
+    def require_network(self, hostname: str) -> None:
+        failure = self.provider_failures.get(hostname) if self.active else None
+        if failure is not None:
+            raise SourceTransplantError(
+                f"{hostname} source inspection is unavailable for this reuse plan.",
+                request_failure=failure,
+            )
+
+
+_INSPECTION_SESSION: ContextVar[_RepositoryInspectionSession | None] = ContextVar(
+    "source_repository_inspection_session", default=None,
+)
+
+
+@contextmanager
+def repository_inspection_session():
+    """Keep negative network observations only until one reuse plan finishes."""
+    session = _RepositoryInspectionSession()
+    token = _INSPECTION_SESSION.set(session)
+    try:
+        yield session
+    finally:
+        _INSPECTION_SESSION.reset(token)
+        session.active = False
+        session.snapshots.clear()
+        session.snapshot_errors.clear()
+        session.rejected_targets.clear()
+        session.blob_errors.clear()
+        session.provider_failures.clear()
+
+
+def repository_inspection_failures() -> tuple[ProviderRequestFailure, ...]:
+    session = _INSPECTION_SESSION.get()
+    return tuple(session.provider_failures.values()) if session is not None else ()
+
+
+def repository_inspection_requires_unavailable_network(
+    repository: str, *, minecraft_version: str, loader: str,
+) -> bool:
+    """Let callers continue with cached snapshots after the API becomes unavailable."""
+    session = _INSPECTION_SESSION.get()
+    if session is None or "api.github.com" not in session.provider_failures:
+        return False
+    keys = ((repository, minecraft_version, loader), (repository, "", ""))
+    if any(session.snapshots.get(key) is not None for key in keys):
+        return False
+    with _SNAPSHOT_LOCK:
+        return not any(key in _SNAPSHOT_CACHE for key in keys)
+
+
+def _client_inspection_session(client: httpx.Client) -> _RepositoryInspectionSession | None:
+    # HTTP clients cross download-worker boundaries, where ContextVars are not
+    # inherited. Bind the plan state to the client as well as the calling context.
+    session = _INSPECTION_SESSION.get() or getattr(client, "_mmm_inspection_session", None)
+    return session if session is not None and session.active else None
 
 
 def _donor_test_paths(blobs: Mapping[str, str]) -> tuple[str, ...]:
@@ -438,7 +521,10 @@ def _repository_tree_entries(
     tree_url = f"https://api.github.com/repos/{repository}/git/trees/{quote(root_sha, safe='')}"
     try:
         recursive = _github_json(client, tree_url, params={"recursive": "1"})
-    except SourceTransplantError:
+    except SourceTransplantError as exc:
+        failure = provider_request_failure(exc)
+        if failure is not None and failure.backend_unavailable:
+            raise
         recursive = None
     if isinstance(recursive, Mapping) and recursive.get("truncated") is not True:
         entries = recursive.get("tree")
@@ -514,6 +600,10 @@ def inspect_repository_slice(
 ) -> DonorSlice | None:
     """Inspect one repo and return a pinned minimal Java/Kotlin closure when evidence suffices."""
 
+    session = _INSPECTION_SESSION.get()
+    target_key = (repository, adapter.minecraft_version, adapter.loader)
+    if session is not None and target_key in session.rejected_targets:
+        return None
     snapshot = _repository_snapshot(repository, discovery_client,
         minecraft_version=adapter.minecraft_version, loader=adapter.loader)
     if not isinstance(snapshot, Mapping):
@@ -552,11 +642,17 @@ def inspect_repository_slice(
                 metadata = _build_metadata_sources(client, repository=repository, blobs=blobs)
                 contexts = source_contexts()
         if not any(version == adapter.minecraft_version for version, _text in contexts.values()):
+            if any(text is None for text in metadata.values()):
+                session = _client_inspection_session(client)
+                if session is not None:
+                    session.require_network("api.github.com")
             print('SOURCE_REUSE_VERSION: ' + json.dumps({
                 'repository': repository, 'requested': adapter.minecraft_version,
                 'declared': sorted({version for version, _text in contexts.values()}),
                 'status': 'source_version_mismatch',
             }), flush=True)
+            if session is not None:
+                session.rejected_targets.add(target_key)
             return None
 
         def version_for(path):
@@ -576,6 +672,7 @@ def inspect_repository_slice(
             blob_fetcher=lambda repo, blob_sha: _fetch_blob_bytes(
                 client, repo, blob_sha
             ),
+            resolver_scope=session,
         )
         graph = index.build_dependency_graph()
         unreadable = tuple(index.metadata.get("unreadable_artifacts") or ())
@@ -591,6 +688,10 @@ def inspect_repository_slice(
             and version_for(evidence.node_id) == adapter.minecraft_version
         )
         if not seed_paths:
+            if unreadable:
+                session = _client_inspection_session(client)
+                if session is not None:
+                    session.require_network("api.github.com")
             return None
 
         selected = list(_closure_paths(graph, seed_paths))
@@ -679,6 +780,9 @@ def inspect_repository_slice(
         )
 
         if not selected:
+            session = _client_inspection_session(client)
+            if session is not None:
+                session.require_network("api.github.com")
             return None
 
         selected_modules = {_source_module(path, metadata) for path in selected
@@ -754,7 +858,10 @@ def inspect_repository_slice(
             unresolved_edges=tuple(unresolved_edges),
             compatibility_evidence=ev,
         )
-    except SourceTransplantError:
+    except SourceTransplantError as exc:
+        failure = provider_request_failure(exc)
+        if failure is not None and failure.backend_unavailable:
+            raise
         return None
     finally:
         client.close()
@@ -956,12 +1063,27 @@ def _repository_snapshot(repository: str, discovery_client: Any, *, minecraft_ve
     """Cache immutable repository metadata/tree across capability evaluation."""
 
     cache_key = (repository, minecraft_version, loader)
+    session = _INSPECTION_SESSION.get()
+    if session is not None and cache_key in session.snapshots:
+        return session.snapshots[cache_key]
     owner = False
     with _SNAPSHOT_LOCK:
         if cache_key in _SNAPSHOT_CACHE:
             cached = _SNAPSHOT_CACHE[cache_key]
             _SNAPSHOT_CACHE.move_to_end(cache_key)
+            if session is not None:
+                session.snapshots[cache_key] = cached
             return cached
+        if session is not None and minecraft_version and "api.github.com" in session.provider_failures:
+            # A previously pinned default branch remains usable as reference
+            # evidence; module metadata below must still prove the exact version.
+            default_key = (repository, "", "")
+            cached = session.snapshots.get(default_key) or _SNAPSHOT_CACHE.get(default_key)
+            if cached is not None:
+                session.snapshots[cache_key] = cached
+                return cached
+        if session is not None and cache_key in session.snapshot_errors:
+            raise session.snapshot_errors[cache_key]
         event = _SNAPSHOT_INFLIGHT.get(cache_key)
         if event is None:
             event = Event()
@@ -973,7 +1095,11 @@ def _repository_snapshot(repository: str, discovery_client: Any, *, minecraft_ve
             return _SNAPSHOT_CACHE.get(cache_key)
 
     snapshot: Mapping[str, Any] | None = None
+    failure_error: Exception | None = None
+    cache_snapshot_globally = True
     try:
+        if session is not None:
+            session.require_network("api.github.com")
         target_inspector = getattr(discovery_client, 'inspect_github_repository_for_target', None)
         evidence = (target_inspector(repository, minecraft_version=minecraft_version, loader=loader)
                     if minecraft_version and callable(target_inspector) else
@@ -993,10 +1119,11 @@ def _repository_snapshot(repository: str, discovery_client: Any, *, minecraft_ve
                      and isinstance(item.get("sha"), str)}
             try:
                 _prefetch_pinned_archive(client, repository, commit_sha, blobs)
-            except (httpx.HTTPError, SourceTransplantError, OSError, zipfile.BadZipFile):
+            except (httpx.HTTPError, SourceTransplantError, OSError, zipfile.BadZipFile) as exc:
                 # The immutable blob API remains a hash-checked fallback for
                 # unavailable/oversized archives and shallow test clients.
-                pass
+                if session is not None:
+                    session.remember_failure(exc, hostname="codeload.github.com")
         finally:
             client.close()
         blobs = {
@@ -1016,16 +1143,39 @@ def _repository_snapshot(repository: str, discovery_client: Any, *, minecraft_ve
             "selected_branch": evidence.get("selected_branch", ""),
         }
         return snapshot
-    except SourceTransplantError:
-        return None
-    finally:
-        with _SNAPSHOT_LOCK:
+    except (SourceTransplantError, EcosystemDiscoveryUnavailable, httpx.HTTPError) as exc:
+        failure = (session.remember_failure(exc, hostname="api.github.com") if session is not None
+                   else provider_request_failure(exc))
+        unavailable = failure is not None and failure.backend_unavailable
+        if unavailable and session is not None and minecraft_version:
+            default_key = (repository, "", "")
+            with _SNAPSHOT_LOCK:
+                snapshot = session.snapshots.get(default_key) or _SNAPSHOT_CACHE.get(default_key)
             if snapshot is not None:
+                # Do not persist this fallback as the target branch snapshot:
+                # a new plan must be able to resolve its intended branch again.
+                cache_snapshot_globally = False
+                return snapshot
+        if isinstance(exc, SourceTransplantError) and not unavailable:
+            return None
+        failure_error = exc
+        raise
+    except Exception as exc:
+        failure_error = exc
+        raise
+    finally:
+        if session is not None:
+            if failure_error is not None:
+                session.snapshot_errors[cache_key] = failure_error
+            else:
+                session.snapshots[cache_key] = snapshot
+        with _SNAPSHOT_LOCK:
+            if snapshot is not None and cache_snapshot_globally:
                 _SNAPSHOT_CACHE[cache_key] = snapshot
                 _SNAPSHOT_CACHE.move_to_end(cache_key)
                 while len(_SNAPSHOT_CACHE) > _snapshot_cache_entries():
                     _SNAPSHOT_CACHE.popitem(last=False)
-            else:
+            elif cache_snapshot_globally:
                 _SNAPSHOT_CACHE.pop(cache_key, None)
             pending = _SNAPSHOT_INFLIGHT.pop(cache_key, None)
             if pending is not None:
@@ -1036,10 +1186,15 @@ def _github_client(token: str) -> httpx.Client:
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "mmm-source-transplant"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    return httpx.Client(timeout=15.0, headers=headers, follow_redirects=False)
+    client = httpx.Client(timeout=15.0, headers=headers, follow_redirects=False)
+    client._mmm_inspection_session = _INSPECTION_SESSION.get()
+    return client
 
 
 def _github_json(client: httpx.Client, url: str, *, params: Mapping[str, str] | None = None) -> Any:
+    session = _client_inspection_session(client)
+    if session is not None:
+        session.require_network(urlparse(url).hostname or "")
     try:
         response = client.get(url, params=params)
         if response.status_code in {301, 302, 307, 308}:
@@ -1061,7 +1216,12 @@ def _github_json(client: httpx.Client, url: str, *, params: Mapping[str, str] | 
             response = client.get(redirect)
         response.raise_for_status()
     except httpx.HTTPError as exc:
-        raise SourceTransplantError(f"GitHub donor request failed: {url}") from exc
+        hostname = urlparse(url).hostname or ""
+        failure = (session.remember_failure(exc, hostname=hostname) if session is not None
+                   else provider_request_failure(exc, provider="github", hostname=hostname))
+        raise SourceTransplantError(
+            f"GitHub donor request failed: {url}", request_failure=failure,
+        ) from exc
     limit = _response_byte_budget()
     if len(response.content) > limit:
         raise SourceTransplantError(
@@ -1097,6 +1257,9 @@ def _prefetch_pinned_archive(client: httpx.Client, repository: str, commit_sha: 
 
     if not callable(getattr(client, "stream", None)):
         return 0
+    session = _client_inspection_session(client)
+    if session is not None:
+        session.require_network("codeload.github.com")
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) or not re.fullmatch(r"[0-9a-f]{40,64}", commit_sha):
         raise SourceTransplantError("Archive source is not an immutable repository commit.")
     budget = _env_int("MMM_SOURCE_ARCHIVE_BYTE_BUDGET", 64 * 1024 * 1024,
@@ -1141,12 +1304,15 @@ def _fetch_blob_bytes(client: httpx.Client, repository: str, blob_sha: str) -> b
     if not re.fullmatch(r"[0-9a-f]{40,64}", blob_sha):
         raise SourceTransplantError("Donor blob is not immutable.")
     key = (repository, blob_sha)
+    session = _client_inspection_session(client)
     owner = False
     with _BLOB_LOCK:
         cached = _BLOB_CACHE.get(key)
         if cached is not None:
             _BLOB_CACHE.move_to_end(key)
             return cached
+        if session is not None and key in session.blob_errors:
+            raise session.blob_errors[key]
         event = _BLOB_INFLIGHT.get(key)
         if event is None:
             event = Event()
@@ -1158,6 +1324,8 @@ def _fetch_blob_bytes(client: httpx.Client, repository: str, blob_sha: str) -> b
         with _BLOB_LOCK:
             cached = _BLOB_CACHE.get(key)
         if cached is None:
+            if session is not None and key in session.blob_errors:
+                raise session.blob_errors[key]
             raise SourceTransplantError("Concurrent donor blob download failed.")
         return cached
 
@@ -1182,6 +1350,11 @@ def _fetch_blob_bytes(client: httpx.Client, repository: str, blob_sha: str) -> b
             )
         _remember_verified_blob(repository, blob_sha, raw)
         return raw
+    except (SourceTransplantError, httpx.HTTPError, OSError) as exc:
+        if session is not None:
+            session.blob_errors[key] = exc
+            session.remember_failure(exc)
+        raise
     finally:
         with _BLOB_LOCK:
             pending = _BLOB_INFLIGHT.pop(key, None)
@@ -1677,6 +1850,9 @@ __all__ = [
     "inspect_repository_slice",
     "materialize_source_slices",
     "repository_from_candidate",
+    "repository_inspection_failures",
+    "repository_inspection_requires_unavailable_network",
+    "repository_inspection_session",
     "validate_donor_slice_manifest",
     "validated_reuse_donor",
 ]

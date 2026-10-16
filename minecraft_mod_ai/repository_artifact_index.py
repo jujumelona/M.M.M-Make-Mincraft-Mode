@@ -167,6 +167,7 @@ class RepositoryArtifactIndex:
     text_by_path: dict[str, str] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
     _blob_fetcher: Callable[[str, str], bytes] | None = None
+    _resolver_scope: object | None = field(default=None, repr=False)
     _blob_cache: OrderedDict[str, bytes] = field(default_factory=OrderedDict)
     _blob_cache_bytes: int = 0
     _dependency_graph: ArtifactDependencyGraph | None = None
@@ -181,6 +182,7 @@ class RepositoryArtifactIndex:
         tree_items: Sequence[Mapping[str, Any]],
         *,
         blob_fetcher: Callable[[str, str], bytes] | None = None,
+        resolver_scope: object | None = None,
     ) -> RepositoryArtifactIndex:
         """Build or reuse an immutable full-repository artifact index."""
 
@@ -197,7 +199,7 @@ class RepositoryArtifactIndex:
                 if blob_fetcher is not None:
                     # The previous HTTP client may already be closed. Refresh only
                     # the resolver; indexed identity remains commit/tree-bound.
-                    cached._blob_fetcher = blob_fetcher
+                    cached._bind_blob_fetcher(blob_fetcher, resolver_scope)
                 cached.metadata["index_cache_hits"] = (
                     int(cached.metadata.get("index_cache_hits", 0)) + 1
                 )
@@ -208,6 +210,7 @@ class RepositoryArtifactIndex:
             repository=repository,
             commit_sha=commit_sha,
             _blob_fetcher=blob_fetcher,
+            _resolver_scope=resolver_scope if resolver_scope is not None else blob_fetcher,
         )
 
         for item in items:
@@ -238,7 +241,7 @@ class RepositoryArtifactIndex:
             raced = _INDEX_CACHE.get(cache_key)
             if raced is not None:
                 if blob_fetcher is not None:
-                    raced._blob_fetcher = blob_fetcher
+                    raced._bind_blob_fetcher(blob_fetcher, resolver_scope)
                 raced.metadata["index_cache_hits"] = (
                     int(raced.metadata.get("index_cache_hits", 0)) + 1
                 )
@@ -248,6 +251,20 @@ class RepositoryArtifactIndex:
             while len(_INDEX_CACHE) > _cache_entry_limit():
                 _INDEX_CACHE.popitem(last=False)
         return index
+
+    def _bind_blob_fetcher(
+        self, blob_fetcher: Callable[[str, str], bytes], resolver_scope: object | None,
+    ) -> None:
+        scope = resolver_scope if resolver_scope is not None else blob_fetcher
+        with self._graph_lock:
+            if self._resolver_scope is not scope and self.metadata.get("unreadable_artifacts"):
+                # An incomplete materialization is an observation of its resolver,
+                # not immutable evidence that these files will always be unreadable.
+                # Keep complete graphs and all verified cached source bytes.
+                self._dependency_graph = None
+                self._dependency_graph_context_key = ""
+            self._blob_fetcher = blob_fetcher
+            self._resolver_scope = scope
 
     def _remember_blob(self, path: str, data: bytes) -> None:
         budget = _blob_cache_byte_budget()

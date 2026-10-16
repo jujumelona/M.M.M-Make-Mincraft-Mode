@@ -14,14 +14,14 @@ import json
 import os
 import re
 import tempfile
-
-import httpx
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from .ecosystem_discovery import EcosystemDiscoveryClient
+import httpx
+
+from .ecosystem_discovery import EcosystemDiscoveryClient, provider_request_failure
 from .platform_catalog import adapter_for_target
 from .research_reuse_candidates import planning_state_repository_cards
 from .reuse_proof_executor import ReuseProofReceipt, execute_reuse_proof
@@ -30,6 +30,9 @@ from .source_transplant import (
     SourceTransplantError,
     inspect_repository_slice,
     materialize_pinned_donor,
+    repository_inspection_failures,
+    repository_inspection_requires_unavailable_network,
+    repository_inspection_session,
     validate_donor_slice_manifest,
     validated_reuse_donor,
 )
@@ -287,22 +290,26 @@ def _proof_admits(donor: DonorSlice, receipt: ReuseProofReceipt) -> bool:
 
 def _inspection_backend_unavailable(exc: Exception) -> bool:
     """Stop repeated impossible downloads, not semantically rejected donors."""
-    if isinstance(exc, (httpx.ConnectError, httpx.TimeoutException)):
-        return True
-    if isinstance(exc, httpx.HTTPStatusError):
-        response = exc.response
-        if response.status_code == 429:
-            return True
-        if response.status_code == 403 and response.headers.get("x-ratelimit-remaining") == "0":
-            return True
-    message = f"{type(exc).__name__}: {exc}".casefold()
-    # EcosystemDiscoveryClient wraps HTTP errors as text, for example
-    # "EcosystemDiscoveryUnavailable: api.github.com discovery returned HTTP 429".
-    # Failing to recognize that wrapper inspected all 160 candidates despite
-    # the provider already rejecting every request.
-    return ("rate limit" in message or "rate_limit" in message
-            or "http 429" in message or "too many requests" in message
-            or "api rate" in message or "connection refused" in message)
+    failure = provider_request_failure(exc)
+    return failure is not None and failure.backend_unavailable
+
+
+def _record_inspection_outage(outage, capability, repository, exc=None):
+    if outage is None:
+        return
+    failure = provider_request_failure(exc) if exc is not None else None
+    if failure is None or not failure.backend_unavailable:
+        failure = next(iter(repository_inspection_failures()), None)
+    if failure is None or not failure.backend_unavailable:
+        return
+    first = not outage
+    outage.setdefault("repository", repository)
+    outage.setdefault("error", (f"{type(exc).__name__}: {exc}"[:1200] if exc is not None
+                                else f"{failure.hostname} source request is unavailable."))
+    outage.setdefault("request_failure", failure.to_dict())
+    if first:
+        print("SOURCE_REUSE_INSPECTION_OUTAGE: " + json.dumps(
+            {"capability": capability, **outage}, ensure_ascii=False), flush=True)
 
 
 def _retain_reference_source(donor, capability, client, diagnostics, references, inspections):
@@ -342,26 +349,49 @@ def _inspect_candidate_batch(
     adapter: TargetContract, client: EcosystemDiscoveryClient,
     donor_inspector: DonorInspector, inspections: list[dict[str, Any]],
     reference_sources: list[dict[str, Any]],
-    outage: dict[str, str] | None = None,
+    outage: dict[str, Any] | None = None,
+    inspection_cache: dict[tuple[str, str, str, str], tuple[DonorSlice | None, Exception | None]] | None = None,
 ) -> list[DonorSlice]:
     """Inspect a small ranked batch before paying for the rest of the frontier."""
     candidates: list[DonorSlice] = []
     for card in cards:
-        if outage is not None and outage:
+        if outage and donor_inspector is not inspect_repository_slice:
             break
         overlap = _candidate_overlap(capability, terms, card)
         explicit_reference = bool(card.get("explicit_reference"))
         repository = str(card["repository"])
+        if donor_inspector is inspect_repository_slice and repository_inspection_requires_unavailable_network(
+            repository, minecraft_version=adapter.minecraft_version, loader=adapter.loader,
+        ):
+            inspections.append({
+                "capability": capability, "repository": repository,
+                "page_refs": list(card.get("page_refs", ())),
+                "status": "inspection_deferred", "provider_unavailable": True,
+                "reason": "No cached pinned snapshot; provider network is unavailable for this plan.",
+            })
+            continue
+        cache_key = (repository.casefold(), adapter.minecraft_version, adapter.loader, capability)
+        cached = inspection_cache.get(cache_key) if inspection_cache is not None else None
         try:
-            donor = donor_inspector(
-                repository=repository,
-                capability=capability,
-                adapter=adapter,
-                discovery_client=client,
-            )
+            if cached is not None:
+                donor, error = cached
+                if error is not None:
+                    raise error
+            else:
+                donor = donor_inspector(
+                    repository=repository,
+                    capability=capability,
+                    adapter=adapter,
+                    discovery_client=client,
+                )
+                if inspection_cache is not None:
+                    inspection_cache[cache_key] = (donor, None)
         except Exception as exc:  # noqa: BLE001 - fail closed per external donor
+            if inspection_cache is not None:
+                inspection_cache[cache_key] = (None, exc)
             error = f"{type(exc).__name__}: {exc}"[:1200]
             unavailable = _inspection_backend_unavailable(exc)
+            failure = provider_request_failure(exc)
             inspections.append({
                 "capability": capability, "repository": repository,
                 "page_refs": list(card.get("page_refs", ())),
@@ -369,13 +399,12 @@ def _inspect_candidate_batch(
                 "candidate_origin": str(card.get("candidate_origin") or "planning_state_or_explicit"),
                 "status": "inspection_error", "error": error,
                 "provider_unavailable": unavailable,
+                "request_failure": failure.to_dict() if failure is not None else None,
+                "inspection_cache_hit": cached is not None,
             })
-            if unavailable and outage is not None:
-                outage["repository"] = repository
-                outage["error"] = error
-                print("SOURCE_REUSE_INSPECTION_OUTAGE: " + json.dumps(
-                    {"capability": capability, **outage}, ensure_ascii=False), flush=True)
+            _record_inspection_outage(outage, capability, repository, exc)
             continue
+        _record_inspection_outage(outage, capability, repository)
         reference_eligible = False
         rejection = "No pinned source slice was located."
         if donor is not None:
@@ -401,6 +430,7 @@ def _inspect_candidate_batch(
             reference_eligible = _retain_reference_source(
                 donor, capability, client, json.dumps(diagnostics, ensure_ascii=False),
                 reference_sources, inspections)
+            _record_inspection_outage(outage, capability, repository)
             if not reference_eligible:
                 rejection = 'Pinned slice has no readable Java reference for the authoring handoff.'
         inspections.append(
@@ -413,6 +443,7 @@ def _inspect_candidate_batch(
                 "status": ("proof_pending" if admitted else
                            "reference_only" if reference_eligible else "inspection_rejected"),
                 "overlap": overlap,
+                "inspection_cache_hit": cached is not None,
                 "rejection_reason": "" if reference_eligible else rejection,
             }
         )
@@ -422,6 +453,7 @@ def _inspect_candidate_batch(
     return candidates
 
 
+@repository_inspection_session()
 def build_repository_reuse_plan(
     design: Mapping[str, Any],
     *,
@@ -487,7 +519,8 @@ def build_repository_reuse_plan(
         temporary = tempfile.TemporaryDirectory(prefix="mmm_reuse_target_")
         proof_workspace = Path(temporary.name)
     try:
-        inspection_outage: dict[str, str] = {}
+        inspection_outage: dict[str, Any] = {}
+        inspection_cache: dict[tuple[str, str, str, str], tuple[DonorSlice | None, Exception | None]] = {}
         for capability in capabilities:
             terms = terms_by_capability.get(capability, (capability.replace(".", " "),))
             verified: list[tuple[DonorSlice, ReuseProofReceipt]] = []
@@ -500,13 +533,14 @@ def build_repository_reuse_plan(
             # authoring, hand it off instead of exhausting the frontier looking
             # for a donor that can be installed unchanged.
             for offset in range(0, len(ranked_cards), 2):
-                if inspection_outage:
+                if inspection_outage and donor_inspector is not inspect_repository_slice:
                     break
                 candidates = _inspect_candidate_batch(
                     ranked_cards[offset:offset + 2], capability=capability, terms=terms,
                     adapter=adapter, client=client, donor_inspector=donor_inspector,
                     inspections=inspections, reference_sources=reference_sources,
                     outage=inspection_outage,
+                    inspection_cache=inspection_cache,
                 )
                 for donor in sorted(candidates, key=lambda row: (
                     row.target_compatibility == "exact", -row.adaptation_cost, row.confidence,
@@ -531,6 +565,7 @@ def build_repository_reuse_plan(
                         _retain_reference_source(
                             donor, capability, client, f"{type(exc).__name__}: {exc}"[:1200],
                             reference_sources, inspections)
+                        _record_inspection_outage(inspection_outage, capability, donor.repository, exc)
                         continue
                     proof_payload = receipt.to_dict()
                     proof_payload["status"] = (
@@ -544,6 +579,7 @@ def build_repository_reuse_plan(
                         _retain_reference_source(
                             donor, capability, client, str(receipt.failure_message or receipt.failure_code)[:1200],
                             reference_sources, inspections)
+                        _record_inspection_outage(inspection_outage, capability, donor.repository)
 
                 if verified or any(row['capability'] == capability for row in reference_sources):
                     break
@@ -604,7 +640,10 @@ def build_repository_reuse_plan(
                     "capability": capability, "mode": "fresh",
                     "discovered_repositories": len(discovered.get(capability, ())),
                     "ranked_candidates": len(ranked_cards),
-                    "inspected": sum(row.get("capability") == capability for row in inspections),
+                    "inspected": sum(row.get("capability") == capability
+                                     and row.get("status") != "inspection_deferred" for row in inspections),
+                    "deferred_unavailable": sum(row.get("capability") == capability
+                                                and row.get("status") == "inspection_deferred" for row in inspections),
                     "proof_attempts": sum(row.get("capability") == capability for row in proofs),
                     "status": search_status, "failure_code": failure_code,
                     "reference_sources": sum(row.get("capability") == capability
@@ -639,7 +678,8 @@ def build_repository_reuse_plan(
                 "selected_commit": donor.commit_sha,
                 "discovered_repositories": len(discovered.get(capability, ())),
                 "ranked_candidates": len(ranked_cards),
-                "inspected": sum(row.get("capability") == capability for row in inspections),
+                "inspected": sum(row.get("capability") == capability
+                                 and row.get("status") != "inspection_deferred" for row in inspections),
                 "proof_attempts": sum(row.get("capability") == capability for row in proofs),
             }, ensure_ascii=False), flush=True)
     finally:

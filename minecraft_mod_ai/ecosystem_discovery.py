@@ -40,8 +40,70 @@ _RESTRICTED_MODEL_LICENSES = frozenset({'bigscience-openrail-m', 'creativeml-ope
 _SAFE_MODEL_SUFFIXES = frozenset({'.safetensors', '.gguf', '.onnx'})
 _UNSAFE_SERIALIZATION_SUFFIXES = frozenset({'.bin', '.ckpt', '.joblib', '.pickle', '.pkl', '.pt', '.pth'})
 
+@dataclass(frozen=True)
+class ProviderRequestFailure:
+    """Transport facts that survive discovery/source inspection wrappers."""
+
+    provider: str
+    hostname: str
+    kind: str
+    status_code: int | None = None
+    retry_after: str = ''
+    rate_limit_remaining: str = ''
+    rate_limit_reset: str = ''
+
+    @property
+    def backend_unavailable(self) -> bool:
+        if self.kind == 'transport':
+            return True
+        status = self.status_code
+        return bool(status in {401, 429} or status is not None and 500 <= status < 600
+                    or status == 403 and (self.rate_limit_remaining == '0' or self.retry_after))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {**asdict(self), 'backend_unavailable': self.backend_unavailable}
+
+    @classmethod
+    def from_response(cls, response: httpx.Response, *, provider: str='') -> ProviderRequestFailure:
+        hostname = response.url.host or ''
+        return cls(provider or hostname, hostname, 'http_status', response.status_code,
+                   response.headers.get('retry-after', ''),
+                   response.headers.get('x-ratelimit-remaining', ''),
+                   response.headers.get('x-ratelimit-reset', ''))
+
+
+def provider_request_failure(exc: BaseException, *, provider: str='', hostname: str='') -> ProviderRequestFailure | None:
+    """Recover provider failures by type and cause, never by exception prose."""
+    pending = [exc]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        failure = getattr(current, 'request_failure', None)
+        if isinstance(failure, ProviderRequestFailure):
+            return failure
+        if isinstance(current, httpx.HTTPStatusError):
+            return ProviderRequestFailure.from_response(current.response, provider=provider)
+        if isinstance(current, (httpx.NetworkError, httpx.TimeoutException,
+                                httpx.RemoteProtocolError, httpx.ProxyError)):
+            try:
+                request_hostname = current.request.url.host or hostname
+            except RuntimeError:
+                request_hostname = hostname
+            return ProviderRequestFailure(provider or request_hostname, request_hostname, 'transport')
+        context = current.__context__ if current.__cause__ is None and not current.__suppress_context__ else None
+        for cause in (context, current.__cause__, getattr(current, 'cause', None)):
+            if isinstance(cause, BaseException):
+                pending.append(cause)
+    return None
+
+
 class EcosystemDiscoveryUnavailable(RuntimeError):
-    pass
+    def __init__(self, message: str='', *, request_failure: ProviderRequestFailure | None=None) -> None:
+        super().__init__(message)
+        self.request_failure = request_failure
 
 @dataclass(frozen=True)
 class EcosystemCandidate:
@@ -531,7 +593,10 @@ class EcosystemDiscoveryClient:
         try:
             response = self._http_client.get(url, params=params, headers=headers)
         except httpx.HTTPError as exc:
-            raise EcosystemDiscoveryUnavailable(f'{parsed.hostname} discovery request failed: {type(exc).__name__}.') from exc
+            raise EcosystemDiscoveryUnavailable(
+                f'{parsed.hostname} discovery request failed: {type(exc).__name__}.',
+                request_failure=provider_request_failure(exc, provider=provider, hostname=parsed.hostname or ''),
+            ) from exc
         # GitHub may issue a permanent redirect for repositories that have
         # moved. Follow a single *same-origin HTTPS API* hop; never let
         # an Authorization header escape to arbitrary redirect targets.
@@ -551,9 +616,23 @@ class EcosystemDiscoveryClient:
             try:
                 response = self._http_client.get(redirected, headers=headers)
             except httpx.HTTPError as exc:
-                raise EcosystemDiscoveryUnavailable('GitHub repository redirect failed.') from exc
+                raise EcosystemDiscoveryUnavailable(
+                    'GitHub repository redirect failed.',
+                    request_failure=provider_request_failure(exc, provider=provider, hostname='api.github.com'),
+                ) from exc
         if response.status_code != 200:
-            raise EcosystemDiscoveryUnavailable(f'{parsed.hostname} discovery returned HTTP {response.status_code}.')
+            failure = ProviderRequestFailure.from_response(response, provider=provider)
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise EcosystemDiscoveryUnavailable(
+                    f'{parsed.hostname} discovery returned HTTP {response.status_code}.',
+                    request_failure=failure,
+                ) from exc
+            raise EcosystemDiscoveryUnavailable(
+                f'{parsed.hostname} discovery returned HTTP {response.status_code}.',
+                request_failure=failure,
+            )
         if len(response.content) > _MAX_RESPONSE_BYTES:
             raise EcosystemDiscoveryUnavailable(f'{parsed.hostname} discovery response exceeded the byte policy.')
         try:
