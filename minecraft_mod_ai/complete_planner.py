@@ -169,6 +169,12 @@ class CompleteGameDesignPlanner:
         from .request_scope import request_scope_context
 
         request_scope = plan.request_scope
+        from .research_reuse_candidates import authored_design_repository_candidates
+
+        prior_content_design = (
+            plan.content_design if isinstance(plan.content_design, Mapping) else {}
+        )
+        research_candidates = authored_design_repository_candidates(prior_content_design)
         adapter = self.adapter
         deterministic_module_kinds = self.deterministic_module_kinds
         budget = PlannerBudget()
@@ -219,6 +225,7 @@ class CompleteGameDesignPlanner:
                 minecraft_version=target_version,
                 loader=target_loader,
                 request_scope=request_scope,
+                **({"repository_candidates": research_candidates} if research_candidates else {}),
             )
             text += verified_reuse_context(reuse_receipt)
 
@@ -282,6 +289,15 @@ class CompleteGameDesignPlanner:
                         )
                     )
                 checkpoint.save_content_design(content_catalog, content_design)
+        # A resumed production plan may already carry host-stamped research
+        # results. Preserve those receipts across content graph regeneration;
+        # they remain reference-only until source inspection and compile proof.
+        from copy import deepcopy
+
+        for field in ("_pre_design_research", "_planning_state"):
+            prior = prior_content_design.get(field)
+            if isinstance(prior, Mapping):
+                content_design[field] = deepcopy(dict(prior))
         external_content_refs = content_owned_refs(
             structured_sections,
             content_design,
