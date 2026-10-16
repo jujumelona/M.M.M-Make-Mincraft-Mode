@@ -413,7 +413,19 @@ def author_task_operations(router, task, context):
         payload['provisional_parent_strategies'] = dependency_revision_choices(state, nodes)
         payload['shared_input_resolution'] = shared_input_choices(state, nodes, declaration)
         payload['named_values'] = named_values(working_nodes, declaration, symbols, node_id=slot)
-        choice = state.operation_goal or ask(router, 'construction_operation_next', payload, schema, instruction)
+        # A uniquely typed, source-backed static field is a mechanical
+        # dependency decision, not an open-ended coding question.
+        from .construction_static_providers import preferred_static_field
+        preferred = preferred_static_field(
+            symbols, state.evidence_index, contracts.get(slot, ()),
+            state.selection_goal['purpose'], excluded=state.rejected_apis(slot))
+        if preferred and 'field' in actions and not repair_id:
+            state.selection_goal['preferred_api'] = preferred
+        direct = ({'action': 'field', 'node_id': slot,
+                   'purpose': state.selection_goal['purpose']}
+                  if preferred and 'field' in actions and not repair_id else None)
+        choice = state.operation_goal or direct or ask(
+            router, 'construction_operation_next', payload, schema, instruction)
         action = choice['action']
         if action in {'symbols', 'more_symbols', 'scopes', 'bindings', 'source', 'sources',
                       'declarations', 'nodes', 'node_index', 'memory_index', 'recall'}:
