@@ -480,8 +480,9 @@ def _search_curseforge(
 ) -> list:
     """Browse real Minecraft mod listings, not invented feature-name queries.
 
-    Version/loader constraints are verified against pinned source during donor
-    inspection; applying them here would lose useful porting references.
+    query/limit remain for the existing caller API, but do not filter or truncate
+    this shared catalogue sample: relevance is calculated per capability later.
+    Version/loader constraints are verified during pinned source inspection.
     Catalogue results without source links never acquire reuse authority.
     """
     api_key = _curseforge_api_key()
@@ -709,10 +710,10 @@ def discover_repositories_for_graph(
 ) -> dict[str, tuple[str, ...]]:
     """Discover requested provider stages without treating keyword hits as reuse.
 
-    A caller may request one provider at a time and inspect its sources before
-    paying for fallback discovery. The default retains the complete provider
-    sequence. A caller-owned query cache preserves results and provider failures
-    across lazy stages. Provider errors remain distinct from successful zero hits.
+    The compatibility default includes CurseForge, Modrinth and GitHub.
+    The production donor planner explicitly adds Sourcegraph before the GitHub
+    fallback. Query cache preserves results and provider failures across stages.
+    Provider errors remain distinct from successful zero hits.
     """
 
     ordered = tuple(dict.fromkeys(str(item).strip() for item in capabilities if str(item).strip()))
