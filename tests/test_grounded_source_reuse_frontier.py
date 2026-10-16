@@ -185,3 +185,37 @@ def test_unusable_predesign_candidate_then_expands_search(monkeypatch, tmp_path)
     )
     assert inspected == ["example/unusable", "example/fallback"]
     assert result["capabilities"][0]["mode"] == "source_transplant"
+
+
+def test_irrelevant_java_reference_does_not_stop_before_later_verified_donor(
+    monkeypatch, tmp_path,
+):
+    """Two readable unrelated snippets must not suppress a later real donor."""
+    repositories = ("example/pets", "example/utility", "example/combat")
+    design = _discovery(monkeypatch, repositories)
+    kept = []
+
+    def retain(donor, capability, _client, _diagnostics, references, _inspections):
+        references.append({
+            "capability": capability, "donor": donor.to_dict(),
+            "authority": "pinned_licensed_reference_only",
+        })
+        kept.append(donor.repository)
+        return True
+
+    monkeypatch.setattr(grounded_source_reuse, "_retain_reference_source", retain)
+    proofed = []
+
+    def prove(donor, **_kwargs):
+        proofed.append(donor.repository)
+        return _proof(donor, passed=donor.repository == "example/combat")
+
+    result = grounded_source_reuse.build_repository_reuse_plan(
+        design, discovery_client=object(),
+        donor_inspector=lambda **kwargs: _donor(kwargs["repository"]),
+        proof_executor=prove, target_workspace=tmp_path,
+    )
+    assert proofed == list(repositories)
+    assert result["capabilities"][0]["mode"] == "source_transplant"
+    assert result["capabilities"][0]["donor"]["repository"] == "example/combat"
+    assert kept == ["example/pets", "example/utility"]
