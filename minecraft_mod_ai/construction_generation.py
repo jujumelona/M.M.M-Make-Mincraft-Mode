@@ -373,6 +373,7 @@ def compose(router, spec, *, source_context=(), construction_context=None,
     port_tasks = select_port_tasks(
         planning_router, task, owner=owner,
         references=context.get('reference_port_obligations', ()),
+        source_pages=context.get('source_pages', {}),
         symbols=symbols, exact_type=exact_type, state=state,
     )
     context['construction_declaration_ids'] = tuple(state.declaration_ids)

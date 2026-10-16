@@ -128,23 +128,31 @@ def prepare_construction_context(spec, *, java_classpath, project_root, source_c
     project_inherited_api(symbols)
     from .construction_type_contracts import annotate_functional_interfaces
     annotate_functional_interfaces(symbols)
-    # Pinned old-version references provide porting evidence, never callable
-    # target API authority or permission to install outdated code unchanged.
+    # Pinned same-version references provide partial porting evidence. The
+    # original loader/mappings and unresolved dependencies still need adaptation.
     reference_members = []
+    reference_ids = set()
     for item in json.loads(bindings.get("verified_source_code_json") or "[]"):
         if item.get("authority") != "reference_only_requires_target_adaptation":
             continue
         if not item.get("source_commit") or not item.get("adapted_sha256"):
             raise ValueError("CONSTRUCTION_PORT_REFERENCE_UNPINNED")
+        if item.get('source_minecraft_version') != target['minecraft_version']:
+            raise ValueError('CONSTRUCTION_PORT_REFERENCE_VERSION_MISMATCH')
         ref_id = "reference:" + hashlib.sha256((
             item["repository"] + "@" + item["source_commit"] + ":" +
             item["path"] + ":" + str(item["start_line"])).encode()).hexdigest()[:20]
+        if ref_id in reference_ids:
+            continue
+        reference_ids.add(ref_id)
         pages[ref_id] = [{
             "code": item["code"], "signature": item.get("signature", ""),
             "source_ref": ref_id, "authority": "reference_only_port_required",
             "repository": item["repository"], "source_commit": item["source_commit"],
             "source_sha256": item["adapted_sha256"],
             "migration_diagnostics": item.get("migration_diagnostics", ""),
+            "source_minecraft_version": item['source_minecraft_version'],
+            "source_closure_complete": item.get('source_closure_complete', True),
         }]
         reference_members.append({
             "source_ref": ref_id, "signature": item.get("signature", ""),
