@@ -29,7 +29,7 @@ def test_content_entity_kind_is_generation_time_closed_vocabulary():
     assert "economy_resource_management" not in schema["properties"]["kind"]["enum"]
 
 
-def test_content_capability_is_bound_to_exact_fact_type_before_model_call():
+def test_content_capability_is_bound_to_exact_fact_type_without_model_call():
     captured = []
 
     def generate(_router, _role, _messages, *, response_schema, **_kwargs):
@@ -44,8 +44,7 @@ def test_content_capability_is_bound_to_exact_fact_type_before_model_call():
     )
 
     assert result == {"fact_type": "ITEM_EXISTS"}
-    assert captured[0]["properties"]["fact_type"]["enum"] == ["ITEM_EXISTS"]
-    assert "UNSUPPORTED" not in captured[0]["properties"]["fact_type"]["enum"]
+    assert captured == []
 
 
 def test_content_capability_template_has_no_host_invalid_sentinel():

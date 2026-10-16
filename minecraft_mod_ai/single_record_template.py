@@ -154,6 +154,32 @@ def _merge_record_slice(
     merged.update(deepcopy(dict(part)))
 
 
+def _deterministic_record_slice(
+    schema: dict[str, Any], native_schema: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Resolve only a literal already forced by the effective sampler schema."""
+
+    field = schema["required"][0]
+    properties = native_schema.get("properties")
+    native_field = properties.get(field) if isinstance(properties, Mapping) else None
+    if not isinstance(native_field, Mapping):
+        return None
+    if "const" in native_field:
+        candidate = native_field["const"]
+    else:
+        choices = native_field.get("enum")
+        if not isinstance(choices, list) or len(choices) != 1:
+            return None
+        candidate = choices[0]
+
+    # Presence, rather than truthiness, distinguishes a fixed null/false/zero
+    # from an unresolved field. The original schema also rejects conflicting
+    # types, exclusions or other constraints before this value is accepted.
+    part = {field: deepcopy(candidate)}
+    Draft202012Validator(schema).validate(part)
+    return part
+
+
 def run_single_record_template(
     router: Any,
     identifier: str,
@@ -220,18 +246,27 @@ def run_single_record_template(
             tool_name = "submit_one_" + identifier.replace("/", "_")
             if len(slices) > 1:
                 tool_name += f"_part_{part_index}_of_{len(slices)}"
-            output_ceiling = structured_output_token_ceiling(
-                effective_model_transport_schema(part_schema)
+            native_schema = effective_model_transport_schema(part_schema)
+            part = _deterministic_record_slice(part_schema, native_schema)
+            print(
+                "PLANNER_RECORD_FIELD: " + json.dumps({
+                    "template": identifier,
+                    "field": part_schema["required"][0],
+                    "generation": "deterministic" if part is not None else "model",
+                }, ensure_ascii=False),
+                flush=True,
             )
-            part = generate(
-                router,
-                "planner",
-                messages,
-                response_schema=part_schema,
-                enable_tools=False,
-                tool_name=tool_name,
-                output_token_ceiling=output_ceiling,
-            )
+            if part is None:
+                output_ceiling = structured_output_token_ceiling(native_schema)
+                part = generate(
+                    router,
+                    "planner",
+                    messages,
+                    response_schema=part_schema,
+                    enable_tools=False,
+                    tool_name=tool_name,
+                    output_token_ceiling=output_ceiling,
+                )
             Draft202012Validator(part_schema).validate(part)
             _merge_record_slice(value, part, identifier=identifier)
 
