@@ -316,7 +316,7 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
             'cannot be obtained here, reconsider_parent selects that actual parent for replacement. '
             'Partial admission is provisional; it does not prove its inputs are constructible. '
             'Outside compose_locally or reconsider_parent, another operation is chosen '
-            'only after this node is written. ' + instruction)
+            'only after this node is written. ' + instruction))
         if choice['action'] == 'reject_api':
             from .fixed_template_generation import _validate_native_arguments
             _validate_native_arguments(choice, schema)
