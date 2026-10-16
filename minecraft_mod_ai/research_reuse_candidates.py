@@ -353,6 +353,11 @@ def ensure_authored_source_handoff(
     )
 
     expected_prompt = _canonical_sha256(prompt)
+    old_research = content.get("_pre_design_research")
+    if isinstance(old_research, Mapping) and old_research.get("prompt_sha256") != expected_prompt:
+        # Old receipts without a bound prompt are not safe to project into
+        # a newly authored plan. Re-discover rather than trust ambiguous input.
+        content.pop("_pre_design_research", None)
     cached = content.get("_pre_design_source_handoff")
     if isinstance(cached, Mapping) and cached.get("prompt_sha256") != expected_prompt:
         # Never reuse candidates from a different user requirement, even when
