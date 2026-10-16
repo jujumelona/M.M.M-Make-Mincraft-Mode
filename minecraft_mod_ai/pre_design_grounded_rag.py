@@ -25,6 +25,7 @@ from typing import Any
 
 from .curseforge_catalog import (
     curseforge_api_key,
+    curseforge_browse_windows,
     curseforge_mod_metadata,
     curseforge_mods_class_id,
     curseforge_next_index,
@@ -379,6 +380,7 @@ def _search_curseforge(
     headers = {"x-api-key": key}
     errors: list[str] = []
     mods_class = None
+    categories: Any = None
     try:
         categories = _curseforge_browse_json(
             "https://api.curseforge.com/v1/categories?gameId=432", headers
@@ -402,21 +404,32 @@ def _search_curseforge(
     output_limit = _provider_result_limit() or 20
     page_size = 50
 
-    for sort_field in (2, 3, 11):
+    windows = curseforge_browse_windows(
+        categories.get("data") if isinstance(categories, Mapping) else None,
+        mods_class, broad_pages=page_limit,
+    )
+    for sort_field, category_id, max_pages in windows:
         index = 0
-        for _page_number in range(page_limit):
+        for _page_number in range(max_pages):
             params = {
                 "gameId": 432, "index": index, "pageSize": page_size,
                 "sortField": sort_field, "sortOrder": "desc",
             }
             if mods_class is not None:
                 params["classId"] = mods_class
+            if category_id is not None:
+                params["categoryId"] = category_id
             url = "https://api.curseforge.com/v1/mods/search?" + urllib.parse.urlencode(params)
-            payload = _curseforge_browse_json(url, headers)
+            try:
+                payload = _curseforge_browse_json(url, headers)
+            except (OSError, ValueError) as exc:
+                errors.append(f"catalogue_page_failed:{type(exc).__name__}")
+                break  # Retain all earlier pages and try the remaining independent windows.
             search_requests += 1
             raw_rows = payload.get("data") if isinstance(payload, Mapping) else None
             if not isinstance(raw_rows, list):
-                raise ValueError("CurseForge catalogue search returned invalid data.")
+                errors.append("invalid_catalogue_page")
+                break
             for row in raw_rows:
                 if not isinstance(row, Mapping) or type(row.get("id")) is not int:
                     continue
