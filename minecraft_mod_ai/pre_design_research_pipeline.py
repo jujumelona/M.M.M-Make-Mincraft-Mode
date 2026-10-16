@@ -527,6 +527,24 @@ def collect_design_research(
         ) from exc
 
     deterministic["grounded_rag"] = _grounded_rag_receipt(grounded_bundle)
+    # Preserve already obtained, source-linked candidates as host-only metadata.
+    # This is a reuse-search handoff, never a verified donor or model instruction.
+    from .research_reuse_candidates import (
+        merge_repository_candidates, project_repository_candidates,
+    )
+
+    repository_candidates: list[dict[str, Any]] = []
+    for domain in research_brief.get("domains", []):
+        if not isinstance(domain, Mapping):
+            continue
+        domain_id = str(domain.get("domain_id") or "").strip()
+        grounded = _grounded_domain_evidence(domain_id, grounded_bundle)
+        projected = project_repository_candidates(domain, grounded)
+        if projected:
+            repository_candidates = merge_repository_candidates(
+                repository_candidates, projected,
+            )
+    deterministic["repository_candidates"] = repository_candidates
     if _target_frozen(knowledge_plan):
         try:
             deterministic["technology_radar"] = collect_technology_radar(
