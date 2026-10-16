@@ -66,6 +66,9 @@ def validate_canonical_output(job, source, *, resolved, context, authority, targ
     if target_path != spec["target_path"] or anchor != spec.get("anchor", ""):
         raise ValueError("CANONICAL_OUTPUT_TARGET_MISMATCH")
     receipts = [validate_semantic_contract(source, contract=spec, context_id=resolved.context_id, leaf_id=job.canonical_leaf)]
+    if spec["language"] == "json":
+        from .artifact_validators.json_resource import validate_json_resource
+        receipts.append(validate_json_resource(source, resource_kind=job.canonical_leaf))
     if spec["language"] == "java":
         from .canonical_java_target_contract import assert_canonical_java_target
 
@@ -218,6 +221,9 @@ def execute_generator_job(job, *, context, router, port_registry=None, base_dir=
             "validator": "materialized_prerequisite_source", "status": "CONTEXT",
             "sources": [{"path": row["path"], "sha256": row["sha256"]} for row in source_context],
         })
+    if spec["language"] == "json":
+        from .artifact_validators.json_resource import validate_json_resource
+        validations.append(validate_json_resource(source, resource_kind=job.canonical_leaf))
     if spec["language"] == "java":
         from .canonical_java_target_contract import assert_canonical_java_target
 
