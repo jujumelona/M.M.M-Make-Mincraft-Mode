@@ -58,6 +58,56 @@ def curseforge_target_filters(
     return filters
 
 
+
+def curseforge_mods_class_id(categories: Any) -> int | None:
+    """Resolve the Minecraft Mods section from live category metadata.
+
+    Never assume a category ID is fixed across games or API revisions.
+    """
+    if not isinstance(categories, list):
+        return None
+    for row in categories:
+        if not isinstance(row, Mapping) or row.get("gameId") != 432:
+            continue
+        if row.get("isClass") is not True:
+            continue
+        if str(row.get("slug") or row.get("name") or "").strip().casefold() != "mods":
+            continue
+        class_id = row.get("id")
+        if type(class_id) is int and class_id > 0:
+            return class_id
+    return None
+
+
+def curseforge_next_index(
+    pagination: Any, *, index: int, page_size: int, row_count: int
+) -> int | None:
+    """Return a valid next offset, or None when the window is exhausted.
+
+    API search windows cannot cross index + pageSize = 10,000.
+    """
+    if row_count <= 0:
+        return None
+    server_index, result_count, total_count = index, row_count, None
+    if isinstance(pagination, Mapping):
+        try:
+            server_index = int(pagination.get("index", index))
+            result_count = int(pagination.get("resultCount", row_count))
+            raw_total = pagination.get("totalCount")
+            total_count = int(raw_total) if raw_total is not None else None
+        except (ValueError, TypeError, OverflowError):
+            raise ValueError("CurseForge returned invalid pagination.") from None
+        if server_index != index or result_count < 0 or result_count > page_size:
+            raise ValueError("CurseForge returned inconsistent pagination.")
+    next_index = server_index + result_count
+    if next_index <= index or next_index + page_size > 10000:
+        return None
+    if total_count is not None and next_index >= total_count:
+        return None
+    if row_count < page_size and total_count is None:
+        return None
+    return next_index
+
 def curseforge_mod_metadata(
     mod: Mapping[str, Any],
     *,
@@ -103,4 +153,4 @@ def curseforge_mod_metadata(
     }
 
 
-__all__ = ["curseforge_api_key", "curseforge_mod_metadata", "curseforge_target_filters"]
+__all__ = ["curseforge_api_key", "curseforge_mod_metadata", "curseforge_target_filters", "curseforge_mods_class_id", "curseforge_next_index"]
