@@ -9,6 +9,7 @@ available until source verification and reuse proof decide coverage.
 """
 
 import atexit
+import json
 import os
 import re
 import unicodedata
@@ -630,7 +631,7 @@ def _search_sourcegraph(query: str, *, limit: int, with_metadata=False) -> list:
         if event_type != "matches" or not fragments:
             continue
         try:
-            entries = __import__("json").loads("\n".join(fragments))
+            entries = json.loads("\n".join(fragments))
         except ValueError:
             continue
         if not isinstance(entries, list):
@@ -845,6 +846,7 @@ def discover_repositories_for_graph(
                         field: metadata[field]
                         for field in (
                             "source_id", "catalog_id", "catalog_url", "source_url",
+                            "title", "summary", "code_search_path", "code_search_query",
                             "versions", "version_indexes", "requested_minecraft_version",
                             "requested_loader", "source_reuse_authority",
                         )
