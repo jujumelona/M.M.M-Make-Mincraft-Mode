@@ -8,7 +8,8 @@ from .parallel_model_tasks import deterministic_model_map
 from .task_template_catalog import load_template
 
 
-def generate_canonical_leaf(inputs, *, leaf_id, router, authority, source_context=(), construction_context=None):
+def generate_canonical_leaf(inputs, *, leaf_id, router, authority, source_context=(),
+                            construction_context=None, resource_context=None):
     """Generate one declared artifact, keeping identity/receipt fields host-owned."""
     from .fixed_template_generation import generate_fixed_template_value
     from .integrity_validators import validate_semantic_contract, validate_json_schema
@@ -32,6 +33,10 @@ def generate_canonical_leaf(inputs, *, leaf_id, router, authority, source_contex
         if name in values:
             raise ValueError("GENERATOR_SLOT_BINDING_CONFLICT")
         schema = dict(slot["schema"])
+        if manifest.get("resource_contract"):
+            from .canonical_resource_contract import bind_resource_schema
+
+            schema = bind_resource_schema(schema, resource_context)
         if schema.get("type") == "string" and schema.get(SCHEMA_STRING_CLASS_KEY) == STRING_CLASS_SOURCE:
             # Package/class/lifecycle regexes are host proof obligations, not
             # llama.cpp grammar. Keep the persisted contract intact and check
@@ -80,6 +85,10 @@ def generate_canonical_leaf(inputs, *, leaf_id, router, authority, source_contex
                         "slot": slot["description"],
                         "bindings": spec["bindings"],
                         "materialized_prerequisite_source": source_context,
+                        **({"available_resource_registry_ids": {
+                            name: sorted(entries)
+                            for name, entries in resource_context["registries"].items()
+                        }} if resource_context is not None else {}),
                     },
                     sort_keys=True,
                 ),
@@ -117,6 +126,8 @@ def generate_canonical_leaf(inputs, *, leaf_id, router, authority, source_contex
         # One authored candidate only. Production checks the assembled source;
         # a failed check does not launch another full-file inference.
         validate_json_schema(value, slot_schema)
+        if manifest.get("resource_contract"):
+            validate_json_schema(value, model_schemas[slot["name"]])
         if is_source and spec.get("language") == "java":
             from .canonical_java_target_contract import assert_canonical_java_target
 
@@ -136,7 +147,12 @@ def generate_canonical_leaf(inputs, *, leaf_id, router, authority, source_contex
         validate_json_schema(value, slot["schema"])
         values[slot["name"]] = value
 
-    source = render_template({"render": spec["render_mold"]}, values)
+    if manifest.get("resource_contract"):
+        from .canonical_resource_contract import render_resource_artifact
+
+        source = render_resource_artifact(manifest, spec, values, resource_context)
+    else:
+        source = render_template({"render": spec["render_mold"]}, values)
     validate_semantic_contract(
         source, contract=spec, context_id=spec["context_id"], leaf_id=leaf_id
     )

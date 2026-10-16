@@ -45,6 +45,21 @@ def validate_template_contract(template):
         "java_class_header", "authored"
     ) not in ("plain", "authored"):
         raise ValueError(f"TEMPLATE_CLASS_HEADER_POLICY: {identifier}")
+    if "resource_contract" in template:
+        contract = template["resource_contract"]
+        if (not isinstance(contract, Mapping)
+                or contract.get("renderer") != "dimension"
+                or not isinstance(contract.get("target_path"), str)
+                or placeholders(contract["target_path"]) != {"mod_id", "registry_path"}
+                or template.get("side") != ["common"]
+                or template.get("validators") != ["json_schema"]):
+            raise ValueError(f"TEMPLATE_RESOURCE_CONTRACT: {identifier}")
+        from .model_output_atomicity_contract import assert_atomic_model_schema
+        for name in ("model_schema", "output_schema"):
+            Draft202012Validator.check_schema(contract[name])
+        assert_atomic_model_schema(contract["model_schema"], surface=f"resource {identifier!r}")
+        for schema in contract.get("authored_type_fields", {}).values():
+            Draft202012Validator.check_schema(schema)
     if "rules" in template:
         rules = template["rules"]
         if not isinstance(rules, list):

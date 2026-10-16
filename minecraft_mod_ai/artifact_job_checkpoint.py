@@ -214,7 +214,25 @@ def execute_checkpointed_job(job, *, context, router, registry, base_dir, execut
                 raise ValueError(f"ARTIFACT_CHECKPOINT_TARGET_DRIFT: {relative}")
             if (prior['input_hash'] == binding
                     and prior.get('implementation_fingerprint') == implementation_fingerprint):
-                return _restore_checkpoint(job, prior["receipt"], registry)
+                reusable = prior["receipt"]
+                if is_generator and manifest.get("resource_contract"):
+                    from .canonical_resource_contract import (
+                        prepare_resource_context, validate_resource_artifact,
+                    )
+
+                    resources = prepare_resource_context(
+                        manifest, spec, java_classpath=(context or {}).get("java_classpath", ()),
+                        project_root=root,
+                    )
+                    validation = validate_resource_artifact(
+                        manifest, spec, target.read_text(encoding="utf-8"), resources,
+                    )
+                    reusable = deepcopy(reusable)
+                    reusable["validations"] = [
+                        row for row in reusable["validations"]
+                        if row.get("validator") != "resource_references"
+                    ] + [validation]
+                return _restore_checkpoint(job, reusable, registry)
             # Same approved inputs and verified output, new implementation:
             # regenerate under the normal target lock. Preserve old evidence
             # until a complete new receipt and target hash are committed.

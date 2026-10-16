@@ -66,11 +66,18 @@ def validate_canonical_output(job, source, *, resolved, context, authority, targ
     if target_path != spec["target_path"] or anchor != spec.get("anchor", ""):
         raise ValueError("CANONICAL_OUTPUT_TARGET_MISMATCH")
     receipts = [validate_semantic_contract(source, contract=spec, context_id=resolved.context_id, leaf_id=job.canonical_leaf)]
-    if spec["language"] == "json":
-        from .artifact_validators.json_resource import validate_json_resource, validate_dimension_definition
+    if manifest.get("resource_contract"):
+        from .canonical_resource_contract import prepare_resource_context, validate_resource_artifact
+
+        resources = prepare_resource_context(
+            manifest, spec, java_classpath=context.get("java_classpath", ()),
+            project_root=context.get("project_root"),
+        )
+        receipts.append(validate_resource_artifact(manifest, spec, source, resources))
+    elif spec['language'] == 'json':
+        from .artifact_validators.json_resource import validate_json_resource
+
         receipts.append(validate_json_resource(source, resource_kind=job.canonical_leaf))
-        if job.canonical_leaf == "minecraft/dimension/registry":
-            receipts.append(validate_dimension_definition(source))
     if spec["language"] == "java":
         from .canonical_java_target_contract import assert_canonical_java_target
 
@@ -202,6 +209,13 @@ def execute_generator_job(job, *, context, router, port_registry=None, base_dir=
             donor_sources = installed_donor_source_context(base_dir, donor_caps)
             source_context = tuple(source_context) + donor_sources
     extra_context = {"source_context": source_context} if source_context else {}
+    if manifest.get("resource_contract"):
+        from .canonical_resource_contract import prepare_resource_context
+
+        extra_context["resource_context"] = prepare_resource_context(
+            manifest, spec, java_classpath=context.get("java_classpath", ()),
+            project_root=base_dir,
+        )
     if spec["language"] == "java":
         from .fixed_template_generation import _adapter_name
         if _adapter_name(router, "coder") == "llama_cpp":
@@ -218,12 +232,18 @@ def execute_generator_job(job, *, context, router, port_registry=None, base_dir=
     source = output[next(p["name"] for p in manifest["outputs"] if p["type"] == "code_fragment")]
     verify_candidate_content(job, resolved, context, spec, source)
     validations = []
+    if manifest.get("resource_contract"):
+        from .canonical_resource_contract import validate_resource_artifact
+
+        validations.append(validate_resource_artifact(
+            manifest, spec, source, extra_context["resource_context"],
+        ))
     if source_context:
         validations.append({
             "validator": "materialized_prerequisite_source", "status": "CONTEXT",
             "sources": [{"path": row["path"], "sha256": row["sha256"]} for row in source_context],
         })
-    if spec["language"] == "json":
+    if spec["language"] == "json" and not manifest.get("resource_contract"):
         from .artifact_validators.json_resource import validate_json_resource, validate_dimension_definition
         validations.append(validate_json_resource(source, resource_kind=job.canonical_leaf))
         if job.canonical_leaf == "minecraft/dimension/registry":

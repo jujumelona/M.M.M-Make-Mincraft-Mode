@@ -23,8 +23,15 @@ def build_candidate_evidence(*, project_root, leaf_id, inputs, target, router, s
     authority.types.validate_input(leaf_id + ":input", inputs)
     spec = inputs[next(p["name"] for p in manifest["inputs"] if p["type"] == "specification")]
     implementation = make_implementation(leaf_id, target["minecraft_version"])
+    extra_context = {}
+    if manifest.get("resource_contract"):
+        from .canonical_resource_contract import prepare_resource_context
+
+        extra_context["resource_context"] = prepare_resource_context(
+            manifest, spec, java_classpath=classpath, project_root=project_root,
+        )
     generated = authority.executors[implementation["implementation_id"]](
-        inputs, leaf_id=leaf_id, router=router, authority=authority)
+        inputs, leaf_id=leaf_id, router=router, authority=authority, **extra_context)
     source = generated[next(p["name"] for p in manifest["outputs"] if p["type"] == "code_fragment")]
     if spec["language"] == "java":
         prefix, suffix = spec.get("java_prefix", ""), spec.get("java_suffix", "")

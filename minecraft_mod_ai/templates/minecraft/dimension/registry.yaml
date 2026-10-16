@@ -1,5 +1,5 @@
 id: minecraft/dimension/registry
-task: Implement only the registry responsibility of the supplied dimension artifact.
+task: Author the supplied dimension as a mod-owned datapack dimension definition.
 execution_mode: model
 side:
 - common
@@ -16,14 +16,93 @@ outputs:
 - name: dimension_registry_artifact
   type: code_fragment
 host_requirements:
-  java_class_header: plain
   capabilities:
   - DIMENSION
   symbols: []
   schemas: []
 implementation_key: fabric/dimension/registry
 validators:
-- json_parse
+- json_schema
+resource_contract:
+  min_minecraft: '1.19'
+  renderer: dimension
+  target_path: &dimension_resource_path src/main/resources/data/{{mod_id}}/dimension/{{registry_path}}.json
+  description: >-
+    Return a structured dimension definition using the real target registry IDs
+    supplied in the schema. Select the dimension type, noise settings and biome
+    source to implement the source requirement and authored module properties.
+    Every choice needs gameplay justification from that requirement; never select
+    an overworld clone merely to produce a valid file. Preserve concrete supplied
+    dimension_type IDs. The host preserves authored ambient_light and
+    coordinate_scale in an inline copy of the selected target dimension type.
+    Custom terrain or biome definitions must already exist as prerequisite resources.
+  authored_type_fields:
+    ambient_light:
+      type: number
+      minimum: 0
+      maximum: 1
+    coordinate_scale:
+      type: number
+      minimum: 0.00001
+      maximum: 30000000
+  model_schema: &dimension_definition
+    type: object
+    additionalProperties: false
+    required: [type, generator]
+    properties:
+      type:
+        type: string
+        pattern: '^[a-z0-9_.-]+:[a-z0-9_./-]+$'
+        x-mmm-resource-registry: dimension_type
+      generator: &dimension_generator
+        type: object
+        additionalProperties: false
+        required: [type, settings, biome_source]
+        properties:
+          type:
+            const: minecraft:noise
+          settings:
+            type: string
+            pattern: '^[a-z0-9_.-]+:[a-z0-9_./-]+$'
+            x-mmm-resource-registry: worldgen/noise_settings
+          biome_source:
+            anyOf:
+            - type: object
+              additionalProperties: false
+              required: [type, biome]
+              properties:
+                type:
+                  const: minecraft:fixed
+                biome:
+                  type: string
+                  pattern: '^[a-z0-9_.-]+:[a-z0-9_./-]+$'
+                  x-mmm-resource-registry: worldgen/biome
+            - type: object
+              additionalProperties: false
+              required: [type, preset]
+              properties:
+                type:
+                  const: minecraft:multi_noise
+                preset:
+                  type: string
+                  pattern: '^[a-z0-9_.-]+:[a-z0-9_./-]+$'
+                  x-mmm-resource-registry: worldgen/multi_noise_biome_source_parameter_list
+            - type: object
+              additionalProperties: false
+              required: [type]
+              properties:
+                type:
+                  const: minecraft:the_end
+  output_schema:
+    <<: *dimension_definition
+    properties:
+      type:
+        anyOf:
+        - type: string
+          pattern: '^[a-z0-9_.-]+:[a-z0-9_./-]+$'
+        - type: object
+          minProperties: 1
+      generator: *dimension_generator
 context_projection:
   max_bytes: 4096
   include:
@@ -35,7 +114,7 @@ repair:
   scope:
   - minecraft/dimension/registry
   writable_anchors:
-  - /* MMM:dimension_registry */
+  - *dimension_resource_path
 consumes:
 - artifact_requirement
 - target_cell
@@ -46,17 +125,15 @@ provides:
 - registry
 anchor_kinds:
 - registry_id
-- symbol
-- test
+- resource
 rules:
-- Implement registry responsibility for dimension strictly within declared DIMENSION
-  capability.
-- Target side must remain server; reject cross-side symbol leakage.
+- Implement only the declared DIMENSION resource responsibility.
+- Return structured resource values; the host owns JSON syntax and file installation.
+- Dimensions are dynamic datapack resources; do not search for a Java registerDimension API.
 - Fail closed if required dimension prerequisite receipt is missing; never invent
   defaults.
-- The dimension definition is a data-pack JSON resource, not a Java registry method.
-- Include a dimension type reference and an executable world generator definition.
-- Output must satisfy json_parse and the host-owned dimension object schema before completion.
+- All selected registry references must resolve in the exact target or materialized project.
+- Output must satisfy the dimension JSON schema and reference validator before completion.
 postconditions:
-- dimension JSON definition matches host version contract
+- dimension registry matches host version contract
 - dimension registry receipts emitted with verified context

@@ -206,6 +206,14 @@ def _canonical_candidate_inputs(
     """Build the persisted host-owned input contract for a generator candidate."""
 
     manifest = load_template(canonical_leaf)
+    if manifest.get("resource_contract"):
+        from .canonical_resource_contract import resource_candidate_inputs
+
+        return resource_candidate_inputs(
+            manifest, fact, mod_id=mod_id, subject=subject,
+            minecraft_version=minecraft_version, context_id=context_id,
+            source_requirement=source_requirement, parent_requirement=parent_requirement,
+        )
     side_values = tuple(str(value).upper() for value in manifest.get("side", ()))
     if len(side_values) != 1:
         raise ArtifactExpansionError(
@@ -362,62 +370,6 @@ def _canonical_candidate_inputs(
         ],
         "java_filename": class_name + ".java",
     }
-
-    # A custom Minecraft dimension is a data-driven registry entry, NOT a
-    # Java registration method. Keep the canonical identity/receipt but route
-    # the definition to a data-pack JSON artifact for the 26.x target.
-    if canonical_leaf == "minecraft/dimension/registry" and minecraft_version.startswith("26."):
-        definition_schema = {
-            "type": "object", "required": ["type", "generator"],
-            "additionalProperties": False,
-            "properties": {
-                "type": {"type": "string", "pattern": r"^[a-z0-9_.-]+:[a-z0-9_./-]+$"},
-                "generator": {
-                    "type": "object", "required": ["type"],
-                    "properties": {
-                        "type": {"enum": ["minecraft:noise", "minecraft:flat", "minecraft:debug"]},
-                        "settings": {},
-                        "biome_source": {"type": "object"},
-                    },
-                    "allOf": [
-                        {"if": {"properties": {"type": {"const": "minecraft:noise"}}},
-                         "then": {"required": ["settings", "biome_source"]}},
-                        {"if": {"properties": {"type": {"const": "minecraft:flat"}}},
-                         "then": {"required": ["settings"]}},
-                    ],
-                },
-            },
-        }
-        json_slot_schema = {
-            "type": "string", "minLength": 2,
-            "maxLength": SOURCE_REPAIR_MAX_SOURCE_CHARS,
-            "pattern": r"(?s)^\s*\{.*\}\s*$",
-            SCHEMA_CONTRACT_PROFILE_KEY: SOURCE_REPAIR_SCHEMA_PROFILE,
-            SCHEMA_STRING_CLASS_KEY: STRING_CLASS_SOURCE,
-        }
-        spec.update({
-            "target_path": f"src/main/resources/data/{mod_id}/dimension/{subject}.json",
-            "language": "json",
-            "output_schema": definition_schema,
-            "render_mold": "{{artifact_source}}",
-            "slots": [{
-                "name": "artifact_source",
-                "description": (
-                    "Produce a complete Minecraft 26.x data-pack dimension JSON object. "
-                    "The root must have a verified dimension type ID and a generator definition. "
-                    "Use actual Minecraft 26.x generator and biome_source formats. "
-                    "Do not write Java, registry methods, comments, placeholder resources, "
-                    "or invent missing gameplay characteristics. "
-                    "Keep terrain and biome choices grounded in the supplied requirement."
-                ),
-                "schema": json_slot_schema,
-            }],
-        })
-        spec.pop("java_filename", None)
-        bindings.pop("java_implementation_requirements", None)
-        bindings["data_resource_responsibility"] = (
-            "data/<namespace>/dimension/<id>.json; Java only for separate runtime behavior"
-        )
 
     inputs: dict[str, Any] = {}
     for port in manifest.get("inputs", ()):
@@ -703,15 +655,11 @@ def expand_facts_to_jobs(
                     operation="generate",
                     requires=(),
                     required_ports=(),
-                    # The canonical entity registry generator produces one
-                    # verified receipt and one source artifact. Publish their
-                    # real typed outputs so entity loot can depend on actual
-                    # registration generation, not an invented entity ID port.
-                    produces=(
-                        (f"{subject}.entity_registry_receipt",
-                         f"{subject}.entity_registry_artifact")
-                        if canonical_leaf == "minecraft/entity/registry"
-                        else ()
+                    # Every generator publishes its declared artifact and receipt,
+                    # including datapack resources consumed without Java symbols.
+                    produces=tuple(
+                        f"{subject}.{port['name']}"
+                        for port in load_template(canonical_leaf)["outputs"]
                     ),
                     deterministic_inputs=deterministic_inputs,
                     context_id=version_context.context_id,

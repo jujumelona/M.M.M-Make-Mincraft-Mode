@@ -2002,17 +2002,21 @@ class CompleteProductionOrchestrator:
                         verified_sources.update({path: value.removeprefix('sha256:')
                             for path, value in completed.get('_mmm_output_hashes', {}).items()})
                     generation_context['_verified_prerequisite_source_hashes'] = verified_sources
-                    # Establish the actual Fabric/JDK API before model authoring.
-                    # A broken Gradle toolchain must fail here, not after coder work.
-                    def _java_generator_job(job: ArtifactJob) -> bool:
+                    # Establish the actual target before authoring: Java uses its
+                    # APIs, while datapack resources use its registry definitions.
+                    def _job_requires_target_classpath(job: ArtifactJob) -> bool:
                         if job.executor_type.value != "python_generator":
                             return False
                         inputs = job.deterministic_inputs.get("_canonical_inputs")
                         if not isinstance(inputs, dict):
                             return False
                         specification = canonical_specification_input(job.canonical_leaf, inputs)
-                        return specification.get("language") == "java" and bool(specification.get("slots"))
-                    if any(_java_generator_job(job) for job in artifact_jobs_to_run):
+                        if specification.get("language") == "java":
+                            return bool(specification.get("slots"))
+                        from .task_template_catalog import load_template
+
+                        return bool(load_template(job.canonical_leaf).get("resource_contract"))
+                    if any(_job_requires_target_classpath(job) for job in artifact_jobs_to_run):
                         from .construction_classpath import resolve_fabric_compile_classpath
                         generation_context["java_classpath"] = list(
                             resolve_fabric_compile_classpath(
