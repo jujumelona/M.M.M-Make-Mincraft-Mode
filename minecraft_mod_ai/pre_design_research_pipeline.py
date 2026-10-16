@@ -679,6 +679,7 @@ def collect_design_research(
 
     payload: dict[str, Any] = {
         "schema_version": "mmm/agentic-pre-design-research-v2",
+        "prompt_sha256": _canonical_sha256(prompt),
         "research_brief": research_brief,
         "deterministic": deterministic,
         "domain_notes": domain_notes,
