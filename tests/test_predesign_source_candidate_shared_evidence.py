@@ -323,3 +323,23 @@ def test_reference_changes_invalidate_cached_source_plan_identity():
     assert source_reference_fingerprint(("example/source-one",)) != (
         source_reference_fingerprint(("example/source-two",))
     )
+
+
+def test_research_receipt_without_matching_prompt_hash_is_not_carried_to_new_request(monkeypatch):
+    from minecraft_mod_ai import pre_design_research_pipeline as pipeline
+    from minecraft_mod_ai.research_reuse_candidates import ensure_authored_source_handoff
+
+    prompt = "a completely different machine"
+    monkeypatch.setattr(pipeline, "collect_source_candidate_handoff", lambda _r, p: {
+        "schema_version": "mmm/pre-design-source-candidate-handoff-v1",
+        "prompt_sha256": pipeline._canonical_sha256(p),
+        "repository_candidates": [],
+        "model_called": False,
+    })
+    stale = {"_pre_design_research": {
+        "prompt_sha256": pipeline._canonical_sha256("old spaceship design"),
+        "deterministic": {"repository_candidates": _projected()},
+    }}
+    content, rows = ensure_authored_source_handoff(stale, router=object(), prompt=prompt)
+    assert rows == []
+    assert "_pre_design_research" not in content
