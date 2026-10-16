@@ -114,6 +114,8 @@ class VerifiedSourceRAG:
                     "source_unit_kind": unit["kind"],
                     "adapted_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                     "code": unit["code"],
+                    "source_minecraft_version": (donor.get("compatibility_evidence") or {}).get("minecraft_version", ""),
+                    "source_closure_complete": donor.get("closure_complete", True),
                     "authority": donor.get("_authority", "installed_target_adapted_source"),
                     "retrieval_method": "verified_semantic_match" if score else "inspected_source_fallback",
                     "retrieval_score": score,
@@ -167,6 +169,10 @@ def verified_source_rag(reuse_plan: Mapping[str, Any], *, adapter: Any,
         "fabric_api": adapter.fabric_api, "fabric_loom": adapter.fabric_loom,
         "gradle": adapter.gradle, "target_package": package_name, "target_modid": mod_id,
     }
+    for decision in chosen:
+        evidence = (decision.get("donor") or {}).get("compatibility_evidence") or {}
+        if evidence.get("minecraft_version") != adapter.minecraft_version:
+            raise ValueError("SOURCE_REUSE_DONOR_VERSION_MISMATCH")
     with TemporaryDirectory(prefix="mmm_verified_source_rag_") as directory:
         workspace = Path(directory)
         downloaded = materialize_source_slices(workspace, reuse_plan) if chosen else {"donors": []}
@@ -197,19 +203,20 @@ def verified_source_rag(reuse_plan: Mapping[str, Any], *, adapter: Any,
                 "source_commit": donor["commit_sha"], "source_kind": "verified_adapted_donor",
             })
             rag.sources.append((decision["capability"], index, root, donor))
-        # Older mods that need model adaptation are useful source evidence even
-        # when deterministic target compilation fails. Never install this code
-        # unchanged or label its API as valid for the requested target.
+        # Same-version mods remain useful references when dependency closure or
+        # deterministic target compilation fails. Their original APIs are not
+        # target-callable authority and their files are never installed here.
         reference_counts: dict[str, int] = {}
         installed_capabilities = {row[0] for row in rag.sources}
         for ordinal, reference in enumerate(references):
             capability = reference["capability"]
             if capability in installed_capabilities:
                 continue
-            donor_slice = DonorSlice.from_dict(reference["donor"])
-            if not donor_slice.closure_complete:
-                continue
             try:
+                donor_slice = DonorSlice.from_dict(reference["donor"])
+                if (donor_slice.compatibility_evidence is None or
+                        donor_slice.compatibility_evidence.minecraft_version != adapter.minecraft_version):
+                    raise ValueError("SOURCE_REFERENCE_MINECRAFT_VERSION_MISMATCH")
                 blobs = materialize_pinned_donor(donor_slice)
                 donor = donor_slice.to_dict()
                 notice_path, notice_bytes = _verified_donor_license_notice(donor, blobs)
@@ -234,10 +241,11 @@ def verified_source_rag(reuse_plan: Mapping[str, Any], *, adapter: Any,
                 # Optional migration guidance has no installed-source authority.
                 # Unavailable or invalid evidence must not block fresh authoring.
                 rag.reference_failures.append({
-                    "capability": capability, "repository": donor_slice.repository,
+                    "capability": capability,
+                    "repository": str((reference.get("donor") or {}).get("repository", "")),
                     "status": "reference_unavailable", "error": f"{type(exc).__name__}: {exc}"[:1200],
                 })
-                print(f"SOURCE_RAG: reference unavailable {donor_slice.repository} ({type(exc).__name__})",
+                print(f"SOURCE_RAG: reference unavailable for {capability} ({type(exc).__name__})",
                       flush=True)
                 continue
             rag.license_notices[notice_path] = notice
@@ -263,8 +271,10 @@ def bind_owner_source_context(bindings: dict[str, Any], *, owner: Any,
     capabilities = [row["capability"] for row in graph.get("requirement_bindings", ())
                     if row.get("requirement_id") in refs]
     if not request_scope:
-        capabilities = [row["capability"] for row in reuse_plan.get("capabilities", ())
-                        if row.get("mode") == "source_transplant"]
+        capabilities = list(dict.fromkeys(
+            [row["capability"] for row in reuse_plan.get("capabilities", ())
+             if row.get("mode") == "source_transplant"] +
+            [row["capability"] for row in reuse_plan.get("reference_sources", ())]))
     snippets = rag.context(capabilities, requirement + " " + owner.module_id)
     # A target-proven Java donor is a mandatory handoff, not an optional RAG
     # suggestion. Resource-only transplants need no Java method, but an

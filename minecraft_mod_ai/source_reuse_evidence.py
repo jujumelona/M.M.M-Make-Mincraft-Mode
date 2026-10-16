@@ -38,6 +38,7 @@ class SourceReuseEvidence:
             "verified", "installed", "port_required", "search_empty",
             "provider_error", "download_error", "target_compile_failed",
             "rejected", "unresolved",
+            "reference_available",
         }:
             raise ValueError("SOURCE_REUSE_EVIDENCE_STATUS")
         if self.mode not in {"source_transplant", "port", "fresh", "reference"}:
@@ -94,7 +95,7 @@ def build_source_reuse_evidence(requirements, reuse_plan, target_symbols):
         elif mode == "fresh":
             status = str(decision.get("search_status") or "unresolved")
             if status not in {"search_empty", "provider_error", "download_error",
-                              "target_compile_failed", "rejected", "unresolved"}:
+                              "target_compile_failed", "rejected", "unresolved", "reference_available"}:
                 raise ValueError("SOURCE_REUSE_UNRECOGNIZED_FRESH_REASON")
         else:
             raise ValueError("SOURCE_REUSE_UNRECOGNIZED_DECISION_MODE")
@@ -126,12 +127,12 @@ def build_source_reuse_evidence(requirements, reuse_plan, target_symbols):
         capability = str(reference.get("capability", ""))
         source_id = "host-donor:" + str(donor.get("repository", "")) + "@" + str(donor.get("commit_sha", ""))
         rows.append(SourceReuseEvidence(
-            evidence_id=_evidence_id(capability, source_id, "unresolved"),
+            evidence_id=_evidence_id(capability, source_id, "reference_available"),
             capability=capability,
             requirement_ids=tuple(sorted(by_cap.get(capability, ()))),
-            # Rejected target proofs are evidence for a possible port,
-            # not mandatory source dependencies or installed Java symbols.
-            mode="reference", status="unresolved", source_id=source_id,
+            # Partial slices and rejected target proofs can guide an optional
+            # port without becoming mandatory source dependencies or APIs.
+            mode="reference", status="reference_available", source_id=source_id,
             repository=str(donor.get("repository", "")),
             commit_sha=str(donor.get("commit_sha", "")),
             license_id=str(donor.get("license_id", "")),

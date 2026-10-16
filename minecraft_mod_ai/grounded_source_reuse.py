@@ -5,8 +5,9 @@ from __future__ import annotations
 The small coder never searches for or selects a donor. Only GitHub repositories that
 have host-materialized evidence in the planning-state RAG or were explicitly
 supplied by the host/user may enter this pipeline. A discovery receipt
-is reference-only: a candidate is pinned, license/closure checked, materialized, and
-compiled against the selected target before its source is attached to a generation task.
+is reference-only: candidates are pinned and license/hash checked before inspection.
+Only complete slices compiled against the selected target can be installed;
+partial slices remain optional source evidence for authoring on the target API.
 """
 
 import json
@@ -28,6 +29,8 @@ from .source_transplant import (
     DonorSlice,
     SourceTransplantError,
     inspect_repository_slice,
+    materialize_pinned_donor,
+    validate_donor_slice_manifest,
     validated_reuse_donor,
 )
 from .target_contract import TargetContract
@@ -297,10 +300,43 @@ def _inspection_backend_unavailable(exc: Exception) -> bool:
             or "api rate" in message or "connection refused" in message)
 
 
+def _retain_reference_source(donor, capability, client, diagnostics, references, inspections):
+    """Only stop discovery for source members the Java handoff can actually read."""
+    from .construction_context import java_source_units
+
+    try:
+        blobs = materialize_pinned_donor(donor, client)
+        readable_member = False
+        for path, raw in blobs.items():
+            if not path.endswith('.java'):
+                continue
+            try:
+                units = java_source_units(raw.decode('utf-8'), path=path)
+            except (ValueError, RuntimeError, UnicodeError):
+                continue
+            if any(unit['kind'] in {'method', 'constructor', 'field'} for unit in units):
+                readable_member = True
+                break
+        if not readable_member:
+            raise SourceTransplantError('Pinned reference has no parseable Java member for the source handoff.')
+    except (OSError, ValueError, RuntimeError, httpx.HTTPError) as exc:
+        inspections.append({
+            'capability': capability, 'repository': donor.repository,
+            'status': 'reference_unavailable', 'error': f'{type(exc).__name__}: {exc}',
+        })
+        return False
+    references.append({
+        'capability': capability, 'donor': donor.to_dict(),
+        'authority': 'pinned_licensed_reference_only', 'migration_diagnostics': diagnostics,
+    })
+    return True
+
+
 def _inspect_candidate_batch(
     cards: Sequence[Mapping[str, Any]], *, capability: str, terms: Sequence[str],
     adapter: TargetContract, client: EcosystemDiscoveryClient,
     donor_inspector: DonorInspector, inspections: list[dict[str, Any]],
+    reference_sources: list[dict[str, Any]],
     outage: dict[str, str] | None = None,
 ) -> list[DonorSlice]:
     """Inspect a small ranked batch before paying for the rest of the frontier."""
@@ -310,8 +346,6 @@ def _inspect_candidate_batch(
             break
         overlap = _candidate_overlap(capability, terms, card)
         explicit_reference = bool(card.get("explicit_reference"))
-        if overlap <= 0 and not explicit_reference:
-            continue
         repository = str(card["repository"])
         try:
             donor = donor_inspector(
@@ -337,11 +371,33 @@ def _inspect_candidate_batch(
                 print("SOURCE_REUSE_INSPECTION_OUTAGE: " + json.dumps(
                     {"capability": capability, **outage}, ensure_ascii=False), flush=True)
             continue
-        admitted = bool(
-            donor is not None
-            and donor.closure_complete
-            and donor.target_compatibility in {"exact", "adapt"}
-        )
+        reference_eligible = False
+        rejection = "No pinned source slice was located."
+        if donor is not None:
+            try:
+                validate_donor_slice_manifest(donor)
+                if (donor.compatibility_evidence is None or
+                        donor.compatibility_evidence.minecraft_version != adapter.minecraft_version):
+                    raise SourceTransplantError("Pinned source Minecraft version does not match the request.")
+                reference_eligible = True
+            except (SourceTransplantError, ValueError) as exc:
+                rejection = str(exc)
+        admitted = bool(reference_eligible and donor is not None and donor.closure_complete
+                        and donor.target_compatibility in {"exact", "adapt"})
+        if reference_eligible and not admitted:
+            diagnostics = {
+                "closure_complete": donor.closure_complete,
+                "target_compatibility": donor.target_compatibility,
+                "truncation_reason": donor.truncation_reason,
+                "unresolved_dependency_count": len(donor.unresolved_edges),
+                "dependency_diagnostics_location": 'donor.unresolved_edges',
+                "instruction": "Inspect available members for useful partial logic; resolve target APIs independently.",
+            }
+            reference_eligible = _retain_reference_source(
+                donor, capability, client, json.dumps(diagnostics, ensure_ascii=False),
+                reference_sources, inspections)
+            if not reference_eligible:
+                rejection = 'Pinned slice has no readable Java reference for the authoring handoff.'
         inspections.append(
             {
                 "capability": capability,
@@ -349,8 +405,10 @@ def _inspect_candidate_batch(
                 "page_refs": list(card.get("page_refs", ())),
                 "explicit_reference": explicit_reference,
                 "candidate_origin": str(card.get("candidate_origin") or "planning_state_or_explicit"),
-                "status": "proof_pending" if admitted else "inspection_rejected",
+                "status": ("proof_pending" if admitted else
+                           "reference_only" if reference_eligible else "inspection_rejected"),
                 "overlap": overlap,
+                "rejection_reason": "" if reference_eligible else rejection,
             }
         )
         if admitted and donor is not None:
@@ -429,21 +487,21 @@ def build_repository_reuse_plan(
             terms = terms_by_capability.get(capability, (capability.replace(".", " "),))
             verified: list[tuple[DonorSlice, ReuseProofReceipt]] = []
             ranked_cards = sorted(
-                (card for card in cards if card.get("explicit_reference")
-                 or _candidate_overlap(capability, terms, card) > 0),
+                cards,
                 key=lambda card: (bool(card.get("explicit_reference")),
                                   _candidate_overlap(capability, terms, card)), reverse=True,
             )
-            # Two inspections preserve exact-target/adaptation-cost ranking
-            # locally. Later batches remain available if every proof rejects;
-            # stop downloading as soon as usable code is found.
+            # Rank a small batch locally. Once pinned source can guide partial
+            # authoring, hand it off instead of exhausting the frontier looking
+            # for a donor that can be installed unchanged.
             for offset in range(0, len(ranked_cards), 2):
                 if inspection_outage:
                     break
                 candidates = _inspect_candidate_batch(
                     ranked_cards[offset:offset + 2], capability=capability, terms=terms,
                     adapter=adapter, client=client, donor_inspector=donor_inspector,
-                    inspections=inspections, outage=inspection_outage,
+                    inspections=inspections, reference_sources=reference_sources,
+                    outage=inspection_outage,
                 )
                 for donor in sorted(candidates, key=lambda row: (
                     row.target_compatibility == "exact", -row.adaptation_cost, row.confidence,
@@ -465,11 +523,9 @@ def build_repository_reuse_plan(
                                 "error": f"{type(exc).__name__}: {exc}",
                             }
                         )
-                        reference_sources.append({
-                            "capability": capability, "donor": donor.to_dict(),
-                            "authority": "pinned_licensed_reference_only",
-                            "migration_diagnostics": f"{type(exc).__name__}: {exc}"[:1200],
-                        })
+                        _retain_reference_source(
+                            donor, capability, client, f"{type(exc).__name__}: {exc}"[:1200],
+                            reference_sources, inspections)
                         continue
                     proof_payload = receipt.to_dict()
                     proof_payload["status"] = (
@@ -480,13 +536,11 @@ def build_repository_reuse_plan(
                         verified.append((donor, receipt))
                         break
                     else:
-                        reference_sources.append({
-                            "capability": capability, "donor": donor.to_dict(),
-                            "authority": "pinned_licensed_reference_only",
-                            "migration_diagnostics": str(receipt.failure_message or receipt.failure_code)[:1200],
-                        })
+                        _retain_reference_source(
+                            donor, capability, client, str(receipt.failure_message or receipt.failure_code)[:1200],
+                            reference_sources, inspections)
 
-                if verified:
+                if verified or any(row['capability'] == capability for row in reference_sources):
                     break
 
             selected = verified[0] if verified else None
@@ -497,7 +551,10 @@ def build_repository_reuse_plan(
                                       and r.get("status") == "inspection_error"]
                 searches = [r for r in discovery_receipts
                             if capability in r.get("capabilities", ())]
-                if inspection_outage:
+                reference_count = sum(row['capability'] == capability for row in reference_sources)
+                if reference_count:
+                    search_status, failure_code = 'reference_available', ''
+                elif inspection_outage:
                     search_status = "provider_error"
                     failure_code = "DONOR_INSPECTION_PROVIDER_UNAVAILABLE"
                 elif failed_proofs:
@@ -527,7 +584,11 @@ def build_repository_reuse_plan(
                         "failure_code": failure_code,
                         "source_id": "",
                         "component_refs": [],
+                        "reference_source_count": reference_count,
                         "rationale": (
+                            "Pinned same-version source is available for optional partial porting; "
+                            "author the remaining behavior against the target API."
+                            if reference_count else
                             "No grounded or explicitly referenced GitHub donor passed immutable "
                             "source, permissive license, dependency closure, authoritative compile, "
                             "and artifact coverage gates."
@@ -583,6 +644,7 @@ def build_repository_reuse_plan(
     planning_cards = planning_state_repository_cards(design)
     return {
         "schema_version": _SCHEMA,
+        "bound_target": {'minecraft_version': adapter.minecraft_version, 'loader': adapter.loader},
         "source_plan_sha256": source_plan_sha256,
         "capability_graph": graph,
         "capabilities": decisions,

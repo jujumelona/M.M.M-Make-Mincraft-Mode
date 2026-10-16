@@ -32,7 +32,7 @@ def authored_capability_graph(
             "requirement_bindings": [{"requirement_id": row["requirement_id"],
                                       "capability": row["search_query"]}
                                      for row in request_scope["requirements"]],
-            "retrieval_policy_version": "request-features-v3",
+            "retrieval_policy_version": "request-features-v4-exact-source-partial-fit",
             "coverage_policy": "original request features remain authoritative",
         }
     from .minecraft_knowledge_nodes import detect_features
@@ -96,7 +96,7 @@ def authored_capability_graph(
             }
             for node in nodes
         ],
-        "retrieval_policy_version": "structured-intent-v2",
+        "retrieval_policy_version": "structured-intent-v3-exact-source-partial-fit",
         "coverage_policy": "discovery_hints_only; authored design remains authoritative",
     }
 
@@ -271,6 +271,9 @@ def audit_authored_source_reuse(
         "fresh_implementation_count": len(fresh),
         "verified_transplant_capabilities": verified,
         "fresh_implementation_capabilities": fresh,
+        "reference_source_count": len(reuse_plan.get('reference_sources', ())),
+        "reference_capabilities": sorted({row['capability']
+                                          for row in reuse_plan.get('reference_sources', ())}),
         "inspection_failure_count": sum(
             isinstance(row, Mapping) and row.get("status") in {"inspection_error", "inspection_rejected"}
             for row in inspections if isinstance(inspections, (list, tuple))
@@ -286,7 +289,7 @@ def audit_authored_source_reuse(
                 "capability": str(row.get("capability") or ""),
                 "repository": str(row.get("repository") or ""),
                 "status": str(row.get("status") or ""),
-                "error": str(row.get("error") or ""),
+                "error": str(row.get("error") or row.get('rejection_reason') or ""),
             }
             for row in inspections
             if isinstance(row, Mapping)
