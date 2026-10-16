@@ -12,7 +12,6 @@ import atexit
 import json
 import os
 import re
-import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from threading import Lock
@@ -456,20 +455,6 @@ def _resolve_modrinth_candidates(
         if repository:
             direct.append((repository, score, metadata))
     return direct if with_metadata else [(repo, rank) for repo, rank, _meta in direct]
-
-
-def _ascii_search_query(value: str) -> str:
-    """Project arbitrary Unicode text onto the ASCII-only CurseForge query field.
-
-    This is intentionally script-neutral: Unicode normalization may preserve
-    compatible Latin characters, while unsupported scripts fall back at the
-    provider boundary instead of invoking a language-specific transliterator.
-    """
-
-    normalized = unicodedata.normalize("NFKD", str(value or ""))
-    ascii_text = normalized.encode("ascii", "ignore").decode("ascii")
-    ascii_text = re.sub(r"[^A-Za-z0-9\s_-]+", " ", ascii_text)
-    return re.sub(r"\s+", " ", ascii_text).strip()
 
 
 class _CurseForgeSearchError(RuntimeError):
