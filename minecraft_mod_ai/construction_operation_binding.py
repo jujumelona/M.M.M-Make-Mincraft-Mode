@@ -585,6 +585,17 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
                 references.append(reference['node_ref'])
                 save_author()
             schema['properties']['input_refs'] = {'const': references}
+    if op == 'field' and preferred_field == choice.get('symbol_ref'):
+        row = state.symbols[preferred_field]
+        if row.get('static') or row.get('access', 0) & 8:
+            # Every property is already fixed by target bytecode and the slot:
+            # one more LLM completion would only risk corrupting the wiring.
+            result = {'node_id': goal['node_id'], 'input_refs': [],
+                      'typed_result': row['return_type'],
+                      'attributes': {'symbol_ref': preferred_field}}
+            from .fixed_template_generation import _validate_native_arguments
+            _validate_native_arguments(result, schema)
+            return result
     return dict(ask(router, 'construction_operation_' + op,
         {**current, **state.payload(choice_actions(schema, default_action='write_' + op),
             **{key: payload['construction_state'][key] for key in ('current_member', 'graph', 'sources')
