@@ -123,7 +123,7 @@ def test_curseforge_reuse_discovers_second_page_without_name_search(monkeypatch)
         "build spaceship and fight aliens", limit=8,
         minecraft_version="1.21.1", loader="fabric", with_metadata=True,
     )
-    assert any(repo == "owner/hidden-donor" for repo, _, _ in results)
+    assert any(repo == "" and row["source_id"] == "curseforge:51" for repo, _, row in results)
     searches = [params for url, params in calls if "/mods/search" in url]
     assert searches
     assert all("searchFilter" not in params for params in searches)
@@ -175,7 +175,8 @@ def test_later_curseforge_failure_keeps_completed_page_candidates(monkeypatch):
     found = reuse_discovery._search_curseforge(
         "spaceship", limit=8, with_metadata=True, errors=errors,
     )
-    assert found and found[0][0] == "owner/ship"
+    assert found and found[0][0] == ""
+    assert found[0][2]["source_id"] == "curseforge:51"
     assert errors and errors[0]["stage"] == "later_page"
 
 
