@@ -182,9 +182,11 @@ def test_feature_execution_passes_materialized_owner_api_to_the_real_generator(m
     source.write_text("package test.space; public class PlanetRegistry { "
                       "public static String destinationForShip(long id) { return \"planet\"; } }")
     content = SimpleNamespace(module_id="planet_registry", kind="item", config={"requirement_refs": ["planet"]})
-    content_job = SimpleNamespace(owner_module="planet_registry", deterministic_inputs={"_canonical_inputs": {
-        "item_input": {"language": "java", "target_path": path,
-                       "bindings": {"package_name": "test.space", "class_name": "PlanetRegistry"}}}})
+    # This fixture tests dependency-file visibility, not template compilation:
+    # represent an existing Java producer without inventing a canonical leaf.
+    content_job = SimpleNamespace(
+        owner_module="planet_registry", target_path=path, deterministic_inputs={},
+    )
     adapter = host_target("26.1.2")
     plan = AuthoredPlan("Travel to planets", "Saved", request_scope=_scope_with_accepted_construction_behavior())
     modules, jobs = compile_request_feature_jobs(
