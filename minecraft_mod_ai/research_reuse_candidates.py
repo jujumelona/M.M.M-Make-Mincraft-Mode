@@ -181,7 +181,8 @@ def project_repository_candidates(
     *,
     per_domain_limit: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Project all deduplicated GitHub donor *candidates* from grounded records."""
+    """No GitHub donor candidates are admitted in CurseForge-only mode."""
+    return []
     if not _source_code_domain(domain):
         return []
     domain_id = _text(domain.get("domain_id"))
