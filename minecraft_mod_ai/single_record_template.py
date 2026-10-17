@@ -75,7 +75,12 @@ def _atomic_record_schema_slices(
     *,
     identifier: str,
 ) -> tuple[dict[str, Any], ...]:
-    """Project one logical record into host-owned one-field model pages."""
+    """Batch up to three small related fields into one bounded model request.
+
+    The 9B model authors a small complete record page rather than answering
+    once per field. The host still proves each closed schema's token ceiling
+    and validates the entire resulting record after every page.
+    """
 
     if schema.get("type") != "object":
         raise SingleRecordTemplateError(
@@ -93,47 +98,137 @@ def _atomic_record_schema_slices(
             f"SINGLE_TEMPLATE_SCHEMA: {identifier} has undeclared required fields "
             f"{sorted(undeclared_required)!r}"
         )
+    shared = {key: deepcopy(schema[key]) for key in ("$schema", "$defs", "definitions")
+              if key in schema}
 
-    shared: dict[str, Any] = {}
-    for key in ("$schema", "$defs", "definitions"):
-        if key in schema:
-            shared[key] = deepcopy(schema[key])
+    # A fixed small limit makes each page tractable even for an inexpensive
+    # local model; no inference is spent asking whether to continue.
+    limit = 3
+    pages: list[dict[str, Any]] = []
 
-    slices: list[dict[str, Any]] = []
-    for raw_name in required:
-        name = str(raw_name)
-        child = properties.get(name)
-        if not isinstance(child, Mapping):
-            raise SingleRecordTemplateError(
-                f"SINGLE_TEMPLATE_SCHEMA: {identifier}.{name} must declare a field schema"
-            )
+    def make_page(fields: list[str]) -> dict[str, Any]:
         part_schema: dict[str, Any] = {
             **deepcopy(shared),
             "type": "object",
-            "properties": {name: deepcopy(dict(child))},
-            "required": [name],
+            "properties": {},
+            "required": list(fields),
             "additionalProperties": False,
         }
-        try:
-            assert_atomic_model_schema(
-                part_schema,
-                surface=f"single record field {identifier}.{name}",
-            )
-            # Prove that one field page has a finite decode bound before any model call.
-            structured_output_token_ceiling(
-                effective_model_transport_schema(part_schema)
-            )
-        except Exception as exc:
-            raise SingleRecordTemplateError(
-                f"SINGLE_TEMPLATE_SCHEMA: unbounded field page for {identifier}.{name}: {exc}"
-            ) from exc
-        slices.append(part_schema)
+        for name in fields:
+            child = properties.get(name)
+            if not isinstance(child, Mapping):
+                raise SingleRecordTemplateError(
+                    f"SINGLE_TEMPLATE_SCHEMA: {identifier}.{name} must declare a field schema"
+                )
+            part_schema["properties"][name] = deepcopy(dict(child))
+        assert_atomic_model_schema(
+            part_schema, surface=f"record page {identifier}: {','.join(fields)}"
+        )
+        structured_output_token_ceiling(effective_model_transport_schema(part_schema))
+        return part_schema
 
-    if not slices:
+    pending: list[str] = []
+    for raw_name in required:
+        name = str(raw_name)
+        try:
+            candidate = make_page([*pending, name])
+        except Exception as exc:
+            if not pending:
+                raise SingleRecordTemplateError(
+                    f"SINGLE_TEMPLATE_SCHEMA: unbounded field for {identifier}.{name}: {exc}"
+                ) from exc
+            pages.append(make_page(pending))
+            pending = [name]
+            try:
+                make_page(pending)
+            except Exception as inner:
+                raise SingleRecordTemplateError(
+                    f"SINGLE_TEMPLATE_SCHEMA: unbounded field for {identifier}.{name}: {inner}"
+                ) from inner
+        else:
+            pending.append(name)
+            if len(pending) >= limit:
+                pages.append(candidate)
+                pending = []
+    if pending:
+        pages.append(make_page(pending))
+    if not pages:
         raise SingleRecordTemplateError(
             f"SINGLE_TEMPLATE_SCHEMA: {identifier} has no required model fields"
         )
-    return tuple(slices)
+    return tuple(pages)
+
+
+def _merge_record_slice(
+    merged: dict[str, Any],
+    part: Any,
+    *,
+    identifier: str,
+) -> None:
+    if not isinstance(part, Mapping):
+        raise SingleRecordTemplateError(
+            f"SINGLE_TEMPLATE_RECORD: expected object slice for {identifier}"
+        )
+    overlap = set(merged).intersection(part)
+    if overlap:
+        raise SingleRecordTemplateError(
+            f"SINGLE_TEMPLATE_RECORD: duplicate projected fields for {identifier}: "
+            f"{sorted(overlap)!r}"
+        )
+    merged.update(deepcopy(dict(part)))
+
+
+def _deterministic_record_slice(
+    schema: dict[str, Any], native_schema: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Resolve a page without the model only when *all* fields are forced."""
+
+    properties = native_schema.get("properties")
+    if not isinstance(properties, Mapping):
+        return None
+    part: dict[str, Any] = {}
+    for field in schema["required"]:
+        native_field = properties.get(field)
+        if not isinstance(native_field, Mapping):
+            return None
+        if "const" in native_field:
+            candidate = native_field["const"]
+        else:
+            choices = native_field.get("enum")
+            if not isinstance(choices, list) or len(choices) != 1:
+                return None
+            candidate = choices[0]
+        part[field] = deepcopy(candidate)
+    Draft202012Validator(schema).validate(part)
+    return part
+
+            candidate = make_page([*pending, name])
+        except Exception as exc:
+            if not pending:
+                raise SingleRecordTemplateError(
+                    f"SINGLE_TEMPLATE_SCHEMA: unbounded field for {identifier}.{name}: {exc}"
+                ) from exc
+            pages.append(make_page(pending))
+            pending = [name]
+            try:
+                make_page(pending)
+            except Exception as inner:
+                raise SingleRecordTemplateError(
+                    f"SINGLE_TEMPLATE_SCHEMA: unbounded field for {identifier}.{name}: {inner}"
+                ) from inner
+        else:
+            pending.append(name)
+            if len(pending) >= limit:
+                pages.append(candidate)
+                pending = []
+    if pending:
+        pages.append(make_page(pending))
+    if not pages:
+        raise SingleRecordTemplateError(
+            f"SINGLE_TEMPLATE_SCHEMA: {identifier} has no required model fields"
+        )
+    return tuple(pages)
+
 
 def _merge_record_slice(
     merged: dict[str, Any],
@@ -251,7 +346,8 @@ def run_single_record_template(
             print(
                 "PLANNER_RECORD_FIELD: " + json.dumps({
                     "template": identifier,
-                    "field": part_schema["required"][0],
+                    "fields": list(part_schema["required"]),
+                    "field": ",".join(part_schema["required"]),
                     "generation": "deterministic" if part is not None else "model",
                 }, ensure_ascii=False),
                 flush=True,
