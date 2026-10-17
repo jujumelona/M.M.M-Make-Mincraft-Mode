@@ -164,39 +164,37 @@ Evidence retains raw source, actual Gradle classpath, compiled classes, logs and
 XML test reports under the selected output directory. CI uploads these records.
 Missing evidence or zero executed tests never authorizes production.
 
-### Resource image contracts
+### Visual resources: no FLUX or standalone texture packs
 
-The asset producer stores a `mmm/resource-asset-generation-plan-v3` manifest and
-re-resolves it against HOST facts, content owners, visual semantics and the image
-registry before generation. Older image plans must be rebuilt and approved.
-`VisualSpec` accepts only role, silhouette, materials, motifs and palette;
-`asset/item_sprite` contributes framing while the compiler consumes registry
-settings. Preferred and fallback generation resolutions belong to
-`config/model_registry.yaml`, independently of final Minecraft geometry.
+M.M.M no longer creates standalone texture/resource-pack ZIPs or generates
+AI textures using FLUX, diffusers, rembg/BiRefNet or other image backends.
+New complete proposals do not schedule image asset jobs, and old proposals with
+AI texture assets are rejected until migrated. Colab's normal installation no
+longer includes the `image` dependency extra or its image-model preflight.
 
-HOST snapshots may carry `resource_asset_bindings`, keyed by exact resource
-subject. These bindings provide `render_kind`, `geometry: {width, height}`,
-optional `animation: {frame_count, frametime}`, and explicit crop cardinality.
-Entity bindings require `uv_schema: {id, lora_compatible, regions}` with named
-`box: [x, y, width, height]` regions. GUI bindings require `gui.generated_regions`
-(background/frame/decorative_border/ornament) and `gui.protected_regions` with
-deterministic RGBA pixels. GUI controls, text and exact icons remain code/template
-responsibilities; the image compositor restores protected pixels after decoration.
+Fabric mod resource **documents** remain supported: item/block models, blockstates,
+recipes, loot tables and their references are required for gameplay. The
+extended-content generator uses existing vanilla Minecraft textures as a **generic
+temporary appearance** where custom image files were previously generated. It
+must not claim original artwork or custom visual quality. Existing valid
+mod-owned PNG resources are preserved. Missing entity UV textures or GUI artwork
+that cannot be represented by vanilla references must be reported as unsupported
+rather than silently invented.
 
-Entity and GUI `model_binding` must contain a consumer `path`, `sha256` and exact
-`texture_reference` such as `demo:textures/entity/guardian.png`. Production checks
-the existing consumer bytes and reference literal before inference. This is a
-resource binding check, not proof that a renderer or screen executes correctly.
-Missing layouts or consumers fail closed; no generic entity/GUI atlas is invented.
-Animated UV/GUI composition is currently rejected.
+The retired image code remains in some legacy modules for compatibility and
+test migration, but it is not an active production backend. The
+`generate-textures` skill is retired in both canonical and packaged plugin
+skills, and the `asset-generation` capability is not buildable.
 
-PNG validation checks native geometry, palette, alpha, region coverage, tile edges,
-protected pixels, animation sidecars and the complete generated model reference
-set. Candidate sources are composed by region or animation frame using nearest-grid
-conversion. A registry fallback is attempted only after a memory allocation failure.
-Static assets reject stale animation sidecars. Pixel fixtures and stub image backends
-exercise these contracts in `tests/test_resource_contract_pipeline.py`; real model
-quality, Gradle, GameTest and Minecraft runtime validation remain separate gates.
+### Plugin versus mod dependencies
+
+`capability_plugins.py` is an internal M.M.M capability manifest, not a
+generator of separately distributed Bukkit/Paper plugins. The deliverable is
+a **Fabric mod JAR** built for the exact version and loader the user selects.
+Any required compatible existing mods are separate dependencies only when
+verified by the host; missing behavior is implemented in the Fabric mod itself.
+A standalone Paper/Bukkit plugin would require a different supported target and
+is not produced by this pipeline.
 
 ### Research evidence and small-model validation
 
