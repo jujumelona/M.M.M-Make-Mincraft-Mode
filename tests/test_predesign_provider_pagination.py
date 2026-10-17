@@ -62,12 +62,12 @@ def test_curseforge_paginates_browse_windows_and_fetches_ranked_descriptions(mon
             index = int(query.get("index", ["0"])[0])
             if index == 0:
                 return {"data": [
-                    {"id": 1, "name": "space one", "summary": "space trading", "links": {}},
-                    {"id": 2, "name": "space two", "summary": "space trading", "links": {}},
+                    {"id": 1, "classId": 6, "name": "space one", "summary": "space trading", "links": {}},
+                    {"id": 2, "classId": 6, "name": "space two", "summary": "space trading", "links": {}},
                 ], "pagination": {"index": 0, "pageSize": 50, "resultCount": 2, "totalCount": 3}}
             if index == 2:
                 return {"data": [
-                    {"id": 3, "name": "space three", "summary": "space trading", "links": {}},
+                    {"id": 3, "classId": 6, "name": "space three", "summary": "space trading", "links": {}},
                 ], "pagination": {"index": 2, "pageSize": 50, "resultCount": 1, "totalCount": 3}}
         if "/description" in url:
             mod_id = url.split("/mods/", 1)[1].split("/", 1)[0]

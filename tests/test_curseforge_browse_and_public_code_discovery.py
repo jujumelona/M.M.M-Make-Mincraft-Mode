@@ -64,7 +64,7 @@ def test_curseforge_pagination_advances_and_never_crosses_provider_window():
     assert curseforge_next_index(
         {"index": 0, "pageSize": 50, "resultCount": 4, "totalCount": 200},
         index=0, page_size=50, row_count=4,
-    ) == 50
+    ) == 4
     assert curseforge_next_index(
         {"index": 9950, "pageSize": 50, "resultCount": 50, "totalCount": 12000},
         index=9950, page_size=50, row_count=50,

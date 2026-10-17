@@ -104,8 +104,9 @@ def curseforge_next_index(
                 server_page_size > page_size or result_count != row_count or
                 result_count > server_page_size):
             raise ValueError("CurseForge returned inconsistent pagination.")
-    # Offsets advance by the applied page size, not the last page's row count.
-    next_index = server_index + server_page_size
+    # The provider reports the count actually returned, which may be smaller
+    # than its requested page size. Advancing by pageSize could skip records.
+    next_index = server_index + result_count
     if next_index <= index or next_index + page_size > 10000:
         return None
     if total_count is not None and next_index >= total_count:
