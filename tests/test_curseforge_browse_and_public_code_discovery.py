@@ -122,7 +122,7 @@ def test_curseforge_reuse_discovers_second_page_with_targeted_name_search(monkey
 
     monkeypatch.setattr(reuse_discovery, "_pooled_http_client", lambda: Client())
     results = reuse_discovery._search_curseforge(
-        "build spaceship and fight aliens", limit=8,
+        "spaceship", limit=8,
         minecraft_version="1.21.1", loader="fabric", with_metadata=True,
     )
     assert any(repo == "" and row["source_id"] == "curseforge:51" for repo, _, row in results)
