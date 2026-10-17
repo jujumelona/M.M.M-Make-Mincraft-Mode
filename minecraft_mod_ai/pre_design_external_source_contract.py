@@ -211,7 +211,9 @@ def _retrieve_github_source_body(
     *,
     client: Any = None,
 ) -> dict[str, Any]:
-    """Search GitHub and return at most one verified README body for *query*."""
+    """GitHub source retrieval is disabled; CurseForge is the only mod catalogue."""
+    return {"records": [], "search_requests": 0, "source_requests": 0,
+            "provider_status": "disabled", "saturation_reason": "curseforge_only", "errors": []}
 
     search_requests = 0
     source_requests = 0
@@ -624,7 +626,8 @@ def _retrieve_selected_source_receipts(selected_order: Sequence[str]) -> dict[st
 
 
 def _augment_bundle(payload: Mapping[str, Any], bundle: Mapping[str, Any]) -> dict[str, Any]:
-    result = dict(bundle)
+    # No GitHub augmentation: retain existing local/CurseForge evidence.
+    return dict(bundle)
     raw_domains = bundle.get("domains")
     if not isinstance(raw_domains, list):
         return result
@@ -756,6 +759,9 @@ def _augment_bundle(payload: Mapping[str, Any], bundle: Mapping[str, Any]) -> di
 
 def install(pre_design_rag_module: Any) -> None:
     global _INSTALLED
+    # Retire the hook that queried GitHub once per pre-design requirement.
+    _INSTALLED = True
+    return
     current = pre_design_rag_module._forced_rag_bundle
     if getattr(current, "_mmm_external_source_body_v1", False):
         _INSTALLED = True
