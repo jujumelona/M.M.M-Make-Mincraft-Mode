@@ -54,6 +54,20 @@ def test_actual_registration_method_beats_entity_name_and_debug_distractor():
     assert not index.intent_compatible('net.minecraft.world.entity.EntityType#create')
 
 
+def test_dotted_method_intent_does_not_return_unrelated_value_methods():
+    index = _index()
+    goal = index.prepare(
+        'Call EntityType.registerEntity with the entity type value to register a hostile entity',
+        kinds=('METHOD',),
+    )
+    page = index.page(goal, 0)
+    assert page['matches']
+    assert page['matches'][0]['symbol_id'] == 'net.minecraft.core.Registry#register'
+    assert page['total_count'] < 10
+    assert not any('registerDebugValues' in row['symbol_id']
+                   for row in page['matches'])
+
+
 def test_no_exact_action_evidence_does_not_invent_an_api():
     index = _index(with_registry=False)
     index.prepare('EntityType registration API', kinds=('METHOD',))
