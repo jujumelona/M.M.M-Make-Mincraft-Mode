@@ -38,7 +38,7 @@ from .knowledge import (
 )
 from .rag_index import ProjectRAGIndex
 from .source_intent_aliases import source_intent_terms, source_query_variants
-from .curseforge_query import curseforge_search_queries, curseforge_catalogue_score
+from .curseforge_query import curseforge_search_queries, curseforge_catalogue_score, curseforge_query_family
 
 _TIMEOUT = 8.0
 _UA = "MMM-PreDesignResearch/3.0 (+https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode)"
@@ -436,6 +436,8 @@ def _search_curseforge(
         }
 
     seen_ids: set[int] = set()
+    family_sources: dict[str, set[int]] = {}
+    candidate_families: dict[int, set[str]] = {}
     candidates: list[tuple[int, int, Mapping[str, Any]]] = []
     search_requests = 0
     source_requests = 0
@@ -448,6 +450,10 @@ def _search_curseforge(
     page_size = min(12, output_limit * 2)
     query_receipts: list[dict[str, Any]] = []
     for variant in variants:
+        family = curseforge_query_family(variant)
+        # A synonym is only needed if the same topic is still under-supplied.
+        if len(family_sources.get(family, ())) >= 2:
+            continue
         index, variant_matches, variant_requests = 0, 0, 0
         for _ in range(page_limit):
             params = {
@@ -472,12 +478,16 @@ def _search_curseforge(
                 if not isinstance(row, Mapping) or type(row.get("id")) is not int:
                     continue
                 mod_id = row["id"]
-                if mod_id in seen_ids or row.get("classId") != mods_class:
+                if row.get("classId") != mods_class:
                     continue
-                seen_ids.add(mod_id)
                 score = curseforge_catalogue_score(query, row)
                 if score == 0:
                     continue
+                family_sources.setdefault(family, set()).add(mod_id)
+                candidate_families.setdefault(mod_id, set()).add(family)
+                if mod_id in seen_ids:
+                    continue
+                seen_ids.add(mod_id)
                 variant_matches += 1
                 # Existing source links are not proof of source availability.
                 links = row.get("links") if isinstance(row.get("links"), Mapping) else {}
@@ -504,16 +514,26 @@ def _search_curseforge(
             "query": variant, "search_requests": variant_requests,
             "relevant_new_mods": variant_matches,
         })
-        # Move to implementation once this topic has enough plausible options.
-        # Remaining spellings are fallback searches, not an exhaustive sweep.
-        if len(candidates) >= min(3, output_limit):
-            break
-
     candidates.sort(
         key=lambda row: (-row[0], -row[1],
                          str(row[2].get("name") or "").casefold(), row[2]["id"])
     )
-    shortlisted = candidates[:output_limit]
+    # Keep two candidates for each independent mechanic, not the two most
+    # popular projects for the entire multi-feature request.
+    shortlisted: list[tuple[int, int, Mapping[str, Any]]] = []
+    shortlisted_ids: set[int] = set()
+    for family in dict.fromkeys(curseforge_query_family(q) for q in variants):
+        chosen = 0
+        for entry in candidates:
+            mod_id = int(entry[2]["id"])
+            if (mod_id in shortlisted_ids
+                    or family not in candidate_families.get(mod_id, ())):
+                continue
+            shortlisted.append(entry)
+            shortlisted_ids.add(mod_id)
+            chosen += 1
+            if chosen >= min(2, output_limit):
+                break
     detail_count = min(3, len(shortlisted))
     details: dict[int, str] = {}
     if detail_count:
