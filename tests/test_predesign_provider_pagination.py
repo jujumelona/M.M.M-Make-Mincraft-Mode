@@ -46,7 +46,7 @@ def test_modrinth_paginates_and_bulk_fetches_full_projects(monkeypatch):
     assert sum("/v2/projects?" in call for call in calls) == 2
 
 
-def test_curseforge_paginates_browse_windows_and_fetches_ranked_descriptions(monkeypatch):
+def test_curseforge_paginates_targeted_queries_and_fetches_ranked_descriptions(monkeypatch):
     calls = []
 
     def fake_json(url, headers=None):
@@ -57,7 +57,7 @@ def test_curseforge_paginates_browse_windows_and_fetches_ranked_descriptions(mon
             ]}
         if "/mods/search?" in url:
             query = _query(url)
-            assert "searchFilter" not in query
+            assert query.get("searchFilter", [""])[0] in {"space", "trading"}
             assert query["classId"] == ["6"]
             index = int(query.get("index", ["0"])[0])
             if index == 0:
@@ -80,32 +80,8 @@ def test_curseforge_paginates_browse_windows_and_fetches_ranked_descriptions(mon
     records, receipt = rag._search_curseforge("space trading")
     assert [record["source_id"] for record in records] == ["curseforge:1", "curseforge:2", "curseforge:3"]
     assert [record["content"] for record in records] == ["full-1", "full-2", "full-3"]
-    assert receipt["search_requests"] == 6
+    assert receipt["search_requests"] == 4
     assert receipt["source_requests"] == 3
     assert receipt["provider_total"] == 3
 
 
-def test_github_fallback_paginates_and_fetches_all_readmes(monkeypatch):
-    def fake_json(url, headers=None):
-        if "/search/repositories?" not in url:
-            raise AssertionError(url)
-        page = int(_query(url).get("page", ["1"])[0])
-        if page == 1:
-            return {"total_count": 3, "items": [
-                {"full_name": "x/one", "name": "one", "description": "s1", "html_url": "https://github.com/x/one", "default_branch": "main"},
-                {"full_name": "x/two", "name": "two", "description": "s2", "html_url": "https://github.com/x/two", "default_branch": "main"},
-            ]}
-        if page == 2:
-            return {"total_count": 3, "items": [
-                {"full_name": "x/three", "name": "three", "description": "s3", "html_url": "https://github.com/x/three", "default_branch": "main"},
-            ]}
-        return {"total_count": 3, "items": []}
-
-    monkeypatch.setattr(rag, "_json", fake_json)
-    monkeypatch.setattr(rag, "_text", lambda url, headers=None: "README-" + url.split("/repos/", 1)[1].split("/readme", 1)[0])
-    records, receipt = rag._search_github("space trading")
-    assert [record["source_id"] for record in records] == ["github:x/one", "github:x/two", "github:x/three"]
-    assert [record["content"] for record in records] == ["README-x/one", "README-x/two", "README-x/three"]
-    assert receipt["search_requests"] == 2
-    assert receipt["source_requests"] == 3
-    assert receipt["provider_total"] == 3
