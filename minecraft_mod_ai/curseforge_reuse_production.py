@@ -157,9 +157,38 @@ def donor_from_reference(reference: Mapping[str, Any], files: Mapping[str, bytes
         raise SourceInspectionError("SOURCE_SELECTED_TYPE_NOT_DECLARED")
     license_path = _license_path(files, license_id)
     paths = _choose_closed_java_slice(files, selected)
+    # Metadata is evidence for dependency resolution, NOT source to copy over
+    # the target's own Fabric entrypoint/build files.
+    from .dependency_resolver import parse_donor_build_metadata
+    metadata = {
+        path: body for path, body in files.items()
+        if path in {"build.gradle", "build.gradle.kts", "gradle.properties",
+                    "src/main/resources/fabric.mod.json"}
+        or path.endswith("/gradle/libs.versions.toml")
+    }
+    required_dependencies = list(parse_donor_build_metadata(metadata))
+    java_sources = "\n".join(files[p].decode("utf-8", errors="replace") for p in paths)
+    if ("org.spongepowered.asm.mixin" in java_sources
+            or "@Mixin(" in java_sources
+            or ".accesswidener" in java_sources):
+        raise SourceInspectionError("SOURCE_MIXIN_REQUIRES_EXPLICIT_INTEGRATION")
+
+    # A Java-only manifest silently drops models, textures and data. Include
+    # conventional resources, excluding donor mod entrypoints/build settings,
+    # and refuse an oversized/complex closure rather than claiming success.
+    resources = [
+        p for p in sorted(files)
+        if (p.startswith(("src/main/resources/", "src/client/resources/"))
+            and ("/assets/" in p or "/data/" in p)
+            and not p.endswith((".mixins.json", ".accesswidener")))
+    ]
+    if len(resources) > 64 or sum(len(files[p]) for p in resources) > 8 * 1024 * 1024:
+        raise SourceInspectionError("SOURCE_RESOURCE_CLOSURE_NEEDS_COMPONENT_SELECTION")
+    paths.extend(resources)
     paths.append(license_path)
     paths.extend(p for p in sorted(files)
                  if p.upper() in {"NOTICE", "NOTICE.TXT", "NOTICE.MD", "COPYRIGHT"})
+    paths = list(dict.fromkeys(paths))
     donor_files = []
     for path in paths:
         raw = files[path]
@@ -184,11 +213,11 @@ def donor_from_reference(reference: Mapping[str, Any], files: Mapping[str, bytes
         "files": donor_files,
         "seed_files": [selected],
         "source_symbols": [symbol],
-        "required_dependencies": [],  # Gradle proof discovers missing deps.
+        "required_dependencies": required_dependencies,  # Resolved by target build proof.
         "donor_tests": [],
         "confidence": confidence,
         "adaptation_cost": 1.0 - confidence,
-        "closure_complete": True,  # File closure only; compile/behavior unverified.
+        "closure_complete": True,  # Bounded source/resource closure; behavior proof still mandatory.
         "truncation_reason": "",
     }
 
