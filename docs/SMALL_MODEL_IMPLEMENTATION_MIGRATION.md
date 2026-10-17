@@ -117,3 +117,27 @@ permission to ship Minecraft models referencing nonexistent textures.
   compile/runtime-validated, and CI tests asserting automatic FLUX assets need
   revision to match this newly approved scope.
 
+
+### 2026-10-18 Colab rembg PackageNotFoundError regression
+
+Observed `PackageNotFoundError: No package metadata was found for rembg`
+on the existing Colab build cell. Root cause: the normal Colab install was
+correctly changed to omit retired FLUX/rembg packages but notebook cell 6
+still called `importlib.metadata.version("rembg")` and required 2.0.67.
+The notebook validation script and Python 3.13 CI workflow also mandated
+that old image package, defeating the intentional removal.
+
+Fixed:
+- Notebook cell 6 now validates the setup/commit receipt and installed
+  `mmm-make-mincraft-mode` distribution, **not** rembg. Missing core
+  package reports `COLAB_CORE_PACKAGE_MISSING`.
+- Notebook validator refuses a regression to the rembg check.
+- Python 3.13 workflow resolves and smokes the actual core installation
+  instead of installing rembg/BiRefNet solely to test retired functionality.
+- Dropped inert FLUX/rembg/ONNX pins from standard Colab constraints and
+  migrated installation and notebook regressions.
+
+Operational note: reopening the **latest** notebook is mandatory after
+updating the GitHub branch. Running only a `git pull` from cell 2 in an
+old opened notebook does NOT update that old cell 6's Python source.
+The underlying real-mod JAR/GameTest outcome remains unverified.
