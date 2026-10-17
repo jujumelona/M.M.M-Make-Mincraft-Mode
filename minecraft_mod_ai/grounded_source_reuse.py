@@ -264,7 +264,12 @@ def _candidate_overlap(
     card: Mapping[str, Any],
 ) -> int:
     wanted = _tokens(" ".join((capability, *terms)))
-    available = {str(item) for item in card.get("evidence_tokens", ())}
+    # Some host-provided candidates carry raw source evidence, without a
+    # precomputed token index. Use that actual evidence rather than assigning
+    # relevance zero or (worse) injecting the requested feature as evidence.
+    raw = card.get("evidence_text", "")
+    available = ({str(item) for item in card.get("evidence_tokens", ())}
+                 | _tokens(raw))
     return len(wanted & available)
 
 

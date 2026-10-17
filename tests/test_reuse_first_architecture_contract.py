@@ -55,7 +55,7 @@ class _FakeDiscovery:
                 "candidates": [
                     {
                         "source_url": "https://github.com/example/shared-minecraft-mod",
-                        "title": "Minecraft Fabric mod shared systems",
+                        "title": "Minecraft Fabric mod for merchant economy trade and cooking recipe systems",
                     },
                     {
                         "source_url": f"https://github.com/example/{query.split()[0].lower()}-minecraft-mod",

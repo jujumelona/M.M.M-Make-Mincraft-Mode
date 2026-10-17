@@ -62,18 +62,18 @@ object TradeEngine {
     monkeypatch.setattr(
         source_transplant,
         "_repository_snapshot",
-        lambda _repository, _discovery: snapshot,
+        lambda _repository, _discovery, **_kwargs: snapshot,
     )
     monkeypatch.setattr(source_transplant, "_github_client", lambda _token: _Client())
     monkeypatch.setattr(
         source_transplant,
-        "_build_metadata_text",
-        lambda *_args, **_kwargs: "minecraft_version=1.21.1\nfabricloader\n",
+        "_build_metadata_sources",
+        lambda *_args, **_kwargs: {"gradle.properties": "minecraft_version=1.21.1\nfabricloader=0.16.0\n"},
     )
     monkeypatch.setattr(
         source_transplant,
         "_fetch_blob_bytes",
-        lambda _client, _repository, sha: source if sha == blob_sha else b"",
+        lambda _client, _repository, sha, **_kwargs: source if sha == blob_sha else b"",
     )
 
     adapter = SimpleNamespace(loader="fabric", minecraft_version="1.21.1")
@@ -103,7 +103,7 @@ def test_neoforge_metadata_filename_is_loader_evidence(
     monkeypatch.setattr(
         source_transplant,
         "_fetch_blob_bytes",
-        lambda _client, _repository, _sha: metadata,
+        lambda _client, _repository, _sha, **_kwargs: metadata,
     )
     text = source_transplant._build_metadata_text(
         object(),

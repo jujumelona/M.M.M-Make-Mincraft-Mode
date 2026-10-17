@@ -48,7 +48,7 @@ def test_authored_graph_extracts_actual_structured_capabilities() -> None:
     graph = authored_capability_graph("우주선 제작과 광물 파밍", structured)
     assert "minecraft fabric space ship fabrication" in graph["nodes"]
     assert "minecraft fabric planet ore registration" in graph["nodes"]
-    assert graph["retrieval_policy_version"] == "structured-intent-v2"
+    assert graph["retrieval_policy_version"] == "structured-intent-v3-exact-source-partial-fit"
 
 
 def test_source_queries_prefer_structured_terms_over_long_request(monkeypatch) -> None:
@@ -93,7 +93,7 @@ def test_authored_coverage_does_not_reject_real_gui_label(tmp_path) -> None:
 
 
 
-def test_reuse_discovery_passes_resolved_target_to_search(monkeypatch) -> None:
+def test_reuse_discovery_retains_version_neutral_reference_search(monkeypatch) -> None:
     from minecraft_mod_ai.reuse_discovery import discover_repositories_for_graph
 
     monkeypatch.setenv("MMM_REUSE_QUERY_VARIANTS", "1")
@@ -106,7 +106,8 @@ def test_reuse_discovery_passes_resolved_target_to_search(monkeypatch) -> None:
             self.calls.append((provider, minecraft_version, loader))
             if provider == "github":
                 return {"candidates": [{
-                    "title": "author/spacecraft",
+                    "title": "Minecraft Fabric spacecraft mod",
+                    "source_url": "https://github.com/author/spacecraft",
                     "summary": "A Minecraft Fabric mod with planetary flight",
                 }]}
             return {"candidates": []}
@@ -118,4 +119,6 @@ def test_reuse_discovery_passes_resolved_target_to_search(monkeypatch) -> None:
     )
     assert "author/spacecraft" in discovered["minecraft fabric spacecraft"]
     assert client.calls
-    assert all(version == "1.21.1" and loader == "fabric" for _, version, loader in client.calls)
+    # GitHub and Modrinth discover old source references as well; exact
+    # compatibility is gated later during donor inspection and compile proof.
+    assert all(version is None and loader is None for _, version, loader in client.calls)

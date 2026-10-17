@@ -211,11 +211,11 @@ def test_blob_cache_is_byte_bounded_lru(monkeypatch):
     source_transplant._BLOB_CACHE_BYTES = 0
     monkeypatch.setenv("MMM_SOURCE_TRANSPLANT_SINGLE_BLOB_BYTE_BUDGET", str(64 * 1024))
     monkeypatch.setenv("MMM_SOURCE_TRANSPLANT_BLOB_CACHE_BYTE_BUDGET", str(128 * 1024))
-    payloads = {
-        "1" * 40: b"a" * 60_000,
-        "2" * 40: b"b" * 60_000,
-        "3" * 40: b"c" * 60_000,
-    }
+    def git_sha(raw):
+        return hashlib.sha1(b"blob " + str(len(raw)).encode("ascii") + b"\0" + raw).hexdigest()
+
+    payloads = {git_sha(raw): raw for raw in (b"a" * 60_000, b"b" * 60_000, b"c" * 60_000)}
+    first_sha = git_sha(b"a" * 60_000)
     import base64
     def fake_json(client, url, *, params=None):
         del client, params
@@ -226,7 +226,7 @@ def test_blob_cache_is_byte_bounded_lru(monkeypatch):
         source_transplant._fetch_blob_bytes(object(), "example/repo", sha)
     assert source_transplant._BLOB_CACHE_BYTES <= source_transplant._blob_cache_byte_budget()
     assert len(source_transplant._BLOB_CACHE) == 2
-    assert ("example/repo", "1" * 40) not in source_transplant._BLOB_CACHE
+    assert ("example/repo", first_sha) not in source_transplant._BLOB_CACHE
 
 
 def test_sandbox_destination_rejects_parent_escape(tmp_path):

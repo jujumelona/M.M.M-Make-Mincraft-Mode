@@ -18,7 +18,12 @@ class _FakeClient:
         self.closed = True
 
 
+def _git_sha(payload: bytes) -> str:
+    return hashlib.sha1(b"blob " + str(len(payload)).encode("ascii") + b"\0" + payload).hexdigest()
+
+
 def _file(path: str, blob_sha: str, payload: bytes) -> st.DonorFile:
+    assert blob_sha == _git_sha(payload), "Fixture must pin the real Git blob identity"
     return st.DonorFile(
         path=path,
         blob_sha=blob_sha,
@@ -42,11 +47,15 @@ def _donor(files: tuple[st.DonorFile, ...]) -> st.DonorSlice:
         required_dependencies=(),
         donor_tests=(),
         confidence=1.0,
+        compatibility_evidence=st.CompatibilityEvidence(
+            minecraft_version="1.21.1", loader="fabric", status="metadata_exact"
+        ),
     )
 
 
 def _plan() -> dict[str, object]:
     return {
+        "bound_target": {"minecraft_version": "1.21.1", "loader": "fabric"},
         "capabilities": [
             {
                 "mode": "source_transplant",
@@ -61,23 +70,20 @@ def test_materialization_parallelizes_fetch_but_preserves_manifest_order(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    payloads = {
-        "a" * 40: b"first",
-        "b" * 40: b"second",
-        "c" * 40: b"third",
-    }
+    payloads = {_git_sha(raw): raw for raw in (b"first", b"second", b"third")}
     donor = _donor(
         (
-            _file("src/First.java", "a" * 40, payloads["a" * 40]),
-            _file("src/Second.java", "b" * 40, payloads["b" * 40]),
-            _file("src/Third.java", "c" * 40, payloads["c" * 40]),
+            _file("src/First.java", _git_sha(b"first"), b"first"),
+            _file("src/Second.java", _git_sha(b"second"), b"second"),
+            _file("src/Third.java", _git_sha(b"third"), b"third"),
         )
     )
     fake_client = _FakeClient()
     active = 0
     peak = 0
     lock = threading.Lock()
-    delays = {"a" * 40: 0.08, "b" * 40: 0.04, "c" * 40: 0.01}
+    delays = {_git_sha(b"first"): 0.08, _git_sha(b"second"): 0.04,
+              _git_sha(b"third"): 0.01}
 
     def fake_fetch(_client: object, _repository: str, blob_sha: str) -> bytes:
         nonlocal active, peak
@@ -122,12 +128,12 @@ def test_materialization_hash_failure_writes_no_partial_donor_files(
     expected = b"expected"
     donor = _donor(
         (
-            _file("src/Good.java", "d" * 40, good),
-            _file("src/Bad.java", "e" * 40, expected),
+            _file("src/Good.java", _git_sha(good), good),
+            _file("src/Bad.java", _git_sha(expected), expected),
         )
     )
     fake_client = _FakeClient()
-    payloads = {"d" * 40: good, "e" * 40: b"wrong"}
+    payloads = {_git_sha(good): good, _git_sha(expected): b"wrong"}
 
     monkeypatch.setenv("MMM_SOURCE_TRANSPLANT_MATERIALIZE_DOWNLOAD_WORKERS", "2")
     monkeypatch.setattr(st, "validated_reuse_donor", lambda _decision: donor)
@@ -149,11 +155,11 @@ def test_materialization_single_worker_uses_serial_fallback(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    payloads = {"f" * 40: b"one", "9" * 40: b"two"}
+    payloads = {_git_sha(raw): raw for raw in (b"one", b"two")}
     donor = _donor(
         (
-            _file("src/One.java", "f" * 40, payloads["f" * 40]),
-            _file("src/Two.java", "9" * 40, payloads["9" * 40]),
+            _file("src/One.java", _git_sha(b"one"), b"one"),
+            _file("src/Two.java", _git_sha(b"two"), b"two"),
         )
     )
     fake_client = _FakeClient()

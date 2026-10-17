@@ -149,10 +149,10 @@ def test_explicit_reference_reaches_active_donor_inspection_without_lexical_over
         donor_inspector=inspect,
     )
 
-    assert calls == [
-        ("owner/reference-mod", "economy.trade"),
-        ("owner/reference-mod", "space.travel"),
-    ]
+    # The user-supplied donor must be inspected for each obligation, but
+    # newly discovered independent candidates may also be inspected.
+    assert ("owner/reference-mod", "economy.trade") in calls
+    assert ("owner/reference-mod", "space.travel") in calls
     assert result["explicit_reference_repository_count"] == 1
     assert [item["mode"] for item in result["capabilities"]] == ["fresh", "fresh"]
 
