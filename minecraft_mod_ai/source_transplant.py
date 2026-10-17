@@ -730,11 +730,15 @@ def inspect_repository_slice(
         # Locate a real implementation under one declared module version.
         # Prefer the exact target; otherwise preserve only one older-version
         # source closure as an adaptation reference, never executable reuse.
-        source_version = adapter.minecraft_version if target_version_present else next((
+        seeded_versions = tuple(
             version_for(evidence.node_id)
             for evidence in seed_evidence
             if evidence.node_id in graph.nodes and version_for(evidence.node_id)
-        ), "")
+        )
+        source_version = (
+            adapter.minecraft_version if adapter.minecraft_version in seeded_versions
+            else next(iter(seeded_versions), "")
+        )
         seed_paths = tuple(
             evidence.node_id
             for evidence in seed_evidence
