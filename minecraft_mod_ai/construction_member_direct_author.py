@@ -19,7 +19,7 @@ from .first_pass_java_declarations import declaration_frame, render_declaration
 
 def eligible_method(member_task, symbols, context, *, owned_records=(), port_source_ref="") -> bool:
     member = symbols.get(member_task.owner_symbol, {})
-    if member.get("kind") != "METHOD":
+    if member.get("kind") not in {"METHOD", "FIELD"}:
         return False
     if (owned_records or port_source_ref or context.get("donor_callable_symbols")
             or context.get("direct_method_forbidden")):
@@ -33,7 +33,8 @@ def eligible_method(member_task, symbols, context, *, owned_records=(), port_sou
     # The host must already own a complete declaration signature. No guessed
     # Java types, no model-selected overload lists.
     if (not member.get("name") or not member.get("return_type")
-            or not isinstance(member.get("parameters"), (list, tuple))):
+            or (member.get("kind") == "METHOD" and
+                not isinstance(member.get("parameters"), (list, tuple)))):
         return False
     return True
 
@@ -50,7 +51,11 @@ def compose_method(router, member_task, context, *, owner_name: str) -> str:
         "annotations": list(member.get("annotations", ())),
         "type_parameters": member.get("type_parameters", ""),
     }
-    frame = declaration_frame("method", member["name"], metadata)
+    kind = "field" if member["kind"] == "FIELD" else "method"
+    if kind == "field":
+        metadata["type"] = member["return_type"]
+    frame = declaration_frame(kind, member["name"], metadata,
+                              allow_uninitialized=False)
     spec = {
         "task": member_task.to_dict(),
         "owner": member["owner"],
@@ -92,9 +97,10 @@ def compose_method(router, member_task, context, *, owner_name: str) -> str:
         }
         messages = [
             {"role": "system", "content": (
-                "Implement exactly ONE complete Java method for the real target. "
-                "The host owns the class, signature, target version and import scope. "
-                "Output the WHOLE fixed-frame method, no class/package or extra declarations. "
+                "Implement exactly ONE complete Java method or initialized field "
+                "for the real target. The host owns the class, declaration type, "
+                "signature, target version and import scope. "
+                "Output the WHOLE fixed-frame declaration, no class/package or extras. "
                 "Implement the required gameplay or registration effect. Use ONLY actual "
                 "inspected compatible target APIs and materialized prerequisite symbols. "
                 "Do not invent a magic method, stub, TODO, empty action, null success "
@@ -121,7 +127,7 @@ def compose_method(router, member_task, context, *, owner_name: str) -> str:
                         or re.search(r"\b(?:TODO|FIXME|UnsupportedOperationException)\b", body)):
                     raise ValueError("CONSTRUCTION_UNIT_BODY_INCOMPLETE")
                 source = render_declaration(
-                    "method", member["name"], {**metadata, "source": candidate},
+                    kind, member["name"], {**metadata, "source": candidate},
                     owner=owner_name,
                 )
             except ValueError as error:
@@ -135,7 +141,7 @@ def compose_method(router, member_task, context, *, owner_name: str) -> str:
                 }, ensure_ascii=False)})
                 continue
             _save_checkpoint(checkpoint, identity, {member_task.owner_symbol: source})
-            print("CONSTRUCTION DIRECT METHOD: " + json.dumps({
+            print("CONSTRUCTION DIRECT MEMBER: " + json.dumps({
                 "owner_symbol": member_task.owner_symbol,
                 "model_attempts": attempt + 1, "source_bytes": len(source.encode()),
                 "checkpointed": True, "target_compiled": False,
