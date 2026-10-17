@@ -312,6 +312,15 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
             automatic_api = {'action': 'api', 'symbol_ref': preferred_field,
                              'intended_contribution': 'Read the uniquely selected target static field as this input value.',
                              'input_purposes': []}
+        # A single real, semantically admissible zero-input method requires
+        # neither more retrieval nor another small-model choice.
+        if (automatic_api is None and op == 'call' and len(matches) == 1
+                and not api_input_slots(op, matches[0], state.owner, state.symbols)):
+            automatic_api = {
+                'action': 'api', 'symbol_ref': matches[0]['symbol_id'],
+                'intended_contribution': goal['purpose'],
+                'input_purposes': [],
+            }
         saved_choice = draft.get('binding_choice')
         choice = (saved_choice or automatic_api
                   or _automatic_literal_type(op, requirements, branches)
@@ -341,7 +350,9 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
             'Outside compose_locally or reconsider_parent, another operation is chosen '
             'only after this node is written. ' + instruction))
         if choice is automatic_api:
-            draft['binding_author'] = 'host_static_provider'
+            draft['binding_author'] = (
+                'host_static_provider' if op == 'field' else 'host_unique_semantic_api'
+            )
         elif not saved_choice:
             draft.pop('binding_author', None)
         if choice['action'] == 'reject_api':
