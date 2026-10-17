@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
 
 from minecraft_mod_ai.platform_selection_pipeline import (
     _host_retarget_requested,
