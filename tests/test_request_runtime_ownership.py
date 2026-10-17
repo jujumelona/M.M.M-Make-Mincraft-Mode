@@ -304,5 +304,7 @@ def test_invalid_runtime_owner_batch_never_silently_drops_record(monkeypatch):
         {"requirement_id": "planet", "statement": "Explore planets"},
         {"requirement_id": "crew", "statement": "Recruit crew"},
     ]
-    with pytest.raises((ValueError, Exception)):
+    from minecraft_mod_ai.structured_output import StructuredOutputValidationError
+
+    with pytest.raises(StructuredOutputValidationError):
         _choose_runtime_owner_batch(Router(), rows, features, [], None)
