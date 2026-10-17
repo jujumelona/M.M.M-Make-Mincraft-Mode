@@ -591,6 +591,9 @@ def _search_github(
     disabled: Callable[[], bool] | None = None,
     disable: Callable[[], None] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    # Retired provider: GitHub cannot be searched or requested.
+    return [], {"provider": "github", "status": "disabled",
+                "result_count": 0, "search_requests": 0, "source_requests": 0}
     if disabled is not None and disabled():
         return [], {
             "provider": "github",
@@ -880,6 +883,9 @@ def _linked_github_sources(
     disabled: Callable[[], bool],
     disable: Callable[[], None],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    # Never inspect source URLs even when CurseForge provides a GitHub link.
+    return [], {"provider": "github", "status": "disabled",
+                "result_count": 0, "search_requests": 0, "source_requests": 0}
     repositories: list[str] = []
     result_limit = _provider_result_limit()
     for record in records:
