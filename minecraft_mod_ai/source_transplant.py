@@ -679,17 +679,26 @@ def inspect_repository_slice(
                 metadata = _build_metadata_sources(
                     client, repository=repository, blobs=blobs, commit_sha=commit_sha)
                 contexts = source_contexts()
-        if not any(version == adapter.minecraft_version for version, _text in contexts.values()):
+        target_version_present = any(
+            version == adapter.minecraft_version for version, _text in contexts.values()
+        )
+        if not target_version_present:
             _raise_unavailable_blob_failure(
-                client, repository, blobs, tuple(path for path, text in metadata.items() if text is None))
+                client, repository, blobs,
+                tuple(path for path, text in metadata.items() if text is None),
+            )
             print('SOURCE_REUSE_VERSION: ' + json.dumps({
                 'repository': repository, 'requested': adapter.minecraft_version,
-                'declared': sorted({version for version, _text in contexts.values()}),
-                'status': 'source_version_mismatch',
+                'declared': sorted({version for version, _text in contexts.values() if version}),
+                'status': 'reference_only_source_version_mismatch',
             }), flush=True)
-            if session is not None:
-                session.rejected_targets.add(target_key)
-            return None
+            # Do not discard a declared older-version repository: its pinned,
+            # licensed source can still be a non-executable authoring reference.
+            # Unresolved metadata is not evidence and cannot select source code.
+            if not any(version for version, _text in contexts.values()):
+                if session is not None:
+                    session.rejected_targets.add(target_key)
+                return None
 
         def version_for(path):
             module = _source_module(path, metadata)
@@ -718,11 +727,19 @@ def inspect_repository_slice(
             capability,
             index,
         )
+        # Locate a real implementation under one declared module version.
+        # Prefer the exact target; otherwise preserve only one older-version
+        # source closure as an adaptation reference, never executable reuse.
+        source_version = adapter.minecraft_version if target_version_present else next((
+            version_for(evidence.node_id)
+            for evidence in seed_evidence
+            if evidence.node_id in graph.nodes and version_for(evidence.node_id)
+        ), "")
         seed_paths = tuple(
             evidence.node_id
             for evidence in seed_evidence
             if evidence.node_id in graph.nodes
-            and version_for(evidence.node_id) == adapter.minecraft_version
+            and source_version and version_for(evidence.node_id) == source_version
         )
         if not seed_paths:
             _raise_unavailable_blob_failure(client, repository, blobs, unreadable)
@@ -758,7 +775,7 @@ def inspect_repository_slice(
             # Missing or foreign-version dependencies make a partial reference;
             # a sibling module must never lend its version to these bytes.
             if (_metadata_scope(path) is None and not _is_license_path(path)
-                    and version_for(path) != adapter.minecraft_version):
+                    and version_for(path) != source_version):
                 unresolved_edges.append(UnresolvedArtifactEdge(
                     source_id="closure_root", requested_target=path,
                     relation="source_version", reason="SOURCE_TRANSPLANT_MINECRAFT_VERSION_MISMATCH",
@@ -820,11 +837,16 @@ def inspect_repository_slice(
         selected_modules = {_source_module(path, metadata) for path in selected
                             if _metadata_scope(path) is None and not _is_license_path(path)}
         metadata_text = "\n".join(contexts[module][1] for module in sorted(selected_modules))
-        ev = _compatibility_evidence(metadata_text, adapter.minecraft_version, adapter=adapter)
-        compatibility = "exact" if ev.status == "metadata_exact" else "adapt"
+        ev = _compatibility_evidence(metadata_text, source_version, adapter=adapter)
+        if not source_version or not ev.loader:
+            return None
+        compatibility = (
+            "reference_only" if source_version != adapter.minecraft_version
+            else ("exact" if ev.status == "metadata_exact" else "adapt")
+        )
         required_dependencies = _declared_dependencies(metadata_text)
         donor_tests = _donor_test_paths({path: sha for path, sha in blobs.items()
-                                       if version_for(path) == adapter.minecraft_version})
+                                       if version_for(path) == source_version})
 
         files: list[DonorFile] = []
         symbols: set[str] = set()
