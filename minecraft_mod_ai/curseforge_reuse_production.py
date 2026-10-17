@@ -429,6 +429,9 @@ def certify_sources_at_production(reuse_plan: Mapping[str, Any], *,
         "attempted": attempts,
         "compiled_donors": sum(row.get("mode") == "source_transplant"
                                for row in plan.get("capabilities", ()) if isinstance(row, Mapping)),
+        "compiled_unverified_behavior": sum(
+            row.get("status") == "compile_only_unverified_behavior"
+            for row in proof_receipts if isinstance(row, Mapping)),
         "failed": sum(row.get("status") == "proof_error" or
                       (row.get("status") == "proof_result" and
                        not (row.get("receipt") or {}).get("compile_passed"))
