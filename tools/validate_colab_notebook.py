@@ -66,21 +66,24 @@ def validate_notebook() -> str:
     ):
         raise SystemExit("KV autotune policy must be applied before session construction")
 
-    # Resumed build cells must not bypass the checkout and dependency receipt
-    # established in cell 2; reject stale rembg before any GPU image work.
+    # Resumed build cells must preserve the setup receipt and core package
+    # checks established in cell 2. FLUX/rembg were retired and are not
+    # required by normal Minecraft Fabric mod production.
     for required in (
         "module.assert_setup_state(",
         'used_commit=USED_COMMIT',
-        '_distribution_version("rembg")',
-        '_rembg_version != "2.0.67"',
+        '_distribution_version("mmm-make-mincraft-mode")',
+        "COLAB_CORE_PACKAGE_MISSING:",
         "BUILD_DEPENDENCY_PREFLIGHT:",
     ):
         if required not in build:
             raise SystemExit("Build cell missing runtime preflight: " + required)
+    if '_distribution_version("rembg")' in build:
+        raise SystemExit("Build cell still requires retired rembg package")
     if build.index("module.assert_setup_state(") > build.index("session.build("):
         raise SystemExit("Build cell must validate setup before session.build")
-    if build.index('_distribution_version("rembg")') > build.index("session.build("):
-        raise SystemExit("Build cell must validate rembg before session.build")
+    if build.index('_distribution_version("mmm-make-mincraft-mode")') > build.index("session.build("):
+        raise SystemExit("Build cell must validate M.M.M installation before session.build")
 
     colab_name = notebook.metadata.get("colab", {}).get("name")
     if colab_name != NOTEBOOK_PATH.name:
