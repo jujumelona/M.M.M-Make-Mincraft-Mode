@@ -46,7 +46,7 @@ def compose_method(router, member_task, context, *, owner_name: str) -> str:
         "static": bool(member.get("static", False)),
         "final": bool(member.get("final", False)),
         "return_type": member["return_type"],
-        "parameters": list(member["parameters"]),
+        "parameters": list(member.get("parameters", ())),
         "throws": list(member.get("throws", ())),
         "annotations": list(member.get("annotations", ())),
         "type_parameters": member.get("type_parameters", ""),
