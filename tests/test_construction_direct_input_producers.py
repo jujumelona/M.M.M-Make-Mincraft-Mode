@@ -21,9 +21,9 @@ class _Index:
                 "name": "builder", "return_type": "example.EntityType",
                 "parameters": [], "static": True,
             },
-            "example.EntityType#default": {
+            "example.EntityType#ENTITY_TYPE": {
                 "kind": "FIELD", "owner": "example.EntityType",
-                "name": "default", "return_type": "example.EntityType",
+                "name": "ENTITY_TYPE", "return_type": "example.EntityType",
                 "parameters": [], "static": True,
             },
             "example.EntityType#member": {
@@ -35,7 +35,7 @@ class _Index:
         self.member_result_keys = {
             "example.EntityType": {
                 "example.EntityType#builder",
-                "example.EntityType#default",
+                "example.EntityType#ENTITY_TYPE",
                 "example.EntityType#member",
             }
         }
@@ -61,6 +61,6 @@ def test_typed_api_inputs_have_small_verified_producer_shortlist():
     entry = result["typed_input_producers"][0]
     assert entry["required_type"] == "example.EntityType"
     assert [x["symbol_id"] for x in entry["verified_producers"]] == [
-        "example.EntityType#builder", "example.EntityType#default"
+        "example.EntityType#builder", "example.EntityType#ENTITY_TYPE"
     ]
     assert all("member" not in x["symbol_id"] for x in entry["verified_producers"])
