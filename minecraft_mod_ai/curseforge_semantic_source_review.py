@@ -148,10 +148,13 @@ def _safe_archive_files(data: bytes) -> dict[str, bytes]:
             path = "/".join(parts[1:])
             if not path:
                 continue
+            if path in extracted:
+                raise SourceInspectionError("SOURCE_ARCHIVE_DUPLICATE_PATH")
             basename = path.rsplit("/", 1)[-1].upper()
             if ((path.endswith(".java") and "/src/" in "/" + path)
                     or path.startswith(("src/main/resources/", "src/client/resources/"))
-                    or path in {"build.gradle", "build.gradle.kts", "gradle.properties"}
+                    or path in {"build.gradle", "build.gradle.kts", "gradle.properties",
+                                    "gradle/libs.versions.toml"}
                     or (basename in {"LICENSE", "LICENSE.TXT", "LICENSE.MD", "COPYING", "COPYING.TXT",
                                      "NOTICE", "NOTICE.TXT", "NOTICE.MD", "COPYRIGHT"}
                         and "/" not in path)):
@@ -190,6 +193,9 @@ def _semantic_excerpt(source: str, capability: str, search_terms: Sequence[str])
     for index in range(0, len(lines), 8):
         section = "\n".join(lines[index:index + 35]).lower()
         score = len(keywords & set(_WORD_RE.findall(section)))
+        # Repeated mentions near executable methods outrank a single type-name
+        # occurrence in the header of a large source file.
+        score = score * 100 + sum(section.count(word) for word in keywords)
         if score > best_score:
             best_index, best_score = index, score
     header = "\n".join(lines[:18])[:900]
