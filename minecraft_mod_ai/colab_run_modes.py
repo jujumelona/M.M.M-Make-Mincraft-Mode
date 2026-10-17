@@ -138,13 +138,9 @@ def _user_download_zip(build_result: Any) -> Path | None:
     if not root.is_dir():
         return None
 
+    # Standalone generated resource/texture packs were retired.
     names = [artifact_name]
     additional = bundle.get("additional_artifacts")
-    if (
-        isinstance(additional, Mapping)
-        and "generated-resource-pack.zip" in additional
-    ):
-        names.append("generated-resource-pack.zip")
 
     receipt_members = bundle.get("members")
     if not isinstance(receipt_members, list):
@@ -205,8 +201,8 @@ def _user_download_zip(build_result: Any) -> Path | None:
 def build_result_download_target(build_result: Any) -> tuple[Path | None, str]:
     """Return the end-user artifact produced by one build.
 
-    Verified Full builds expose a user ZIP containing only the runnable mod JAR and,
-    when required, its separately installable generated resource pack. Internal
+    Verified Full builds expose a user ZIP containing the runnable mod JAR.
+    Standalone generated texture/resource packs are not included. Internal
     source/audit release ZIPs and receipt-heavy build bundles are fallback artifacts,
     not the primary user download.
     """
