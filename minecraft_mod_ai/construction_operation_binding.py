@@ -13,6 +13,7 @@ from .construction_shared_inputs import input_use_count, VALUE_READS
 from .construction_operation_contracts import named_values, pending_input_contracts, result_fits
 from .construction_operation_context import (API_KINDS, api_input_slots,
                                             focus_selected_api_memory)
+from .construction_api_admission import api_semantic_admissible
 
 TYPE_BOUND_OPERATIONS = frozenset({'declare', 'literal', 'cast', 'ternary', 'array_get', 'new_array'})
 SYMBOL_BOUND_OPERATIONS = frozenset(API_KINDS) | TYPE_BOUND_OPERATIONS | {
@@ -45,7 +46,7 @@ def _automatic_literal_type(op, requirements, branches):
 
 
 def _usable_api_candidate(key, row, *, op, kinds, current_member, rejected_symbols, state, fits,
-                          requirements=()):
+                          requirements=(), purpose=""):
     # A declaration whose body is being authored is an obligation, not
     # existing implementation evidence. Keep sibling helpers available.
     if op == 'call' and (key == current_member or row.get('inherited_from') == current_member):
@@ -53,6 +54,8 @@ def _usable_api_candidate(key, row, *, op, kinds, current_member, rejected_symbo
     if key in rejected_symbols or row.get('inherited_from') in rejected_symbols:
         return False
     if op == 'call' and _requires_missing_self_receiver(row, requirements, state.evidence_index):
+        return False
+    if not api_semantic_admissible(op, purpose, row, requirements):
         return False
     return (row['kind'] in kinds
             and state.evidence_index.accessible(key, constructor=op == 'new')
@@ -156,7 +159,8 @@ def bind_operation(router, state, *, goal, payload, nodes, source_units, pinned_
     from functools import partial
     usable_api = partial(_usable_api_candidate, op=op, kinds=kinds,
                          current_member=current_member, rejected_symbols=rejected_symbols,
-                         state=state, fits=fits, requirements=requirements)
+                         state=state, fits=fits, requirements=requirements,
+                         purpose=goal["purpose"])
 
     # Retrieval must describe the specific Java dependency, not the full game
     # story. Narrative terms such as "fight aliens / colonize planets" diluted
