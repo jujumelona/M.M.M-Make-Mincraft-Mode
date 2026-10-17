@@ -71,3 +71,16 @@ def test_colab_planner_memory_is_handed_off_before_real_build() -> None:
     # Do not regress to the previous direct gate that rejected 1.7-GiB headroom
     # while leaving a 9-GiB managed model idle in the very same kernel.
     assert 'assert_memory_headroom("before_production_build")' not in cell
+
+
+def test_colab_build_requires_core_package_not_retired_rembg() -> None:
+    """Regression for PackageNotFoundError: No package metadata was found for rembg."""
+    cell = _cell("# @title 6. 제작 또는 Audit")
+    ast.parse(cell)
+    assert "module.assert_setup_state(" in cell
+    assert '_distribution_version("mmm-make-mincraft-mode")' in cell
+    assert "COLAB_CORE_PACKAGE_MISSING" in cell
+    assert '_distribution_version("rembg")' not in cell
+    assert "ALPHA_SEGMENTER_INCOMPATIBLE_REMBG_VERSION" not in cell
+    assert cell.index("module.assert_setup_state(") < cell.index("session.build(")
+    assert cell.index('_distribution_version("mmm-make-mincraft-mode")') < cell.index("session.build(")
