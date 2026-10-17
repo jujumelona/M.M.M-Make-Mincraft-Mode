@@ -129,6 +129,7 @@ def resolve_authored_source_reuse(
     reference_repositories: Sequence[str] = (),
     request_scope: Mapping[str, Any] | None = None,
     repository_candidates: Sequence[Mapping[str, Any]] = (),
+    requested_curseforge_dependencies: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     from .grounded_source_reuse import build_repository_reuse_plan
 
@@ -139,6 +140,10 @@ def resolve_authored_source_reuse(
     }
     design = {
         "_pre_retrieval_plan": frozen,
+        "_requested_curseforge_dependencies": [
+            dict(item) for item in requested_curseforge_dependencies
+            if isinstance(item, Mapping)
+        ],
         # Debug-authored references have zero reuse authority. The normal host
         # inspector and target compile proof still decide source_transplant.
         "_preselected_reference_repositories": list(reference_repositories),
