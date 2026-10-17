@@ -124,6 +124,35 @@ def compose(router, spec, *, source_context=(), construction_context=None,
             'route': work_order.source_route,
             'fingerprint': work_order.fingerprint(),
         }, ensure_ascii=False), flush=True)
+    elif not (context.get('donor_callable_symbols')
+              or context.get('reference_port_obligations')):
+        # Canonical leaves such as minecraft/entity/registry are not entrypoint
+        # artifacts, yet they are the main source of one-operation-per-call
+        # explosions. Give them the same whole-feature target/acceptance contract.
+        from .feature_work_order import FeatureWorkOrder
+        requirement_id = ','.join(task.requirement_ids)
+        leaf_behavior = {
+            'behavior_id': task.behavior_id or task.task_id,
+            'requirement_id': requirement_id,
+            'intent': task.intent,
+            'effects': task.effects or task.intent,
+            'state_reads': task.state_reads,
+            'state_writes': task.state_writes,
+        }
+        work_order = FeatureWorkOrder.for_feature(
+            requirement_id=requirement_id,
+            target=context['target'],
+            target_path=spec['target_path'],
+            behaviors=[leaf_behavior],
+        )
+        context['feature_work_order'] = work_order.to_dict()
+        context['feature_work_order_sha256'] = work_order.fingerprint()
+        print('CONSTRUCTION FEATURE WORK ORDER: ' + json.dumps({
+            'feature_id': work_order.feature_id,
+            'target': work_order.to_dict()['target'],
+            'behavior_count': 1, 'route': 'fresh',
+            'fingerprint': work_order.fingerprint(),
+        }, ensure_ascii=False), flush=True)
     if bindings.get('request_feature_entrypoint'):
         lifecycle, interface = 'onInitialize', 'net.fabricmc.api.ModInitializer'
     elif str(spec.get('side', '')).upper() == 'CLIENT':
