@@ -219,7 +219,8 @@ def test_predesign_browses_metadata_before_budgeted_descriptions(monkeypatch):
     records, receipt = pre_design_grounded_rag._search_curseforge(
         "spaceship", minecraft_version="1.21.1", loader="fabric"
     )
-    assert len(records) == 10\n    assert receipt["search_filter_used"] is True
+    assert len(records) == 10
+    assert receipt["search_filter_used"] is True
     assert receipt["search_requests"] == 1
     assert receipt["source_requests"] == 6
     assert sum("/description" in url for url in calls) == 6
