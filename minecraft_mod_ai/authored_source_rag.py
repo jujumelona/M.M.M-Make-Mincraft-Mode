@@ -279,6 +279,28 @@ def bind_owner_source_context(bindings: dict[str, Any], *, owner: Any,
             [row["capability"] for row in reuse_plan.get("capabilities", ())
              if row.get("mode") == "source_transplant"] +
             [row["capability"] for row in reuse_plan.get("reference_sources", ())]))
+    # Catalogue findings are bounded design references, never installed Java.
+    # Keep them separate from verified_source_code_json so a small model
+    # cannot mistake search metadata for a callable dependency.
+    catalogue_hints = []
+    for decision in reuse_plan.get("capabilities", ()):
+        if decision.get("capability") not in capabilities:
+            continue
+        for hint in decision.get("catalogue_evidence", ())[:3]:
+            if not isinstance(hint, Mapping):
+                continue
+            catalogue_hints.append({
+                "capability": decision["capability"],
+                "title": str(hint.get("title") or "")[:120],
+                "summary": str(hint.get("summary") or "")[:260],
+                "source_id": str(hint.get("source_id") or ""),
+                "catalog_url": str(hint.get("catalog_url") or ""),
+                "authority": "design_reference_only_not_java_source",
+            })
+    if catalogue_hints:
+        bindings["catalogue_research_json"] = json.dumps(
+            catalogue_hints[:12], ensure_ascii=False, separators=(",", ":")
+        )
     snippets = rag.context(capabilities, requirement + " " + owner.module_id)
     # A target-proven Java donor is a mandatory handoff, not an optional RAG
     # suggestion. Resource-only transplants need no Java method, but an
