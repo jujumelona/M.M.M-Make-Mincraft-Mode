@@ -25,10 +25,8 @@ from .deadline_executor import ParallelExecutionTimeout, iter_completed_with_dea
 
 _TIMEOUT = 12.0
 _UA = "MMM-ReferenceResearch/3.0 (+https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode)"
-_GITHUB_API = "https://api.github.com"
 _WIKIDATA_API = "https://www.wikidata.org/w/api.php"
 _MAX_WIKI_PAGES = 5
-_MAX_GITHUB_REPOS = 3
 _MAX_WIKIDATA_ENTITIES = 4
 _MAX_QUERY_VARIANTS = 8
 _MAX_PROVIDER_ATTEMPTS = 2
@@ -104,18 +102,6 @@ def _body(url: str, *, headers: Mapping[str, str] | None = None) -> str:
     response = _http_client().get(url, headers=dict(headers or {}))
     response.raise_for_status()
     return response.content.decode("utf-8", errors="replace")
-
-
-def _github_headers() -> dict[str, str]:
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": _UA,
-    }
-    token = os.environ.get("GITHUB_TOKEN", "").strip() or os.environ.get("GH_TOKEN", "").strip()
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    return headers
 
 
 def _identity_text(value: Any) -> str:
@@ -565,87 +551,6 @@ def _wikidata_sources(
         "source_requests": source_requests,
         "errors": errors[:6],
         "policy": "identity_to_language_sitelink_bridge",
-    }
-
-
-def _github_reference_sources(
-    queries: Sequence[str], anchors: Sequence[str]
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    # GitHub reference search is disabled and cannot issue an HTTP request.
-    return [], {"provider": "github_reference", "status": "disabled", "result_count": 0}
-    headers = _github_headers()
-    records: list[dict[str, Any]] = []
-    errors: list[str] = []
-    search_requests = 0
-    source_requests = 0
-    plan = list(dict.fromkeys([*anchors, *queries]))[:4]
-
-    for query in plan:
-        if len(records) >= _MAX_GITHUB_REPOS:
-            break
-        params = urllib.parse.urlencode(
-            {
-                "q": query + " in:name,description,readme,topics",
-                "per_page": _MAX_GITHUB_REPOS,
-            }
-        )
-        try:
-            search_requests += 1
-            payload = _json(f"{_GITHUB_API}/search/repositories?{params}", headers=headers)
-        except Exception as exc:
-            errors.append(f"search:{type(exc).__name__}:{exc}")
-            continue
-        items = payload.get("items", []) if isinstance(payload, Mapping) else []
-        for repository in items[:_MAX_GITHUB_REPOS] if isinstance(items, list) else []:
-            if not isinstance(repository, Mapping):
-                continue
-            full_name = _text(repository.get("full_name"))
-            if not full_name or "/" not in full_name:
-                continue
-            try:
-                source_requests += 1
-                readme = _json(f"{_GITHUB_API}/repos/{full_name}/readme", headers=headers)
-                download_url = str(readme.get("download_url") or "") if isinstance(readme, Mapping) else ""
-                if not download_url:
-                    continue
-                body = _body(download_url, headers={"User-Agent": _UA}).strip()
-            except Exception as exc:
-                errors.append(f"{full_name}:{type(exc).__name__}:{exc}")
-                continue
-            title = full_name
-            if len(body) < 120 or not _relevant(query, title, body):
-                continue
-            record = {
-                "source_id": f"github-reference:{full_name}",
-                "source_type": "reference_repository_body",
-                "source_locator": f"github:{full_name}",
-                "url": f"https://github.com/{full_name}",
-                "title": title,
-                "content": body,
-                "content_sha256": _sha(body),
-                "body_retrieved": True,
-                "evidence_origin": "github_reference_readme",
-                "metadata": {
-                    "provider": "github",
-                    "repository": full_name,
-                    "query": query,
-                },
-            }
-            if anchors and not _record_matches_anchor(record, anchors):
-                continue
-            records.append(record)
-            if len(records) >= _MAX_GITHUB_REPOS:
-                break
-
-    unique = _dedupe(records)
-    return unique, {
-        "provider": "github_reference",
-        "status": "available" if unique or not errors else "error",
-        "result_count": len(unique),
-        "search_requests": search_requests,
-        "source_requests": source_requests,
-        "errors": errors[:6],
-        "policy": "independent_identity_anchored_provider",
     }
 
 
