@@ -673,7 +673,11 @@ class ConstructionEvidenceIndex:
             self.name_weights[hinted_prefix] = max(8, self.name_weights.get(hinted_prefix, 0))
             self.strong_name_prefixes = frozenset((*self.strong_name_prefixes, hinted_prefix))
             self.exact_action_available = True
-        owners = rank_context_chunks(query, self.owner_chunks.values(), relation_scores=relation,
+        # Focused API searches rank only the owners reached by the inverted
+        # index. Ranking every type in the classpath after narrowing a method
+        # would defeat the retrieval preselection.
+        owner_chunks = (self.owner_chunks[owner] for owner in eligible) if focused else self.owner_chunks.values()
+        owners = rank_context_chunks(query, owner_chunks, relation_scores=relation,
                                      prepared_text=self.owner_prepared)
         ranked = tuple(row.chunk_id for row in owners if row.chunk_id in eligible)
         self.owner_scores = {row.chunk_id: row.score for row in owners}
