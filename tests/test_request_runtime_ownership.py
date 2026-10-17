@@ -25,6 +25,19 @@ def scope():
                                "implementation_role": "gameplay", "search_query": "space travel"}]}
 
 
+def _scope_with_accepted_construction_behavior():
+    """Production consumes an accepted behavior ledger, not an invented fallback."""
+    from minecraft_mod_ai.construction_task import BehaviorRequirement
+
+    ledger = scope()
+    ledger["behavior_requirements"] = [BehaviorRequirement(
+        "behavior_planet", "planet", "Travel to planets",
+        "Travel to planets", "launch_sequence_initiated",
+        "Move to the chosen planet",
+    ).to_dict()]
+    return ledger
+
+
 def test_custom_trigger_is_owned_before_typed_authoring_without_fake_event():
     from minecraft_mod_ai.request_runtime_ownership import author_runtime_ownership
     from minecraft_mod_ai.typed_plan_authoring import author_typed_plan_ir
@@ -173,7 +186,7 @@ def test_feature_execution_passes_materialized_owner_api_to_the_real_generator(m
         "item_input": {"language": "java", "target_path": path,
                        "bindings": {"package_name": "test.space", "class_name": "PlanetRegistry"}}}})
     adapter = host_target("26.1.2")
-    plan = AuthoredPlan("Travel to planets", "Saved", request_scope=scope())
+    plan = AuthoredPlan("Travel to planets", "Saved", request_scope=_scope_with_accepted_construction_behavior())
     modules, jobs = compile_request_feature_jobs(
         plan, adapter=adapter, mod_id="space", package_name="test.space",
         content_modules=(content,), content_jobs=(content_job,), runtime_modules=(),
@@ -219,7 +232,7 @@ def test_feature_receives_real_template_registry_path_and_constant():
                       target_path="src/main/java/test/space/registry/ModItems.java",
                       deterministic_inputs={"java_constant": "ORE", "registry_path": "ore"})
     _, jobs = compile_request_feature_jobs(
-        AuthoredPlan("Travel to planets", "Saved", request_scope=scope()),
+        AuthoredPlan("Travel to planets", "Saved", request_scope=_scope_with_accepted_construction_behavior()),
         adapter=host_target("26.1.2"), mod_id="space", package_name="test.space",
         content_modules=(owner,), content_jobs=(job,), source_rag=VerifiedSourceRAG(), source_reuse={},
     )
