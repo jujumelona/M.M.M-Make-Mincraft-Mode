@@ -61,6 +61,48 @@ def root_action_stems(purpose: str) -> frozenset[str]:
                      if word in _ACTIONS)
 
 
+# Root registration must target a registry for the requested domain.
+# Matching the word "register" alone admits RecipeType/RuleTestType for entities.
+_DOMAINS = {
+    "entity": {"entity", "entities", "alien", "mob", "mobs", "creature", "creatures"},
+    "item": {"item", "items"},
+    "block": {"block", "blocks"},
+    "recipe": {"recipe", "recipes", "crafting", "smelting"},
+    "sound": {"sound", "sounds", "audio"},
+    "fluid": {"fluid", "fluids"},
+    "biome": {"biome", "biomes"},
+    "particle": {"particle", "particles"},
+    "attribute": {"attribute", "attributes"},
+    "component": {"component", "components"},
+}
+_GENERIC_REGISTRY_OWNERS = frozenset({
+    "registry", "registries", "builtinregistries", "deferredregister",
+})
+
+
+def _registration_owner_matches(purpose: str, row: Mapping[str, object]) -> bool:
+    words = set(_words(purpose))
+    requested = {domain for domain, aliases in _DOMAINS.items() if words & aliases}
+    if not requested:
+        return True
+    owner = str(row.get("owner") or "").rsplit(".", 1)[-1].rsplit("$", 1)[-1]
+    if owner.casefold() in _GENERIC_REGISTRY_OWNERS:
+        return True
+    owner_terms = set(_words(owner))
+    owner_domains = {domain for domain, aliases in _DOMAINS.items()
+                     if owner_terms & aliases}
+    # A specific registrar for the wrong domain can never implement this one.
+    if not owner_domains or not owner_domains & requested:
+        return False
+    # EntityRendererRegistry registers renderers, not entity types. Likewise
+    # "client" registrations cannot satisfy an ordinary server-side entity
+    # registration task.
+    qualifier_roles = {"renderer", "rendering", "client", "screen", "model"}
+    if owner_terms & qualifier_roles and not words & qualifier_roles:
+        return False
+    return True
+
+
 def api_semantic_admissible(
     op: str, purpose: str, row: Mapping[str, object],
     requirements: Sequence[Mapping[str, object]] = (),
@@ -95,5 +137,9 @@ def api_semantic_admissible(
         and term not in _NEUTRAL
     ]
     intent = {_stem(term) for term in requested if term not in _NEUTRAL}
-    # Generic register(...) is valid; registerEntity(...) needs entity in intent.
-    return not rest or any(term in intent for term in rest)
+    # Generic register(...) still requires the correct domain owner.
+    if rest and not any(term in intent for term in rest):
+        return False
+    if "regis" in matching_actions and not _registration_owner_matches(purpose, row):
+        return False
+    return True
