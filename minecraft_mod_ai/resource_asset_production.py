@@ -132,9 +132,9 @@ def _plan_row(router: Any, proposal: CompleteProposal, request: AssetRequest) ->
 
 def attach_generation_plan(router: Any, proposal: CompleteProposal) -> CompleteProposal:
     """Persist deterministic resource contracts; Qwen never authors raw backend prompts."""
-    from .resource_prompt_compiler import image_profile_fingerprint
-    if not proposal.assets:
-        return proposal
+    from .visual_generation_policy import reject_generated_assets
+    reject_generated_assets(proposal.assets)
+    return proposal
     _preflight(proposal)
     image_config = router.registry.role(router.profile, "image_generator")
     plan = {
@@ -527,6 +527,8 @@ def generate_assets(
     *,
     package_resource_pack: bool = True,
 ) -> dict[str, Any]:
+    from .visual_generation_policy import reject_generated_assets
+    reject_generated_assets(proposal.assets)
     proposal = _asset_execution_projection(proposal)
     from .model_adapters.image_diffusion import ImageGenerationConfig
     from .resource_image_pipeline import (
