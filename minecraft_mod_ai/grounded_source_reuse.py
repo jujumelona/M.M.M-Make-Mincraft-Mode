@@ -551,7 +551,7 @@ def build_repository_reuse_plan(
     # those pinned URLs but must not launch unrelated keyword searches.
     provider_order = ("curseforge",)
     print("SOURCE_REUSE_DISCOVERY_ROUTE: " + json.dumps({
-        "provider_order": provider_order, "curseforge_key_present": provider_order[0] == "curseforge",
+        "provider_order": provider_order, "curseforge_key_present": bool(curseforge_api_key()),
         "fallback_policy": "curseforge_catalog_only_no_github_or_modrinth",
         "minecraft_version": adapter.minecraft_version, "loader": adapter.loader,
     }), flush=True)
