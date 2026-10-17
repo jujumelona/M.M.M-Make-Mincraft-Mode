@@ -50,8 +50,8 @@ def test_source_reuse_stops_after_first_sufficient_query(monkeypatch):
 def test_predesign_search_stops_after_first_shortlist(monkeypatch):
     monkeypatch.delenv("MMM_PREDESIGN_PROVIDER_RESULTS_PER_QUERY", raising=False)
     monkeypatch.delenv("MMM_PREDESIGN_PROVIDER_SEARCH_PAGES", raising=False)
-    assert pre_design_grounded_rag._provider_result_limit() == 4
-    assert pre_design_grounded_rag._provider_page_limit() == 1
+    assert pre_design_grounded_rag._provider_result_limit() is None
+    assert pre_design_grounded_rag._provider_page_limit() is None
     monkeypatch.setattr(pre_design_grounded_rag, "curseforge_api_key", lambda: "test")
     search_requests = []
     detail_requests = []
