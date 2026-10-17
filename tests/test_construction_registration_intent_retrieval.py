@@ -85,6 +85,22 @@ def test_explicit_method_intent_never_builds_the_global_eligible_method_inventor
     ]
 
 
+def test_nonexistent_dotted_method_does_not_trigger_global_scan():
+    index = _index()
+
+    def global_scan_forbidden(*_args, **_kwargs):
+        raise AssertionError('A fictional dotted API is not global-search evidence')
+
+    index._eligible_owners = global_scan_forbidden
+    goal = index.prepare(
+        'Call EntityType.uninventedMagicalRegistry to register an entity',
+        kinds=('METHOD',),
+    )
+    page = index.page(goal, 0)
+    assert page['matches'] == []
+    assert page['total_count'] == 0
+
+
 def test_no_exact_action_evidence_does_not_invent_an_api():
     index = _index(with_registry=False)
     index.prepare('EntityType registration API', kinds=('METHOD',))
