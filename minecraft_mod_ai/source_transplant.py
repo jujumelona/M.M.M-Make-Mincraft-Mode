@@ -634,7 +634,8 @@ def inspect_repository_slice(
     adapter: PlatformAdapter,
     discovery_client: Any,
 ) -> DonorSlice | None:
-    """Inspect one repo and return a pinned minimal Java/Kotlin closure when evidence suffices."""
+    """External GitHub donor inspection is disabled."""
+    raise SourceTransplantError("GitHub donor inspection disabled: CurseForge only.")
 
     session = _INSPECTION_SESSION.get()
     target_key = (repository, adapter.minecraft_version, adapter.loader)
@@ -1119,7 +1120,8 @@ def _donor_materialization_key(
 
 
 def _repository_snapshot(repository: str, discovery_client: Any, *, minecraft_version="", loader="") -> Mapping[str, Any] | None:
-    """Cache immutable repository metadata/tree across capability evaluation."""
+    """GitHub snapshots are disabled."""
+    raise SourceTransplantError("GitHub snapshot disabled: CurseForge only.")
 
     cache_key = (repository, minecraft_version, loader)
     session = _INSPECTION_SESSION.get()
@@ -1673,7 +1675,8 @@ def materialize_pinned_donor(
     donor_slice: DonorSlice,
     discovery_client: Any = None,
 ) -> dict[str, bytes]:
-    """Fetch and verify all files in a donor slice using immutable blob SHAs."""
+    """GitHub pinned donor downloads are disabled."""
+    raise SourceTransplantError("GitHub donor download disabled: CurseForge only.")
     validate_donor_slice_manifest(donor_slice)
     token = str(getattr(discovery_client, "github_token", "") or os.environ.get("GITHUB_TOKEN")
                 or os.environ.get("GH_TOKEN") or "").strip()

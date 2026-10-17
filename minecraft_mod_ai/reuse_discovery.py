@@ -575,7 +575,7 @@ def _search_curseforge(
                     seen_ids.add(mod_id)
                     links = item.get("links")
                     source_url = links.get("sourceUrl") if isinstance(links, Mapping) else ""
-                    repository = _github_repository(source_url)
+                    repository = ""  # CurseForge metadata only; never inspect GitHub sourceUrl.
                     result.append((repository, 1.0 / (1 + len(result)), {
                         "title": item.get("name", ""), "summary": item.get("summary", ""),
                         "repository": repository, "sort_field": sort_field,
@@ -823,10 +823,10 @@ def discover_repositories_for_graph(
         raise TypeError("Reuse discovery providers must be a sequence of provider names.")
     provider_order = tuple(dict.fromkeys(
         str(provider).strip().casefold()
-        for provider in (providers if providers is not None else ("curseforge", "modrinth", "github"))
+        for provider in (providers if providers is not None else ("curseforge",))
     ))
-    if any(provider not in _PROVIDER_PRIORITY for provider in provider_order):
-        raise ValueError("Reuse discovery received an unsupported provider.")
+    if any(provider != "curseforge" for provider in provider_order):
+        raise ValueError("Reuse discovery only permits CurseForge; no GitHub or Modrinth fallback.")
     if "curseforge" in provider_order and not _curseforge_api_key():
         provider_order = tuple(provider for provider in provider_order if provider != "curseforge")
         if diagnostics is not None:
@@ -882,7 +882,7 @@ def discover_repositories_for_graph(
             "provider_priority": _PROVIDER_PRIORITY[provider],
             "capabilities": list(owners),
             "status": "provider_error" if errors else (
-                "found" if values else
+                "catalog_only" if provider == "curseforge" and values else
                 "bounded_listing_no_source" if provider == "curseforge" else "search_empty"
             ),
             "error": "; ".join(str(error["error"]) for error in errors),

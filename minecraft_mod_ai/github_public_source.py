@@ -186,7 +186,7 @@ class PublicGitSourceError(RuntimeError):
 
 def public_git_available() -> bool:
     """Capability check only; it does not invoke Git or probe the network."""
-    return shutil.which("git") is not None
+    return False  # Public git donor inspection prohibited by CurseForge-only policy.
 
 
 def _disk_bytes(root: Path, budget: int) -> int:
@@ -406,6 +406,7 @@ def inspect_public_repository(
     errors distinguish transport/resource failures from a successful inspection.
     No source compatibility or build success is asserted by this function.
     """
+    raise PublicGitSourceError("Public Git inspection disabled: CurseForge only.", kind="unavailable")
     if not _REPOSITORY.fullmatch(repository) or any(part in {".", ".."} for part in repository.split("/")):
         raise PublicGitSourceError("Invalid public GitHub repository identity.")
     if any(type(value) is not int or value <= 0 for value in (response_byte_budget, archive_byte_budget, single_blob_byte_budget)):

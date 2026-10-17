@@ -18,7 +18,7 @@ from .central_research import external_discovery_routes
 from .platform_catalog import adapter_for_target
 from .spec import SpecValidationError, canonical_json
 
-_PROVIDERS = frozenset({'modrinth', 'github', 'openverse_images', 'wikipedia', 'huggingface_models', 'openalex_works', 'crossref_works'})
+_PROVIDERS = frozenset({'modrinth', 'openverse_images', 'wikipedia', 'huggingface_models', 'openalex_works', 'crossref_works'})
 _TARGET_PROFILES = frozenset({'minecraft_mod', 'ai_runtime', 'media', 'general_reference'})
 _MODRINTH_ID = re.compile('^[A-Za-z0-9_-]{3,64}$')
 _SHA1_HEX = re.compile('^[0-9a-f]{40}$')
@@ -271,6 +271,7 @@ class EcosystemDiscoveryClient:
         return self.inspect_github_repository(full_name, minecraft_version=minecraft_version, loader=loader)
 
     def inspect_github_repository(self, full_name: str, *, minecraft_version: str='', loader: str='') -> dict[str, Any]:
+        raise EcosystemDiscoveryUnavailable('GitHub inspection disabled: CurseForge only.')
         if not _GITHUB_REPOSITORY.fullmatch(full_name):
             raise SpecValidationError('Invalid GitHub owner/repository name.')
         repository_url = f'https://api.github.com/repos/{full_name}'
@@ -397,6 +398,7 @@ class EcosystemDiscoveryClient:
         return (candidates, total, next_offset)
 
     def _search_github(self, query: str, *, page: int, limit: int, target_profile: str, target: _DiscoveryTarget, source_reference: bool=False) -> tuple[list[EcosystemCandidate], int, int | None]:
+        raise EcosystemDiscoveryUnavailable('GitHub search disabled: CurseForge only.')
         scoped_query = query
         if target_profile == 'minecraft_mod':
             scoped_query += (f' minecraft "{target.minecraft_version}"' if source_reference else
@@ -584,6 +586,8 @@ class EcosystemDiscoveryClient:
 
     def _get_json(self, url: str, *, params: dict[str, str] | None=None, provider: str='', include_next_url: bool=False) -> Any:
         parsed = urlparse(url)
+        if parsed.hostname == 'api.github.com':
+            raise EcosystemDiscoveryUnavailable('GitHub API disabled: CurseForge only.')
         if parsed.scheme != 'https' or parsed.hostname not in {'api.modrinth.com', 'api.github.com', 'api.openverse.org', 'en.wikipedia.org', 'ko.wikipedia.org', 'huggingface.co', 'api.openalex.org', 'api.crossref.org'}:
             raise SpecValidationError('Discovery request escaped the API allowlist.')
         if parsed.hostname == 'huggingface.co' and (not (parsed.path == '/api/models' or parsed.path.startswith('/api/models/'))):
@@ -668,8 +672,6 @@ def _serial_discover_seed_bundle(prompt: str, game_design: dict[str, Any], *, re
     query = _seed_query(prompt, game_design)
     if research_brief is None:
         routes = [{'domain_id': 'request', 'provider': provider, 'query': query, 'target_profile': 'media' if provider in {'openverse_images'} else 'minecraft_mod'} for provider in ['modrinth', 'openverse_images']]
-        if client is not None and client.github_token or os.environ.get('GITHUB_TOKEN') or os.environ.get('GH_TOKEN'):
-            routes.append({'domain_id': 'request', 'provider': 'github', 'query': query, 'target_profile': 'minecraft_mod'})
     else:
         routes = list(external_discovery_routes(research_brief))
     selected_target: Mapping[str, Any] = {}

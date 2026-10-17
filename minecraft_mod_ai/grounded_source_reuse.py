@@ -511,7 +511,8 @@ def build_repository_reuse_plan(
     adapter = _adapter(design)
     adapter.validate()
     client = discovery_client or EcosystemDiscoveryClient()
-    cards = list(_grounded_repository_cards(design))
+    # Previous GitHub donor cards never enter the CurseForge-only pipeline.
+    cards: list[dict[str, Any]] = []
     # Host-owned discovery feeds reference-only repository identities into the
     # existing immutable source, license, closure and compile-proof gates.
     # A search hit has ZERO reuse authority until the proof below passes.
@@ -534,44 +535,6 @@ def build_repository_reuse_plan(
         for capability, repositories in results.items():
             discovered[capability] = tuple(dict.fromkeys(
                 (*discovered.get(capability, ()), *repositories)))
-            for repository in repositories:
-                provenance = [
-                    dict(item) for receipt in receipts
-                    if capability in receipt.get("capabilities", ())
-                    for item in receipt.get("repository_evidence", ())
-                    if str(item.get("repository") or "").casefold() == repository.casefold()
-                ]
-                priority = min((item["provider_priority"] for item in provenance), default=2)
-                source_ids = ["github:" + repository]
-                source_urls = ["https://github.com/" + repository]
-                for item in provenance:
-                    if item.get("source_id"):
-                        source_ids.append(item["source_id"])
-                    for field in ("catalog_url", "source_url"):
-                        if item.get(field):
-                            source_urls.append(item[field])
-                _merge_card(cards, by_repository, {
-                    "repository": repository,
-                    "page_refs": ["host:ecosystem_discovery"],
-                    "source_ids": list(dict.fromkeys(source_ids)),
-                    "source_urls": list(dict.fromkeys(source_urls)),
-                    "evidence_text": " ".join(
-                        str(item.get(field) or "")
-                        for item in provenance
-                        for field in ("title", "summary", "code_search_path")
-                    )[:1280],
-                    "evidence_tokens": sorted(_tokens(" ".join(
-                        str(item.get(field) or "")
-                        for item in provenance
-                        for field in ("title", "summary", "code_search_path")
-                    ))),
-                    "explicit_reference": False,
-                    "candidate_origin": "host_ecosystem_discovery",
-                    "reference_only": True,
-                    "source_reuse_authority": "verification_required",
-                    "catalog_evidence": provenance,
-                    "catalog_provider_priority": {capability: priority},
-                })
     terms_by_capability = _search_terms(graph)
     capabilities = tuple(
         dict.fromkeys(
@@ -586,10 +549,10 @@ def build_repository_reuse_plan(
     # No broad GitHub or Sourcegraph provider wave. Catalog metadata supplies
     # candidate projects and exact source URLs; donor inspection may fetch
     # those pinned URLs but must not launch unrelated keyword searches.
-    provider_order = ("curseforge",) if curseforge_api_key() else ("modrinth",)
+    provider_order = ("curseforge",)
     print("SOURCE_REUSE_DISCOVERY_ROUTE: " + json.dumps({
         "provider_order": provider_order, "curseforge_key_present": provider_order[0] == "curseforge",
-        "fallback_policy": "catalog_source_links_only_no_broad_github_search",
+        "fallback_policy": "curseforge_catalog_only_no_github_or_modrinth",
         "minecraft_version": adapter.minecraft_version, "loader": adapter.loader,
     }), flush=True)
     # Pre-design has already materialized some source candidates. Verify them
@@ -743,9 +706,8 @@ def build_repository_reuse_plan(
                             "Pinned same-version source is available for optional partial porting; "
                             "author the remaining behavior against the target API."
                             if reference_count else
-                            "No grounded or explicitly referenced GitHub donor passed immutable "
-                            "source, permissive license, dependency closure, authoritative compile, "
-                            "and artifact coverage gates."
+                            "CurseForge catalogue had no reusable verified source; author fresh "
+                            "code against the selected target API."
                         ),
                     }
                 )
@@ -820,9 +782,8 @@ def build_repository_reuse_plan(
         "proof_receipts": proofs,
         "reference_sources": reference_sources,
         "selection_policy": (
-            "reference-only host-grounded/explicit GitHub candidate -> frozen-intent capability "
-            "inspection -> immutable source + permissive-license closure -> authoritative target "
-            "compile -> complete verified artifact coverage -> task-owned approved source context"
+            "Only CurseForge catalog metadata is inspected; no GitHub search, "
+            "GitHub REST or public git inspection. Missing source -> fresh authoring."
         ),
     }
 
