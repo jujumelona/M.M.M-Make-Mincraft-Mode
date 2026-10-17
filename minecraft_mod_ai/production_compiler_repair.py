@@ -78,8 +78,19 @@ def repair_failed_build_with_model(
     repair = repair_staged_java_with_model(router, root, target_path=paths[0])
     receipt["repair"] = repair
     if repair.get("status") == "COMPILED" and repair.get("compile_passed") is True:
+        # Rebind source authorship to the exact now-compiled bytes. Preserve
+        # the original authorship hash as provenance; compilation is not proof
+        # of gameplay. This invalidates stale old-source coverage receipts.
+        from .construction_coverage import record_authored_source_calls
+        source = (root / paths[0]).read_text(encoding="utf-8")
+        record_authored_source_calls(
+            root, paths[0], source,
+            selected_ports=[], installed_donor_calls=[], source_kind="direct",
+        )
         receipt["status"] = "COMPILER_REPAIRED"
         receipt["repaired_files"] = paths
+        receipt["compiled_source_sha256"] = hashlib.sha256(
+            source.encode("utf-8")).hexdigest()
         receipt["build_recheck_required"] = True
     else:
         receipt["status"] = "REPAIR_FAILED"
