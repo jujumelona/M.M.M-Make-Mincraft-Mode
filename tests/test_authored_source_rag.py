@@ -132,7 +132,7 @@ def test_failed_deterministic_proof_preserves_downloadable_reference(monkeypatch
     monkeypatch.setattr("minecraft_mod_ai.reuse_discovery.discover_repositories_for_graph", lambda *args, **kwargs: {
         "space travel": ("example/oldspace",)})
     source_path = "src/main/java/Travel.java"
-    source_code = b"package example; public class Travel { public void travel() {} }"
+    source_code = (b"package example;\n"\n                   b"public class Travel {\n"\n                   b"  public void travel() { }\n"\n                   b"}\n")
     donor = DonorSlice(
         capability="space travel", repository="example/oldspace", commit_sha="b" * 40, license_id="MIT",
         source_url="https://github.com/example/oldspace", target_compatibility="adapt",
@@ -155,6 +155,7 @@ def test_failed_deterministic_proof_preserves_downloadable_reference(monkeypatch
     }, discovery_client=object(), donor_inspector=lambda **kwargs: donor,
         proof_executor=cannot_migrate, target_workspace=tmp_path)
     assert result["capabilities"][0]["mode"] == "fresh"
+    assert result["reference_sources"], result["inspection_receipts"]
     assert result["reference_sources"][0]["donor"]["commit_sha"] == "b" * 40
     assert "model adaptation" in result["reference_sources"][0]["migration_diagnostics"]
 
