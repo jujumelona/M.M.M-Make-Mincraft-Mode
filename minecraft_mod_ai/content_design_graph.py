@@ -38,7 +38,6 @@ ALL_DESIGN_SLOTS: tuple[str, ...] = (
     "design/resource_source",
     "design/reward",
     "design/risk",
-    "design/texture_requirement",
     "design/theme",
     "design/ui_requirement",
     "design/unlock",
