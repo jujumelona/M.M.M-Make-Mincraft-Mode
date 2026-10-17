@@ -37,11 +37,11 @@ Given a request such as *modular spaceships, trading, mining and hostile alien e
 | ID | Deliverable | Stage | Completion evidence |
 |---|---|---|---|
 | M0 | This authoritative migration checklist, baseline and acceptance fixtures | DOCUMENTED | committed doc with status and invariants |
-| M1 | `FeatureWorkOrder`: bounded, stable per-feature work item with required effects, state/effects, target, dependencies, source route and a compile acceptance contract | TODO | isolated unit tests, version changes invalidate cache |
+| M1 | `FeatureWorkOrder`: bounded, stable per-feature work item with required effects, state/effects, target, dependencies, source route and a compile acceptance contract | IMPLEMENTED, CI NOT YET VERIFIED | `feature_work_order.py`, `construction_generation.py`, `tests/test_feature_work_order.py` |
 | M2 | Verified route selector: CurseForge compatibility + licensing/permissions + byte/hash proof, `dependency`/`source_reuse`/`fresh` and explicit reasons | TODO | fixture for each mode, no false donor proof; no forbidden runtime provider |
 | M3 | Version/loader-aware scaffold factory grounded in inspected classpath for registries, lifecycle, state holders, events, server/client sides | TODO | compile real minimal entity/item/block/event fixture against chosen target |
-| M4 | Unified **feature-level** Java writer: host supplies signatures and state/event ownership, small AI writes complete methods; no default micro-node writer | TODO | stateful and stateless real feature fixtures; old IR reserved as explicit legacy option |
-| M5 | Bounded model context: at most relevant shortlist of verified callable APIs + nearby source; reject wrong registries and missing constructor chains BEFORE model calls | TODO | `Registry.register` accepted for EntityType only when object construction feasible; `RecipeType.register` rejected |
+| M4 | Unified **feature-level** Java writer: host supplies signatures and state/event ownership, small AI writes complete methods; no default micro-node writer | PARTIAL | Whole-method author and checkpoint for independent canonical methods; stateful and donor/port implementations still legacy; real compile E2E NOT proven |
+| M5 | Bounded model context: at most relevant shortlist of verified callable APIs + nearby source; reject wrong registries and missing constructor chains BEFORE model calls | PARTIAL | Wrong-domain registrar filter and regression; complete constructibility checker and target compile proof remain TODO |
 | M6 | Host compiler feedback: real compileJava per feature/batch, diagnostics normalized by file/line/code, local 0-2 edits, rollback/replan on persistent error | TODO | controlled failing Java fixture repaired then compiled, 3rd identical attempt impossible |
 | M7 | Replace per-field/AST planner recursion with one small semantic feature planning call; host handles cardinality, dedup, scheduling | TODO | call-count regression on multi-capability scenario and coverage equality |
 | M8 | Persist code, compile outputs, source evidence and work order with hashes; resume without regenerating finished feature | TODO | restart/resume and invalidation tests |
@@ -70,3 +70,7 @@ Main at `054b9d3` had failed CI, Partial CI, Production Kill Gates and Debug Gat
 ### Update log
 
 - 2026-10-18: M0: exhaustive architecture/acceptance plan committed. Implementation and verification remain staged; no assertion of production completion.
+
+- 2026-10-18: M1 implemented: immutable `FeatureWorkOrder` carrying every behavior, target coordinates, state and acceptance contract. Work order is injected at canonical feature-entrypoint composition and reflected in direct-writer prompts; tests added (CI not yet green).
+- 2026-10-18: M4 **partial**: added `construction_member_direct_author.py`; independent method declarations use one complete Java method call with one optional syntax correction and hash-bound checkpoint; legacy operation IR remains for stateful, retained typed effects and donor/port obligations. `construction_generation.py` routes these eligible methods directly. Method presence is not compiler/gameplay proof. Real Gradle and restart fixtures remain required.
+- 2026-10-18: M5 **partial**: root registry API admission checks owner domain (entity, item, block, recipe, etc.) as well as method stem; excludes `RecipeType.register`, `RuleTestType.register`, `EntityRendererRegistry.register` when registering entity types. Full argument constructibility contract still open.
