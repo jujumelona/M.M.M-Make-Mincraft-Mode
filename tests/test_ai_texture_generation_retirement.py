@@ -9,7 +9,6 @@ from minecraft_mod_ai.capability_plugins import buildable_plugin_ids
 from minecraft_mod_ai.complete_spec import AssetRequest, SpecValidationError
 from minecraft_mod_ai.extended_content_generator import _block_resources, _item_resources
 from minecraft_mod_ai.resource_asset_production import (
-    AssetProductionError,
     attach_generation_plan, generate_assets,
 )
 from minecraft_mod_ai.visual_generation_policy import (
