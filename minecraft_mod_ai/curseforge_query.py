@@ -86,12 +86,33 @@ def curseforge_search_queries(
     # title/summary reranker subsequently checks the full original capability.
     synonyms = [equivalent for term in terms
                 for equivalent in _EQUIVALENTS.get(term, ())]
-    queries = list(dict.fromkeys((*compounds, *terms, *synonyms)))
-    # When one canonical title term is known, try its direct synonyms before
-    # spending the last budget slot on low-specificity words.
-    if len(terms) == 1:
-        queries = list(dict.fromkeys((*compounds, terms[0], *synonyms)))
-    return tuple(queries[:max_variants])
+    candidates = list(dict.fromkeys((*compounds, *terms, *synonyms)))
+    families = {
+        "space": "spaceship", "ship": "spaceship", "spaceship": "spaceship",
+        "spacecraft": "spaceship", "starship": "spaceship",
+        "alien": "alien", "aliens": "alien",
+        "trade": "trade", "trading": "trade", "economy": "trade",
+        "ore": "mining", "ores": "mining", "mine": "mining", "mining": "mining",
+        "planet": "planet", "planets": "planet", "planetary": "planet",
+    }
+    # Diversify among distinct sub-capabilities before fallback synonyms.
+    # For a single-subject query, use any free budget to try equivalent names.
+    selected: list[str] = []
+    covered: set[str] = set()
+    for word in candidates:
+        family = families.get(word, word)
+        if family in covered:
+            continue
+        covered.add(family)
+        selected.append(word)
+        if len(selected) >= max_variants:
+            return tuple(selected)
+    for word in candidates:
+        if word not in selected:
+            selected.append(word)
+        if len(selected) >= max_variants:
+            break
+    return tuple(selected)
 
 
 def curseforge_catalogue_score(
