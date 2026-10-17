@@ -39,7 +39,7 @@ _NEUTRAL = frozenset({
 
 
 def _words(value: object) -> tuple[str, ...]:
-    value = re.sub(r"([a-z0-9])([A-Z])", r"\\1 \\2", str(value or ""))
+    value = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", str(value or ""))
     return tuple(re.findall(r"[a-z][a-z0-9]*", value.casefold()))
 
 
