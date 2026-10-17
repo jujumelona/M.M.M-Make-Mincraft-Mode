@@ -59,7 +59,7 @@ def build_repository_reuse_plan(design: Mapping[str, Any], **kwargs: Any) -> dic
             "discovery_status": discovery_status,
             "failure_code": failure_code, "source_id": "",
             "component_refs": [], "reference_source_count": 0,
-            "catalogue_evidence": matched[:5],
+            "catalogue_evidence": matched,  # Already bounded per distinct topic.
             "catalogue_queries": list(row.get("queries") or ()),
             "rationale": (
                 "CurseForge catalogue metadata is only a research hint; "
