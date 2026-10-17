@@ -64,11 +64,11 @@ def test_curseforge_paginates_targeted_queries_and_fetches_ranked_descriptions(m
                 return {"data": [
                     {"id": 1, "classId": 6, "name": "space one", "summary": "space trading", "links": {}},
                     {"id": 2, "classId": 6, "name": "space two", "summary": "space trading", "links": {}},
-                ], "pagination": {"index": 0, "pageSize": 50, "resultCount": 2, "totalCount": 3}}
+                ], "pagination": {"index": 0, "pageSize": int(query["pageSize"][0]), "resultCount": 2, "totalCount": 3}}
             if index == 2:
                 return {"data": [
                     {"id": 3, "classId": 6, "name": "space three", "summary": "space trading", "links": {}},
-                ], "pagination": {"index": 2, "pageSize": 50, "resultCount": 1, "totalCount": 3}}
+                ], "pagination": {"index": 2, "pageSize": int(query["pageSize"][0]), "resultCount": 1, "totalCount": 3}}
         if "/description" in url:
             mod_id = url.split("/mods/", 1)[1].split("/", 1)[0]
             return {"data": f"<p>full-{mod_id}</p>"}
@@ -80,7 +80,9 @@ def test_curseforge_paginates_targeted_queries_and_fetches_ranked_descriptions(m
     records, receipt = rag._search_curseforge("space trading")
     assert [record["source_id"] for record in records] == ["curseforge:1", "curseforge:2", "curseforge:3"]
     assert [record["content"] for record in records] == ["full-1", "full-2", "full-3"]
-    assert receipt["search_requests"] == 6
+    # Stop after the first keyword produced three plausible candidates.
+    assert receipt["search_requests"] == 2
+    assert receipt["search_variants"] == ["space"]
     assert receipt["source_requests"] == 3
     assert receipt["provider_total"] == 3
 
