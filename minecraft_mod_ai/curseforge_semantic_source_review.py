@@ -304,6 +304,18 @@ def _judge_with_model(router: object, capability: str, evidence: Sequence[Mappin
     return {"status": "semantic_reviewed", **reviewed}
 
 
+def _semantic_cache_key(capability: str, revision: str, url: str,
+                        search_terms: Sequence[str]) -> tuple[object, ...]:
+    """Deduplicate equivalent feature reviews, never the user's requirements."""
+    tokens = re.findall(r"[a-z0-9_]+|[가-힣]+", capability.casefold())
+    # Removing only English articles/prepositions is safe for caching a
+    # suggestion, not for merging or dropping original requirement records.
+    stop = {"in", "the", "a", "an", "of"}
+    return ("semantic-review", url, revision,
+            tuple(sorted(token for token in tokens if token not in stop)),
+            tuple(sorted(set(search_terms))))
+
+
 def assess_ranked_sources(capability: str, candidates: Sequence[Mapping[str, object]],
                           *, router: object = None, cache: dict | None = None,
                           max_candidates: int = 2) -> list[dict[str, object]]:
@@ -335,10 +347,10 @@ def assess_ranked_sources(capability: str, candidates: Sequence[Mapping[str, obj
                         else _gitlab_archive(client, owner, repository)
                     )
                 cache[url] = (revision, archive)
+            search_terms = tuple(str(term) for term in
+                                 (candidate.get("matched_queries") or ()) if str(term).strip())
             observation = inventory_from_archive(
-                capability, archive,
-                search_terms=tuple(str(term) for term in
-                                   (candidate.get("matched_queries") or ()) if str(term).strip()),
+                capability, archive, search_terms=search_terms,
             )
             receipt.update({"pinned_sha": revision, "inspection_status": observation["status"],
                             "license_spdx": observation["license_spdx"],
@@ -346,8 +358,14 @@ def assess_ranked_sources(capability: str, candidates: Sequence[Mapping[str, obj
                             "examined_files": [ {k: v for k, v in record.items() if k != "snippet"}
                                                 for record in observation["evidence"] ]})
             if observation["status"] == "inspected":
-                semantic = _judge_with_model(router, capability, observation["evidence"],
-                                             str(observation["license_spdx"]))
+                key = _semantic_cache_key(capability, revision, url, search_terms)
+                semantic = cache.get(key)
+                if semantic is None:
+                    semantic = _judge_with_model(
+                        router, capability, observation["evidence"],
+                        str(observation["license_spdx"]),
+                    )
+                    cache[key] = semantic
                 receipt["semantic"] = semantic
                 if semantic.get("status") == "semantic_reviewed":
                     selected = next((item for item in observation["evidence"]
