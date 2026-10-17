@@ -152,6 +152,13 @@ def compose_feature(router, spec, context, behaviors, *, package, name, owner):
 
 def _compose_claimed(router, spec, context, behaviors, package, name, owner,
                      root, checkpoint, identity):
+    target = context['target']
+    if not isinstance(target, dict):
+        raise ValueError('CONSTRUCTION_DIRECT_TARGET_INVALID')
+    target_version = str(target.get('minecraft_version') or '').strip()
+    target_loader = str(target.get('loader') or '').strip().casefold()
+    if not target_version or target_loader != 'fabric':
+        raise ValueError('CONSTRUCTION_DIRECT_TARGET_UNSUPPORTED')
     saved = _read_checkpoint(checkpoint, identity)
     expected = {str(row["behavior_id"]) for row in behaviors}
     if set(saved) - expected:
@@ -192,7 +199,7 @@ def _compose_claimed(router, spec, context, behaviors, package, name, owner,
         }
         messages = [
             {"role": "system", "content": (
-                "Implement exactly one independently owned Fabric 26.2 behavior "
+                f"Implement exactly one independently owned Fabric {target_version} behavior "
                 "as COMPLETE Java method source. The host fixes the signature; "
                 "return the entire declaration with exactly that signature, not "
                 "a planning decision or a fragment. Use real inspected APIs "
