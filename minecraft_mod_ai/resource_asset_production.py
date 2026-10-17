@@ -135,20 +135,6 @@ def attach_generation_plan(router: Any, proposal: CompleteProposal) -> CompleteP
     from .visual_generation_policy import reject_generated_assets
     reject_generated_assets(proposal.assets)
     return proposal
-    _preflight(proposal)
-    image_config = router.registry.role(router.profile, "image_generator")
-    plan = {
-        "schema_version": "mmm/resource-asset-generation-plan-v3",
-        "image_profile_sha256": image_profile_fingerprint(image_config),
-        "assets": [_plan_row(router, proposal, request) for request in proposal.assets],
-    }
-    _validate_manifest(plan["assets"])
-    if proposal.game_design.get("_asset_generation_plan") == plan:
-        return proposal
-    updated = replace(proposal, game_design={**proposal.game_design, "_asset_generation_plan": plan}, approval_hash="").with_hash()
-    updated.validate()
-    return updated
-
 
 def _safe_target(project_root: Path, relative: str) -> Path:
     normalized = PurePosixPath(str(relative).replace("\\", "/"))
