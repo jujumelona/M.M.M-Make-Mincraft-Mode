@@ -404,6 +404,22 @@ def discover_repositories_for_graph(
                         "minecraft_version": version, "loader": selected_loader,
                         "score": score, "matched_queries": [query],
                         "source_reuse_authority": "catalogue_only",
+                        "target_file_indexes": [
+                            {
+                                "file_id": index.get("file_id"),
+                                "filename": index.get("filename"),
+                                "loader_type": index.get("loader_type"),
+                                "game_version": index.get("game_version"),
+                            }
+                            for index in (meta.get("version_indexes") or ())
+                            if isinstance(index, Mapping)
+                            and index.get("game_version") == version
+                            and index.get("loader_type") == {
+                                "forge": 1, "fabric": 4, "quilt": 5,
+                                "neoforge": 6,
+                            }.get(selected_loader)
+                            and type(index.get("file_id")) is int
+                        ][:3],
                     }
                 else:
                     previous["score"] = max(int(previous["score"]), score)
