@@ -146,7 +146,7 @@ def test_actual_predesign_request_domain_is_source_code_eligible():
     request = next(row for row in brief["domains"] if row["domain_id"] == "request")
     assert "minecraft_api" in request["evidence_kinds"]
     assert "curseforge" in request["providers"]
-    assert "modrinth" in request["providers"]
+    assert "modrinth" not in request["providers"]
     assert "github" not in request["providers"]
     grounded = {"queries": [{
         "query": "planet travel", "evidence_records": [{
