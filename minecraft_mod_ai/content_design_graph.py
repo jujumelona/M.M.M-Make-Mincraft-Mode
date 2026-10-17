@@ -1122,35 +1122,9 @@ def compile_content_graph(
             config["visual_spec"] = visual_spec
 
         modules.append(ProductionModule(eid, kind, config))
-        if visual:
-            visual_desc = ", ".join(f"{k}: {v}" for k, v in visual.items())
-            if kind in {"item", "armor"}:
-                asset_kind = "item"
-                render_kind = "item.generated"
-            elif kind == "block":
-                asset_kind = "block"
-                render_kind = "block.cube_all"
-            elif kind in {"gui", "entity", "boss", "npc"}:
-                # Structured visual assets are deferred until HOST geometry/layout
-                # and an exact screen/model consumer binding are available.
-                continue
-            else:
-                raise ValueError(
-                    f"ASSET_KIND_UNSUPPORTED: no texture contract for module kind {kind!r} ({eid})"
-                )
-
-            assets.append(
-                AssetRequest(
-                    asset_id=canonical_spec_id(f"texture_{asset_kind}_{eid}"),
-                    kind=asset_kind,
-                    visual_description=visual_desc,
-                    render_kind=render_kind,
-                    subject_id=eid,
-                    owner_module_id=eid,
-                    container="mod",
-                    visual_spec=visual_spec,
-                )
-            )
+        # Retired: no AI image/texture asset request is authored here.
+        # Keep gameplay modules and semantic visual hints, but never create a
+        # FLUX task or standalone resource pack from them.
 
     module_by_id = {m.module_id: m for m in modules}
 
