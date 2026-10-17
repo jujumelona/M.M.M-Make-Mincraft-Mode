@@ -122,45 +122,45 @@ def test_older_source_with_failed_proof_reaches_model_as_adaptation_reference(mo
     assert len(notices) == 1 and "Copyright example" in notices[0].read_text()
 
 
-def test_failed_deterministic_proof_preserves_downloadable_reference(monkeypatch, tmp_path):
+def test_curseforge_catalogue_never_invents_reusable_donor(monkeypatch):
     from minecraft_mod_ai import grounded_source_reuse
     from minecraft_mod_ai.host_version_catalog import host_target
-    from minecraft_mod_ai.source_transplant import CompatibilityEvidence, DonorFile, DonorSlice
 
-    monkeypatch.delenv("MMM_REFERENCE_MOD_URLS", raising=False)
-    monkeypatch.setattr(grounded_source_reuse, "_adapter", lambda *args: host_target("26.1.2"))
-    monkeypatch.setattr("minecraft_mod_ai.reuse_discovery.discover_repositories_for_graph", lambda *args, **kwargs: {
-        "space travel": ("example/oldspace",)})
-    source_path = "src/main/java/Travel.java"
-    source_code = (b"package example;\n"
-                   b"public class Travel {\n"
-                   b"  public void travel() { }\n"
-                   b"}\n")
-    donor = DonorSlice(
-        capability="space travel", repository="example/oldspace", commit_sha="b" * 40, license_id="MIT",
-        source_url="https://github.com/example/oldspace", target_compatibility="adapt",
-        files=(DonorFile(source_path, "c" * 40,
-                         "sha256:" + hashlib.sha256(source_code).hexdigest(), len(source_code), ("Travel",)),),
-        seed_files=(source_path,), source_symbols=("Travel",), required_dependencies=(), donor_tests=(), confidence=0.8,
-        compatibility_evidence=CompatibilityEvidence(minecraft_version="26.1.2", loader="fabric", status="metadata_exact"),
+    calls = []
+    version, loader = "26.1.2", "fabric"
+    monkeypatch.setattr(
+        grounded_source_reuse, "adapter_for_target",
+        lambda actual_version, actual_loader: (
+            calls.append(("target", actual_version, actual_loader)),
+            host_target(actual_version),
+        )[1],
     )
-    # The unit test supplies actual readable Java bytes instead of contacting
-    # GitHub; the production materializer still verifies pinned blob hashes.
-    monkeypatch.setattr("minecraft_mod_ai.grounded_source_reuse.materialize_pinned_donor",
-                        lambda *args: {source_path: source_code})
 
-    def cannot_migrate(*args, **kwargs):
-        raise RuntimeError("Yarn migration requires model adaptation")
+    def discover(capabilities, existing, **kwargs):
+        calls.append(("catalogue", tuple(capabilities), kwargs))
+        assert kwargs["providers"] == ("curseforge",)
+        assert kwargs["minecraft_version"] == version
+        assert kwargs["loader"] == loader
+        return {"space travel": ("curseforge:123",)}
 
+    monkeypatch.setattr(grounded_source_reuse, "discover_repositories_for_graph", discover)
     result = grounded_source_reuse.build_repository_reuse_plan({
-        "_pre_retrieval_plan": {"plan_sha256": "sha256:" + "a" * 64,
-                                "capability_graph": {"nodes": ["space travel"]}},
-    }, discovery_client=object(), donor_inspector=lambda **kwargs: donor,
-        proof_executor=cannot_migrate, target_workspace=tmp_path)
+        "_pre_retrieval_plan": {
+            "plan_sha256": "sha256:" + "a" * 64,
+            "capability_graph": {"nodes": ["space travel"]},
+        },
+        "_platform_selection": {
+            "target": {"minecraft_version": version, "loader": loader},
+        },
+    })
+
+    assert calls[0] == ("target", version, loader)
+    assert calls[1][0] == "catalogue"
+    assert result["bound_target"] == {"minecraft_version": version, "loader": loader}
     assert result["capabilities"][0]["mode"] == "fresh"
-    assert result["reference_sources"], result["inspection_receipts"]
-    assert result["reference_sources"][0]["donor"]["commit_sha"] == "b" * 40
-    assert "model adaptation" in result["reference_sources"][0]["migration_diagnostics"]
+    assert result["reference_sources"] == []
+    assert result["grounded_repository_count"] == 0
+    assert result["host_discovered_repositories"]["space travel"] == ["curseforge:123"]
 
 
 def test_unavailable_optional_reference_does_not_abort_fresh_implementation(monkeypatch):
