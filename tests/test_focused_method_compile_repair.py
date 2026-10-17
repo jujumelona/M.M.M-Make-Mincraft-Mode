@@ -64,3 +64,25 @@ def test_unsupported_error_without_method_does_not_summon_model(tmp_path, monkey
 
     assert focused.repair_staged_java_with_model(
         Router(), tmp_path, target_path=TARGET)["status"] == "NO_PROGRESS"
+
+
+def test_noop_compiler_repair_cannot_delete_requested_behavior(tmp_path, monkeypatch):
+    file = tmp_path / TARGET
+    file.parent.mkdir(parents=True)
+    file.write_text(SOURCE, encoding="utf-8")
+
+    def fake_compile(root, *, target_path, edit, max_repairs):
+        draft = edit(SOURCE, ({"path": TARGET, "line": 4,
+                               "message": "Unresolved method"},), 1)
+        assert draft == SOURCE
+        return {"status": "NO_PROGRESS"}
+
+    monkeypatch.setattr(focused, "compile_and_repair_feature", fake_compile)
+
+    class StubRouter:
+        def generate_java_source(self, role, messages, *, source_frame, **kwargs):
+            return source_frame["prefix"] + "return;" + source_frame["suffix"]
+
+    result = focused.repair_staged_java_with_model(
+        StubRouter(), tmp_path, target_path=TARGET)
+    assert result["status"] == "NO_PROGRESS"
