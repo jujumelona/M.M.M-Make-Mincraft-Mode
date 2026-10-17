@@ -37,21 +37,6 @@ def test_modrinth_search_uses_exact_facets_and_bound_offset_pagination() -> None
     assert requests[1].url.params['offset'] == '2'
     assert second['next_cursor'].startswith('offset:4:')
 
-def test_discovery_cursor_is_bound_to_query_and_provider() -> None:
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.host == 'api.github.com':
-            return httpx.Response(200, json={'total_count': 2, 'items': [{'id': 1, 'full_name': 'example/fabric-library', 'html_url': 'https://github.com/example/fabric-library', 'description': 'Library', 'default_branch': 'main', 'archived': False, 'license': {'spdx_id': 'MIT'}, 'topics': ['fabric']}]})
-        raise AssertionError('A rejected cursor must not make another request')
-    client = _client(handler)
-    page = client.search('github', 'navigation', limit=1)
-    cursor = page['next_cursor']
-    assert cursor.startswith('page:2:')
-    with pytest.raises(SpecValidationError, match='provider and query'):
-        client.search('github', 'unrelated economy', cursor=cursor, limit=1)
-    with pytest.raises(SpecValidationError, match='provider and query'):
-        client.search('openverse_images', 'navigation', cursor=cursor, limit=1)
-
 def test_modrinth_project_inspection_preserves_exact_hashes_dependencies_and_license() -> None:
     requests: list[httpx.Request] = []
     sha1 = '1' * 40
@@ -92,41 +77,13 @@ def test_modrinth_inspection_does_not_accept_off_target_or_ambiguous_files() -> 
     assert 'off_target_minecraft_version_or_loader' in version['unresolved_or_rejected_gates']
     assert 'exactly_one_primary_file_is_required' in version['unresolved_or_rejected_gates']
 
-def test_github_discovery_retains_unasserted_license_until_source_inspection() -> None:
+def test_deleted_github_provider_has_no_search_path():
+    client = _client(lambda request: (_ for _ in ()).throw(AssertionError("No network expected")))
+    with pytest.raises(SpecValidationError, match="Unsupported ecosystem discovery provider"):
+        client.search("github", "space")
+    assert not hasattr(client, "inspect_github_repository")
+    client.close()
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.host == 'api.github.com'
-        return httpx.Response(200, json={'total_count': 3, 'items': [{'id': 1, 'full_name': 'example/no-license', 'html_url': 'https://github.com/example/no-license', 'archived': False, 'license': None}, {'id': 2, 'full_name': 'example/noassertion', 'html_url': 'https://github.com/example/noassertion', 'archived': False, 'license': {'spdx_id': 'NOASSERTION'}}, {'id': 3, 'full_name': 'example/reviewable', 'html_url': 'https://github.com/example/reviewable', 'description': 'Reviewable source', 'default_branch': 'main', 'archived': False, 'license': {'spdx_id': 'BSD-3-Clause'}, 'topics': ['minecraft', 'fabric']}]})
-    page = _client(handler).search('github', 'trade economy', limit=10)
-    assert [item['candidate_id'] for item in page['candidates']] == [
-        'github:example/no-license', 'github:example/noassertion',
-        'github:example/reviewable',
-    ]
-    assert page['candidates'][0]['reuse_status'] == 'candidate_only_not_cloned'
-    assert page['candidates'][1]['license_id'] == 'NOASSERTION'
-    assert page['candidates'][0]['reuse_status'] == 'candidate_only_not_cloned'
-    assert page['download_performed'] is False
-
-def test_github_inspection_pins_commit_and_hashes_license_without_cloning() -> None:
-    license_bytes = b'MIT License\n\nPermission is hereby granted...'
-    requests: list[httpx.Request] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        if request.url.path == '/repos/example/reviewable':
-            return httpx.Response(200, json={'full_name': 'example/reviewable', 'html_url': 'https://github.com/example/reviewable', 'default_branch': 'main', 'private': False, 'archived': False})
-        if request.url.path == '/repos/example/reviewable/commits/main':
-            return httpx.Response(200, json={'sha': 'a' * 40, 'commit': {'verification': {'verified': True}}})
-        assert request.url.path == '/repos/example/reviewable/license'
-        return httpx.Response(200, json={'encoding': 'base64', 'content': base64.b64encode(license_bytes).decode('ascii'), 'html_url': 'https://github.com/example/reviewable/blob/main/LICENSE', 'license': {'spdx_id': 'MIT'}})
-    result = _client(handler).inspect_github_repository('example/reviewable')
-    assert len(requests) == 3
-    assert result['commit_sha'] == 'a' * 40
-    assert result['commit_verified'] is True
-    assert result['license_id'] == 'MIT'
-    assert result['license_text_sha256'] == 'sha256:' + hashlib.sha256(license_bytes).hexdigest()
-    assert result['download_performed'] is False
-    assert result['compatibility'].startswith('unverified')
 
 def test_openverse_keeps_license_attribution_and_origin_verification_without_download() -> None:
     requests: list[httpx.Request] = []
