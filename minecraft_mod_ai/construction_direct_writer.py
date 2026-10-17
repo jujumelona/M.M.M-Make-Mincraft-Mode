@@ -335,6 +335,8 @@ def _compose_claimed(router, spec, context, behaviors, package, name, owner,
               + " implements net.fabricmc.api.ModInitializer {\n"
               + members + "\n@Override\npublic void onInitialize() {\n"
               + lifecycle + "\n}\n}\n")
+    from .compiled_feature_patch import replay_compiled_repair
+    source = replay_compiled_repair(root, spec["target_path"], source)
     _parse(source)
     if context.get("verify_source"):
         context["verify_source"](source, spec["target_path"])
