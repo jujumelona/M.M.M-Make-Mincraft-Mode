@@ -252,3 +252,57 @@ def test_feature_receives_real_template_registry_path_and_constant():
     assert job.target_path in json.loads(bindings["content_dependency_paths_json"])
     assert {"package_name": "test.space.registry", "class_name": "ModItems",
             "java_constant": "ORE", "registry_path": "ore"} in json.loads(bindings["content_owner_classes_json"])
+
+
+def test_four_runtime_owner_records_use_one_model_call(monkeypatch):
+    from minecraft_mod_ai.request_runtime_ownership import author_runtime_ownership
+    from minecraft_mod_ai.planner_budget import PlannerBudget
+
+    design = sections()
+    for index in range(3):
+        design["algorithm"]["specification"]["steps"].append(
+            {key: "Recruit crew member " + str(index)
+             for key in DETAIL_RECORDS["algorithm"]["steps"].split()})
+    ledger = scope()
+    ledger["requirements"].append({
+        "requirement_id": "crew", "statement": "Recruit crew",
+        "implementation_role": "gameplay",
+    })
+    calls = []
+    class Router:
+        def generate_text(self, role, messages, **kwargs):
+            payload = json.loads(messages[1]["content"])
+            schema = kwargs["response_schema"]
+            records = payload["records"]
+            assert 1 <= len(records) <= 4
+            assert len(schema["required"]) == len(records)
+            calls.append(len(records))
+            return json.dumps({
+                row["key"]: ("planet" if row["record_ref"].startswith("integration.")
+                             else "crew") for row in records
+            })
+    budget = PlannerBudget()
+    owners = author_runtime_ownership(Router(), ledger, design, budget=budget)
+    assert sum(calls) == 5
+    assert calls == [4, 1]
+    assert budget.call_count == 2
+    grouped = {owner["feature_id"]: owner["worksheet_record_refs"] for owner in owners}
+    assert len(grouped["planet"]) == 1
+    assert len(grouped["crew"]) == 4
+
+
+def test_invalid_runtime_owner_batch_never_silently_drops_record(monkeypatch):
+    from minecraft_mod_ai.request_runtime_ownership import _choose_runtime_owner_batch
+
+    class Router:
+        def generate_text(self, role, messages, **kwargs):
+            # The response is invalid even if the model can produce valid JSON.
+            return json.dumps({"r0": "planet"})
+    rows = [("algorithm.steps[" + str(i) + "]", {"operation": "attack"})
+            for i in range(3)]
+    features = [
+        {"requirement_id": "planet", "statement": "Explore planets"},
+        {"requirement_id": "crew", "statement": "Recruit crew"},
+    ]
+    with pytest.raises((ValueError, Exception)):
+        _choose_runtime_owner_batch(Router(), rows, features, [], None)
