@@ -12,7 +12,6 @@ research insufficient.
 
 import atexit
 import hashlib
-import os
 import re
 import threading
 import urllib.parse
