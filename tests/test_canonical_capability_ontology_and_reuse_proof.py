@@ -41,16 +41,19 @@ def test_unresolved_concept_requires_explicit_semantic_evidence() -> None:
     unevidenced = enrich_resolution_with_semantic_inference(res)
     assert not any(node.capability_id.startswith("provisional:") for node in unevidenced.nodes)
 
-    enriched = enrich_resolution_with_semantic_inference(
-        res,
-        router=lambda _prompt: (
-            {
-                "name": "bank.loan",
+    class SemanticRouter:
+        def generate_text(self, role, messages, **kwargs):
+            assert role == "planner"
+            return {"capabilities": [{
+                "capability_id": "bank.loan",
+                "source_span": res.unresolved_spans[0],
                 "category": "finance",
                 "description": "Bank lending system",
-                "dependencies": ("persistence.state_store",),
-            },
-        ),
+                "dependencies": ["persistence.state_store"],
+            }]}
+
+    enriched = enrich_resolution_with_semantic_inference(
+        res, router=SemanticRouter(),
     )
     assert any(node.capability_id == "bank.loan" for node in enriched.nodes)
     assert any("persistence.state_store" in edge[1] for edge in enriched.edges)
@@ -94,7 +97,7 @@ def test_multi_artifact_closure_complete_gating(monkeypatch) -> None:
         "fabric.mod.json": "blob-meta-1",
     }
 
-    def fake_fetch_blob(client, repo, blob_sha):
+    def fake_fetch_blob(client, repo, blob_sha, **kwargs):
         if blob_sha == "blob-java-1":
             return b'package com.example.boss;\npublic class BossEntity {\nString id = "modid:boss_sword";\n}'
         if blob_sha == "blob-res-1":
@@ -107,7 +110,7 @@ def test_multi_artifact_closure_complete_gating(monkeypatch) -> None:
     monkeypatch.setattr(
         source_transplant,
         "_repository_snapshot",
-        lambda repo, disc: {
+        lambda repo, disc, **kwargs: {
             "license_id": "MIT",
             "commit_sha": "a" * 40,
             "blobs": fake_blobs,
@@ -149,7 +152,7 @@ def test_deterministic_adapters_pipeline() -> None:
             "donor_modid": "donor_mod",
         },
     )
-    java_code = adapted_files["src/main/java/com/donor/boss/BossSword.java"]
+    java_code = adapted_files["src/main/java/ai/minecraft/generated/boss/BossSword.java"]
     assert "package ai.minecraft.generated.boss;" in java_code
     assert "FabricItemSettings" not in java_code
     assert "new Item.Settings()" in java_code
@@ -163,7 +166,7 @@ def test_non_authoritative_compile_checker_never_grants_compile_proof(monkeypatc
     monkeypatch.setattr(
         source_transplant,
         "_fetch_blob_bytes",
-        lambda _client, _repo, _blob_sha: fake_code,
+        lambda _client, _repo, _blob_sha, **kwargs: fake_code,
     )
     donor = source_transplant.DonorSlice(
         capability="item.equipment",
