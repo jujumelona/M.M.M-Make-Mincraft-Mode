@@ -32,8 +32,19 @@ _GENERIC = frozenset((
 _COMPOUNDS = (
     (("space", "ship"), "spaceship"),
     (("space", "craft"), "spacecraft"),
-    (("alien", "combat"), "alien"),
 )
+_EQUIVALENTS = {
+    "spacecraft": ("spaceship", "space"),
+    "spaceship": ("spacecraft", "space"),
+    "starship": ("spaceship", "space"),
+    "rocket": ("spacecraft",),
+    "planetary": ("planet",),
+    "aliens": ("alien",),
+    "alien": ("aliens",),
+    "trading": ("trade",),
+    "trade": ("trading",),
+    "mining": ("ores", "mine"),
+}
 
 
 def _words(value: str) -> tuple[str, ...]:
@@ -73,7 +84,13 @@ def curseforge_search_queries(
     ]
     # Provider search matches NAME/AUTHOR, so one subject per request. The
     # title/summary reranker subsequently checks the full original capability.
-    queries = list(dict.fromkeys((*compounds, *terms)))
+    synonyms = [equivalent for term in terms
+                for equivalent in _EQUIVALENTS.get(term, ())]
+    queries = list(dict.fromkeys((*compounds, *terms, *synonyms)))
+    # When one canonical title term is known, try its direct synonyms before
+    # spending the last budget slot on low-specificity words.
+    if len(terms) == 1:
+        queries = list(dict.fromkeys((*compounds, terms[0], *synonyms)))
     return tuple(queries[:max_variants])
 
 
