@@ -39,7 +39,7 @@ def test_pre_design_preserves_every_approved_query_without_cap(monkeypatch) -> N
     assert prompt not in domain["queries"]
     assert "github" not in domain["providers"]
     assert "curseforge" in domain["providers"]
-    assert "modrinth" in domain["providers"]
+    assert "modrinth" not in domain["providers"]
 
 
 def test_corrective_query_uses_unsearched_host_queries_without_model_call() -> None:
