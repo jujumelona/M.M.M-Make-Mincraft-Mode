@@ -44,6 +44,21 @@ def _purpose_name_weights(purpose):
     return weights
 
 
+def _explicit_method_prefix(purpose):
+    """A dotted callable is a search *intent*, never proof that an API exists.
+
+    In particular, a model-suggested EntityType.registerEntity must find
+    actual `register*` members in the inspected classpath, not every method
+    whose owner mentions Entity, Type, or Value.
+    """
+    matches = re.findall(r'\b([A-Z][A-Za-z0-9_$]*)\.([a-z][A-Za-z0-9_$]*)\b', purpose)
+    if not matches:
+        return None
+    name = matches[0][1]
+    parts = _name_parts({'name': name})
+    return parts[0][:5] if parts and len(parts[0]) >= 5 else None
+
+
 def _owner_name_precision(owner, query_terms):
     """Match the actual declaring class role, not its package path."""
     name = owner.rsplit('.', 1)[-1].replace('$', '.')
@@ -543,7 +558,35 @@ class ConstructionEvidenceIndex:
                 hits = sum(counts[kind][term] for kind in kinds for term in terms)
                 relation[owner] += hits / (documents * len(terms))
         eligible = self._eligible_owners(kinds, descriptor.get('selection'))
+        # When the current operation explicitly names a callable, perform a
+        # bounded member-name lookup before owner ranking. This is an inverted
+        # posting lookup, not a scan or pagination over 300k unrelated methods.
+        # If the suggested callable is nonexistent, keep the ordinary discovery
+        # path instead of treating the suggestion as actual API authority.
+        hinted_prefix = _explicit_method_prefix(descriptor['purpose']) if 'METHOD' in kinds else None
+        focused = {}
+        if hinted_prefix in self.member_name_owners:
+            query_terms = set(_meaningful_terms(query))
+            for owner in self.member_name_owners[hinted_prefix]:
+                candidates = eligible.get(owner, ())
+                methods = []
+                for key in candidates:
+                    row = self.symbols[key]
+                    if row['kind'] != 'METHOD':
+                        continue
+                    parts = _name_parts(row)
+                    if (any(part[:5] == hinted_prefix for part in parts)
+                            and all(part[:5] == hinted_prefix or part in query_terms for part in parts)):
+                        methods.append(key)
+                if methods:
+                    focused[owner] = methods
+        if focused:
+            eligible = focused
         self._rank_method_intent(query, kinds, eligible, relation)
+        if focused:
+            self.name_weights[hinted_prefix] = max(8, self.name_weights.get(hinted_prefix, 0))
+            self.strong_name_prefixes = frozenset((*self.strong_name_prefixes, hinted_prefix))
+            self.exact_action_available = True
         owners = rank_context_chunks(query, self.owner_chunks.values(), relation_scores=relation,
                                      prepared_text=self.owner_prepared)
         ranked = tuple(row.chunk_id for row in owners if row.chunk_id in eligible)
@@ -563,7 +606,7 @@ class ConstructionEvidenceIndex:
             'goal_id': goal, 'purpose': descriptor['purpose'], 'symbol_kinds': descriptor['kinds'],
             'candidate_count': sum(len(keys) for keys in eligible.values()), 'source_unit_count': len(sources),
             'owner_count': len(ranked), 'retrieval_surface': 'inspected_target_classpath',
-            'discovery_mode': 'owner_representatives_then_package_type_scopes',
+            'discovery_mode': 'explicit_method_postings' if focused else 'owner_representatives_then_package_type_scopes',
             'source_embeddings_used': bool(vector), 'semantic_selector': 'native_package_type_signature_selection',
         }, ensure_ascii=False), flush=True)
         return goal
