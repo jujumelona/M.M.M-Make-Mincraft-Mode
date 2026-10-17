@@ -824,7 +824,7 @@ def _install_project(*, local_profile: bool) -> None:
         raise RuntimeError(
             "COLAB_PIP_INSTALL_FAILED: pinned Colab dependencies did not "
             f"install (exit={exc.returncode}); see pip output above. "
-            "Do not silently downgrade rembg or ignore resolver conflicts."
+            "Do not silently bypass the pinned core dependency contracts."
         ) from exc
 
     healthy, detail = _core_stack_preflight()
