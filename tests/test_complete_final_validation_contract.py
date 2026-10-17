@@ -374,6 +374,9 @@ def test_requested_gametest_requires_structured_matching_evidence(tmp_path) -> N
         "gametest_report": str(report),
     }
 
+
+    build["gametest_report_sha256"] = file_sha256(report)
+
     assert _gametest_attestation_status(
         build,
         SimpleNamespace(mod_id="demo"),
@@ -407,6 +410,10 @@ def test_incremental_full_build_receipt_is_release_grade_evidence(
         ],
         "gametest_report": None,
     }
+
+
+    build["jar_sha256"] = file_sha256(jar)
+    build["build_input_manifest_sha256"] = file_sha256(jar)
 
     assert CompleteProductionOrchestrator._full_gradle_build_receipt_passed(build)
     assert CompleteProductionOrchestrator._cached_build_exists(build)
@@ -451,6 +458,9 @@ def test_integrated_gametest_accepts_incremental_build_receipt(tmp_path) -> None
         "gametest_report": str(report),
     }
 
+
+    build["gametest_report_sha256"] = file_sha256(report)
+
     assert _gametest_attestation_status(
         build,
         SimpleNamespace(mod_id="demo"),
@@ -493,6 +503,11 @@ def test_incremental_integrated_build_receipt_matches_runtime_log_shape(
             }
         ],
     }
+
+
+    build["jar_sha256"] = file_sha256(jar)
+    build["build_input_manifest_sha256"] = file_sha256(jar)
+    build["gametest_report_sha256"] = file_sha256(report)
 
     assert CompleteProductionOrchestrator._full_gradle_build_receipt_passed(build)
     assert CompleteProductionOrchestrator._cached_build_exists(
@@ -583,6 +598,11 @@ def test_cached_build_requires_real_build_command_and_requested_gametest(tmp_pat
         ],
         "gametest_report": str(report),
     }
+
+
+    build["jar_sha256"] = file_sha256(jar)
+    build["build_input_manifest_sha256"] = file_sha256(jar)
+    build["gametest_report_sha256"] = file_sha256(report)
 
     assert CompleteProductionOrchestrator._cached_build_exists(build)
     assert CompleteProductionOrchestrator._cached_build_exists(
