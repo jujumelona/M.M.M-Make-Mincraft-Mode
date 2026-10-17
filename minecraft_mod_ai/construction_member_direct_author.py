@@ -86,6 +86,7 @@ def compose_method(router, member_task, context, *, owner_name: str) -> str:
             },
             "target": context["target"],
             "bounded_inspected_apis": snippets["target_api"],
+            "typed_input_producers": snippets.get("typed_input_producers", []),
             "installed_source": snippets["source"],
             "feature_work_order": context.get("feature_work_order"),
             "prerequisite_sha256": context["prerequisite_hashes"],
