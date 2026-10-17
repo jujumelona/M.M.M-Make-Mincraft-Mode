@@ -4,32 +4,20 @@ from __future__ import annotations
 
 from minecraft_mod_ai.authored_reuse_bridge import authored_capability_graph
 from minecraft_mod_ai.final_artifact import _authored_feature_semantic_findings
-from minecraft_mod_ai.reuse_discovery import (
-    _github_candidate_is_minecraft_mod,
-    _query_variants,
+from minecraft_mod_ai.curseforge_query import (
+    curseforge_search_queries, curseforge_catalogue_score,
 )
 
 
-def test_github_candidate_rejects_unrelated_readme_keyword_hits() -> None:
-    for repository, summary in (
-        ("rust-unofficial/awesome-rust", "Curated Rust ecosystem list"),
-        ("gmh5225/awesome-game-security", "Security tools for games"),
-        ("lobehub/lobe-chat-agents", "AI chat agents"),
-        ("ferrumc-rs/ferrumc", "Minecraft server written in Rust"),
-    ):
-        assert not _github_candidate_is_minecraft_mod(
-            {"title": repository, "summary": summary}
-        )
+def test_curseforge_filters_irrelevant_title_and_description():
+    requested = "spaceship aliens and planetary travel"
+    assert curseforge_catalogue_score(
+        requested, {"name": "Spaceship Explorer", "summary": "Explore planets"}
+    ) > 0
+    assert curseforge_catalogue_score(
+        requested, {"name": "Unrelated Server Library", "summary": "Networking"}
+    ) == 0
 
-
-def test_github_candidate_keeps_actual_mod_and_resource_pack() -> None:
-    for name, summary in (
-        ("author/spacecraft", "A Minecraft Fabric mod with ships and planets"),
-        ("author/textures", "Minecraft texture pack for custom blocks"),
-    ):
-        assert _github_candidate_is_minecraft_mod(
-            {"title": name, "summary": summary}
-        )
 
 
 def test_authored_graph_extracts_actual_structured_capabilities() -> None:
@@ -51,16 +39,15 @@ def test_authored_graph_extracts_actual_structured_capabilities() -> None:
     assert graph["retrieval_policy_version"] == "structured-intent-v3-exact-source-partial-fit"
 
 
-def test_source_queries_prefer_structured_terms_over_long_request(monkeypatch) -> None:
-    monkeypatch.setenv("MMM_REUSE_QUERY_VARIANTS", "3")
-    query = "custom gameplay " + ("very long worldbuilding request " * 15)
-    variants = _query_variants(
-        query,
-        ("minecraft spaceship mod", "minecraft planetary ore mod", query),
+def test_source_queries_prefer_short_specific_terms():
+    queries = curseforge_search_queries(
+        "custom gameplay " + ("long worldbuilding request " * 15),
+        search_terms=("minecraft spaceship mod", "minecraft planetary ore mod"),
     )
-    assert variants[0] == "minecraft spaceship mod"
-    assert variants[1] == "minecraft planetary ore mod"
-    assert all(len(value) <= 90 for value in variants)
+    assert queries
+    assert "spaceship" in queries
+    assert all(value and len(value) <= 90 for value in queries)
+
 
 
 def test_authored_coverage_rejects_nonfunctional_gui_placeholder(tmp_path) -> None:
@@ -93,32 +80,3 @@ def test_authored_coverage_does_not_reject_real_gui_label(tmp_path) -> None:
 
 
 
-def test_reuse_discovery_retains_version_neutral_reference_search(monkeypatch) -> None:
-    from minecraft_mod_ai.reuse_discovery import discover_repositories_for_graph
-
-    monkeypatch.setenv("MMM_REUSE_QUERY_VARIANTS", "1")
-
-    class StubClient:
-        def __init__(self) -> None:
-            self.calls = []
-
-        def search(self, provider, query, *, minecraft_version=None, loader=None, **kwargs):
-            self.calls.append((provider, minecraft_version, loader))
-            if provider == "github":
-                return {"candidates": [{
-                    "title": "Minecraft Fabric spacecraft mod",
-                    "source_url": "https://github.com/author/spacecraft",
-                    "summary": "A Minecraft Fabric mod with planetary flight",
-                }]}
-            return {"candidates": []}
-
-    client = StubClient()
-    discovered = discover_repositories_for_graph(
-        ("minecraft fabric spacecraft",), client,
-        minecraft_version="1.21.1", loader="fabric",
-    )
-    assert "author/spacecraft" in discovered["minecraft fabric spacecraft"]
-    assert client.calls
-    # GitHub and Modrinth discover old source references as well; exact
-    # compatibility is gated later during donor inspection and compile proof.
-    assert all(version is None and loader is None for _, version, loader in client.calls)
