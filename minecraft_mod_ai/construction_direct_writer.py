@@ -113,7 +113,45 @@ def _evidence(index, intent, source_pages):
     """Expose only ranked, inspected target symbols and actual installed source."""
     goal = index.prepare(intent, kinds=("METHOD", "CONSTRUCTOR", "FIELD", "CLASS"))
     page = index.page(goal, 0)
-    result = {"target_api": page["matches"][:8], "source": []}
+    result = {"target_api": page["matches"][:8], "source": [],
+              "typed_input_producers": []}
+    # A correct registration API is not actionable if the small model must
+    # discover every receiver and argument by blind paging. Resolve short,
+    # exact-type producer evidence from the *already indexed* target bytecode.
+    # The absence of a producer is only missing evidence, not proof that an
+    # object cannot be built by composing a constructor or builder.
+    from .java_operation_ir import parameter_types
+    from .construction_state import symbol_record
+    input_types = []
+    for candidate in result["target_api"][:3]:
+        key = candidate.get("symbol_id")
+        api = index.symbols.get(key, {})
+        for type_ in parameter_types(api)[:5]:
+            base = type_.split("[", 1)[0]
+            if base in index.symbols and base not in input_types:
+                input_types.append(base)
+            if len(input_types) >= 6:
+                break
+        if len(input_types) >= 6:
+            break
+    for type_ in input_types:
+        producers = []
+        for key in sorted(index.member_result_keys.get(type_, ())):
+            row = index.symbols.get(key, {})
+            if row.get("kind") not in {"METHOD", "CONSTRUCTOR", "FIELD"}:
+                continue
+            if row.get("kind") != "CONSTRUCTOR" and not (
+                row.get("static") or row.get("access", 0) & 8
+            ):
+                continue
+            if not index.accessible(key, constructor=row.get("kind") == "CONSTRUCTOR"):
+                continue
+            producers.append(symbol_record(key, row))
+            if len(producers) >= 2:
+                break
+        result["typed_input_producers"].append({
+            "required_type": type_, "verified_producers": producers,
+        })
     for candidate in page["source_candidates"][:4]:
         ref, offset = candidate["source_ref"], candidate["offset"]
         units = source_pages.get(ref, ())
