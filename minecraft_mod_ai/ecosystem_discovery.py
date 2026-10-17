@@ -23,8 +23,6 @@ _TARGET_PROFILES = frozenset({'minecraft_mod', 'ai_runtime', 'media', 'general_r
 _MODRINTH_ID = re.compile('^[A-Za-z0-9_-]{3,64}$')
 _SHA1_HEX = re.compile('^[0-9a-f]{40}$')
 _SHA512_HEX = re.compile('^[0-9a-f]{128}$')
-_GITHUB_REPOSITORY = re.compile('^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$')
-_GIT_COMMIT = re.compile('^[0-9a-f]{40,64}$')
 _CURSOR = re.compile('^(offset|page):(\\d+):([0-9a-f]{16})$')
 _TOKEN_CURSOR = re.compile('^token:([A-Za-z0-9_-]{1,2048}):([0-9a-f]{16})$')
 _SEED_ROUTE_CURSOR = re.compile('^routes:(\\d+):([0-9a-f]{16})$')
@@ -172,13 +170,11 @@ class EcosystemDiscoveryClient:
     host has selected an executable provider target.
     """
 
-    def __init__(self, *, transport: httpx.BaseTransport | None=None, timeout_seconds: float=12.0, github_token: str | None=None, openverse_token: str | None=None) -> None:
+    def __init__(self, *, transport: httpx.BaseTransport | None=None, timeout_seconds: float=12.0, openverse_token: str | None=None) -> None:
         if timeout_seconds <= 0:
             raise ValueError('timeout_seconds must be positive.')
         self.transport = transport
         self.timeout_seconds = timeout_seconds
-        self.github_token = str(github_token or os.environ.get('GITHUB_TOKEN')
-                                or os.environ.get('GH_TOKEN') or '').strip()
         self.openverse_token = openverse_token or os.environ.get('MMM_OPENVERSE_TOKEN', '')
         # httpx.Client is thread-safe and owns connection pooling. Keep one client for
         # the discovery lifetime instead of rebuilding a TCP/TLS pool per API request.
@@ -223,8 +219,6 @@ class EcosystemDiscoveryClient:
             candidates, total, next_position = self._search_huggingface_models(query, cursor=provider_cursor, limit=limit)
         elif provider == 'modrinth':
             candidates, total, next_position = self._search_modrinth(query, offset=position, limit=limit, target=target, source_reference=source_reference)
-        elif provider == 'github':
-            candidates, total, next_position = self._search_github(query, page=position or 1, limit=limit, target_profile=target_profile, target=target, source_reference=source_reference)
         elif provider == 'openverse_images':
             candidates, total, next_position = self._search_openverse(query, media_type='images', page=position or 1, limit=limit)
         elif provider == 'wikipedia':
@@ -237,7 +231,7 @@ class EcosystemDiscoveryClient:
             next_cursor = _encode_token_cursor(provider=provider, query=cursor_query, target_profile=target_profile, token=next_position, minecraft_version=target.minecraft_version, loader=target.loader) if next_position is not None else ''
         else:
             next_cursor = _encode_cursor(provider=provider, query=cursor_query, position_kind=position_kind, position=next_position, target_profile=target_profile, minecraft_version=target.minecraft_version, loader=target.loader) if next_position is not None else ''
-        payload = {'schema_version': 'mmm/ecosystem-discovery-page-v2', 'provider': provider, 'query': query, 'query_sha256': _sha256_text(query), 'minecraft_version': target.minecraft_version, 'loader': target.loader, 'target_exact': target.exact, 'target_profile': target_profile, 'candidates': [candidate.to_dict() for candidate in candidates], 'returned': len(candidates), 'provider_total_estimate': total, 'provider_truncated': bool(provider == 'github' and isinstance(total, int) and (total > 1000)), 'provider_result_limit': 1000 if provider == 'github' else None, 'next_cursor': next_cursor, 'download_performed': False, 'authorization': 'none', 'selection_policy': 'Targetless results are metadata hypotheses only. Exact-target candidates are still not selected or downloaded until origin-license, dependency closure and immutable-file-hash gates pass.'}
+        payload = {'schema_version': 'mmm/ecosystem-discovery-page-v2', 'provider': provider, 'query': query, 'query_sha256': _sha256_text(query), 'minecraft_version': target.minecraft_version, 'loader': target.loader, 'target_exact': target.exact, 'target_profile': target_profile, 'candidates': [candidate.to_dict() for candidate in candidates], 'returned': len(candidates), 'provider_total_estimate': total, 'provider_truncated': False, 'provider_result_limit': None, 'next_cursor': next_cursor, 'download_performed': False, 'authorization': 'none', 'selection_policy': 'Targetless results are metadata hypotheses only. Exact-target candidates are still not selected or downloaded until origin-license, dependency closure and immutable-file-hash gates pass.'}
         if source_reference:
             payload['source_reference'] = True
             payload['selection_policy'] = 'Source candidates may use another loader; pinned source-module Minecraft version must exactly match before reference or installation admission.'
@@ -265,79 +259,6 @@ class EcosystemDiscoveryClient:
         compatible = [version for version in normalized_versions if version['eligible_for_selection']]
         payload = {'schema_version': 'mmm/modrinth-inspection-v2', 'project_id': str(project.get('id', project_id)), 'slug': str(project.get('slug', project_id)), 'title': str(project.get('title', '')), 'license_id': license_id, 'license_url': _safe_https_url(license_url, allow_empty=True), 'license_policy': _code_license_policy(license_id), 'minecraft_version': target.minecraft_version, 'loader': target.loader, 'versions': normalized_versions, 'exact_compatible_version_found': bool(compatible), 'eligible_version_ids': [version['version_id'] for version in compatible], 'compatibility_gate': 'candidate_requires_dependency_closure_and_verified_download' if compatible else 'blocked_no_exact_version_with_one_primary_strong_digest_file', 'download_performed': False, 'required_next_gate': 'Select one listed exact-target version, resolve required/incompatible dependencies, download only after approval, and verify the advertised SHA-512.'}
         payload['inspection_sha256'] = _sha256_text(canonical_json(payload))
-        return payload
-
-    def inspect_github_repository_for_target(self, full_name: str, *, minecraft_version: str, loader: str) -> dict[str, Any]:
-        return self.inspect_github_repository(full_name, minecraft_version=minecraft_version, loader=loader)
-
-    def inspect_github_repository(self, full_name: str, *, minecraft_version: str='', loader: str='') -> dict[str, Any]:
-        raise EcosystemDiscoveryUnavailable('GitHub inspection disabled: CurseForge only.')
-        if not _GITHUB_REPOSITORY.fullmatch(full_name):
-            raise SpecValidationError('Invalid GitHub owner/repository name.')
-        repository_url = f'https://api.github.com/repos/{full_name}'
-        repository = self._get_json(repository_url, provider='github')
-        if not isinstance(repository, dict):
-            raise EcosystemDiscoveryUnavailable('GitHub returned an invalid repository response.')
-        if repository.get('private') or repository.get('archived'):
-            raise EcosystemDiscoveryUnavailable('GitHub repository is private or archived.')
-        default_branch = str(repository.get('default_branch') or '').strip()
-        if not default_branch or len(default_branch.encode('utf-8')) > 512:
-            raise EcosystemDiscoveryUnavailable('GitHub repository has no usable default branch.')
-        selected_branch = default_branch
-        if minecraft_version:
-            version_name = re.compile(r'(?<![0-9.])' + re.escape(minecraft_version) + r'(?![0-9.]|-(?:pre|rc)[0-9])')
-            if not version_name.search(default_branch):
-                page = 1
-                matches = []
-                while True:
-                    branches = self._get_json(repository_url + '/branches',
-                        params={'per_page': '100', 'page': str(page)}, provider='github')
-                    if not isinstance(branches, list):
-                        raise EcosystemDiscoveryUnavailable('GitHub returned invalid branch evidence.')
-                    matches.extend(row['name'] for row in branches if isinstance(row, dict)
-                                   and isinstance(row.get('name'), str) and version_name.search(row['name']))
-                    if len(branches) < 100:
-                        break
-                    page += 1
-                if matches:
-                    selected_branch = max(matches, key=lambda name: (
-                        loader.casefold() in name.casefold() if loader else False,
-                        name == minecraft_version, -len(name), name))
-        commit = self._get_json(repository_url + '/commits/' + quote(selected_branch, safe=''), provider='github')
-        if not isinstance(commit, dict):
-            raise EcosystemDiscoveryUnavailable('GitHub returned invalid commit evidence.')
-        commit_sha = str(commit.get('sha') or '').strip().lower()
-        if not _GIT_COMMIT.fullmatch(commit_sha):
-            raise EcosystemDiscoveryUnavailable('GitHub did not return an immutable commit SHA.')
-        license_data = self._get_json(repository_url + '/license', params={'ref': commit_sha}, provider='github')
-        if not isinstance(license_data, dict):
-            raise EcosystemDiscoveryUnavailable('GitHub returned invalid commit or license evidence.')
-        license_value = license_data.get('license')
-        license_id = str(license_value.get('spdx_id') or '').strip() if isinstance(license_value, dict) else ''
-        if not license_id or license_id == 'NOASSERTION':
-            raise EcosystemDiscoveryUnavailable('GitHub did not detect a reviewable SPDX license.')
-        encoded_license = str(license_data.get('content') or '').replace('\n', '')
-        if license_data.get('encoding') != 'base64' or not encoded_license:
-            raise EcosystemDiscoveryUnavailable('GitHub license evidence has no base64 content.')
-        try:
-            license_bytes = base64.b64decode(encoded_license, validate=True)
-        except (ValueError, binascii.Error) as exc:
-            raise EcosystemDiscoveryUnavailable('GitHub license evidence is invalid base64.') from exc
-        if not license_bytes or len(license_bytes) > _MAX_RESPONSE_BYTES:
-            raise EcosystemDiscoveryUnavailable('GitHub license text exceeds the byte policy.')
-        verification = commit.get('commit')
-        verification = verification.get('verification') if isinstance(verification, dict) else None
-        source_url = _safe_https_url(repository.get('html_url'))
-        if urlparse(source_url).hostname != 'github.com':
-            raise EcosystemDiscoveryUnavailable('GitHub repository origin URL is invalid.')
-        license_path = str(license_data.get('path') or 'LICENSE').replace('\\', '/')
-        if not license_path or license_path.startswith('/') or '..' in license_path.split('/'):
-            raise EcosystemDiscoveryUnavailable('GitHub license path is invalid.')
-        payload = {'schema_version': 'mmm/github-repository-inspection-v1', 'full_name': str(repository.get('full_name') or full_name), 'source_url': source_url, 'default_branch': default_branch, 'commit_sha': commit_sha, 'commit_verified': bool(isinstance(verification, dict) and verification.get('verified') is True), 'license_id': license_id, 'license_url': f'https://github.com/{full_name}/blob/{commit_sha}/' + quote(license_path, safe='/_.-'), 'license_blob_sha': str(license_data.get('sha') or ''), 'license_text_sha256': 'sha256:' + hashlib.sha256(license_bytes).hexdigest(), 'license_policy': _code_license_policy(license_id), 'download_performed': False, 'compatibility': 'unverified_until_pinned_metadata_and_build_pass', 'required_next_gate': 'Read platform metadata and build files at this commit, bind an exact host-selected target, resolve dependencies, then verify any selected release file with its own immutable SHA-256 or stronger digest.'}
-        payload['selected_branch'] = selected_branch
-        payload['requested_minecraft_version'] = minecraft_version
-        payload['inspection_sha256'] = _sha256_text(canonical_json({
-            key: value for key, value in payload.items() if key != 'inspection_sha256'}))
         return payload
 
     def inspect_huggingface_model(self, repo_id: str) -> dict[str, Any]:
@@ -396,47 +317,6 @@ class EcosystemDiscoveryClient:
             candidates.append(EcosystemCandidate(candidate_id=f'modrinth:{project_id}', provider='modrinth', resource_kind=project_type, title=stable['title'], summary=stable['description'], source_url=f'https://modrinth.com/{project_type}/{slug}', api_url=f'https://api.modrinth.com/v2/project/{project_id}', license_id=license_id, license_url='', license_policy=_code_license_policy(license_id), minecraft_version=target.minecraft_version, loader='unverified' if source_reference else target.loader, compatibility='source_reference; pinned_module_version_inspection_required' if source_reference else 'search_metadata_exact; version_file_inspection_required' if target.exact else 'platform_neutral_metadata; target_hypothesis_required', attribution='', preview_urls=_safe_preview_urls([hit.get('icon_url'), *hit.get('gallery', [])], allowed_hosts={'cdn.modrinth.com'}), reuse_status='candidate_only_not_downloaded', evidence_sha256=_sha256_text(canonical_json(stable))))
         next_offset = offset + limit if offset + limit < total else None
         return (candidates, total, next_offset)
-
-    def _search_github(self, query: str, *, page: int, limit: int, target_profile: str, target: _DiscoveryTarget, source_reference: bool=False) -> tuple[list[EcosystemCandidate], int, int | None]:
-        raise EcosystemDiscoveryUnavailable('GitHub search disabled: CurseForge only.')
-        scoped_query = query
-        if target_profile == 'minecraft_mod':
-            scoped_query += (f' minecraft "{target.minecraft_version}"' if source_reference else
-                             f' minecraft {target.loader} "{target.minecraft_version}"'
-                             if target.exact else ' minecraft mod')
-        raw = self._get_json('https://api.github.com/search/repositories', params={'q': f'{scoped_query} in:name,description,readme fork:false archived:false', 'sort': 'stars', 'order': 'desc', 'page': str(page), 'per_page': str(limit)}, provider='github')
-        if not isinstance(raw, dict) or not isinstance(raw.get('items'), list):
-            raise EcosystemDiscoveryUnavailable('GitHub returned an invalid repository search response.')
-        query_scope = 'version_metadata' if source_reference else 'default'
-        if source_reference and not raw['items'] and not _nonnegative_int(raw.get('total_count')):
-            # Repository search sees the default README, not version branches.
-            # Keep normal pagination while letting pinned source inspection
-            # decide the version of a repository absent from this text query.
-            raw = self._get_json('https://api.github.com/search/repositories', params={
-                'q': f'{query} minecraft mod in:name,description,readme fork:false archived:false',
-                'sort': 'stars', 'order': 'desc', 'page': str(page), 'per_page': str(limit)}, provider='github')
-            if not isinstance(raw, dict) or not isinstance(raw.get('items'), list):
-                raise EcosystemDiscoveryUnavailable('GitHub returned an invalid repository search response.')
-            query_scope = 'version_text_free_fallback'
-        total = _nonnegative_int(raw.get('total_count'))
-        candidates: list[EcosystemCandidate] = []
-        for item in raw['items']:
-            if not isinstance(item, dict) or item.get('archived'):
-                continue
-            license_value = item.get('license')
-            license_id = str(license_value.get('spdx_id', '')).strip() if isinstance(license_value, dict) else ''
-            # A blank/NOASSERTION catalogue SPDX is not proof of an
-            # unlicensed repository. Keep a reference-only candidate and let
-            # pinned license inspection reject it if genuinely unsupported.
-            full_name = str(item.get('full_name', '')).strip()
-            source_url = _safe_https_url(item.get('html_url'))
-            if not full_name or urlparse(source_url).hostname != 'github.com':
-                continue
-            stable = {'id': item.get('id'), 'full_name': full_name, 'description': str(item.get('description') or ''), 'default_branch': str(item.get('default_branch', '')), 'license': license_id, 'topics': sorted(str(value) for value in item.get('topics', []))}
-            is_minecraft = target_profile == 'minecraft_mod'
-            candidates.append(EcosystemCandidate(candidate_id=f'github:{full_name.lower()}', provider='github', resource_kind='repository', title=full_name, summary=stable['description'], source_url=source_url, api_url=f'https://api.github.com/repos/{full_name}', license_id=license_id, license_url=f'https://api.github.com/repos/{full_name}/license', license_policy=_code_license_policy(license_id), minecraft_version=target.minecraft_version if is_minecraft else 'not_applicable', loader='unverified' if source_reference else target.loader if is_minecraft else 'not_applicable', compatibility='unverified; exact commit, platform metadata and build inspection required' if is_minecraft and target.exact else 'platform_neutral_metadata; target_hypothesis_required' if is_minecraft else 'unverified; pin commit, inspect license and benchmark runtime', attribution='', preview_urls=(), reuse_status='candidate_only_not_cloned', evidence_sha256=_sha256_text(canonical_json(stable)), metadata={'topics': stable['topics'], **({'query_scope': query_scope} if source_reference else {})}))
-        next_page = page + 1 if page * limit < min(total, 1000) else None
-        return (candidates, total, next_page)
 
     def _search_huggingface_models(self, query: str, *, cursor: str, limit: int) -> tuple[list[EcosystemCandidate], None, str | None]:
         params = {'search': query, 'limit': str(limit), 'full': 'true', 'cardData': 'true', 'sort': 'lastModified', 'direction': '-1'}
@@ -586,9 +466,7 @@ class EcosystemDiscoveryClient:
 
     def _get_json(self, url: str, *, params: dict[str, str] | None=None, provider: str='', include_next_url: bool=False) -> Any:
         parsed = urlparse(url)
-        if parsed.hostname == 'api.github.com':
-            raise EcosystemDiscoveryUnavailable('GitHub API disabled: CurseForge only.')
-        if parsed.scheme != 'https' or parsed.hostname not in {'api.modrinth.com', 'api.github.com', 'api.openverse.org', 'en.wikipedia.org', 'ko.wikipedia.org', 'huggingface.co', 'api.openalex.org', 'api.crossref.org'}:
+        if parsed.scheme != 'https' or parsed.hostname not in {'api.modrinth.com', 'api.openverse.org', 'en.wikipedia.org', 'ko.wikipedia.org', 'huggingface.co', 'api.openalex.org', 'api.crossref.org'}:
             raise SpecValidationError('Discovery request escaped the API allowlist.')
         if parsed.hostname == 'huggingface.co' and (not (parsed.path == '/api/models' or parsed.path.startswith('/api/models/'))):
             raise SpecValidationError('Hugging Face discovery is restricted to metadata API paths.')
@@ -597,12 +475,7 @@ class EcosystemDiscoveryClient:
         if parsed.hostname == 'api.crossref.org' and (not (parsed.path == '/works' or parsed.path.startswith('/works/'))):
             raise SpecValidationError('Crossref discovery is restricted to works metadata paths.')
         headers = {'Accept': 'application/json', 'User-Agent': _USER_AGENT}
-        if provider == 'github':
-            headers['X-GitHub-Api-Version'] = '2022-11-28'
-            headers['Accept'] = 'application/vnd.github+json'
-            if self.github_token:
-                headers['Authorization'] = f'Bearer {self.github_token}'
-        elif provider == 'openverse' and self.openverse_token:
+        if provider == 'openverse' and self.openverse_token:
             headers['Authorization'] = f'Bearer {self.openverse_token}'
         try:
             response = self._http_client.get(url, params=params, headers=headers)
@@ -611,29 +484,6 @@ class EcosystemDiscoveryClient:
                 f'{parsed.hostname} discovery request failed: {type(exc).__name__}.',
                 request_failure=provider_request_failure(exc, provider=provider, hostname=parsed.hostname or ''),
             ) from exc
-        # GitHub may issue a permanent redirect for repositories that have
-        # moved. Follow a single *same-origin HTTPS API* hop; never let
-        # an Authorization header escape to arbitrary redirect targets.
-        if provider == 'github' and parsed.hostname == 'api.github.com' and response.status_code in {301, 302, 307, 308}:
-            from urllib.parse import urljoin
-
-            redirected = urljoin(str(response.url), response.headers.get('location', ''))
-            destination = urlparse(redirected)
-            if (
-                destination.scheme != 'https'
-                or destination.hostname != 'api.github.com'
-                or destination.username is not None
-                or destination.password is not None
-                or not destination.path.startswith(('/repos/', '/repositories/'))
-            ):
-                raise EcosystemDiscoveryUnavailable('GitHub repository redirect escaped the API allowlist.')
-            try:
-                response = self._http_client.get(redirected, headers=headers)
-            except httpx.HTTPError as exc:
-                raise EcosystemDiscoveryUnavailable(
-                    'GitHub repository redirect failed.',
-                    request_failure=provider_request_failure(exc, provider=provider, hostname='api.github.com'),
-                ) from exc
         if response.status_code != 200:
             failure = ProviderRequestFailure.from_response(response, provider=provider)
             try:
