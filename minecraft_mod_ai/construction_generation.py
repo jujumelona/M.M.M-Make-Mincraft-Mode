@@ -112,6 +112,11 @@ def compose(router, spec, *, source_context=(), construction_context=None,
         # requirement/target contract, so route decisions cannot erase effects.
         context['feature_work_order'] = work_order.to_dict()
         context['feature_work_order_sha256'] = work_order.fingerprint()
+        retained_units = json.loads(bindings.get('retained_typed_behavior_json') or '{}')
+        context['direct_method_forbidden'] = any(
+            retained_units.get(key)
+            for key in ('functions', 'event_bindings', 'ui_owned_records')
+        )
         print('CONSTRUCTION FEATURE WORK ORDER: ' + json.dumps({
             'feature_id': work_order.feature_id,
             'target': work_order.to_dict()['target'],
