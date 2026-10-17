@@ -101,6 +101,32 @@ def test_nonexistent_dotted_method_does_not_trigger_global_scan():
     assert page['total_count'] == 0
 
 
+def test_generic_registration_intent_uses_name_postings_before_global_scan():
+    index = _index()
+    index._eligible_owners = lambda *_a, **_k: (_ for _ in ()).throw(
+        AssertionError("The entity registration task must not scan the whole API inventory")
+    )
+    goal = index.prepare("Register the hostile entity type in the registry", kinds=("METHOD",))
+    page = index.page(goal, 0)
+    assert page["matches"][0]["symbol_id"] == "net.minecraft.core.Registry#register"
+    assert not any("registerDebugValues" in item["symbol_id"] for item in page["matches"])
+
+
+def test_exact_required_return_type_resolves_via_type_postings():
+    index = _index()
+    index._eligible_owners = lambda *_a, **_k: (_ for _ in ()).throw(
+        AssertionError("An exact type obligation must use indexed return types")
+    )
+    selection = {"contracts": [{"mode": "expression",
+                                "expected_type": "net.minecraft.world.entity.EntityType"}],
+                 "excluded_symbols": [], "constructor_result": False}
+    goal = index.prepare("Provide the entity type value for the callback",
+                         kinds=("METHOD",), selection=selection)
+    page = index.page(goal, 0)
+    assert page["matches"]
+    assert page["matches"][0]["symbol_id"] == "net.minecraft.core.Registry#register"
+
+
 def test_no_exact_action_evidence_does_not_invent_an_api():
     index = _index(with_registry=False)
     index.prepare('EntityType registration API', kinds=('METHOD',))
