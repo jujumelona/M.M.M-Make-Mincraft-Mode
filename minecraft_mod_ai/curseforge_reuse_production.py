@@ -312,6 +312,14 @@ def certify_sources_at_production(reuse_plan: Mapping[str, Any], *,
             continue
         if ref.get("proof_status") != "NOT_RUN":
             continue
+        # A documentation reference is not a donor recommendation. The model
+        # must ground functional reuse in actual code before any Gradle proof.
+        scores = ref.get("semantic_scores") or {}
+        if (ref.get("semantic_intent") not in {"adapt", "reuse"}
+                or not isinstance(scores, Mapping)
+                or int(scores.get("functional_fit") or 0) < 3
+                or int(scores.get("completeness") or 0) < 2):
+            continue
         grouped.setdefault(str(ref.get("capability") or ""), []).append(dict(ref))
     for group in grouped.values():
         group.sort(key=lambda r: -float(r.get("semantic_score") or 0))
@@ -357,6 +365,19 @@ def certify_sources_at_production(reuse_plan: Mapping[str, Any], *,
                 receipt["verified_file_attestations"] = attest_compiled_donor_files(
                     donor, files, receipt, target_context,
                 )
+                # Compilation proves syntactic/API compatibility, not gameplay.
+                # Only an implementation-bound host acceptance test can promote
+                # the donor to verified feature reuse. Otherwise preserve it
+                # as a diagnosed reference while the feature remains fresh.
+                if (receipt.get("tests_passed") is not True
+                        or not receipt.get("matched_capability_tests")):
+                    proof_receipts.append({
+                        "capability": capability,
+                        "candidate_id": donor.repository + "@" + donor.commit_sha,
+                        "status": "compile_only_unverified_behavior",
+                        "receipt": receipt,
+                    })
+                    continue
                 candidate = {**decision, "mode": "source_transplant",
                              "source_id": "host-donor:" + donor.repository + "@" + donor.commit_sha,
                              "donor": donor_dict, "proof_receipt": receipt}
