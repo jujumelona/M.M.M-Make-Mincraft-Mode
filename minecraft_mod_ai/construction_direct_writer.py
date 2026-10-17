@@ -122,6 +122,8 @@ def _evidence(index, intent, source_pages):
     # object cannot be built by composing a constructor or builder.
     from .java_operation_ir import parameter_types
     from .construction_state import symbol_record
+    from .construction_api_admission import _words
+    goal_words = set(_words(intent))
     input_types = []
     for candidate in result["target_api"][:3]:
         key = candidate.get("symbol_id")
@@ -142,6 +144,13 @@ def _evidence(index, intent, source_pages):
                 continue
             if row.get("kind") != "CONSTRUCTOR" and not (
                 row.get("static") or row.get("access", 0) & 8
+            ):
+                continue
+            # A static EntityType.ARROW is type-correct but cannot create
+            # the requested alien. Fields must be relevant to this feature,
+            # not merely share the return type.
+            if row.get("kind") == "FIELD" and not (
+                set(_words(row.get("name", ""))) & goal_words
             ):
                 continue
             if not index.accessible(key, constructor=row.get("kind") == "CONSTRUCTOR"):
