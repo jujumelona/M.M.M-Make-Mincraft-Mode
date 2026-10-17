@@ -668,6 +668,13 @@ class ConstructionEvidenceIndex:
             eligible, action_prefix = self._focused_action_owners(descriptor['purpose'], selection)
             if action_prefix:
                 hinted_prefix = action_prefix
+        concrete_results = set()
+        if selection:
+            for contract in selection['contracts']:
+                concrete_results.update(value for value in (
+                    contract.get('expected_type'), *contract.get('expected_types', ()),
+                    *contract.get('allowed_types', ())) if value and value not in {'void', 'java.lang.Object'})
+        strict_result = len(concrete_results) == 1
         if not eligible and not hinted_prefix and selection:
             eligible = self._focused_result_owners(kinds, selection)
         # When the current operation explicitly names a callable, perform a
@@ -676,7 +683,7 @@ class ConstructionEvidenceIndex:
         # If the suggested callable is nonexistent, keep the ordinary discovery
         # path instead of treating the suggestion as actual API authority.
         focused = bool(eligible)
-        if not eligible and not hinted_prefix:
+        if not eligible and not hinted_prefix and not strict_result:
             # A proposed but nonexistent dotted method is not a reason to
             # re-open hundreds of thousands of unrelated declarations.
             eligible = self._eligible_owners(kinds, selection)
