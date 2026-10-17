@@ -1,86 +1,51 @@
 from __future__ import annotations
 
-import base64
 from pathlib import Path
 from types import SimpleNamespace
 
 from minecraft_mod_ai import research_grounded_rag_contract as grounded
 
 
-def test_discovery_query_variants_preserve_original_without_forced_source_suffix() -> None:
-    variants = grounded._query_variants("maplestory.mode.spawn.mob")
+def test_removed_remote_retrieval_is_not_importable() -> None:
+    """The deleted GitHub module must not be restored or used by planning."""
+    assert not hasattr(grounded, "_github_adaptive_search")
+    assert not hasattr(grounded, "_github_targeted_search")
+    assert not hasattr(grounded, "_modrinth_search")
+    assert not hasattr(grounded, "_external_retrieval")
+    source = (Path(grounded.__file__)).read_text(encoding="utf-8")
+    assert "github_adaptive_retrieval" not in source
+    assert "api.modrinth.com" not in source
+    assert "api.github.com" not in source
 
-    assert variants == ("maplestory.mode.spawn.mob", "maplestory mode spawn mob")
-    assert all("source implementation" not in item for item in variants)
-    assert len(variants) == len(set(variants))
 
-
-def test_external_retrieval_needs_no_api_key_and_follows_source_repository(monkeypatch) -> None:
-    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    monkeypatch.delenv("GH_TOKEN", raising=False)
-    monkeypatch.delenv("CURSEFORGE_API_KEY", raising=False)
-
-    readme = base64.b64encode(b"Mob spawning implementation and registry notes").decode()
-
-    def fake_json(url: str, *, github: bool = False):
-        del github
-        if "api.modrinth.com/v2/search" in url:
-            return {
-                "hits": [
-                    {
-                        "project_id": "abc123",
-                        "slug": "example-mob-mod",
-                        "title": "Example Mob Mod",
-                        "description": "Adds configurable mob spawning",
-                        "author": "example",
-                        "versions": ["1.21.1"],
-                        "downloads": 100,
-                        "license": "MIT",
-                    }
-                ]
-            }
-        if "api.modrinth.com/v2/project/abc123" in url:
-            return {
-                "source_url": "https://github.com/example/example-mob-mod",
-                "body": "Open source Fabric mob spawning implementation",
-            }
-        if url == "https://api.github.com/repos/example/example-mob-mod":
-            return {
-                "default_branch": "main",
-                "html_url": "https://github.com/example/example-mob-mod",
-                "license": {"spdx_id": "MIT"},
-            }
-        if "/readme?ref=main" in url:
-            return {
-                "content": readme,
-                "html_url": "https://github.com/example/example-mob-mod/blob/main/README.md",
-            }
-        if "/git/trees/main?recursive=1" in url:
-            return {
-                "tree": [
-                    {
-                        "type": "blob",
-                        "path": "src/main/java/example/MobSpawnRegistry.java",
-                    }
-                ]
-            }
-        raise AssertionError(url)
-
-    monkeypatch.setattr(grounded, "_http_json", fake_json)
+def test_plan_wrapper_uses_existing_curseforge_evidence_without_second_search(monkeypatch) -> None:
+    """Existing results are retained; the wrapper only attaches local index."""
+    queried = []
+    payload = {
+        "schema_version": "mmm/pre-design-grounded-rag-v6",
+        "versions": ["1.21.1"],
+        "external_source_count": 1,
+        "domains": [{"queries": [{"external_rag": {
+            "sources": [{"source_id": "curseforge:123", "provider": "curseforge"}],
+            "providers": {"curseforge": {"status": "available"}},
+        }}]}],
+    }
     monkeypatch.setattr(
-        grounded,
-        "_http_text",
-        lambda url, **kwargs: "class MobSpawnRegistry { void registerMobSpawn() {} }",
+        grounded, "_ensure_local_index",
+        lambda agentic, router: {"status": "available", "index_path": "/tmp/index.db"},
     )
-
-    result = grounded._external_retrieval("mob spawn registry", ("1.21.1",))
-
-    assert result["credentials_required"] is False
-    assert result["status"] == "available"
-    assert result["corrective_search_used"] is False
-    assert result["actual_source_document_count"] >= 1
-    source_types = {item["source_type"] for item in result["documents"]}
-    assert "github_source" in source_types
+    agentic = SimpleNamespace(
+        _forced_rag_bundle=lambda router, brief: (queried.append(brief), payload)[1],
+        _sha256=lambda value: "sha256:local",
+    )
+    grounded.install(agentic)
+    result = agentic._forced_rag_bundle(object(), {"domains": []})
+    assert len(queried) == 1
+    assert result["schema_version"] == "mmm/pre-design-grounded-rag-v6"
+    assert result["domains"] == payload["domains"]
+    assert result["external_source_count"] == 1
+    assert result["code_index_status"] == "available"
+    assert result["research_sha256"] == "sha256:local"
 
 
 def test_local_rag_index_is_built_when_missing(monkeypatch, tmp_path: Path) -> None:
@@ -176,54 +141,20 @@ def test_router_attached_workspace_has_priority_over_process_cwd(
     assert stale_index.read_bytes() == b"stale"
 
 
-def test_bundle_augmentation_keeps_external_source_content(monkeypatch) -> None:
-    def fake_external(query, versions, *, mode):
-        del versions
-        assert mode == grounded._PLANNING_DISCOVERY
-        return {
-            "schema_version": "mmm/external-grounded-rag-v1",
-            "status": "available",
-            "query": query,
-            "actual_source_document_count": 1,
-            "document_count": 1,
-            "documents": [
-                {
-                    "source_id": "github:a/b:Example.java",
-                    "source_type": "github_source",
-                    "url": "https://github.com/a/b/blob/main/Example.java",
-                    "content": "class Example {}",
-                }
-            ],
-        }
-
-    monkeypatch.setattr(grounded, "_external_retrieval", fake_external)
+def test_bundle_augmentation_preserves_curseforge_sources() -> None:
     agentic = SimpleNamespace(_sha256=lambda value: "sha256:test")
     payload = {
-        "schema_version": "mmm/forced-pre-design-rag-v2",
-        "versions": [],
-        "domains": [
-            {
-                "domain_id": "request",
-                "queries": [
-                    {
-                        "query": "mob spawn",
-                        "project_rag": {"sources": []},
-                        "code_rag": {"hits": []},
-                    }
-                ],
-            }
-        ],
+        "schema_version": "mmm/pre-design-grounded-rag-v6",
+        "external_source_count": 1,
+        "domains": [{"queries": [{"external_rag": {
+            "sources": [{"source_id": "curseforge:123", "provider": "curseforge"}]
+        }}]}],
     }
-
     result = grounded._augment_bundle(
-        agentic,
-        payload,
-        versions=(),
+        agentic, payload,
         local_index={"status": "available", "index_path": "/tmp/index.db"},
-        external_queries=("mob spawn",),
     )
-
-    query = result["domains"][0]["queries"][0]
-    assert query["external_rag"]["documents"][0]["content"] == "class Example {}"
+    assert result["domains"] == payload["domains"]
     assert result["external_source_count"] == 1
     assert result["code_index_status"] == "available"
+    assert result["research_sha256"] == "sha256:test"
