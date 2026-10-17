@@ -39,6 +39,55 @@ def _record_key(record: dict[str, Any]) -> str:
     return json.dumps(record, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 
 
+def _batched_decision_values(router, template, normalized, selected_slots, progress, checkpoint):
+    """Fill every chosen slot in bounded schema-closed pages, without dropping slots.
+
+    An earlier implementation called the model once for EACH decision field.
+    Pages share a single model request for several independent decisions, while
+    still binding every output key to a host-selected slot.
+    """
+    value_schema = template["record_schema"]["properties"]["value"]
+    if not isinstance(value_schema, dict):
+        raise TemplateBlocked("TEMPLATE_DECISION_VALUE_SCHEMA_INVALID")
+    output = []
+    page_size = 8  # Transport page width, not a limit on requested capabilities.
+    for offset in range(0, len(selected_slots), page_size):
+        page = tuple(selected_slots[offset:offset + page_size])
+        schema = {"type": "object", "additionalProperties": False,
+                  "properties": {slot: dict(value_schema) for slot in page},
+                  "required": list(page)}
+        binding = "decision-values-page-v1:" + task_binding(
+            template, {**normalized, "allowed_slots": list(page)}, (),
+        )
+        value = (progress or {}).get(binding)
+        if value is None:
+            value = generate_fixed_template_value(
+                router, "planner",
+                (
+                    {"role": "system", "content": (
+                        "Fill exactly one concise value for each host-owned design slot. "
+                        "Return all and only the JSON fields named by the schema; "
+                        "do not invent, skip, or combine requirements. Use the original "
+                        "user requirements as authoritative evidence."
+                    )},
+                    {"role": "user", "content": json.dumps(
+                        {"context": normalized, "requested_slots": list(page)},
+                        ensure_ascii=False,
+                    )},
+                ),
+                response_schema=schema,
+                enable_tools=False,
+                description="Author bounded independent design decision values.",
+                output_token_ceiling=structured_output_token_ceiling(schema),
+            )
+            Draft202012Validator(schema).validate(value)
+            if checkpoint is not None:
+                checkpoint(binding, dict(value))
+        Draft202012Validator(schema).validate(value)
+        output.extend({"slot_id": slot, "value": value[slot]} for slot in page)
+    return output
+
+
 def _run_decisions(router, identifier, context, progress, checkpoint):
     """Author semantic decisions while the host owns the complete slot structure.
 
@@ -127,6 +176,13 @@ def _run_decisions(router, identifier, context, progress, checkpoint):
         for slot_id in allowed_slots
         if applicability[slot_id] is True
     ]
+    # For a large set of independent slots, the former per-slot request loop
+    # multiplied inference cost. Keep the legacy small-case boundary for
+    # existing saved checkpoints; use schema-closed pages when there are many.
+    if len(selected_slots) > 8:
+        return _batched_decision_values(
+            router, template, normalized, selected_slots, progress, safe_checkpoint,
+        ), normalized
     jobs = tuple(enumerate(selected_slots))
 
     def run_slot(job):
