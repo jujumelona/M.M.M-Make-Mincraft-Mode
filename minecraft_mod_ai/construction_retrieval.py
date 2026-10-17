@@ -598,7 +598,9 @@ class ConstructionEvidenceIndex:
         # If the suggested callable is nonexistent, keep the ordinary discovery
         # path instead of treating the suggestion as actual API authority.
         focused = bool(eligible)
-        if not eligible:
+        if not eligible and not hinted_prefix:
+            # A proposed but nonexistent dotted method is not a reason to
+            # re-open hundreds of thousands of unrelated declarations.
             eligible = self._eligible_owners(kinds, descriptor.get('selection'))
         self._rank_method_intent(query, kinds, eligible, relation)
         if focused:
