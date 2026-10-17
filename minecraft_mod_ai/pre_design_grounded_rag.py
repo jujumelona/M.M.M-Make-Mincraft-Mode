@@ -578,7 +578,7 @@ def _search_curseforge(
         "result_count": len(records), "provider_total": provider_total,
         "search_requests": search_requests, "source_requests": source_requests,
         "detail_errors": errors, "authenticated": True,
-        "target_filters": {},
+        "target_filters": dict(target_filters),
         "search_filter_used": False,
         "catalog_class_verified": mods_class is not None,
         "retrieval_stop": "bounded_multi_sort_catalogue_scan_not_exhaustive",

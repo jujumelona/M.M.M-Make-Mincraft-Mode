@@ -14,7 +14,7 @@ class _Backend:
         self.github_records = list(github_records or [])
         self.calls: list[str] = []
 
-    def _search_curseforge(self, query):
+    def _search_curseforge(self, query, **kwargs):
         self.calls.append("curseforge")
         return list(self.catalog_records), {
             "provider": "curseforge",
@@ -101,18 +101,19 @@ def _query(backend: _Backend) -> dict[str, Any]:
     )
 
 
-def test_catalog_candidate_without_source_link_uses_broad_github_source_discovery(monkeypatch) -> None:
+def test_catalog_candidate_without_source_link_does_not_search_github(monkeypatch) -> None:
     monkeypatch.setenv("CURSEFORGE_API_KEY", "configured-test-key")
     backend = _Backend(catalog_records=[_catalog_record()])
 
     row = _query(backend)
 
-    assert backend.calls[:2] == ["curseforge", "modrinth"] or set(backend.calls[:2]) == {"curseforge", "modrinth"}
+    assert backend.calls[0] == "curseforge"
+    assert "modrinth" not in backend.calls
     assert "github_linked" in backend.calls
-    assert "github_broad" in backend.calls
+    assert "github_broad" not in backend.calls
     github = row["external_rag"]["providers"]["github"]
-    assert github["status"] == "available"
-    assert github["policy"] == "catalog_candidate_source_discovery_fallback"
+    assert github["status"] == "skipped_no_linked_source"
+    assert github["policy"] == "exact_catalog_link_only"
 
 
 def test_catalog_linked_source_uses_exact_github_repository_only(monkeypatch) -> None:
@@ -133,14 +134,14 @@ def test_catalog_linked_source_uses_exact_github_repository_only(monkeypatch) ->
     assert row["external_rag"]["providers"]["github"]["policy"] == "exact_catalog_link_only"
 
 
-def test_broad_github_is_only_source_discovery_fallback(monkeypatch) -> None:
+def test_empty_catalog_does_not_trigger_github_search(monkeypatch) -> None:
     monkeypatch.setenv("CURSEFORGE_API_KEY", "configured-test-key")
     backend = _Backend(catalog_records=[], github_records=[_github_record()])
 
     row = _query(backend)
 
-    assert "github_broad" in backend.calls
-    assert row["external_rag"]["providers"]["github"]["policy"] == "catalog_empty_fallback"
+    assert "github_broad" not in backend.calls
+    assert row["external_rag"]["providers"]["github"]["policy"] == "broad_search_disabled"
 
 
 def test_curseforge_key_enables_authenticated_catalog_role(monkeypatch) -> None:

@@ -3,10 +3,10 @@ from __future__ import annotations
 """Catalog-first provider policy for Minecraft research.
 
 Provider transport lives in ``pre_design_grounded_rag``. This module owns retrieval
-policy: discover actual Minecraft mods from CurseForge/Modrinth first, prefer their
-explicit source repository links, and fall back to GitHub repository discovery when a
-catalog candidate has no linked source or the catalog stage is empty. GitHub remains an
-internal source-discovery mechanism, not a peer Minecraft catalog provider.
+policy: search the active Minecraft target in CurseForge first (Modrinth only
+when the CurseForge credential is absent), then inspect catalog-linked source
+repositories. Never issue broad GitHub keyword searches for missing source links
+or empty catalog pages. Source verification remains independent of search.
 Official/project sources remain separate from ecosystem discovery.
 
 Query-level orchestration uses the backend-owned dynamic worker authority and the
@@ -82,20 +82,21 @@ def _run_catalogs(
     receipts: dict[str, Any] = {}
     errors: list[dict[str, Any]] = []
 
-    if "curseforge" in allowed:
-        if curseforge_api_key():
-            target = {"minecraft_version": minecraft_version} if minecraft_version else {}
-            if minecraft_version and loader:
-                target["loader"] = loader
-            calls["curseforge"] = lambda: backend._search_curseforge(query, **target)
-        else:
+    if "curseforge" in allowed and curseforge_api_key():
+        # Bound target values come from the current approved request, NEVER a
+        # release constant. Do not retry unfiltered if a target lookup is empty.
+        target = {"minecraft_version": minecraft_version} if minecraft_version else {}
+        if minecraft_version and loader:
+            target["loader"] = loader
+        calls["curseforge"] = lambda: backend._search_curseforge(query, **target)
+    else:
+        if "curseforge" in allowed:
             receipts["curseforge"] = {
-                "provider": "curseforge",
-                "status": "not_configured",
+                "provider": "curseforge", "status": "not_configured",
                 "result_count": 0,
             }
-    if "modrinth" in allowed:
-        calls["modrinth"] = lambda: backend._search_modrinth(query)
+        if "modrinth" in allowed:
+            calls["modrinth"] = lambda: backend._search_modrinth(query)
 
     results: dict[str, list[dict[str, Any]]] = {}
     for provider, call in calls.items():
@@ -172,81 +173,26 @@ def _query_bundle(
         receipts.update(catalog_receipts)
         errors.extend(catalog_errors)
 
-    # Catalog discovery is only the first stage. A catalog hit without source code must
-    # not terminate reuse discovery: exact project source links are preferred, then a
-    # progress-driven GitHub repository search may recover a source donor candidate.
-    github_policy_active = catalog_allowed or "github" in allowed
-    if github_policy_active:
-        if catalog_records:
-            linked, linked_receipt = backend._linked_github_sources(
-                catalog_records,
-                disabled=github_disabled,
-                disable=disable_github,
-            )
-            records.extend(linked)
-            if linked:
-                receipts["github"] = {
-                    **dict(linked_receipt),
-                    "policy": "exact_catalog_link_only",
-                }
-            elif github_disabled():
-                receipts["github"] = {
-                    **dict(linked_receipt),
-                    "policy": "catalog_source_discovery_disabled",
-                }
-            else:
-                try:
-                    found, fallback_receipt = backend._search_github(
-                        query,
-                        disabled=github_disabled,
-                        disable=disable_github,
-                    )
-                    records.extend(found)
-                    receipts["github"] = _combined_github_receipt(
-                        linked_receipt,
-                        fallback_receipt,
-                        policy="catalog_candidate_source_discovery_fallback",
-                    )
-                except Exception as exc:
-                    receipt = backend._error("github", exc)
-                    receipts["github"] = _combined_github_receipt(
-                        linked_receipt,
-                        receipt,
-                        policy="catalog_candidate_source_discovery_fallback",
-                    )
-                    errors.append(receipt)
-        elif catalog_allowed:
-            try:
-                found, receipt = backend._search_github(
-                    query,
-                    disabled=github_disabled,
-                    disable=disable_github,
-                )
-                records.extend(found)
-                receipts["github"] = {
-                    **dict(receipt),
-                    "policy": "catalog_empty_fallback",
-                }
-            except Exception as exc:
-                receipt = backend._error("github", exc)
-                receipts["github"] = receipt
-                errors.append(receipt)
-        else:
-            try:
-                found, receipt = backend._search_github(
-                    query,
-                    disabled=github_disabled,
-                    disable=disable_github,
-                )
-                records.extend(found)
-                receipts["github"] = {
-                    **dict(receipt),
-                    "policy": "repository_domain_direct",
-                }
-            except Exception as exc:
-                receipt = backend._error("github", exc)
-                receipts["github"] = receipt
-                errors.append(receipt)
+    # GitHub is a source host, not a second search engine. Only repositories
+    # explicitly linked from actual catalog records may be read or inspected.
+    # Missing source links/empty results stay incomplete; never fan out to a
+    # broad GitHub search, even when the caller lists GitHub as a provider.
+    if catalog_records:
+        linked, linked_receipt = backend._linked_github_sources(
+            catalog_records,
+            disabled=github_disabled,
+            disable=disable_github,
+        )
+        records.extend(linked)
+        receipts["github"] = {
+            **dict(linked_receipt), "policy": "exact_catalog_link_only",
+        }
+    elif catalog_allowed or "github" in allowed:
+        receipts["github"] = {
+            "provider": "github", "status": "skipped_no_catalog_source",
+            "result_count": 0, "search_requests": 0, "source_requests": 0,
+            "policy": "broad_search_disabled",
+        }
 
     project_rag = (
         backend._search_authoritative_catalog(query, versions)
@@ -287,19 +233,10 @@ def _query_bundle(
                     if provider in allowed
                 ],
                 "github_role": (
-                    "internal_exact_source_then_source_discovery_fallback"
-                    if catalog_allowed
-                    else (
-                        "direct_repository_domain" if "github" in allowed else "not_requested"
-                    )
+                    "catalog_linked_source_only" if catalog_allowed
+                    else "not_requested"
                 ),
-                "github_broad_search": (
-                    "fallback_after_missing_linked_source_or_empty_catalog"
-                    if catalog_allowed
-                    else (
-                        "direct_repository_domain" if "github" in allowed else "not_requested"
-                    )
-                ),
+                "github_broad_search": "disabled",
                 "github_linked_source": (
                     "exact_catalog_source_url_preferred" if catalog_allowed else "not_applicable"
                 ),

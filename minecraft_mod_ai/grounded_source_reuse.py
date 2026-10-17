@@ -583,11 +583,13 @@ def build_repository_reuse_plan(
     if not capabilities:
         raise ValueError("Repository reuse requires at least one frozen capability.")
 
-    provider_order = (("curseforge", "modrinth", "sourcegraph", "github") if curseforge_api_key()
-                      else ("modrinth", "sourcegraph", "github"))
+    # No broad GitHub or Sourcegraph provider wave. Catalog metadata supplies
+    # candidate projects and exact source URLs; donor inspection may fetch
+    # those pinned URLs but must not launch unrelated keyword searches.
+    provider_order = ("curseforge",) if curseforge_api_key() else ("modrinth",)
     print("SOURCE_REUSE_DISCOVERY_ROUTE: " + json.dumps({
         "provider_order": provider_order, "curseforge_key_present": provider_order[0] == "curseforge",
-        "fallback_policy": "merge_independent_catalog_and_code_hits_then_inspect_github_last",
+        "fallback_policy": "catalog_source_links_only_no_broad_github_search",
         "minecraft_version": adapter.minecraft_version, "loader": adapter.loader,
     }), flush=True)
     # Pre-design has already materialized some source candidates. Verify them
@@ -613,8 +615,8 @@ def build_repository_reuse_plan(
                 yield stage_cards[offset:offset + 2]
 
         yield from uninspected_batches()
-        # Preserve recall after failed proof: only then broaden with independent
-        # catalogue and public code discovery. These are not verified donors.
+        # After failed proof, try only the selected catalog provider's projects
+        # at the currently approved version/loader. Do not broaden to GitHub.
         for provider in provider_order:
             discover_stage((capability,), provider)
             yield from uninspected_batches()

@@ -11,7 +11,7 @@ class _Backend:
         self.linked_calls = 0
         self.broad_github_calls = 0
 
-    def _search_curseforge(self, query):
+    def _search_curseforge(self, query, **kwargs):
         return list(self.catalog_records), {
             "provider": "curseforge",
             "status": "available",
@@ -73,7 +73,7 @@ def _bundle(backend):
     )
 
 
-def test_catalog_candidate_without_link_uses_source_discovery_fallback(monkeypatch) -> None:
+def test_catalog_candidate_without_link_does_not_use_broad_github(monkeypatch) -> None:
     monkeypatch.setenv("CURSEFORGE_API_KEY", "configured-test-key")
     backend = _Backend(
         catalog_records=[
@@ -88,18 +88,47 @@ def test_catalog_candidate_without_link_uses_source_discovery_fallback(monkeypat
     row = _bundle(backend)
 
     assert backend.linked_calls == 1
-    assert backend.broad_github_calls == 1
+    assert backend.broad_github_calls == 0
     assert row["external_rag"]["providers"]["github"]["policy"] == (
-        "catalog_candidate_source_discovery_fallback"
+        "exact_catalog_link_only"
     )
 
 
-def test_empty_catalog_uses_broad_github_fallback(monkeypatch) -> None:
+def test_empty_catalog_does_not_query_github(monkeypatch) -> None:
     monkeypatch.setenv("CURSEFORGE_API_KEY", "configured-test-key")
     backend = _Backend(catalog_records=[])
 
     row = _bundle(backend)
 
     assert backend.linked_calls == 0
-    assert backend.broad_github_calls == 1
-    assert row["external_rag"]["providers"]["github"]["policy"] == "catalog_empty_fallback"
+    assert backend.broad_github_calls == 0
+    assert row["external_rag"]["providers"]["github"]["policy"] == "broad_search_disabled"
+
+def test_curseforge_uses_selected_version_and_loader_not_a_fixed_release(monkeypatch) -> None:
+    from types import SimpleNamespace
+    from minecraft_mod_ai.pre_design_grounded_rag import _versions
+
+    monkeypatch.setenv("MMM_CURSEFORGE_API_KEY", "configured-test-key")
+    backend = _Backend(catalog_records=[])
+    backend._versions = _versions
+    observed = []
+
+    def search(query, **target):
+        observed.append(dict(target))
+        return [], {"provider": "curseforge", "status": "available", "result_count": 0}
+
+    backend._search_curseforge = search
+    for version, loader in (("1.21.1", "fabric"), ("26.2", "neoforge")):
+        router = SimpleNamespace(
+            _mmm_requested_minecraft_version=version,
+            _mmm_requested_loader=loader,
+        )
+        row = _query_bundle(
+            backend, router, "spacecraft engine", ("curseforge", "modrinth", "github"),
+            github_disabled=lambda: False, disable_github=lambda: None,
+        )
+        assert row["external_rag"]["providers"]["github"]["search_requests"] == 0
+    assert observed == [
+        {"minecraft_version": "1.21.1", "loader": "fabric"},
+        {"minecraft_version": "26.2", "loader": "neoforge"},
+    ]
