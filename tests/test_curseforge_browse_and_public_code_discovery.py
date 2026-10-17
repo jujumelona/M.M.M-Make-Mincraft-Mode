@@ -1,12 +1,11 @@
 """Regression checks for provider search semantics and evidence budgets."""
 from __future__ import annotations
 
-import json
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from minecraft_mod_ai import grounded_source_reuse, pre_design_grounded_rag, reuse_discovery
+from minecraft_mod_ai import pre_design_grounded_rag, reuse_discovery
 from minecraft_mod_ai.curseforge_catalog import (
     curseforge_browse_windows,
     curseforge_mods_class_id,
