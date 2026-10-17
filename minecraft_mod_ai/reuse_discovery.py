@@ -45,23 +45,23 @@ def _workers() -> int:
 
 
 def _query_limit() -> int:
-    return _env_int("MMM_REUSE_DISCOVERY_LIMIT", 16, minimum=4, maximum=50)
+    return _env_int("MMM_REUSE_DISCOVERY_LIMIT", 6, minimum=1, maximum=12)
 
 
 def _representative_limit() -> int:
-    return _env_int("MMM_REUSE_REPRESENTATIVE_LIMIT", 16, minimum=4, maximum=48)
+    return _env_int("MMM_REUSE_REPRESENTATIVE_LIMIT", 3, minimum=1, maximum=5)
 
 
 def _query_variant_limit() -> int:
-    return _env_int("MMM_REUSE_QUERY_VARIANTS", 3, minimum=1, maximum=6)
+    return _env_int("MMM_REUSE_QUERY_VARIANTS", 2, minimum=1, maximum=3)
 
 
 def _minimum_candidates() -> int:
-    return _env_int("MMM_REUSE_MIN_CANDIDATES_PER_CAPABILITY", 3, minimum=1, maximum=12)
+    return _env_int("MMM_REUSE_MIN_CANDIDATES_PER_CAPABILITY", 2, minimum=1, maximum=5)
 
 
 def _discovery_pages() -> int:
-    return _env_int("MMM_REUSE_DISCOVERY_PAGES", 2, minimum=1, maximum=4)
+    return _env_int("MMM_REUSE_DISCOVERY_PAGES", 1, minimum=1, maximum=2)
 
 
 def _pooled_http_client() -> httpx.Client:
@@ -186,7 +186,7 @@ def _search_curseforge(
 
     result: list[tuple[str, float, dict[str, Any]]] = []
     seen_ids: set[int] = set()
-    page_size = min(50, max(limit, _query_limit()))
+    page_size = min(12, limit)
     index = 0
     for _ in range(_discovery_pages()):
         params = {
@@ -318,6 +318,8 @@ def discover_repositories_for_graph(
                 if isinstance(terms, (list, tuple)):
                     terms_by_cap[name] = tuple(str(v) for v in terms if str(v).strip())
     category_context: dict[str, Any] = {}
+    # Deduplicate identical provider requests even if callers omit a cache.
+    shared_cache = query_cache if query_cache is not None else {}
     for capability in selected:
         queries = curseforge_search_queries(
             capability, search_terms=terms_by_cap.get(capability, ()),
@@ -346,7 +348,7 @@ def discover_repositories_for_graph(
         failures: list[dict[str, Any]] = []
         for query in queries:
             key = ("curseforge", query.casefold(), version, selected_loader)
-            cached = query_cache.get(key) if query_cache is not None else None
+            cached = shared_cache.get(key)
             if isinstance(cached, Mapping):
                 rows = list(cached.get("rows", ()))
                 errors = list(cached.get("errors", ()))
@@ -364,8 +366,7 @@ def discover_repositories_for_graph(
                     errors.append(_discovery_provider_error(
                         "curseforge", exc, stage="search"))
                 cache_hit = False
-                if query_cache is not None:
-                    query_cache[key] = {"rows": list(rows), "errors": list(errors)}
+                shared_cache[key] = {"rows": list(rows), "errors": list(errors)}
             failures.extend(errors)
             query_receipts.append({
                 "query": query, "hit_count": len(rows),
@@ -401,19 +402,25 @@ def discover_repositories_for_graph(
                     previous["score"] = max(int(previous["score"]), score)
                     if query not in previous["matched_queries"]:
                         previous["matched_queries"].append(query)
+            # One strong short list is enough. Do not exhaust synonym queries.
+            if len(combined) >= _minimum_candidates():
+                break
         ranked = sorted(
             combined.values(),
             key=lambda row: (-int(row["score"]), -len(row["matched_queries"]),
                              str(row["title"]).casefold(), str(row["source_id"])),
         )
+        shortlist = ranked[:_representative_limit()]
         if diagnostics is not None:
             diagnostics.append({
                 "provider": "curseforge", "capability": capability,
-                "queries": list(queries), "query_receipts": query_receipts,
+                "queries": [receipt["query"] for receipt in query_receipts],
+                "query_receipts": query_receipts,
                 "status": ("provider_error" if failures
                            else "catalog_only" if ranked else "search_empty"),
-                "catalog_result_count": len(ranked),
-                "ranked_catalogue_hits": ranked[:_representative_limit()],
+                "catalog_result_count": len(shortlist),
+                "catalog_scanned_count": len(ranked),
+                "ranked_catalogue_hits": shortlist,
                 "repository_count": 0, "repository_evidence": [],
                 "errors": failures,
                 "minecraft_version": version, "loader": selected_loader,
