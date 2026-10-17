@@ -68,8 +68,6 @@ def _bundle(backend):
         object(),
         "energy automation",
         ("curseforge", "modrinth"),
-        github_disabled=lambda: False,
-        disable_github=lambda: None,
     )
 
 
@@ -87,11 +85,9 @@ def test_catalog_candidate_without_link_does_not_use_broad_github(monkeypatch) -
 
     row = _bundle(backend)
 
-    assert backend.linked_calls == 1
+    assert backend.linked_calls == 0
     assert backend.broad_github_calls == 0
-    assert row["external_rag"]["providers"]["github"]["policy"] == (
-        "exact_catalog_link_only"
-    )
+    assert set(row["external_rag"]["providers"]) == {"curseforge"}
 
 
 def test_empty_catalog_does_not_query_github(monkeypatch) -> None:
@@ -102,7 +98,7 @@ def test_empty_catalog_does_not_query_github(monkeypatch) -> None:
 
     assert backend.linked_calls == 0
     assert backend.broad_github_calls == 0
-    assert row["external_rag"]["providers"]["github"]["policy"] == "broad_search_disabled"
+    assert set(row["external_rag"]["providers"]) == {"curseforge"}
 
 def test_curseforge_uses_selected_version_and_loader_not_a_fixed_release(monkeypatch) -> None:
     from types import SimpleNamespace
@@ -125,9 +121,8 @@ def test_curseforge_uses_selected_version_and_loader_not_a_fixed_release(monkeyp
         )
         row = _query_bundle(
             backend, router, "spacecraft engine", ("curseforge", "modrinth", "github"),
-            github_disabled=lambda: False, disable_github=lambda: None,
         )
-        assert row["external_rag"]["providers"]["github"]["search_requests"] == 0
+        assert set(row["external_rag"]["providers"]) == {"curseforge"}
     assert observed == [
         {"minecraft_version": "1.21.1", "loader": "fabric"},
         {"minecraft_version": "26.2", "loader": "neoforge"},
