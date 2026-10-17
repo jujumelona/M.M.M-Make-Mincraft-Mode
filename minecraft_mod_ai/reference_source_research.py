@@ -571,6 +571,8 @@ def _wikidata_sources(
 def _github_reference_sources(
     queries: Sequence[str], anchors: Sequence[str]
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    # GitHub reference search is disabled and cannot issue an HTTP request.
+    return [], {"provider": "github_reference", "status": "disabled", "result_count": 0}
     headers = _github_headers()
     records: list[dict[str, Any]] = []
     errors: list[str] = []
@@ -714,7 +716,6 @@ def retrieve_reference_grounded_evidence(queries: Sequence[str]) -> dict[str, An
     provider_specs: tuple[tuple[str, _ReferenceProvider], ...] = (
         ("wikipedia", lambda: _wikipedia_sources(search_plan, anchors)),
         ("wikidata", lambda: _wikidata_sources(search_plan, anchors)),
-        ("github_reference", lambda: _github_reference_sources(search_plan, anchors)),
     )
 
     completed: dict[
