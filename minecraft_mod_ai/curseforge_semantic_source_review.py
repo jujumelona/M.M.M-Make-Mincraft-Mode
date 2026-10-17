@@ -149,10 +149,12 @@ def _safe_archive_files(data: bytes) -> dict[str, bytes]:
             if not path:
                 continue
             basename = path.rsplit("/", 1)[-1].upper()
-            if (path.endswith(".java") and "/src/" in "/" + path
-                    or basename in {"LICENSE", "LICENSE.TXT", "LICENSE.MD", "COPYING", "COPYING.TXT",
-                                    "NOTICE", "NOTICE.TXT", "NOTICE.MD", "COPYRIGHT"}
-                    and "/" not in path):
+            if ((path.endswith(".java") and "/src/" in "/" + path)
+                    or path.startswith(("src/main/resources/", "src/client/resources/"))
+                    or path in {"build.gradle", "build.gradle.kts", "gradle.properties"}
+                    or (basename in {"LICENSE", "LICENSE.TXT", "LICENSE.MD", "COPYING", "COPYING.TXT",
+                                     "NOTICE", "NOTICE.TXT", "NOTICE.MD", "COPYRIGHT"}
+                        and "/" not in path)):
                 if path.endswith(".java") and sum(k.endswith(".java") for k in extracted) >= _MAX_JAVA_FILES:
                     continue
                 with archive.open(item, "r") as fh:
@@ -163,15 +165,40 @@ def _safe_archive_files(data: bytes) -> dict[str, bytes]:
     return extracted
 
 
-def _source_rank(capability: str, path: str, source: str) -> int:
+def _source_rank(capability: str, path: str, source: str,
+                 search_terms: Sequence[str] = ()) -> int:
+    """Use requested mechanics plus CurseForge-derived English search terms."""
     stop = {"minecraft", "fabric", "forge", "the", "with", "game", "mod", "and", "for", "new", "mode"}
-    wanted = set(_WORD_RE.findall(capability.lower())) - stop
+    words = " ".join((capability, *search_terms)).lower()
+    wanted = set(_WORD_RE.findall(words)) - stop
+    if not wanted:
+        return 0
     name_tokens = set(_WORD_RE.findall(path.lower()))
-    snippet_tokens = set(_WORD_RE.findall(source[:3500].lower()))
-    return 5 * len(wanted & name_tokens) + len(wanted & snippet_tokens)
+    source_tokens = set(_WORD_RE.findall(source[:120000].lower()))
+    return 5 * len(wanted & name_tokens) + len(wanted & source_tokens)
 
 
-def inventory_from_archive(capability: str, archive: bytes) -> dict[str, object]:
+def _semantic_excerpt(source: str, capability: str, search_terms: Sequence[str]) -> str:
+    """Select implementation-relevant source lines, not simply file prefix."""
+    keywords = set(_WORD_RE.findall(" ".join((capability, *search_terms)).lower()))
+    lines = source.splitlines()
+    if not lines:
+        return ""
+    # Identify the most relevant code region. Keep the first declarations so
+    # package, imports and type ownership remain legible to the small model.
+    best_index, best_score = 0, -1
+    for index in range(0, len(lines), 8):
+        section = "\n".join(lines[index:index + 35]).lower()
+        score = len(keywords & set(_WORD_RE.findall(section)))
+        if score > best_score:
+            best_index, best_score = index, score
+    header = "\n".join(lines[:18])[:900]
+    body = "\n".join(lines[max(0, best_index - 8):best_index + 65])
+    return (header + "\n// --- relevant implementation excerpt ---\n" + body)[:_MAX_SNIPPET_CHARS]
+
+
+def inventory_from_archive(capability: str, archive: bytes,
+                           search_terms: Sequence[str] = ()) -> dict[str, object]:
     files = _safe_archive_files(archive)
     license_id, notice = _license_spdx(files)
     source_files = [(path, contents) for path, contents in files.items() if path.endswith(".java")]
@@ -185,14 +212,21 @@ def inventory_from_archive(capability: str, archive: bytes) -> dict[str, object]
     for path, contents in source_files:
         full = contents.decode("utf-8", errors="replace")
         symbols = list(dict.fromkeys(
-            token for pair in _SYMBOL_RE.findall(full[:20000]) for token in pair if token
+            token for pair in _SYMBOL_RE.findall(full[:120000]) for token in pair if token
         ))[:35]
         if not symbols:
             continue
         rows.append({"path": path, "file_sha256": "sha256:" + hashlib.sha256(contents).hexdigest(),
-                     "symbols": symbols, "rank": _source_rank(capability, path, full),
-                     "snippet": full[:_MAX_SNIPPET_CHARS]})
+                     "symbols": symbols,
+                     "rank": _source_rank(capability, path, full, search_terms),
+                     "snippet": _semantic_excerpt(full, capability, search_terms)})
     rows.sort(key=lambda x: (-x["rank"], x["path"]))
+    # Unknown lexical relation is not evidence that alphabetically first
+    # Java classes implement the requested Minecraft mechanic.
+    if rows and not rows[0]["rank"]:
+        return {"status": "semantic_unresolved", "license_spdx": license_id,
+                "evidence": [], "license_notice": notice,
+                "java_file_count": len(source_files)}
     return {"status": "inspected" if rows else "source_unavailable",
             "license_spdx": license_id, "license_notice": notice,
             "evidence": rows[:_MAX_SNIPPETS], "java_file_count": len(source_files)}
@@ -296,7 +330,11 @@ def assess_ranked_sources(capability: str, candidates: Sequence[Mapping[str, obj
                         else _gitlab_archive(client, owner, repository)
                     )
                 cache[url] = (revision, archive)
-            observation = inventory_from_archive(capability, archive)
+            observation = inventory_from_archive(
+                capability, archive,
+                search_terms=tuple(str(term) for term in
+                                   (candidate.get("matched_queries") or ()) if str(term).strip()),
+            )
             receipt.update({"pinned_sha": revision, "inspection_status": observation["status"],
                             "license_spdx": observation["license_spdx"],
                             "java_file_count": observation.get("java_file_count", 0),
