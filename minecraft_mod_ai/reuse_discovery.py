@@ -24,6 +24,7 @@ from .curseforge_catalog import (
     curseforge_target_filters,
 )
 from .ecosystem_discovery import provider_request_failure
+from .curseforge_query import curseforge_search_queries, curseforge_catalogue_score
 
 _MINECRAFT_GAME_ID = 432
 _HTTP_CLIENT_LOCK = Lock()
@@ -134,18 +135,22 @@ def _search_curseforge(
     query: str,
     *,
     limit: int,
-    with_metadata=False,
-    minecraft_version=None,
-    loader=None,
+    with_metadata: bool = False,
+    minecraft_version: str | None = None,
+    loader: str | None = None,
     errors: list[dict[str, Any]] | None = None,
+    category_context: dict[str, Any] | None = None,
 ) -> list:
-    """Browse real Minecraft mod listings, not invented feature-name queries.
+    """Search provider-side by a nonempty feature keyword, then rerank locally.
 
-    query/limit remain for the existing caller API, but do not filter or truncate
-    this shared catalogue sample: relevance is calculated per capability later.
-    The selected target version/loader is always passed to CurseForge.
-    Catalogue metadata is never treated as code reuse proof.
+    No popularity browse or source-repository lookup is permitted. The request
+    remains restricted to the bound version, loader and Minecraft Mods class.
     """
+    query = " ".join(str(query or "").split())
+    if not query:
+        raise ValueError("CURSEFORGE_EMPTY_SEARCH_FILTER_FORBIDDEN")
+    if limit < 1:
+        raise ValueError("CURSEFORGE_SEARCH_LIMIT_INVALID")
     api_key = _curseforge_api_key()
     if not api_key:
         return []
@@ -155,109 +160,126 @@ def _search_curseforge(
         raise _CurseForgeSearchError(f"Invalid CurseForge target: {exc}") from None
     client = _pooled_http_client()
     headers = {"Accept": "application/json", "x-api-key": api_key}
-    try:
-        category_response = client.get(
-            "https://api.curseforge.com/v1/categories",
-            params={"gameId": str(_MINECRAFT_GAME_ID)},
-            headers=headers, timeout=10.0,
-        )
-        category_response.raise_for_status()
-        category_payload = category_response.json()
-        category_rows = category_payload.get("data") if isinstance(category_payload, Mapping) else None
-        mods_class_id = curseforge_mods_class_id(category_rows)
-    except (httpx.HTTPError, ValueError):
-        # The search endpoint may remain functional even if categories do not.
-        # Results without a known Mods class must not masquerade as exhaustive.
-        mods_class_id = None
-        category_rows = None
+    ctx = category_context if category_context is not None else {}
+    mods_class_id = ctx.get("mods_class_id")
     if mods_class_id is None:
-        raise _CurseForgeSearchError(
-            "CurseForge Mods class could not be verified; refusing unscoped search."
-        )
+        try:
+            category_response = client.get(
+                "https://api.curseforge.com/v1/categories",
+                params={"gameId": str(_MINECRAFT_GAME_ID)},
+                headers=headers, timeout=10.0,
+            )
+            category_response.raise_for_status()
+            category_payload = category_response.json()
+            category_rows = (category_payload.get("data")
+                             if isinstance(category_payload, Mapping) else None)
+            mods_class_id = curseforge_mods_class_id(category_rows)
+        except (httpx.HTTPError, ValueError) as exc:
+            raise _CurseForgeSearchError(
+                "CurseForge Mods class lookup failed.",
+                request_failure=provider_request_failure(exc, provider="curseforge"),
+            ) from None
+        if mods_class_id is None:
+            raise _CurseForgeSearchError(
+                "CurseForge Mods class could not be verified; refusing unscoped search."
+            )
+        ctx["mods_class_id"] = mods_class_id
 
-    result = []
+    result: list[tuple[str, float, dict[str, Any]]] = []
     seen_ids: set[int] = set()
-    page_size = 50  # Each browse page can expose candidates beyond a single shortlist.
-    # Categories reveal less popular projects that broad popularity/recency
-    # windows miss. Keep names out of searchFilter for every browse window.
-    windows = curseforge_browse_windows(
-        category_rows, mods_class_id, broad_pages=_discovery_pages()
-    )
-    try:
-        for sort_field, category_id, max_pages in windows:
-            index = 0
-            for _ in range(max_pages):
-                params = {
-                    "gameId": str(_MINECRAFT_GAME_ID),
-                    "sortField": str(sort_field),
-                    "sortOrder": "desc",
-                    "pageSize": str(page_size),
-                    "index": str(index),
-                    "classId": str(mods_class_id),
-                }
-                params.update(target_filters)
-                if category_id is not None:
-                    params["categoryId"] = str(category_id)
-                try:
-                    response = client.get(
-                        "https://api.curseforge.com/v1/mods/search",
-                        params=params, headers=headers, timeout=10.0,
-                    )
-                    response.raise_for_status()
-                    raw = response.json()
-                except httpx.HTTPStatusError as exc:
-                    status = exc.response.status_code
-                    raise _CurseForgeSearchError(
-                        f"CurseForge search failed (HTTP {status}).", http_status=status,
-                        request_failure=provider_request_failure(exc, provider="curseforge"),
-                    ) from None
-                except httpx.HTTPError as exc:
-                    raise _CurseForgeSearchError(
-                        f"CurseForge search transport failed ({type(exc).__name__}).",
-                        request_failure=provider_request_failure(exc, provider="curseforge"),
-                    ) from None
-                except ValueError:
-                    raise _CurseForgeSearchError("CurseForge search returned invalid JSON.") from None
-
-                rows = raw.get("data") if isinstance(raw, Mapping) else None
-                if not isinstance(rows, list):
-                    raise _CurseForgeSearchError("CurseForge search returned no valid data list.")
-                for item in rows:
-                    if not isinstance(item, Mapping) or type(item.get("id")) is not int:
-                        continue
-                    mod_id = item["id"]
-                    if mod_id in seen_ids:
-                        continue
-                    if item.get("classId") != mods_class_id:
-                        continue
-                    seen_ids.add(mod_id)
-                    repository = ""  # Catalogue entry only, not a source repository.
-                    result.append((repository, 1.0 / (1 + len(result)), {
-                        "title": item.get("name", ""), "summary": item.get("summary", ""),
-                        "repository": repository, "sort_field": sort_field,
-                        "catalog_class_verified": mods_class_id is not None,
-                        **curseforge_mod_metadata(
-                            item, minecraft_version=minecraft_version, loader=loader
-                        ),
-                    }))
-                try:
-                    next_index = curseforge_next_index(
-                        raw.get("pagination") if isinstance(raw, Mapping) else None,
-                        index=index, page_size=page_size, row_count=len(rows),
-                    )
-                except ValueError as exc:
-                    raise _CurseForgeSearchError(str(exc)) from None
-                if next_index is None:
-                    break
-                index = next_index
-    except _CurseForgeSearchError as exc:
-        if not result:
-            raise
-        if errors is not None:
-            errors.append(_discovery_provider_error("curseforge", exc, stage="later_page"))
+    page_size = min(50, max(limit, _query_limit()))
+    index = 0
+    for _ in range(_discovery_pages()):
+        params = {
+            "gameId": str(_MINECRAFT_GAME_ID), "classId": str(mods_class_id),
+            "gameVersion": str(minecraft_version or "").strip(),
+            "searchFilter": query, "sortField": "13", "sortOrder": "desc",
+            "pageSize": str(page_size), "index": str(index),
+        }
+        params.update(target_filters)
+        if not params["gameVersion"]:
+            params.pop("gameVersion")
+        try:
+            response = client.get(
+                "https://api.curseforge.com/v1/mods/search",
+                params=params, headers=headers, timeout=10.0,
+            )
+            response.raise_for_status()
+            raw = response.json()
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            failure = _CurseForgeSearchError(
+                f"CurseForge search failed (HTTP {status}).", http_status=status,
+                request_failure=provider_request_failure(exc, provider="curseforge"),
+            )
+        except httpx.HTTPError as exc:
+            failure = _CurseForgeSearchError(
+                f"CurseForge search transport failed ({type(exc).__name__}).",
+                request_failure=provider_request_failure(exc, provider="curseforge"),
+            )
+        except ValueError:
+            failure = _CurseForgeSearchError("CurseForge search returned invalid JSON.")
         else:
-            raise
-    return result if with_metadata else [(repo, rank) for repo, rank, _meta in result if repo]
+            failure = None
+        if failure is not None:
+            if result and errors is not None:
+                errors.append(_discovery_provider_error(
+                    "curseforge", failure, stage="later_page"))
+                break
+            raise failure
+
+        rows = raw.get("data") if isinstance(raw, Mapping) else None
+        if not isinstance(rows, list):
+            failure = _CurseForgeSearchError("CurseForge search returned no valid data list.")
+            if result and errors is not None:
+                errors.append(_discovery_provider_error(
+                    "curseforge", failure, stage="later_page"))
+                break
+            raise failure
+        for item in rows:
+            if not isinstance(item, Mapping) or type(item.get("id")) is not int:
+                continue
+            mod_id = item["id"]
+            if mod_id in seen_ids or item.get("classId") != mods_class_id:
+                continue
+            seen_ids.add(mod_id)
+            # The server's searchFilter may match author only. Reject unrelated
+            # projects rather than promoting every provider hit as an answer.
+            score = curseforge_catalogue_score(query, item)
+            if score <= 0:
+                continue
+            info = {
+                "title": str(item.get("name") or ""),
+                "summary": str(item.get("summary") or ""),
+                "repository": "",
+                "query": query,
+                "catalog_class_verified": True,
+                "target_filter_applied": bool(target_filters),
+                **curseforge_mod_metadata(
+                    item, minecraft_version=minecraft_version, loader=loader
+                ),
+            }
+            result.append(("", float(score), info))
+        if len(result) >= limit:
+            break
+        try:
+            next_index = curseforge_next_index(
+                raw.get("pagination") if isinstance(raw, Mapping) else None,
+                index=index, page_size=page_size, row_count=len(rows),
+            )
+        except ValueError as exc:
+            failure = _CurseForgeSearchError(str(exc))
+            if result and errors is not None:
+                errors.append(_discovery_provider_error(
+                    "curseforge", failure, stage="later_page"))
+                break
+            raise failure from None
+        if next_index is None:
+            break
+        index = next_index
+    result.sort(key=lambda row: (-row[1], str(row[2].get("title", "")).casefold()))
+    result = result[:limit]
+    return result if with_metadata else [(repo, rank) for repo, rank, _ in result]
 
 
 def discover_repositories_for_graph(
@@ -271,13 +293,14 @@ def discover_repositories_for_graph(
     providers: Sequence[str] | None = None,
     query_cache: dict[tuple[str, str, str, str], Any] | None = None,
 ) -> dict[str, tuple[str, ...]]:
-    """Inspect CurseForge once for selected target; never discover source repos.
+    """Collect per-capability CurseForge evidence without discovering repos.
 
-    The return shape is kept for the host's fresh-authoring contract.
-    Inspecting catalogue metadata alone must not be reported as reusable Java.
+    Return shape stays empty by design: a catalog listing cannot authorize a
+    source transplant. Diagnostic receipts carry ranked, target-filtered facts.
     """
+    del client
     selected = tuple(dict.fromkeys(str(c).strip() for c in capabilities if str(c).strip()))
-    result = {capability: () for capability in selected}
+    result: dict[str, tuple[str, ...]] = {capability: () for capability in selected}
     requested = tuple(providers) if providers is not None else ("curseforge",)
     if requested != ("curseforge",):
         raise ValueError("Only the CurseForge catalogue provider is supported.")
@@ -285,54 +308,119 @@ def discover_repositories_for_graph(
         return result
     version = str(minecraft_version or "").strip()
     selected_loader = str(loader or "").strip().casefold()
-    if not _curseforge_api_key():
+    # Validate target even when the provider is unavailable.
+    curseforge_target_filters(version, selected_loader)
+    terms_by_cap: dict[str, tuple[str, ...]] = {}
+    if isinstance(capability_graph, Mapping):
+        for row in capability_graph.get("search_terms", ()):
+            if isinstance(row, Mapping):
+                name = str(row.get("capability") or "")
+                terms = row.get("terms")
+                if isinstance(terms, (list, tuple)):
+                    terms_by_cap[name] = tuple(str(v) for v in terms if str(v).strip())
+    category_context: dict[str, Any] = {}
+    for capability in selected:
+        queries = curseforge_search_queries(
+            capability, search_terms=terms_by_cap.get(capability, ()),
+            max_variants=_query_variant_limit(),
+        )
+        if not queries:
+            if diagnostics is not None:
+                diagnostics.append({
+                    "provider": "curseforge", "status": "query_unresolved",
+                    "capability": capability, "queries": [],
+                    "catalog_result_count": 0, "ranked_catalogue_hits": [],
+                    "minecraft_version": version, "loader": selected_loader,
+                })
+            continue
+        if not _curseforge_api_key():
+            if diagnostics is not None:
+                diagnostics.append({
+                    "provider": "curseforge", "status": "not_configured",
+                    "capability": capability, "queries": list(queries),
+                    "catalog_result_count": 0, "ranked_catalogue_hits": [],
+                    "minecraft_version": version, "loader": selected_loader,
+                })
+            continue
+        combined: dict[str, dict[str, Any]] = {}
+        query_receipts: list[dict[str, Any]] = []
+        failures: list[dict[str, Any]] = []
+        for query in queries:
+            key = ("curseforge", query.casefold(), version, selected_loader)
+            cached = query_cache.get(key) if query_cache is not None else None
+            if isinstance(cached, Mapping):
+                rows = list(cached.get("rows", ()))
+                errors = list(cached.get("errors", ()))
+                cache_hit = True
+            else:
+                errors = []
+                try:
+                    rows = _search_curseforge(
+                        query, limit=_query_limit(), with_metadata=True,
+                        minecraft_version=version, loader=selected_loader,
+                        errors=errors, category_context=category_context,
+                    )
+                except Exception as exc:
+                    rows = []
+                    errors.append(_discovery_provider_error(
+                        "curseforge", exc, stage="search"))
+                cache_hit = False
+                if query_cache is not None:
+                    query_cache[key] = {"rows": list(rows), "errors": list(errors)}
+            failures.extend(errors)
+            query_receipts.append({
+                "query": query, "hit_count": len(rows),
+                "cache_hit": cache_hit, "errors": list(errors),
+            })
+            for _repository, provider_score, meta in rows:
+                if not isinstance(meta, Mapping):
+                    continue
+                ident = str(meta.get("source_id") or "")
+                if not ident:
+                    continue
+                # Re-evaluate full original requirement (not only the short
+                # provider keyword), preferring exact capability relevance.
+                score = curseforge_catalogue_score(
+                    capability,
+                    {"name": meta.get("title"), "summary": meta.get("summary")},
+                    search_terms=terms_by_cap.get(capability, ()),
+                )
+                if score <= 0:
+                    continue
+                previous = combined.get(ident)
+                if previous is None:
+                    combined[ident] = {
+                        "source_id": ident, "catalog_id": meta.get("catalog_id"),
+                        "title": str(meta.get("title") or ""),
+                        "summary": str(meta.get("summary") or "")[:400],
+                        "catalog_url": str(meta.get("catalog_url") or ""),
+                        "minecraft_version": version, "loader": selected_loader,
+                        "score": score, "matched_queries": [query],
+                        "source_reuse_authority": "catalogue_only",
+                    }
+                else:
+                    previous["score"] = max(int(previous["score"]), score)
+                    if query not in previous["matched_queries"]:
+                        previous["matched_queries"].append(query)
+        ranked = sorted(
+            combined.values(),
+            key=lambda row: (-int(row["score"]), -len(row["matched_queries"]),
+                             str(row["title"]).casefold(), str(row["source_id"])),
+        )
         if diagnostics is not None:
             diagnostics.append({
-                "provider": "curseforge", "status": "not_configured",
-                "capabilities": list(selected), "query": "",
+                "provider": "curseforge", "capability": capability,
+                "queries": list(queries), "query_receipts": query_receipts,
+                "status": ("provider_error" if failures
+                           else "catalog_only" if ranked else "search_empty"),
+                "catalog_result_count": len(ranked),
+                "ranked_catalogue_hits": ranked[:_representative_limit()],
+                "repository_count": 0, "repository_evidence": [],
+                "errors": failures,
                 "minecraft_version": version, "loader": selected_loader,
-                "repository_count": 0, "catalog_result_count": 0,
+                "relevance_policy": "exact_requirement_ranked_metadata",
+                "search_exhaustiveness": "bounded_targeted_name_queries",
             })
-        return result
-    key = ("curseforge", "", version, selected_loader)
-    cached = query_cache.get(key) if query_cache is not None else None
-    if isinstance(cached, Mapping):
-        rows = list(cached.get("rows", ()))
-        errors = list(cached.get("errors", ()))
-        cache_hit = True
-    else:
-        errors = []
-        try:
-            rows = _search_curseforge(
-                "", limit=_query_limit(), with_metadata=True,
-                minecraft_version=version, loader=selected_loader,
-                errors=errors,
-            )
-        except Exception as exc:
-            rows = []
-            errors.append(_discovery_provider_error("curseforge", exc, stage="search"))
-        cache_hit = False
-        if query_cache is not None:
-            query_cache[key] = {"rows": list(rows), "errors": list(errors)}
-    if diagnostics is not None:
-        diagnostics.append({
-            "provider": "curseforge", "query": "",
-            "capabilities": list(selected),
-            "status": "provider_error" if errors else ("catalog_only" if rows else "search_empty"),
-            "catalog_result_count": len(rows),
-            "repository_count": 0,
-            "repositories": [],
-            "repository_evidence": [],
-            "source_repository_missing_count": 0,
-            "usable_source_repository_count": 0,
-            "cache_hit": cache_hit,
-            "minecraft_version": version, "loader": selected_loader,
-            "errors": list(errors),
-            "error": "; ".join(str(error.get("error", "")) for error in errors),
-            "http_status": next((error.get("http_status") for error in errors if error.get("http_status")), None),
-            "search_exhaustiveness": "bounded_category_and_multi_sort_sample",
-            "relevance_policy": "catalogue_metadata_only_fresh_code",
-        })
     return result
 
 
