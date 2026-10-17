@@ -41,19 +41,21 @@ def test_one_browse_plan_shared_by_reuse_and_predesign():
     )
 
 
-def test_provider_rank_fusion_does_not_multiply_repeated_single_provider_hits():
-    single = {"catalog_evidence": [
-        {"provider": "curseforge", "rank_position": 2},
-        {"provider": "curseforge", "rank_position": 2},
-    ]}
-    multi = {"catalog_evidence": [
-        {"provider": "curseforge", "rank_position": 2},
-        {"provider": "sourcegraph", "rank_position": 7},
-    ]}
-    assert grounded_source_reuse._candidate_provider_rrf(single) == 1.0 / 62
-    assert grounded_source_reuse._candidate_provider_rrf(multi) > (
-        grounded_source_reuse._candidate_provider_rrf(single)
+def test_provider_search_terms_rank_real_feature_titles_above_generic_hits():
+    from minecraft_mod_ai.curseforge_query import (
+        curseforge_catalogue_score, curseforge_search_queries,
     )
+    assert curseforge_search_queries("build a spaceship to fight aliens")[0] == "spaceship"
+    assert curseforge_search_queries("외계인 우주선 전투")[0] == "spaceship"
+    assert curseforge_search_queries("mod game feature only") == ()
+    assert curseforge_catalogue_score(
+        "build a spaceship to fight aliens", {"name": "Spaceship",
+                                                "summary": "Fight aliens"}
+    ) > curseforge_catalogue_score(
+        "build a spaceship to fight aliens", {"name": "Popular Animals",
+                                                "summary": "Wild animals"}
+    )
+
 
 
 def test_curseforge_pagination_advances_and_never_crosses_provider_window():
@@ -76,7 +78,7 @@ def test_curseforge_pagination_advances_and_never_crosses_provider_window():
         )
 
 
-def test_curseforge_reuse_discovers_second_page_without_name_search(monkeypatch):
+def test_curseforge_reuse_discovers_second_page_with_targeted_name_search(monkeypatch):
     monkeypatch.setattr(reuse_discovery, "_curseforge_api_key", lambda: "dummy")
     monkeypatch.setattr(reuse_discovery, "_discovery_pages", lambda: 2)
     calls = []
@@ -96,11 +98,11 @@ def test_curseforge_reuse_discovers_second_page_without_name_search(monkeypatch)
                 ]}
             position = int(self.params["index"])
             sort = int(self.params["sortField"])
-            if sort == 2 and position == 0:
+            if sort == 13 and position == 0:
                 mods = [{"id": i, "classId": 6, "name": f"Popular Mod {i}",
                          "links": {}} for i in range(1, 51)]
                 total = 51
-            elif sort == 2 and position == 50:
+            elif sort == 13 and position == 50:
                 mods = [{"id": 51, "classId": 6, "name": "Hidden Donor",
                          "summary": "Spacecraft assembly",
                          "links": {"sourceUrl": "https://github.com/owner/hidden-donor"}}]
@@ -126,11 +128,11 @@ def test_curseforge_reuse_discovers_second_page_without_name_search(monkeypatch)
     assert any(repo == "" and row["source_id"] == "curseforge:51" for repo, _, row in results)
     searches = [params for url, params in calls if "/mods/search" in url]
     assert searches
-    assert all("searchFilter" not in params for params in searches)
+    assert all(params.get("searchFilter") == "spaceship" for params in searches)
     assert all(params.get("gameVersion") == "1.21.1" and
                params.get("modLoaderType") == "4" for params in searches)
     assert all(params.get("classId") == "6" for params in searches)
-    assert any(params["sortField"] == "2" and params["index"] == "50"
+    assert any(params["sortField"] == "13" and params["index"] == "50"
                for params in searches)
 
 
@@ -197,7 +199,7 @@ def test_predesign_browses_metadata_before_budgeted_descriptions(monkeypatch):
             return {"data": "<p>Source-backed spaceship mechanic.</p>"}
         if "/mods/search?" in url:
             params = parse_qs(urlsplit(url).query)
-            assert "searchFilter" not in params
+            assert params.get("searchFilter") == ["spaceship"]
             assert params.get("classId") == ["6"]
             assert params.get("gameVersion") == ["1.21.1"]
             assert params.get("modLoaderType") == ["4"]
@@ -215,8 +217,8 @@ def test_predesign_browses_metadata_before_budgeted_descriptions(monkeypatch):
     records, receipt = pre_design_grounded_rag._search_curseforge(
         "spaceship", minecraft_version="1.21.1", loader="fabric"
     )
-    assert len(records) == 10
-    assert receipt["search_requests"] == 3
+    assert len(records) == 10\n    assert receipt["search_filter_used"] is True
+    assert receipt["search_requests"] == 1
     assert receipt["source_requests"] == 6
     assert sum("/description" in url for url in calls) == 6
     assert sum(bool(row["body_retrieved"]) for row in records) == 6
