@@ -3,10 +3,7 @@ from __future__ import annotations
 """Catalog-first provider policy for Minecraft research.
 
 Provider transport lives in ``pre_design_grounded_rag``. This module owns retrieval
-policy: search the active Minecraft target in CurseForge first (Modrinth only
-when the CurseForge credential is absent), then inspect catalog-linked source
-repositories. Never issue broad GitHub keyword searches for missing source links
-or empty catalog pages. Source verification remains independent of search.
+policy: search CurseForge for the selected Minecraft version and loader.
 Official/project sources remain separate from ecosystem discovery.
 
 Query-level orchestration uses the backend-owned dynamic worker authority and the
@@ -14,7 +11,6 @@ shared deadline executor. Provider/source retrieval remains independently bounde
 transport timeouts, while deterministic output order is reconstructed from authored specs.
 """
 
-import threading
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
@@ -125,32 +121,11 @@ def _dedupe(records: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return output
 
 
-def _combined_github_receipt(
-    linked_receipt: Mapping[str, Any],
-    fallback_receipt: Mapping[str, Any],
-    *,
-    policy: str,
-) -> dict[str, Any]:
-    """Preserve request accounting across exact-link and fallback discovery stages."""
-
-    receipt = {**dict(linked_receipt), **dict(fallback_receipt), "policy": policy}
-    receipt["search_requests"] = int(linked_receipt.get("search_requests") or 0) + int(
-        fallback_receipt.get("search_requests") or 0
-    )
-    receipt["source_requests"] = int(linked_receipt.get("source_requests") or 0) + int(
-        fallback_receipt.get("source_requests") or 0
-    )
-    return receipt
-
-
 def _query_bundle(
     backend: Any,
     router: Any,
     query: str,
     providers: tuple[str, ...],
-    *,
-    github_disabled: Callable[[], bool],
-    disable_github: Callable[[], None],
 ) -> dict[str, Any]:
     # Only CurseForge is allowed for external mod catalogues.
     allowed = (set(providers) & {"official_docs", "project_rag"}) | {"curseforge"}
@@ -172,13 +147,6 @@ def _query_bundle(
         receipts.update(catalog_receipts)
         errors.extend(catalog_errors)
 
-    # No GitHub READMEs, including links supplied by CurseForge metadata.
-    receipts["github"] = {
-        "provider": "github", "status": "disabled",
-        "result_count": 0, "search_requests": 0, "source_requests": 0,
-        "policy": "curseforge_only",
-    }
-
     project_rag = (
         backend._search_authoritative_catalog(query, versions)
         if allowed & {"official_docs", "project_rag"}
@@ -198,7 +166,6 @@ def _query_bundle(
         }
     )
 
-    gh = receipts.get("github", {}) if isinstance(receipts.get("github"), Mapping) else {}
     unique = _dedupe(records)
     return {
         "query": query,
@@ -217,26 +184,8 @@ def _query_bundle(
                     for provider in ("curseforge",)
                     if provider in allowed
                 ],
-                "github_role": (
-                    "disabled" if catalog_allowed
-                    else "not_requested"
-                ),
-                "github_broad_search": "disabled",
-                "github_linked_source": (
-                    "disabled" if catalog_allowed else "not_applicable"
-                ),
             },
-            "github_retrieval": {
-                "provider_status": _text(gh.get("status") or "not_requested"),
-                "saturation_reason": (
-                    "rate_or_auth_failure"
-                    if _text(gh.get("status"))
-                    in {"error", "disabled_after_rate_or_auth_failure"}
-                    else ""
-                ),
-                "search_requests": int(gh.get("search_requests") or 0),
-                "source_requests": int(gh.get("source_requests") or 0),
-            },
+
         },
     }
 
@@ -253,12 +202,7 @@ def _query_failure(backend: Any, query: str, exc: Exception) -> dict[str, Any]:
             "errors": [backend._error("query_worker", exc)],
             "providers": {},
             "provider_policy": {},
-            "github_retrieval": {
-                "provider_status": "not_requested",
-                "saturation_reason": "",
-                "search_requests": 0,
-                "source_requests": 0,
-            },
+
         },
     }
 
@@ -284,18 +228,6 @@ def forced_rag_bundle(
         if isinstance(research_brief.get("domains"), list)
         else []
     )
-    github_blocked = False
-    github_lock = threading.Lock()
-
-    def github_disabled() -> bool:
-        with github_lock:
-            return github_blocked
-
-    def disable_github() -> None:
-        nonlocal github_blocked
-        with github_lock:
-            github_blocked = True
-
     specs: list[tuple[str, tuple[str, ...]]] = []
     for domain in domains:
         for key in _domain_specs(domain):
@@ -316,8 +248,6 @@ def forced_rag_bundle(
                     router,
                     query,
                     providers,
-                    github_disabled=github_disabled,
-                    disable_github=disable_github,
                 )
             except Exception as exc:
                 row = _query_failure(backend, query, exc)
