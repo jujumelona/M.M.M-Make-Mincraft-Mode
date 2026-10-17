@@ -619,6 +619,8 @@ def compose(router, spec, *, source_context=(), construction_context=None,
     source = 'package ' + package + ';\n\npublic ' + ('final ' if lifecycle else '') + 'class ' + name
     source += (' extends ' + superclass if superclass else '') + (' implements ' + ', '.join(interfaces) if interfaces else '')
     source += ' {\n' + '\n\n'.join(members) + '\n}\n'
+    from .compiled_feature_patch import replay_compiled_repair
+    source = replay_compiled_repair(context['project_root'], spec['target_path'], source)
     if context.get('verify_source'):
         context['verify_source'](source, spec['target_path'])
     from .construction_coverage import record_authored_source_calls
