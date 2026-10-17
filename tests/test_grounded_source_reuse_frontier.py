@@ -5,7 +5,7 @@ from dataclasses import replace
 from minecraft_mod_ai import grounded_source_reuse
 from minecraft_mod_ai.host_version_catalog import host_target
 from minecraft_mod_ai.reuse_proof_executor import ReuseProofReceipt
-from minecraft_mod_ai.source_transplant import DonorFile, DonorSlice, donor_closure_sha256
+from minecraft_mod_ai.source_transplant import CompatibilityEvidence, DonorFile, DonorSlice, donor_closure_sha256
 
 
 def _discovery(monkeypatch, repositories):
@@ -24,6 +24,9 @@ def _donor(repository):
         source_url="https://github.com/" + repository, target_compatibility="exact",
         files=(DonorFile(path, "c" * 40, "sha256:" + "d" * 64, 1, ()),), seed_files=(path,),
         source_symbols=(), required_dependencies=(), donor_tests=(), confidence=0.8,
+        compatibility_evidence=CompatibilityEvidence(
+            minecraft_version="26.1.2", loader="fabric", status="metadata_exact",
+        ),
     )
 
 
@@ -53,8 +56,11 @@ def test_proven_ranked_candidate_avoids_downloading_the_remaining_frontier(monke
 
     def prove(donor, **kwargs):
         proved.append(donor.repository)
-        return _proof(donor)
+        return _proof(donor, passed=donor.repository != repositories[0])
 
+    # An adaptation-only source is not an installed donor unless proof passes.
+    monkeypatch.setattr(grounded_source_reuse, "_retain_reference_source",
+                        lambda *_args, **_kwargs: False)
     result = grounded_source_reuse.build_repository_reuse_plan(
         design, discovery_client=object(), donor_inspector=inspect, proof_executor=prove,
         target_workspace=tmp_path,
@@ -78,6 +84,14 @@ def test_rejected_batches_do_not_truncate_later_usable_candidates(monkeypatch, t
         proved.append(donor.repository)
         return _proof(donor, passed=donor.repository == repositories[-1])
 
+    # Synthetic sources have no downloadable blobs; fake only the reference I/O,
+    # not the immutable donor manifest and compatibility admission checks.
+    def retain(donor, capability, _client, diagnostics, references, _inspections):
+        references.append({"capability": capability, "donor": donor.to_dict(),
+                           "authority": "pinned_licensed_reference_only",
+                           "migration_diagnostics": diagnostics})
+        return True
+    monkeypatch.setattr(grounded_source_reuse, "_retain_reference_source", retain)
     result = grounded_source_reuse.build_repository_reuse_plan(
         design, discovery_client=object(), donor_inspector=inspect, proof_executor=prove,
         target_workspace=tmp_path,
