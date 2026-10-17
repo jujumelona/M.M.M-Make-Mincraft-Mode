@@ -202,9 +202,19 @@ def test_feature_execution_passes_materialized_owner_api_to_the_real_generator(m
         def generate_text(self, role, messages, **kwargs):
             payload = json.loads(messages[-1]["content"])
             assert "destinationForShip(long id)" in json.dumps(payload["materialized_prerequisite_source"])
-            return json.dumps(f"package {spec['bindings']['package_name']}; "
-                              f"public final class {spec['bindings']['class_name']} "
-                              "implements net.fabricmc.api.ModInitializer { public void onInitialize() {} }")
+            import hashlib
+
+            registration = "registerBehavior" + hashlib.sha256(
+                b"behavior_planet"
+            ).hexdigest()[:20]
+            return json.dumps(
+                f"package {spec['bindings']['package_name']}; "
+                f"public final class {spec['bindings']['class_name']} "
+                "implements net.fabricmc.api.ModInitializer { "
+                f"public void onInitialize() {{ this.{registration}(); }} "
+                f"private void {registration}() {{ }} "
+                "}"
+            )
 
     monkeypatch.setattr("minecraft_mod_ai.integrity_validators.validate_java_syntax",
                         lambda *args, **kwargs: {"validator": "java_syntax", "status": "FIXTURE"})
