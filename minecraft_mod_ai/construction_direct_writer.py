@@ -138,7 +138,14 @@ def _evidence(index, intent, source_pages):
             break
     for type_ in input_types:
         producers = []
-        for key in sorted(index.member_result_keys.get(type_, ())):
+        for key in sorted(
+            index.member_result_keys.get(type_, ()),
+            key=lambda name: (
+                {"CONSTRUCTOR": 0, "METHOD": 1, "FIELD": 2}.get(
+                    index.symbols.get(name, {}).get("kind"), 3),
+                name,
+            ),
+        ):
             row = index.symbols.get(key, {})
             if row.get("kind") not in {"METHOD", "CONSTRUCTOR", "FIELD"}:
                 continue
