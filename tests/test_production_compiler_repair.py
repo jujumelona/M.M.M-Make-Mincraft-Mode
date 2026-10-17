@@ -29,7 +29,14 @@ def test_real_owned_javac_diagnostic_can_invoke_one_model_repair(tmp_path, monke
     calls = []
     def repair(router, root, *, target_path):
         calls.append(target_path)
-        return {"status": "COMPILED", "compile_passed": True}
+        original_sha = hashlib.sha256(
+            (Path(root)/target_path).read_bytes()).hexdigest()
+        repaired_source = SOURCE.replace("BAD()", "System.out.println(1)")
+        (Path(root)/target_path).write_text(repaired_source, encoding="utf-8")
+        return {"status": "COMPILED", "compile_passed": True,
+                "original_sha256": original_sha,
+                "compiled_sha256": hashlib.sha256(
+                    repaired_source.encode()).hexdigest()}
     monkeypatch.setattr(
         "minecraft_mod_ai.focused_method_compile_repair.repair_staged_java_with_model", repair)
     report = pc.repair_failed_build_with_model(object(), tmp_path, {
