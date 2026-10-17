@@ -234,6 +234,11 @@ class CompleteGameDesignPlanner:
                 loader=target_loader,
                 request_scope=request_scope,
                 **({"repository_candidates": research_candidates} if research_candidates else {}),
+                **({"requested_curseforge_dependencies":
+                    prior_content_design.get("_requested_curseforge_dependencies", ())}
+                   if isinstance(prior_content_design, Mapping)
+                   and prior_content_design.get("_requested_curseforge_dependencies")
+                   else {}),
             )
             text += verified_reuse_context(reuse_receipt)
 
