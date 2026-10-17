@@ -345,6 +345,40 @@ def materialize_verified_authored_sources(
     if bound != {"minecraft_version": minecraft_version, "loader": loader}:
         raise ValueError("SOURCE_REUSE_TARGET_MISMATCH: donor proof is for another target")
 
+    # Catalogue hits cannot auto-install a mod. Only explicit provider file
+    # selections with local bytes and an acknowledged license policy enter this
+    # lane. The provider response is fetched again HERE, never trusted from a
+    # model-generated or persisted plan.
+    requested_deps = reuse_plan.get("requested_curseforge_dependencies", ())
+    if not isinstance(requested_deps, (list, tuple)) or len(requested_deps) > 8:
+        raise ValueError("SOURCE_REUSE_DEPENDENCY_REQUESTS_INVALID")
+    installed_dependencies = []
+    if requested_deps:
+        from .curseforge_dependency_adoption import (
+            fetch_exact_curseforge_file_metadata, verify_curseforge_dependency,
+        )
+        from .curseforge_dependency_project import install_verified_fabric_dependency
+        for requested in requested_deps:
+            if not isinstance(requested, Mapping):
+                raise ValueError("SOURCE_REUSE_DEPENDENCY_REQUEST_INVALID")
+            project_id = requested.get("project_id")
+            file_id = requested.get("file_id")
+            if type(project_id) is not int or type(file_id) is not int:
+                raise ValueError("SOURCE_REUSE_DEPENDENCY_FILE_ID_INVALID")
+            exact_metadata = fetch_exact_curseforge_file_metadata(project_id, file_id)
+            verified = verify_curseforge_dependency(
+                str(requested.get("jar_path") or ""),
+                project_id=project_id, file_id=file_id,
+                file_metadata=exact_metadata,
+                minecraft_version=minecraft_version, loader=loader,
+                license_policy_confirmed=(
+                    requested.get("license_policy_confirmed") is True
+                ),
+            )
+            installed_dependencies.append(install_verified_fabric_dependency(
+                project_root, verified, minecraft_version=minecraft_version
+            ))
+
     chosen = [
         row for row in reuse_plan.get("capabilities", ())
         if isinstance(row, Mapping) and row.get("mode") == "source_transplant"
@@ -359,7 +393,9 @@ def materialize_verified_authored_sources(
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(notice, encoding="utf-8")
     if not chosen:
-        return {"schema_version": "mmm/authored-source-install-v1", "donor_count": 0, "files": []}
+        return {"schema_version": "mmm/authored-source-install-v1", "donor_count": 0,
+                "files": [], "dependency_count": len(installed_dependencies),
+                "dependencies": installed_dependencies}
     if not package_name.strip() or not mod_id.strip():
         raise ValueError(
             "SOURCE_REUSE_TARGET_IDENTITY_REQUIRED: verified transplant needs "
@@ -487,6 +523,8 @@ def materialize_verified_authored_sources(
         "file_owners": file_owners,
         "installed_manifest": str(manifest_path),
         "provenance": str(provenance_file),
+        "dependency_count": len(installed_dependencies),
+        "dependencies": installed_dependencies,
     }
 
 
