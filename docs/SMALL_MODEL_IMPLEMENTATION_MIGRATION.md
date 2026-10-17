@@ -89,3 +89,31 @@ Main at `054b9d3` had failed CI, Partial CI, Production Kill Gates and Debug Gat
 - 2026-10-18: M7 PARTIAL: `request_runtime_ownership.py` assigns 3+ runtime records in bounded groups of up to four per model request, with exact closed-schema ownership validation and a fixture comparing 5 records / 2 requests against the old 5 requests. The expensive `typed_plan_authoring.py` per-AST-decision authoring has NOT been replaced; do not mark M7 complete.
 - 2026-10-18: M12 PARTIAL: `complete_planner.py` prints `PLANNER_STAGE_COST` counters for design and production planning, exposing stage/model call counts in Colab logs without forcing another replan. No claimed speed-up until measured.
 - 2026-10-18: Partial CI at `5773708` FAILED 20/479 tests, including obsolete GitHub/Modrinth runtime-search assertions, target preflight/setup and several independent receipt checks. Cross-stage ABI passed on that SHA. Tests are not automatically dismissed; reconcile exact cases while keeping only CurseForge as runtime discovery provider.
+
+### 2026-10-18 visual/backend scope correction
+
+User decision: **remove standalone texture/resource-pack production and stop using
+FLUX or comparable AI image models**. This is a reduction in feature scope, NOT
+permission to ship Minecraft models referencing nonexistent textures.
+
+- New production proposals have zero AI asset requests. Model-authored content
+  no longer creates `design/texture_requirement` decisions or AI texture jobs.
+  Older authored content asset rows are retired at production compilation; old
+  approved CompleteProposals containing image assets fail clearly instead of
+  starting the backend.
+- Standalone generated resource-pack ZIPs are removed from normal Colab user
+  downloads. AI asset-generation calls reject work before FLUX imports.
+- Colab no longer installs `[image]` or preflights FLUX/rembg. This does not
+  remove the text model, JDT, Gradle, Fabric mod resource JSON or existing PNGs.
+- Extended content item/block/crop models reference **generic existing vanilla
+  Minecraft textures** instead of nonexistent auto-generated custom PNG files.
+  The fallback is not original art and must not count as meeting a custom-art goal.
+- `asset-generation` was removed from the active capability manifest;
+  canonical + packaged `generate-textures` skills are explicitly retired.
+  Legacy image implementation files remain inert for compatibility/testing
+  until a separate safe deletion/migration.
+- Existing unsupported entity UV/GUI custom art needs an explicit supplied file
+  or unsupported-feature report. Minecraft resource dependencies must still be
+  compile/runtime-validated, and CI tests asserting automatic FLUX assets need
+  revision to match this newly approved scope.
+
