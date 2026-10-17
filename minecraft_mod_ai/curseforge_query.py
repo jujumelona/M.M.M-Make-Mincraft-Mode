@@ -46,6 +46,24 @@ _EQUIVALENTS = {
     "mining": ("ores", "mine"),
 }
 
+# One synonym family is one retrieval topic; distinct mechanics keep separate
+# shortlists (e.g. spaceship, weapons and crew are not interchangeable).
+_QUERY_FAMILIES = {
+    "space": "spaceship", "ship": "spaceship", "spaceship": "spaceship",
+    "spacecraft": "spaceship", "starship": "spaceship",
+    "alien": "alien", "aliens": "alien",
+    "trade": "trade", "trading": "trade", "economy": "trade",
+    "ore": "mining", "ores": "mining", "mine": "mining", "mining": "mining",
+    "planet": "planet", "planets": "planet", "planetary": "planet",
+}
+
+
+def curseforge_query_family(query: str) -> str:
+    """Group fallback spellings without merging different requested mechanics."""
+    term = str(query or "").strip().casefold()
+    return _QUERY_FAMILIES.get(term, term)
+
+
 
 def _words(value: str) -> tuple[str, ...]:
     return tuple(re.findall(r"[a-z][a-z0-9]{2,}", str(value).casefold()))
@@ -87,20 +105,12 @@ def curseforge_search_queries(
     synonyms = [equivalent for term in terms
                 for equivalent in _EQUIVALENTS.get(term, ())]
     candidates = list(dict.fromkeys((*compounds, *terms, *synonyms)))
-    families = {
-        "space": "spaceship", "ship": "spaceship", "spaceship": "spaceship",
-        "spacecraft": "spaceship", "starship": "spaceship",
-        "alien": "alien", "aliens": "alien",
-        "trade": "trade", "trading": "trade", "economy": "trade",
-        "ore": "mining", "ores": "mining", "mine": "mining", "mining": "mining",
-        "planet": "planet", "planets": "planet", "planetary": "planet",
-    }
     # Diversify among distinct sub-capabilities before fallback synonyms.
     # For a single-subject query, use any free budget to try equivalent names.
     selected: list[str] = []
     covered: set[str] = set()
     for word in candidates:
-        family = families.get(word, word)
+        family = curseforge_query_family(word)
         if family in covered:
             continue
         covered.add(family)
@@ -139,4 +149,4 @@ def curseforge_catalogue_score(
             + len(wanted & cat_terms))
 
 
-__all__ = ["curseforge_search_queries", "curseforge_catalogue_score"]
+__all__ = ["curseforge_search_queries", "curseforge_catalogue_score", "curseforge_query_family"]
