@@ -113,15 +113,19 @@ def compile_and_repair_feature(
             except Exception:
                 status = "INVALID_REPAIR"
                 break
-            before_owners = {
-                (row.get("owner"), row.get("kind"))
-                for row in before if row.get("kind") in {"class", "record", "enum", "interface"}
+            before_signature = {
+                (row.get("owner"), row.get("kind"), row.get("name"),
+                 tuple((p.get("type"), p.get("name")) for p in row.get("parameters", ())),
+                 row.get("return_type"))
+                for row in before
             }
-            after_owners = {
-                (row.get("owner"), row.get("kind"))
-                for row in after if row.get("kind") in {"class", "record", "enum", "interface"}
+            after_signature = {
+                (row.get("owner"), row.get("kind"), row.get("name"),
+                 tuple((p.get("type"), p.get("name")) for p in row.get("parameters", ())),
+                 row.get("return_type"))
+                for row in after
             }
-            if not before_owners or before_owners != after_owners:
+            if not before_signature or before_signature != after_signature:
                 status = "INVALID_REPAIR"
                 break
             path.write_text(next_source, encoding="utf-8")
