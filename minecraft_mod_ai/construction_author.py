@@ -291,6 +291,11 @@ def author_task_operations(router, task, context):
 
     def reconsider_node(choice):
         key = choice['node_ref']
+        if ((state.selection_goal or {}).get('revising')
+                and key == state.selection_goal['node_id']):
+            # Revising is a selection state, not a graph mutation. Repeating
+            # it would reissue the same model prompt indefinitely.
+            raise ValueError('CONSTRUCTION_REVISION_NO_PROGRESS: ' + key)
         if key not in by_id:
             raise ValueError('CONSTRUCTION_REVISION_TARGET_INVALID')
         if choice['action'] == 'reconsider_parent' and key not in {
