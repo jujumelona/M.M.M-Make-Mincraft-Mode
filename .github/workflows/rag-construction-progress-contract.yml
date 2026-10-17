@@ -15,7 +15,6 @@ on:
       - 'minecraft_mod_ai/construction_memory.py'
       - 'minecraft_mod_ai/construction_declaration_choices.py'
       - 'tests/test_authored_source_rag.py'
-      - 'tests/test_grounded_source_reuse_frontier.py'
       - 'tests/test_reuse_discovery_query_architecture.py'
       - 'tests/test_ecosystem_discovery.py'
       - 'tests/test_construction_operation_progress_gate.py'
