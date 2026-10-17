@@ -107,10 +107,12 @@ class ConstructionEvidenceIndex:
         # Older goals remain reconstructible from their immutable selectors.
         self.ordering_goal = None
         self.ordering = None
+        self.active_eligible = {}
         self.by_owner = defaultdict(list)
         # Postings contain owners, not duplicate copies of the entire
         # classpath index. Query-local scoring inspects only matching owners.
         self.member_name_owners = defaultdict(set)
+        self.member_name_keys = defaultdict(set)
         self.name_weights = {}
         self.strong_name_prefixes = frozenset()
         self.exact_action_available = False
@@ -134,7 +136,7 @@ class ConstructionEvidenceIndex:
                 continue
             self.by_owner[row['owner']].append(key)
             self._record_document(key, row)
-            self._index_name_owner(row)
+            self._index_name_owner(key, row)
             if row.get('kind') == 'CLASS':
                 self.aliases[symbol_query_key(key)].add(key)
                 self.aliases[symbol_query_key(row['name'])].add(key)
@@ -172,11 +174,12 @@ class ConstructionEvidenceIndex:
         self.source_ranking_query = None
         self.source_ranking = None
 
-    def _index_name_owner(self, row):
+    def _index_name_owner(self, key, row):
         if row.get('kind') == 'METHOD':
             for part in _name_parts(row):
                 if len(part) >= 5:
                     self.member_name_owners[part[:5]].add(row['owner'])
+                    self.member_name_keys[part[:5]].add(key)
 
     def _record_document(self, key, row):
         owner, kind = row['owner'], row['kind']
@@ -249,11 +252,12 @@ class ConstructionEvidenceIndex:
         if key not in self.by_owner[self.owner]:
             self.by_owner[self.owner].append(key)
         self._record_document(key, row)
-        self._index_name_owner(row)
+        self._index_name_owner(key, row)
         self.member_text[key] = _description(row)
         self.member_prepared[key] = (frozenset(_tokens(self.member_text[key])), self.member_text[key].casefold())
         self.eligible.clear()
         self.selection_eligible = None
+        self.active_eligible = {}
         self.ordering_goal = None
 
     def _member_name_score(self, key):
@@ -351,6 +355,34 @@ class ConstructionEvidenceIndex:
         # Retain one active filtered view, not another full classpath per slot.
         self.selection_eligible = (cache_key, rows)
         return rows
+
+    def _focused_method_owners(self, prefix, query, selection):
+        """Resolve a typed callable hint against a *small* name posting first.
+
+        Avoid building the complete eligible method index merely to score all
+        its methods against an explicit callable. This is a search route, not
+        permission to invoke a guessed member.
+        """
+        if not prefix:
+            return {}
+        from .construction_operation_contracts import result_fits
+        excluded = set(selection['excluded_symbols']) if selection else set()
+        constraints = selection['contracts'] if selection else ()
+        terms = set(_meaningful_terms(_words(query)))
+        selected = defaultdict(list)
+        for key in self.member_name_keys.get(prefix, ()):
+            row = self.symbols[key]
+            parts = _name_parts(row)
+            if not all(part[:5] == prefix or part in terms for part in parts):
+                continue
+            if key in excluded or row.get('inherited_from') in excluded:
+                continue
+            if not self.accessible(key):
+                continue
+            if constraints and not result_fits(row['return_type'], constraints, self):
+                continue
+            selected[row['owner']].append(key)
+        return dict(selected)
 
     def _dense_allowed(self):
         registry = getattr(self.router, 'registry', None)
@@ -557,31 +589,17 @@ class ConstructionEvidenceIndex:
             if documents and terms:
                 hits = sum(counts[kind][term] for kind in kinds for term in terms)
                 relation[owner] += hits / (documents * len(terms))
-        eligible = self._eligible_owners(kinds, descriptor.get('selection'))
+        hinted_prefix = _explicit_method_prefix(descriptor['purpose']) if 'METHOD' in kinds else None
+        eligible = self._focused_method_owners(
+            hinted_prefix, descriptor['purpose'], descriptor.get('selection'))
         # When the current operation explicitly names a callable, perform a
         # bounded member-name lookup before owner ranking. This is an inverted
         # posting lookup, not a scan or pagination over 300k unrelated methods.
         # If the suggested callable is nonexistent, keep the ordinary discovery
         # path instead of treating the suggestion as actual API authority.
-        hinted_prefix = _explicit_method_prefix(descriptor['purpose']) if 'METHOD' in kinds else None
-        focused = {}
-        if hinted_prefix in self.member_name_owners:
-            query_terms = set(_meaningful_terms(query))
-            for owner in self.member_name_owners[hinted_prefix]:
-                candidates = eligible.get(owner, ())
-                methods = []
-                for key in candidates:
-                    row = self.symbols[key]
-                    if row['kind'] != 'METHOD':
-                        continue
-                    parts = _name_parts(row)
-                    if (any(part[:5] == hinted_prefix for part in parts)
-                            and all(part[:5] == hinted_prefix or part in query_terms for part in parts)):
-                        methods.append(key)
-                if methods:
-                    focused[owner] = methods
-        if focused:
-            eligible = focused
+        focused = bool(eligible)
+        if not eligible:
+            eligible = self._eligible_owners(kinds, descriptor.get('selection'))
         self._rank_method_intent(query, kinds, eligible, relation)
         if focused:
             self.name_weights[hinted_prefix] = max(8, self.name_weights.get(hinted_prefix, 0))
@@ -601,6 +619,7 @@ class ConstructionEvidenceIndex:
         self.member_orderings = {}
         self.scoped_orderings = {}
         self.ordering_goal = goal
+        self.active_eligible = eligible
         self.ordering = (ranked, tuple(row.chunk_id for row in sources))
         print('CONSTRUCTION RETRIEVAL: ' + json.dumps({
             'goal_id': goal, 'purpose': descriptor['purpose'], 'symbol_kinds': descriptor['kinds'],
@@ -613,7 +632,7 @@ class ConstructionEvidenceIndex:
 
     def page(self, goal, offset):
         descriptor = self._ensure(goal)
-        eligible = self._eligible_owners(descriptor['kinds'], descriptor.get('selection'))
+        eligible = self.active_eligible
         scope = descriptor['scope']
         representatives = scope.startswith('package:')
         if scope not in self.scoped_orderings:
