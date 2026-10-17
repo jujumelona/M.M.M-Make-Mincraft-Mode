@@ -82,7 +82,7 @@ def forbidden_input_references(nodes, goal_id, *, declaration=None, symbols=None
                 pending.append(user)
     used = {ref for node in nodes if node['node_id'] != goal_id for ref in node['input_refs']}
     blocked.update(node['node_id'] for node in nodes
-                   if node['op'] not in LEAVES and node['node_id'] in used)
+                   if node.get('op') not in LEAVES and node['node_id'] in used)
     if declaration is not None:
         from .construction_lexical import lexical_sites
         visible = None
