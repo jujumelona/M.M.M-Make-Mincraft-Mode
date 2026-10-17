@@ -134,6 +134,13 @@ class CompleteGameDesignPlanner:
             structured_sections = normalize_structured_sections(structured_sections)
             checkpoint.save_sections(structured_sections)
 
+        print("PLANNER_STAGE_COST: " + json.dumps({
+            "stage": "author_design",
+            "model_calls": budget.call_count,
+            "breakdown": dict(sorted(budget.stage_counts.items())),
+            "restored_checkpoint": checkpoint.load_sections() is not None,
+        }, ensure_ascii=False), flush=True)
+
         # The saved plan must carry the real, host-owned catalogue evidence
         # discovered for this exact prompt. No model is called by this handoff,
         # and provider failures are recorded rather than blocking authorship.
@@ -402,6 +409,12 @@ class CompleteGameDesignPlanner:
             externally_covered_refs=external_content_refs,
             runtime_owners=runtime_owners,
         )
+        print("PLANNER_STAGE_COST: " + json.dumps({
+            "stage": "author_for_production",
+            "model_calls": budget.call_count,
+            "breakdown": dict(sorted(budget.stage_counts.items())),
+            "owned_runtime_groups": len(runtime_owners),
+        }, ensure_ascii=False), flush=True)
         return AuthoredPlan(
             requested_prompt=prompt,
             text=text,
