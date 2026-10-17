@@ -78,12 +78,12 @@ def test_curseforge_paginates_targeted_queries_and_fetches_ranked_descriptions(m
     monkeypatch.setattr(rag, "_json", fake_json)
     monkeypatch.setattr(rag, "_provider_page_limit", lambda: 2)
     records, receipt = rag._search_curseforge("space trading")
-    assert [record["source_id"] for record in records] == ["curseforge:1", "curseforge:2", "curseforge:3"]
-    assert [record["content"] for record in records] == ["full-1", "full-2", "full-3"]
+    assert [record["source_id"] for record in records] == ["curseforge:1", "curseforge:2"]
+    assert [record["content"] for record in records] == ["full-1", "full-2"]
     # Stop after the first keyword produced three plausible candidates.
-    assert receipt["search_requests"] == 2
-    assert receipt["search_variants"] == ["space"]
-    assert receipt["source_requests"] == 3
+    assert receipt["search_requests"] == 4  # two pages for space, two for trading
+    assert receipt["search_variants"] == ["space", "trading"]
+    assert receipt["source_requests"] == 2
     assert receipt["provider_total"] == 3
 
 
