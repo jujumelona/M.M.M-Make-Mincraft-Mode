@@ -228,7 +228,7 @@ def _materialize_authored_resource_definitions(
     return tuple(created)
 
 
-from .complete_spec import AssetRequest, ProductionModule
+from .complete_spec import ProductionModule
 from .content_design_contract import (
     CONTENT_FACT_TO_PRODUCTION_KIND,
     REGISTRY_TAG_KIND_TO_TARGET_FACT_TYPE,
