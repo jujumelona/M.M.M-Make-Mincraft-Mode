@@ -55,6 +55,12 @@ def _stem(term: str) -> str:
     return term
 
 
+def root_action_stems(purpose: str) -> frozenset[str]:
+    """Recognize executable goal verbs, rather than incidental type words."""
+    return frozenset(_ACTIONS[word] for word in _words(purpose)
+                     if word in _ACTIONS)
+
+
 def api_semantic_admissible(
     op: str, purpose: str, row: Mapping[str, object],
     requirements: Sequence[Mapping[str, object]] = (),
@@ -68,9 +74,7 @@ def api_semantic_admissible(
     if op != "call" or requirements:
         return True
     requested = _words(purpose)
-    action_stems = {
-        _ACTIONS[token] for token in requested if token in _ACTIONS
-    }
+    action_stems = root_action_stems(purpose)
     if not action_stems:
         return True  # No explicit action: preserve normal target API retrieval.
     method = _words(row.get("name", ""))
