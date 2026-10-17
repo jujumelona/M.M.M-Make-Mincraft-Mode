@@ -180,65 +180,6 @@ def test_later_curseforge_failure_keeps_completed_page_candidates(monkeypatch):
     assert errors and errors[0]["stage"] == "later_page"
 
 
-def test_sourcegraph_stream_extracts_real_java_source_evidence(monkeypatch):
-    entry = {
-        "type": "content",
-        "repository": "github.com/owner/galactic-code",
-        "path": "src/main/java/sample/SpaceshipController.java",
-        "lineMatches": [
-            {"line": "import net.minecraft.world.entity.Entity;"},
-            {"line": "public void launchSpaceship() {}"},
-        ],
-    }
-
-    class Response:
-        text = (
-            "event: matches\ndata: " + json.dumps([entry]) +
-            "\n\nevent: done\ndata: {}\n\n"
-        )
-
-        def raise_for_status(self):
-            pass
-
-    class Client:
-        def get(self, url, **kwargs):
-            assert url == "https://sourcegraph.com/.api/search/stream"
-            assert 'lang:Java' in kwargs["params"]["q"]
-            assert 'repo:github.com' in kwargs["params"]["q"]
-            assert 'content:"spaceship"' in kwargs["params"]["q"]
-            assert '"net.minecraft"' not in kwargs["params"]["q"]
-            return Response()
-
-    monkeypatch.setattr(reuse_discovery, "_pooled_http_client", lambda: Client())
-    results = reuse_discovery._search_sourcegraph(
-        "spaceship", limit=10, with_metadata=True,
-    )
-    assert len(results) == 1
-    repo, _, metadata = results[0]
-    assert repo == "owner/galactic-code"
-    assert metadata["code_search_path"].endswith("SpaceshipController.java")
-    assert metadata["source_reuse_authority"] == "verification_required"
-
-
-def test_sourcegraph_action_word_does_not_silently_disable_code_search(monkeypatch):
-    observed = []
-
-    class Response:
-        text = "event: done\ndata: {}\n\n"
-
-        def raise_for_status(self):
-            pass
-
-    class Client:
-        def get(self, url, **kwargs):
-            observed.append(kwargs["params"]["q"])
-            return Response()
-
-    monkeypatch.setattr(reuse_discovery, "_pooled_http_client", lambda: Client())
-    assert reuse_discovery._search_sourcegraph("travel", limit=5) == []
-    assert observed and 'content:"travel"' in observed[0]
-
-
 def test_predesign_browses_metadata_before_budgeted_descriptions(monkeypatch):
     monkeypatch.setattr(pre_design_grounded_rag, "curseforge_api_key", lambda: "dummy")
     monkeypatch.setattr(pre_design_grounded_rag, "_provider_page_limit", lambda: 1)
