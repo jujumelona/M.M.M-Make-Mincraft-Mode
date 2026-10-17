@@ -21,7 +21,8 @@ def eligible_method(member_task, symbols, context, *, owned_records=(), port_sou
     member = symbols.get(member_task.owner_symbol, {})
     if member.get("kind") != "METHOD":
         return False
-    if owned_records or port_source_ref or context.get("donor_callable_symbols"):
+    if (owned_records or port_source_ref or context.get("donor_callable_symbols")
+            or context.get("direct_method_forbidden")):
         return False
     if context.get("reference_port_obligations"):
         return False
