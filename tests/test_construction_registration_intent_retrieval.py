@@ -127,6 +127,21 @@ def test_exact_required_return_type_resolves_via_type_postings():
     assert page["matches"][0]["symbol_id"] == "net.minecraft.core.Registry#register"
 
 
+def test_unavailable_exact_result_type_never_opens_global_method_search():
+    index = _index()
+    index._eligible_owners = lambda *_a, **_k: (_ for _ in ()).throw(
+        AssertionError("No matching result type cannot justify global method search")
+    )
+    selection = {"contracts": [{"mode": "expression",
+                                "expected_type": "example.NotAvailable"}],
+                 "excluded_symbols": [], "constructor_result": False}
+    goal = index.prepare("Produce the unavailable required typed value",
+                         kinds=("METHOD",), selection=selection)
+    result = index.page(goal, 0)
+    assert result["matches"] == []
+    assert result["total_count"] == 0
+
+
 def test_no_exact_action_evidence_does_not_invent_an_api():
     index = _index(with_registry=False)
     index.prepare('EntityType registration API', kinds=('METHOD',))
