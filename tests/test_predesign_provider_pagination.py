@@ -46,7 +46,7 @@ def test_modrinth_paginates_and_bulk_fetches_full_projects(monkeypatch):
     assert sum("/v2/projects?" in call for call in calls) == 2
 
 
-def test_curseforge_paginates_targeted_queries_and_fetches_ranked_descriptions(monkeypatch):
+def test_curseforge_stops_at_two_per_topic_and_fetches_ranked_descriptions(monkeypatch):
     calls = []
 
     def fake_json(url, headers=None):
@@ -81,7 +81,7 @@ def test_curseforge_paginates_targeted_queries_and_fetches_ranked_descriptions(m
     assert [record["source_id"] for record in records] == ["curseforge:1", "curseforge:2"]
     assert [record["content"] for record in records] == ["full-1", "full-2"]
     # Stop after the first keyword produced three plausible candidates.
-    assert receipt["search_requests"] == 4  # two pages for space, two for trading
+    assert receipt["search_requests"] == 2  # one page for space, one for trading
     assert receipt["search_variants"] == ["space", "trading"]
     assert receipt["source_requests"] == 2
     assert receipt["provider_total"] == 3
