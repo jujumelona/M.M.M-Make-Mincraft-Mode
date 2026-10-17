@@ -1102,7 +1102,7 @@ def _block_resources(mod_id: str, module_id: str, kind: str, config: dict[str, A
             f"{assets}/models/item/{module_id}_seeds.json": json.dumps(
                 {
                     "parent": "minecraft:item/generated",
-                    "textures": {"layer0": f"{mod_id}:item/{module_id}_seeds"},
+                    "textures": {"layer0": "minecraft:item/wheat_seeds"},
                 },
                 indent=2,
             )
@@ -1127,7 +1127,7 @@ def _block_resources(mod_id: str, module_id: str, kind: str, config: dict[str, A
             files[f"{assets}/models/block/{module_id}_stage{stage}.json"] = json.dumps(
                 {
                     "parent": "minecraft:block/crop",
-                    "textures": {"crop": f"{mod_id}:block/{module_id}"},
+                    "textures": {"crop": "minecraft:block/wheat_stage0"},
                 },
                 indent=2,
             ) + "\n"
@@ -1140,7 +1140,7 @@ def _block_resources(mod_id: str, module_id: str, kind: str, config: dict[str, A
         f"{assets}/models/block/{module_id}.json": json.dumps(
             {
                 "parent": "minecraft:block/cube_all",
-                "textures": {"all": f"{mod_id}:block/{module_id}"},
+                "textures": {"all": "minecraft:block/stone"},
             },
             indent=2,
         )
@@ -1172,7 +1172,7 @@ def _item_resources(mod_id: str, module_id: str, kind: str, config: dict[str, An
         f"{assets}/models/item/{module_id}.json": json.dumps(
             {
                 "parent": "minecraft:item/handheld" if kind in {"tool", "weapon"} else "minecraft:item/generated",
-                "textures": {"layer0": f"{mod_id}:item/{module_id}"},
+                "textures": {"layer0": ("minecraft:item/iron_sword" if kind in {"tool", "weapon"} else "minecraft:item/iron_ingot")},
             },
             indent=2,
         )
