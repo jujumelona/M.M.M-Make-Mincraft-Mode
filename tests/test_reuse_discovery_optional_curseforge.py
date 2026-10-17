@@ -36,7 +36,7 @@ def test_curseforge_lane_uses_host_key_without_following_github_source(monkeypat
             return {
                 "data": [{"id": 99, "classId": 6, "name": "Trade Mod",
                           "links": {"sourceUrl": "https://github.com/example/trade-mod"}}],
-                "pagination": {"index": 0, "pageSize": 50, "resultCount": 1, "totalCount": 1},
+                "pagination": {"index": 0, "pageSize": 16, "resultCount": 1, "totalCount": 1},
             }
 
     class FakeClient:
@@ -54,5 +54,5 @@ def test_curseforge_lane_uses_host_key_without_following_github_source(monkeypat
     assert records[0][2]["source_id"] == "curseforge:99"
     assert observed["url"] == "https://api.curseforge.com/v1/mods/search"
     assert observed["headers"]["x-api-key"] == "secret-test-key"
-    assert "searchFilter" not in observed["params"]
+    assert observed["params"]["searchFilter"] == "trade system"
     assert observed["params"]["classId"] == "6"
