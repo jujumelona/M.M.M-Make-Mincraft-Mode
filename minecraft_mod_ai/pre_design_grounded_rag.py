@@ -75,11 +75,11 @@ def _source_worker_count(task_count: int) -> int:
 
 
 def _provider_result_limit() -> int | None:
-    return _positive_env_int("MMM_PREDESIGN_PROVIDER_RESULTS_PER_QUERY")
+    return min(8, _positive_env_int("MMM_PREDESIGN_PROVIDER_RESULTS_PER_QUERY") or 4)
 
 
 def _provider_page_limit() -> int | None:
-    return _positive_env_int("MMM_PREDESIGN_PROVIDER_SEARCH_PAGES")
+    return min(2, _positive_env_int("MMM_PREDESIGN_PROVIDER_SEARCH_PAGES") or 1)
 
 
 def _limit_reached(value: int, limit: int | None) -> bool:
@@ -395,7 +395,7 @@ def _search_curseforge(
     query variants from the real requirement, then rerank by full intent and
     fetch description bodies for only the best target-filtered results.
     """
-    variants = curseforge_search_queries(query, max_variants=4)
+    variants = curseforge_search_queries(query, max_variants=3)
     if not variants:
         return [], {
             "provider": "curseforge", "status": "query_unresolved",
@@ -440,9 +440,10 @@ def _search_curseforge(
     search_requests = 0
     source_requests = 0
     provider_total = 0
-    page_limit = _provider_page_limit() or 2
-    output_limit = _provider_result_limit() or 20
-    page_size = 50
+    page_limit = _provider_page_limit() or 1
+    output_limit = _provider_result_limit() or 4
+    # Fetch only a small shortlist, never a full 50-mod provider page.
+    page_size = min(12, output_limit * 2)
     query_receipts: list[dict[str, Any]] = []
     for variant in variants:
         index, variant_matches, variant_requests = 0, 0, 0
@@ -501,13 +502,17 @@ def _search_curseforge(
             "query": variant, "search_requests": variant_requests,
             "relevant_new_mods": variant_matches,
         })
+        # Move to implementation once this topic has enough plausible options.
+        # Remaining spellings are fallback searches, not an exhaustive sweep.
+        if len(candidates) >= min(3, output_limit):
+            break
 
     candidates.sort(
         key=lambda row: (-row[0], -row[1],
                          str(row[2].get("name") or "").casefold(), row[2]["id"])
     )
     shortlisted = candidates[:output_limit]
-    detail_count = min(6, len(shortlisted))
+    detail_count = min(3, len(shortlisted))
     details: dict[int, str] = {}
     if detail_count:
         jobs = tuple(enumerate(row[2]["id"] for row in shortlisted[:detail_count]))
@@ -579,7 +584,7 @@ def _search_curseforge(
         "detail_errors": errors, "authenticated": True,
         "target_filters": dict(target_filters),
         "search_filter_used": True,
-        "search_variants": list(variants),
+        "search_variants": [row["query"] for row in query_receipts],
         "query_receipts": query_receipts,
         "catalog_class_verified": True,
         "retrieval_complete": False,
