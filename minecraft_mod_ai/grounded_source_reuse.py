@@ -111,7 +111,7 @@ def build_repository_reuse_plan(design: Mapping[str, Any], **kwargs: Any) -> dic
             ),
         })
         print("SOURCE_REUSE_CAPABILITY: " + json.dumps({
-            "capability": name, "mode": "fresh", "inspected": sum(
+            "stage": "planning", "capability": name, "mode": "fresh", "inspected": sum(
                 item.get("inspection_status") == "inspected" for item in inspections),
             "source_links": len(available_links),
             "semantic_reviews": sum((item.get("semantic") or {}).get("status")
