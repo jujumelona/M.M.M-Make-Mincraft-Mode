@@ -104,7 +104,7 @@ def _discovery_provider_error(provider: str, exc: BaseException, *, stage: str) 
     status = status if isinstance(status, int) else None
     unavailable = bool(failure is not None and failure.backend_unavailable)
     unavailable = unavailable or bool(getattr(exc, "backend_unavailable", False))
-    unavailable = unavailable or provider in {"curseforge", "sourcegraph"} and status in {401, 403, 429, 500, 502, 503, 504}
+    unavailable = unavailable or provider == "curseforge" and status in {401, 403, 429, 500, 502, 503, 504}
     return {
         "provider": provider,
         "stage": stage,
@@ -143,8 +143,8 @@ def _search_curseforge(
 
     query/limit remain for the existing caller API, but do not filter or truncate
     this shared catalogue sample: relevance is calculated per capability later.
-    Query version/loader filters first; pinned source inspection verifies reuse.
-    Catalogue results without source links never acquire reuse authority.
+    The selected target version/loader is always passed to CurseForge.
+    Catalogue metadata is never treated as code reuse proof.
     """
     api_key = _curseforge_api_key()
     if not api_key:
@@ -231,9 +231,7 @@ def _search_curseforge(
                     if item.get("classId") != mods_class_id:
                         continue
                     seen_ids.add(mod_id)
-                    links = item.get("links")
-                    source_url = links.get("sourceUrl") if isinstance(links, Mapping) else ""
-                    repository = ""  # CurseForge metadata only; never inspect GitHub sourceUrl.
+                    repository = ""  # Catalogue entry only, not a source repository.
                     result.append((repository, 1.0 / (1 + len(result)), {
                         "title": item.get("name", ""), "summary": item.get("summary", ""),
                         "repository": repository, "sort_field": sort_field,
@@ -325,7 +323,7 @@ def discover_repositories_for_graph(
             "repository_count": 0,
             "repositories": [],
             "repository_evidence": [],
-            "source_repository_missing_count": len(rows),
+            "source_repository_missing_count": 0,
             "usable_source_repository_count": 0,
             "cache_hit": cache_hit,
             "minecraft_version": version, "loader": selected_loader,
