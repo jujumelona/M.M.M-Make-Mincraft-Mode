@@ -1,3 +1,3 @@
-# Base Colab environment. Native llama CUDA is supplied as a verified prebuilt
+# Base Colab environment (no FLUX/diffusers/rembg AI texture stack). Native llama CUDA is supplied as a verified prebuilt
 # llama-server + shared-library bundle; source-only Qwen kernel extras stay opt-in.
--e .[ui,local-model,rag,image,speech,production-audio,training]
+-e .[ui,local-model,rag,speech,production-audio,training]
