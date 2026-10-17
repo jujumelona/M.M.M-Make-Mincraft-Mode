@@ -174,8 +174,8 @@ def test_colab_debug_defaults_to_live_model_path() -> None:
     assert "BUILD_RESULT = session.build(reply, run_name=RUN_NAME, options=options)" in cells["build"]
 
 
-def test_colab_build_checks_setup_and_rembg_version_before_generation() -> None:
-    """A rerun of only cell 6 cannot bypass the installed runtime contract."""
+def test_colab_build_checks_setup_and_core_package_before_generation() -> None:
+    """Cell 6 must validate setup/core package, not the retired image stack."""
     notebook_path = Path(__file__).resolve().parents[1] / "M.M.M_Make_Mincraft_Mode_Colab.ipynb"
     notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
     source = "".join(next(
@@ -184,8 +184,7 @@ def test_colab_build_checks_setup_and_rembg_version_before_generation() -> None:
     compile(source, "<colab:build>", "exec")
     dispatch = source.index("session.build(")
     assert source.index("module.assert_setup_state(") < dispatch
-    assert source.index('_distribution_version("rembg")') < dispatch
-    assert source.index('_rembg_version != "2.0.67"') < dispatch
+    assert source.index('_distribution_version("mmm-make-mincraft-mode")') < dispatch
     assert source.index("BUILD_DEPENDENCY_PREFLIGHT:") < dispatch
-    # rembg transitively imports onnxruntime; leave it in the isolated worker.
+    assert '_distribution_version("rembg")' not in source
     assert "from rembg import" not in source
