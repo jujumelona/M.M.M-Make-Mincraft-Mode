@@ -43,17 +43,22 @@ def build_repository_reuse_plan(design: Mapping[str, Any], **kwargs: Any) -> dic
     reference_sources = []
     shared_source_cache = {}
     # Bound total external inspections; never scan the whole catalogue.
-    remaining_inspections = max(16, len(capabilities) * 2)
-    for name in capabilities:
+    remaining_inspections = max(8, len(capabilities))  # One fair pass per feature; no speculative double scan.
+    for index, name in enumerate(capabilities):
         row = receipts_by_cap.get(name) or single_legacy_receipt or {}
         discovery_status = str(row.get("status") or "query_unresolved")
         matched = list(row.get("ranked_catalogue_hits") or ())
         available_links = [hit for hit in matched if hit.get("source_url")]
+        # Reserve capacity for each outstanding capability before considering
+        # a second donor. This prevents early catalogue matches from starving
+        # later, unrelated requirements.
+        outstanding = len(capabilities) - index - 1
+        allowance = min(2, max(0, remaining_inspections - outstanding))
         inspections = (
             assess_ranked_sources(name, available_links, router=kwargs.get("router"),
                                   cache=shared_source_cache,
-                                  max_candidates=min(2, remaining_inspections))
-            if remaining_inspections else []
+                                  max_candidates=allowance)
+            if allowance else []
         )
         remaining_inspections -= len(inspections)
         inspection_receipts.extend(inspections)
@@ -72,6 +77,8 @@ def build_repository_reuse_plan(design: Mapping[str, Any], **kwargs: Any) -> dic
                     "selected_symbol": semantic.get("selected_symbol"),
                     "file_sha256": semantic.get("file_sha256"),
                     "semantic_score": semantic.get("semantic_score"),
+                    "semantic_intent": semantic.get("intent"),
+                    "semantic_scores": semantic.get("scores") or {},
                     "rationale": semantic.get("rationale"),
                     "residual_work": semantic.get("residual_work"),
                     "source_excerpt": candidate.get("licensed_reference_excerpt", ""),
