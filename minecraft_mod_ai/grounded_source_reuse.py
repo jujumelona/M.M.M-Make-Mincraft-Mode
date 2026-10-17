@@ -439,12 +439,22 @@ def _inspect_candidate_batch(
             try:
                 validate_donor_slice_manifest(donor)
                 if (donor.compatibility_evidence is None or
-                        donor.compatibility_evidence.minecraft_version != adapter.minecraft_version):
-                    raise SourceTransplantError("Pinned source Minecraft version does not match the request.")
+                        not donor.compatibility_evidence.minecraft_version or
+                        not donor.compatibility_evidence.loader):
+                    raise SourceTransplantError("Pinned source has no version/loader evidence.")
+                # Older, licensed and hash-pinned code can guide an adaptation,
+                # but cannot become installed target code without exact version
+                # and loader evidence plus authoritative target compile proof.
                 reference_eligible = True
             except (SourceTransplantError, ValueError) as exc:
                 rejection = str(exc)
-        admitted = bool(reference_eligible and donor is not None and donor.closure_complete
+        target_match = bool(
+            reference_eligible and donor is not None
+            and donor.compatibility_evidence is not None
+            and donor.compatibility_evidence.minecraft_version == adapter.minecraft_version
+            and donor.compatibility_evidence.loader.casefold() == adapter.loader.casefold()
+        )
+        admitted = bool(target_match and donor is not None and donor.closure_complete
                         and donor.target_compatibility in {"exact", "adapt"})
         if reference_eligible and not admitted:
             diagnostics = {
