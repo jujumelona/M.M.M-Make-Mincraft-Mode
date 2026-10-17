@@ -116,7 +116,8 @@ def operation_next_schema(state, *, nodes, declaration, can_complete, context_br
             branches.append(obj({'action': {'enum': sorted(root_actions)}, 'node_id': {'const': slot}, 'purpose': ID}))
     if can_complete:
         branches.append(action_schema('complete', {'purpose': ID}))
-    if (state.validation_observation or {}).get('status') == 'rejected':
+    if ((state.validation_observation or {}).get('status') == 'rejected'
+            and not (state.selection_goal or {}).get('revising')):
         visible = {row['node_id'] for row in nodes[-PAGE_SIZE:]}
         if state.lookup.get('kind') == 'nodes':
             visible.update(row['node_id'] for row in state.lookup.get('nodes', ()))
