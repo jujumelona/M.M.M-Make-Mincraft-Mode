@@ -74,6 +74,44 @@ def test_catalogue_status_can_compile_as_fresh_evidence(
     assert evidence[0].files == ()
 
 
+def test_actual_curseforge_source_link_survives_into_production(monkeypatch):
+    from minecraft_mod_ai.research_reuse_candidates import (
+        project_repository_candidates, ensure_authored_source_handoff,
+    )
+    from minecraft_mod_ai.pre_design_research_pipeline import _canonical_sha256
+
+    grounded = {"queries": [{"query": "spaceship", "evidence_records": [{
+        "source_id": "curseforge:42",
+        "metadata": {"provider": "curseforge", "source_id": "curseforge:42",
+                     "source_url": "https://github.com/example/space-donor",
+                     "catalog_url": "https://www.curseforge.com/minecraft/mc-mods/space"},
+        "summary": "Spaceship with movable parts",
+    }]}]}
+    links = project_repository_candidates({"domain_id": "request"}, grounded)
+    assert len(links) == 1
+    assert links[0]["repository"] == "example/space-donor"
+    assert links[0]["reference_only"] is True
+    assert links[0]["source_reuse_authority"] == "verification_required"
+    prompt = "Build a spaceship"
+    record = {"_pre_design_source_handoff": {"prompt_sha256": _canonical_sha256(prompt),
+                                              "repository_candidates": links}}
+    recovered, candidates = ensure_authored_source_handoff(
+        record, router=object(), prompt=prompt,
+    )
+    assert candidates == links
+    assert recovered["_pre_design_source_handoff"]["candidate_count"] == 1
+
+
+def test_curseforge_catalogue_without_source_link_is_not_a_code_candidate():
+    from minecraft_mod_ai.research_reuse_candidates import project_repository_candidates
+
+    grounded = {"queries": [{"evidence_records": [{
+        "source_id": "curseforge:42", "metadata": {"provider": "curseforge",
+            "source_url": "", "source_id": "curseforge:42"}
+    }]}]}
+    assert project_repository_candidates({}, grounded) == []
+
+
 @pytest.mark.parametrize(
     ("legacy_status", "expected_status", "expected_failure"),
     [
