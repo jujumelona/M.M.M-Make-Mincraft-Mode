@@ -131,7 +131,6 @@ def _pre_design_brief(prompt: str) -> dict[str, Any]:
                 "queries": queries,
                 "providers": [
                     "curseforge",
-                    "modrinth",
                     "official_docs",
                     "project_rag",
                 ],
@@ -696,11 +695,9 @@ def collect_design_research(
         "method": {
             "requirement_authority": "host_active_requirement_ledger",
             "provider_order": [
-                "curseforge_if_configured",
-                "modrinth",
+                "curseforge_only",
                 "official_docs",
                 "project_rag",
-                "github_exact_source_or_empty_catalog_fallback",
             ],
             "provider_failure_semantics": "isolated_per_provider_and_query",
             "zero_source_semantics": "retain_authored_requirement_and_skip_model",
