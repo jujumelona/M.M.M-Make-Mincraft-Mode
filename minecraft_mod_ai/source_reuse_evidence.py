@@ -94,11 +94,19 @@ def build_source_reuse_evidence(requirements, reuse_plan, target_symbols):
             status = "verified"
         elif mode == "fresh":
             status = str(decision.get("search_status") or "unresolved")
+            # Older saved plans emitted the discovery-only "catalog_only"
+            # status. Such metadata is not a reusable source receipt.
+            if status == "catalog_only":
+                status = "unresolved"
             if status not in {"search_empty", "provider_error", "download_error",
                               "target_compile_failed", "rejected", "unresolved", "reference_available"}:
                 raise ValueError("SOURCE_REUSE_UNRECOGNIZED_FRESH_REASON")
         else:
             raise ValueError("SOURCE_REUSE_UNRECOGNIZED_DECISION_MODE")
+        failure_code = str(decision.get("failure_code") or "")
+        if status == "provider_error" and not failure_code:
+            # Legacy plans did not attach the required provider failure code.
+            failure_code = "CATALOG_PROVIDER_ERROR_UNSPECIFIED"
         files = _donor_files(donor)
         if mode == "source_transplant" and not decision.get("proof_receipt"):
             raise ValueError("SOURCE_REUSE_PROOF_REQUIRED")
@@ -119,7 +127,7 @@ def build_source_reuse_evidence(requirements, reuse_plan, target_symbols):
             dependencies=tuple(donor.get("required_dependencies", ())),
             remaining_behaviors=tuple(decision.get("remaining_behaviors", ())),
             verification=dict(decision.get("proof_receipt") or {}),
-            failure_code=str(decision.get("failure_code", "")),
+            failure_code=failure_code,
             failure_detail=str(decision.get("rationale", "")),
         ))
     for reference in reuse_plan.get("reference_sources", ()):
