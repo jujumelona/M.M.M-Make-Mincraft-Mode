@@ -72,7 +72,20 @@ def build_repository_reuse_plan(design: Mapping[str, Any], **kwargs: Any) -> dic
             "evidence_status": status, "catalogue_match_count": len(matched),
             "queries": list(row.get("queries") or ()),
         }, ensure_ascii=False), flush=True)
+    # Explicit local CurseForge dependency selections remain UNVERIFIED here.
+    # Actual authenticated file lookup, license acknowledgement, byte hash,
+    # Fabric metadata and Gradle wiring happen at project materialization.
+    requested_dependencies = design.get("_requested_curseforge_dependencies", ())
+    if not isinstance(requested_dependencies, (list, tuple)):
+        raise ValueError("SOURCE_REUSE_DEPENDENCY_SELECTION_INVALID")
+    requested_dependencies = [
+        {k: item[k] for k in (
+            "project_id", "file_id", "jar_path", "license_policy_confirmed")
+         if k in item}
+        for item in requested_dependencies if isinstance(item, Mapping)
+    ][:8]
     return {
+        "requested_curseforge_dependencies": requested_dependencies,
         "schema_version": "mmm/grounded-repository-reuse-plan-v2",
         "bound_target": {"minecraft_version": version, "loader": loader},
         "source_plan_sha256": sha, "capability_graph": dict(graph),
