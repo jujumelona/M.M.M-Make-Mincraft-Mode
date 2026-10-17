@@ -72,3 +72,21 @@ def test_retrieval_does_not_expand_global_inventory_for_no_matching_action():
         "Register alien entities", kinds=("METHOD",)), 0)
     assert result["matches"] == []
     assert result["total_count"] == 0
+
+
+def test_register_requires_matching_registry_domain_not_just_name():
+    task = "Register a hostile alien entity type"
+    assert api_semantic_admissible(
+        "call", task, row("net.minecraft.core.Registry", "register"))
+    assert api_semantic_admissible(
+        "call", task, row("net.minecraft.world.entity.EntityType", "register"))
+    for unrelated in (
+        "net.minecraft.world.item.crafting.RecipeType",
+        "net.minecraft.world.level.levelgen.structure.templatesystem.RuleTestType",
+        "net.minecraft.world.entity.ai.gossip.ReputationEventType",
+        "net.fabricmc.fabric.api.client.rendering.v1.EntityRendererRegistry",
+    ):
+        assert not api_semantic_admissible("call", task, row(unrelated, "register"))
+    assert api_semantic_admissible(
+        "call", "Register a crafting recipe",
+        row("net.minecraft.world.item.crafting.RecipeType", "register"))
