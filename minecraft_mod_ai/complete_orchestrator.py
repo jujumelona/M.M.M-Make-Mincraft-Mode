@@ -517,6 +517,12 @@ class CompleteProductionOrchestrator:
                 mod_id=spec.mod_id,
             )
             module_receipts.append(installed_reuse)
+            if installed_reuse.get('dependency_count', 0):
+                # Local host-installed CurseForge JARs are NOT portable release
+                # dependencies. Keep them visible as unresolved until an
+                # authenticated remote dependency acquisition/redistribution
+                # policy is implemented; passing local Gradle alone is not proof.
+                unresolved.append('external-dependency:nonportable-local-jar')
         self._succeed_work_node(ledger, 'prepare-project', {'schema_version': 'mmm/work-node-receipt-v1', 'status': 'SUCCEEDED', 'project_root': str(project_root)})
         generation = self._execute_generation_work(approved=approved, ordered=ordered, work_plan=work_plan, ledger=ledger, project_root=project_root, run_root=run_root, options=options, router=router)
         mark_post_generation()
