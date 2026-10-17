@@ -163,7 +163,13 @@ def resolve_authored_source_reuse(
             },
         },
     }
-    receipt = build_repository_reuse_plan(design, router=router)
+    # Preserve the single-argument host planner ABI when no live model router
+    # is provided (debug/fixture callers); real production passes the router.
+    receipt = (
+        build_repository_reuse_plan(design, router=router)
+        if router is not None
+        else build_repository_reuse_plan(design)
+    )
     return {
         **receipt,
         "pre_design_candidates_sha256": source_candidate_fingerprint(repository_candidates),
