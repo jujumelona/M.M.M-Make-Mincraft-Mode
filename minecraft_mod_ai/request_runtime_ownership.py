@@ -43,6 +43,66 @@ def _choose_runtime_owner(router, item, features, actions, consume):
     return ref, owner
 
 
+
+def _choose_runtime_owner_batch(router, items, features, actions, consume):
+    """One small bounded owner decision for up to four actual records.
+
+    The host owns all record identities and validates every returned value.
+    No semantic record is dropped merely because the model omitted a field.
+    """
+    from .fixed_template_generation import generate_fixed_template_value
+
+    if not 1 <= len(items) <= 4:
+        raise ValueError("RUNTIME_OWNER_BATCH_SIZE_INVALID")
+    available = [row["requirement_id"] for row in features]
+    schema = {
+        "type": "object",
+        "properties": {
+            f"r{i}": {"type": "string", "enum": (
+                available + ([TYPED_UI_OWNER + ":" + action for action in actions]
+                             if actions and not ref.startswith("integration.") else [])
+            )}
+            for i, (ref, _record) in enumerate(items)
+        },
+        "required": [f"r{i}" for i in range(len(items))],
+        "additionalProperties": False,
+    }
+    if not all(schema["properties"][key]["enum"] for key in schema["required"]):
+        raise ValueError("RUNTIME_OWNER_BATCH_EMPTY_DOMAIN")
+    if all(len(schema["properties"][key]["enum"]) == 1 for key in schema["required"]):
+        result = {key: schema["properties"][key]["enum"][0]
+                  for key in schema["required"]}
+    else:
+        if consume is not None:
+            consume("request_scope.runtime_owner_batch")
+        result = generate_fixed_template_value(
+            router, "planner", (
+                {"role": "system", "content": (
+                    "Assign each existing worksheet record to exactly one of "
+                    "the enumerated original feature IDs or an already implemented "
+                    "typed UI action. Do not add, remove or merge records. "
+                    "Assign custom gameplay events to their actual feature."
+                )},
+                {"role": "user", "content": json.dumps({
+                    "records": [{"key": f"r{i}", "record_ref": ref, "record": record}
+                                for i, (ref, record) in enumerate(items)],
+                    "features": [{"id": row["requirement_id"],
+                                  "statement": row["statement"]} for row in features],
+                    "existing_ui_actions": actions,
+                }, ensure_ascii=False, separators=(",", ":"))},
+            ), response_schema=schema, enable_tools=False,
+        )
+    if not isinstance(result, dict) or set(result) != set(schema["required"]):
+        raise ValueError("RUNTIME_OWNER_BATCH_RESPONSE_INVALID")
+    out = []
+    for i, (ref, _record) in enumerate(items):
+        key = f"r{i}"
+        if result[key] not in schema["properties"][key]["enum"]:
+            raise ValueError("RUNTIME_OWNER_BATCH_ASSIGNMENT_INVALID")
+        out.append((ref, result[key]))
+    return out
+
+
 def author_runtime_ownership(router, scope, sections, *, budget=None):
     """Choose one owner per runtime record using bounded feature identities.
 
@@ -60,11 +120,24 @@ def author_runtime_ownership(router, scope, sections, *, budget=None):
     sections = normalize_structured_sections(sections)
     actions = _mutating_ui_actions(sections)
     consume = serialized_callback(budget.consume) if budget is not None else None
-    assignments = deterministic_model_map(
-        router, _runtime_records(sections),
-        lambda item: _choose_runtime_owner(router, item, features, actions, consume),
-        thread_name_prefix="mmm-request-runtime-owner",
-    )
+    records = list(_runtime_records(sections))
+    if len(records) >= 3 and len(features) > 1:
+        # Group only four records per bounded inference; a dozen one-field
+        # owner questions otherwise cost a dozen model roundtrips.
+        batches = [records[i:i + 4] for i in range(0, len(records), 4)]
+        assigned_batches = deterministic_model_map(
+            router, batches,
+            lambda items: _choose_runtime_owner_batch(
+                router, items, features, actions, consume),
+            thread_name_prefix="mmm-request-runtime-owner-batch",
+        )
+        assignments = [assignment for batch in assigned_batches for assignment in batch]
+    else:
+        assignments = deterministic_model_map(
+            router, records,
+            lambda item: _choose_runtime_owner(router, item, features, actions, consume),
+            thread_name_prefix="mmm-request-runtime-owner",
+        )
     groups = {}
     for ref, owner in assignments:
         action = ""
