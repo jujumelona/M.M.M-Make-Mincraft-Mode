@@ -146,7 +146,7 @@ def test_failed_deterministic_proof_preserves_downloadable_reference(monkeypatch
     )
     # The unit test supplies actual readable Java bytes instead of contacting
     # GitHub; the production materializer still verifies pinned blob hashes.
-    monkeypatch.setattr("minecraft_mod_ai.source_transplant.materialize_pinned_donor",
+    monkeypatch.setattr("minecraft_mod_ai.grounded_source_reuse.materialize_pinned_donor",
                         lambda *args: {source_path: source_code})
 
     def cannot_migrate(*args, **kwargs):
