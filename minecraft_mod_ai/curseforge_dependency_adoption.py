@@ -113,3 +113,44 @@ def verify_curseforge_dependency(
         "runtime_verified": False, "source_reuse": False,
         "redistribution_authorized": False,
     }
+
+
+def fetch_exact_curseforge_file_metadata(
+    project_id: int, file_id: int, *, client: Any = None,
+) -> dict[str, Any]:
+    """Read an explicit file identity from authenticated CurseForge REST.
+
+    This is NOT catalogue search. Neither a model nor a page URL may supply an
+    unchecked download address. Network and credentials stay host-owned.
+    """
+    import httpx
+    from .curseforge_catalog import curseforge_api_key
+
+    if type(project_id) is not int or type(file_id) is not int or min(project_id, file_id) <= 0:
+        raise CurseForgeDependencyError("DEPENDENCY_PROVIDER_ID_INVALID")
+    key = curseforge_api_key()
+    if not key:
+        raise CurseForgeDependencyError("DEPENDENCY_PROVIDER_CREDENTIAL_MISSING")
+    own_client = client is None
+    session = client if client is not None else httpx.Client(timeout=10.0)
+    try:
+        response = session.get(
+            f"https://api.curseforge.com/v1/mods/{project_id}/files/{file_id}",
+            headers={"x-api-key": key, "Accept": "application/json"},
+            timeout=10.0,
+        )
+        response.raise_for_status()
+        data = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise CurseForgeDependencyError(
+            "DEPENDENCY_PROVIDER_FETCH_FAILED: " + type(exc).__name__
+        ) from None
+    finally:
+        if own_client:
+            session.close()
+    if not isinstance(data, Mapping) or not isinstance(data.get("data"), Mapping):
+        raise CurseForgeDependencyError("DEPENDENCY_PROVIDER_RESPONSE_INVALID")
+    result = dict(data["data"])
+    if result.get("id") != file_id or result.get("modId") != project_id:
+        raise CurseForgeDependencyError("DEPENDENCY_PROVIDER_FILE_MISMATCH")
+    return result
