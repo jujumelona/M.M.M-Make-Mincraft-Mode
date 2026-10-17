@@ -1,0 +1,96 @@
+"""CurseForge discovery inspects a short list per topic, never the whole catalogue."""
+from __future__ import annotations
+
+from urllib.parse import parse_qs, urlsplit
+
+from minecraft_mod_ai import pre_design_grounded_rag, reuse_discovery
+
+
+def test_source_reuse_stops_after_first_sufficient_query(monkeypatch):
+    monkeypatch.delenv("MMM_REUSE_DISCOVERY_LIMIT", raising=False)
+    monkeypatch.delenv("MMM_REUSE_REPRESENTATIVE_LIMIT", raising=False)
+    monkeypatch.delenv("MMM_REUSE_QUERY_VARIANTS", raising=False)
+    monkeypatch.delenv("MMM_REUSE_MIN_CANDIDATES_PER_CAPABILITY", raising=False)
+    monkeypatch.delenv("MMM_REUSE_DISCOVERY_PAGES", raising=False)
+    assert reuse_discovery._query_limit() == 6
+    assert reuse_discovery._representative_limit() == 3
+    assert reuse_discovery._query_variant_limit() == 2
+    assert reuse_discovery._discovery_pages() == 1
+
+    monkeypatch.setattr(reuse_discovery, "_curseforge_api_key", lambda: "test")
+    requests = []
+
+    def search(query, *, minecraft_version, loader, limit, **kwargs):
+        requests.append((query, minecraft_version, loader, limit))
+        return [
+            ("", float(5 - i), {
+                "source_id": f"curseforge:{i}",
+                "catalog_id": i,
+                "title": f"Spaceship {i}",
+                "summary": "Pilot a spaceship",
+                "catalog_url": f"https://www.curseforge.com/minecraft/mc-mods/ship-{i}",
+            }) for i in range(1, 5)
+        ]
+
+    monkeypatch.setattr(reuse_discovery, "_search_curseforge", search)
+    diagnostics = []
+    result = reuse_discovery.discover_repositories_for_graph(
+        ["spaceship", "spaceship"], None,
+        minecraft_version="1.21.8", loader="fabric",
+        diagnostics=diagnostics,
+    )
+    assert result == {"spaceship": ()}
+    assert len(requests) == 1
+    assert requests[0][1:] == ("1.21.8", "fabric", 6)
+    assert len(diagnostics[0]["ranked_catalogue_hits"]) == 3
+    assert diagnostics[0]["queries"] == [requests[0][0]]
+    assert diagnostics[0]["catalog_scanned_count"] == 4
+
+
+def test_predesign_search_stops_after_first_shortlist(monkeypatch):
+    monkeypatch.delenv("MMM_PREDESIGN_PROVIDER_RESULTS_PER_QUERY", raising=False)
+    monkeypatch.delenv("MMM_PREDESIGN_PROVIDER_SEARCH_PAGES", raising=False)
+    assert pre_design_grounded_rag._provider_result_limit() == 4
+    assert pre_design_grounded_rag._provider_page_limit() == 1
+    monkeypatch.setattr(pre_design_grounded_rag, "curseforge_api_key", lambda: "test")
+    search_requests = []
+    detail_requests = []
+
+    def get_catalog(url, headers):
+        if "/categories?" in url:
+            return {"data": [{
+                "id": 6, "gameId": 432, "name": "Mods",
+                "slug": "mc-mods", "isClass": True,
+            }]}
+        if "/mods/search?" in url:
+            q = parse_qs(urlsplit(url).query)
+            search_requests.append(q)
+            assert q["pageSize"] == ["8"]
+            assert q["gameVersion"] == ["1.21.8"]
+            assert q["modLoaderType"] == ["4"]
+            assert q["classId"] == ["6"]
+            assert q["searchFilter"][0]
+            return {"data": [
+                {"id": i, "classId": 6, "name": f"Spaceship {i}",
+                 "summary": "Space ship piloting", "links": {}}
+                for i in range(100, 104)
+            ], "pagination": {
+                "index": 0, "pageSize": 8, "resultCount": 4, "totalCount": 1000,
+            }}
+        raise AssertionError(url)
+
+    def detail(url, *args, **kwargs):
+        detail_requests.append(url)
+        return {"data": "Spaceship piloting and construction."}
+
+    monkeypatch.setattr(pre_design_grounded_rag, "_curseforge_browse_json", get_catalog)
+    monkeypatch.setattr(pre_design_grounded_rag, "_json", detail)
+    records, receipt = pre_design_grounded_rag._search_curseforge(
+        "spaceship assembly", minecraft_version="1.21.8", loader="fabric",
+    )
+    assert len(search_requests) == 1
+    assert len(detail_requests) == 3
+    assert len(records) == 4
+    assert len(receipt["search_variants"]) == 1
+    assert receipt["search_requests"] == 1
+    assert receipt["retrieval_complete"] is False
