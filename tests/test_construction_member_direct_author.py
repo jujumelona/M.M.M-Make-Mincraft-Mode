@@ -69,3 +69,34 @@ def test_direct_method_authors_one_whole_method_and_resumes(tmp_path, monkeypatc
     assert first == second
     assert 'System.out.println("registered");' in first
     assert "registerAliens" in first
+
+
+def test_direct_field_generates_whole_initialized_declaration(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from minecraft_mod_ai import construction_member_direct_author as module
+
+    task, ctx = _fixture(tmp_path)
+    field_symbol = "demo.AlienRegistry#ALIEN_TYPE"
+    ctx["symbols"][field_symbol] = {
+        "kind": "FIELD", "owner": "demo.AlienRegistry", "name": "ALIEN_TYPE",
+        "return_type": "java.lang.String", "static": True, "final": True,
+        "visibility": "public", "side": "COMMON",
+    }
+    task = replace(task, owner_symbol=field_symbol, task_id="alien_type_field")
+    assert eligible_method(task, ctx["symbols"], ctx)
+    monkeypatch.setattr(module, "_evidence",
+                        lambda _i, _purpose, _source: {"target_api": [], "source": []})
+
+    class FieldRouter:
+        calls = 0
+
+        def generate_java_source(self, role, messages, *, source_frame, **kwargs):
+            self.calls += 1
+            assert source_frame["kind"] == "field"
+            assert "empty_value" not in source_frame
+            return source_frame["prefix"] + '"alien"' + source_frame["suffix"]
+
+    router = FieldRouter()
+    source = compose_method(router, task, ctx, owner_name="AlienRegistry")
+    assert router.calls == 1
+    assert 'public static final java.lang.String ALIEN_TYPE = "alien";' == source
