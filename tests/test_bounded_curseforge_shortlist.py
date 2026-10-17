@@ -94,3 +94,30 @@ def test_predesign_search_stops_after_first_shortlist(monkeypatch):
     assert len(receipt["search_variants"]) == 1
     assert receipt["search_requests"] == 1
     assert receipt["retrieval_complete"] is False
+
+
+def test_multifeature_request_checks_each_distinct_topic(monkeypatch):
+    monkeypatch.setattr(reuse_discovery, "_curseforge_api_key", lambda: "test")
+    calls = []
+
+    def search(query, *, minecraft_version, loader, **kwargs):
+        calls.append(query)
+        assert (minecraft_version, loader) == ("1.21.8", "fabric")
+        return [
+            ("", 10.0, {
+                "source_id": f"curseforge:{query}-{i}",
+                "catalog_id": i, "title": f"{query} {i}",
+                "summary": f"Mod for {query}",
+                "catalog_url": f"https://www.curseforge.com/minecraft/mc-mods/{query}-{i}",
+            }) for i in (1, 2)
+        ]
+
+    monkeypatch.setattr(reuse_discovery, "_search_curseforge", search)
+    receipts = []
+    reuse_discovery.discover_repositories_for_graph(
+        ["spaceship weapons crew"], None,
+        minecraft_version="1.21.8", loader="fabric", diagnostics=receipts,
+    )
+    assert calls == ["spaceship", "weapons", "crew"]
+    assert len(receipts[0]["ranked_catalogue_hits"]) == 6
+    assert receipts[0]["queries"] == calls
