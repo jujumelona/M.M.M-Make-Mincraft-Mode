@@ -87,6 +87,22 @@ def test_rejected_operation_not_offered_again_for_same_slot():
     assert "return" in actions
 
 
+def test_active_revision_cannot_reselect_identical_revision_forever():
+    state = _state()
+    state.selection_goal['revising'] = True
+    state.validation_observation = {'status': 'rejected'}
+    member = {
+        'kind': 'METHOD', 'owner': 'example.Owner',
+        'name': 'registerAlien', 'return_type': 'void',
+        'static': True, 'parameters': [],
+    }
+    node = {'node_id': 'operation_0', 'op': 'return',
+            'typed_result': 'void', 'input_refs': [], 'attributes': {}}
+    schema = operation_next_schema(state, nodes=[node], declaration=member, can_complete=False)
+    assert 'revise_node' not in _actions(schema['oneOf'])
+    assert 'call' in _actions(schema['oneOf'])
+
+
 def test_memory_navigation_also_exhausts_same_no_progress_window():
     state = _state()
     state.operation_reads = MAX_OPERATION_EVIDENCE_READS
