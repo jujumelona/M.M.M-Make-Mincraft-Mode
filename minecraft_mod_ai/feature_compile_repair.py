@@ -106,14 +106,22 @@ def compile_and_repair_feature(
                 break
             # Keep the target's package and primary class unchanged. The
             # actual compiler still establishes target API compatibility.
-            from .java_region_parser import java_source_units
+            from .construction_context import java_source_units
             try:
                 before = java_source_units(original, path=target_path)
                 after = java_source_units(next_source, path=target_path)
             except Exception:
                 status = "INVALID_REPAIR"
                 break
-            if not before or not after:
+            before_owners = {
+                (row.get("owner"), row.get("kind"))
+                for row in before if row.get("kind") in {"class", "record", "enum", "interface"}
+            }
+            after_owners = {
+                (row.get("owner"), row.get("kind"))
+                for row in after if row.get("kind") in {"class", "record", "enum", "interface"}
+            }
+            if not before_owners or before_owners != after_owners:
                 status = "INVALID_REPAIR"
                 break
             path.write_text(next_source, encoding="utf-8")
