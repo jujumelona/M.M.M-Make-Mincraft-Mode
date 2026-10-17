@@ -123,6 +123,7 @@ class CompleteGameDesignPlanner:
                 # Never resume from a stale or invalid authored design record.
                 checkpoint.clear_sections()
                 structured_sections = None
+        restored_sections = structured_sections is not None
         if structured_sections is None:
             with planner_operation("author_structured_execution_contract"):
                 structured_sections = author_structured_sections(
@@ -138,7 +139,7 @@ class CompleteGameDesignPlanner:
             "stage": "author_design",
             "model_calls": budget.call_count,
             "breakdown": dict(sorted(budget.stage_counts.items())),
-            "restored_checkpoint": checkpoint.load_sections() is not None,
+            "restored_checkpoint": restored_sections,
         }, ensure_ascii=False), flush=True)
 
         # The saved plan must carry the real, host-owned catalogue evidence
