@@ -62,6 +62,10 @@ def test_curseforge_pagination_advances_and_never_crosses_provider_window():
         index=0, page_size=50, row_count=50,
     ) == 50
     assert curseforge_next_index(
+        {"index": 0, "pageSize": 50, "resultCount": 4, "totalCount": 200},
+        index=0, page_size=50, row_count=4,
+    ) == 50
+    assert curseforge_next_index(
         {"index": 9950, "pageSize": 50, "resultCount": 50, "totalCount": 12000},
         index=9950, page_size=50, row_count=50,
     ) is None
@@ -123,8 +127,8 @@ def test_curseforge_reuse_discovers_second_page_without_name_search(monkeypatch)
     searches = [params for url, params in calls if "/mods/search" in url]
     assert searches
     assert all("searchFilter" not in params for params in searches)
-    assert all("gameVersion" not in params and "modLoaderType" not in params
-               for params in searches)
+    assert all(params.get("gameVersion") == "1.21.1" and
+               params.get("modLoaderType") == "4" for params in searches)
     assert all(params.get("classId") == "6" for params in searches)
     assert any(params["sortField"] == "2" and params["index"] == "50"
                for params in searches)
@@ -155,9 +159,11 @@ def test_later_curseforge_failure_keeps_completed_page_candidates(monkeypatch):
                     {"id": 51, "classId": 6, "name": "Spaceship",
                      "summary": "Ship implementation",
                      "links": {"sourceUrl": "https://github.com/owner/ship"}},
+                    *({"id": i, "classId": 6, "name": f"Mod {i}", "links": {}}
+                      for i in range(52, 101)),
                 ],
-                "pagination": {"index": 0, "resultCount": 1,
-                               "pageSize": 50, "totalCount": 10},
+                "pagination": {"index": 0, "resultCount": 50,
+                               "pageSize": 50, "totalCount": 51},
             }
 
     class Client:
@@ -251,6 +257,8 @@ def test_predesign_browses_metadata_before_budgeted_descriptions(monkeypatch):
             params = parse_qs(urlsplit(url).query)
             assert "searchFilter" not in params
             assert params.get("classId") == ["6"]
+            assert params.get("gameVersion") == ["1.21.1"]
+            assert params.get("modLoaderType") == ["4"]
             return {"data": [
                 {"id": i, "classId": 6, "name": f"Spaceship {i}",
                  "summary": "Spaceship engine and launch",
@@ -262,10 +270,32 @@ def test_predesign_browses_metadata_before_budgeted_descriptions(monkeypatch):
         raise AssertionError(url)
 
     monkeypatch.setattr(pre_design_grounded_rag, "_json", fake_json)
-    records, receipt = pre_design_grounded_rag._search_curseforge("spaceship")
+    records, receipt = pre_design_grounded_rag._search_curseforge(
+        "spaceship", minecraft_version="1.21.1", loader="fabric"
+    )
     assert len(records) == 10
     assert receipt["search_requests"] == 3
     assert receipt["source_requests"] == 6
     assert sum("/description" in url for url in calls) == 6
     assert sum(bool(row["body_retrieved"]) for row in records) == 6
     assert all(row["evidence_origin"].startswith("curseforge_mod_") for row in records)
+
+
+def test_curseforge_unknown_mod_class_fails_closed(monkeypatch):
+    monkeypatch.setattr(reuse_discovery, "_curseforge_api_key", lambda: "dummy")
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": []}
+
+    class Client:
+        def get(self, url, **kwargs):
+            assert "/categories" in url, "Must not browse unscoped Modpacks/Resourcepacks"
+            return Response()
+
+    monkeypatch.setattr(reuse_discovery, "_pooled_http_client", lambda: Client())
+    with pytest.raises(RuntimeError, match="Mods class"):
+        reuse_discovery._search_curseforge("trade", limit=8)

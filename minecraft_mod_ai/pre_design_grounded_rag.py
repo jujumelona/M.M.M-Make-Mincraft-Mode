@@ -29,6 +29,7 @@ from .curseforge_catalog import (
     curseforge_mod_metadata,
     curseforge_mods_class_id,
     curseforge_next_index,
+    curseforge_target_filters,
 )
 from .deadline_executor import iter_completed_with_deadlines
 from .knowledge import (
@@ -399,6 +400,13 @@ def _search_curseforge(
         return [], {
             "provider": "curseforge", "status": "not_configured", "result_count": 0,
         }
+    try:
+        target_filters = curseforge_target_filters(minecraft_version, loader)
+    except ValueError as exc:
+        return [], {
+            "provider": "curseforge", "status": "provider_error", "result_count": 0,
+            "detail_errors": [f"invalid_target:{exc}"], "retrieval_complete": False,
+        }
 
     headers = {"x-api-key": key}
     errors: list[str] = []
@@ -413,6 +421,12 @@ def _search_curseforge(
         )
     except (OSError, ValueError) as exc:
         errors.append("categories_unavailable:" + type(exc).__name__)
+    if mods_class is None:
+        return [], {
+            "provider": "curseforge", "status": "provider_error", "result_count": 0,
+            "detail_errors": [*errors, "mods_class_unavailable"],
+            "retrieval_complete": False,
+        }
 
     wanted = set(_search_terms(query)) | set(source_intent_terms(query))
     seen_ids: set[int] = set()
@@ -435,9 +449,9 @@ def _search_curseforge(
             params = {
                 "gameId": 432, "index": index, "pageSize": page_size,
                 "sortField": sort_field, "sortOrder": "desc",
+                "classId": mods_class,
             }
-            if mods_class is not None:
-                params["classId"] = mods_class
+            params.update(target_filters)
             if category_id is not None:
                 params["categoryId"] = category_id
             url = "https://api.curseforge.com/v1/mods/search?" + urllib.parse.urlencode(params)
@@ -457,7 +471,7 @@ def _search_curseforge(
                 mod_id = row["id"]
                 if mod_id in seen_ids:
                     continue
-                if mods_class is not None and row.get("classId") not in (None, mods_class):
+                if row.get("classId") != mods_class:
                     continue
                 seen_ids.add(mod_id)
                 category_rows = row.get("categories")

@@ -33,6 +33,7 @@ from .curseforge_catalog import (
     curseforge_mod_metadata,
     curseforge_mods_class_id,
     curseforge_next_index,
+    curseforge_target_filters,
 )
 from .deadline_executor import iter_completed_with_deadlines
 from .ecosystem_discovery import provider_request_failure
@@ -484,12 +485,16 @@ def _search_curseforge(
 
     query/limit remain for the existing caller API, but do not filter or truncate
     this shared catalogue sample: relevance is calculated per capability later.
-    Version/loader constraints are verified during pinned source inspection.
+    Query version/loader filters first; pinned source inspection verifies reuse.
     Catalogue results without source links never acquire reuse authority.
     """
     api_key = _curseforge_api_key()
     if not api_key:
         return []
+    try:
+        target_filters = curseforge_target_filters(minecraft_version, loader)
+    except ValueError as exc:
+        raise _CurseForgeSearchError(f"Invalid CurseForge target: {exc}") from None
     client = _pooled_http_client()
     headers = {"Accept": "application/json", "x-api-key": api_key}
     try:
@@ -507,6 +512,10 @@ def _search_curseforge(
         # Results without a known Mods class must not masquerade as exhaustive.
         mods_class_id = None
         category_rows = None
+    if mods_class_id is None:
+        raise _CurseForgeSearchError(
+            "CurseForge Mods class could not be verified; refusing unscoped search."
+        )
 
     result = []
     seen_ids: set[int] = set()
@@ -526,9 +535,9 @@ def _search_curseforge(
                     "sortOrder": "desc",
                     "pageSize": str(page_size),
                     "index": str(index),
+                    "classId": str(mods_class_id),
                 }
-                if mods_class_id is not None:
-                    params["classId"] = str(mods_class_id)
+                params.update(target_filters)
                 if category_id is not None:
                     params["categoryId"] = str(category_id)
                 try:
@@ -561,7 +570,7 @@ def _search_curseforge(
                     mod_id = item["id"]
                     if mod_id in seen_ids:
                         continue
-                    if mods_class_id is not None and item.get("classId") not in (None, mods_class_id):
+                    if item.get("classId") != mods_class_id:
                         continue
                     seen_ids.add(mod_id)
                     links = item.get("links")

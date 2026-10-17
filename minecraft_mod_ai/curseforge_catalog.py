@@ -90,18 +90,22 @@ def curseforge_next_index(
     """
     if row_count <= 0:
         return None
-    server_index, result_count, total_count = index, row_count, None
+    server_index, server_page_size, result_count, total_count = index, page_size, row_count, None
     if isinstance(pagination, Mapping):
         try:
             server_index = int(pagination.get("index", index))
+            server_page_size = int(pagination.get("pageSize", page_size))
             result_count = int(pagination.get("resultCount", row_count))
             raw_total = pagination.get("totalCount")
             total_count = int(raw_total) if raw_total is not None else None
         except (ValueError, TypeError, OverflowError):
             raise ValueError("CurseForge returned invalid pagination.") from None
-        if server_index != index or result_count < 0 or result_count > page_size:
+        if (server_index != index or server_page_size <= 0 or
+                server_page_size > page_size or result_count != row_count or
+                result_count > server_page_size):
             raise ValueError("CurseForge returned inconsistent pagination.")
-    next_index = server_index + result_count
+    # Offsets advance by the applied page size, not the last page's row count.
+    next_index = server_index + server_page_size
     if next_index <= index or next_index + page_size > 10000:
         return None
     if total_count is not None and next_index >= total_count:
