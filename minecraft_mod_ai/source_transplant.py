@@ -370,11 +370,6 @@ def validated_reuse_donor(decision: Mapping[str, Any]) -> DonorSlice:
     }
     if donor_capability.removeprefix("capability:") not in verified_capabilities:
         raise SourceTransplantError("Reuse proof did not verify the selected capability.")
-    verified_artifacts = {
-        str(item).replace("\\", "/")
-        for item in proof.get("verified_artifacts", ())
-        if str(item).strip()
-    }
     # A compile receipt lists final paths, not which pinned donor file each
     # output came from. Require the exact per-file attestation created by the
     # production host after re-running deterministic source adaptation.
