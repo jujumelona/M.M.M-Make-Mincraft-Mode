@@ -131,13 +131,20 @@ def test_failed_deterministic_proof_preserves_downloadable_reference(monkeypatch
     monkeypatch.setattr(grounded_source_reuse, "_adapter", lambda *args: host_target("26.1.2"))
     monkeypatch.setattr("minecraft_mod_ai.reuse_discovery.discover_repositories_for_graph", lambda *args, **kwargs: {
         "space travel": ("example/oldspace",)})
+    source_path = "src/main/java/Travel.java"
+    source_code = b"package example; public class Travel { public void travel() {} }"
     donor = DonorSlice(
         capability="space travel", repository="example/oldspace", commit_sha="b" * 40, license_id="MIT",
         source_url="https://github.com/example/oldspace", target_compatibility="adapt",
-        files=(DonorFile("src/main/java/Travel.java", "c" * 40, "sha256:" + "d" * 64, 1, ()),),
-        seed_files=("src/main/java/Travel.java",), source_symbols=(), required_dependencies=(), donor_tests=(), confidence=0.8,
+        files=(DonorFile(source_path, "c" * 40,
+                         "sha256:" + hashlib.sha256(source_code).hexdigest(), len(source_code), ("Travel",)),),
+        seed_files=(source_path,), source_symbols=("Travel",), required_dependencies=(), donor_tests=(), confidence=0.8,
         compatibility_evidence=CompatibilityEvidence(minecraft_version="26.1.2", loader="fabric", status="metadata_exact"),
     )
+    # The unit test supplies actual readable Java bytes instead of contacting
+    # GitHub; the production materializer still verifies pinned blob hashes.
+    monkeypatch.setattr("minecraft_mod_ai.source_transplant.materialize_pinned_donor",
+                        lambda *args: {source_path: source_code})
 
     def cannot_migrate(*args, **kwargs):
         raise RuntimeError("Yarn migration requires model adaptation")
