@@ -141,7 +141,7 @@ def _index_schema(state, kind, query):
     return branches
 
 
-MAX_OPERATION_EVIDENCE_READS = 12
+MAX_OPERATION_EVIDENCE_READS = 4
 
 
 def operation_context_branches(state, *, nodes, source_units, pinned_source,
