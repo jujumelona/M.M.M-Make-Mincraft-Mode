@@ -393,7 +393,7 @@ jobs:
       - uses: actions/setup-python@v6
         with: {python-version: '3.11', cache: pip}
       - uses: actions/setup-java@v5
-        with: {distribution: temurin, java-version: '17'}
+        with: {distribution: temurin, java-version: '21'}
       - run: python -m pip install --prefer-binary 'build>=1,<2' -e '.[dev,ui]'
       - run: python tools/verify_integrity_minecraft.py --output .mmm/integrity-validation
       - uses: actions/upload-artifact@v4
@@ -442,7 +442,7 @@ jobs:
       - uses: actions/setup-python@v6
         with: {python-version: '3.11', cache: pip}
       - uses: actions/setup-java@v5
-        with: {distribution: temurin, java-version: '17'}
+        with: {distribution: temurin, java-version: '21'}
       - run: python -m pip install --prefer-binary -e '.[dev,ui]'
       - name: Materialize test group
         shell: bash
