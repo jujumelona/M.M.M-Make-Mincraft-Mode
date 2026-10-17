@@ -215,8 +215,12 @@ def verified_source_rag(reuse_plan: Mapping[str, Any], *, adapter: Any,
             try:
                 donor_slice = DonorSlice.from_dict(reference["donor"])
                 if (donor_slice.compatibility_evidence is None or
-                        donor_slice.compatibility_evidence.minecraft_version != adapter.minecraft_version):
-                    raise ValueError("SOURCE_REFERENCE_MINECRAFT_VERSION_MISMATCH")
+                        not donor_slice.compatibility_evidence.minecraft_version or
+                        not donor_slice.compatibility_evidence.loader):
+                    raise ValueError("SOURCE_REFERENCE_VERSION_EVIDENCE_MISSING")
+                # This is an authoring REFERENCE, never executable donor code.
+                # Older releases are valid examples once pinned hashes and
+                # permissive licensing have been checked independently.
                 blobs = materialize_pinned_donor(donor_slice)
                 donor = donor_slice.to_dict()
                 notice_path, notice_bytes = _verified_donor_license_notice(donor, blobs)
