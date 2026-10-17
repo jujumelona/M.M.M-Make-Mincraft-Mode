@@ -68,6 +68,23 @@ def test_dotted_method_intent_does_not_return_unrelated_value_methods():
                    for row in page['matches'])
 
 
+def test_explicit_method_intent_never_builds_the_global_eligible_method_inventory():
+    index = _index()
+
+    def global_scan_forbidden(*_args, **_kwargs):
+        raise AssertionError('A specific method lookup must not scan the full classpath')
+
+    index._eligible_owners = global_scan_forbidden
+    goal = index.prepare(
+        'Call EntityType.registerEntity with its value to register a hostile entity',
+        kinds=('METHOD',),
+    )
+    page = index.page(goal, 0)
+    assert [row['symbol_id'] for row in page['matches']] == [
+        'net.minecraft.core.Registry#register'
+    ]
+
+
 def test_no_exact_action_evidence_does_not_invent_an_api():
     index = _index(with_registry=False)
     index.prepare('EntityType registration API', kinds=('METHOD',))
