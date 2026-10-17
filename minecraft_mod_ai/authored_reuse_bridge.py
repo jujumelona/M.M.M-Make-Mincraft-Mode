@@ -206,6 +206,9 @@ def _verified_donor_license_notice(
         }
     ), None)
     if license_text is None:
+        # No raw.githubusercontent.com fallback under CurseForge-only policy.
+        raise RuntimeError("SOURCE_REUSE_LICENSE_NOTICE_REQUIRED: license must be in the approved local donor snapshot")
+
         import httpx
 
         repository = str(donor["repository"])
