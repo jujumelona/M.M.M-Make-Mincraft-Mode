@@ -113,6 +113,7 @@ class ConstructionEvidenceIndex:
         # classpath index. Query-local scoring inspects only matching owners.
         self.member_name_owners = defaultdict(set)
         self.member_name_keys = defaultdict(set)
+        self.member_result_keys = defaultdict(set)
         self.name_weights = {}
         self.strong_name_prefixes = frozenset()
         self.exact_action_available = False
@@ -137,6 +138,7 @@ class ConstructionEvidenceIndex:
             self.by_owner[row['owner']].append(key)
             self._record_document(key, row)
             self._index_name_owner(key, row)
+            self._index_result_type(key, row)
             if row.get('kind') == 'CLASS':
                 self.aliases[symbol_query_key(key)].add(key)
                 self.aliases[symbol_query_key(row['name'])].add(key)
@@ -180,6 +182,12 @@ class ConstructionEvidenceIndex:
                 if len(part) >= 5:
                     self.member_name_owners[part[:5]].add(row['owner'])
                     self.member_name_keys[part[:5]].add(key)
+
+    def _index_result_type(self, key, row):
+        if row.get('kind') in {'METHOD', 'FIELD'} and row.get('return_type'):
+            self.member_result_keys[row['return_type']].add(key)
+        elif row.get('kind') == 'CONSTRUCTOR':
+            self.member_result_keys[row['owner']].add(key)
 
     def _record_document(self, key, row):
         owner, kind = row['owner'], row['kind']
@@ -253,6 +261,7 @@ class ConstructionEvidenceIndex:
             self.by_owner[self.owner].append(key)
         self._record_document(key, row)
         self._index_name_owner(key, row)
+        self._index_result_type(key, row)
         self.member_text[key] = _description(row)
         self.member_prepared[key] = (frozenset(_tokens(self.member_text[key])), self.member_text[key].casefold())
         self.eligible.clear()
@@ -383,6 +392,57 @@ class ConstructionEvidenceIndex:
                 continue
             selected[row['owner']].append(key)
         return dict(selected)
+
+    def _focused_result_owners(self, kinds, selection):
+        """Look up return/constructed types via postings before any global scan.
+
+        A concrete result type is a dependency constraint, not a textual hint.
+        Candidate methods may return a subtype, so verify assignability with
+        the same target class hierarchy used by the IR type checker.
+        """
+        if not selection:
+            return {}
+        expected = set()
+        for contract in selection['contracts']:
+            expected.update(v for v in (contract.get('expected_type'),
+                                          *contract.get('expected_types', ()),
+                                          *contract.get('allowed_types', ())) if v)
+        expected.discard('java.lang.Object')
+        expected.discard('void')
+        if len(expected) != 1:
+            return {}
+        want = next(iter(expected))
+        if want not in self.symbols and want not in PRIMITIVES and not want.endswith('[]'):
+            return {}
+        from .construction_operation_contracts import result_fits
+        excluded = set(selection['excluded_symbols'])
+        rows = defaultdict(list)
+        for result_type, keys in self.member_result_keys.items():
+            if result_type != want and not self.assignable(result_type, want):
+                continue
+            for key in keys:
+                row = self.symbols[key]
+                if row['kind'] not in kinds or key in excluded or row.get('inherited_from') in excluded:
+                    continue
+                if not self.accessible(key, constructor=row['kind'] == 'CONSTRUCTOR'):
+                    continue
+                if result_fits(row['owner'] if selection['constructor_result'] else row['return_type'],
+                               selection['contracts'], self):
+                    rows[row['owner']].append(key)
+        return dict(rows)
+
+    def _focused_action_owners(self, purpose, selection):
+        """Prefer actual callable-name postings for a verb before broad owners."""
+        weights = _purpose_name_weights(purpose)
+        ordered = sorted((prefix for prefix in weights if prefix in self.member_name_keys),
+                         key=lambda prefix: (-weights[prefix], len(self.member_name_keys[prefix]), prefix))
+        for prefix in ordered:
+            if weights[prefix] < 4 and prefix not in {'regis', 'creat', 'spaw', 'updat', 'remov', 'rende', 'inter', 'craft', 'attac', 'tradi'}:
+                continue
+            found = self._focused_method_owners(prefix, purpose, selection)
+            if found:
+                return found, prefix
+        return {}, None
 
     def _dense_allowed(self):
         registry = getattr(self.router, 'registry', None)
@@ -590,8 +650,14 @@ class ConstructionEvidenceIndex:
                 hits = sum(counts[kind][term] for kind in kinds for term in terms)
                 relation[owner] += hits / (documents * len(terms))
         hinted_prefix = _explicit_method_prefix(descriptor['purpose']) if 'METHOD' in kinds else None
-        eligible = self._focused_method_owners(
-            hinted_prefix, descriptor['purpose'], descriptor.get('selection'))
+        selection = descriptor.get('selection')
+        eligible = self._focused_method_owners(hinted_prefix, descriptor['purpose'], selection)
+        if not eligible and not hinted_prefix and 'METHOD' in kinds:
+            eligible, action_prefix = self._focused_action_owners(descriptor['purpose'], selection)
+            if action_prefix:
+                hinted_prefix = action_prefix
+        if not eligible and not hinted_prefix and selection:
+            eligible = self._focused_result_owners(kinds, selection)
         # When the current operation explicitly names a callable, perform a
         # bounded member-name lookup before owner ranking. This is an inverted
         # posting lookup, not a scan or pagination over 300k unrelated methods.
@@ -601,7 +667,7 @@ class ConstructionEvidenceIndex:
         if not eligible and not hinted_prefix:
             # A proposed but nonexistent dotted method is not a reason to
             # re-open hundreds of thousands of unrelated declarations.
-            eligible = self._eligible_owners(kinds, descriptor.get('selection'))
+            eligible = self._eligible_owners(kinds, selection)
         self._rank_method_intent(query, kinds, eligible, relation)
         if focused:
             self.name_weights[hinted_prefix] = max(8, self.name_weights.get(hinted_prefix, 0))
