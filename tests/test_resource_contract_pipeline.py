@@ -122,6 +122,7 @@ def test_postprocess_and_validation_use_actual_pixels(tmp_path):
     ).textures[0]
     source = Image.new("RGBA", (512, 512), (255, 255, 255, 255))
     source.paste((20, 30, 40, 255), (128, 128, 384, 384))
+    source.paste((60, 70, 80, 255), (128, 128, 192, 384))
     output = postprocess_region(source, texture.resource_contract, (16, 16))
     path = tmp_path / "blade.png"
     output.save(path)
@@ -367,7 +368,9 @@ def test_stale_animation_metadata_is_not_accepted_as_static(tmp_path):
         request("block", "block.cube_all"), namespace="demo", minecraft_version="1.21.4"
     ).textures[0]
     path = tmp_path / "block.png"
-    Image.new("RGBA", (16, 16), (20, 40, 80, 255)).save(path)
+    static_image = Image.new("RGBA", (16, 16), (20, 40, 80, 255))
+    static_image.paste((80, 100, 140, 255), (2, 2, 8, 8))
+    static_image.save(path)
     (tmp_path / "block.png.mcmeta").write_text('{"animation": {}}')
     with pytest.raises(ValueError, match="Static"):
         validate_texture(path, texture.to_dict(), check_metadata=True)

@@ -80,7 +80,7 @@ def test_malformed_native_sibling_prevents_partial_execution(monkeypatch):
     adapter = _adapter(monkeypatch)
     completions = 0
 
-    def completion(server_url, payload):
+    def completion(server_url, payload, **_kwargs):
         nonlocal completions
         completions += 1
         return {
@@ -108,7 +108,7 @@ def test_schema_invalid_native_sibling_prevents_partial_execution(monkeypatch):
     monkeypatch.setattr(
         llama_cpp_adapter,
         "_completion_message",
-        lambda server_url, payload: {
+        lambda server_url, payload, **_kwargs: {
             "role": "assistant",
             "content": None,
             "tool_calls": [
@@ -131,7 +131,7 @@ def test_all_invalid_native_calls_return_non_executable_rejection(monkeypatch):
     monkeypatch.setattr(
         llama_cpp_adapter,
         "_completion_message",
-        lambda server_url, payload: {
+        lambda server_url, payload, **_kwargs: {
             "role": "assistant",
             "content": None,
             "tool_calls": [{
@@ -151,7 +151,7 @@ def test_parallel_disabled_returns_protocol_rejection_before_execution(monkeypat
     monkeypatch.setattr(
         llama_cpp_adapter,
         "_completion_message",
-        lambda server_url, payload: {
+        lambda server_url, payload, **_kwargs: {
             "role": "assistant",
             "content": None,
             "tool_calls": [

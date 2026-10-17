@@ -20,7 +20,7 @@ from minecraft_mod_ai.validator import _complete_client_required
 def _canonical_client_job() -> ArtifactJob:
     return ArtifactJob(
         job_id="shipyard.screen_handler",
-        template_id="",
+        template_id="minecraft/client/screen_handler",
         owner_module="shipyard",
         executor_type=ExecutorType.PYTHON_GENERATOR,
         deterministic_inputs={

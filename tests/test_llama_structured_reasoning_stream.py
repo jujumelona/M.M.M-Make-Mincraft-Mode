@@ -72,7 +72,10 @@ def test_qwen35_json_request_keeps_schema_host_side() -> None:
     )
     assert request.response_schema == schema
     assert payload["response_format"] == {"type": "json_object"}
-    assert payload["json_schema"] == schema
+    assert payload["json_schema"]["type"] == "object"
+    assert payload["json_schema"]["required"] == ["value"]
+    assert payload["json_schema"]["properties"]["value"]["type"] == "string"
+    assert payload["json_schema"]["properties"]["value"]["maxLength"] == 256
     assert "grammar" not in payload
     assert "reasoning_effort" not in payload
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}

@@ -83,10 +83,10 @@ def test_content_properties_are_one_property_atomic_calls():
     )
 
     assert [row["property"] for row in result["records"]] == properties
-    assert len(router.calls) == 2 * len(properties)
+    assert len(router.calls) == len(properties)
     assert all(name == "planner-json" for name, _ in router.calls)
     observed = [context["requested_property"] for _, context in router.calls]
-    assert observed == [name for name in properties for _ in range(2)]
+    assert observed == properties
 
 
 def test_relations_use_host_owned_pair_cardinality_without_model_continuation():
