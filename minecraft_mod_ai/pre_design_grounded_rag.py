@@ -25,7 +25,6 @@ from typing import Any
 
 from .curseforge_catalog import (
     curseforge_api_key,
-    curseforge_browse_windows,
     curseforge_mod_metadata,
     curseforge_mods_class_id,
     curseforge_next_index,
