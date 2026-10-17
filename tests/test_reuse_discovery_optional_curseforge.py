@@ -18,7 +18,7 @@ def test_curseforge_lane_is_disabled_without_api_key(monkeypatch):
     assert called is False
 
 
-def test_curseforge_lane_uses_host_key_and_resolves_github_source(monkeypatch):
+def test_curseforge_lane_uses_host_key_without_following_github_source(monkeypatch):
     monkeypatch.setenv("MMM_CURSEFORGE_API_KEY", "secret-test-key")
     monkeypatch.delenv("CURSEFORGE_API_KEY", raising=False)
     observed = {}
@@ -48,7 +48,10 @@ def test_curseforge_lane_uses_host_key_and_resolves_github_source(monkeypatch):
             return Response(url)
 
     monkeypatch.setattr(reuse_discovery, "_pooled_http_client", lambda: FakeClient())
-    assert reuse_discovery._search_curseforge("trade system", limit=8) == [("example/trade-mod", 1.0)]
+    assert reuse_discovery._search_curseforge("trade system", limit=8) == []
+    records = reuse_discovery._search_curseforge("trade system", limit=8, with_metadata=True)
+    assert records[0][0] == ""
+    assert records[0][2]["source_id"] == "curseforge:99"
     assert observed["url"] == "https://api.curseforge.com/v1/mods/search"
     assert observed["headers"]["x-api-key"] == "secret-test-key"
     assert "searchFilter" not in observed["params"]
