@@ -238,7 +238,7 @@ class CompleteGameDesignPlanner:
             )
 
             reuse_receipt = resolve_authored_source_reuse(
-                prompt, structured_sections,
+                prompt, structured_sections, router=self.router,
                 minecraft_version=target_version,
                 loader=target_loader,
                 request_scope=request_scope,

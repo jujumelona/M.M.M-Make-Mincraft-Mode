@@ -130,6 +130,7 @@ def resolve_authored_source_reuse(
     request_scope: Mapping[str, Any] | None = None,
     repository_candidates: Sequence[Mapping[str, Any]] = (),
     requested_curseforge_dependencies: Sequence[Mapping[str, Any]] = (),
+    router: Any | None = None,
 ) -> dict[str, Any]:
     from .grounded_source_reuse import build_repository_reuse_plan
 
@@ -162,7 +163,7 @@ def resolve_authored_source_reuse(
             },
         },
     }
-    receipt = build_repository_reuse_plan(design)
+    receipt = build_repository_reuse_plan(design, router=router)
     return {
         **receipt,
         "pre_design_candidates_sha256": source_candidate_fingerprint(repository_candidates),
@@ -189,9 +190,19 @@ def verified_reuse_context(plan: Mapping[str, Any]) -> str:
             "source": source_id if row.get("mode") == "source_transplant" else "",
             "mode": row.get("mode", "fresh"),
         })
+    references = []
+    for row in list(plan.get("reference_sources", ()))[:8]:
+        if not isinstance(row, Mapping) or row.get("reference_only") is not True:
+            continue
+        references.append({k: row.get(k) for k in (
+            "capability", "source_url", "pinned_sha", "license_spdx",
+            "selected_file", "selected_symbol", "file_sha256",
+            "semantic_score", "rationale", "residual_work", "source_excerpt")})
     return (
         "\n\nHOST SOURCE-REUSE RECEIPTS (read-only facts, not new requests):\n"
         + json.dumps(summaries, ensure_ascii=False, separators=(",", ":"))
+        + "\nSEMANTIC SOURCE REFERENCES (UNVERIFIED, NOT INSTALLED):\n"
+        + json.dumps(references, ensure_ascii=False, separators=(",", ":"))
         + "\nOnly source_transplant rows have passed code inspection and compile proof. "
         "Fresh rows need an independent implementation. Never treat a repository search "
         "result or a feature description as working code.\n"
@@ -454,6 +465,14 @@ def materialize_verified_authored_sources(
             blobs[relative] = Path(item["path"]).read_bytes()
         notice_path, notice_bytes = _verified_donor_license_notice(donor, blobs)
         prepared[notice_path] = (notice_bytes, str(donor["repository"]))
+        for extra_path, extra_bytes in blobs.items():
+            if extra_path.casefold() in {"notice", "notice.txt", "notice.md", "copyright"}:
+                document_name = str(donor["repository"]).replace("/", "__").replace(".", "_")
+                dest = ("src/main/resources/META-INF/mmm-third-party/" + document_name
+                        + "-" + str(donor["commit_sha"])[:12] + "." + extra_path.replace(".", "_"))
+                if dest in prepared and prepared[dest][0] != extra_bytes:
+                    raise RuntimeError("SOURCE_REUSE_NOTICE_COLLISION")
+                prepared[dest] = (extra_bytes, str(donor["repository"]))
         adapted, _ = apply_deterministic_adapters(blobs, target_context)
         copied_for_donor = 0
         for relative, data in adapted.items():

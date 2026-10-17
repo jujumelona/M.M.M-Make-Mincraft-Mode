@@ -6,6 +6,7 @@ from typing import Any
 from .curseforge_catalog import curseforge_api_key
 from .platform_catalog import adapter_for_target
 from .reuse_discovery import discover_repositories_for_graph
+from .curseforge_semantic_source_review import assess_ranked_sources
 
 def build_repository_reuse_plan(design: Mapping[str, Any], **kwargs: Any) -> dict[str, Any]:
     """Produce fresh-authoring decisions from catalogue observations only."""
@@ -38,10 +39,44 @@ def build_repository_reuse_plan(design: Mapping[str, Any], **kwargs: Any) -> dic
     }
     single_legacy_receipt = receipts[0] if len(capabilities) == len(receipts) == 1 else None
     decisions = []
+    inspection_receipts = []
+    reference_sources = []
+    shared_source_cache = {}
+    # Bound total external inspections; never scan the whole catalogue.
+    remaining_inspections = max(16, len(capabilities) * 2)
     for name in capabilities:
         row = receipts_by_cap.get(name) or single_legacy_receipt or {}
         discovery_status = str(row.get("status") or "query_unresolved")
         matched = list(row.get("ranked_catalogue_hits") or ())
+        available_links = [hit for hit in matched if hit.get("source_url")]
+        inspections = (
+            assess_ranked_sources(name, available_links, router=kwargs.get("router"),
+                                  cache=shared_source_cache,
+                                  max_candidates=min(2, remaining_inspections))
+            if remaining_inspections else []
+        )
+        remaining_inspections -= len(inspections)
+        inspection_receipts.extend(inspections)
+        # Examined candidate != transplant. Only compile-proof may set source_transplant.
+        for candidate in inspections:
+            semantic = candidate.get("semantic") or {}
+            if (candidate.get("inspection_status") == "inspected"
+                    and semantic.get("status") == "semantic_reviewed"
+                    and semantic.get("intent") in {"reference", "adapt", "reuse"}):
+                reference_sources.append({
+                    "capability": name, "source_id": candidate.get("source_id"),
+                    "source_url": candidate.get("source_url"),
+                    "pinned_sha": candidate.get("pinned_sha"),
+                    "license_spdx": candidate.get("license_spdx"),
+                    "selected_file": semantic.get("selected_file"),
+                    "selected_symbol": semantic.get("selected_symbol"),
+                    "file_sha256": semantic.get("file_sha256"),
+                    "semantic_score": semantic.get("semantic_score"),
+                    "rationale": semantic.get("rationale"),
+                    "residual_work": semantic.get("residual_work"),
+                    "source_excerpt": candidate.get("licensed_reference_excerpt", ""),
+                    "proof_status": "NOT_RUN", "reference_only": True,
+                })
         if discovery_status in {"provider_error", "not_configured"}:
             status, failure_code = ("provider_error",
                 "CURSEFORGE_NOT_CONFIGURED" if discovery_status == "not_configured"
@@ -60,14 +95,20 @@ def build_repository_reuse_plan(design: Mapping[str, Any], **kwargs: Any) -> dic
             "failure_code": failure_code, "source_id": "",
             "component_refs": [], "reference_source_count": 0,
             "catalogue_evidence": matched,  # Already bounded per distinct topic.
+            "semantic_assessments": inspections,
             "catalogue_queries": list(row.get("queries") or ()),
             "rationale": (
-                "CurseForge catalogue metadata is only a research hint; "
-                "implement behavior against the selected Minecraft target."
+                "Catalogue metadata ranks candidates. Official linked source is "
+                "inspected and semantically reviewed when available. "
+                "Unproved donors remain reference-only; complete fresh implementation."
             ),
         })
         print("SOURCE_REUSE_CAPABILITY: " + json.dumps({
-            "capability": name, "mode": "fresh", "inspected": 0,
+            "capability": name, "mode": "fresh", "inspected": sum(
+                item.get("inspection_status") == "inspected" for item in inspections),
+            "source_links": len(available_links),
+            "semantic_reviews": sum((item.get("semantic") or {}).get("status")
+                                    == "semantic_reviewed" for item in inspections),
             "proof_attempts": 0, "status": discovery_status,
             "evidence_status": status, "catalogue_match_count": len(matched),
             "queries": list(row.get("queries") or ()),
@@ -95,9 +136,10 @@ def build_repository_reuse_plan(design: Mapping[str, Any], **kwargs: Any) -> dic
         },
         "planning_rag_candidate_repository_count": 0,
         "explicit_reference_repository_count": 0,
-        "discovery_receipts": receipts, "inspection_receipts": [],
-        "proof_receipts": [], "reference_sources": [],
-        "selection_policy": "Targeted CurseForge metadata only; independent fresh Java code.",
+        "discovery_receipts": receipts, "inspection_receipts": inspection_receipts,
+        "proof_receipts": [], "reference_sources": reference_sources,
+        "selection_policy": "CurseForge official source inspection + model semantic reference review; "
+                            "reuse needs isolated compile proof and installation.",
     }
 
 

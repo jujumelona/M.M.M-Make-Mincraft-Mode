@@ -508,6 +508,40 @@ class CompleteProductionOrchestrator:
                     "SOURCE_REUSE_APPROVED_TARGET_MISMATCH: the donor proof must "
                     "match the immutable approved Minecraft version and loader."
                 )
+            from .curseforge_reuse_production import certify_sources_at_production
+            from .platform_catalog import adapter_for_target
+
+            source_adapter = adapter_for_target(
+                str(bound.get("minecraft_version") or ""),
+                str(bound.get("loader") or ""),
+            )
+            target_context = {
+                "minecraft_version": source_adapter.minecraft_version,
+                "loader": source_adapter.loader,
+                "mappings": source_adapter.yarn_mappings,
+                "mappings_kind": source_adapter.mappings_kind,
+                "java_version": source_adapter.java_version,
+                "fabric_loader": source_adapter.fabric_loader,
+                "fabric_api": source_adapter.fabric_api,
+                "fabric_loom": source_adapter.fabric_loom,
+                "gradle": source_adapter.gradle,
+                "target_package": spec.package_name,
+                "target_modid": spec.mod_id,
+            }
+            # Runtime copy, not a mutation of the approved proposal hash.
+            # Unproved donors remain fresh and may be implemented normally.
+            authored_reuse = certify_sources_at_production(
+                authored_reuse, project_root=project_root,
+                target_context=target_context,
+            )
+            # Durable evidence is written before installation and content
+            # generation. A later failure cannot masquerade as a reuse success.
+            reuse_dir = project_root / ".minecraft_ai" / "reuse"
+            reuse_dir.mkdir(parents=True, exist_ok=True)
+            (reuse_dir / "runtime-proof.json").write_text(
+                json.dumps(authored_reuse, ensure_ascii=False, indent=2, sort_keys=True)
+                + "\n", encoding="utf-8",
+            )
             installed_reuse = materialize_verified_authored_sources(
                 str(project_root),
                 authored_reuse,

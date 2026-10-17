@@ -398,6 +398,7 @@ def discover_repositories_for_graph(
                 if previous is None:
                     combined[ident] = {
                         "source_id": ident, "catalog_id": meta.get("catalog_id"),
+                        "source_url": str(meta.get("source_url") or ""),
                         "title": str(meta.get("title") or ""),
                         "summary": str(meta.get("summary") or "")[:400],
                         "catalog_url": str(meta.get("catalog_url") or ""),
@@ -427,7 +428,7 @@ def discover_repositories_for_graph(
                         previous["matched_queries"].append(query)
         ranked = sorted(
             combined.values(),
-            key=lambda row: (-int(row["score"]), -len(row["matched_queries"]),
+            key=lambda row: (not bool(row.get("source_url")), -int(row["score"]), -len(row["matched_queries"]),
                              str(row["title"]).casefold(), str(row["source_id"])),
         )
         # Keep a few per distinct topic rather than letting spaceship hits

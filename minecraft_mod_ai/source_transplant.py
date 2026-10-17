@@ -375,9 +375,14 @@ def validated_reuse_donor(decision: Mapping[str, Any]) -> DonorSlice:
         for item in proof.get("verified_artifacts", ())
         if str(item).strip()
     }
-    donor_paths = {item.path for item in donor.files}
-    if not donor_paths or not donor_paths <= verified_artifacts:
-        raise SourceTransplantError("Reuse proof did not verify the complete donor artifact set.")
+    # A compile receipt lists final paths, not which pinned donor file each
+    # output came from. Require the exact per-file attestation created by the
+    # production host after re-running deterministic source adaptation.
+    from .curseforge_source_attestation import check_attested_files
+    try:
+        check_attested_files(donor, proof)
+    except ValueError as exc:
+        raise SourceTransplantError(str(exc)) from exc
     return donor
 
 
@@ -689,14 +694,13 @@ def _declared_dependencies(text: str) -> tuple[str, ...]:
 
 
 def materialize_source_slices(project_root: str | Path, reuse_plan: Mapping[str, Any]) -> dict[str, Any]:
-    """Only local fresh-generated code is supported by this production path."""
-    decisions = reuse_plan.get("capabilities") if isinstance(reuse_plan, Mapping) else ()
-    if any(isinstance(x, Mapping) and x.get("mode") in {"source_transplant", "adapt"} for x in (decisions or ())):
-        raise SourceTransplantError("External donor source is not part of the CurseForge-only pipeline.")
-    return {"schema_version": "mmm/reuse-materialization-v1", "donors": [], "count": 0}
+    """Install only compiled and SHA-bound donors into a staging directory."""
+    from .curseforge_reuse_production import stage_verified_donors
+    return stage_verified_donors(project_root, reuse_plan)
 
 def materialize_pinned_donor(donor_slice: DonorSlice, discovery_client: Any = None) -> dict[str, bytes]:
-    """A source manifest is not source bytes and cannot be installed."""
-    raise SourceTransplantError("External donor materialization is not part of the pipeline.")
+    """Re-fetch exact CurseForge-linked source commit and attest every byte."""
+    from .curseforge_reuse_production import read_pinned_manifest
+    return read_pinned_manifest(donor_slice)
 
 __all__ = ["ArtifactEdge", "ArtifactNode", "DonorFile", "DonorSlice", "SourceTransplantError", "donor_closure_sha256", "materialize_pinned_donor", "materialize_source_slices", "validate_donor_slice_manifest", "validated_reuse_donor"]
