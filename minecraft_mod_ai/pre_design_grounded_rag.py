@@ -75,11 +75,11 @@ def _source_worker_count(task_count: int) -> int:
 
 
 def _provider_result_limit() -> int | None:
-    return min(8, _positive_env_int("MMM_PREDESIGN_PROVIDER_RESULTS_PER_QUERY") or 4)
+    return _positive_env_int("MMM_PREDESIGN_PROVIDER_RESULTS_PER_QUERY")
 
 
 def _provider_page_limit() -> int | None:
-    return min(2, _positive_env_int("MMM_PREDESIGN_PROVIDER_SEARCH_PAGES") or 1)
+    return _positive_env_int("MMM_PREDESIGN_PROVIDER_SEARCH_PAGES")
 
 
 def _limit_reached(value: int, limit: int | None) -> bool:
@@ -440,8 +440,10 @@ def _search_curseforge(
     search_requests = 0
     source_requests = 0
     provider_total = 0
-    page_limit = _provider_page_limit() or 1
-    output_limit = _provider_result_limit() or 4
+    # The older provider settings remain optional for legacy/local retrievers;
+    # only CurseForge catalogue discovery has an enforced small shortlist.
+    page_limit = min(2, _provider_page_limit() or 1)
+    output_limit = min(8, _provider_result_limit() or 4)
     # Fetch only a small shortlist, never a full 50-mod provider page.
     page_size = min(12, output_limit * 2)
     query_receipts: list[dict[str, Any]] = []
