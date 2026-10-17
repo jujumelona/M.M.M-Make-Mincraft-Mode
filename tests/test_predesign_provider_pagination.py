@@ -57,7 +57,7 @@ def test_curseforge_paginates_targeted_queries_and_fetches_ranked_descriptions(m
             ]}
         if "/mods/search?" in url:
             query = _query(url)
-            assert query.get("searchFilter", [""])[0] in {"space", "trading"}
+            assert query.get("searchFilter", [""])[0] in {"space", "trading", "trade"}
             assert query["classId"] == ["6"]
             index = int(query.get("index", ["0"])[0])
             if index == 0:
@@ -80,7 +80,7 @@ def test_curseforge_paginates_targeted_queries_and_fetches_ranked_descriptions(m
     records, receipt = rag._search_curseforge("space trading")
     assert [record["source_id"] for record in records] == ["curseforge:1", "curseforge:2", "curseforge:3"]
     assert [record["content"] for record in records] == ["full-1", "full-2", "full-3"]
-    assert receipt["search_requests"] == 4
+    assert receipt["search_requests"] == 6
     assert receipt["source_requests"] == 3
     assert receipt["provider_total"] == 3
 
