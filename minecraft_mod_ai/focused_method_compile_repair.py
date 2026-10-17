@@ -88,7 +88,7 @@ def repair_staged_java_with_model(
             return source
         body = replacement[len(frame["prefix"]):-len(frame["suffix"])].strip()
         if (not body or body in {";", "return;"}
-                or re.search(r"\\b(?:TODO|FIXME|UnsupportedOperationException)\\b", body)):
+                or re.search(r"\b(?:TODO|FIXME|UnsupportedOperationException)\b", body)):
             # Compiler-pass alone must not promote a trivially erased feature.
             return source
         return source.replace(old, replacement, 1)
