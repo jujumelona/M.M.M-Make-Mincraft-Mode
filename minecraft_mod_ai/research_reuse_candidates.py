@@ -83,10 +83,11 @@ def merge_repository_candidates(existing: Sequence[Mapping[str, Any]] | None,
         else:
             prev = result[name]
             for field in ("source_ids", "source_urls", "catalog_evidence"):
-                prev[field] = list(dict.fromkeys(prev.get(field, ()) + list(row.get(field, ())))                     if field != "catalog_evidence" else [
-                        *prev.get(field, ()),
-                        *(value for value in row.get(field, ()) if value not in prev.get(field, ())),
-                    ]
+                merged = list(prev.get(field, ()))
+                for value in row.get(field, ()):
+                    if value not in merged:
+                        merged.append(value)
+                prev[field] = merged
     values = list(result.values())
     return values[:global_limit] if global_limit is not None else values
 
