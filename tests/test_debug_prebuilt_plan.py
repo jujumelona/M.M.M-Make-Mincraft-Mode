@@ -90,33 +90,29 @@ def test_prebuilt_roundtrip_matches_production_plan_abi(tmp_path: Path) -> None:
     assert selected["donor_claims"] == []
 
 
-def test_prebuilt_reference_selection_reaches_proof_only_repository_cards(monkeypatch) -> None:
+def test_prebuilt_references_do_not_restore_removed_repository_search(monkeypatch) -> None:
     from minecraft_mod_ai.authored_reuse_bridge import resolve_authored_source_reuse
-    from minecraft_mod_ai.grounded_source_reuse import _grounded_repository_cards
     import minecraft_mod_ai.grounded_source_reuse as reuse
 
     plan = build_prebuilt_debug_plan()
     selections = plan.content_design["_debug_reference_selection"]["reference_candidates"]
     repositories = tuple(row["repository"] for row in selections)
     assert repositories == ("FabricMC/fabric-example-mod",)
+    # Historical debug references are inert hints, not executable source.
+    assert not hasattr(reuse, "_grounded_repository_cards")
     received = {}
 
-    def fake_host_proof(design):
+    def fake_catalogue_plan(design):
         received.update(design)
-        cards = _grounded_repository_cards(design)
-        selected = next(
-            card for card in cards
-            if card["repository"] == "FabricMC/fabric-example-mod"
-        )
-        assert selected["explicit_reference"] is True
-        assert selected["reference_only"] is True
-        assert selected["source_reuse_authority"] == "verification_required"
         return {
             "schema_version": "mmm/grounded-repository-reuse-plan-v2",
-            "capabilities": [],
+            "capabilities": [
+                {"capability": "example", "mode": "fresh",
+                 "search_status": "unresolved", "source_id": ""}
+            ],
         }
 
-    monkeypatch.setattr(reuse, "build_repository_reuse_plan", fake_host_proof)
+    monkeypatch.setattr(reuse, "build_repository_reuse_plan", fake_catalogue_plan)
     result = resolve_authored_source_reuse(
         plan.requested_prompt,
         plan.structured_sections,
@@ -125,10 +121,14 @@ def test_prebuilt_reference_selection_reaches_proof_only_repository_cards(monkey
         reference_repositories=repositories,
     )
     assert received["_preselected_reference_repositories"] == list(repositories)
+    assert received["_planning_state"]["repository_candidates"] == []
+    assert result["capabilities"][0]["mode"] == "fresh"
+    assert result["capabilities"][0]["source_id"] == ""
     assert result["origin"] == "default_authored_production"
     assert result["bound_target"] == {
         "minecraft_version": "1.21.8", "loader": "fabric",
     }
+
 
 
 def test_prebuilt_fact_graph_lowers_on_real_fabric_target_without_model() -> None:
