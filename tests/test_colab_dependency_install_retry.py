@@ -75,7 +75,7 @@ def test_project_install_fails_closed_if_deadline_unavailable(monkeypatch, tmp_p
     assert not receipt.exists()
 
 
-def test_colab_image_stack_pins_backtracked_package_families():
+def test_colab_core_stack_constraints_do_not_require_retired_image_backend():
     constraints = (
         Path(setup.__file__).with_name("colab_pip_constraints.txt")
         .read_text(encoding="utf-8")
@@ -86,12 +86,32 @@ def test_colab_image_stack_pins_backtracked_package_families():
         if line and not line.startswith("#") and "==" in line
     }
     for package in (
-        "numpy", "numba", "llvmlite", "rembg", "accelerate",
-        "bitsandbytes", "diffusers", "gradio", "gradio-client",
-        "huggingface-hub", "peft", "sentence-transformers", "transformers",
+        "numpy", "numba", "llvmlite", "accelerate",
+        "bitsandbytes", "gradio", "gradio-client",
+        "huggingface-hub", "sentence-transformers", "transformers",
     ):
         assert package in values
-    assert values["rembg"] == "2.0.67"
     assert values["numpy"] == "2.1.3"
-    assert values["scikit-image"] == "0.25.2"
     assert setup._PROJECT_PIP_INSTALL_DEADLINE_SECONDS == 240
+    assert ",image" not in setup.LOCAL_PROJECT_INSTALL_TARGET
+    assert ",image" not in setup.REMOTE_PROJECT_INSTALL_TARGET
+    source = Path(setup.__file__).read_text(encoding="utf-8")
+    assert "def _core_stack_preflight" in source
+    assert 'from diffusers import Flux2KleinPipeline' not in source
+    assert 'version("rembg")' not in source
+
+
+def test_python313_core_stack_smoke_preflight(monkeypatch):
+    class Completed:
+        returncode = 0
+        stdout = "M.M.M core production imports=OK\n"
+
+    invoked = []
+    monkeypatch.setattr(setup.subprocess, "run", lambda *a, **kw: (
+        invoked.append((a, kw)) or Completed()
+    ))
+    healthy, detail = setup._core_stack_preflight()
+    assert healthy and "core production imports=OK" in detail
+    assert invoked[0][1]["timeout"] == 45
+    assert "rembg" not in invoked[0][0][0][-1]
+    assert "diffusers" not in invoked[0][0][0][-1]
