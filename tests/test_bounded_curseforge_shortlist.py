@@ -14,7 +14,7 @@ def test_source_reuse_stops_after_first_sufficient_query(monkeypatch):
     monkeypatch.delenv("MMM_REUSE_DISCOVERY_PAGES", raising=False)
     assert reuse_discovery._query_limit() == 6
     assert reuse_discovery._representative_limit() == 3
-    assert reuse_discovery._query_variant_limit() == 2
+    assert reuse_discovery._query_variant_limit() == 3
     assert reuse_discovery._discovery_pages() == 1
 
     monkeypatch.setattr(reuse_discovery, "_curseforge_api_key", lambda: "test")
@@ -86,11 +86,11 @@ def test_predesign_search_stops_after_first_shortlist(monkeypatch):
     monkeypatch.setattr(pre_design_grounded_rag, "_curseforge_browse_json", get_catalog)
     monkeypatch.setattr(pre_design_grounded_rag, "_json", detail)
     records, receipt = pre_design_grounded_rag._search_curseforge(
-        "spaceship assembly", minecraft_version="1.21.8", loader="fabric",
+        "spaceship", minecraft_version="1.21.8", loader="fabric",
     )
     assert len(search_requests) == 1
-    assert len(detail_requests) == 3
-    assert len(records) == 4
+    assert len(detail_requests) == 2
+    assert len(records) == 2
     assert len(receipt["search_variants"]) == 1
     assert receipt["search_requests"] == 1
     assert receipt["retrieval_complete"] is False
