@@ -606,6 +606,11 @@ def _compile_content_artifact_graph(
         if not isinstance(values, list):
             raise ValueError(f"CONTENT_DESIGN_INVALID: {label} must be an array")
 
+    # Assets from older authored plans were prompts for FLUX/standalone pack
+    # production, not executable gameplay. Retire them at the saved-plan
+    # boundary; keep real module facts and artifact jobs intact.
+    raw_assets = []
+
     module_fields = {
         "module_id",
         "kind",
