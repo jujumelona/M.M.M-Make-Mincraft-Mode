@@ -118,7 +118,7 @@ def test_predesign_provider_search_keeps_version_loader_and_feature(monkeypatch)
     records, receipt = pre_design_grounded_rag._search_curseforge(
         "spaceship", minecraft_version="1.21.8", loader="fabric"
     )
-    assert requests == ["spaceship"]
+    assert requests == ["spaceship", "spacecraft", "space"]
     assert receipt["search_filter_used"] is True
     assert [r["source_id"] for r in records] == ["curseforge:100"]
     assert records[0]["body_retrieved"]
