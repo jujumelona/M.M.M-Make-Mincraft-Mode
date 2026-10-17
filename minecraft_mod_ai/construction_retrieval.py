@@ -114,6 +114,7 @@ class ConstructionEvidenceIndex:
         self.member_name_owners = defaultdict(set)
         self.member_name_keys = defaultdict(set)
         self.member_result_keys = defaultdict(set)
+        self.children_by_parent = defaultdict(set)
         self.name_weights = {}
         self.strong_name_prefixes = frozenset()
         self.exact_action_available = False
@@ -139,6 +140,10 @@ class ConstructionEvidenceIndex:
             self._record_document(key, row)
             self._index_name_owner(key, row)
             self._index_result_type(key, row)
+            if row.get('kind') == 'CLASS':
+                for parent in (row.get('superclass', ''), *row.get('interfaces', ())):
+                    if parent:
+                        self.children_by_parent[parent].add(key)
             if row.get('kind') == 'CLASS':
                 self.aliases[symbol_query_key(key)].add(key)
                 self.aliases[symbol_query_key(row['name'])].add(key)
@@ -417,10 +422,17 @@ class ConstructionEvidenceIndex:
         from .construction_operation_contracts import result_fits
         excluded = set(selection['excluded_symbols'])
         rows = defaultdict(list)
-        for result_type, keys in self.member_result_keys.items():
-            if result_type != want and not self.assignable(result_type, want):
-                continue
-            for key in keys:
+        possible_types, pending = {want}, [want]
+        while pending:
+            for child in self.children_by_parent.get(pending.pop(), ()):
+                if child not in possible_types:
+                    possible_types.add(child)
+                    pending.append(child)
+        # Java primitive widening is finite and separate from inheritance.
+        possible_types.update(primitive for primitive in PRIMITIVES
+                              if primitive != 'void' and self.assignable(primitive, want))
+        for result_type in possible_types:
+            for key in self.member_result_keys.get(result_type, ()):
                 row = self.symbols[key]
                 if row['kind'] not in kinds or key in excluded or row.get('inherited_from') in excluded:
                     continue
