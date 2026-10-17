@@ -3,30 +3,45 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from minecraft_mod_ai import source_transplant as source
 from minecraft_mod_ai.artifact_dependency_graph import ArtifactKind, ArtifactNode
 from minecraft_mod_ai.host_version_catalog import host_target
 
 
-def test_real_donor_inspector_returns_version_bound_reference_for_older_source(monkeypatch):
+@pytest.mark.parametrize("unrelated_target_module", (False, True))
+def test_real_donor_inspector_returns_version_bound_reference_for_older_source(
+    monkeypatch, unrelated_target_module,
+):
     java_path = "src/main/java/example/Travel.java"
     java_code = b"package example; public class Travel { public void travel() {} }"
+    modern_path = "modern/src/main/java/example/Unrelated.java"
+    blobs = {java_path: "b" * 40}
+    metadata = {
+        "gradle.properties": "minecraft_version=1.20.1",
+        "src/main/resources/fabric.mod.json":
+            '{"schemaVersion":1,"id":"demo","depends":{"fabricloader":">=0.15.0","minecraft":"1.20.1"}}',
+    }
+    if unrelated_target_module:
+        blobs[modern_path] = "c" * 40
+        metadata["modern/gradle.properties"] = "minecraft_version=26.1.2"
+        metadata["modern/src/main/resources/fabric.mod.json"] = (
+            '{"id":"modern","depends":{"fabricloader":">=0.17.0","minecraft":"26.1.2"}}'
+        )
 
     monkeypatch.setattr(source, "_repository_snapshot", lambda *_args, **_kwargs: {
         "license_id": "MIT",
         "commit_sha": "a" * 40,
-        "blobs": {java_path: "b" * 40},
+        "blobs": blobs,
         "selected_branch": "main",
         "default_branch": "main",
     })
-    monkeypatch.setattr(source, "_build_metadata_sources", lambda *_args, **_kwargs: {
-        "gradle.properties": "minecraft_version=1.20.1",
-        "src/main/resources/fabric.mod.json":
-            '{"schemaVersion":1,"id":"demo","depends":{"fabricloader":">=0.15.0","minecraft":"1.20.1"}}',
-    })
+    monkeypatch.setattr(source, "_build_metadata_sources",
+                        lambda *_args, **_kwargs: metadata)
 
     class FakeGraph:
-        nodes = {java_path: ArtifactNode(java_path, ArtifactKind.JAVA_SOURCE)}
+        nodes = {path: ArtifactNode(path, ArtifactKind.JAVA_SOURCE) for path in blobs}
         unresolved_edges = ()
         ambiguous_edges = ()
         adjacency = {}
