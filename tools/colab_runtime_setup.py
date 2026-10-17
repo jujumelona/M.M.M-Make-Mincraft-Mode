@@ -40,8 +40,8 @@ _LOCAL_PROFILE_ENV_NAMES = (
     "MMM_LLAMA_SERVER_DISTRIBUTION",
     "MMM_LLAMA_SERVER_SOURCE_DIR",
 )
-REMOTE_PROJECT_INSTALL_TARGET = ".[ui,rag,image,speech,production-audio]"
-LOCAL_PROJECT_INSTALL_TARGET = ".[ui,local-model,rag,image,speech,production-audio]"
+REMOTE_PROJECT_INSTALL_TARGET = ".[ui,rag,speech,production-audio]"
+LOCAL_PROJECT_INSTALL_TARGET = ".[ui,local-model,rag,speech,production-audio]"
 # A pip network timeout is not an overall resolver deadline. Keep both
 # bounded so a Colab setup cell cannot spend hours backtracking.
 _PROJECT_PIP_INSTALL_DEADLINE_SECONDS = 240
@@ -709,42 +709,22 @@ def _project_install_fingerprint(target: str) -> str:
     return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
 
 
-def _image_stack_preflight() -> tuple[bool, str]:
-    """Import the real FLUX.2/Qwen3/rembg dependency chain in a clean interpreter.
-
-    A successful package installation (or a cached install receipt) does not
-    guarantee that NumPy's compiled extension and its Python files agree.
-    This intentionally does not download model weights or allocate GPU memory.
-    """
+def _core_stack_preflight() -> tuple[bool, str]:
+    """Check only required core production dependencies, not FLUX/rembg."""
     code = (
-        "import numpy as np\n"
-        "import numpy.testing\n"
-        "from scipy.sparse import csr_matrix\n"
-        "from transformers import Qwen3ForCausalLM\n"
-        "from diffusers import Flux2KleinPipeline\n"
-        "from importlib.metadata import version as distribution_version\n"
-        "from rembg.sessions.birefnet_general_lite import BiRefNetSessionGeneralLite\n"
-        "from rembg.sessions.u2netp import U2netpSession\n"
-        "rembg_version = distribution_version('rembg')\n"
-        "if rembg_version != '2.0.67':\n"
-        "    raise RuntimeError('ALPHA_SEGMENTER_INCOMPATIBLE_REMBG_VERSION: installed=' + rembg_version + ' required=2.0.67')\n"
-        "if BiRefNetSessionGeneralLite.name() != 'birefnet-general-lite':\n"
-        "    raise RuntimeError('ALPHA_SEGMENTER_MODEL_CLASS_MISMATCH')\n"
-        "if U2netpSession.name() != 'u2netp':\n"
-        "    raise RuntimeError('ALPHA_SEGMENTER_FALLBACK_CLASS_MISMATCH')\n"
-        "print('numpy=' + np.__version__ + ' rembg=' + rembg_version + ' FLUX.2/rembg imports=OK')\n"
+        "import yaml\n"
+        "import httpx\n"
+        "import jsonschema\n"
+        "print('M.M.M core production imports=OK')\n"
     )
     try:
         result = subprocess.run(
             [sys.executable, "-c", code],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            check=False,
-            timeout=120,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, check=False, timeout=45,
         )
     except subprocess.TimeoutExpired:
-        return False, "FLUX.2/rembg dependency import timed out after 120 seconds"
+        return False, "Core production dependency import timed out."
     output = result.stdout.strip()
     if result.returncode:
         return False, output[-8000:]
@@ -785,14 +765,14 @@ def _install_project(*, local_profile: bool) -> None:
         and receipt.get("fingerprint") == fingerprint
         and _installed_version("mmm-make-mincraft-mode") is not None
     ):
-        healthy, detail = _image_stack_preflight()
+        healthy, detail = _core_stack_preflight()
         if healthy and all(
             not loaded_version or loaded_version == _installed_version(dist)
             for dist, loaded_version in loaded_native_versions.items()
         ):
-            print("project dependencies: receipt and FLUX.2 imports verified; pip skipped", flush=True)
+            print("project dependencies: receipt and core imports verified; pip skipped", flush=True)
             return
-        print("project dependencies: stale receipt; FLUX.2 imports failed:", detail[-1500:], flush=True)
+        print("project dependencies: stale receipt; core imports failed:", detail[-1500:], flush=True)
 
     print(
         "project dependencies: installing",
@@ -847,7 +827,7 @@ def _install_project(*, local_profile: bool) -> None:
             "Do not silently downgrade rembg or ignore resolver conflicts."
         ) from exc
 
-    healthy, detail = _image_stack_preflight()
+    healthy, detail = _core_stack_preflight()
     repaired_numpy = False
     if not healthy and "_blas_supports_fpe" in detail:
         # The exact observed Colab failure is an inconsistent NumPy binary /
@@ -856,7 +836,7 @@ def _install_project(*, local_profile: bool) -> None:
         print("project dependencies: repairing NumPy _blas_supports_fpe import failure", flush=True)
         current_numpy = _installed_version("numpy")
         if current_numpy is None:
-            raise RuntimeError("NumPy installation is missing; FLUX.2 cannot start.")
+            raise RuntimeError("NumPy installation is missing; native extension unavailable.")
         _run_logged([
             sys.executable, "-m", "pip", "install",
             "--disable-pip-version-check", "--prefer-binary",
@@ -865,10 +845,10 @@ def _install_project(*, local_profile: bool) -> None:
             "numpy==" + current_numpy,
         ])
         repaired_numpy = True
-        healthy, detail = _image_stack_preflight()
+        healthy, detail = _core_stack_preflight()
     if not healthy:
         raise RuntimeError(
-            "FLUX.2 Klein/rembg dependency imports remain broken after installation. "
+            "Core production dependency imports remain broken after installation. "
             "Fix the reported Python packages before running production. "
             f"Original import traceback:\\n{detail}"
         )
@@ -895,7 +875,7 @@ def _install_project(*, local_profile: bool) -> None:
             "cell 1. The pinned NumPy/Numba constraints prevent repeated "
             "upgrades on subsequent setup runs."
         )
-    print("project dependencies: FLUX.2/Qwen3 imports verified:", detail, flush=True)
+    print("project dependencies: core imports verified:", detail, flush=True)
     receipt_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = receipt_path.with_suffix(receipt_path.suffix + ".tmp")
     temporary.write_text(
