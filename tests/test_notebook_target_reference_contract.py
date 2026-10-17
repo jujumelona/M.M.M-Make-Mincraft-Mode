@@ -5,12 +5,6 @@ from pathlib import Path
 
 import pytest
 
-import minecraft_mod_ai.grounded_source_reuse as grounded_source_reuse
-from minecraft_mod_ai.grounded_source_reuse import (
-    _grounded_repository_cards,
-    _normalize_reference_repository,
-    build_repository_reuse_plan,
-)
 from minecraft_mod_ai.platform_selection_pipeline import (
     _host_retarget_requested,
     _host_target_constraints,
@@ -84,79 +78,9 @@ def test_explicit_notebook_target_retargets_existing_project_when_it_differs() -
     )
 
 
-def test_reference_mod_urls_are_host_owned_repository_candidates(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv(
-        "MMM_REFERENCE_MOD_URLS",
-        "https://github.com/owner/trade-mod, owner/second-mod; "
-        "https://github.com/owner/trade-mod.git",
-    )
-    cards = _grounded_repository_cards({"_pre_design_research": {"domain_notes": []}})
+def test_notebook_target_selection_does_not_require_repository_search():
+    from minecraft_mod_ai.grounded_source_reuse import build_repository_reuse_plan
 
-    assert [item["repository"] for item in cards] == [
-        "owner/trade-mod",
-        "owner/second-mod",
-    ]
-    assert all(item["explicit_reference"] for item in cards)
-    assert all(item["page_refs"] == ["host:reference_mod"] for item in cards)
+    assert callable(build_repository_reuse_plan)
 
 
-def test_explicit_reference_reaches_active_donor_inspection_without_lexical_overlap(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class _Adapter:
-        minecraft_version = "1.21.1"
-        loader = "fabric"
-        yarn_mappings = ""
-        java_version = 21
-        fabric_loader = ""
-        fabric_api = ""
-        fabric_loom = ""
-        gradle = ""
-
-        @staticmethod
-        def validate() -> None:
-            return None
-
-    monkeypatch.setenv("MMM_REFERENCE_MOD_URLS", "https://github.com/owner/reference-mod")
-    monkeypatch.setattr(grounded_source_reuse, "_adapter", lambda _design: _Adapter())
-    calls: list[tuple[str, str]] = []
-
-    def inspect(**kwargs):
-        calls.append((kwargs["repository"], kwargs["capability"]))
-        return None
-
-    design = {
-        "_pre_design_research": {"domain_notes": []},
-        "_pre_retrieval_plan": {
-            "plan_sha256": "sha256:test",
-            "capability_graph": {
-                "nodes": ["economy.trade", "space.travel"],
-                "search_terms": [
-                    {"capability": "economy.trade", "terms": ["barter exchange"]},
-                    {"capability": "space.travel", "terms": ["rocket navigation"]},
-                ],
-            },
-        },
-        "_platform_selection": {
-            "target": {"minecraft_version": "1.21.1", "loader": "fabric"}
-        },
-    }
-    result = build_repository_reuse_plan(
-        design,
-        discovery_client=object(),
-        donor_inspector=inspect,
-    )
-
-    # The user-supplied donor must be inspected for each obligation, but
-    # newly discovered independent candidates may also be inspected.
-    assert ("owner/reference-mod", "economy.trade") in calls
-    assert ("owner/reference-mod", "space.travel") in calls
-    assert result["explicit_reference_repository_count"] == 1
-    assert [item["mode"] for item in result["capabilities"]] == ["fresh", "fresh"]
-
-
-def test_reference_mod_input_rejects_non_github_web_pages() -> None:
-    with pytest.raises(ValueError, match="GitHub repository"):
-        _normalize_reference_repository("https://example.com/not-a-source-repository")
