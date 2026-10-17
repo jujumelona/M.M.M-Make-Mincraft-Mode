@@ -39,6 +39,7 @@ from .knowledge import (
 )
 from .rag_index import ProjectRAGIndex
 from .source_intent_aliases import source_intent_terms, source_query_variants
+from .curseforge_query import curseforge_search_queries, curseforge_catalogue_score
 
 _TIMEOUT = 8.0
 _UA = "MMM-PreDesignResearch/3.0 (+https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode)"
@@ -389,16 +390,24 @@ def _search_curseforge(
     minecraft_version: str | None = None,
     loader: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Browse catalogue metadata first; fetch bodies only for ranked evidence.
+    """Find actual matching mods using targeted provider-side keyword searches.
 
-    CurseForge searchFilter matches names/authors, NOT descriptions. A feature
-    sentence cannot be used as the search key. Browsing three sorting windows
-    provides complementary samples without promising exhaustive catalogue reach.
+    CurseForge searches mod names/authors, not prose descriptions. Produce short
+    query variants from the real requirement, then rerank by full intent and
+    fetch description bodies for only the best target-filtered results.
     """
+    variants = curseforge_search_queries(query, max_variants=4)
+    if not variants:
+        return [], {
+            "provider": "curseforge", "status": "query_unresolved",
+            "result_count": 0, "search_variants": [],
+            "retrieval_complete": False,
+        }
     key = curseforge_api_key()
     if not key:
         return [], {
-            "provider": "curseforge", "status": "not_configured", "result_count": 0,
+            "provider": "curseforge", "status": "not_configured",
+            "result_count": 0, "search_variants": list(variants),
         }
     try:
         target_filters = curseforge_target_filters(minecraft_version, loader)
@@ -410,8 +419,6 @@ def _search_curseforge(
 
     headers = {"x-api-key": key}
     errors: list[str] = []
-    mods_class = None
-    categories: Any = None
     try:
         categories = _curseforge_browse_json(
             "https://api.curseforge.com/v1/categories?gameId=432", headers
@@ -420,6 +427,7 @@ def _search_curseforge(
             categories.get("data") if isinstance(categories, Mapping) else None
         )
     except (OSError, ValueError) as exc:
+        mods_class = None
         errors.append("categories_unavailable:" + type(exc).__name__)
     if mods_class is None:
         return [], {
@@ -428,68 +436,50 @@ def _search_curseforge(
             "retrieval_complete": False,
         }
 
-    wanted = set(_search_terms(query)) | set(source_intent_terms(query))
     seen_ids: set[int] = set()
     candidates: list[tuple[int, int, Mapping[str, Any]]] = []
     search_requests = 0
     source_requests = 0
     provider_total = 0
-    # This is a scan budget, not a claim that all matching mods were visited.
     page_limit = _provider_page_limit() or 2
     output_limit = _provider_result_limit() or 20
     page_size = 50
-
-    windows = curseforge_browse_windows(
-        categories.get("data") if isinstance(categories, Mapping) else None,
-        mods_class, broad_pages=page_limit,
-    )
-    for sort_field, category_id, max_pages in windows:
-        index = 0
-        for _page_number in range(max_pages):
+    query_receipts: list[dict[str, Any]] = []
+    for variant in variants:
+        index, variant_matches, variant_requests = 0, 0, 0
+        for _ in range(page_limit):
             params = {
                 "gameId": 432, "index": index, "pageSize": page_size,
-                "sortField": sort_field, "sortOrder": "desc",
-                "classId": mods_class,
+                "sortField": 13, "sortOrder": "desc", "classId": mods_class,
+                "searchFilter": variant,
             }
             params.update(target_filters)
-            if category_id is not None:
-                params["categoryId"] = category_id
             url = "https://api.curseforge.com/v1/mods/search?" + urllib.parse.urlencode(params)
             try:
                 payload = _curseforge_browse_json(url, headers)
             except (OSError, ValueError) as exc:
-                errors.append(f"catalogue_page_failed:{type(exc).__name__}")
-                break  # Retain all earlier pages and try the remaining independent windows.
+                errors.append(f"catalogue_page_failed:{variant}:{type(exc).__name__}")
+                break
             search_requests += 1
+            variant_requests += 1
             raw_rows = payload.get("data") if isinstance(payload, Mapping) else None
             if not isinstance(raw_rows, list):
-                errors.append("invalid_catalogue_page")
+                errors.append(f"invalid_catalogue_page:{variant}")
                 break
             for row in raw_rows:
                 if not isinstance(row, Mapping) or type(row.get("id")) is not int:
                     continue
                 mod_id = row["id"]
-                if mod_id in seen_ids:
-                    continue
-                if row.get("classId") != mods_class:
+                if mod_id in seen_ids or row.get("classId") != mods_class:
                     continue
                 seen_ids.add(mod_id)
-                category_rows = row.get("categories")
-                categories_text = " ".join(
-                    str(item.get("name") or "") for item in category_rows
-                    if isinstance(item, Mapping)
-                ) if isinstance(category_rows, list) else ""
-                indexed_text = " ".join((
-                    str(row.get("name") or ""),
-                    str(row.get("summary") or ""),
-                    categories_text,
-                ))
-                overlap = len(wanted & (set(_search_terms(indexed_text)) | set(source_intent_terms(indexed_text))))
-                if overlap == 0:
-                    continue  # Avoid handing irrelevant broad catalogue rows to the model.
+                score = curseforge_catalogue_score(query, row)
+                if score == 0:
+                    continue
+                variant_matches += 1
+                # Existing source links are not proof of source availability.
                 links = row.get("links") if isinstance(row.get("links"), Mapping) else {}
-                source_bonus = 1 if links.get("sourceUrl") else 0
-                candidates.append((overlap, source_bonus, row))
+                candidates.append((score, int(bool(links.get("sourceUrl"))), row))
             pagination = payload.get("pagination") if isinstance(payload, Mapping) else None
             if isinstance(pagination, Mapping):
                 try:
@@ -498,19 +488,25 @@ def _search_curseforge(
                     errors.append("invalid_total_count")
             try:
                 next_index = curseforge_next_index(
-                    pagination, index=index, page_size=page_size, row_count=len(raw_rows),
+                    pagination, index=index, page_size=page_size, row_count=len(raw_rows)
                 )
             except ValueError:
-                errors.append("invalid_pagination")
+                errors.append(f"invalid_pagination:{variant}")
                 break
             if next_index is None:
                 break
             index = next_index
+            if variant_matches >= output_limit:
+                break
+        query_receipts.append({
+            "query": variant, "search_requests": variant_requests,
+            "relevant_new_mods": variant_matches,
+        })
 
     candidates.sort(
-        key=lambda row: (row[0], row[1]), reverse=True
+        key=lambda row: (-row[0], -row[1],
+                         str(row[2].get("name") or "").casefold(), row[2]["id"])
     )
-    # Small AI only receives a bounded shortlist, not all catalogue descriptions.
     shortlisted = candidates[:output_limit]
     detail_count = min(6, len(shortlisted))
     details: dict[int, str] = {}
@@ -521,7 +517,7 @@ def _search_curseforge(
             position, mod_id = job
             try:
                 payload = _json(
-                    f"https://api.curseforge.com/v1/mods/{mod_id}/description", headers,
+                    f"https://api.curseforge.com/v1/mods/{mod_id}/description", headers
                 )
                 if isinstance(payload, Mapping):
                     body = " ".join(
@@ -550,7 +546,7 @@ def _search_curseforge(
                 errors.append(f"{mod['id']}:{error}")
 
     records: list[dict[str, Any]] = []
-    for _, _, row in shortlisted:
+    for score, _bonus, row in shortlisted:
         mod_id = row["id"]
         body = details.get(mod_id)
         summary = str(row.get("summary") or "").strip()
@@ -558,6 +554,11 @@ def _search_curseforge(
         if not text:
             continue
         links = row.get("links") if isinstance(row.get("links"), Mapping) else {}
+        metadata = curseforge_mod_metadata(
+            row, minecraft_version=minecraft_version, loader=loader
+        )
+        metadata["retrieval_relevance_score"] = score
+        metadata["source_reuse_authority"] = "catalogue_only"
         records.append({
             "source_id": f"curseforge:{mod_id}",
             "source_type": "curseforge_mod_body" if body else "curseforge_mod_summary",
@@ -568,20 +569,22 @@ def _search_curseforge(
             "content_sha256": _sha256_text(text),
             "body_retrieved": bool(body),
             "evidence_origin": "curseforge_mod_body" if body else "curseforge_mod_summary",
-            "metadata": curseforge_mod_metadata(
-                row, minecraft_version=minecraft_version, loader=loader,
-            ),
+            "metadata": metadata,
         })
 
     return records, {
-        "provider": "curseforge", "status": "available",
+        "provider": "curseforge",
+        "status": "provider_error" if errors and not search_requests else "available",
         "result_count": len(records), "provider_total": provider_total,
         "search_requests": search_requests, "source_requests": source_requests,
         "detail_errors": errors, "authenticated": True,
         "target_filters": dict(target_filters),
-        "search_filter_used": False,
-        "catalog_class_verified": mods_class is not None,
-        "retrieval_stop": "bounded_multi_sort_catalogue_scan_not_exhaustive",
+        "search_filter_used": True,
+        "search_variants": list(variants),
+        "query_receipts": query_receipts,
+        "catalog_class_verified": True,
+        "retrieval_complete": False,
+        "retrieval_stop": "bounded_targeted_search_not_exhaustive",
     }
 
 
