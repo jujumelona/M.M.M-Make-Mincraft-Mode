@@ -91,6 +91,12 @@ def repair_failed_build_with_model(
         receipt["repaired_files"] = paths
         receipt["compiled_source_sha256"] = hashlib.sha256(
             source.encode("utf-8")).hexdigest()
+        from .compiled_feature_patch import persist_compiled_repair
+        receipt["resume_patch"] = persist_compiled_repair(
+            root, paths[0],
+            original_sha256=str(repair["original_sha256"]),
+            compiled_source=source,
+        )
         receipt["build_recheck_required"] = True
     else:
         receipt["status"] = "REPAIR_FAILED"
