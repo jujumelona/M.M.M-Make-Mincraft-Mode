@@ -4,7 +4,7 @@ import json
 import math
 import struct
 import zlib
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from .fabric_official_template_provider import _install_host_gametest_contract
@@ -65,6 +65,13 @@ class FabricProjectGenerator:
         root.mkdir(parents=True, exist_ok=True)
 
         self._written: list[Path] = []
+        # Persist the complete approved target before generating project files.
+        # Downstream compilation must reconstruct the same lock, never silently
+        # re-resolve a newer Minecraft, loader, or Gradle toolchain.
+        self._write_text(
+            root, ".minecraft_ai/platform-lock.json",
+            _json_text(asdict(spec.platform)), raw=True,
+        )
         package_path = Path(*spec.package_name.split("."))
         main_class = _java_class_name(spec.mod_id)
 
