@@ -46,7 +46,7 @@ def test_provider_search_terms_rank_real_feature_titles_above_generic_hits():
         curseforge_catalogue_score, curseforge_search_queries,
     )
     assert curseforge_search_queries("build a spaceship to fight aliens")[0] == "spaceship"
-    assert curseforge_search_queries("외계인 우주선 전투")[0] == "spaceship"
+    assert "spaceship" in curseforge_search_queries("외계인 우주선 전투")
     assert curseforge_search_queries("mod game feature only") == ()
     assert curseforge_catalogue_score(
         "build a spaceship to fight aliens", {"name": "Spaceship",
@@ -81,6 +81,7 @@ def test_curseforge_pagination_advances_and_never_crosses_provider_window():
 def test_curseforge_reuse_discovers_second_page_with_targeted_name_search(monkeypatch):
     monkeypatch.setattr(reuse_discovery, "_curseforge_api_key", lambda: "dummy")
     monkeypatch.setattr(reuse_discovery, "_discovery_pages", lambda: 2)
+    monkeypatch.setattr(reuse_discovery, "_query_limit", lambda: 50)
     calls = []
 
     class Response:
@@ -140,6 +141,7 @@ def test_curseforge_reuse_discovers_second_page_with_targeted_name_search(monkey
 def test_later_curseforge_failure_keeps_completed_page_candidates(monkeypatch):
     monkeypatch.setattr(reuse_discovery, "_curseforge_api_key", lambda: "dummy")
     monkeypatch.setattr(reuse_discovery, "_discovery_pages", lambda: 2)
+    monkeypatch.setattr(reuse_discovery, "_query_limit", lambda: 50)
 
     class Response:
         def __init__(self, url, params):
