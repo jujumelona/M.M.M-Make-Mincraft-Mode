@@ -5,6 +5,7 @@ The target inventory remains authoritative; old source is porting evidence.
 """
 from __future__ import annotations
 from .construction_type_contracts import owner_package, class_accessible
+from .construction_api_admission import api_semantic_admissible, root_action_stems
 
 import hashlib
 import json
@@ -395,6 +396,8 @@ class ConstructionEvidenceIndex:
                 continue
             if constraints and not result_fits(row['return_type'], constraints, self):
                 continue
+            if not api_semantic_admissible("call", query, row, constraints):
+                continue
             selected[row['owner']].append(key)
         return dict(selected)
 
@@ -683,9 +686,11 @@ class ConstructionEvidenceIndex:
         # If the suggested callable is nonexistent, keep the ordinary discovery
         # path instead of treating the suggestion as actual API authority.
         focused = bool(eligible)
-        if not eligible and not hinted_prefix and not strict_result:
-            # A proposed but nonexistent dotted method is not a reason to
-            # re-open hundreds of thousands of unrelated declarations.
+        if (not eligible and not hinted_prefix and not strict_result
+                and not ("METHOD" in kinds and root_action_stems(purpose)
+                         and not (selection or {}).get("contracts"))):
+            # An explicit task verb without a corresponding callable is not
+            # permission to browse hundreds of thousands of unrelated APIs.
             eligible = self._eligible_owners(kinds, selection)
         self._rank_method_intent(query, kinds, eligible, relation)
         if focused:
