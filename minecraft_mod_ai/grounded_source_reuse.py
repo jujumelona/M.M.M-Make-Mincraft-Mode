@@ -31,34 +31,61 @@ def build_repository_reuse_plan(design: Mapping[str, Any], **kwargs: Any) -> dic
     receipts = []
     found = discover_repositories_for_graph(capabilities, None, capability_graph=graph, minecraft_version=version, loader=loader, diagnostics=receipts, providers=("curseforge",), query_cache={})
     print("SOURCE_REUSE_DISCOVERY_ROUTE: " + json.dumps({"provider_order":["curseforge"], "curseforge_key_present":bool(curseforge_api_key()), "minecraft_version":version, "loader":loader}), flush=True)
-    # The catalogue's diagnostic status and the source-evidence status are
-    # different contracts. Catalogue hits are not verified reusable Java.
-    provider_error = any(row.get("status") == "provider_error" for row in receipts)
-    not_configured = any(row.get("status") == "not_configured" for row in receipts)
-    catalog_hits = any(row.get("catalog_result_count") for row in receipts)
-    if provider_error:
-        status, discovery_status, failure_code = (
-            "provider_error", "provider_error", "CURSEFORGE_PROVIDER_ERROR"
-        )
-    elif not_configured:
-        status, discovery_status, failure_code = (
-            "provider_error", "not_configured", "CURSEFORGE_NOT_CONFIGURED"
-        )
-    elif catalog_hits:
-        status, discovery_status, failure_code = "unresolved", "catalog_only", ""
-    else:
-        status, discovery_status, failure_code = "search_empty", "search_empty", ""
+    # Source evidence is decided independently for every feature. A positive
+    # search for one capability must never cover an unrelated requirement.
+    receipts_by_cap = {
+        str(row.get("capability") or ""): row for row in receipts
+    }
+    single_legacy_receipt = receipts[0] if len(capabilities) == len(receipts) == 1 else None
     decisions = []
     for name in capabilities:
-        decisions.append({"capability":name, "mode":"fresh", "search_status":status,
-                          "discovery_status":discovery_status,
-                          "failure_code":failure_code, "source_id":"",
-                          "component_refs":[], "reference_source_count":0,
-                          "rationale":"Catalogue metadata is not verified source; generate code against the selected target."})
-        print("SOURCE_REUSE_CAPABILITY: " + json.dumps(
-            {"capability":name, "mode":"fresh", "inspected":0,
-             "proof_attempts":0, "status":discovery_status,
-             "evidence_status":status}), flush=True)
-    return {"schema_version":"mmm/grounded-repository-reuse-plan-v2", "bound_target":{"minecraft_version":version, "loader":loader}, "source_plan_sha256":sha, "capability_graph":dict(graph), "capabilities":decisions, "grounded_repository_count":0, "host_discovered_repositories":{name:list(found.get(name,())) for name in capabilities}, "planning_rag_candidate_repository_count":0, "explicit_reference_repository_count":0, "discovery_receipts":receipts, "inspection_receipts":[], "proof_receipts":[], "reference_sources":[], "selection_policy":"CurseForge metadata only and fresh target code."}
+        row = receipts_by_cap.get(name) or single_legacy_receipt or {}
+        discovery_status = str(row.get("status") or "query_unresolved")
+        matched = list(row.get("ranked_catalogue_hits") or ())
+        if discovery_status in {"provider_error", "not_configured"}:
+            status, failure_code = ("provider_error",
+                "CURSEFORGE_NOT_CONFIGURED" if discovery_status == "not_configured"
+                else "CURSEFORGE_PROVIDER_ERROR")
+        elif discovery_status == "catalog_only" and matched:
+            status, failure_code = "unresolved", ""
+        elif discovery_status == "catalog_only" and row.get("catalog_result_count", 0):
+            status, failure_code = "unresolved", ""
+        elif discovery_status == "search_empty":
+            status, failure_code = "search_empty", ""
+        else:
+            status, failure_code = "unresolved", ""
+        decisions.append({
+            "capability": name, "mode": "fresh", "search_status": status,
+            "discovery_status": discovery_status,
+            "failure_code": failure_code, "source_id": "",
+            "component_refs": [], "reference_source_count": 0,
+            "catalogue_evidence": matched[:5],
+            "catalogue_queries": list(row.get("queries") or ()),
+            "rationale": (
+                "CurseForge catalogue metadata is only a research hint; "
+                "implement behavior against the selected Minecraft target."
+            ),
+        })
+        print("SOURCE_REUSE_CAPABILITY: " + json.dumps({
+            "capability": name, "mode": "fresh", "inspected": 0,
+            "proof_attempts": 0, "status": discovery_status,
+            "evidence_status": status, "catalogue_match_count": len(matched),
+            "queries": list(row.get("queries") or ()),
+        }, ensure_ascii=False), flush=True)
+    return {
+        "schema_version": "mmm/grounded-repository-reuse-plan-v2",
+        "bound_target": {"minecraft_version": version, "loader": loader},
+        "source_plan_sha256": sha, "capability_graph": dict(graph),
+        "capabilities": decisions, "grounded_repository_count": 0,
+        "host_discovered_repositories": {
+            name: list(found.get(name, ())) for name in capabilities
+        },
+        "planning_rag_candidate_repository_count": 0,
+        "explicit_reference_repository_count": 0,
+        "discovery_receipts": receipts, "inspection_receipts": [],
+        "proof_receipts": [], "reference_sources": [],
+        "selection_policy": "Targeted CurseForge metadata only; independent fresh Java code.",
+    }
+
 
 __all__ = ["build_repository_reuse_plan"]
