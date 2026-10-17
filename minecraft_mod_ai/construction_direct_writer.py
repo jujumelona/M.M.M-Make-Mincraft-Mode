@@ -188,6 +188,8 @@ def _compose_claimed(router, spec, context, behaviors, package, name, owner,
             "intent": behavior["intent"], "trigger": behavior.get("trigger", ""),
             "effects": behavior["effects"], "target_api_and_source": evidence,
             "authoring_contract": context.get("authoring_contract", {}),
+            "feature_work_order": context.get("feature_work_order"),
+            "feature_work_order_sha256": context.get("feature_work_order_sha256"),
             # Preserve the full accepted work in the checkpoint; send a
             # repository-map-like compact member catalogue to the small model.
             "accepted_member_catalogue": [
