@@ -483,10 +483,20 @@ def compose(router, spec, *, source_context=(), construction_context=None,
     # recreates its signature or removes other pending behavior owners.
     authoring_order = sorted(body_jobs, key=lambda job: job[0].owner_symbol != preferred_body)
     rendered = {}
+    from .construction_member_direct_author import eligible_method, compose_method
     for member_task, options in authoring_order:
-        nodes = author_one(member_task, **options)
-        render_task_java(member_task, nodes, symbols)
-        rendered[member_task.owner_symbol] = render_task_member(member_task, nodes, symbols)
+        if eligible_method(member_task, symbols, context, **options):
+            # A host-owned method signature can be filled as one complete
+            # semantic coding unit; do not spend dozens of model calls
+            # constructing one-operation-at-a-time IR.
+            nodes = ()
+            rendered[member_task.owner_symbol] = compose_method(
+                router, member_task, context, owner_name=name)
+            member_invocations[member_task.owner_symbol] = set()
+        else:
+            nodes = author_one(member_task, **options)
+            render_task_java(member_task, nodes, symbols)
+            rendered[member_task.owner_symbol] = render_task_member(member_task, nodes, symbols)
         print('CONSTRUCTION_MEMBER_PROGRESS: ' + json.dumps({
             'owner_symbol': member_task.owner_symbol,
             'accepted_operation_count': len(nodes),
@@ -497,8 +507,10 @@ def compose(router, spec, *, source_context=(), construction_context=None,
         # here (state encodings, callbacks and helper logic), not only signatures.
         ref = 'accepted-member:' + hashlib.sha256(member_task.owner_symbol.encode()).hexdigest()[:24]
         evidence_hash = hashlib.sha256(json.dumps(
-            {'task': member_task.to_dict(), 'nodes': nodes}, ensure_ascii=False,
-            sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+            {'task': member_task.to_dict(), 'nodes': nodes,
+             'rendered_java_sha256': hashlib.sha256(
+                 rendered[member_task.owner_symbol].encode('utf-8')).hexdigest()},
+            ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
         metadata = {'owner': owner, 'authority': 'accepted_sibling_graph',
                     'source_sha256': evidence_hash, 'side': symbols[member_task.owner_symbol]['side']}
         # Make the *actual rendered Java* retrievable for the next member.
