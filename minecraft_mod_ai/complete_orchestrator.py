@@ -776,6 +776,54 @@ class CompleteProductionOrchestrator:
                 build_input_manifest_sha256=build_input_manifest,
             ),
         )
+        if build.get('status') != 'PASS' and router is not None:
+            # Repair only a directly authored Java source with matching host
+            # provenance and an actual javac error. One bounded method-local
+            # correction batch; never infer fixes for Gradle, EULA or GameTest.
+            from .production_compiler_repair import repair_failed_build_with_model
+            repaired = repair_failed_build_with_model(router, project_root, build)
+            module_receipts.append(repaired)
+            if repaired.get('build_recheck_required'):
+                # A Java patch invalidates BOTH source validation and build
+                # manifest identities. Never reuse their old PASS receipts.
+                post_repair_validation = ScalableProjectValidator(
+                    policy=self.policy).validate(project_root, spec).to_dict()
+                if post_repair_validation.get('status') != 'PASS':
+                    raise CompleteProductionError(
+                        'Java compile repair did not pass regenerated source validation.'
+                    )
+                source_report = post_repair_validation
+                validation_manifest = self._project_manifest_hash(project_root)
+                if options.run_jdt:
+                    post_repair_jdt = _run_release_jdt_verification(project_root)
+                    if _blocking_jdt_errors(post_repair_jdt):
+                        raise CompleteProductionError(
+                            'Java compile repair left blocking JDT diagnostics.'
+                        )
+                    jdt_receipt = post_repair_jdt
+                build_input_manifest = build_input_manifest_sha256(project_root)
+                build = run_named_checkpoint(
+                    ledger,
+                    "gradle-build", stage="build",
+                    input_value={
+                        "graph_hash": work_plan.graph_hash,
+                        "project_manifest": validation_manifest,
+                        "build_input_manifest": build_input_manifest,
+                        "run_gametest": options.run_gametest,
+                        "require_clean_build": (
+                            approved.schema_version == 'mmm/complete-proposal-v2'
+                        ),
+                    },
+                    action=run_build,
+                    encode=lambda value: value,
+                    decode=lambda cached: cached,
+                    validate_cached=lambda cached: self._cached_build_exists(
+                        cached,
+                        require_gametest=options.run_gametest,
+                        spec=spec,
+                        build_input_manifest_sha256=build_input_manifest,
+                    ),
+                )
         if build.get('status') != 'PASS':
             from .compiler_diagnostics import gradle_failure_summary
 
