@@ -16,8 +16,23 @@ class _RecordingRunner(GradleRunner):
         return True
 
     def _run(self, *, name, executable, arguments, cwd, env, log_path):
-        del executable, cwd, env
+        del executable, env
         self.calls.append((name, tuple(arguments)))
+        # This recording runner does not execute Gradle. Reproduce the actual
+        # outputs that a successful build/GameTest command is required to leave
+        # on disk, so production hash verification stays enabled in the test.
+        root = Path(cwd)
+        if name in {"build", "clean_build"}:
+            jar = root / "build/libs/test.jar"
+            jar.parent.mkdir(parents=True, exist_ok=True)
+            jar.write_bytes(b"fixture remapped jar")
+            report = root / "build/gametest-report.xml"
+            report.parent.mkdir(parents=True, exist_ok=True)
+            report.write_text(
+                '<testsuite tests="1" failures="0" errors="0" skipped="0">'
+                '<testcase name="DemoModGameTests.generatedRegistriesAreLive"/>'
+                '</testsuite>', encoding="utf-8",
+            )
         return CommandResult(
             name=name,
             command=tuple(arguments),
