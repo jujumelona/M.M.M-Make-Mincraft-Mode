@@ -203,11 +203,9 @@ jobs:
             tests/test_packaged_version_catalog.py \
             tests/test_ci_quality_regression_audit.py \
             tests/test_authored_source_rag.py \
-            tests/test_pinned_repository_download.py \
-            tests/test_grounded_source_reuse_frontier.py \
+            tests/test_curseforge_only_source_policy.py \
             tests/test_request_driven_worksheet.py \
             tests/test_gradle_wrapper_release_attestation.py \
-            tests/test_reuse_discovery_query_architecture.py \
             tests/test_llama_completion_liveness_contract.py \
             tests/test_authored_gameplay_gui_floor.py \
             tests/test_execution_contract_policy.py \
