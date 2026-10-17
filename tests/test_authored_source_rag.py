@@ -46,7 +46,9 @@ def test_downloaded_adapted_source_is_retrieved_by_owning_feature(monkeypatch, t
 
     adapter = host_target(version)
     plan = {"bound_target": {"minecraft_version": version, "loader": "fabric"},
-            "capabilities": [{"mode": "source_transplant", "capability": "space travel"}]}
+            "capabilities": [{"mode": "source_transplant", "capability": "space travel",
+                              "donor": {"compatibility_evidence": {"minecraft_version": version,
+                                                                     "loader": "fabric"}}}]}
     with authored_source_rag.verified_source_rag(plan, adapter=adapter, package_name="test.mod", mod_id="test") as rag:
         result = rag.context(["space travel"], "travelToPlanet")
         assert result and "test.mod" in result[0]["owner"]
@@ -87,7 +89,7 @@ def test_older_source_with_failed_proof_reaches_model_as_adaptation_reference(mo
         materialize_verified_authored_sources,
     )
     from minecraft_mod_ai.host_version_catalog import host_target
-    from minecraft_mod_ai.source_transplant import DonorFile, DonorSlice
+    from minecraft_mod_ai.source_transplant import CompatibilityEvidence, DonorFile, DonorSlice
 
     path = "src/main/java/old/space/PlanetTravel.java"
     code = b"package old.space; public class PlanetTravel { public void travelToPlanet() {} }"
@@ -97,6 +99,7 @@ def test_older_source_with_failed_proof_reaches_model_as_adaptation_reference(mo
         files=(DonorFile(path=path, blob_sha="c" * 40, sha256="sha256:" + hashlib.sha256(code).hexdigest(),
                          size_bytes=len(code), symbols=("PlanetTravel",)),),
         seed_files=(path,), source_symbols=("PlanetTravel",), required_dependencies=(), donor_tests=(), confidence=0.8,
+        compatibility_evidence=CompatibilityEvidence(minecraft_version="1.20.1", loader="fabric", status="metadata_adapt"),
     )
     monkeypatch.setattr("minecraft_mod_ai.source_transplant.materialize_pinned_donor",
                         lambda *args: {path: code, "LICENSE": b"MIT Copyright example"})
@@ -122,7 +125,7 @@ def test_older_source_with_failed_proof_reaches_model_as_adaptation_reference(mo
 def test_failed_deterministic_proof_preserves_downloadable_reference(monkeypatch, tmp_path):
     from minecraft_mod_ai import grounded_source_reuse
     from minecraft_mod_ai.host_version_catalog import host_target
-    from minecraft_mod_ai.source_transplant import DonorFile, DonorSlice
+    from minecraft_mod_ai.source_transplant import CompatibilityEvidence, DonorFile, DonorSlice
 
     monkeypatch.delenv("MMM_REFERENCE_MOD_URLS", raising=False)
     monkeypatch.setattr(grounded_source_reuse, "_adapter", lambda *args: host_target("26.1.2"))
@@ -133,6 +136,7 @@ def test_failed_deterministic_proof_preserves_downloadable_reference(monkeypatch
         source_url="https://github.com/example/oldspace", target_compatibility="adapt",
         files=(DonorFile("src/main/java/Travel.java", "c" * 40, "sha256:" + "d" * 64, 1, ()),),
         seed_files=("src/main/java/Travel.java",), source_symbols=(), required_dependencies=(), donor_tests=(), confidence=0.8,
+        compatibility_evidence=CompatibilityEvidence(minecraft_version="26.1.2", loader="fabric", status="metadata_exact"),
     )
 
     def cannot_migrate(*args, **kwargs):
@@ -152,7 +156,7 @@ def test_unavailable_optional_reference_does_not_abort_fresh_implementation(monk
     from dataclasses import replace
 
     from minecraft_mod_ai.host_version_catalog import host_target
-    from minecraft_mod_ai.source_transplant import DonorFile, DonorSlice, SourceTransplantError
+    from minecraft_mod_ai.source_transplant import CompatibilityEvidence, DonorFile, DonorSlice, SourceTransplantError
 
     path = "src/main/java/old/space/Travel.java"
     code = b"package old.space; public class Travel { public void travelToPlanet() {} }"
@@ -161,6 +165,7 @@ def test_unavailable_optional_reference_does_not_abort_fresh_implementation(monk
         license_id="MIT", source_url="https://github.com/example/unavailable", target_compatibility="adapt",
         files=(DonorFile(path, "c" * 40, "sha256:" + hashlib.sha256(code).hexdigest(), len(code), ()),),
         seed_files=(path,), source_symbols=(), required_dependencies=(), donor_tests=(), confidence=0.8,
+        compatibility_evidence=CompatibilityEvidence(minecraft_version="26.1.2", loader="fabric", status="metadata_exact"),
     )
 
     def download(candidate):
@@ -191,7 +196,9 @@ def test_unavailable_installed_donor_still_aborts_production(monkeypatch):
 
     monkeypatch.setattr("minecraft_mod_ai.source_transplant.materialize_source_slices", unavailable)
     plan = {"bound_target": {"minecraft_version": "26.1.2", "loader": "fabric"},
-            "capabilities": [{"capability": "space travel", "mode": "source_transplant"}]}
+            "capabilities": [{"capability": "space travel", "mode": "source_transplant",
+                              "donor": {"compatibility_evidence": {"minecraft_version": "26.1.2",
+                                                                     "loader": "fabric"}}}]}
     with pytest.raises(SourceTransplantError, match="installed source unavailable"):
         with authored_source_rag.verified_source_rag(
             plan, adapter=host_target("26.1.2"), package_name="test.space", mod_id="space",
