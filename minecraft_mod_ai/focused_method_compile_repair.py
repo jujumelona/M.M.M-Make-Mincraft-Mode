@@ -7,6 +7,7 @@ replacement and checks it with real compileJava. No model API selection loop.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -84,6 +85,11 @@ def repair_staged_java_with_model(
         if (not isinstance(replacement, str)
                 or not replacement.startswith(frame["prefix"])
                 or not replacement.endswith(frame["suffix"])):
+            return source
+        body = replacement[len(frame["prefix"]):-len(frame["suffix"])].strip()
+        if (not body or body in {";", "return;"}
+                or re.search(r"\\b(?:TODO|FIXME|UnsupportedOperationException)\\b", body)):
+            # Compiler-pass alone must not promote a trivially erased feature.
             return source
         return source.replace(old, replacement, 1)
 
