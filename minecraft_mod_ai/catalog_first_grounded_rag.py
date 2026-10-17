@@ -95,8 +95,6 @@ def _run_catalogs(
                 "provider": "curseforge", "status": "not_configured",
                 "result_count": 0,
             }
-        if "modrinth" in allowed:
-            calls["modrinth"] = lambda: backend._search_modrinth(query)
 
     results: dict[str, list[dict[str, Any]]] = {}
     for provider, call in calls.items():
@@ -110,7 +108,7 @@ def _run_catalogs(
             errors.append(receipt)
             results[provider] = []
 
-    records = results.get("curseforge", []) + results.get("modrinth", [])
+    records = results.get("curseforge", [])
     return records, receipts, errors
 
 
@@ -154,7 +152,8 @@ def _query_bundle(
     github_disabled: Callable[[], bool],
     disable_github: Callable[[], None],
 ) -> dict[str, Any]:
-    allowed = set(providers)
+    # Only CurseForge is allowed for external mod catalogues.
+    allowed = (set(providers) & {"official_docs", "project_rag"}) | {"curseforge"}
     records: list[dict[str, Any]] = []
     receipts: dict[str, Any] = {}
     errors: list[dict[str, Any]] = []
@@ -173,26 +172,12 @@ def _query_bundle(
         receipts.update(catalog_receipts)
         errors.extend(catalog_errors)
 
-    # GitHub is a source host, not a second search engine. Only repositories
-    # explicitly linked from actual catalog records may be read or inspected.
-    # Missing source links/empty results stay incomplete; never fan out to a
-    # broad GitHub search, even when the caller lists GitHub as a provider.
-    if catalog_records:
-        linked, linked_receipt = backend._linked_github_sources(
-            catalog_records,
-            disabled=github_disabled,
-            disable=disable_github,
-        )
-        records.extend(linked)
-        receipts["github"] = {
-            **dict(linked_receipt), "policy": "exact_catalog_link_only",
-        }
-    elif catalog_allowed or "github" in allowed:
-        receipts["github"] = {
-            "provider": "github", "status": "skipped_no_catalog_source",
-            "result_count": 0, "search_requests": 0, "source_requests": 0,
-            "policy": "broad_search_disabled",
-        }
+    # No GitHub READMEs, including links supplied by CurseForge metadata.
+    receipts["github"] = {
+        "provider": "github", "status": "disabled",
+        "result_count": 0, "search_requests": 0, "source_requests": 0,
+        "policy": "curseforge_only",
+    }
 
     project_rag = (
         backend._search_authoritative_catalog(query, versions)
@@ -229,16 +214,16 @@ def _query_bundle(
                 "catalog_first": catalog_allowed,
                 "catalog_order": [
                     provider
-                    for provider in ("curseforge", "modrinth")
+                    for provider in ("curseforge",)
                     if provider in allowed
                 ],
                 "github_role": (
-                    "catalog_linked_source_only" if catalog_allowed
+                    "disabled" if catalog_allowed
                     else "not_requested"
                 ),
                 "github_broad_search": "disabled",
                 "github_linked_source": (
-                    "exact_catalog_source_url_preferred" if catalog_allowed else "not_applicable"
+                    "disabled" if catalog_allowed else "not_applicable"
                 ),
             },
             "github_retrieval": {
