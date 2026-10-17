@@ -205,30 +205,6 @@ def _verified_donor_license_notice(
             "copying", "copying.txt", "copying.md",
         }
     ), None)
-    if license_text is None:
-        # No raw.githubusercontent.com fallback under CurseForge-only policy.
-        raise RuntimeError("SOURCE_REUSE_LICENSE_NOTICE_REQUIRED: license must be in the approved local donor snapshot")
-
-        import httpx
-
-        repository = str(donor["repository"])
-        commit = str(donor["commit_sha"])
-        with httpx.Client(timeout=15, follow_redirects=True) as http:
-            for filename in (
-                "LICENSE", "LICENSE.md", "LICENSE.txt",
-                "COPYING", "COPYING.md", "COPYING.txt",
-            ):
-                url = (
-                    "https://raw.githubusercontent.com/"
-                    + repository + "/" + commit + "/" + filename
-                )
-                try:
-                    response = http.get(url)
-                except httpx.HTTPError:
-                    continue
-                if response.status_code == 200 and 0 < len(response.content) < 256_000:
-                    license_text = response.content
-                    break
     if not license_text:
         raise RuntimeError(
             "SOURCE_REUSE_LICENSE_NOTICE_REQUIRED: " + str(donor["repository"])
