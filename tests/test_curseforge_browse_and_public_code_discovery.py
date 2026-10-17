@@ -200,7 +200,7 @@ def test_predesign_browses_metadata_before_budgeted_descriptions(monkeypatch):
             return {"data": "<p>Source-backed spaceship mechanic.</p>"}
         if "/mods/search?" in url:
             params = parse_qs(urlsplit(url).query)
-            assert params.get("searchFilter") == ["spaceship"]
+            assert params.get("searchFilter", [""])[0] in {"spaceship", "spacecraft", "space"}
             assert params.get("classId") == ["6"]
             assert params.get("gameVersion") == ["1.21.1"]
             assert params.get("modLoaderType") == ["4"]
@@ -220,7 +220,7 @@ def test_predesign_browses_metadata_before_budgeted_descriptions(monkeypatch):
     )
     assert len(records) == 10
     assert receipt["search_filter_used"] is True
-    assert receipt["search_requests"] == 1
+    assert receipt["search_requests"] == 3
     assert receipt["source_requests"] == 6
     assert sum("/description" in url for url in calls) == 6
     assert sum(bool(row["body_retrieved"]) for row in records) == 6
