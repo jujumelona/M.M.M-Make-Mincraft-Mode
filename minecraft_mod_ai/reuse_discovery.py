@@ -23,7 +23,7 @@ from .curseforge_catalog import (
     curseforge_target_filters,
 )
 from .ecosystem_discovery import provider_request_failure
-from .curseforge_query import curseforge_search_queries, curseforge_catalogue_score
+from .curseforge_query import curseforge_search_queries, curseforge_catalogue_score, curseforge_query_family
 
 _MINECRAFT_GAME_ID = 432
 _HTTP_CLIENT_LOCK = Lock()
@@ -53,7 +53,7 @@ def _representative_limit() -> int:
 
 
 def _query_variant_limit() -> int:
-    return _env_int("MMM_REUSE_QUERY_VARIANTS", 2, minimum=1, maximum=3)
+    return _env_int("MMM_REUSE_QUERY_VARIANTS", 3, minimum=1, maximum=4)
 
 
 def _minimum_candidates() -> int:
@@ -344,9 +344,15 @@ def discover_repositories_for_graph(
                 })
             continue
         combined: dict[str, dict[str, Any]] = {}
+        family_sources: dict[str, set[str]] = {}
         query_receipts: list[dict[str, Any]] = []
         failures: list[dict[str, Any]] = []
         for query in queries:
+            family = curseforge_query_family(query)
+            # Equivalent spellings are fallback only; different mechanics retain
+            # independent evidence shortlists even within a long requirement.
+            if len(family_sources.get(family, ())) >= _minimum_candidates():
+                continue
             key = ("curseforge", query.casefold(), version, selected_loader)
             cached = shared_cache.get(key)
             if isinstance(cached, Mapping):
@@ -387,6 +393,7 @@ def discover_repositories_for_graph(
                 )
                 if score <= 0:
                     continue
+                family_sources.setdefault(family, set()).add(ident)
                 previous = combined.get(ident)
                 if previous is None:
                     combined[ident] = {
@@ -402,15 +409,26 @@ def discover_repositories_for_graph(
                     previous["score"] = max(int(previous["score"]), score)
                     if query not in previous["matched_queries"]:
                         previous["matched_queries"].append(query)
-            # One strong short list is enough. Do not exhaust synonym queries.
-            if len(combined) >= _minimum_candidates():
-                break
         ranked = sorted(
             combined.values(),
             key=lambda row: (-int(row["score"]), -len(row["matched_queries"]),
                              str(row["title"]).casefold(), str(row["source_id"])),
         )
-        shortlist = ranked[:_representative_limit()]
+        # Keep a few per distinct topic rather than letting spaceship hits
+        # displace unrelated crew, trading or combat evidence.
+        shortlist: list[dict[str, Any]] = []
+        seen_shortlist: set[str] = set()
+        for family in dict.fromkeys(curseforge_query_family(query) for query in queries):
+            count = 0
+            for hit in ranked:
+                ident = str(hit["source_id"])
+                if ident not in family_sources.get(family, ()) or ident in seen_shortlist:
+                    continue
+                shortlist.append(hit)
+                seen_shortlist.add(ident)
+                count += 1
+                if count >= _representative_limit():
+                    break
         if diagnostics is not None:
             diagnostics.append({
                 "provider": "curseforge", "capability": capability,
