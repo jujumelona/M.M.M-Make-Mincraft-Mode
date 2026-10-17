@@ -508,7 +508,7 @@ def _search_curseforge(
             if next_index is None:
                 break
             index = next_index
-            if variant_matches >= output_limit:
+            if len(family_sources.get(family, ())) >= 2:
                 break
         query_receipts.append({
             "query": variant, "search_requests": variant_requests,
@@ -522,17 +522,18 @@ def _search_curseforge(
     # popular projects for the entire multi-feature request.
     shortlisted: list[tuple[int, int, Mapping[str, Any]]] = []
     shortlisted_ids: set[int] = set()
-    for family in dict.fromkeys(curseforge_query_family(q) for q in variants):
-        chosen = 0
-        for entry in candidates:
-            mod_id = int(entry[2]["id"])
-            if (mod_id in shortlisted_ids
-                    or family not in candidate_families.get(mod_id, ())):
-                continue
-            shortlisted.append(entry)
-            shortlisted_ids.add(mod_id)
-            chosen += 1
-            if chosen >= min(2, output_limit):
+    # Round robin: at least one reviewed option from every topic before
+    # expanding a popular topic's second option.
+    families = tuple(dict.fromkeys(curseforge_query_family(q) for q in variants))
+    for _round in range(min(2, output_limit)):
+        for family in families:
+            for entry in candidates:
+                mod_id = int(entry[2]["id"])
+                if (mod_id in shortlisted_ids
+                        or family not in candidate_families.get(mod_id, ())):
+                    continue
+                shortlisted.append(entry)
+                shortlisted_ids.add(mod_id)
                 break
     detail_count = min(3, len(shortlisted))
     details: dict[int, str] = {}
