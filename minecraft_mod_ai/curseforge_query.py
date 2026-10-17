@@ -18,7 +18,7 @@ _GENERIC = frozenset((
     "making", "player", "players", "custom", "add", "adding", "and", "or",
     "with", "into", "from", "there", "the", "for", "this", "that",
     "using", "more", "all", "some", "new", "allows", "enable", "enables",
-    "gameplay", "worldbuilding", "request", "requests", "long",
+    "gameplay", "worldbuilding", "request", "requests", "long", "only",
     "requirement", "requirements", "story", "narrative", "wanted",
     "should", "would", "could", "needs", "need", "stuff",
     "modular", "sections", "upgrade", "upgrades", "purchase", "purchases",
