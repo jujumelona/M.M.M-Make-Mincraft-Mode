@@ -11,10 +11,15 @@ def test_criterion_manifests_are_isolated_from_record_templates():
 
 def test_legacy_section_lookup_cannot_shadow_canonical_persistence_record():
     manifest = load_template("feature/persistence")
-    record = load_record_template("feature/persistence")
+    import pytest
+
     assert manifest["id"] == "criterion/persistence"
     assert "record_schema" not in manifest
-    assert record["id"] == "feature/persistence"
+    # The legacy aggregate is a criterion, not an executable single record.
+    with pytest.raises(ValueError, match="TEMPLATE_RECORD_SCHEMA"):
+        load_record_template("feature/persistence")
+    record = load_record_template("feature/persistence/stored_state")
+    assert record["id"] == "feature/persistence/stored_state"
     assert "record_schema" in record
 
 

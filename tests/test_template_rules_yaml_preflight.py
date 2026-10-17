@@ -44,7 +44,8 @@ def test_content_entity_rules_are_strings_and_single_record_can_generate() -> No
         generator=generator,
     )
     assert record == accepted
-    assert seen == ["role", "kind", "entity_id"]
+    # A sole host-allowed kind is deterministic; the model should not spend a turn on it.
+    assert seen == ["role", "entity_id"]
 
 
 def test_catalog_rule_preflight_accepts_packaged_rules() -> None:
