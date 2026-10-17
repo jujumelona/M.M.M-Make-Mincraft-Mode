@@ -4,6 +4,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from minecraft_mod_ai import source_transplant as source
+from minecraft_mod_ai.artifact_dependency_graph import ArtifactKind, ArtifactNode
 from minecraft_mod_ai.host_version_catalog import host_target
 
 
@@ -25,7 +26,7 @@ def test_real_donor_inspector_returns_version_bound_reference_for_older_source(m
     })
 
     class FakeGraph:
-        nodes = {java_path: object()}
+        nodes = {java_path: ArtifactNode(java_path, ArtifactKind.JAVA_SOURCE)}
         unresolved_edges = ()
         ambiguous_edges = ()
         adjacency = {}
