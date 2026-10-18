@@ -413,6 +413,16 @@ def execute_reuse_proof(
             failure_code="MANIFEST_INVALID", failure_message=str(exc),
         )
 
+    # A missing target is not permission to substitute a historical Minecraft
+    # version. Reject it before downloading any donor or creating a Gradle build.
+    if (not str(target_context.get("loader") or "").strip()
+            or not str(target_context.get("minecraft_version") or "").strip()):
+        return _rejected_receipt(
+            donor_slice, candidate_id=candidate_id, closure_hash=closure_hash,
+            failure_code="TARGET_SELECTION_REQUIRED",
+            failure_message="Reuse proof requires the user's selected Minecraft version and loader.",
+        )
+
     if not is_reusable_source_license(donor_slice.license_id):
         return _rejected_receipt(
             donor_slice, candidate_id=candidate_id, closure_hash=closure_hash,
@@ -505,12 +515,6 @@ def execute_reuse_proof(
 
     loader = str(target_context.get("loader") or "").strip().casefold()
     mc_ver = str(target_context.get("minecraft_version") or "").strip()
-    if not loader or not mc_ver:
-        return _rejected_receipt(
-            donor_slice, candidate_id=candidate_id, closure_hash=closure_hash,
-            proof_level=current_level, failure_code="TARGET_SELECTION_REQUIRED",
-            failure_message="Reuse proof requires the user's exact selected Minecraft version and loader.",
-        )
     donor_declared_deps = parse_donor_build_metadata(in_memory_files)
     all_needed_deps = tuple(
         dict.fromkeys(
