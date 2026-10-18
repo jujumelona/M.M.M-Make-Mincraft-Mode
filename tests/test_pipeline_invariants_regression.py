@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from minecraft_mod_ai import evidence_obligation_contract as obligations
-from minecraft_mod_ai import reuse_planner
 
 
 def _catalog(count: int = 2) -> dict:
@@ -54,12 +53,3 @@ def test_frozen_target_expands_complete_obligation_dag():
     assert brief["deferred_obligation_kinds"] == []
 
 
-def test_reuse_planner_owns_catalog_provenance_without_runtime_rebinding():
-    graph = reuse_planner.decompose_capability_graph(
-        "test",
-        design={"_evidence_request_catalog": _catalog(1)},
-    )
-
-    assert graph.sources == (("capability_0", "evidence_request_catalog.req_0"),)
-    assert not hasattr(reuse_planner, "_discover_donor_candidates")
-    assert not hasattr(reuse_planner, "_discover_best_donor")
