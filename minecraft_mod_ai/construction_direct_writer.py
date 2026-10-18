@@ -361,18 +361,19 @@ def _compose_claimed(router, spec, context, behaviors, package, name, owner,
     from .compiled_feature_patch import replay_compiled_repair
     source = replay_compiled_repair(root, spec["target_path"], source)
     _parse(source)
-    if context.get("java_classpath"):
-        from .javac_bridge import analyze_java
-        try:
-            analyze_java(
-                source, classpath=context["java_classpath"],
-                java_version=str(context["target"]["java_version"]),
-                filename=name + ".java",
-            )
-        except (ValueError, OSError, RuntimeError) as exc:
-            raise ValueError(
-                "CONSTRUCTION_DIRECT_FEATURE_TARGET_SYMBOL_INVALID: " + str(exc)[:2400]
-            ) from exc
+    if not context.get("java_classpath"):
+        raise ValueError("CONSTRUCTION_DIRECT_TARGET_CLASSPATH_REQUIRED")
+    from .javac_bridge import analyze_java
+    try:
+        analyze_java(
+            source, classpath=context["java_classpath"],
+            java_version=str(context["target"]["java_version"]),
+            filename=name + ".java",
+        )
+    except (ValueError, OSError, RuntimeError) as exc:
+        raise ValueError(
+            "CONSTRUCTION_DIRECT_FEATURE_TARGET_SYMBOL_INVALID: " + str(exc)[:2400]
+        ) from exc
     if context.get("verify_source"):
         context["verify_source"](source, spec["target_path"])
     # An interrupted or rejected whole-feature candidate never becomes a
