@@ -138,7 +138,7 @@ def test_bad_java_types_never_checkpointed_before_compiler_proof(tmp_path, monke
     assert examined[0][1] == ("/pinned/fabric-classpath.jar",)
     assert examined[0][2] == "25"
     assert examined[0][3] == "AlienRegistry.java"
-    assert "\\npublic class AlienRegistry" in examined[1][0]
+    assert "\npublic class AlienRegistry" in examined[1][0]
     # Repeat must revalidate the exact cached source without more model work.
     again = compose_method(router, task, ctx, owner_name="AlienRegistry")
     assert again == source and router.calls == 2
