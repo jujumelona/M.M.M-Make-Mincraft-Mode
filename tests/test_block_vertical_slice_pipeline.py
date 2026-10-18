@@ -19,7 +19,7 @@ from minecraft_mod_ai.prompt_fact_types import FactType, PromptFact
 from minecraft_mod_ai.task_template_catalog import load_template
 
 
-def test_block_vertical_slice_end_to_end(tmp_path: Path):
+def test_block_vertical_slice_end_to_end(tmp_path: Path, synthetic_platform_lock):
     mod_id = "space"
     pkg = "com.foo.space"
     pkg_path = "com/foo/space"
@@ -135,6 +135,7 @@ def test_block_vertical_slice_end_to_end(tmp_path: Path):
         mod_id=mod_id,
         package_name=pkg,
         main_class=main_class,
+        version_context=synthetic_platform_lock.version_context,
     )
     # item: key, register_basic, client_item, model_generated, lang_en, initializer (6)
     # block: key, register_basic, blockstate_simple, model_cube_all, lang_en, initializer (6)
