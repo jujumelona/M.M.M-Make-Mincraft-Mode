@@ -242,6 +242,9 @@ class CompleteGameDesignPlanner:
                 minecraft_version=target_version,
                 loader=target_loader,
                 request_scope=request_scope,
+                prior_reuse_plan=prior_content_design.get("_host_source_reuse")
+                if isinstance(prior_content_design.get("_host_source_reuse"), Mapping)
+                else None,
                 **({"repository_candidates": research_candidates} if research_candidates else {}),
                 **({"requested_curseforge_dependencies":
                     prior_content_design.get("_requested_curseforge_dependencies", ())}
