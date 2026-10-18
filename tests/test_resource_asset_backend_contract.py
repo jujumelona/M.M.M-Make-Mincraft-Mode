@@ -19,7 +19,7 @@ def _asset() -> AssetRequest:
         visual_description="blue lightsaber replacement",
         render_kind="item.handheld",
         subject_id="diamond_sword",
-        container="resource_pack",
+        container="mod",
         requested_width=16,
         requested_height=16,
     )
@@ -92,6 +92,11 @@ def test_image_profile_fingerprint_is_stable_and_registry_bound() -> None:
 def test_asset_request_uses_semantic_resource_contract_not_legacy_target_path() -> None:
     request = _asset()
     request.validate()
+    with pytest.raises(ValueError, match="STANDALONE_RESOURCE_PACK_GENERATION_REMOVED"):
+        AssetRequest(
+            "legacy_pack", "item", "texture", "item.handheld", "blade",
+            container="resource_pack",
+        ).validate()
 
     assert request.visual_description == "blue lightsaber replacement"
     assert request.render_kind == "item.handheld"
