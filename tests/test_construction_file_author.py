@@ -272,3 +272,23 @@ def test_diagnostic_evidence_uses_existing_symbols_not_guessed_api(monkeypatch,t
     assert 'ENTITY_TYPE' in names
     assert 'HOSTILE_ENTITY_TYPE' not in names
     assert evidence[0]['behavior_verified'] is False
+
+
+def test_entrypoint_rejects_noop_registrars(monkeypatch, tmp_path):
+    module, _, spec, _ = load_author(monkeypatch, tmp_path)
+    behavior_id = 'alien-spawn'
+    registrar = 'registerBehavior' + hashlib.sha256(behavior_id.encode()).hexdigest()[:20]
+    spec['bindings'] = {
+        'request_feature_entrypoint': True,
+        'construction_behaviors_json': json.dumps([{'behavior_id': behavior_id, 'intent': 'spawn alien'}]),
+    }
+    for body in ('return;', ';', 'return; /* pretend to spawn */'):
+        source = (
+            'package demo;\n'
+            'public class ModUnit implements net.fabricmc.api.ModInitializer {\n'
+            f'  private void {registrar}() {{ {body} }}\n'
+            f'  public void onInitialize() {{ this.{registrar}(); }}\n'
+            '}\n'
+        )
+        with pytest.raises(module.ConstructionFileError, match='BEHAVIOR_NOOP'):
+            module._check_entrypoint(source, spec)

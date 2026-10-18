@@ -150,6 +150,11 @@ def _check_entrypoint(source: str, spec: dict) -> None:
         member_body = _method_body(code, registrar)
         if member_body is None or not member_body.strip():
             raise ConstructionFileError('CONSTRUCTION_FILE_BEHAVIOR_METHOD_MISSING: ' + key)
+        # An empty statement or an immediate bare return is not gameplay.
+        # Compile-time validity alone cannot certify behavior, but it must not
+        # admit the most obvious no-effect registrar implementation.
+        if re.fullmatch(r'(?:\s*return\s*;|\s*;)*\s*', member_body):
+            raise ConstructionFileError('CONSTRUCTION_FILE_BEHAVIOR_NOOP: ' + key)
         if not re.search(r'\bthis\s*\.\s*' + registrar + r'\s*\(\s*\)\s*;', lifecycle):
             raise ConstructionFileError('CONSTRUCTION_FILE_BEHAVIOR_REGISTRATION_MISSING: ' + key)
         # Downstream construction_coverage.record_constructed_requirement
