@@ -64,3 +64,28 @@ def test_typed_api_inputs_have_small_verified_producer_shortlist():
         "example.EntityType#builder", "example.EntityType#ENTITY_TYPE"
     ]
     assert all("member" not in x["symbol_id"] for x in entry["verified_producers"])
+
+
+def test_direct_evidence_excludes_unrelated_entity_registrars_and_client_rendering():
+    index = _Index()
+    wrong = [
+        "net.fabricmc.fabric.api.object.builder.v1.entity.FabricEntityDataRegistry",
+        "net.fabricmc.fabric.api.registry.fluid.EntityFluidInteractionRegistry",
+        "net.minecraft.client.renderer.entity.EntityRenderers",
+    ]
+    for owner in wrong:
+        index.symbols[owner + "#register"] = {
+            "kind": "METHOD", "owner": owner, "name": "register",
+            "return_type": "void", "parameters": [], "side": "CLIENT" if "client" in owner else "COMMON",
+        }
+    def candidates(_goal, _offset):
+        return {
+            "matches": [
+                {"symbol_id": item + "#register"} for item in wrong
+            ] + [{"symbol_id": "example.Registry#register"}],
+            "source_candidates": [],
+        }
+    index.page = candidates
+    result = _evidence(index, "Register alien entity type on the common side", {})
+    assert result["target_api"] == [{"symbol_id": "example.Registry#register"}]
+    assert result["rejected_unrelated_api_count"] == 3
