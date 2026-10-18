@@ -27,3 +27,27 @@ def test_semantic_review_cache_preserves_agent_patient_order():
     b = _semantic_cache_key("dogs chase cats", params[0], params[1], params[2])
     assert a != b
     assert a == _semantic_cache_key(" cats   chase   dogs ", *params)
+
+
+def test_nested_gitlab_identity_survives_source_manifest_verification():
+    import hashlib
+    from minecraft_mod_ai.source_transplant import (
+        DonorFile, DonorSlice, validate_donor_slice_manifest,
+    )
+    payload = b"package donor; public class Teleport {}"
+    file = DonorFile(
+        path="src/main/java/donor/Teleport.java",
+        blob_sha="a" * 40,
+        sha256="sha256:" + hashlib.sha256(payload).hexdigest(),
+        size_bytes=len(payload), symbols=("Teleport",),
+    )
+    donor = DonorSlice(
+        capability="teleport", repository="team/platform/teleport-mod",
+        commit_sha="b" * 40, license_id="MIT",
+        source_url="https://gitlab.com/team/platform/teleport-mod/-/tree/main",
+        target_compatibility="adapt", files=(file,),
+        seed_files=(file.path,), source_symbols=("Teleport",),
+        required_dependencies=(), donor_tests=(), confidence=0.9,
+    )
+    validate_donor_slice_manifest(donor)
+    assert donor.repository == "team/platform/teleport-mod"
