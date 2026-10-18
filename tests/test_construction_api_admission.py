@@ -87,6 +87,19 @@ def test_register_requires_matching_registry_domain_not_just_name():
         "net.fabricmc.fabric.api.client.rendering.v1.EntityRendererRegistry",
     ):
         assert not api_semantic_admissible("call", task, row(unrelated, "register"))
+
+    # These all contain the word Entity, but register a different kind of
+    # object or a client-only rendering hook. None creates an entity type.
+    for unrelated in (
+        "net.fabricmc.fabric.api.object.builder.v1.entity.FabricEntityDataRegistry",
+        "net.fabricmc.fabric.api.registry.fluid.EntityFluidInteractionRegistry",
+        "net.fabricmc.fabric.api.debug.v1.EntityDebugSubscriptionRegistry",
+        "net.minecraft.client.renderer.entity.EntityRenderers",
+    ):
+        assert not api_semantic_admissible(
+            "call", task, row(unrelated, "register")
+        )
+
     assert api_semantic_admissible(
         "call", "Register a crafting recipe",
         row("net.minecraft.world.item.crafting.RecipeType", "register"))
