@@ -15,7 +15,7 @@
 - Main branch only; commit each meaningful change and publish the reviewed result.
 - No tests, project-function probes, model inference or Minecraft builds during this work. Verify Python syntax, data contracts and diffs; obtain independent static review.
 - No lookup-count caps, retries, timeout increases or prompt-specific gameplay patches.
-- Preserve every assigned body, helper, donor integration, source-port obligation and semantic/completion check.
+- Preserve every assigned body, helper, selected-target API binding and semantic/completion check.
 - Preserve exact target/version/side/access authority. Reference-only old code is evidence, never callable target API authority.
 - All real inventory/source entries remain reachable through literal successor pages; page size is presentation granularity, not an inventory cap.
 - Advance the construction protocol when request/checkpoint contracts change. Accepted node graphs keep their existing checkpoint identity.
@@ -57,7 +57,7 @@
 - [x] Connect the evidence index to the class/type and operation contexts; advance the protocol.
 - [x] Replace independent body search with operation-owned evidence acquisition and native real-ID selection.
 - [x] Ground API operations and their signature shapes; preserve forward references and all remaining operation kinds.
-- [x] Keep source reads, donor/port reachability and every queued body intact.
+- [x] Keep verified Minecraft/Fabric API reads and every queued authored body intact.
 - [x] Parse changed Python, inspect selectors/resume and run `git diff --check`, then commit.
 
 ## Task 3: Static review and main publication
@@ -96,7 +96,7 @@ The supplied `20261014-153519` console and `production-logs (6)(1).zip` run publ
 
 - [x] Add and validate the selection goal; advance the construction protocol while retaining accepted graph identity.
 - [x] Offer actual binding/scope/source/node/declaration reads before opcode selection and remove the unproven natural-language extension escape.
-- [x] Keep every queued input/body/donor/source obligation and the existing backend/final graph checks. Preserve selected scope and all read binding-page selectors across decision steps and resume.
+- [x] Keep every queued input/body/API obligation and the existing backend/final graph checks. Preserve selected scope and all read binding-page selectors across decision steps and resume.
 - [x] Parse syntax, inspect current-slot/resume/control flow, run diff checks and commit.
 
 ### Task 6: Review and publication
