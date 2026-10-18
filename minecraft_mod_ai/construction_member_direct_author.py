@@ -27,11 +27,10 @@ def _verify_direct_member(source: str, member: dict, context: dict) -> bool:
     """
     classpath = context.get("java_classpath")
     if not classpath:
-        # Isolated author tests may only check the immutable source frame.
-        # Real production always injects a pinned classpath through
-        # prepare_construction_context; lack of evidence must not be described
-        # as target-verified.
-        return False
+        # A syntactically valid member with unknown imports or API owners is
+        # NOT an accepted artifact. Do not persist unverifiable source from
+        # an alternate caller that bypassed construction preflight.
+        raise ValueError("CONSTRUCTION_DIRECT_TARGET_CLASSPATH_REQUIRED")
     from .javac_bridge import analyze_java
     owner = str(member["owner"])
     package, sep, class_name = owner.rpartition(".")
