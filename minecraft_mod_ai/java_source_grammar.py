@@ -22,4 +22,13 @@ def native_java_source_grammar(frame: Mapping[str, Any]) -> str:
     root = f"root ::= {prefix} {entry} {suffix}"
     if frame.get("empty_value") is not None:
         root += " | " + json.dumps(frame["empty_value"], ensure_ascii=False)
-    return root + "\n" + resource["grammar"]
+    grammar = resource["grammar"]
+    # The generated PEG contains 244 Java identifier suffix productions of
+    # [A-Za-z0-9_$]*. A 9B sampler can legally produce AliasHolder thousands
+    # of times without ever reaching a statement or the fixed method suffix.
+    # Bound only identifier continuation, not source statements or literals.
+    unbounded = "[A-Za-z0-9_$]*"
+    if unbounded not in grammar:
+        raise ValueError("NATIVE_JAVA_GRAMMAR_IDENTIFIER_CONTRACT_MISSING")
+    grammar = grammar.replace(unbounded, "[A-Za-z0-9_$]{0,127}")
+    return root + "\n" + grammar
