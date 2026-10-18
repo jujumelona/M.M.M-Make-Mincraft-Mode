@@ -353,6 +353,16 @@ def validated_reuse_donor(decision: Mapping[str, Any]) -> DonorSlice:
         raise SourceTransplantError("Reuse proof level is not verified.")
     if proof.get("authoritative_compile") is not True or proof.get("compile_passed") is not True:
         raise SourceTransplantError("Reuse proof has no authoritative compile pass.")
+    # A source transplant claims working functionality, not merely importable
+    # Java. Enforce that distinction at the shared donor-validation boundary
+    # as well as the production candidate selector.
+    if str(decision.get("mode") or "").strip().casefold() == "source_transplant":
+        if (proof.get("tests_passed") is not True
+                or not proof.get("matched_capability_tests")
+                or ProofLevel.from_value(proof.get("proof_level")) not in {
+                    ProofLevel.BEHAVIOR_VERIFIED, ProofLevel.HOST_VERIFIED
+                }):
+            raise SourceTransplantError("SOURCE_REUSE_BEHAVIOR_PROOF_REQUIRED")
     candidate_id = f"{donor.repository}@{donor.commit_sha}"
     if str(proof.get("candidate_id") or "") != candidate_id:
         raise SourceTransplantError("Reuse proof candidate identity does not match its donor.")
