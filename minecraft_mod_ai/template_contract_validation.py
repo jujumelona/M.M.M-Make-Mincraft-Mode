@@ -15,7 +15,6 @@ _HOST_WORKFLOWS = (
     "asset/workflow",
     "integration/workflow",
     "validation/workflow",
-    "reuse/workflow",
 )
 _SYSTEM_SOURCE_FIELDS = {
     "persistent_store": {"package_name", "mod_id"},
@@ -292,7 +291,7 @@ def runtime_consumer_roots():
     roots.update(f"{stage}/workflow" for stage in KNOWN_STAGES)
     roots.update(HOST_TEMPLATE_CANDIDATES)
     roots.update({
-        "prompt/workflow", "reuse/workflow",
+        "prompt/workflow",
         "minecraft/resource/workflow",
         "minecraft/generation_contract", "feature/discover", "feature/decompose",
         "feature/atomic_check", "design/content_capability", "design/content_entity",

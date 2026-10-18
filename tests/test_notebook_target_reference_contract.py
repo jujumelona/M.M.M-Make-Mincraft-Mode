@@ -41,8 +41,8 @@ def test_notebook_exposes_target_and_reference_inputs_to_complete_session() -> N
     ):
         assert f'"{version}"' in configuration
     assert 'MOD_LOADER = "Auto"' in configuration
-    assert 'REFERENCE_MOD_URLS = ""' in configuration
-    assert 'os.environ["MMM_REFERENCE_MOD_URLS"] = reference_mod_urls' in configuration
+    assert "REFERENCE_MOD_URLS" not in configuration
+    assert "MMM_REFERENCE_MOD_URLS" not in configuration
     assert "minecraft_version=MINECRAFT_VERSION" in plan
     assert "loader=MOD_LOADER" in plan
 
@@ -78,8 +78,6 @@ def test_explicit_notebook_target_retargets_existing_project_when_it_differs() -
 
 
 def test_notebook_target_selection_does_not_require_repository_search():
-    from minecraft_mod_ai.grounded_source_reuse import build_repository_reuse_plan
-
-    assert callable(build_repository_reuse_plan)
-
-
+    configuration = _notebook_cells()["configuration"]
+    assert "REFERENCE_MOD_URLS" not in configuration
+    assert "CURSEFORGE_API_KEY" not in configuration
