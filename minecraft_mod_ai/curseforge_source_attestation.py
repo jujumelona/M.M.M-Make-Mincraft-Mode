@@ -58,6 +58,19 @@ def attest_compiled_donor_files(donor: Any, raw_files: Mapping[str, bytes],
             if len(matches) != 1:
                 raise ValueError("SOURCE_ATTESTATION_UNMAPPED_JAVA: " + original)
             output = matches[0]
+        elif original.startswith(("src/main/resources/assets/", "src/main/resources/data/",
+                                  "src/client/resources/assets/", "src/client/resources/data/")):
+            # Both JSON and binary resources may be renamed by the verified
+            # ModId adapter. Only the namespace component is allowed to change;
+            # the source-set, kind and inner relative path must be identical.
+            parts = original.split("/")
+            target_modid = str(target_context.get("target_modid") or "")
+            if len(parts) < 6 or not re.fullmatch(r"[a-z0-9_.-]+", target_modid):
+                raise ValueError("SOURCE_ATTESTATION_UNMAPPED_RESOURCE: " + original)
+            expected = "/".join((*parts[:4], target_modid, *parts[5:]))
+            if expected not in adapted:
+                raise ValueError("SOURCE_ATTESTATION_UNMAPPED_RESOURCE: " + original)
+            output = expected
         else:
             raise ValueError("SOURCE_ATTESTATION_UNMAPPED_RESOURCE: " + original)
         if output in seen_outputs or output not in verified_set:
@@ -101,8 +114,20 @@ def check_attested_files(donor: Any, proof: Mapping[str, Any]) -> None:
                 or protected.get(dest) != item.get("verified_sha256")
                 or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(item.get("verified_sha256") or ""))):
             raise ValueError("SOURCE_ATTESTATION_BINDING_INVALID")
-        if source != dest and source.rsplit("/", 1)[-1] != dest.rsplit("/", 1)[-1]:
-            raise ValueError("SOURCE_ATTESTATION_UNEXPECTED_RENAME")
+        if source != dest:
+            sp, dp = source.split("/"), dest.split("/")
+            java_relocation = source.endswith(".java") and dest.endswith(".java") and sp[-1] == dp[-1]
+            resource_relocation = (
+                len(sp) >= 6 and len(dp) == len(sp)
+                and sp[:4] == dp[:4]
+                and sp[:4] in (["src", "main", "resources", "assets"],
+                               ["src", "main", "resources", "data"],
+                               ["src", "client", "resources", "assets"],
+                               ["src", "client", "resources", "data"])
+                and sp[5:] == dp[5:]
+            )
+            if not java_relocation and not resource_relocation:
+                raise ValueError("SOURCE_ATTESTATION_UNEXPECTED_RENAME")
         mapped_src.add(source)
         mapped_output.add(dest)
     if mapped_src != set(donor_map):
