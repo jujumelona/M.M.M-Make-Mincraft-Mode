@@ -53,6 +53,9 @@ def report_recoverable_direct_failure(symbol: str, error: ValueError) -> bool:
     recoverable = isinstance(error, JavaRegionParseError) or str(error).startswith((
         "CONSTRUCTION_DIRECT_TARGET_SYMBOL_INVALID",
         "CONSTRUCTION_DIRECT_FEATURE_TARGET_SYMBOL_INVALID",
+        "CONSTRUCTION_DIRECT_BODY_INCOMPLETE",
+        "CONSTRUCTION_DIRECT_SIGNATURE_INVALID",
+        "CONSTRUCTION_DIRECT_BODY_NOT_VALIDATED",
         "CONSTRUCTION_UNIT_",
         "CONSTRUCTION_SOURCE_SIGNATURE_INVALID",
     ))
