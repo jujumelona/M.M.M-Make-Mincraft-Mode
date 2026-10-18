@@ -108,20 +108,8 @@ def record_constructed_requirement(project_root, spec, source, *, materialized_s
                   "behavior_id": task.get("behavior_id", ""),
                   "depends_on": task["depends_on"],
                   "verification_ids": task["verification_ids"]}
-        if kind == "reuse":
-            from .authored_reuse_bridge import installed_donor_source_context
-            capabilities = sorted({ref["capability"] for ref in task["source_refs"]
-                                   if ref.get("capability")})
-            if not capabilities:
-                raise ValueError("CONSTRUCTION_WORK_GRAPH_REUSE_SOURCE_UNBOUND")
-            verified = installed_donor_source_context(project_root, capabilities)
-            record["installed_file_hashes"] = {
-                item["path"]: item["sha256"] for item in verified}
-            record["stage"] = "INSTALLED_HASH_VERIFIED"
-        elif kind in {"logic", "glue"}:
+        if kind in {"logic", "glue"}:
             record["stage"] = "SOURCE_MATERIALIZED_RUNTIME_UNVERIFIED"
-        elif kind == "port":
-            record["stage"] = "PORT_RUNTIME_UNVERIFIED"
         elif kind == "verify":
             record["stage"] = "RUNTIME_UNVERIFIED"
         else:
