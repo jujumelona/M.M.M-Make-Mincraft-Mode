@@ -99,8 +99,6 @@ def _record_requires_external_evidence(identifier: str) -> bool:
     section = _runtime_concern_section(identifier)
     if section is None:
         return False
-    if section == "reuse_assessment":
-        return True
     if section == "integration":
         return identifier in _EVIDENCE_BOUND_RECORD_TASKS
     return False
