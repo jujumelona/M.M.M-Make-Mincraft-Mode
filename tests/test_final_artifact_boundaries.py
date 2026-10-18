@@ -660,7 +660,6 @@ def test_bundle_rejects_receipt_sha_mismatch(
             tmp_path / "bundle",
             artifact_receipt=artifact_receipt,
             requirement_coverage=coverage,
-            reuse_manifest={},
             build_receipt=build,
             runtime_receipt=runtime,
         )

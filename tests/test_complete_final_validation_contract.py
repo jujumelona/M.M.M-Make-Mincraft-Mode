@@ -1055,7 +1055,6 @@ def test_downloadable_bundle_keeps_verified_additional_resource_pack(tmp_path) -
             "artifact_sha256": artifact_sha,
             "proposal_hash": proposal_hash,
         },
-        reuse_manifest={},
         build_receipt={
             "status": "PASS",
             "artifact_sha256": artifact_sha,

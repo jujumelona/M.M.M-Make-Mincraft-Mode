@@ -3,9 +3,8 @@ from __future__ import annotations
 """Transport and evidence storage for host-owned Minecraft research.
 
 Retrieval policy intentionally lives in ``catalog_first_grounded_rag``. This module owns
-provider I/O and exact evidence materialization only. CurseForge browsing
-is intentionally bounded to multiple catalogue windows; receipts identify these
-samples as incomplete. Other providers retain their own retrieval budgets.
+official Minecraft API lookup, local project indexing and evidence materialization.
+External mod catalogues are not consulted by this module.
 """
 
 import hashlib
@@ -17,20 +16,17 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from threading import Lock
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from .deadline_executor import iter_completed_with_deadlines
 from .knowledge import (
     AuthoritativeEvidenceRetriever,
     evidence_catalog_for_version,
     target_neutral_evidence_catalog,
 )
 from .rag_index import ProjectRAGIndex
-from .source_intent_aliases import source_intent_terms, source_query_variants
 
 _TIMEOUT = 8.0
 _UA = "MMM-PreDesignResearch/3.0 (+https://github.com/jujumelona/M.M.M-Make-Mincraft-Mode)"

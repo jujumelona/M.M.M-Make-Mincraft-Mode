@@ -225,47 +225,22 @@ def bind_behavior_scope(scope, router):
 
 def plan_construction_tasks(scope, source_evidence, target_symbols, router):
     behaviors = author_behavior_requirements(scope, router)
-    tasks, installed = [], set()
+    tasks = []
     for behavior in behaviors:
         parent = behavior.requirement_id
-        references, dependencies = [], []
-        for evidence in source_evidence:
-            row = evidence.to_dict() if hasattr(evidence, "to_dict") else dict(evidence)
-            if parent not in row.get("requirement_ids", ()):
-                continue
-            if row.get("behavior_ids") and behavior.behavior_id not in row["behavior_ids"]:
-                continue
-            # Search hits and unported references never confer install authority.
-            if row.get("status") not in {"verified", "installed", "port_required"}:
-                continue
-            if row.get("mode") not in {"source_transplant", "port"}:
-                continue
-            source_id = row.get("evidence_id") or row.get("source_id", "")
-            if not source_id:
-                continue
-            key = "source_" + hashlib.sha256(source_id.encode()).hexdigest()[:20]
-            if key not in installed:
-                tasks.append(ConstructionTask(key, tuple(row.get("requirement_ids", (parent,))),
-                    "reuse" if row.get("status") in {"verified", "installed"} and row.get("mode") == "source_transplant" else "port",
-                    "Install or adapt pinned source " + source_id, source_refs=(row,),
-                    output_symbols=tuple(row.get("symbols", ())), verification_ids=(key + ".compile",)))
-                installed.add(key)
-            dependencies.append(key)
-            references.append(row)
         key = behavior.behavior_id + ".logic"
-        tasks.append(ConstructionTask(key, (parent,), "logic", behavior.intent,
-            depends_on=tuple(dependencies), source_refs=tuple(references),
-            input_symbols=tuple(dict.fromkeys(s for ref in references for s in ref.get("symbols", ()) if s in target_symbols)),
+        tasks.append(ConstructionTask(
+            key, (parent,), "logic", behavior.intent,
             state_reads=behavior.state_reads, state_writes=behavior.state_writes,
-            trigger=behavior.trigger, effects=behavior.effects, behavior_id=behavior.behavior_id,
-            verification_ids=(key + ".compile", key + ".behavior")))
-        if references:
-            glue = behavior.behavior_id + ".glue"
-            tasks.append(replace(tasks[-1], task_id=glue, kind="glue",
-                intent="Connect " + behavior.intent + " to its installed source and trigger",
-                depends_on=(key,), verification_ids=(glue + ".behavior",)))
-        tasks.append(ConstructionTask(behavior.behavior_id + ".verify", (parent,), "verify",
-            "Verify " + behavior.intent, depends_on=(tasks[-1].task_id,),
-            verification_ids=(key + ".compile", key + ".behavior"), behavior_id=behavior.behavior_id))
+            trigger=behavior.trigger, effects=behavior.effects,
+            behavior_id=behavior.behavior_id,
+            verification_ids=(key + ".compile", key + ".behavior"),
+        ))
+        tasks.append(ConstructionTask(
+            behavior.behavior_id + ".verify", (parent,), "verify",
+            "Verify " + behavior.intent, depends_on=(key,),
+            verification_ids=(key + ".compile", key + ".behavior"),
+            behavior_id=behavior.behavior_id,
+        ))
     validate_task_graph(tasks)
     return tuple(tasks)
