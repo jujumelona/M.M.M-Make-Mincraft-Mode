@@ -1,78 +1,18 @@
 from __future__ import annotations
 
 
-def test_unauthenticated_external_query_budget_is_not_eight(monkeypatch):
-    from minecraft_mod_ai import pre_design_external_source_contract as external
+def test_removed_github_donor_research_cannot_reenter_predesign() -> None:
+    from pathlib import Path
 
-    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    monkeypatch.delenv("GH_TOKEN", raising=False)
-    monkeypatch.delenv("MMM_PREDESIGN_EXTERNAL_SOURCE_QUERIES", raising=False)
-    assert external._max_queries() == 20
+    from minecraft_mod_ai.pre_design_research_pipeline import _pre_design_brief
 
-
-def test_all_approved_requirement_queries_are_attempted(monkeypatch):
-    from minecraft_mod_ai import pre_design_external_source_contract as external
-
-    calls = []
-    monkeypatch.setattr(
-        external,
-        "_retrieve_github_source_body",
-        lambda query: calls.append(query)
-        or {
-            "records": [],
-            "search_requests": 1,
-            "source_requests": 0,
-            "provider_status": "available",
-            "saturation_reason": "test",
-            "errors": [],
-        },
-    )
-    queries = [f"minecraft mod requirement {i} source" for i in range(10)]
-    payload = {
-        "schema_version": "mmm/corrective-retrieval-request-v1",
-        "domains": [{"domain_id": "request", "queries": queries}],
-    }
-    bundle = {
-        "domains": [
-            {
-                "domain_id": "request",
-                "queries": [
-                    {"query": q, "external_rag": {"records": []}} for q in queries
-                ],
-            }
-        ]
-    }
-    external._augment_bundle(payload, bundle)
-    assert calls == queries
-
-
-def test_generic_github_repository_is_rejected_before_body():
-    from minecraft_mod_ai import pre_design_external_source_contract as external
-
-    assert not external._repository_candidate_relevant(
-        "minecraft mod build space station modules",
-        {
-            "full_name": "microsoft/StudentsAtBuild",
-            "description": "Minecraft student learning path",
-            "topics": [],
-        },
-    )
-    assert external._repository_candidate_relevant(
-        "minecraft mod space rocket vehicle",
-        {
-            "full_name": "Advanced-Rocketry/AdvancedRocketry",
-            "description": "Advanced Rocketry Minecraft space mod",
-            "topics": ["minecraft", "mod"],
-        },
-    )
-    assert not external._body_relevant(
-        "minecraft mod build space station modules",
-        "Student Zone learning path for Minecraft mod build tutorials.",
-    )
-    assert external._body_relevant(
-        "minecraft mod space rocket vehicle",
-        "Advanced Rocketry is a Minecraft mod for building rocket vehicles and travelling through space.",
-    )
+    root = Path(__file__).resolve().parents[1] / "minecraft_mod_ai"
+    assert not (root / "pre_design_external_source_contract.py").exists()
+    brief = _pre_design_brief("minecraft seasonal crop planting")
+    providers = set(brief["domains"][0]["providers"])
+    assert {"official_docs", "project_rag"} <= providers
+    assert not providers.intersection({"github", "curseforge", "modrinth"})
+    assert [domain["domain_id"] for domain in brief["domains"]] == ["request"]
 
 
 def test_corrective_queries_are_host_owned_and_do_not_call_model():
