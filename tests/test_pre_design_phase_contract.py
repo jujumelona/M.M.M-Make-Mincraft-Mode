@@ -18,13 +18,11 @@ def test_pre_design_does_not_expand_post_design_obligation_domains() -> None:
     providers = set(domains[0]["providers"])
     assert "official_docs" in providers
     assert "project_rag" in providers
-    assert "modrinth" in providers
-    assert "curseforge" in providers
-    assert "github" not in providers
+    assert providers == {"official_docs", "project_rag"}
     assert all(not domain["domain_id"].startswith("obl_") for domain in domains)
 
 
-def test_pre_design_public_discovery_uses_catalog_providers_without_broad_github_peer() -> None:
+def test_pre_design_research_only_uses_official_and_project_providers() -> None:
     brief = pipeline._pre_design_brief("우주선 모드를 설계해줘")
     providers = {
         provider
@@ -33,9 +31,7 @@ def test_pre_design_public_discovery_uses_catalog_providers_without_broad_github
     }
 
     assert [domain["domain_id"] for domain in brief["domains"]] == ["request"]
-    assert {"modrinth", "curseforge", "official_docs", "project_rag"} <= providers
-    assert "github" not in providers
-    assert "openverse_images" not in providers
+    assert providers == {"official_docs", "project_rag"}
 
 
 def test_active_approved_catalog_does_not_replace_pre_design_candidate() -> None:
