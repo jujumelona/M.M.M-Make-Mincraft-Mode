@@ -42,4 +42,8 @@ jobs:
             tests/test_reference_source_research_concurrency.py \
             tests/test_reference_source_research_parallelism.py \
             tests/test_reference_source_research_strategy.py \
-            tests/test_planning_handoff_contract.py
+            tests/test_planning_handoff_contract.py \
+            tests/test_pre_design_live_retrieval_route.py \
+            tests/test_pre_design_dynamic_limits.py \
+            tests/test_predesign_performance_contract.py \
+            tests/test_rag_clean_code_regressions.py
