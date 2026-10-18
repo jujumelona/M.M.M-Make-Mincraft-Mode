@@ -100,3 +100,70 @@ def test_direct_field_generates_whole_initialized_declaration(tmp_path, monkeypa
     source = compose_method(router, task, ctx, owner_name="AlienRegistry")
     assert router.calls == 1
     assert 'public static final java.lang.String ALIEN_TYPE = "alien";' == source
+
+
+def test_bad_java_types_never_checkpointed_before_compiler_proof(tmp_path, monkeypatch):
+    from minecraft_mod_ai import construction_member_direct_author as module
+    from minecraft_mod_ai import javac_bridge
+
+    task, ctx = _fixture(tmp_path)
+    ctx["java_classpath"] = ["/pinned/fabric-classpath.jar"]
+    monkeypatch.setattr(module, "_evidence",
+                        lambda *_args: {"target_api": [], "source": []})
+    examined = []
+
+    def fake_javac(source, *, classpath, java_version, filename):
+        examined.append((source, tuple(classpath), java_version, filename))
+        if "ImaginaryAlienEntity" in source:
+            raise ValueError("JAVA_ANALYSIS_FAILED: cannot find symbol ImaginaryAlienEntity")
+        return [{"name": "registerAliens", "kind": "METHOD"}]
+
+    monkeypatch.setattr(javac_bridge, "analyze_java", fake_javac)
+
+    class Router:
+        def __init__(self):
+            self.calls = 0
+
+        def generate_java_source(self, _role, _messages, *, source_frame, **_kw):
+            self.calls += 1
+            body = ("new ImaginaryAlienEntity();" if self.calls == 1
+                    else 'System.out.println("known Java API");')
+            return source_frame["prefix"] + body + source_frame["suffix"]
+
+    router = Router()
+    source = compose_method(router, task, ctx, owner_name="AlienRegistry")
+    assert router.calls == 2
+    assert len(examined) == 2
+    assert "ImaginaryAlienEntity" not in source
+    assert examined[0][1] == ("/pinned/fabric-classpath.jar",)
+    assert examined[0][2] == "25"
+    assert examined[0][3] == "AlienRegistry.java"
+    assert "\\npublic class AlienRegistry" in examined[1][0]
+    # Repeat must revalidate the exact cached source without more model work.
+    again = compose_method(router, task, ctx, owner_name="AlienRegistry")
+    assert again == source and router.calls == 2
+    assert len(examined) == 3
+
+
+def test_invalid_direct_method_never_publishes_checkpoint(tmp_path, monkeypatch):
+    from minecraft_mod_ai import construction_member_direct_author as module
+    from minecraft_mod_ai import javac_bridge
+    import pytest
+
+    task, ctx = _fixture(tmp_path)
+    ctx["java_classpath"] = ["/pinned/fabric.jar"]
+    monkeypatch.setattr(module, "_evidence",
+                        lambda *_args: {"target_api": [], "source": []})
+
+    def reject(*_args, **_kwargs):
+        raise ValueError("JAVA_ANALYSIS_FAILED: unresolved entity class")
+
+    monkeypatch.setattr(javac_bridge, "analyze_java", reject)
+
+    class Router:
+        def generate_java_source(self, _role, _messages, *, source_frame, **_kw):
+            return source_frame["prefix"] + "new ImaginaryAlienEntity();" + source_frame["suffix"]
+
+    with pytest.raises(ValueError, match="CONSTRUCTION_DIRECT_TARGET_SYMBOL_INVALID"):
+        compose_method(Router(), task, ctx, owner_name="AlienRegistry")
+    assert not list((tmp_path / ".mmm" / "construction_direct_methods").glob("*.json"))
