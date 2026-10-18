@@ -30,9 +30,9 @@ def test_content_entity_rules_are_strings_and_single_record_can_generate() -> No
     def generator(_router, role, messages, **kwargs):
         assert role == "planner"
         assert isinstance(messages[0]["content"], str)
-        field = next(iter(kwargs["response_schema"]["properties"]))
-        seen.append(field)
-        return {field: accepted[field]}
+        fields = tuple(kwargs["response_schema"]["required"])
+        seen.extend(fields)
+        return {field: accepted[field] for field in fields}
 
     record = run_single_record_template(
         object(),
