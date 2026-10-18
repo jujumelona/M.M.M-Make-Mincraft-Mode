@@ -20,7 +20,10 @@ from minecraft_mod_ai.validator import _complete_client_required
 def _canonical_client_job() -> ArtifactJob:
     return ArtifactJob(
         job_id="shipyard.screen_handler",
-        template_id="minecraft/client/screen_handler",
+        template_id="",
+        canonical_leaf="minecraft/client/screen_handler",
+        implementation_id="python_generator:minecraft/client/screen_handler",
+        context_id="sha256:" + "a" * 64,
         owner_module="shipyard",
         executor_type=ExecutorType.PYTHON_GENERATOR,
         deterministic_inputs={
@@ -44,7 +47,7 @@ def test_canonical_artifact_job_is_client_approval_source_of_truth() -> None:
         "example.client.generated.ShipyardScreen",
     )
     proposal = SimpleNamespace(
-        modules=(),
+        modules=(SimpleNamespace(module_id="shipyard", kind="gui", config={}),),
         game_design={"_artifact_jobs": [job.to_dict()]},
     )
     assert _complete_client_required(proposal) is True
