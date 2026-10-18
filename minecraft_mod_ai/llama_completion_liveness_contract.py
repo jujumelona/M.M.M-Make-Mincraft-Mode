@@ -5,8 +5,8 @@ from __future__ import annotations
 Transport keepalive activity is not model progress. The watchdog is reset only by
 prompt processing, decode/tool deltas, or terminal completion events. Lifecycle logging
 must also distinguish a real request failure from Python's normal generator close after
-the consumer has already observed ``data: [DONE]``. A finite output budget bounds healthy
-decoding; an implicit fixed wall deadline must not override continuing semantic progress.
+the consumer has already observed ``data: [DONE]``. Periodic output and an absolute wall limit must both constrain
+decoding; an output token allowance alone cannot prove semantic progress.
 """
 
 import json
@@ -51,6 +51,79 @@ class LlamaSemanticProgressTimeout(TimeoutError):
 
 class LlamaCompletionDeadlineExceeded(TimeoutError):
     """A configured absolute limit expired; this is not a retryable semantic stall."""
+
+
+class LlamaDegenerateOutputError(RuntimeError):
+    """A decode is filling its grammar slot with a periodic, non-progressing string."""
+
+
+class _RepeatedOutputWatchdog:
+    """Detect exact short-period loops across arbitrarily sliced SSE content deltas.
+
+    Keep only a bounded recent suffix. A model can emit *thousands* of valid
+    tokens without producing a useful member; lexical output must not renew
+    a shared GPU lease indefinitely just because characters keep arriving.
+    """
+
+    def __init__(self, *, min_periodic_chars: int = 4096, max_period: int = 128):
+        self._suffix = ""
+        self._min_periodic_chars = min_periodic_chars
+        self._max_period = max_period
+        self._since_check = 0
+
+    @staticmethod
+    def _delta_text(raw_line: Any) -> str:
+        if isinstance(raw_line, bytes):
+            line = raw_line.decode("utf-8", errors="replace").strip()
+        else:
+            line = str(raw_line or "").strip()
+        if not line.startswith("data:"):
+            return ""
+        try:
+            chunk = json.loads(line[5:].strip())
+        except (TypeError, ValueError):
+            return ""
+        if not isinstance(chunk, Mapping):
+            return ""
+        result = []
+        for choice in chunk.get("choices", ()) if isinstance(chunk.get("choices"), list) else ():
+            if not isinstance(choice, Mapping):
+                continue
+            delta = choice.get("delta")
+            if not isinstance(delta, Mapping):
+                delta = choice.get("message")
+            if not isinstance(delta, Mapping):
+                continue
+            for key in ("content", "reasoning_content", "reasoning"):
+                part = delta.get(key)
+                if isinstance(part, str) and part:
+                    result.append(part)
+            for call in delta.get("tool_calls", ()) if isinstance(delta.get("tool_calls"), list) else ():
+                if isinstance(call, Mapping):
+                    function = call.get("function")
+                    if isinstance(function, Mapping):
+                        args = function.get("arguments")
+                        if isinstance(args, str):
+                            result.append(args)
+        return "".join(result)
+
+    def observe(self, raw_line: Any) -> None:
+        text = self._delta_text(raw_line)
+        if not text:
+            return
+        window = self._min_periodic_chars
+        self._suffix = (self._suffix + text)[-window:]
+        self._since_check += len(text)
+        if len(self._suffix) < window or self._since_check < 128:
+            return
+        self._since_check = 0
+        tail = self._suffix
+        for period in range(1, min(self._max_period, window // 8) + 1):
+            if tail[period:] == tail[:-period]:
+                raise LlamaDegenerateOutputError(
+                    "LLAMA_DEGENERATE_REPEATED_OUTPUT: repeated "
+                    f"{period}-character pattern across {window} output characters"
+                )
 
 
 def _positive_env_float(name: str, default: float) -> float:
@@ -212,7 +285,10 @@ def _completion_wall_timeout_seconds(payload: Mapping[str, Any]) -> float | None
     )
     if os.environ.get(name, "").strip():
         return _positive_env_float(name, default)
-    return None if _completion_token_budget(payload) is not None else default
+    # A finite token allowance is *not* an execution wall bound: a broken
+    # grammar can emit the same token for minutes and keep refreshing its
+    # parent work-unit deadline. Every request must have an absolute ceiling.
+    return default
 
 
 def _semantic_idle_timeout_seconds(
@@ -397,6 +473,7 @@ class _ProgressCheckedResponse:
         self._wall_seconds = float(wall_seconds) if wall_seconds is not None else None
         self._first_progress = False
         self._semantic_events = 0
+        self._repetition_watchdog = _RepeatedOutputWatchdog()
         self._last_progress_log_at = started_at
         self._progress_log_interval = _positive_env_float(
             "MMM_LLAMA_PROGRESS_LOG_INTERVAL_SECONDS",
@@ -461,6 +538,9 @@ class _ProgressCheckedResponse:
                 raise_if_model_execution_cancelled()
                 if self._trace is not None:
                     self._trace.observe_line(raw_line)
+                # Check BEFORE classifying a delta as semantic progress or
+                # refreshing the shared work-unit deadline.
+                self._repetition_watchdog.observe(raw_line)
                 now = time.monotonic()
                 if self._wall_seconds is not None and now - self._started_at >= self._wall_seconds:
                     raise LlamaCompletionDeadlineExceeded(
