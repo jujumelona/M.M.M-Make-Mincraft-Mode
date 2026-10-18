@@ -59,6 +59,23 @@ def _parallelism(job_count: int) -> int:
     return min(job_count, _configured_positive_int("MMM_ARTIFACT_MAX_WORKERS", default))
 
 
+def _generation_parallelism(job_count: int, router: Any) -> int:
+    """Avoid starting more competing native inference leases than actual slots.
+
+    A graph may own eight artifact threads while a single-GPU llama server only
+    runs one decoder. The old surplus threads consumed their whole work-unit
+    deadline waiting for capacity, causing unrelated generation jobs to fail
+    before they made any model request.
+    """
+    workers = _parallelism(job_count)
+    from .model_concurrency import (
+        router_native_model_parallelism, router_owns_native_model,
+    )
+    if router_owns_native_model(router, role="coder"):
+        workers = min(workers, router_native_model_parallelism(router, role="coder"))
+    return max(1, workers)
+
+
 def _validation_parallelism(job_count: int, generation_workers: int) -> int:
     """Keep validation concurrent without allowing it to dominate the machine."""
     default = min(4, max(1, generation_workers))
@@ -248,7 +265,7 @@ def execute_artifact_graph(
     future_deadlines: dict[Future[Any], ModelExecutionBudget] = {}
     results: dict[str, dict[str, Any]] = {}
     validated_jobs: set[str] = set()
-    generation_workers = _parallelism(len(ordered_jobs))
+    generation_workers = _generation_parallelism(len(ordered_jobs), router)
     validation_workers = _validation_parallelism(len(ordered_jobs), generation_workers)
 
     def submit_ready(pool: ThreadPoolExecutor) -> int:
