@@ -67,6 +67,27 @@ def _reconcile_project_compiled_sources(symbols, pages, root):
     }
 
 
+def normalized_construction_target(target):
+    """Normalize the host-pinned JDK major once for all construction consumers.
+
+    Platform release metadata can provide the major as the decimal string
+    "25"; the classpath preflight already accepted it, while FeatureWorkOrder
+    required an int. Preserve the selected version; never substitute defaults.
+    """
+    if not isinstance(target, dict):
+        raise ValueError("CONSTRUCTION_IMMUTABLE_TARGET_REQUIRED")
+    raw = target.get("java_version")
+    if type(raw) is int:
+        java_version = raw
+    elif isinstance(raw, str) and raw.isascii() and raw.isdecimal() and raw == raw.strip():
+        java_version = int(raw)
+    else:
+        raise ValueError("CONSTRUCTION_JAVA_VERSION_INVALID")
+    if java_version < 1:
+        raise ValueError("CONSTRUCTION_JAVA_VERSION_INVALID")
+    return {**target, "java_version": java_version}
+
+
 def prepare_construction_context(spec, *, java_classpath, project_root, source_context=(), target_override=None):
     source_context = tuple(source_context)
     bindings = spec.get("bindings") or {}
@@ -77,7 +98,8 @@ def prepare_construction_context(spec, *, java_classpath, project_root, source_c
         target = target_override
     if not target:
         raise ValueError("CONSTRUCTION_IMMUTABLE_TARGET_REQUIRED")
-    java_version = int(target.get("java_version") or 0)
+    target = normalized_construction_target(target)
+    java_version = target["java_version"]
     namespace = target_symbol_namespace(target)
     if not java_version or not java_classpath:
         raise ValueError("CONSTRUCTION_CLASSPATH_REQUIRED")
