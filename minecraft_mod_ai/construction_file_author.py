@@ -47,13 +47,23 @@ def _lexical_code(source: str) -> str:
         three = source[idx:idx + 3]
         if state == 'code':
             if two == '//':
-                state = 'line'; out[idx] = out[idx + 1] = ' '; idx += 2; continue
+                state = 'line'
+                out[idx] = out[idx + 1] = ' '
+                idx += 2
+                continue
             if two == '/*':
-                state = 'block'; out[idx] = out[idx + 1] = ' '; idx += 2; continue
+                state = 'block'
+                out[idx] = out[idx + 1] = ' '
+                idx += 2
+                continue
             if three == '"""':
-                state = 'text_block'; out[idx:idx + 3] = '   '; idx += 3; continue
+                state = 'text_block'
+                out[idx:idx + 3] = '   '
+                idx += 3
+                continue
             if source[idx] in ('"', "'"):
-                state = source[idx]; out[idx] = ' '
+                state = source[idx]
+                out[idx] = ' '
         elif state == 'line':
             if source[idx] == '\n':
                 state = 'code'
@@ -61,17 +71,27 @@ def _lexical_code(source: str) -> str:
                 out[idx] = ' '
         elif state == 'block':
             if two == '*/':
-                state = 'code'; out[idx] = out[idx + 1] = ' '; idx += 2; continue
-            if source[idx] != '\n': out[idx] = ' '
+                state = 'code'
+                out[idx] = out[idx + 1] = ' '
+                idx += 2
+                continue
+            if source[idx] != '\n':
+                out[idx] = ' '
         elif state == 'text_block':
             if three == '"""':
-                state = 'code'; out[idx:idx + 3] = '   '; idx += 3; continue
-            if source[idx] != '\n': out[idx] = ' '
+                state = 'code'
+                out[idx:idx + 3] = '   '
+                idx += 3
+                continue
+            if source[idx] != '\n':
+                out[idx] = ' '
         else:
             if source[idx] == '\\':
                 out[idx] = ' '
-                if idx + 1 < len(source): out[idx + 1] = ' '
-                idx += 2; continue
+                if idx + 1 < len(source):
+                    out[idx + 1] = ' '
+                idx += 2
+                continue
             if source[idx] == state:
                 state = 'code'
             out[idx] = ' '

@@ -33,13 +33,19 @@ def _mask_non_java_code(source: str) -> str:
         if state == 'code':
             if two == '//':
                 result[index:index + 2] = '  '
-                state = 'line'; index += 2; continue
+                state = 'line'
+                index += 2
+                continue
             if two == '/*':
                 result[index:index + 2] = '  '
-                state = 'block'; index += 2; continue
+                state = 'block'
+                index += 2
+                continue
             if three == '"""':
                 result[index:index + 3] = '   '
-                state = 'text_block'; index += 3; continue
+                state = 'text_block'
+                index += 3
+                continue
             if source[index] in ('"', "'"):
                 state = source[index]
                 result[index] = ' '
@@ -51,13 +57,17 @@ def _mask_non_java_code(source: str) -> str:
         elif state == 'block':
             if two == '*/':
                 result[index:index + 2] = '  '
-                state = 'code'; index += 2; continue
+                state = 'code'
+                index += 2
+                continue
             if source[index] != '\n':
                 result[index] = ' '
         elif state == 'text_block':
             if three == '"""':
                 result[index:index + 3] = '   '
-                state = 'code'; index += 3; continue
+                state = 'code'
+                index += 3
+                continue
             if source[index] != '\n':
                 result[index] = ' '
         else:
@@ -65,7 +75,8 @@ def _mask_non_java_code(source: str) -> str:
                 result[index] = ' '
                 if index + 1 < len(source):
                     result[index + 1] = ' '
-                index += 2; continue
+                index += 2
+                continue
             if source[index] == state:
                 state = 'code'
             result[index] = ' '
