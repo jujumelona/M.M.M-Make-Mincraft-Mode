@@ -271,10 +271,23 @@ def validate_donor_slice_manifest(donor_slice: DonorSlice) -> None:
     """Validate immutable donor identity and every manifest path/hash before I/O."""
 
     repository = str(donor_slice.repository or "").strip()
-    if repository.count("/") != 1 or any(
-        not part or part in {".", ".."} for part in repository.split("/")
-    ):
+    parts = repository.split("/")
+    from urllib.parse import urlsplit
+    host = urlsplit(str(donor_slice.source_url or "")).hostname
+    # GitLab supports nested project groups; GitHub repositories have exactly
+    # owner/name. Never authorize an arbitrary nested GitHub identity.
+    if (len(parts) < 2
+            or (len(parts) != 2 and host != "gitlab.com")
+            or any(not part or part in {".", ".."} for part in parts)):
         raise SourceTransplantError("Donor repository identity is invalid.")
+    if host == "gitlab.com" and len(parts) > 2:
+        from .curseforge_semantic_source_review import direct_source_identity
+        try:
+            _host, owner, name = direct_source_identity(donor_slice.source_url)
+        except ValueError as exc:
+            raise SourceTransplantError("Donor GitLab source URL is invalid.") from exc
+        if owner + "/" + name != repository:
+            raise SourceTransplantError("Donor GitLab source identity does not match URL.")
     if not re.fullmatch(r"[0-9a-f]{40,64}", str(donor_slice.commit_sha or "")):
         raise SourceTransplantError("Donor commit is not an immutable full SHA.")
     if not is_reusable_source_license(donor_slice.license_id):
