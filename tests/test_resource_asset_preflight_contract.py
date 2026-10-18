@@ -70,13 +70,10 @@ def test_prompt_preflight_blocks_before_router_planning_access() -> None:
         resource_module.attach_generation_plan(object(), proposal)
 
 
-def test_binary_preflight_blocks_before_image_generation(tmp_path: Path) -> None:
+def test_binary_preflight_rejects_removed_texture_generation(tmp_path: Path) -> None:
     proposal = _Proposal("assets/example/textures/item/test.png", pack_format=None)
 
-    with pytest.raises(
-        resource_module.AssetProductionError,
-        match="Resource asset preflight failed",
-    ):
+    with pytest.raises(ValueError, match="AI_TEXTURE_GENERATION_REMOVED"):
         resource_module.generate_assets(object(), proposal, tmp_path, tmp_path)
 
 
