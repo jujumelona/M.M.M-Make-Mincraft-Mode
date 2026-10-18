@@ -127,8 +127,23 @@ def _atomic_record_schema_slices(
         structured_output_token_ceiling(effective_model_transport_schema(part_schema))
         return part_schema
 
-    pending: list[str] = []
+    # A host-forced singleton is not an inference task. Separate such fields
+    # from model-authored pages while preserving batching for the other fields.
+    fixed_fields: list[str] = []
+    dynamic_fields: list[str] = []
     for raw_name in required:
+        name = str(raw_name)
+        child = properties.get(name)
+        if isinstance(child, Mapping) and (
+            "const" in child
+            or (isinstance(child.get("enum"), list) and len(child["enum"]) == 1)
+        ):
+            fixed_fields.append(name)
+        else:
+            dynamic_fields.append(name)
+
+    pending: list[str] = []
+    for raw_name in dynamic_fields:
         name = str(raw_name)
         try:
             candidate = make_page([*pending, name])
@@ -152,6 +167,8 @@ def _atomic_record_schema_slices(
                 pending = []
     if pending:
         pages.append(make_page(pending))
+    for offset in range(0, len(fixed_fields), limit):
+        pages.append(make_page(fixed_fields[offset:offset + limit]))
     if not pages:
         raise SingleRecordTemplateError(
             f"SINGLE_TEMPLATE_SCHEMA: {identifier} has no required model fields"

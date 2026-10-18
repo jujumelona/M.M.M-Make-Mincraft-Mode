@@ -121,13 +121,17 @@ def test_cancelled_staged_record_keeps_persisted_and_in_memory_progress(
     assert _checkpoint(tmp_path, monkeypatch).content_progress(catalog) == expected
 
 
-def test_qwen_mtp_flags_do_not_allocate_hidden_prompt_ram(monkeypatch):
+def test_retired_qwen_mtp_flag_does_not_override_prompt_cache_policy(monkeypatch):
+    # The retired Qwen hot-path flag must not override the explicit cache policy.
     monkeypatch.setenv("MMM_QWEN35_MTP_HOTPATH", "1")
+    monkeypatch.delenv("MMM_LLAMA_PROMPT_CACHE_ENABLED", raising=False)
     config = SimpleNamespace(model_id="unsloth/Qwen3.5-9B-MTP-GGUF", extra={})
     args = ["--ctx-size", "8192", "--cache-prompt", "--cache-ram", "1024",
             "--cache-reuse", "256"]
     _configure_prompt_cache(args, config)
-    assert args == ["--ctx-size", "8192"]
+    assert "--cache-prompt" in args
+    assert "--cache-ram" in args
+    assert "--cache-reuse" in args
 
 
 def test_non_mtp_preserves_prompt_cache(monkeypatch):

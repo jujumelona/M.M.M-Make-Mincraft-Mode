@@ -375,15 +375,15 @@ def test_real_field_authoring_uses_prefix_to_resolve_distinct_entities() -> None
         def generate_text(self, role, messages, **kwargs):
             assert role == "planner"
             schema = kwargs["response_schema"]
-            field = next(iter(schema["properties"]))
+            fields = tuple(schema["properties"])
             self.text_calls.append({"messages": deepcopy(messages), "schema": schema})
-            if field == "count":
+            if fields == ("count",):
                 return json.dumps({"count": len(expected)})
             context = json.loads(messages[1]["content"])
             accepted = context["accepted_records"]
-            # Mimic an author that selects the first unassigned meaning, rather
-            # than treating an ungrounded ordinal as a semantic assignment.
-            return json.dumps({field: expected[len(accepted)][field]})
+            # The model returns the complete bounded page; the host owns the
+            # sole allowed kind and excludes it from model generation.
+            return json.dumps({field: expected[len(accepted)][field] for field in fields})
 
     router = PrefixRouter()
     result = bounded.run_bounded_record_template(
@@ -395,13 +395,12 @@ def test_real_field_authoring_uses_prefix_to_resolve_distinct_entities() -> None
         },
     )
     assert result["records"] == expected
-    assert len(router.text_calls) == 1 + 3 * len(expected)
-    for index in range(len(expected)):
-        field_calls = router.text_calls[1 + 3 * index:1 + 3 * (index + 1)]
-        for call in field_calls:
-            context = json.loads(call["messages"][1]["content"])
-            assert context["accepted_records"] == expected[:index]
-            assert "still-uncovered" in call["messages"][0]["content"]
+    assert len(router.text_calls) == 1 + len(expected)
+    for index, call in enumerate(router.text_calls[1:]):
+        assert set(call["schema"]["required"]) == {"role", "entity_id"}
+        context = json.loads(call["messages"][1]["content"])
+        assert context["accepted_records"] == expected[:index]
+        assert "still-uncovered" in call["messages"][0]["content"]
 
 
 @pytest.mark.parametrize("resumed", [False, True])
