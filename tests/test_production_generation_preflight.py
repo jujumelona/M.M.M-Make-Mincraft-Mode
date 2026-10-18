@@ -215,7 +215,17 @@ def test_cross_catalog_duplicates_are_rejected_before_parallel_pack_writes() -> 
         validate_production_generation_modules(modules)
 
 
-def test_imported_system_reference_is_resolved_before_dispatch(tmp_path: Path) -> None:
+def test_imported_system_reference_is_resolved_before_dispatch(tmp_path: Path, synthetic_platform_lock) -> None:
+    from minecraft_mod_ai.scalable_generator import ScalableFabricProjectGenerator
+    from minecraft_mod_ai.spec import ModSpec
+
+    # Exercise catalog merging only after a real target-bound Fabric scaffold exists.
+    ScalableFabricProjectGenerator().generate(ModSpec(
+        mod_id="example", mod_name="Example", package_name="com.example",
+        version="1.0.0", summary="system merge regression", contents=(),
+        platform=synthetic_platform_lock,
+    ), tmp_path)
+
     existing_class = _module("mage", "class", {"display_name": "Mage"})
     new_skill = _module(
         "blink",
@@ -243,7 +253,17 @@ def test_imported_system_reference_is_resolved_before_dispatch(tmp_path: Path) -
     )
 
 
-def test_imported_system_collision_is_rejected_before_dispatch(tmp_path: Path) -> None:
+def test_imported_system_collision_is_rejected_before_dispatch(tmp_path: Path, synthetic_platform_lock) -> None:
+    from minecraft_mod_ai.scalable_generator import ScalableFabricProjectGenerator
+    from minecraft_mod_ai.spec import ModSpec
+
+    # Exercise catalog merging only after a real target-bound Fabric scaffold exists.
+    ScalableFabricProjectGenerator().generate(ModSpec(
+        mod_id="example", mod_name="Example", package_name="com.example",
+        version="1.0.0", summary="system merge regression", contents=(),
+        platform=synthetic_platform_lock,
+    ), tmp_path)
+
     existing_shop = _module(
         "shop_a",
         "shop",
