@@ -359,8 +359,8 @@ def assess_ranked_sources(capability: str, candidates: Sequence[Mapping[str, obj
             receipt["repository"] = owner + "/" + repository
             if url in cache:
                 from .source_inspection_recovery import cached_archive
-                revision, archive = cached_archive(cache, url, SourceInspectionError)
                 receipt["source_cache_hits"] = 1
+                revision, archive = cached_archive(cache, url, SourceInspectionError)
             else:
                 receipt["source_fetches"] = 1
                 with httpx.Client() as client:
