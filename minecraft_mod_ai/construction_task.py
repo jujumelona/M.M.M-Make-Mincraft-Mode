@@ -68,7 +68,7 @@ class ConstructionTask:
     def __post_init__(self):
         if not self.task_id or not self.requirement_ids or not self.intent.strip():
             raise ValueError("CONSTRUCTION_TASK_IDENTITY_REQUIRED")
-        if self.kind not in {"reuse", "port", "glue", "logic", "resource", "verify"}:
+        if self.kind not in {"glue", "logic", "resource", "verify"}:
             raise ValueError("CONSTRUCTION_TASK_KIND")
         if self.status not in {"planned", "ready", "running", "verified", "failed", "blocked"}:
             raise ValueError("CONSTRUCTION_TASK_STATUS")

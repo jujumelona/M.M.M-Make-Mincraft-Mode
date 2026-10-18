@@ -1,7 +1,6 @@
 """Checkpointed one-method-at-a-time Java authoring for independent features.
 
-The direct path is deliberately narrow: it never claims an external donor was
-installed, never replaces a persistent-state plan, and never certifies gameplay.
+The direct path never replaces a persistent-state plan or certifies gameplay.
 The existing typed-IR implementation continues to own those cases.
 """
 from __future__ import annotations
@@ -61,10 +60,8 @@ def _digest(value):
 
 
 def eligible(bindings, context, behaviors):
-    """Never bypass donor integration, retained typed effects or state ownership."""
+    """Never bypass retained typed effects or state ownership."""
     if not bindings.get("request_feature_entrypoint") or not behaviors:
-        return False
-    if context.get("donor_callable_symbols") or context.get("reference_port_obligations"):
         return False
     if any(behavior.get("state_reads") or behavior.get("state_writes")
            or behavior.get("source_status", "grounded") != "grounded"

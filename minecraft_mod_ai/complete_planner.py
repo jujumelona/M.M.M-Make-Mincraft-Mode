@@ -255,7 +255,7 @@ class CompleteGameDesignPlanner:
         from copy import deepcopy
 
         for field in (
-            "_pre_design_research", "_planning_state",
+            "_planning_state",
         ):
             prior = prior_content_design.get(field)
             if isinstance(prior, Mapping):

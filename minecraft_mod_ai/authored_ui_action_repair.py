@@ -15,15 +15,10 @@ from .authored_ui_action_bindings import _mutating_ui_actions
 
 
 def authored_ui_action_repair_needed(
-    plan: Any, *, source_reuse: Mapping[str, Any] | None = None,
+    plan: Any,
 ) -> bool:
     actions = _mutating_ui_actions(plan.structured_sections)
     if len(actions) < 2:
-        return False
-    if isinstance(source_reuse, Mapping) and any(
-        isinstance(row, Mapping) and row.get("mode") == "source_transplant"
-        for row in source_reuse.get("capabilities", ())
-    ):
         return False
     functions = {
         str(fn.get("id") or ""): fn
@@ -257,14 +252,14 @@ def _append_repaired_ui_bindings(
         })
 
 def repair_authored_ui_action_plan(
-    router: Any, plan: Any, source_reuse: Mapping[str, Any],
+    router: Any, plan: Any,
 ) -> Any:
     """Retain saved design but add missing executable UI action bindings."""
     from dataclasses import replace
     from .typed_host_capabilities import typed_host_capability_contracts
     from .root_cause_trace import emit_root_cause
 
-    if not authored_ui_action_repair_needed(plan, source_reuse=source_reuse):
+    if not authored_ui_action_repair_needed(plan):
         return plan
     updated = repair_authored_ui_action_ir(
         router, plan.text, plan.structured_sections, plan.typed_plan_ir,
