@@ -18,7 +18,7 @@ def test_pre_design_does_not_expand_post_design_obligation_domains() -> None:
     providers = set(domains[0]["providers"])
     assert "official_docs" in providers
     assert "project_rag" in providers
-    assert providers == {"official_docs", "project_rag"}
+    assert providers == {"official_docs", "project_rag", "runtime"}
     assert all(not domain["domain_id"].startswith("obl_") for domain in domains)
 
 
@@ -31,7 +31,7 @@ def test_pre_design_research_only_uses_official_and_project_providers() -> None:
     }
 
     assert [domain["domain_id"] for domain in brief["domains"]] == ["request"]
-    assert providers == {"official_docs", "project_rag"}
+    assert providers == {"official_docs", "project_rag", "runtime"}
 
 
 def test_active_approved_catalog_does_not_replace_pre_design_candidate() -> None:

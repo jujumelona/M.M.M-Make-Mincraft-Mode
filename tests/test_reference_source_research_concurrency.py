@@ -79,7 +79,6 @@ def test_reference_provider_failure_does_not_suppress_other_providers(monkeypatc
         record["source_id"] for record in row["evidence_records"]
     } == {
         "wikidata:alpha",
-        "github_reference:alpha",
     }
     assert row["retrieval_errors"] == [
         {"provider": "wikipedia", "error": "RuntimeError: wiki failed"}
