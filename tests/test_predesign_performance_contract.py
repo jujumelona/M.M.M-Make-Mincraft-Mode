@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -8,28 +7,8 @@ from minecraft_mod_ai import catalog_first_grounded_rag as catalog_rag
 from minecraft_mod_ai import pre_design_grounded_rag as rag
 
 
-def test_linked_github_readmes_are_fetched_concurrently(monkeypatch):
-    monkeypatch.setenv("MMM_PREDESIGN_SOURCE_WORKERS", "2")
-    barrier = threading.Barrier(2, timeout=2.0)
-
-    def text(url: str, headers=None) -> str:
-        barrier.wait()
-        return f"implementation body from {url}"
-
-    monkeypatch.setattr(rag, "_text", text)
-    records = [
-        {"metadata": {"source_url": f"https://github.com/example/repo-{index}"}}
-        for index in range(4)
-    ]
-
-    found, receipt = rag._linked_github_sources(
-        records, disabled=lambda: False, disable=lambda: None
-    )
-
-    assert [item["metadata"]["repository"] for item in found] == [
-        f"example/repo-{index}" for index in range(4)
-    ]
-    assert receipt["source_requests"] == 4
+def test_deleted_github_source_transport_cannot_be_called():
+    assert not hasattr(rag, "_linked_github_sources")
 
 
 def test_source_worker_count_respects_operator_override(monkeypatch):
@@ -83,74 +62,30 @@ def test_predesign_code_rag_uses_lexical_hot_path(monkeypatch):
     ]
 
 
-def test_empty_catalog_github_fallback_does_not_nest_query_executors(monkeypatch):
-    monkeypatch.delenv("CURSEFORGE_API_KEY", raising=False)
-    state_lock = threading.Lock()
-    active = 0
-    max_active = 0
-    seen_queries: list[str] = []
-
-    def github(query: str, **kwargs):
-        nonlocal active, max_active
-        with state_lock:
-            active += 1
-            max_active = max(max_active, active)
-            seen_queries.append(query)
-        try:
-            return [], {
-                "provider": "github",
-                "status": "available",
-                "result_count": 0,
-                "search_requests": 1,
-                "source_requests": 0,
-            }
-        finally:
-            with state_lock:
-                active -= 1
-
+def test_external_mod_requests_only_use_local_and_official_rag(monkeypatch):
+    calls = []
+    monkeypatch.setattr(rag, "_versions", lambda _router: ())
     monkeypatch.setattr(
-        rag,
-        "_search_modrinth",
-        lambda query: (
-            [],
-            {"provider": "modrinth", "status": "available", "result_count": 0},
-        ),
-    )
-    monkeypatch.setattr(rag, "_search_github", github)
-    monkeypatch.setattr(
-        rag,
-        "_search_authoritative_catalog",
-        lambda query, versions: {"sources": [], "errors": []},
+        rag, "_search_authoritative_catalog",
+        lambda query, versions: {"sources": [{"query": query}], "errors": []},
     )
     monkeypatch.setattr(rag, "_existing_code_index", lambda: None)
     monkeypatch.setattr(
-        rag,
-        "_search_code_index",
-        lambda index, query: {"status": "not_indexed", "hits": []},
+        rag, "_search_code_index",
+        lambda index, query: {"status": "searched", "hits": []},
     )
-
+    monkeypatch.setattr(rag, "_query_worker_count", lambda count: 1)
     brief = {
-        "domains": [
-            {
-                "domain_id": "request",
-                "providers": ["curseforge", "modrinth"],
-                "queries": ["query one", "query two"],
-            }
-        ]
+        "domains": [{
+            "domain_id": "request",
+            "providers": ["curseforge", "modrinth"],
+            "queries": ["query one", "query two"],
+        }]
     }
     bundle = catalog_rag.forced_rag_bundle(rag, object(), brief)
-
-    assert max_active == 1
-    assert seen_queries == ["query one", "query two"]
     rows = bundle["domains"][0]["queries"]
     assert len(rows) == 2
-    assert all(
-        row["external_rag"]["providers"]["github"]["policy"]
-        == "catalog_empty_fallback"
-        for row in rows
-    )
-    assert all(
-        row["external_rag"]["provider_policy"]["github_broad_search"]
-        == "fallback_after_missing_linked_source_or_empty_catalog"
-        for row in rows
-    )
+    assert [row["project_rag"]["sources"][0]["query"] for row in rows] == [
+        "query one", "query two",
+    ]
+    assert all(row["external_rag"]["sources"] == [] for row in rows)
