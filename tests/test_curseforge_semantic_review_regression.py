@@ -89,3 +89,20 @@ def test_oversized_archive_reuses_error_without_repeated_download(monkeypatch):
     assert second[0]["source_fetches"] == 0
     assert second[0]["source_cache_hits"] == 1
     assert second[0]["error"] == "SOURCE_ARCHIVE_COMPRESSED_LIMIT"
+
+def test_shortlist_retries_failed_source_without_scanning_all_results():
+    from minecraft_mod_ai.source_inspection_recovery import inspect_shortlist_until_reference
+    candidates = [{"source_url": f"https://github.com/example/donor-{n}"} for n in range(8)]
+    seen = []
+
+    def inspect(_capability, selected, **kwargs):
+        seen.append(selected[0]["source_url"])
+        return [{"inspection_status": "inspected", "semantic": {
+            "status": "semantic_reviewed",
+            "intent": "reference" if len(seen) == 2 else "reject",
+        }}]
+
+    results = inspect_shortlist_until_reference("ship", candidates, router=None,
+                                               cache={}, inspect=inspect)
+    assert len(results) == 2
+    assert seen == [candidates[0]["source_url"], candidates[1]["source_url"]]

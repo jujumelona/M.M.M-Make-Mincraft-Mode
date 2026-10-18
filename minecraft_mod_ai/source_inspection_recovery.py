@@ -34,3 +34,18 @@ def unusable_source_links(receipts: Sequence[Mapping]) -> set[str]:
                      "SOURCE_ARCHIVE_", "SOURCE_MEMBER_",
                  ))))
     }
+
+def inspect_shortlist_until_reference(capability, available_links, *, router, cache, inspect, max_candidates=2):
+    """Check a second source only when the first lacks a verified semantic reference."""
+    receipts = []
+    for candidate in available_links[:max_candidates]:
+        current = inspect(capability, [candidate], router=router, cache=cache, max_candidates=1)
+        receipts.extend(current)
+        if any(
+            row.get("inspection_status") == "inspected"
+            and (row.get("semantic") or {}).get("status") == "semantic_reviewed"
+            and (row.get("semantic") or {}).get("intent") in {"reference", "adapt", "reuse"}
+            for row in current
+        ):
+            break
+    return receipts

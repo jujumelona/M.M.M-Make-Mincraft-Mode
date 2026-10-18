@@ -8,7 +8,8 @@ from .curseforge_catalog import curseforge_api_key
 from .platform_catalog import adapter_for_target
 from .reuse_discovery import discover_repositories_for_graph
 from .curseforge_semantic_source_review import assess_ranked_sources
-from .source_inspection_recovery import usable_source_links, unusable_source_links
+from .source_inspection_recovery import (usable_source_links, unusable_source_links,
+                                         inspect_shortlist_until_reference)
 
 def build_repository_reuse_plan(design: Mapping[str, Any], **kwargs: Any) -> dict[str, Any]:
     """Produce fresh-authoring decisions from catalogue observations only."""
@@ -44,24 +45,17 @@ def build_repository_reuse_plan(design: Mapping[str, Any], **kwargs: Any) -> dic
     inspection_receipts = []
     reference_sources = []
     shared_source_cache, unusable_source_urls = {}, set()
-    remaining_inspections = max(8, len(capabilities))  # One fair pass per feature; no speculative double scan.
     for index, name in enumerate(capabilities):
         row = receipts_by_cap.get(name) or single_legacy_receipt or {}
         discovery_status = str(row.get("status") or "query_unresolved")
         matched = list(row.get("ranked_catalogue_hits") or ())
         available_links = usable_source_links(matched, unusable_source_urls)
-        # Reserve capacity for each outstanding capability before considering
-        # a second donor. This prevents early catalogue matches from starving
-        # later, unrelated requirements.
-        outstanding = len(capabilities) - index - 1
-        allowance = min(2, max(0, remaining_inspections - outstanding))
-        inspections = (
-            assess_ranked_sources(name, available_links, router=kwargs.get("router"),
-                                  cache=shared_source_cache,
-                                  max_candidates=allowance)
-            if allowance else []
+        # Check the best relevant source first. Check one alternate only if
+        # the first is rejected, unsafe or unrelated; never scan all matches.
+        inspections = inspect_shortlist_until_reference(
+            name, available_links, router=kwargs.get("router"),
+            cache=shared_source_cache, inspect=assess_ranked_sources,
         )
-        remaining_inspections -= len(inspections)
         inspection_receipts.extend(inspections)
         unusable_source_urls.update(unusable_source_links(inspections))
         # Examined candidate != transplant. Only compile-proof may set source_transplant.
