@@ -97,7 +97,11 @@ def _registration_owner_matches(purpose: str, row: Mapping[str, object]) -> bool
     # EntityRendererRegistry registers renderers, not entity types. Likewise
     # "client" registrations cannot satisfy an ordinary server-side entity
     # registration task.
-    qualifier_roles = {"renderer", "rendering", "client", "screen", "model"}
+    qualifier_roles = {
+        "renderer", "renderers", "rendering", "client", "screen", "model",
+        "data", "serializer", "selector", "option", "debug", "subscription",
+        "fluid", "interaction",
+    }
     if owner_terms & qualifier_roles and not words & qualifier_roles:
         return False
     return True
