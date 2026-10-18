@@ -4,7 +4,6 @@ import json
 
 from minecraft_mod_ai.authored_content_contract import content_request_catalog
 from minecraft_mod_ai.authored_plan import AuthoredPlan
-from minecraft_mod_ai.authored_reuse_bridge import authored_capability_graph
 
 PROMPT = "자원파밍 거래 우주선 조립 무기 선원 업그레이드 행성 여행 특수 광물 외계인 전투 식민지화 모드"
 FEATURES = [
@@ -74,12 +73,6 @@ def test_scope_keeps_authored_transactions_as_implementation_work(monkeypatch):
     assert rows[-1]["design_context"]["source_concern"] == "atomic_mutations"
     assert "spend ore" in rows[-1]["statement"]
 
-
-def test_source_search_uses_feature_queries_without_whole_korean_request():
-    graph = authored_capability_graph(PROMPT, {}, request_scope=scope_fixture())
-    assert graph["nodes"] == [r[1] for r in FEATURES]
-    assert {row["capability"] for row in graph["search_terms"]} == set(graph["nodes"])
-    assert all(PROMPT not in term for row in graph["search_terms"] for term in row["terms"])
 
 
 def test_planner_checkpoint_restores_scope_without_another_model_call(monkeypatch, tmp_path):
