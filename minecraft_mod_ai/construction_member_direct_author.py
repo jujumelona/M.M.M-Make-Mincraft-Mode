@@ -1,8 +1,8 @@
 """Complete Java method author for known, host-owned declarations.
 
 This replaces the one-operation-per-model-call loop for independent canonical
-Java methods. Stateful/donor/port jobs retain their stricter legacy author
-until a grounded state scaffold makes them eligible.
+Java methods. Stateful jobs retain the typed author until a grounded state
+scaffold makes them eligible.
 """
 from __future__ import annotations
 
@@ -57,14 +57,11 @@ def _verify_direct_member(source: str, member: dict, context: dict) -> bool:
     return True
 
 
-def eligible_method(member_task, symbols, context, *, owned_records=(), port_source_ref="") -> bool:
+def eligible_method(member_task, symbols, context, *, owned_records=()) -> bool:
     member = symbols.get(member_task.owner_symbol, {})
     if member.get("kind") not in {"METHOD", "FIELD"}:
         return False
-    if (owned_records or port_source_ref or context.get("donor_callable_symbols")
-            or context.get("direct_method_forbidden")):
-        return False
-    if context.get("reference_port_obligations"):
+    if owned_records or context.get("direct_method_forbidden"):
         return False
     if member_task.state_reads or member_task.state_writes:
         return False

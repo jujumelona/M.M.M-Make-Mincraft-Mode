@@ -31,14 +31,10 @@ def _fixture(tmp_path):
     return task, context
 
 
-def test_direct_method_rejects_unowned_state_or_port_donor(tmp_path):
+def test_direct_method_rejects_unowned_state(tmp_path):
     task, ctx = _fixture(tmp_path)
     assert eligible_method(task, ctx["symbols"], ctx)
     assert not eligible_method(task, ctx["symbols"], ctx, owned_records=[{"record": 1}])
-    assert not eligible_method(task, ctx["symbols"], ctx, port_source_ref="port")
-    assert not eligible_method(task, ctx["symbols"], {
-        **ctx, "donor_callable_symbols": {"required": ["demo.External#doThing"]},
-    })
     from dataclasses import replace
     stateful = replace(task, state_reads=("alienPopulation",))
     assert not eligible_method(stateful, ctx["symbols"], ctx)
