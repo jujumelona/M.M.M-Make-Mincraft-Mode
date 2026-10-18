@@ -248,6 +248,12 @@ def _run_properties(router, identifier, context, progress, checkpoint):
     unknown = [name for name in required_properties if name not in allowed_set]
     if unknown:
         raise TemplateBlocked(f"TEMPLATE_REQUIRED_PROPERTY_UNKNOWN: {unknown}")
+    if len(required_properties) > 4:
+        from .design_property_batching import batched_property_records
+        return batched_property_records(
+            router, template, normalized, required_properties, progress,
+            serialized_callback(checkpoint),
+        ), normalized
 
     # Required properties are host-selected independent slots. Feeding previously
     # generated property records into later calls created an artificial dependency,
