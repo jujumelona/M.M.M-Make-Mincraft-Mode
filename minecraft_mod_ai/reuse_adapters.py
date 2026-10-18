@@ -603,9 +603,18 @@ def apply_deterministic_adapters(
             )
             continue
         if isinstance(content, bytes):
-            try:
-                working_files[path] = content.decode("utf-8")
-            except UnicodeDecodeError:
+            # A PNG, OGG or NBT file can occasionally be UTF-8-decodable by
+            # accident. File type, not decoder success, owns its bytes.
+            text_resource = path.endswith((
+                ".java", ".kt", ".json", ".json5", ".mcmeta", ".mcfunction",
+                ".lang", ".properties", ".toml", ".txt", ".snbt", ".xml",
+            ))
+            if text_resource:
+                try:
+                    working_files[path] = content.decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    raise ValueError("SOURCE_REUSE_INVALID_UTF8_TEXT_RESOURCE: " + path) from exc
+            else:
                 binary_files[path] = content
         else:
             working_files[path] = content
