@@ -359,6 +359,21 @@ def certify_sources_at_production(reuse_plan: Mapping[str, Any], *,
         if not isinstance(decision, dict) or decision.get("mode") != "fresh":
             continue
         capability = decision.get("capability")
+        # There is no way to produce behavior-verified reuse from a smoke-only
+        # acceptance registry. Avoid downloading and compiling 2 donors for a
+        # provably unreachable state, while retaining the source as a useful
+        # unverified implementation reference for fresh generation.
+        if proof_runner is None and grouped.get(capability):
+            from .acceptance_contracts import get_host_acceptance_contracts
+            contracts = get_host_acceptance_contracts(str(capability or ""))
+            if not contracts or not all(c.implementation_bound is True for c in contracts):
+                proof_receipts.append({
+                    "capability": capability,
+                    "status": "behavior_contract_unavailable",
+                    "candidate_count": len(grouped.get(capability, ())),
+                    "failure_code": "NO_IMPLEMENTATION_BOUND_ACCEPTANCE",
+                })
+                continue
         feature_attempts = 0
         for ref in grouped.get(capability, ()):
             if attempts >= _MAX_PROOF_CANDIDATES_PER_RUN or feature_attempts >= _MAX_PROOF_CANDIDATES_PER_FEATURE:
@@ -429,6 +444,9 @@ def certify_sources_at_production(reuse_plan: Mapping[str, Any], *,
         "attempted": attempts,
         "compiled_donors": sum(row.get("mode") == "source_transplant"
                                for row in plan.get("capabilities", ()) if isinstance(row, Mapping)),
+        "behavior_contract_unavailable": sum(
+            row.get("status") == "behavior_contract_unavailable"
+            for row in proof_receipts if isinstance(row, Mapping)),
         "compiled_unverified_behavior": sum(
             row.get("status") == "compile_only_unverified_behavior"
             for row in proof_receipts if isinstance(row, Mapping)),
