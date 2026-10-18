@@ -43,3 +43,33 @@ def test_source_review_cache_deduplicates_api_and_model(monkeypatch):
     assert calls == {"archive": 1, "model": 2}
     assert new_intent["source_cache_hits"] == 1
     assert new_intent["semantic_cache_hits"] == 0
+
+
+def test_unrelated_first_five_allow_only_one_extra_semantic_window(monkeypatch):
+    calls = {"model": 0, "pages": []}
+    monkeypatch.setattr(review, "_github_archive",
+                        lambda _c, _o, _r: ("b" * 40, b"source"))
+    def inventory(_capability, _archive, search_terms=(), evidence_offset=0):
+        calls["pages"].append(evidence_offset)
+        chosen = "Teleport" if evidence_offset else "Generic"
+        return {"status": "inspected", "license_spdx": "MIT", "java_file_count": 120,
+                "evidence": [{"path": f"src/main/java/{chosen}.java",
+                              "symbols": [chosen], "file_sha256": "sha256:" + "a"*64,
+                              "snippet": f"class {chosen} {{}}"}]}
+    def judge(_r, _capability, evidence, _license):
+        calls["model"] += 1
+        selected = evidence[0]
+        intent = "reuse" if "Teleport" in selected["path"] else "reject"
+        return {"status": "semantic_reviewed", "intent": intent,
+                "scores": {"functional_fit": 4},
+                "selected_file": selected["path"],
+                "selected_symbol": selected["symbols"][0]}
+    monkeypatch.setattr(review, "inventory_from_archive", inventory)
+    monkeypatch.setattr(review, "_judge_with_model", judge)
+    rows = review.assess_ranked_sources(
+        "teleport", [{"source_url": "https://github.com/a/large",
+                      "source_id": "curseforge:123"}], router=object(), cache={},
+    )
+    assert calls == {"model": 2, "pages": [0, 5]}
+    assert rows[0]["semantic"]["selected_symbol"] == "Teleport"
+    assert rows[0]["model_judgement_calls"] == 2
