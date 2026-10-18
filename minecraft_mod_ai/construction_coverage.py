@@ -30,16 +30,14 @@ def _authored_source_path(project_root, target_path):
 
 
 def record_authored_source_calls(project_root, target_path, source, *,
-                                 selected_ports, installed_donor_calls, source_kind="typed"):
+                                 source_kind="typed"):
     """Record actual source authorship without claiming target build/runtime success."""
     if source_kind not in {"typed", "direct"}:
         raise ValueError("CONSTRUCTION_SOURCE_KIND_INVALID")
     output = {
-        "schema_version": "mmm/construction-authorship-v1",
+        "schema_version": "mmm/construction-authorship-v2",
         "target_path": target_path,
         "source_sha256": _digest(source.encode("utf-8")),
-        "selected_port_tasks": list(selected_ports),
-        "installed_donor_symbol_calls": sorted(installed_donor_calls),
         "status": ("DIRECT_SOURCE_RENDERED_RUNTIME_UNVERIFIED" if source_kind == "direct"
                    else "TYPED_SOURCE_RENDERED_RUNTIME_UNVERIFIED"),
     }
@@ -119,17 +117,10 @@ def record_constructed_requirement(project_root, spec, source, *, materialized_s
     authorship = None
     if authorship_file.is_file():
         candidate = json.loads(authorship_file.read_text(encoding="utf-8"))
-        if (candidate.get("schema_version") == "mmm/construction-authorship-v1"
+        if (candidate.get("schema_version") == "mmm/construction-authorship-v2"
             and candidate.get("source_sha256") == source_sha
             and candidate.get("target_path") == spec["target_path"]):
             authorship = candidate
-    if authorship:
-        for port in authorship["selected_port_tasks"]:
-            task_receipts.append({
-                "task_id": port["task_id"], "kind": "port",
-                "source_ref": port["source_ref"], "owner_symbol": port["owner_symbol"],
-                "stage": "PORT_SOURCE_RENDERED_RUNTIME_UNVERIFIED",
-            })
     receipt = {"schema_version": "mmm/construction-coverage-v1",
                "requirement_id": parent, "target_path": spec["target_path"],
                "source_sha256": source_sha,

@@ -384,6 +384,5 @@ def _compose_claimed(router, spec, context, behaviors, package, name, owner,
         _save_checkpoint(checkpoint, identity, saved)
     from .construction_coverage import record_authored_source_calls
     record_authored_source_calls(
-        root, spec["target_path"], source, selected_ports=[],
-        installed_donor_calls=[], source_kind="direct")
+        root, spec["target_path"], source, source_kind="direct")
     return source

@@ -581,5 +581,5 @@ def compose(router, spec, *, source_context=(), construction_context=None,
         context['verify_source'](source, spec['target_path'])
     from .construction_coverage import record_authored_source_calls
     record_authored_source_calls(context['project_root'], spec['target_path'], source,
-        selected_ports=[], installed_donor_calls=[])
+)
     return source
