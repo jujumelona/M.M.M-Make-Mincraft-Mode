@@ -130,21 +130,42 @@ def test_system_pack_incremental_shards_merge_and_update_one_record(tmp_path: Pa
     updated = {item['module_id']: item for item in iter_system_module_records(project, mod_id='catalog_test', pack_id='quest-system')}
     assert updated['quest_00077']['config']['required'] == 9
 
-def test_system_pack_migrates_legacy_shards_without_losing_modules(tmp_path: Path) -> None:
-    project = _project(tmp_path / 'legacy-system')
-    resources = project / 'src/main/resources'
-    contract = resources / 'data/catalog_test/mmm_systems/quest-system.json'
-    shard = resources / 'data/catalog_test/mmm_systems/quest-system/shards/modules-00000000.json'
+def test_legacy_system_pack_shards_are_rejected_without_implicit_migration(tmp_path: Path) -> None:
+    import pytest
+
+    project = _project(tmp_path / "legacy-system")
+    resources = project / "src/main/resources"
+    contract = resources / "data/catalog_test/mmm_systems/quest-system.json"
+    shard = resources / "data/catalog_test/mmm_systems/quest-system/shards/modules-00000000.json"
     shard.parent.mkdir(parents=True)
     legacy_modules = _system_modules(2)
-    shard.write_text(json.dumps({'schema_version': 'mmm/system-module-shard-v1', 'modules': legacy_modules}, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+    shard.write_text(json.dumps({
+        "schema_version": "mmm/system-module-shard-v1",
+        "modules": legacy_modules,
+    }), encoding="utf-8")
     contract.parent.mkdir(parents=True, exist_ok=True)
-    contract.write_text(json.dumps({'schema_version': 'mmm/quest-system-v5', 'storage_schema_version': 'mmm/system-pack-index-v1', 'pack_id': 'quest-system', 'module_count': 2, 'shard_size': 8, 'root': '/data/catalog_test/mmm_systems/quest-system/shards/modules-00000000.json', 'server_authoritative': True, 'persistent': True, 'minecraft_version': '1.20.1', 'loader': 'fabric'}, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
-    generate_system_pack(project_root=project, pack_id='quest-system', mod_id='catalog_test', package_name='ai.minecraft.catalog_test', config={'modules': [_system_modules(3)[2]]}, policy=ScalePolicy(java_shard_size=8))
-    migrated = iter_system_module_records(project, mod_id='catalog_test', pack_id='quest-system')
-    assert [item['module_id'] for item in migrated] == ['quest_00000', 'quest_00001', 'quest_00002']
-    root = json.loads(contract.read_text(encoding='utf-8'))
-    assert root['storage_schema_version'] == 'mmm/system-pack-directory-v1'
+    old_index = {
+        "schema_version": "mmm/quest-system-v5",
+        "storage_schema_version": "mmm/system-pack-index-v1",
+        "pack_id": "quest-system",
+        "module_count": 2,
+        "shard_size": 8,
+        "root": "/data/catalog_test/mmm_systems/quest-system/shards/modules-00000000.json",
+        "server_authoritative": True,
+        "persistent": True,
+        "minecraft_version": "1.20.1",
+        "loader": "fabric",
+    }
+    contract.write_text(json.dumps(old_index), encoding="utf-8")
+    with pytest.raises(ValueError, match="Unsupported system pack storage schema"):
+        generate_system_pack(
+            project_root=project, pack_id="quest-system", mod_id="catalog_test",
+            package_name="ai.minecraft.catalog_test",
+            config={"modules": [_system_modules(3)[2]]},
+            policy=ScalePolicy(java_shard_size=8),
+        )
+    assert json.loads(contract.read_text(encoding="utf-8")) == old_index
+
 
 def test_class_skill_template_replays_bounded_catalog_for_dependency_passes(tmp_path: Path) -> None:
     project = _project(tmp_path / 'class-skill')
