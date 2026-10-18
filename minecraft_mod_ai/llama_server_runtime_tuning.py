@@ -290,11 +290,9 @@ def _prompt_cache_disabled(config: Any) -> bool:
     setting = os.environ.get("MMM_LLAMA_PROMPT_CACHE_ENABLED", "").strip().casefold()
     if setting:
         return setting in {"0", "false", "off", "no"}
-    # Existing MTP hot-path installations explicitly opt out of duplicate
-    # prompt storage; never leave a stale --cache-ram allocation in argv.
-    return os.environ.get("MMM_QWEN35_MTP_HOTPATH", "").strip().casefold() in {
-        "1", "true", "on", "yes",
-    }
+    # The deleted Qwen3.5 MTP hot-path flag must not change MiMo cache policy.
+    # Only the explicit current cache preference is authoritative.
+    return False
 
 
 def _configure_prompt_cache(args: list[str], config: Any) -> None:
