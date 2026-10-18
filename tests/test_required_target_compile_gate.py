@@ -73,7 +73,7 @@ def test_target_compile_requires_real_successful_gradle_command_receipt():
         {
             "status": "PASS",
             "commands": [
-                {"name": "build", "exit_code": 0, "timed_out": False},
+                {"name": "build", "command": ["./gradlew", "build"], "exit_code": 0, "timed_out": False},
             ],
         }
     ) == []
@@ -128,7 +128,7 @@ def test_required_jdt_does_not_fallback_to_successful_gradle_build():
         {"status": "UNAVAILABLE", "error_count": 0, "files_opened": 0},
         build_report={
             "status": "PASS",
-            "commands": [{"name": "build", "exit_code": 0, "timed_out": False}],
+            "commands": [{"name": "build", "command": ["./gradlew", "build"], "exit_code": 0, "timed_out": False}],
         },
     )
 
@@ -140,7 +140,7 @@ def test_required_jdt_accepts_only_real_clean_jdt_receipt():
         _clean_jdt_core_receipt(),
         build_report={
             "status": "PASS",
-            "commands": [{"name": "build", "exit_code": 0, "timed_out": False}],
+            "commands": [{"name": "build", "command": ["./gradlew", "build"], "exit_code": 0, "timed_out": False}],
         },
     ) == []
 
@@ -235,7 +235,7 @@ def test_generated_receipt_cannot_add_unapproved_release_gate():
         jdt_receipt={"status": "UNAVAILABLE", "error_count": 0, "files_opened": 0},
         build_report={
             "status": "PASS",
-            "commands": [{"name": "build", "exit_code": 0, "timed_out": False}],
+            "commands": [{"name": "build", "command": ["./gradlew", "build"], "exit_code": 0, "timed_out": False}],
         },
         jar_validation=None,
         blockbench_receipts=(),
