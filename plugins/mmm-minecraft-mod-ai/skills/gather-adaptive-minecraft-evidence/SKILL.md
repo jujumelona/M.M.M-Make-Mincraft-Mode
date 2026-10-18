@@ -21,8 +21,8 @@ routing:
 - Vanilla gameplay/mechanic facts -> reviewed vanilla knowledge route.
 - Exact mappings, symbols, registries, source behavior, and version differences -> exact-version development/source route.
 - Fabric or NeoForge API facts and implementation examples -> reviewed modding-documentation route.
-- Project-specific reuse or compatibility -> project-local code RAG and pinned receipts.
-- Ecosystem/reference-mod discovery -> ecosystem discovery first, then inspect only candidates admitted for the current requirement.
+- Project-specific implementation or compatibility -> project-local code RAG and pinned receipts.
+- User-specified dependency facts -> verify official target API documentation and local classpath; do not discover external mod candidates.
 required_rag:
 - primary Fabric metadata and documentation when the unresolved fact requires Fabric behavior
 - exact Yarn symbols for the pinned Minecraft version when symbol/mapping evidence is required
@@ -31,9 +31,6 @@ allowed_tools:
 - search_project_rag
 - index_project_rag
 - search_code_rag
-- discover_ecosystem_resources
-- inspect_modrinth_project
-- inspect_github_repository
 - inspect_existing_mod
 validators:
 - exact_version_evidence
@@ -59,6 +56,7 @@ forbidden_actions:
 - Merge every requirement's candidates into one semantic-review work queue.
 - Send unresolved or zero-relevance catalog candidates to an LLM merely to discover whether they are relevant.
 - Expand the current requirement's query with unrelated sibling requirements.
+- Never search external mod catalogues for reusable code or transplant any outside mod source.
 exit_conditions:
   success:
   - Every dependent claim has relevant exact-version provenance and adequate coverage.

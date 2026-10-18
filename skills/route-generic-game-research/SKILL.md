@@ -1,9 +1,7 @@
 ---
 name: route-generic-game-research
-description: Decompose any small or game-scale Minecraft mod request into request-derived research domains, then route each
-  domain to exact-version RAG, compatible open-source ecosystem search, licensed-media search, and unresolved-evidence gates.
-  Use for broad, unfamiliar, cross-genre, reference-game, multimodal, library-selection, asset, 3D, audio, or plugin research
-  during game ideation and before production planning.
+description: Decompose Minecraft mod requests into research domains, verify exact target APIs and current-project evidence,
+  and check user-selected media or AI models without searching external mods for reusable source code.
 ---
 
 ```yaml
@@ -24,18 +22,15 @@ route_before_search:
 - Vanilla mechanic/fact -> reviewed vanilla knowledge route.
 - Minecraft symbol, mapping, registry, source behavior, version difference -> minecraft-dev/exact-version RAG route.
 - Fabric/NeoForge implementation pattern -> reviewed modding-docs route.
-- Current project code/reuse -> project-local code RAG route.
-- Compatible external mod/library/plugin candidate -> ecosystem discovery/technology radar route, then inspect the candidate.
+- Current project code -> project-local code RAG route.
+- User-specified optional library -> official target-version API and dependency metadata, never external mod candidate search.
 - Licensed media/model candidate -> the matching media/model discovery route with provenance/license gates.
 required_rag:
 - exact-version official implementation evidence for technical claims
 - project-local source and dependency relationships when the question is project-specific
-- provider metadata, origin license, compatibility and immutable artifact evidence for selected external candidates
+- verified licensing and provenance for user-specified optional libraries or media
 allowed_tools:
 - build_technology_radar
-- discover_ecosystem_resources
-- inspect_modrinth_project
-- inspect_github_repository
 - inspect_huggingface_model
 - assess_technology_compatibility
 - search_project_rag
@@ -69,6 +64,7 @@ forbidden_actions:
 - Fan one question out to every available provider without a route classification.
 - Merge unrelated sibling requirements into a search query.
 - Send the complete task-wide discovery cache through an LLM relevance scan.
+- Never search external mod catalogues for reusable code or transplant any outside mod source.
 exit_conditions:
   success:
   - Every request-derived domain is covered by provenance-bearing evidence or an explicit original-generation and validation

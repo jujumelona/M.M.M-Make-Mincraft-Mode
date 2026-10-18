@@ -25,7 +25,7 @@ planning_research_policy:
 - Start with the user's requested gameplay/design intent; do not search just to invent extra features.
 - For every unresolved factual or feasibility question, classify the evidence route before retrieval.
 - Search only the route that can answer the current question, then bind receipts back to that requirement.
-- Keep ecosystem discovery, code/source lookup, vanilla knowledge, and implementation documentation as separate evidence routes.
+- Keep official API lookup, local-project code, vanilla knowledge, and implementation documentation as distinct evidence routes.
 - Reuse a task-wide discovery cache only as a cache; semantic review receives a requirement-local admitted frontier.
 - Continue corrective retrieval only when the route, query, or admitted frontier materially changes.
 required_rag:
@@ -35,7 +35,7 @@ required_rag:
   registry_lookup, source_search or version_diff capability, preferring minecraft-dev when available.
 - Fabric or NeoForge API design and implementation-pattern claims must use official_mod_docs or mod_examples from a reviewed
   modding documentation route such as mcmodding-docs when available.
-- Project-specific reuse and compatibility decisions require project-local source and prior build/runtime receipts.
+- Project-specific implementation and compatibility decisions require project-local source and prior build/runtime receipts.
 - Exact library version claims for optional dependencies require reviewed version and license evidence.
 allowed_tools:
 - plan_game
@@ -43,9 +43,6 @@ allowed_tools:
 - search_project_rag
 - search_code_rag
 - build_technology_radar
-- discover_ecosystem_resources
-- inspect_modrinth_project
-- inspect_github_repository
 - assess_technology_compatibility
 validators:
 - requirement_traceability
@@ -78,6 +75,7 @@ forbidden_actions:
 - querying every evidence provider for every requirement
 - merging sibling requirements into the current requirement's search expansion
 - using the semantic verifier as a relevance-discovery search engine
+- Never search external mod catalogues for reusable code or transplant any outside mod source.
 exit_conditions:
   success:
   - Every requested capability has an explicit design status and acceptance criterion.
