@@ -12,7 +12,7 @@ def owner_package(symbols, owner):
     return symbols.get(owner, {}).get('package', owner.rpartition('.')[0])
 
 
-def _source_set_owner_accessible(owner: str, target_path: str) -> bool:
+def _source_set_owner_accessible(owner: str, target_path: str, row=None) -> bool:
     """Reject client-only and private Fabric implementation owners.
 
     Some classpath symbols have no explicit side annotation; their package
@@ -23,6 +23,8 @@ def _source_set_owner_accessible(owner: str, target_path: str) -> bool:
         return False
     if target_path.startswith("src/client/"):
         return True
+    if (row or {}).get("side") == "CLIENT":
+        return False
     return not canonical.startswith((
         "net.minecraft.client.",
         "net.fabricmc.fabric.api.client.",
@@ -35,15 +37,13 @@ def class_accessible(symbols, owner, current, target_path):
     """Check the inspected leaf and every enclosing type from this caller."""
     seen = set()
     while owner:
-        if not _source_set_owner_accessible(owner, target_path):
-            return False
         if owner in seen:
             return False
         seen.add(owner)
         row = symbols.get(owner, {})
         if row.get('kind') != 'CLASS':
             return False
-        if row.get('side') == 'CLIENT' and not target_path.startswith('src/client/'):
+        if not _source_set_owner_accessible(owner, target_path, row):
             return False
         access = row.get('access', 1)
         same_package = owner_package(symbols, owner) == owner_package(symbols, current)
