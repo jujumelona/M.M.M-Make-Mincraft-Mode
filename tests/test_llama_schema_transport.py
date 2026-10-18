@@ -289,11 +289,11 @@ def test_llama_pattern_shorthand_is_normalized_before_transport():
     assert "[A-Za-z0-9_]" in pattern
     assert r"\x0B" in pattern
     assert "*" not in pattern
-    # '+' inside the signed-number character class is legal and necessary.
-    # Confirm the normalized pattern still restricts lexical number syntax.
+    # Preserve the original identifier suffix; it is not a numeric exponent.
     import re
-    assert re.fullmatch(pattern, "1.5e+8")
-    assert re.fullmatch(pattern, "-.5")
+    assert re.fullmatch(pattern, "123.alpha  ")
+    assert re.fullmatch(pattern, "1.name")
+    assert not re.fullmatch(pattern, "1.5e+8")
     assert not re.fullmatch(pattern, "unbounded")
 
 
@@ -331,4 +331,9 @@ def test_state_numeric_default_transport_has_no_digit_shorthand():
     assert r"\d" not in pattern
     assert "[0-9]" in pattern
     assert "*" not in pattern
-    assert "+" not in pattern
+    # A sign within a bounded numeric grammar is legal, but unlimited digits,
+    # arbitrary letters and non-finite values are not.
+    import re
+    assert re.fullmatch(pattern, "1.5e+8")
+    assert not re.fullmatch(pattern, "infinity")
+    assert not re.fullmatch(pattern, "x" * 40)
