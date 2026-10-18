@@ -70,3 +70,30 @@ def test_colab_has_no_external_mod_reuse_credentials():
     notebook = (ROOT / "M.M.M_Make_Mincraft_Mode_Colab.ipynb").read_text(encoding="utf-8")
     assert "CURSEFORGE_API_KEY" not in notebook
     assert "REFERENCE_MOD_URLS" not in notebook
+
+
+def test_planning_skills_cannot_request_external_mod_donors():
+    import json
+
+    package = json.loads(
+        (PACKAGE / "packaged_skills.json").read_text(encoding="utf-8")
+    )
+    forbidden_tools = {
+        "read_reuse_source",
+        "discover_ecosystem_resources",
+        "inspect_modrinth_project",
+        "inspect_github_repository",
+    }
+    for name in (
+        "plan-game-design",
+        "gather-adaptive-minecraft-evidence",
+        "ground-production-with-live-evidence",
+        "route-generic-game-research",
+    ):
+        source = (ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
+        plugin = (ROOT / "plugins" / "mmm-minecraft-mod-ai" / "skills" / name / "SKILL.md")
+        assert plugin.read_text(encoding="utf-8") == source
+        assert package["skills"][name] == source
+        allowed = set(package["contracts"][name]["allowed_tools"])
+        assert not (allowed & forbidden_tools), (name, allowed & forbidden_tools)
+        assert "Never search" in source or "never searching" in source
