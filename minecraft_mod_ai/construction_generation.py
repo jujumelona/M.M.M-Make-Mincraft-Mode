@@ -121,11 +121,10 @@ def compose(router, spec, *, source_context=(), construction_context=None,
             'feature_id': work_order.feature_id,
             'target': work_order.to_dict()['target'],
             'behavior_count': len(work_order.behavior_ids),
-            'route': work_order.source_route,
+            'route': 'fresh',
             'fingerprint': work_order.fingerprint(),
         }, ensure_ascii=False), flush=True)
-    elif not (context.get('donor_callable_symbols')
-              or context.get('reference_port_obligations')):
+    else:
         # Canonical leaves such as minecraft/entity/registry are not entrypoint
         # artifacts, yet they are the main source of one-operation-per-call
         # explosions. Give them the same whole-feature target/acceptance contract.
@@ -164,7 +163,7 @@ def compose(router, spec, *, source_context=(), construction_context=None,
     if owner in symbols or any(row.get('owner') == owner for row in symbols.values()):
         raise ValueError('CONSTRUCTION_OWNER_ALREADY_EXISTS: ' + owner)
     # The model's complete-declaration Java writer is the default for
-    # independent behaviors. Stateful features and donor/port integration keep
+    # independent behaviors. Stateful features keep
     # the fully typed, evidence-bound operation author below.
     from .construction_direct_writer import eligible as direct_eligible, compose_feature
     if direct_eligible(bindings, context, behaviors):
@@ -187,8 +186,6 @@ def compose(router, spec, *, source_context=(), construction_context=None,
             'assigned_behaviors': len(behaviors),
             'stateful_behaviors': sum(bool(row.get('state_reads') or row.get('state_writes'))
                                        for row in behaviors),
-            'donor_capabilities': sorted(context.get('donor_callable_symbols', {})),
-            'port_reference_count': len(context.get('reference_port_obligations', ())),
             'retained_typed_effects': sum(len(retained.get(key, ())) for key in
                                           ('functions', 'event_bindings', 'ui_owned_records')),
             'owned_runtime_record_count': len(json.loads(
@@ -429,14 +426,6 @@ def compose(router, spec, *, source_context=(), construction_context=None,
         from .construction_ownership import assign_behavior_records
         assigned_records = assign_behavior_records(planning_router, behaviors, residual_records)
 
-    donor_symbols = context.get('donor_callable_symbols', {})
-    from .construction_porting import select_port_tasks
-    port_tasks = select_port_tasks(
-        planning_router, task, owner=owner,
-        references=context.get('reference_port_obligations', ()),
-        source_pages=context.get('source_pages', {}),
-        symbols=symbols, exact_type=exact_type, state=state,
-    )
     context['construction_declaration_ids'] = tuple(state.declaration_ids)
     from .construction_progress import planned_declarations_fingerprint, construction_input_fingerprint
     planned_declaration_hash = planned_declarations_fingerprint(symbols, state.declaration_ids)
@@ -445,7 +434,7 @@ def compose(router, spec, *, source_context=(), construction_context=None,
     constructor_delegations = {}
     accepted_member_evidence = {}
 
-    def author_one(member_task, *, owned_records=(), port_source_ref=''):
+    def author_one(member_task, *, owned_records=()):
         from .construction_progress import ConstructionNodeCheckpoint
         if not context.get('project_root'):
             raise ValueError('CONSTRUCTION_RESUME_WORKSPACE_REQUIRED')
@@ -459,13 +448,7 @@ def compose(router, spec, *, source_context=(), construction_context=None,
                 ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest())
         scoped_context = dict(context)
         scoped_context['owned_runtime_records'] = list(owned_records)
-        scoped_context['port_source_ref'] = port_source_ref
         scoped_context['source_read'] = progress.record_source_read
-        scoped_context['donor_call_obligations'] = {
-            cap: {'callable_symbol_count': len(identifiers),
-                  'lookup_hint': identifiers[0].split('#', 1)[0]}
-            for cap, identifiers in donor_symbols.items()
-        }
         scoped_context['already_implemented_effects'] = {
             'ui_owned_records': typed_owners.get('ui_owned_records', ()),
             'typed_functions': typed_owners.get('functions', ()),
@@ -480,8 +463,6 @@ def compose(router, spec, *, source_context=(), construction_context=None,
         scoped_context['checkpoint_author_state'] = progress.save_author_state
         scoped_context['recorded_source_refs'] = progress.recorded_source_refs
         nodes = author_task_operations(router, member_task, scoped_context)
-        if port_source_ref and port_source_ref not in progress.recorded_source_refs():
-            raise ValueError('CONSTRUCTION_PORT_SOURCE_NOT_READ: ' + port_source_ref)
         member_invocations[member_task.owner_symbol] = {
             node['attributes']['symbol_ref']
             for node in nodes
@@ -501,8 +482,6 @@ def compose(router, spec, *, source_context=(), construction_context=None,
         member_task = replace(task, task_id=task.task_id + '.member.' + str(index), owner_symbol=key,
                               intent=purpose, output_symbols=(key,))
         body_jobs.append((member_task, {}))
-    for port_task, reference_id in port_tasks:
-        body_jobs.append((port_task, {'port_source_ref': reference_id}))
     for key, behavior in registrars:
         registrar_task = replace(task,
             task_id=behavior['behavior_id'] + '.registration',
@@ -580,43 +559,6 @@ def compose(router, spec, *, source_context=(), construction_context=None,
         accepted_member_evidence[ref] = evidence_hash
     # Keep declaration/field initialization order independent of author order.
     members = [rendered[current.owner_symbol] for current, _options in body_jobs]
-    # Donor/port calls in an unreachable helper are not runtime integration.
-    # The lifecycle invokes every registrar; follow its typed member call
-    # graph transitively before claiming source glue was actually connected.
-    roots = [key for key, _behavior in registrars]
-    if not roots:
-        # Only externally callable declarations can be a runtime entry into the
-        # new class. Starting from every authored member makes an uncalled
-        # private helper appear to satisfy donor/port integration obligations.
-        roots = [
-            key for key in member_invocations
-            if symbols[key].get('visibility') in {'public', 'protected'}
-            or symbols[key].get('kind') == 'CONSTRUCTOR'
-        ]
-    reachable_members, reachable_calls, frontier = set(), set(), list(roots)
-    while frontier:
-        current = frontier.pop()
-        if current in reachable_members:
-            continue
-        reachable_members.add(current)
-        for called in member_invocations.get(current, ()):
-            reachable_calls.add(called)
-            if called in member_invocations and called not in reachable_members:
-                frontier.append(called)
-    missing_port_calls = [
-        item.owner_symbol for item, _ref in port_tasks
-        if item.owner_symbol not in reachable_calls
-    ]
-    if missing_port_calls:
-        raise ValueError('CONSTRUCTION_PORT_GLUE_CALL_MISSING: ' +
-                         ','.join(sorted(missing_port_calls)))
-    missing_donor_calls = [
-        cap for cap, identifiers in donor_symbols.items()
-        if not set(identifiers) & reachable_calls
-    ]
-    if missing_donor_calls:
-        raise ValueError('CONSTRUCTION_DONOR_GLUE_CALL_MISSING: ' +
-                         ','.join(sorted(missing_donor_calls)))
     checked_delegations = set()
     for start in constructor_delegations:
         current, visiting = start, set()
@@ -639,15 +581,5 @@ def compose(router, spec, *, source_context=(), construction_context=None,
         context['verify_source'](source, spec['target_path'])
     from .construction_coverage import record_authored_source_calls
     record_authored_source_calls(context['project_root'], spec['target_path'], source,
-        selected_ports=[
-            {'task_id': port_task.task_id, 'source_ref': ref,
-             'owner_symbol': port_task.owner_symbol}
-            for port_task, ref in port_tasks
-        ],
-        installed_donor_calls=sorted(
-            reachable_calls & {
-                ref for rows in donor_symbols.values() for ref in rows
-            }
-        ),
-    )
+        selected_ports=[], installed_donor_calls=[])
     return source
