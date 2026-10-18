@@ -164,12 +164,6 @@ def execute_checkpointed_job(job, *, context, router, registry, base_dir, execut
                 ):
                     raise ValueError("ARTIFACT_SOURCE_DEPENDENCY_PATH_INVALID")
                 source_hashes[relative_source] = _current_sha256(path)
-        donor_caps = json.loads(bindings.get("construction_donor_capabilities_json") or "[]")
-        if donor_caps:
-            from .authored_reuse_bridge import installed_donor_source_context
-            for row in installed_donor_source_context(root, donor_caps):
-                source_hashes[row["path"]] = row["sha256"]
-                verified_sources[row['path']] = row['sha256']
     approved_context = dict(context or {})
     approved_context.pop('_verified_prerequisite_source_hashes', None)
     approved_binding = digest({'job': definition,

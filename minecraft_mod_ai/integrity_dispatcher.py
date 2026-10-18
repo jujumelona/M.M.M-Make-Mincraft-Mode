@@ -201,13 +201,6 @@ def execute_generator_job(job, *, context, router, port_registry=None, base_dir=
         from .request_runtime_records import generated_owner_source_context
 
         source_context = generated_owner_source_context(base_dir, spec)
-    if base_dir is not None and spec["language"] == "java":
-        donor_caps = json.loads(spec.get("bindings", {}).get(
-            "construction_donor_capabilities_json", "[]"))
-        if donor_caps:
-            from .authored_reuse_bridge import installed_donor_source_context
-            donor_sources = installed_donor_source_context(base_dir, donor_caps)
-            source_context = tuple(source_context) + donor_sources
     extra_context = {"source_context": source_context} if source_context else {}
     if manifest.get("resource_contract"):
         from .canonical_resource_contract import prepare_resource_context

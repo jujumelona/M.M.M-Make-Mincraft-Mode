@@ -171,7 +171,6 @@ def test_feature_execution_passes_materialized_owner_api_to_the_real_generator(m
         compile_request_feature_jobs,
     )
     from minecraft_mod_ai.authored_plan import AuthoredPlan
-    from minecraft_mod_ai.authored_source_rag import VerifiedSourceRAG
     from minecraft_mod_ai.host_version_catalog import host_target
     from minecraft_mod_ai.implementation_identity import compute_json_schema_hash
     from minecraft_mod_ai.integrity_dispatcher import execute_generator_job
@@ -192,7 +191,7 @@ def test_feature_execution_passes_materialized_owner_api_to_the_real_generator(m
     modules, jobs = compile_request_feature_jobs(
         plan, adapter=adapter, mod_id="space", package_name="test.space",
         content_modules=(content,), content_jobs=(content_job,), runtime_modules=(),
-        source_rag=VerifiedSourceRAG(), source_reuse={},
+        
     )
     assert "planet_registry" in modules[0].depends_on
     spec = jobs[0].deterministic_inputs["_canonical_inputs"]["event_callback_input"]
@@ -236,7 +235,6 @@ def test_feature_receives_real_template_registry_path_and_constant():
         compile_request_feature_jobs,
     )
     from minecraft_mod_ai.authored_plan import AuthoredPlan
-    from minecraft_mod_ai.authored_source_rag import VerifiedSourceRAG
     from minecraft_mod_ai.host_version_catalog import host_target
 
     owner = SimpleNamespace(module_id="ore", kind="item", config={"requirement_refs": ["planet"]})
@@ -246,7 +244,7 @@ def test_feature_receives_real_template_registry_path_and_constant():
     _, jobs = compile_request_feature_jobs(
         AuthoredPlan("Travel to planets", "Saved", request_scope=_scope_with_accepted_construction_behavior()),
         adapter=host_target("26.1.2"), mod_id="space", package_name="test.space",
-        content_modules=(owner,), content_jobs=(job,), source_rag=VerifiedSourceRAG(), source_reuse={},
+        content_modules=(owner,), content_jobs=(job,), 
     )
     bindings = jobs[0].deterministic_inputs["_canonical_inputs"]["event_callback_input"]["bindings"]
     assert job.target_path in json.loads(bindings["content_dependency_paths_json"])
