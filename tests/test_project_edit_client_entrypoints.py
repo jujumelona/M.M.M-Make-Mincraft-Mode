@@ -40,8 +40,14 @@ def _canonical_client_job() -> ArtifactJob:
     )
 
 
-def test_canonical_artifact_job_is_client_approval_source_of_truth() -> None:
+def test_canonical_artifact_job_is_client_approval_source_of_truth(monkeypatch) -> None:
     job = _canonical_client_job()
+    # A mock specification port isolates canonical job ownership from the
+    # separate template catalog/parser test suite.
+    monkeypatch.setattr(
+        "minecraft_mod_ai.task_template_catalog.canonical_specification_input",
+        lambda identifier, inputs: inputs["screen"],
+    )
 
     assert canonical_client_entrypoints((job,)) == (
         "example.client.generated.ShipyardScreen",
