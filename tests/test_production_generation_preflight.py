@@ -48,14 +48,26 @@ def _write_system_pack(
     pack_id: str,
     modules: list[SimpleNamespace],
 ) -> None:
-    path = root / f"src/main/resources/data/example/mmm_systems/{pack_id}.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
+    # The old inline "modules" catalog is deliberately unsupported.
+    base = root / f"src/main/resources/data/example/mmm_systems/{pack_id}"
+    records = base / "records"
+    records.mkdir(parents=True, exist_ok=True)
+    for module in modules:
+        (records / f"{module.module_id}.json").write_text(
+            json.dumps({
+                "schema_version": "mmm/system-module-record-v1",
+                "module": _module_dict(module),
+            }),
+            encoding="utf-8",
+        )
+    catalog = base.with_suffix(".json")
+    catalog.write_text(json.dumps({
+        "schema_version": f"mmm/{pack_id}-v5",
+        "storage_schema_version": "mmm/system-pack-directory-v1",
         "pack_id": pack_id,
         "module_count": len(modules),
-        "modules": [_module_dict(module) for module in modules],
-    }
-    path.write_text(json.dumps(payload), encoding="utf-8")
+        "directory": f"/data/example/mmm_systems/{pack_id}/records",
+    }), encoding="utf-8")
 
 
 def _legacy_entity_record(*, spawn_group: str = "monster") -> dict[str, object]:
