@@ -68,6 +68,7 @@ def test_property_pages_keep_exact_schema_and_resume(monkeypatch):
         values = {}
         for name, rule in response_schema["properties"].items():
             values[name] = (rule["enum"][0] if "enum" in rule
+                            else "#FFFFFF" if name == "main_color"
                             else "1" if rule.get("pattern") else "stone")
         return values
 
