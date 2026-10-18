@@ -228,6 +228,10 @@ def test_direct_feature_parser_failure_can_switch_to_typed_author(capsys):
         "demo.AlienRegistry", ValueError("CONSTRUCTION_DIRECT_FEATURE_TARGET_SYMBOL_INVALID"))
     assert report_recoverable_direct_failure(
         "demo.AlienRegistry", ValueError("CONSTRUCTION_SOURCE_SIGNATURE_INVALID"))
+    assert report_recoverable_direct_failure(
+        "demo.AlienRegistry", ValueError("CONSTRUCTION_DIRECT_BODY_INCOMPLETE"))
+    assert report_recoverable_direct_failure(
+        "demo.AlienRegistry", ValueError("CONSTRUCTION_DIRECT_SIGNATURE_INVALID"))
     assert not report_recoverable_direct_failure(
         "demo.AlienRegistry", ValueError("CONSTRUCTION_DIRECT_TARGET_CLASSPATH_REQUIRED"))
     assert "CONSTRUCTION_AUTHOR_ROUTE_SWITCH" in capsys.readouterr().out
