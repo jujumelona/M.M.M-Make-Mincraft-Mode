@@ -113,8 +113,29 @@ def _evidence(index, intent, source_pages):
     """Expose only ranked, inspected target symbols and actual installed source."""
     goal = index.prepare(intent, kinds=("METHOD", "CONSTRUCTOR", "FIELD", "CLASS"))
     page = index.page(goal, 0)
-    result = {"target_api": page["matches"][:8], "source": [],
-              "typed_input_producers": []}
+    # Direct Java source bypassed the typed operation binder, allowing the 9B
+    # model to pick FabricEntityDataRegistry or EntityRenderers for entity
+    # *type* registration. Apply the same functional admission gate before
+    # a candidate is ever shown to the direct source generator.
+    from .construction_api_admission import api_semantic_admissible, root_action_stems
+    action_required = bool(root_action_stems(intent))
+    target_api = []
+    rejected = 0
+    for candidate in page["matches"]:
+        row = index.symbols.get(candidate.get("symbol_id"), {})
+        if (action_required and row.get("kind") == "METHOD"
+                and not api_semantic_admissible("call", intent, row)):
+            rejected += 1
+            continue
+        if (not str(getattr(index, "target_path", "")).startswith("src/client/")
+                and row.get("side") == "CLIENT"):
+            rejected += 1
+            continue
+        target_api.append(candidate)
+        if len(target_api) >= 8:
+            break
+    result = {"target_api": target_api, "source": [],
+              "typed_input_producers": [], "rejected_unrelated_api_count": rejected}
     # A correct registration API is not actionable if the small model must
     # discover every receiver and argument by blind paging. Resolve short,
     # exact-type producer evidence from the *already indexed* target bytecode.
