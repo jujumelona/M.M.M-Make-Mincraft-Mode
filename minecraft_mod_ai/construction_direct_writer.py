@@ -325,8 +325,10 @@ def _compose_claimed(router, spec, context, behaviors, package, name, owner,
         if member is None:
             raise ValueError("CONSTRUCTION_DIRECT_BODY_NOT_VALIDATED")
         if behavior_id not in saved:
+            # Draft state lives only inside this construction attempt. Do not
+            # publish it as a reusable checkpoint until the COMPLETE owner
+            # source has passed the exact target's Java compiler.
             saved[behavior_id] = member
-            _save_checkpoint(checkpoint, identity, saved)
         print("CONSTRUCTION_MEMBER_PROGRESS: " + json.dumps({
             "owner_symbol": owner + "#" + method + "()",
             "rendered_java_bytes": len(member.encode("utf-8")),
@@ -359,8 +361,24 @@ def _compose_claimed(router, spec, context, behaviors, package, name, owner,
     from .compiled_feature_patch import replay_compiled_repair
     source = replay_compiled_repair(root, spec["target_path"], source)
     _parse(source)
+    if context.get("java_classpath"):
+        from .javac_bridge import analyze_java
+        try:
+            analyze_java(
+                source, classpath=context["java_classpath"],
+                java_version=str(context["target"]["java_version"]),
+                filename=name + ".java",
+            )
+        except (ValueError, OSError, RuntimeError) as exc:
+            raise ValueError(
+                "CONSTRUCTION_DIRECT_FEATURE_TARGET_SYMBOL_INVALID: " + str(exc)[:2400]
+            ) from exc
     if context.get("verify_source"):
         context["verify_source"](source, spec["target_path"])
+    # An interrupted or rejected whole-feature candidate never becomes a
+    # checkpoint, even when an individual method's immutable frame was valid.
+    if saved and set(saved) - set(_read_checkpoint(checkpoint, identity)):
+        _save_checkpoint(checkpoint, identity, saved)
     from .construction_coverage import record_authored_source_calls
     record_authored_source_calls(
         root, spec["target_path"], source, selected_ports=[],
