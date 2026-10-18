@@ -1,8 +1,6 @@
 """A whole feature is resumable only after exact-target Java symbol validation."""
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
 from minecraft_mod_ai import construction_direct_writer as writer
