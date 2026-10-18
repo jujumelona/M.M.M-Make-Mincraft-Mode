@@ -148,10 +148,16 @@ def test_existing_geckolib_manifest_is_parsed_before_dispatch(tmp_path: Path) ->
 
 
 def test_existing_geckolib_registration_values_are_preflighted(tmp_path: Path) -> None:
-    _write_geckolib_manifest(
+    manifest = _write_geckolib_manifest(
         tmp_path,
         [_legacy_entity_record(spawn_group="not_a_spawn_group")],
     )
+    # The approved backward-compatible format has an explicit schema and shard size.
+    manifest.write_text(json.dumps({
+        "schema_version": "mmm/geckolib-entities-v2",
+        "shard_size": 16,
+        "entities": [_legacy_entity_record(spawn_group="not_a_spawn_group")],
+    }), encoding="utf-8")
 
     with pytest.raises(
         GeckoLibGenerationContractError,
