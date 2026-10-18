@@ -153,6 +153,12 @@ def _user_download_zip(build_result: Any) -> Path | None:
     artifact_sha256 = str(bundle.get("artifact_sha256") or "").strip()
     if expected_hashes.get(artifact_name) != artifact_sha256:
         return None
+    # Optional artifacts are excluded from the user ZIP, but a symlink or
+    # traversal in their signed manifest still invalidates the bundle.
+    for member_name in expected_hashes:
+        if (not member_name or Path(member_name).name != member_name
+                or (root / member_name).is_symlink()):
+            return None
 
     members: list[Path] = []
     for name in names:
