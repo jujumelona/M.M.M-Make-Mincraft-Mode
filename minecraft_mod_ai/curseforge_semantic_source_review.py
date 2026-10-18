@@ -158,7 +158,7 @@ def _safe_archive_files(data: bytes) -> dict[str, bytes]:
             if path in extracted:
                 raise SourceInspectionError("SOURCE_ARCHIVE_DUPLICATE_PATH")
             basename = path.rsplit("/", 1)[-1].upper()
-            if ((path.endswith(".java") and "/src/" in "/" + path)
+            if ((path.endswith((".java", ".kt")) and "/src/" in "/" + path)
                     or path.startswith(("src/main/resources/", "src/client/resources/"))
                     or path in {"build.gradle", "build.gradle.kts", "gradle.properties",
                                     "gradle/libs.versions.toml"}
@@ -215,8 +215,10 @@ def inventory_from_archive(capability: str, archive: bytes,
     files = _safe_archive_files(archive)
     license_id, notice = _license_spdx(files)
     source_files = [(path, contents) for path, contents in files.items() if path.endswith(".java")]
+    kotlin_count = sum(path.endswith(".kt") for path in files)
     if not source_files:
-        return {"status": "source_unavailable", "license_spdx": license_id,
+        return {"status": "unsupported_kotlin_source" if kotlin_count else "source_unavailable",
+                "kotlin_file_count": kotlin_count, "license_spdx": license_id,
                 "evidence": [], "license_notice": notice}
     if not is_reusable_source_license(license_id):
         return {"status": "license_blocked", "license_spdx": license_id,
