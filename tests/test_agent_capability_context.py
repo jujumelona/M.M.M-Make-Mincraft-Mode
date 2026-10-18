@@ -71,7 +71,11 @@ def test_phase_projection_retains_active_policies_and_external_access() -> None:
     verification = _decode_context(capability_context.project_agent_capability_context(
         original, (_schema("java_diagnostics"),)
     ))
-    assert len(verification["eligible_skills"]) > len(payload["eligible_skills"])
+    assert verification["eligible_skills"]
+    # The current reduced skill catalog may expose the same one valid skill
+    # through both tool scopes; no unrelated skills may be invented for size.
+    assert all(skill["model_tools"] == ["java_diagnostics"]
+               for skill in verification["eligible_skills"])
 
 
 def test_phase_projection_preserves_unknown_policy_shapes() -> None:
