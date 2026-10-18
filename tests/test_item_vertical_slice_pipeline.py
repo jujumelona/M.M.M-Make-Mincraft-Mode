@@ -16,7 +16,7 @@ from minecraft_mod_ai.prompt_fact_types import FactType, PromptFact
 from minecraft_mod_ai.task_template_catalog import load_template
 
 
-def test_item_vertical_slice_end_to_end(tmp_path: Path):
+def test_item_vertical_slice_end_to_end(tmp_path: Path, synthetic_platform_lock):
     mod_id = "space"
     pkg = "com.foo.space"
     pkg_path = "com/foo/space"
@@ -95,6 +95,7 @@ def test_item_vertical_slice_end_to_end(tmp_path: Path):
         mod_id=mod_id,
         package_name=pkg,
         main_class=main_class,
+        version_context=synthetic_platform_lock.version_context,
     )
     assert len(jobs) == 7
 
