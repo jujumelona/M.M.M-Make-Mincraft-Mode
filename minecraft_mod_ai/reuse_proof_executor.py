@@ -503,8 +503,14 @@ def execute_reuse_proof(
         resolve_dependency_for_target,
     )
 
-    loader = str(target_context.get("loader") or "fabric")
-    mc_ver = str(target_context.get("minecraft_version") or "1.21.1")
+    loader = str(target_context.get("loader") or "").strip().casefold()
+    mc_ver = str(target_context.get("minecraft_version") or "").strip()
+    if not loader or not mc_ver:
+        return _rejected_receipt(
+            donor_slice, candidate_id=candidate_id, closure_hash=closure_hash,
+            proof_level=current_level, failure_code="TARGET_SELECTION_REQUIRED",
+            failure_message="Reuse proof requires the user's exact selected Minecraft version and loader.",
+        )
     donor_declared_deps = parse_donor_build_metadata(in_memory_files)
     all_needed_deps = tuple(
         dict.fromkeys(
