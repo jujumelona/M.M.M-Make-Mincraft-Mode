@@ -16,38 +16,43 @@ from minecraft_mod_ai.resource_contracts import derive_module_asset_specs, resol
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_legacy_asset_input_migrates_only_at_deserialization_boundary() -> None:
-    asset = _asset_from_dict(
-        {
-            "asset_id": "texture_item_blade",
-            "kind": "item",
-            "prompt": "dark steel blade",
-            "target_path": "src/main/resources/assets/demo/textures/item/blade.png",
-            "width": 32,
-            "height": 32,
-        }
-    )
+def test_legacy_asset_input_is_rejected_at_deserialization_boundary() -> None:
+    # Canonical proposals must not silently migrate removed FLUX asset requests.
+    from minecraft_mod_ai.complete_spec import SpecValidationError
+
+    legacy = {
+        "asset_id": "texture_item_blade",
+        "kind": "item",
+        "prompt": "dark steel blade",
+        "target_path": "src/main/resources/assets/demo/textures/item/blade.png",
+        "width": 32,
+        "height": 32,
+    }
+    with pytest.raises(SpecValidationError, match="Invalid asset fields"):
+        _asset_from_dict(legacy)
+
+    canonical = {
+        "asset_id": "texture_item_blade",
+        "kind": "item",
+        "visual_description": "dark steel blade",
+        "render_kind": "item.generated",
+        "subject_id": "blade",
+        "owner_module_id": "",
+        "container": "mod",
+        "requested_width": 32,
+        "requested_height": 32,
+        "variant_count": 1,
+        "visual_spec": None,
+    }
+    asset = _asset_from_dict(canonical)
     assert asset.visual_description == "dark steel blade"
-    assert asset.subject_id == "blade"
-    assert asset.render_kind == "item.generated"
     assert asset.requested_width == 32
     assert asset.requested_height == 32
-
-    params = inspect.signature(AssetRequest).parameters
-    assert not {"prompt", "target_path", "width", "height"} & set(params)
-    assert not hasattr(asset, "prompt")
-    assert not hasattr(asset, "width")
-    assert not hasattr(asset, "height")
-
+    assert set(inspect.signature(AssetRequest).parameters).isdisjoint(
+        {"prompt", "target_path", "width", "height"}
+    )
     with pytest.raises(TypeError):
-        AssetRequest(
-            asset_id="texture_item_blade",
-            kind="item",
-            visual_description="dark steel blade",
-            render_kind="item.generated",
-            subject_id="blade",
-            prompt="legacy prompt must not enter the canonical contract",
-        )
+        AssetRequest(**{**canonical, "prompt": "removed"})
 
 
 def test_module_assets_are_host_derived_and_owned() -> None:
@@ -137,9 +142,11 @@ def test_content_design_graph_only_emits_semantic_asset_requests() -> None:
         "height=h",
     ):
         assert obsolete not in source
-    assert "visual_description=visual_desc" in source
-    assert "owner_module_id=eid" in source
-    assert "subject_id=eid" in source
+    # Content design now emits gameplay facts and references existing resources,
+    # never standalone AI texture production contracts.
+    assert "AssetRequest(" not in source
+    assert "visual_description=visual_desc" not in source
+    assert "AssetRequest(" not in source
 
 
 def test_backend_literals_are_not_owned_by_resource_orchestrator() -> None:
