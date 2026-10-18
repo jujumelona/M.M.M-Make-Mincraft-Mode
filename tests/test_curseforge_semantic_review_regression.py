@@ -67,3 +67,25 @@ def test_real_dependency_metadata_and_assets_are_in_donor_manifest():
     assert "src/main/java/example/Teleport.java" in paths
     assert "src/main/resources/assets/example/lang/en_us.json" in paths
     assert "geckolib" in manifest["required_dependencies"]
+
+
+def test_oversized_archive_reuses_error_without_repeated_download(monkeypatch):
+    from minecraft_mod_ai import curseforge_semantic_source_review as source
+
+    fetches = []
+    def oversized(*_args, **_kwargs):
+        fetches.append(True)
+        raise source.SourceInspectionError("SOURCE_ARCHIVE_COMPRESSED_LIMIT")
+
+    monkeypatch.setattr(source, "_github_archive", oversized)
+    cache = {}
+    candidate = [{"source_url": "https://github.com/example/oversized",
+                  "source_id": "curseforge:7"}]
+    first = source.assess_ranked_sources("launch spacecraft", candidate, cache=cache)
+    second = source.assess_ranked_sources("alien combat", candidate, cache=cache)
+    assert len(fetches) == 1
+    assert first[0]["source_fetches"] == 1
+    assert first[0]["inspection_status"] == "inspection_error"
+    assert second[0]["source_fetches"] == 0
+    assert second[0]["source_cache_hits"] == 1
+    assert second[0]["error"] == "SOURCE_ARCHIVE_COMPRESSED_LIMIT"

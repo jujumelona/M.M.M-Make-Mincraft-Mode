@@ -175,3 +175,44 @@ def test_invalid_direct_method_never_publishes_checkpoint(tmp_path, monkeypatch)
     with pytest.raises(ValueError, match="CONSTRUCTION_DIRECT_TARGET_SYMBOL_INVALID"):
         compose_method(Router(), task, ctx, owner_name="AlienRegistry")
     assert not list((tmp_path / ".mmm" / "construction_direct_methods").glob("*.json"))
+
+
+def test_invalid_java_from_router_is_passed_to_repair_not_none(tmp_path, monkeypatch):
+    import json
+    from minecraft_mod_ai import construction_member_direct_author as module
+    from minecraft_mod_ai import first_pass_java_declarations, javac_bridge
+    from minecraft_mod_ai.java_region_parser import JavaRegionParseError
+
+    task, ctx = _fixture(tmp_path)
+    ctx["java_classpath"] = ["/pinned/fabric.jar"]
+    monkeypatch.setattr(module, "_evidence",
+                        lambda *_a: {"target_api": [], "source": []})
+    monkeypatch.setattr(javac_bridge, "analyze_java", lambda *_a, **_kw: [])
+    failures = []
+    monkeypatch.setattr(first_pass_java_declarations, "_record_source_failure",
+                        lambda source, **kwargs: failures.append((source, kwargs)))
+
+    class Router:
+        calls = 0
+        def generate_java_source(self, _role, messages, *, source_frame, **_kw):
+            self.calls += 1
+            if self.calls == 1:
+                bad = source_frame["prefix"] + "}" + source_frame["suffix"]
+                error = JavaRegionParseError("syntax error at 6:1: '}'")
+                error.failed_source = bad  # as attached by model_router
+                raise error
+            repair = json.loads(messages[-1]["content"])
+            assert repair["previous_source"] == bad
+            assert repair["diagnostic"] == "syntax error at 6:1: '}'"
+            assert repair["required_suffix"] == source_frame["suffix"]
+            return (source_frame["prefix"]
+                    + 'System.out.println("fixed");'
+                    + source_frame["suffix"])
+
+    router = Router()
+    fixed = compose_method(router, task, ctx, owner_name="AlienRegistry")
+    assert router.calls == 2
+    assert 'System.out.println("fixed");' in fixed
+    assert len(failures) == 1
+    assert failures[0][0].endswith("}" + "}")
+    assert failures[0][1]["phase"] == "direct_author"

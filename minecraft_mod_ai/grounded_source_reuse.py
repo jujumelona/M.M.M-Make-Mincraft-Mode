@@ -43,13 +43,17 @@ def build_repository_reuse_plan(design: Mapping[str, Any], **kwargs: Any) -> dic
     inspection_receipts = []
     reference_sources = []
     shared_source_cache = {}
+    unusable_source_urls: set[str] = set()
     # Bound total external inspections; never scan the whole catalogue.
     remaining_inspections = max(8, len(capabilities))  # One fair pass per feature; no speculative double scan.
     for index, name in enumerate(capabilities):
         row = receipts_by_cap.get(name) or single_legacy_receipt or {}
         discovery_status = str(row.get("status") or "query_unresolved")
         matched = list(row.get("ranked_catalogue_hits") or ())
-        available_links = [hit for hit in matched if hit.get("source_url")]
+        available_links = [
+            hit for hit in matched
+            if hit.get("source_url") and str(hit["source_url"]) not in unusable_source_urls
+        ]
         # Reserve capacity for each outstanding capability before considering
         # a second donor. This prevents early catalogue matches from starving
         # later, unrelated requirements.
@@ -63,6 +67,16 @@ def build_repository_reuse_plan(design: Mapping[str, Any], **kwargs: Any) -> dic
         )
         remaining_inspections -= len(inspections)
         inspection_receipts.extend(inspections)
+        for result in inspections:
+            # A previously rejected archive must not consume another feature's
+            # sole source-inspection attempt. Try that feature's next official
+            # CurseForge candidate instead; do not invent reuse proof.
+            if (result.get("inspection_status") == "license_blocked"
+                    or (result.get("inspection_status") == "inspection_error"
+                        and str(result.get("error") or "").startswith((
+                            "SOURCE_ARCHIVE_", "SOURCE_MEMBER_",
+                        )))):
+                unusable_source_urls.add(str(result.get("source_url") or ""))
         # Examined candidate != transplant. Only compile-proof may set source_transplant.
         for candidate in inspections:
             semantic = candidate.get("semantic") or {}
