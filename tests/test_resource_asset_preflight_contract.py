@@ -65,10 +65,8 @@ def test_safe_target_uses_same_canonical_path_contract(tmp_path: Path) -> None:
 def test_prompt_preflight_blocks_before_router_planning_access() -> None:
     proposal = _Proposal("assets/example/textures/item/test.json")
 
-    with pytest.raises(
-        resource_module.AssetProductionError,
-        match="Resource asset preflight failed",
-    ):
+    # Removed AI texture planning must reject before touching the router.
+    with pytest.raises(ValueError, match="AI_TEXTURE_GENERATION_REMOVED"):
         resource_module.attach_generation_plan(object(), proposal)
 
 
