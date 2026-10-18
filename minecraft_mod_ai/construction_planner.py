@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import replace
 
 from .construction_task import BehaviorRequirement, ConstructionTask, validate_task_graph
 from .fixed_template_generation import _validate_native_arguments
