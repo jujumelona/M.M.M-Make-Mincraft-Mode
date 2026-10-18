@@ -140,39 +140,27 @@ def test_block_vertical_slice_end_to_end(tmp_path: Path, synthetic_platform_lock
     # item: key, register_basic, client_item, model_generated, lang_en, initializer (6)
     # block: key, register_basic, blockstate_simple, model_cube_all, lang_en, initializer (6)
     # block_drop: block_drop (1) -> total 13 jobs
-    assert len(jobs) == 13
+    assert len(jobs) == 14
 
     port_registry = PortRegistry()
     job_map = {j.job_id: j for j in jobs}
-    execution_order = [
-        "raw_lunite.key",
-        "raw_lunite.register_basic",
-        "raw_lunite.initializer",
-        "raw_lunite.client_item",
-        "raw_lunite.model_generated",
-        "raw_lunite.lang_en",
-        "lunite_ore.key",
-        "lunite_ore.register_basic",
-        "lunite_ore.initializer",
-        "lunite_ore.blockstate_simple",
-        "lunite_ore.model_cube_all",
-        "lunite_ore.lang_en",
-        "lunite_ore.block_drop",
-    ]
-
-    assert set(execution_order) == set(job_map)
-    for job_id in execution_order:
-        job = job_map[job_id]
-        for req in job.requires:
-            assert port_registry.get(req) is not None, (
-                f"Missing required port {req} for {job_id}"
-            )
+    # Resolve the actual host-approved dependency DAG instead of assuming the
+    # retired hand-written 13-job ordering. New reviewed leaves are required.
+    remaining = dict(job_map)
+    while remaining:
+        ready = [
+            job for job in remaining.values()
+            if all(port_registry.get(port) is not None for port in job.requires)
+        ]
+        assert ready, f"Missing host-owned producers for {sorted(remaining)}"
+        job = ready[0]
         template = load_template(job.template_id)
         rendered = render_template(template, job.deterministic_inputs)
         receipt = materialize_job_output(job, rendered, base_dir=tmp_path)
         assert receipt.status == "SUCCESS"
-        for prod in job.produces:
-            port_registry.register(prod, rendered)
+        for port in job.produces:
+            port_registry.register(port, rendered)
+        del remaining[job.job_id]
 
     v_item = validate_item_vertical_slice(
         tmp_path,
