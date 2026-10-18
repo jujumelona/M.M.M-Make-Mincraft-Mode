@@ -20,7 +20,7 @@ def _sha(payload: Any) -> str:
 
 def source_discovery_algorithm_version() -> str:
     """Change when provider discovery or donor handoff semantics change."""
-    return "shared-source-candidate-retrieval-v1"
+    return "shared-source-candidate-retrieval-v2"
 
 
 def source_reference_fingerprint(reference_repositories: Sequence[str]) -> str:
@@ -145,10 +145,18 @@ def resolve_authored_source_reuse(
     # It eliminates the second CurseForge search on resume; execution still
     # independently re-downloads pinned bytes and proves installation.
     target = {"minecraft_version": minecraft_version, "loader": loader}
+    authored_input_sha = "sha256:" + _sha({
+        "requested_prompt": requested_prompt,
+        "structured_sections": structured_sections,
+        "request_scope": request_scope,
+        "reference_repositories": list(reference_repositories),
+        "target": target,
+    })
     if isinstance(prior_reuse_plan, Mapping) and (
         prior_reuse_plan.get("schema_version") == "mmm/grounded-repository-reuse-plan-v2"
         and prior_reuse_plan.get("source_plan_sha256") == frozen["plan_sha256"]
         and prior_reuse_plan.get("capability_graph") == graph
+        and prior_reuse_plan.get("authored_input_sha256") == authored_input_sha
         and prior_reuse_plan.get("bound_target") == target
         and prior_reuse_plan.get("pre_design_candidates_sha256")
             == source_candidate_fingerprint(repository_candidates)
@@ -200,6 +208,7 @@ def resolve_authored_source_reuse(
     return {
         **receipt,
         "pre_design_candidates_sha256": source_candidate_fingerprint(repository_candidates),
+        "authored_input_sha256": authored_input_sha,
         "discovery_algorithm_version": source_discovery_algorithm_version(),
         "reference_repositories_sha256": source_reference_fingerprint(reference_repositories),
         "bound_target": {
