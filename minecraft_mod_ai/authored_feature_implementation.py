@@ -6,7 +6,7 @@ interaction/glue implementation; a zero-entity feature cannot vanish here.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from pathlib import PurePosixPath
 from typing import Any
 
