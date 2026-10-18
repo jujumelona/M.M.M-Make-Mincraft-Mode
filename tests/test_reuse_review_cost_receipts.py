@@ -55,6 +55,7 @@ def test_unrelated_first_five_allow_only_one_extra_semantic_window(monkeypatch):
         return {"status": "inspected", "license_spdx": "MIT", "java_file_count": 120,
                 "evidence": [{"path": f"src/main/java/{chosen}.java",
                               "symbols": [chosen], "file_sha256": "sha256:" + "a"*64,
+                              "rank": 1,
                               "snippet": f"class {chosen} {{}}"}]}
     def judge(_r, _capability, evidence, _license):
         calls["model"] += 1
