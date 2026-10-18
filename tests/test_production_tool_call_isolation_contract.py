@@ -39,7 +39,8 @@ def _adapter(monkeypatch: pytest.MonkeyPatch) -> LlamaCppAdapter:
     monkeypatch.setattr(
         llama_exact_context,
         "capacity_safe_payload",
-        lambda server_url, payload, structured_output=False, use_full_context=False: dict(payload),
+        lambda server_url, payload, structured_output=False, use_full_context=False,
+               required_output_tokens=None: dict(payload),
     )
     monkeypatch.setattr(
         llama_stream_efficiency_contract,
