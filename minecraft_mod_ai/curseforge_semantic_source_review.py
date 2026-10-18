@@ -10,6 +10,7 @@ import io
 import json
 import re
 import stat
+import time
 import zipfile
 from collections.abc import Mapping, Sequence
 from urllib.parse import quote, urlsplit
@@ -344,16 +345,21 @@ def assess_ranked_sources(capability: str, candidates: Sequence[Mapping[str, obj
         examined.add(url)
         if len(result) >= max_candidates:
             break
+        started = time.monotonic()
         receipt = {"capability": capability, "source_id": str(candidate.get("source_id") or ""),
                    "catalog_id": candidate.get("catalog_id"), "source_url": url,
                    "catalogue_score": candidate.get("score", 0),
-                   "proof_status": "NOT_RUN", "proof_attempts": 0}
+                   "proof_status": "NOT_RUN", "proof_attempts": 0,
+                   "source_fetches": 0, "source_cache_hits": 0,
+                   "model_judgement_calls": 0, "semantic_cache_hits": 0}
         try:
             host, owner, repository = direct_source_identity(url)
             receipt["repository"] = owner + "/" + repository
             if url in cache:
                 revision, archive = cache[url]
+                receipt["source_cache_hits"] = 1
             else:
+                receipt["source_fetches"] = 1
                 with httpx.Client() as client:
                     revision, archive = (
                         _github_archive(client, owner, repository)
@@ -375,11 +381,14 @@ def assess_ranked_sources(capability: str, candidates: Sequence[Mapping[str, obj
                 key = _semantic_cache_key(capability, revision, url, search_terms)
                 semantic = cache.get(key)
                 if semantic is None:
+                    receipt["model_judgement_calls"] = int(router is not None)
                     semantic = _judge_with_model(
                         router, capability, observation["evidence"],
                         str(observation["license_spdx"]),
                     )
                     cache[key] = semantic
+                else:
+                    receipt["semantic_cache_hits"] = 1
                 receipt["semantic"] = semantic
                 if semantic.get("status") == "semantic_reviewed":
                     selected = next((item for item in observation["evidence"]
@@ -390,5 +399,7 @@ def assess_ranked_sources(capability: str, candidates: Sequence[Mapping[str, obj
         except Exception as exc:
             receipt["inspection_status"] = "inspection_error"
             receipt["error"] = str(exc)[:250] if isinstance(exc, SourceInspectionError) else type(exc).__name__
+        finally:
+            receipt["elapsed_ms"] = round(1000 * (time.monotonic() - started), 1)
         result.append(receipt)
     return result
