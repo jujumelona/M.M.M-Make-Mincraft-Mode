@@ -50,12 +50,28 @@ def _batched_decision_values(router, template, normalized, selected_slots, progr
     if not isinstance(value_schema, dict):
         raise TemplateBlocked("TEMPLATE_DECISION_VALUE_SCHEMA_INVALID")
     output = []
-    page_size = 8  # Transport page width, not a limit on requested capabilities.
-    for offset in range(0, len(selected_slots), page_size):
-        page = tuple(selected_slots[offset:offset + page_size])
+    # The model's schema transport expands each maximum-length string. Fixed
+    # 8-slot pages can exceed the global output limit even for short values.
+    # Greedily fit every original slot into an admissible bounded page.
+    from .execution_contract_policy import PLANNER_RECORD_PAGE_OUTPUT_TOKEN_CEILING
+    offset = 0
+    while offset < len(selected_slots):
+        size = 1
+        page = tuple(selected_slots[offset:offset + size])
         schema = {"type": "object", "additionalProperties": False,
                   "properties": {slot: dict(value_schema) for slot in page},
                   "required": list(page)}
+        # Fail honestly if one field cannot be represented at all.
+        structured_output_token_ceiling(schema)
+        while size < min(8, len(selected_slots) - offset):
+            candidate = tuple(selected_slots[offset:offset + size + 1])
+            projected = {"type": "object", "additionalProperties": False,
+                         "properties": {slot: dict(value_schema) for slot in candidate},
+                         "required": list(candidate)}
+            if structured_output_token_ceiling(projected, absolute_ceiling=None) > PLANNER_RECORD_PAGE_OUTPUT_TOKEN_CEILING:
+                break
+            size += 1
+            page, schema = candidate, projected
         binding = "decision-values-page-v1:" + task_binding(
             template, {**normalized, "allowed_slots": list(page)}, (),
         )
@@ -85,6 +101,7 @@ def _batched_decision_values(router, template, normalized, selected_slots, progr
                 checkpoint(binding, dict(value))
         Draft202012Validator(schema).validate(value)
         output.extend({"slot_id": slot, "value": value[slot]} for slot in page)
+        offset += len(page)
     return output
 
 
