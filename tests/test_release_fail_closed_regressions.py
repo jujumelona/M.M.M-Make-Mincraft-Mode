@@ -152,7 +152,6 @@ def test_download_bundle_rejects_stale_proposal_binding(tmp_path) -> None:
                 "status": "PASS",
                 "proposal_hash": "sha256:" + "a" * 64,
             },
-            reuse_manifest={},
             build_receipt={"status": "PASS"},
             runtime_receipt={"status": "NOT_REQUIRED"},
             proposal_hash="sha256:" + "b" * 64,
