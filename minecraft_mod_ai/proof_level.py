@@ -12,7 +12,11 @@ from collections.abc import Mapping
 from enum import Enum
 from typing import Any
 
-from .reuse_license import is_reusable_source_license
+# Legacy proof receipts retain exact SPDX validation without loading donor modules.
+_ALLOWED_LICENSE_IDS = frozenset({
+    "MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause",
+    "ISC", "Zlib", "Unlicense", "CC0-1.0",
+})
 
 
 class ProofLevel(str, Enum):
@@ -185,9 +189,7 @@ def _validate_receipt(dst: ProofLevel, receipt: Any) -> tuple[bool, str]:
     if data is None:
         return False, f"MISSING_RECEIPT: transition to {dst.value} requires an attested proof receipt"
 
-    if dst == ProofLevel.LICENSE_VERIFIED and not is_reusable_source_license(
-        data.get("license")
-    ):
+    if dst == ProofLevel.LICENSE_VERIFIED and str(data.get("license") or "").strip() not in _ALLOWED_LICENSE_IDS:
         return False, "INVALID_RECEIPT: LICENSE_VERIFIED requires a reusable source license"
     if dst == ProofLevel.PINNED and not _immutable_commit_sha(data, "commit_sha"):
         return False, "INVALID_RECEIPT: PINNED requires an immutable 40-64 hex commit_sha"
