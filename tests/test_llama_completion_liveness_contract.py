@@ -407,3 +407,55 @@ def test_completion_wall_deadline_does_not_refresh_with_progress(monkeypatch) ->
 
     with pytest.raises(contract.LlamaCompletionDeadlineExceeded, match="wall-clock ceiling"):
         list(wrapped.iter_lines())
+
+
+def test_repetitive_grammar_output_is_aborted_before_parent_deadline_renewal(monkeypatch):
+    """Reproduces the 52k-character AliasHolder loop in the production trace."""
+    refreshed = []
+    monkeypatch.setattr(
+        contract, "refresh_model_execution_deadline",
+        lambda seconds: refreshed.append(seconds),
+    )
+    streamed = []
+    def lines():
+        for _ in range(2000):
+            content = "AliasHolder" * 8
+            streamed.append(content)
+            yield "data: " + contract.json.dumps(
+                {"choices": [{"delta": {"content": content}}]},
+            )
+        yield "data: [DONE]"
+
+    wrapped = contract._ProgressCheckedResponse(
+        SimpleNamespace(iter_lines=lines), 120.0,
+        request_id="repeated-native-grammar",
+        started_at=contract.time.monotonic(),
+    )
+    with pytest.raises(contract.LlamaDegenerateOutputError, match="LLAMA_DEGENERATE_REPEATED_OUTPUT"):
+        list(wrapped.iter_lines())
+    assert len(streamed) < 75  # fail well before 52k characters
+    assert len(refreshed) < len(streamed)  # last repeated chunk cannot renew lease
+
+
+def test_repetition_guard_recognizes_token_splitting_without_false_positive():
+    guard = contract._RepeatedOutputWatchdog()
+    # Equivalent model output, sliced at adversarial SSE chunk boundaries.
+    malformed = "AliasHolder" * 600
+    with pytest.raises(contract.LlamaDegenerateOutputError):
+        for offset in range(0, len(malformed), 7):
+            guard.observe("data: " + contract.json.dumps({
+                "choices": [{"delta": {"content": malformed[offset:offset + 7]}}],
+            }))
+    healthy = contract._RepeatedOutputWatchdog()
+    for i in range(160):
+        healthy.observe("data: " + contract.json.dumps({
+            "choices": [{"delta": {"content": "public class Field" + str(i) + " { return value; }"}}],
+        }))
+
+
+def test_finite_token_budget_still_has_absolute_wall_clock_guard(monkeypatch):
+    monkeypatch.delenv("MMM_LLAMA_COMPLETION_WALL_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("MMM_LLAMA_TOOL_COMPLETION_WALL_TIMEOUT_SECONDS", raising=False)
+    assert contract._completion_wall_timeout_seconds({"max_tokens": 32000}) == 300.0
+    assert contract._completion_wall_timeout_seconds({"tools": [{"type": "function"}],
+                                                      "max_tokens": 32000}) == 600.0
