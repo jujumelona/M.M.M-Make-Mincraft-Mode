@@ -519,15 +519,29 @@ def compose(router, spec, *, source_context=(), construction_context=None,
     rendered = {}
     from .construction_member_direct_author import eligible_method, compose_method
     for member_task, options in authoring_order:
-        if eligible_method(member_task, symbols, context, **options):
-            # A host-owned method signature can be filled as one complete
-            # semantic coding unit; do not spend dozens of model calls
-            # constructing one-operation-at-a-time IR.
-            nodes = ()
-            rendered[member_task.owner_symbol] = compose_method(
-                router, member_task, context, owner_name=name)
-            member_invocations[member_task.owner_symbol] = set()
-        else:
+        direct_candidate = eligible_method(member_task, symbols, context, **options)
+        nodes = ()
+        if direct_candidate:
+            try:
+                # The direct route is fast only when its *real* classpath types
+                # resolve. A syntactically valid invented API is not accepted.
+                rendered[member_task.owner_symbol] = compose_method(
+                    router, member_task, context, owner_name=name)
+                member_invocations[member_task.owner_symbol] = set()
+            except ValueError as exc:
+                if "CONSTRUCTION_DIRECT_TARGET_SYMBOL_INVALID" not in str(exc):
+                    raise
+                print("CONSTRUCTION_AUTHOR_ROUTE_SWITCH: " + json.dumps({
+                    "member": member_task.owner_symbol,
+                    "from": "direct_java", "to": "typed_ir",
+                    "reason": "target_symbol_admission_failed",
+                    "diagnostic": str(exc)[:1200],
+                }, ensure_ascii=False), flush=True)
+                direct_candidate = False
+        if not direct_candidate:
+            # The fallback is not free-form Java regeneration. Every operation
+            # is selected from inspected signatures and validated for input
+            # types before the host renders source from the typed IR.
             nodes = author_one(member_task, **options)
             render_task_java(member_task, nodes, symbols)
             rendered[member_task.owner_symbol] = render_task_member(member_task, nodes, symbols)
