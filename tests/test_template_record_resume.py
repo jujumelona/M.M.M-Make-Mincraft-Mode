@@ -109,12 +109,12 @@ def test_interruption_reconstructs_validated_prefix_from_singleton_checkpoints(m
         nonlocal interrupted
         context = json.loads(messages[1]["content"])
         index = len(context["accepted_records"])
-        field = next(iter(response_schema["properties"]))
+        fields = tuple(response_schema["required"])
         if index == 1 and not interrupted:
             interrupted = True
             raise TimeoutError("second record interrupted")
-        field_calls.append((index, field))
-        return {field: _record(index)[field]}
+        field_calls.append((index, ",".join(fields)))
+        return {field: _record(index)[field] for field in fields}
 
     monkeypatch.setattr(single, "generate_fixed_template_value", generate_field)
     kwargs = {
@@ -134,7 +134,8 @@ def test_interruption_reconstructs_validated_prefix_from_singleton_checkpoints(m
     result = runtime.run_record_template(None, IDENTIFIER, **kwargs)
 
     assert result["records"] == [_record(0), _record(1)]
-    assert field_calls == prior_calls + [(1, "trigger"), (1, "owner")]
+    assert {field for index, group in field_calls[len(prior_calls):]
+            if index == 1 for field in group.split(",")} == {"trigger", "owner"}
     assert progress[aggregate_key]["records"] == result["records"]
 
 
@@ -147,8 +148,8 @@ def test_rejected_duplicate_never_poison_singleton_resume(monkeypatch):
     def generate_field(_router, _role, messages, *, response_schema, **_kwargs):
         context = json.loads(messages[1]["content"])
         index = len(context["accepted_records"])
-        field = next(iter(response_schema["properties"]))
-        field_calls.append((index, field))
+        fields = tuple(response_schema["required"])
+        field_calls.append((index, ",".join(fields)))
         return {field: _record(index if corrected else 0)[field]}
 
     monkeypatch.setattr(single, "generate_fixed_template_value", generate_field)
@@ -169,7 +170,8 @@ def test_rejected_duplicate_never_poison_singleton_resume(monkeypatch):
     _patch_count(monkeypatch, AssertionError("count already checkpointed"))
     result = runtime.run_record_template(None, IDENTIFIER, **kwargs)
     assert result["records"] == [_record(0), _record(1)]
-    assert field_calls == prior_calls + [(1, "trigger"), (1, "owner")]
+    assert {field for index, group in field_calls[len(prior_calls):]
+            if index == 1 for field in group.split(",")} == {"trigger", "owner"}
 
 
 @pytest.mark.parametrize("changed", ["context", "allowed_refs"])
