@@ -173,8 +173,17 @@ def compose(router, spec, *, source_context=(), construction_context=None,
             'assigned_behaviors': len(behaviors), 'checkpointed': True,
             'target_build_verified': False,
         }, ensure_ascii=False), flush=True)
-        return compose_feature(router, spec, context, behaviors,
-                               package=package, name=name, owner=owner)
+        try:
+            return compose_feature(router, spec, context, behaviors,
+                                   package=package, name=name, owner=owner)
+        except ValueError as exc:
+            if "CONSTRUCTION_DIRECT_FEATURE_TARGET_SYMBOL_INVALID" not in str(exc):
+                raise
+            print("CONSTRUCTION_AUTHOR_ROUTE_SWITCH: " + json.dumps({
+                "owner": owner, "from": "direct_feature_java", "to": "typed_ir",
+                "reason": "whole_feature_target_compile_failed",
+                "diagnostic": str(exc)[:1200],
+            }, ensure_ascii=False), flush=True)
     if bindings.get('request_feature_entrypoint'):
         retained = json.loads(bindings.get('retained_typed_behavior_json') or '{}')
         print('CONSTRUCTION_AUTHOR_ROUTE: ' + json.dumps({
