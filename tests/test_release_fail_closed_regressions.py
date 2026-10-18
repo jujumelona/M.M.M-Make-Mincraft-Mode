@@ -114,14 +114,14 @@ def _coverage(tmp_path, text: str) -> dict:
 def test_retired_byte_partition_manifest_never_certifies_a_release(tmp_path) -> None:
     # The old v1 authored plan and byte-partition manifest must not be
     # accepted as modern Typed PlanIR evidence, even if source is compilable.
-    text = "# Economy\\nImplement credits and trading.\\n"
+    text = "# Economy\nImplement credits and trading.\n"
     source = tmp_path / "src/main/java/demo/AuthoredFeature001.java"
     source.parent.mkdir(parents=True)
     source.write_text(
-        "package demo;\\n"
-        "public final class AuthoredFeature001 {\\n"
-        "  public static void initialize() { return; }\\n"
-        "}\\n",
+        "package demo;\n"
+        "public final class AuthoredFeature001 {\n"
+        "  public static void initialize() { return; }\n"
+        "}\n",
         encoding="utf-8",
     )
     blocked = _coverage(tmp_path, text)
@@ -129,11 +129,11 @@ def test_retired_byte_partition_manifest_never_certifies_a_release(tmp_path) -> 
     assert any("canonical typed v2 schema" in finding for finding in blocked["findings"])
 
     source.write_text(
-        "package demo;\\n"
-        "public final class AuthoredFeature001 {\\n"
-        "  private static int credits;\\n"
-        "  public static void initialize() { credits = 1; }\\n"
-        "}\\n",
+        "package demo;\n"
+        "public final class AuthoredFeature001 {\n"
+        "  private static int credits;\n"
+        "  public static void initialize() { credits = 1; }\n"
+        "}\n",
         encoding="utf-8",
     )
     # Source text alone is not evidence of an approved, realized Typed PlanIR.
