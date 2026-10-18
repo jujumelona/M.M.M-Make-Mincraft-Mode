@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-"""Catalog-first provider policy for Minecraft research.
+"""Official API and local-project evidence policy for Minecraft research.
 
-Provider transport lives in ``pre_design_grounded_rag``. This module owns retrieval
-policy: search CurseForge for the selected Minecraft version and loader.
-Official/project sources remain separate from ecosystem discovery.
-
-Query-level orchestration uses the backend-owned dynamic worker authority and the
-shared deadline executor. Provider/source retrieval remains independently bounded by its
-transport timeouts, while deterministic output order is reconstructed from authored specs.
+External mod catalogues, donor repositories and source transplant providers are
+not consulted. Keep the existing module entrypoints for internal callers while
+only admitting official target APIs and local project source evidence.
 """
 
 from collections.abc import Mapping, Sequence
@@ -93,7 +89,7 @@ def forced_rag_bundle(
     router: Any,
     research_brief: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Build the grounded-RAG wire shape under catalog-first provider policy.
+    """Build the grounded-RAG wire shape under official/project provider policy.
 
     Query orchestration is intentionally serial. Provider implementations own the only
     executor layer for source/README expansion, preventing nested executor fan-out while
@@ -171,7 +167,7 @@ def forced_rag_bundle(
         "domain_count": len(domains),
         "query_count": query_count,
         "unique_query_count": len(specs),
-        "provider_policy": "catalog_first_exact_source_then_fallback",
+        "provider_policy": "official_api_and_local_project_only",
         "external_source_count": external_count,
         "domains": out_domains,
     }
