@@ -132,7 +132,18 @@ def build_repository_reuse_plan(design: Mapping[str, Any], **kwargs: Any) -> dic
          if k in item}
         for item in requested_dependencies if isinstance(item, Mapping)
     ][:8]
+    performance = {
+        "source_downloads": sum(int(x.get("source_fetches") or 0) for x in inspection_receipts),
+        "source_cache_hits": sum(int(x.get("source_cache_hits") or 0) for x in inspection_receipts),
+        "model_judgement_calls": sum(int(x.get("model_judgement_calls") or 0) for x in inspection_receipts),
+        "semantic_cache_hits": sum(int(x.get("semantic_cache_hits") or 0) for x in inspection_receipts),
+        "inspection_wall_ms": round(sum(float(x.get("elapsed_ms") or 0) for x in inspection_receipts), 1),
+        "inspected_candidate_count": len(inspection_receipts),
+        "capability_count": len(capabilities),
+    }
+    print("SOURCE_REUSE_COSTS: " + json.dumps(performance, ensure_ascii=False), flush=True)
     return {
+        "source_reuse_costs": performance,
         "requested_curseforge_dependencies": requested_dependencies,
         "schema_version": "mmm/grounded-repository-reuse-plan-v2",
         "bound_target": {"minecraft_version": version, "loader": loader},
