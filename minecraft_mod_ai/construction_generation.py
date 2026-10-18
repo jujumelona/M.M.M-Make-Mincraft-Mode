@@ -538,12 +538,22 @@ def compose(router, spec, *, source_context=(), construction_context=None,
                     router, member_task, context, owner_name=name)
                 member_invocations[member_task.owner_symbol] = set()
             except ValueError as exc:
-                if "CONSTRUCTION_DIRECT_TARGET_SYMBOL_INVALID" not in str(exc):
+                from .java_region_parser import JavaRegionParseError
+                # Syntax/frame errors are model-authored code failures, not
+                # infrastructure faults. After two direct tries, let the
+                # existing type-checked operation author build this member.
+                recoverable = (isinstance(exc, JavaRegionParseError)
+                               or str(exc).startswith((
+                                   "CONSTRUCTION_DIRECT_TARGET_SYMBOL_INVALID",
+                                   "CONSTRUCTION_UNIT_",
+                                   "CONSTRUCTION_SOURCE_SIGNATURE_INVALID",
+                               )))
+                if not recoverable:
                     raise
                 print("CONSTRUCTION_AUTHOR_ROUTE_SWITCH: " + json.dumps({
                     "member": member_task.owner_symbol,
                     "from": "direct_java", "to": "typed_ir",
-                    "reason": "target_symbol_admission_failed",
+                    "reason": "direct_source_validation_failed",
                     "diagnostic": str(exc)[:1200],
                 }, ensure_ascii=False), flush=True)
                 direct_candidate = False

@@ -485,9 +485,18 @@ class ModelRouter:
             result == source_frame.get("empty_value")
             or (result.startswith(prefix) and result.endswith(suffix))
         )):
-            raise ModelConfigurationError("CONSTRUCTION_SOURCE_SIGNATURE_INVALID")
+            error = ModelConfigurationError("CONSTRUCTION_SOURCE_SIGNATURE_INVALID")
+            # The repair owner needs the exact failed bytes, not a None value.
+            error.failed_source = result
+            raise error
         from .first_pass_java_declarations import validate_source_frame
-        validate_source_frame(result, source_frame)
+        try:
+            validate_source_frame(result, source_frame)
+        except ValueError as error:
+            # Validation is host-owned, but the generated attempt must survive
+            # the exception boundary for the next diagnostic-guided turn.
+            error.failed_source = result
+            raise
         return result
 
     def generate_tool_decision(

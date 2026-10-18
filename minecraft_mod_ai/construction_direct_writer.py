@@ -321,13 +321,20 @@ def _compose_claimed(router, spec, context, behaviors, package, name, owner,
                                             {**metadata, "source": candidate}, owner=name)
                 break
             except ValueError as error:
+                if candidate is None and isinstance(getattr(error, "failed_source", None), str):
+                    candidate = error.failed_source
+                if isinstance(candidate, str):
+                    from .first_pass_java_declarations import _record_source_failure
+                    _record_source_failure(candidate, kind="method", name=method,
+                                           owner=name, phase="direct_feature", exc=error)
                 if behavior_id in saved or attempt + 1 >= attempts:
                     raise
                 messages.append({"role": "user", "content": json.dumps({
                     "repair_current_declaration": True,
-                    "error": str(error)[:1600],
-                    "previous_candidate": str(candidate)[:8000],
+                    "error": str(error),
+                    "previous_candidate": candidate,
                     "required_signature": frame["prefix"],
+                    "required_suffix": frame["suffix"],
                     "instruction": "Return the whole corrected method, keep the exact frame.",
                 }, ensure_ascii=False)})
         if member is None:

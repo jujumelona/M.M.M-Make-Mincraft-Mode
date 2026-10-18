@@ -175,13 +175,25 @@ def compose_method(router, member_task, context, *, owner_name: str) -> str:
                 )
                 target_symbols_verified = _verify_direct_member(source, member, context)
             except ValueError as error:
+                if candidate is None and isinstance(getattr(error, "failed_source", None), str):
+                    candidate = error.failed_source
+                if isinstance(candidate, str):
+                    # A parser exception occurs *inside* the router, before it
+                    # returns candidate. Persist the actual failed method and
+                    # its diagnostic; never feed "None" to the repair model.
+                    from .first_pass_java_declarations import _record_source_failure
+                    _record_source_failure(
+                        candidate, kind=kind, name=member["name"],
+                        owner=owner_name, phase="direct_author", exc=error,
+                    )
                 if attempt:
                     raise
                 messages.append({"role": "user", "content": json.dumps({
                     "repair_only_this_method": True,
-                    "diagnostic": str(error)[:1000],
-                    "previous_source": str(candidate)[:7000],
+                    "diagnostic": str(error),
+                    "previous_source": candidate,
                     "required_prefix": frame["prefix"],
+                    "required_suffix": frame["suffix"],
                 }, ensure_ascii=False)})
                 continue
             _save_checkpoint(checkpoint, identity, {member_task.owner_symbol: source})
