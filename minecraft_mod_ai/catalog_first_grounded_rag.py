@@ -24,7 +24,7 @@ def _providers(domain: Mapping[str, Any]) -> tuple[str, ...]:
         if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray))
         else []
     )
-    return tuple(dict.fromkeys(values))
+    return tuple(dict.fromkeys(v for v in values if v in {"official_docs", "project_rag", "runtime"}))
 
 
 def _domain_spec_occurrences(domain: Mapping[str, Any]) -> list[tuple[str, tuple[str, ...]]]:

@@ -58,53 +58,9 @@ def test_provider_limits_are_optional_operator_policy(monkeypatch):
     assert grounded_rag._provider_page_limit() == 9
 
 
-def test_modrinth_progress_can_cross_old_four_page_limit(monkeypatch):
-    monkeypatch.delenv("MMM_PREDESIGN_PROVIDER_RESULTS_PER_QUERY", raising=False)
-    monkeypatch.delenv("MMM_PREDESIGN_PROVIDER_SEARCH_PAGES", raising=False)
-    terms = ("alpha", "bravo", "charlie", "delta", "echo", "foxtrot")
-    search_calls: list[int] = []
-
-    def fake_json(url: str, headers=None):
-        del headers
-        parsed = urllib.parse.urlparse(url)
-        query = urllib.parse.parse_qs(parsed.query)
-        if parsed.path.endswith("/search"):
-            offset = int(query.get("offset", ["0"])[0])
-            search_calls.append(offset)
-            term = terms[offset]
-            return {
-                "total_hits": len(terms),
-                "offset": offset,
-                "hits": [
-                    {
-                        "project_id": f"p{offset}",
-                        "slug": f"p{offset}",
-                        "title": term,
-                        "description": term,
-                        "versions": [],
-                    }
-                ],
-            }
-        if parsed.path.endswith("/projects"):
-            ids = json.loads(query["ids"][0])
-            offset = int(ids[0][1:])
-            return [
-                {
-                    "id": ids[0],
-                    "title": terms[offset],
-                    "body": f"{terms[offset]} evidence",
-                    "game_versions": [],
-                    "loaders": [],
-                }
-            ]
-        raise AssertionError(url)
-
-    monkeypatch.setattr(grounded_rag, "_json", fake_json)
-    records, receipt = grounded_rag._search_modrinth(" ".join(terms))
-
-    assert len(records) == len(terms)
-    assert receipt["search_requests"] == len(terms)
-    assert len(search_calls) > 4
+def test_removed_mod_catalogue_transports_cannot_run():
+    assert not hasattr(grounded_rag, "_search_modrinth")
+    assert not hasattr(grounded_rag, "_search_curseforge")
 
 
 def test_grounded_evidence_preserves_more_than_four_cards_and_long_excerpt():

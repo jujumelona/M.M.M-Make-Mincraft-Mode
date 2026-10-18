@@ -88,13 +88,15 @@ def _rewrite_pre_design_candidate(prompt: str, candidate: Any) -> Any:
                 and not isinstance(raw_providers, (str, bytes, bytearray))
                 else []
             )
-            # Public planning metadata advertises actual catalogs only. GitHub source
-            # verification and broad fallback are internal to catalog_first_grounded_rag
-            # and must not reappear as a peer discovery provider.
-            providers = [provider for provider in providers if provider != "github"]
-            domain["providers"] = list(
-                dict.fromkeys([*providers, "curseforge", "modrinth"])
-            )
+            # The approved query is grounded against selected-target official APIs
+            # and the current workspace. Never advertise external mod catalogues
+            # or donor repositories as alternate implementation providers.
+            allowed = {"official_docs", "project_rag", "runtime"}
+            domain["providers"] = list(dict.fromkeys(
+                provider for provider in providers if provider in allowed
+            ))
+            if not domain["providers"]:
+                domain["providers"] = ["official_docs", "project_rag"]
         domains.append(domain)
     rewritten["domains"] = domains
     return rewritten

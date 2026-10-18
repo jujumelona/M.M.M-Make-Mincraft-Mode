@@ -38,8 +38,7 @@ def test_pre_design_preserves_every_approved_query_without_cap(monkeypatch) -> N
     assert len(domain["queries"]) == 30
     assert prompt not in domain["queries"]
     assert "github" not in domain["providers"]
-    assert "curseforge" in domain["providers"]
-    assert "modrinth" not in domain["providers"]
+    assert domain["providers"] == ["official_docs", "project_rag", "runtime"]
 
 
 def test_corrective_query_uses_unsearched_host_queries_without_model_call() -> None:
