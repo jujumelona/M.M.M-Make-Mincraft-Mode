@@ -115,7 +115,6 @@ def test_reference_retrieval_runs_independent_providers_after_identity_expansion
 
     monkeypatch.setattr(reference, "_wikipedia_sources", provider("wikipedia"))
     monkeypatch.setattr(reference, "_wikidata_sources", provider("wikidata"))
-    monkeypatch.setattr(reference, "_github_reference_sources", provider("github_reference"))
 
     result = reference.retrieve_reference_grounded_evidence(
         [
@@ -126,10 +125,10 @@ def test_reference_retrieval_runs_independent_providers_after_identity_expansion
 
     assert result["retrieval_strategy"] == "identity_first_bounded_expansion"
     assert result["inferred_reference_names"] == ["maplestory"]
-    assert set(calls) == {"wikipedia", "wikidata", "github_reference"}
+    assert set(calls) == {"wikipedia", "wikidata"}
     row = result["queries"][0]
     assert row["provider_policy"] == "independent_parallel_after_identity_first_expansion"
-    assert row["content_record_count"] == 3
+    assert row["content_record_count"] == 2
 
 
 def test_reference_provider_deadline_returns_error_receipts(monkeypatch) -> None:

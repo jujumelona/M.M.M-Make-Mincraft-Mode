@@ -20,7 +20,7 @@ def _provider_result(name: str, query: str):
 def test_reference_providers_are_bounded_parallel_and_result_order_is_canonical(
     monkeypatch,
 ) -> None:
-    barrier = threading.Barrier(3, timeout=2.0)
+    barrier = threading.Barrier(2, timeout=2.0)
     lock = threading.Lock()
     active = 0
     max_active = 0
@@ -43,20 +43,18 @@ def test_reference_providers_are_bounded_parallel_and_result_order_is_canonical(
 
     monkeypatch.setattr(rsr, "_wikipedia_sources", provider("wikipedia"))
     monkeypatch.setattr(rsr, "_wikidata_sources", provider("wikidata"))
-    monkeypatch.setattr(rsr, "_github_reference_sources", provider("github_reference"))
 
     result = rsr.retrieve_reference_grounded_evidence(
         ["Maple Story gameplay rules", "Maple Story documented systems behavior rules"]
     )
 
-    assert max_active == 3
+    assert max_active == 2
     assert result["retrieval_strategy"] == "identity_first_bounded_expansion"
     assert list(result["queries"][0]["provider_receipts"]) == [
         "wikipedia",
         "wikidata",
-        "github_reference",
     ]
-    assert result["queries"][0]["content_record_count"] == 3
+    assert result["queries"][0]["content_record_count"] == 2
 
 
 def test_provider_retry_remains_bounded() -> None:

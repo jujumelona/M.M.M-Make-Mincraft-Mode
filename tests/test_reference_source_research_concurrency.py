@@ -14,7 +14,7 @@ def _record(provider: str, query: str) -> dict[str, object]:
 
 
 def test_reference_providers_overlap_and_all_contribute(monkeypatch) -> None:
-    barrier = threading.Barrier(3, timeout=2.0)
+    barrier = threading.Barrier(2, timeout=2.0)
     lock = threading.Lock()
     active = 0
     max_active = 0
@@ -40,15 +40,10 @@ def test_reference_providers_overlap_and_all_contribute(monkeypatch) -> None:
 
     monkeypatch.setattr(reference_research, "_wikipedia_sources", provider("wikipedia"))
     monkeypatch.setattr(reference_research, "_wikidata_sources", provider("wikidata"))
-    monkeypatch.setattr(
-        reference_research,
-        "_github_reference_sources",
-        provider("github_reference"),
-    )
 
     payload = reference_research.retrieve_reference_grounded_evidence(["alpha", "beta"])
 
-    assert max_active == 3
+    assert max_active == 2
     assert payload["queries"][0]["authored_queries"] == ["alpha", "beta"]
     assert payload["queries"][0]["provider_policy"] == (
         "independent_parallel_after_identity_first_expansion"
@@ -58,7 +53,6 @@ def test_reference_providers_overlap_and_all_contribute(monkeypatch) -> None:
     } == {
         "wikipedia:alpha",
         "wikidata:alpha",
-        "github_reference:alpha",
     }
 
 
@@ -74,20 +68,8 @@ def test_reference_provider_failure_does_not_suppress_other_providers(monkeypatc
             {"provider": "wikidata", "status": "available", "result_count": 1},
         )
 
-    def github(queries, anchors):
-        del anchors
-        return (
-            [_record("github_reference", queries[0])],
-            {
-                "provider": "github_reference",
-                "status": "available",
-                "result_count": 1,
-            },
-        )
-
     monkeypatch.setattr(reference_research, "_wikipedia_sources", fail_wikipedia)
     monkeypatch.setattr(reference_research, "_wikidata_sources", wikidata)
-    monkeypatch.setattr(reference_research, "_github_reference_sources", github)
 
     payload = reference_research.retrieve_reference_grounded_evidence(["alpha"])
     row = payload["queries"][0]

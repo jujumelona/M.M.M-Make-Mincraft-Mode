@@ -5,7 +5,7 @@ from __future__ import annotations
 Reference research is identity-first and host-owned. Long natural-language research
 questions are deliberately not treated as the only search key: the host first resolves the
 named reference itself, then expands through encyclopedia search, Wikidata language links,
-and repository evidence. Provider failures are retried in a bounded way and zero-result
+and public encyclopedia evidence. Provider failures are retried in a bounded way and zero-result
 searches trigger broader deterministic variants before the planning state may call the
 research insufficient.
 """
