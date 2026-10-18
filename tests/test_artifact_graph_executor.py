@@ -250,3 +250,21 @@ def test_readiness_does_not_rescan_all_jobs_after_each_completion(monkeypatch):
     # port snapshot. A completion-driven O(N^2) readiness scan would exceed this by
     # thousands of calls for 128 jobs.
     assert registry.has_calls <= len(jobs) + 2
+
+
+def test_native_artifact_generation_does_not_queue_more_than_real_model_slots(monkeypatch):
+    import minecraft_mod_ai.artifact_graph_executor as executor
+    from types import SimpleNamespace
+
+    config = SimpleNamespace(provider="local", adapter="llama_cpp", exclusive_gpu=True)
+    router = SimpleNamespace(
+        profile="local",
+        registry=SimpleNamespace(role=lambda _profile, _role: config),
+    )
+    monkeypatch.setenv("MMM_ARTIFACT_MAX_WORKERS", "8")
+    monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "1")
+    assert executor._generation_parallelism(32, router) == 1
+    monkeypatch.setenv("MMM_LLAMA_ACTIVE_PARALLEL", "2")
+    assert executor._generation_parallelism(32, router) == 2
+    config.provider = "remote"
+    assert executor._generation_parallelism(32, router) == 8
