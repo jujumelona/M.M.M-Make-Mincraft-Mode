@@ -40,8 +40,6 @@ class FeatureWorkOrder:
     effects: tuple[str, ...]
     state_reads: tuple[str, ...]
     state_writes: tuple[str, ...]
-    source_route: str = "fresh"
-    source_evidence_id: str = ""
     schema_version: str = "mmm/feature-work-order-v1"
 
     def __post_init__(self) -> None:
@@ -50,10 +48,6 @@ class FeatureWorkOrder:
         if type(self.java_version) is not int or self.java_version < 1:
             raise ValueError("FEATURE_WORK_ORDER_JAVA_VERSION_INVALID")
         _path(self.target_path)
-        if self.source_route not in {"fresh", "dependency", "source_reuse"}:
-            raise ValueError("FEATURE_WORK_ORDER_SOURCE_ROUTE_INVALID")
-        if self.source_route != "fresh" and not self.source_evidence_id:
-            raise ValueError("FEATURE_WORK_ORDER_SOURCE_PROOF_REQUIRED")
         if (not self.behavior_ids or len(self.behavior_ids) != len(set(self.behavior_ids))
                 or len(self.behavior_ids) != len(self.intents)
                 or len(self.intents) != len(self.effects)
@@ -78,8 +72,6 @@ class FeatureWorkOrder:
             "effects": list(self.effects),
             "state_reads": list(self.state_reads),
             "state_writes": list(self.state_writes),
-            "source_route": self.source_route,
-            "source_evidence_id": self.source_evidence_id,
             "acceptance": {
                 "compile": "real_gradle_compileJava",
                 "integration": "linked_feature_entrypoint",
@@ -96,7 +88,7 @@ class FeatureWorkOrder:
     @classmethod
     def for_feature(cls, *, requirement_id: str, target: Mapping,
                     target_path: str, behaviors: Sequence[Mapping],
-                    route: str = "fresh", evidence_id: str = "") -> "FeatureWorkOrder":
+                    ) -> "FeatureWorkOrder":
         if not isinstance(target, Mapping) or not isinstance(behaviors, (list, tuple)):
             raise ValueError("FEATURE_WORK_ORDER_INPUT_INVALID")
         version = _nonempty(target.get("minecraft_version"), "MINECRAFT_VERSION")
@@ -124,5 +116,4 @@ class FeatureWorkOrder:
                                       for key in row.get("state_reads", ()) if str(key).strip()})),
             state_writes=tuple(sorted({str(key).strip() for row in selected
                                        for key in row.get("state_writes", ()) if str(key).strip()})),
-            source_route=route, source_evidence_id=evidence_id,
         )
