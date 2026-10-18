@@ -118,3 +118,17 @@ def test_resource_attestation_cannot_swap_unrelated_resource_directory():
                 for p, raw in blobs.items()
             ],
         })
+
+
+def test_text_and_utf8_decodable_binary_share_relocated_namespace():
+    from minecraft_mod_ai.reuse_adapters import apply_deterministic_adapters
+
+    files = {
+        "src/main/resources/assets/oldmod/lang/en_us.json": b'{"item.oldmod.key":"Value"}',
+        "src/main/resources/assets/oldmod/textures/item/key.png": b"ABCD",
+    }
+    adapted, _ = apply_deterministic_adapters(files, {"target_modid": "newmod"})
+    assert "src/main/resources/assets/oldmod/lang/en_us.json" not in adapted
+    assert "src/main/resources/assets/oldmod/textures/item/key.png" not in adapted
+    assert "src/main/resources/assets/newmod/lang/en_us.json" in adapted
+    assert adapted["src/main/resources/assets/newmod/textures/item/key.png"] == b"ABCD"
