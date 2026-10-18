@@ -44,7 +44,7 @@ def _verify_direct_member(source: str, member: dict, context: dict) -> bool:
         header += " extends " + superclass
     if interfaces:
         header += " implements " + ", ".join(interfaces)
-    unit = "package " + package + ";\\n" + header + " {\\n" + source + "\\n}\\n"
+    unit = "package " + package + ";\n" + header + " {\n" + source + "\n}\n"
     try:
         analyze_java(
             unit, classpath=classpath,
