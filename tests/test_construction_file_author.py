@@ -168,6 +168,7 @@ def test_materialized_prerequisite_source_included_in_prompt(monkeypatch,tmp_pat
     create_args = {'package':'demo','name':'ModUnit','owner':'demo.ModUnit',
                    'source_context':[{'path':'src/main/java/demo/Helper.java'}]}
     result = module.compose_complete_source(router,spec,context,**create_args)
+    assert result == GOOD
     prompt = json.loads(router.calls[0][1][1]['content'])
     assert prompt['materialized_project_source'][0]['path'].endswith('Helper.java')
     assert 'final class Helper' in prompt['materialized_project_source'][0]['code']

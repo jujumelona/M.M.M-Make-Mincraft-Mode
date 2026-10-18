@@ -63,7 +63,6 @@ def test_predesign_code_rag_uses_lexical_hot_path(monkeypatch):
 
 
 def test_external_mod_requests_only_use_local_and_official_rag(monkeypatch):
-    calls = []
     monkeypatch.setattr(rag, "_versions", lambda _router: ())
     monkeypatch.setattr(
         rag, "_search_authoritative_catalog",
