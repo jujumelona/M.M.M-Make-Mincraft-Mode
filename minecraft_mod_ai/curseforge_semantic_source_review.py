@@ -42,9 +42,17 @@ def direct_source_identity(source_url: str) -> tuple[str, str, str]:
     components = [x for x in p.path.split("/") if x]
     if len(components) < 2:
         raise SourceInspectionError("SOURCE_REPOSITORY_ID_MISSING")
-    owner, repository = components[:2]
+    if p.hostname == "gitlab.com":
+        # GitLab may nest projects inside subgroups. Strip its /-/ UI routes
+        # rather than treating the subgroup as the repository name.
+        components = components[:components.index("-")] if "-" in components else components
+        if len(components) < 2:
+            raise SourceInspectionError("SOURCE_REPOSITORY_ID_MISSING")
+        owner, repository = "/".join(components[:-1]), components[-1]
+    else:
+        owner, repository = components[:2]
     repository = repository.removesuffix(".git")
-    for value in (owner, repository):
+    for value in (*owner.split("/"), repository):
         if (not 1 <= len(value) <= 100
                 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", value)
                 or value in {".", ".."}):
@@ -311,9 +319,11 @@ def _semantic_cache_key(capability: str, revision: str, url: str,
     # Removing only English articles/prepositions is safe for caching a
     # suggestion, not for merging or dropping original requirement records.
     stop = {"in", "the", "a", "an", "of"}
+    # Semantic roles depend on order: "cats chase dogs" and "dogs chase cats"
+    # must NOT reuse a judgment, even with the same set of tokens.
     return ("semantic-review", url, revision,
-            tuple(sorted(token for token in tokens if token not in stop)),
-            tuple(sorted(set(search_terms))))
+            tuple(token for token in tokens if token not in stop),
+            tuple(search_terms))
 
 
 def assess_ranked_sources(capability: str, candidates: Sequence[Mapping[str, object]],
