@@ -67,5 +67,5 @@ def test_approved_queries_replace_raw_request_without_exposing_github_as_catalog
 
     assert prompt not in domain["queries"]
     assert domain["queries"][0] == "minecraft modular spaceship construction mod"
-    assert {"curseforge", "modrinth"} <= set(domain["providers"])
-    assert "github" not in domain["providers"]
+    assert set(domain["providers"]) == {"official_docs", "project_rag"}
+    assert not {"github", "curseforge", "modrinth"} & set(domain["providers"])
