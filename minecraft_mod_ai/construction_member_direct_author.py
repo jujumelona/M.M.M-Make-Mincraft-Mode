@@ -17,6 +17,47 @@ from .construction_direct_writer import (
 from .first_pass_java_declarations import declaration_frame, render_declaration
 
 
+
+def _verify_direct_member(source: str, member: dict, context: dict) -> bool:
+    """Prove a complete direct member against the selected target classpath.
+
+    A syntactically valid Java method can reference nonexistent classes, the
+    wrong Minecraft mappings, or client-only types. Do not commit its checkpoint
+    before javac has resolved the generated owner compilation unit.
+    """
+    classpath = context.get("java_classpath")
+    if not classpath:
+        # Isolated author tests may only check the immutable source frame.
+        # Real production always injects a pinned classpath through
+        # prepare_construction_context; lack of evidence must not be described
+        # as target-verified.
+        return False
+    from .javac_bridge import analyze_java
+    owner = str(member["owner"])
+    package, sep, class_name = owner.rpartition(".")
+    if not sep or not package:
+        raise ValueError("CONSTRUCTION_DIRECT_OWNER_INVALID")
+    superclass = str(member.get("class_superclass") or "").strip()
+    interfaces = tuple(member.get("class_interfaces") or ())
+    header = "public class " + class_name
+    if superclass:
+        header += " extends " + superclass
+    if interfaces:
+        header += " implements " + ", ".join(interfaces)
+    unit = "package " + package + ";\\n" + header + " {\\n" + source + "\\n}\\n"
+    try:
+        analyze_java(
+            unit, classpath=classpath,
+            java_version=str(context["target"]["java_version"]),
+            filename=class_name + ".java",
+        )
+    except (ValueError, OSError, RuntimeError) as exc:
+        # The complete diagnostic is passed to the *same* method correction
+        # request; it is not converted into an alleged valid API match.
+        raise ValueError("CONSTRUCTION_DIRECT_TARGET_SYMBOL_INVALID: " + str(exc)[:2400]) from exc
+    return True
+
+
 def eligible_method(member_task, symbols, context, *, owned_records=(), port_source_ref="") -> bool:
     member = symbols.get(member_task.owner_symbol, {})
     if member.get("kind") not in {"METHOD", "FIELD"}:
@@ -74,6 +115,7 @@ def compose_method(router, member_task, context, *, owner_name: str) -> str:
         if saved:
             if set(saved) != {member_task.owner_symbol}:
                 raise ValueError("CONSTRUCTION_METHOD_CHECKPOINT_FOREIGN_DECLARATION")
+            _verify_direct_member(saved[member_task.owner_symbol], member, context)
             return saved[member_task.owner_symbol]
         index = context["evidence_index"]
         snippets = _evidence(index, member_task.intent, context.get("source_pages", {}))
@@ -131,6 +173,7 @@ def compose_method(router, member_task, context, *, owner_name: str) -> str:
                     kind, member["name"], {**metadata, "source": candidate},
                     owner=owner_name,
                 )
+                target_symbols_verified = _verify_direct_member(source, member, context)
             except ValueError as error:
                 if attempt:
                     raise
@@ -145,7 +188,8 @@ def compose_method(router, member_task, context, *, owner_name: str) -> str:
             print("CONSTRUCTION DIRECT MEMBER: " + json.dumps({
                 "owner_symbol": member_task.owner_symbol,
                 "model_attempts": attempt + 1, "source_bytes": len(source.encode()),
-                "checkpointed": True, "target_compiled": False,
+                "checkpointed": True, "target_symbols_verified": target_symbols_verified,
+                "target_compiled": False,
             }, ensure_ascii=False), flush=True)
             return source
         raise ValueError("CONSTRUCTION_UNIT_NOT_AUTHORED")
