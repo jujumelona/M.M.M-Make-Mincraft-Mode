@@ -216,3 +216,18 @@ def test_invalid_java_from_router_is_passed_to_repair_not_none(tmp_path, monkeyp
     assert len(failures) == 1
     assert failures[0][0].endswith("}" + "}")
     assert failures[0][1]["phase"] == "direct_author"
+
+
+def test_direct_feature_parser_failure_can_switch_to_typed_author(capsys):
+    from minecraft_mod_ai.construction_source_repair import report_recoverable_direct_failure
+    from minecraft_mod_ai.java_region_parser import JavaRegionParseError
+
+    assert report_recoverable_direct_failure(
+        "demo.AlienRegistry", JavaRegionParseError("syntax error at 6:1: '}'"))
+    assert report_recoverable_direct_failure(
+        "demo.AlienRegistry", ValueError("CONSTRUCTION_DIRECT_FEATURE_TARGET_SYMBOL_INVALID"))
+    assert report_recoverable_direct_failure(
+        "demo.AlienRegistry", ValueError("CONSTRUCTION_SOURCE_SIGNATURE_INVALID"))
+    assert not report_recoverable_direct_failure(
+        "demo.AlienRegistry", ValueError("CONSTRUCTION_DIRECT_TARGET_CLASSPATH_REQUIRED"))
+    assert "CONSTRUCTION_AUTHOR_ROUTE_SWITCH" in capsys.readouterr().out

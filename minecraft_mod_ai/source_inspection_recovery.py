@@ -4,19 +4,15 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 
-def cached_archive(cache: Mapping, url: str):
-    from .curseforge_semantic_source_review import SourceInspectionError
-
+def cached_archive(cache: Mapping, url: str, error_type):
     value = cache[url]
-    if isinstance(value, SourceInspectionError):
-        raise SourceInspectionError(str(value))
+    if isinstance(value, error_type):
+        raise error_type(str(value))
     return value
 
 
-def cache_archive_failure(cache: dict, url: str, error: Exception) -> None:
-    from .curseforge_semantic_source_review import SourceInspectionError
-
-    if (isinstance(error, SourceInspectionError)
+def cache_archive_failure(cache: dict, url: str, error: Exception, error_type) -> None:
+    if (isinstance(error, error_type)
             and str(error).startswith(("SOURCE_ARCHIVE_", "SOURCE_MEMBER_"))
             and url not in cache):
         cache[url] = error

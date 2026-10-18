@@ -359,7 +359,7 @@ def assess_ranked_sources(capability: str, candidates: Sequence[Mapping[str, obj
             receipt["repository"] = owner + "/" + repository
             if url in cache:
                 from .source_inspection_recovery import cached_archive
-                revision, archive = cached_archive(cache, url)
+                revision, archive = cached_archive(cache, url, SourceInspectionError)
                 receipt["source_cache_hits"] = 1
             else:
                 receipt["source_fetches"] = 1
@@ -443,7 +443,7 @@ def assess_ranked_sources(capability: str, candidates: Sequence[Mapping[str, obj
             receipt["inspection_status"] = "inspection_error"
             receipt["error"] = str(exc)[:250] if isinstance(exc, SourceInspectionError) else type(exc).__name__
             from .source_inspection_recovery import cache_archive_failure
-            cache_archive_failure(cache, url, exc)
+            cache_archive_failure(cache, url, exc, SourceInspectionError)
         finally:
             receipt["elapsed_ms"] = round(1000 * (time.monotonic() - started), 1)
         result.append(receipt)
