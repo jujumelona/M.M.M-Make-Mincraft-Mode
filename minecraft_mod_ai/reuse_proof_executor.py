@@ -709,7 +709,17 @@ def execute_reuse_proof(
         verified_art_list.extend(adapted_files.keys())
     else:
         subgraphs = _compute_dependency_closed_subgraphs(adapted_files, donor_slice)
+        # Do not run one expensive Gradle build for every unrelated subgraph in
+        # a failed donor. The requested component must contain a chosen seed;
+        # everything else stays residual rather than being miscredited.
+        seed_names = {str(path).replace("\\", "/").rsplit("/", 1)[-1]
+                      for path in donor_slice.seed_files}
         for component in subgraphs:
+            if not seed_names.intersection(
+                str(path).rsplit("/", 1)[-1] for path in component
+            ):
+                residual_art_list.extend(component)
+                continue
             comp_has_error = False
             for path in component:
                 content = adapted_files.get(path, "")
