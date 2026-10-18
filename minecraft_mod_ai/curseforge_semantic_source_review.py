@@ -214,7 +214,8 @@ def _semantic_excerpt(source: str, capability: str, search_terms: Sequence[str])
 
 
 def inventory_from_archive(capability: str, archive: bytes,
-                           search_terms: Sequence[str] = ()) -> dict[str, object]:
+                           search_terms: Sequence[str] = (),
+                           evidence_offset: int = 0) -> dict[str, object]:
     files = _safe_archive_files(archive)
     license_id, notice = _license_spdx(files)
     source_files = [(path, contents) for path, contents in files.items() if path.endswith(".java")]
@@ -247,7 +248,8 @@ def inventory_from_archive(capability: str, archive: bytes,
                 "java_file_count": len(source_files)}
     return {"status": "inspected" if rows else "source_unavailable",
             "license_spdx": license_id, "license_notice": notice,
-            "evidence": rows[:_MAX_SNIPPETS], "java_file_count": len(source_files)}
+            "evidence": rows[evidence_offset:evidence_offset + _MAX_SNIPPETS],
+            "java_file_count": len(source_files)}
 
 
 _SCORE_KEYS = ("functional_fit", "partial_reuse", "completeness", "portability",
@@ -389,6 +391,38 @@ def assess_ranked_sources(capability: str, candidates: Sequence[Mapping[str, obj
                     cache[key] = semantic
                 else:
                     receipt["semantic_cache_hits"] = 1
+                # The top-ranked files may be lexically related but implement
+                # none of the requested mechanics. One bounded fallback window
+                # may rescue a valid partial donor; no open-ended search loops.
+                if (router is not None and observation.get("java_file_count", 0) > _MAX_SNIPPETS
+                        and (semantic.get("status") != "semantic_reviewed"
+                             or semantic.get("intent") in {"reject", "reference"})):
+                    next_window = inventory_from_archive(
+                        capability, archive, search_terms=search_terms,
+                        evidence_offset=_MAX_SNIPPETS,
+                    )
+                    if next_window.get("evidence"):
+                        other_key = (*key, "fallback-window-2")
+                        alternative = cache.get(other_key)
+                        if alternative is None:
+                            receipt["model_judgement_calls"] += 1
+                            alternative = _judge_with_model(
+                                router, capability, next_window["evidence"],
+                                str(next_window["license_spdx"]),
+                            )
+                            cache[other_key] = alternative
+                        else:
+                            receipt["semantic_cache_hits"] += 1
+                        receipt["fallback_window_examined"] = len(next_window["evidence"])
+                        if (alternative.get("status") == "semantic_reviewed"
+                                and alternative.get("intent") in {"adapt", "reuse"}
+                                and alternative.get("scores", {}).get("functional_fit", 0) >= 3):
+                            observation = next_window
+                            semantic = alternative
+                            receipt["examined_files"] += [
+                                {k: v for k, v in record.items() if k != "snippet"}
+                                for record in next_window["evidence"]
+                            ]
                 receipt["semantic"] = semantic
                 if semantic.get("status") == "semantic_reviewed":
                     selected = next((item for item in observation["evidence"]
