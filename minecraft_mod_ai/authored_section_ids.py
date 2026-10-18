@@ -17,7 +17,6 @@ AUTHORING_SECTION_ORDER = (
     "persistence",
     "resources_and_ui",
     "failure_and_limits",
-    "reuse_assessment",
     "verification",
 )
 
@@ -40,7 +39,7 @@ DOCUMENT_SECTION_ORDER = (
 )
 DOCUMENT_SECTION_SET = frozenset(DOCUMENT_SECTION_ORDER)
 CONTEXT_SECTION_SET = frozenset({
-    "overview", "reuse_assessment", "verification", "conclusion",
+    "overview", "verification", "conclusion",
 })
 # No individual engineering role is universally required. Authored production lowers
 # only the execution roles that the approved document actually contains. This matches
