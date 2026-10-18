@@ -13,7 +13,6 @@ from typing import Any
 from .artifact_expansion import _canonical_candidate_inputs
 from .artifact_job import ArtifactJob
 from .authored_plan import AuthoredPlan
-from .authored_source_rag import bind_owner_source_context
 from .complete_spec import ProductionModule
 from .implementation_identity import ExecutorType
 from .registered_leaf_binding import require_registered_leaf_binding
@@ -24,7 +23,6 @@ from .task_template_catalog import canonical_specification_input
 def compile_request_feature_jobs(
     plan: AuthoredPlan, *, adapter: Any, mod_id: str, package_name: str,
     content_modules: Sequence[Any], content_jobs: Sequence[ArtifactJob],
-    source_rag: Any, source_reuse: Mapping[str, Any],
     runtime_modules: Sequence[Any] = (),
 ):
     modules, jobs = [], []
@@ -46,9 +44,7 @@ def compile_request_feature_jobs(
     )
     if not execution_features:
         return (), ()
-    from .source_reuse_evidence import build_source_reuse_evidence
     from .construction_planner import plan_construction_tasks
-    source_evidence = build_source_reuse_evidence(execution_features, source_reuse, {})
     ids = {feature["requirement_id"] for feature in execution_features}
     scoped = {**plan.request_scope, "requirements": execution_features}
     if "behavior_requirements" in scoped:
@@ -57,7 +53,7 @@ def compile_request_feature_jobs(
             if row.get("requirement_id") in ids
         ]
     construction_tasks = plan_construction_tasks(
-        scoped, source_evidence, {}, router=None)
+        scoped, (), {}, router=None)
     if not construction_tasks:
         raise ValueError("CONSTRUCTION_TASK_GRAPH_EMPTY")
     for feature in execution_features:
@@ -108,18 +104,6 @@ def compile_request_feature_jobs(
              } for row in task.source_refs],
              "verification_ids": list(task.verification_ids)}
             for task in current_tasks], ensure_ascii=False, separators=(",", ":"))
-        proven_capabilities = {
-            row.get("capability") for row in source_reuse.get("capabilities", ())
-            if row.get("mode") == "source_transplant"
-        }
-        bound_capabilities = sorted({
-            row["capability"] for row in source_reuse.get("capability_graph", {}).get(
-                "requirement_bindings", ())
-            if row.get("requirement_id") == rid
-            and row.get("capability") in proven_capabilities
-        })
-        bindings["construction_donor_capabilities_json"] = json.dumps(
-            bound_capabilities, ensure_ascii=False, separators=(",", ":"))
         bindings["target_contract_json"] = json.dumps(adapter.version_context.to_dict().get("target", {}), separators=(",", ":"))
         declarations = []
         source_paths = []
@@ -182,8 +166,9 @@ def compile_request_feature_jobs(
                           for fn in plan.typed_plan_ir.get("functions", ())],
             "ui_owned_records": owner_records(plan.structured_sections, runtime_owners, "__typed_ui__"),
         }, ensure_ascii=False, separators=(",", ":"))
-        bind_owner_source_context(bindings, owner=module, request_scope=plan.request_scope,
-                                  reuse_plan=source_reuse, rag=source_rag, requirement=feature["statement"])
+        bindings["request_features_json"] = json.dumps(
+            [{"requirement_id": rid, "statement": feature["statement"]}],
+            ensure_ascii=False, separators=(",", ":"))
         source_pattern = spec["output_schema"]["pattern"] + (
             r".*\bimplements\s+(?:net\.fabricmc\.api\.)?ModInitializer\b.*\bonInitialize\s*\("
         )
@@ -193,7 +178,6 @@ def compile_request_feature_jobs(
             "Register the relevant real Fabric/Minecraft callbacks from onInitialize "
             "and implement their behavior. Choose hooks matching the original player/world "
             "interaction; do not default to player join or invent an item/command trigger. "
-            "Call installed donor code where applicable and implement missing glue. "
             "Object declarations, GUI labels, chat confirmations and state counters alone "
             "do not implement world travel/combat/trading or other requested behavior. "
             "Use the actual materialized prerequisite declarations and shared state APIs; "
