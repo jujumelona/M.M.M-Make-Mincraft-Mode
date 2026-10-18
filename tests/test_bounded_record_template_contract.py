@@ -389,7 +389,10 @@ def test_real_field_authoring_uses_prefix_to_resolve_distinct_entities() -> None
     result = bounded.run_bounded_record_template(
         router,
         "design/content_entity",
-        context={"requirement": "Add copper ore, a fuel cell, and a red hangar key."},
+        context={
+            "requirement": "Add copper ore, a fuel cell, and a red hangar key.",
+            "allowed_content_kinds": ["item"],
+        },
     )
     assert result["records"] == expected
     assert len(router.text_calls) == 1 + 3 * len(expected)
