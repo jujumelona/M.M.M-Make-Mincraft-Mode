@@ -457,10 +457,10 @@ def test_finite_token_budget_still_has_absolute_wall_clock_guard(monkeypatch):
     monkeypatch.delenv("MMM_LLAMA_COMPLETION_WALL_TIMEOUT_SECONDS", raising=False)
     monkeypatch.delenv("MMM_LLAMA_TOOL_COMPLETION_WALL_TIMEOUT_SECONDS", raising=False)
     assert contract._completion_wall_timeout_seconds({
-        "max_tokens": 32000, "grammar": "root ::= \\"public\\"",
+        "max_tokens": 32000, "grammar": 'root ::= "public"',
     }) == 300.0
     assert contract._completion_wall_timeout_seconds({
         "max_tokens": 32000, "tools": [{"type": "function"}],
-        "grammar": "root ::= \\"public\\"",
+        "grammar": 'root ::= "public"',
     }) == 600.0
     assert contract._completion_wall_timeout_seconds({"max_tokens": 8192}) is None
