@@ -193,10 +193,9 @@ def _run_decisions(router, identifier, context, progress, checkpoint):
         for slot_id in allowed_slots
         if applicability[slot_id] is True
     ]
-    # For a large set of independent slots, the former per-slot request loop
-    # multiplied inference cost. Keep the legacy small-case boundary for
-    # existing saved checkpoints; use schema-closed pages when there are many.
-    if len(selected_slots) > 8:
+    # Page medium and large independent slot sets; preserve legacy small
+    # checkpoint handling for up to four selected slots.
+    if len(selected_slots) > 4:
         return _batched_decision_values(
             router, template, normalized, selected_slots, progress, safe_checkpoint,
         ), normalized

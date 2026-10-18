@@ -44,7 +44,6 @@ def build_repository_reuse_plan(design: Mapping[str, Any], **kwargs: Any) -> dic
     inspection_receipts = []
     reference_sources = []
     shared_source_cache, unusable_source_urls = {}, set()
-    # Bound total external inspections; never scan the whole catalogue.
     remaining_inspections = max(8, len(capabilities))  # One fair pass per feature; no speculative double scan.
     for index, name in enumerate(capabilities):
         row = receipts_by_cap.get(name) or single_legacy_receipt or {}

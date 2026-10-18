@@ -336,7 +336,7 @@ def _semantic_cache_key(capability: str, revision: str, url: str,
 def assess_ranked_sources(capability: str, candidates: Sequence[Mapping[str, object]],
                           *, router: object = None, cache: dict | None = None,
                           max_candidates: int = 2) -> list[dict[str, object]]:
-    """Inspect bounded official links; no copying/compiling of donor code."""
+    """Inspect official links without copying donor code."""
     result: list[dict[str, object]] = []
     cache = cache if cache is not None else {}
     examined: set[str] = set()
