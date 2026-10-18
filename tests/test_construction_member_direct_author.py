@@ -196,8 +196,8 @@ def test_invalid_java_from_router_is_passed_to_repair_not_none(tmp_path, monkeyp
         calls = 0
         def generate_java_source(self, _role, messages, *, source_frame, **_kw):
             self.calls += 1
+            bad = source_frame["prefix"] + "}" + source_frame["suffix"]
             if self.calls == 1:
-                bad = source_frame["prefix"] + "}" + source_frame["suffix"]
                 error = JavaRegionParseError("syntax error at 6:1: '}'")
                 error.failed_source = bad  # as attached by model_router
                 raise error
