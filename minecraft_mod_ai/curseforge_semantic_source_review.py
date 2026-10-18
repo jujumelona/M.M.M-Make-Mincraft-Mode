@@ -401,7 +401,8 @@ def assess_ranked_sources(capability: str, candidates: Sequence[Mapping[str, obj
                         capability, archive, search_terms=search_terms,
                         evidence_offset=_MAX_SNIPPETS,
                     )
-                    if next_window.get("evidence"):
+                    if (next_window.get("evidence")
+                            and int(next_window["evidence"][0].get("rank") or 0) > 0):
                         other_key = (*key, "fallback-window-2")
                         alternative = cache.get(other_key)
                         if alternative is None:
