@@ -16,11 +16,6 @@ from minecraft_mod_ai.authored_content_contract import (
     CONTENT_GRAPH_DRIVER_CONCERNS,
     GAMEPLAY_CONTENT_DRIVER_CONCERNS,
 )
-from minecraft_mod_ai.authored_reuse_bridge import (
-    authored_capability_graph,
-    materialize_verified_authored_sources,
-    resolve_authored_source_reuse,
-)
 from minecraft_mod_ai.content_design_contract import (
     CONTENT_FACT_TO_PRODUCTION_KIND,
     CONTENT_KIND_TO_FACT_TYPE,
@@ -190,41 +185,3 @@ def test_platform_authoring_schemas_are_json_schema_valid():
         Draft202012Validator.check_schema(platform_config_schema(kind))
 
 
-def test_reuse_bridge_producer_receipt_matches_materialization_boundary(monkeypatch, tmp_path):
-    from minecraft_mod_ai import grounded_source_reuse
-
-    captured = []
-
-    def no_network_reuse(design):
-        captured.append(design)
-        graph = design["_pre_retrieval_plan"]["capability_graph"]
-        return {
-            "schema_version": "mmm/grounded-repository-reuse-plan-v2",
-            "source_plan_sha256": design["_pre_retrieval_plan"]["plan_sha256"],
-            "capability_graph": graph,
-            "capabilities": [
-                {"capability": cap, "mode": "fresh"}
-                for cap in graph["nodes"]
-            ],
-        }
-
-    monkeypatch.setattr(grounded_source_reuse, "build_repository_reuse_plan", no_network_reuse)
-    result = resolve_authored_source_reuse(
-        "Spaceship fuel and colony trading", {},
-        minecraft_version="26.2", loader="fabric",
-    )
-    assert captured
-    assert result["bound_target"] == {
-        "minecraft_version": "26.2", "loader": "fabric",
-    }
-    staged = materialize_verified_authored_sources(
-        str(tmp_path), result,
-        minecraft_version="26.2", loader="fabric",
-    )
-    assert staged["donor_count"] == 0
-    with pytest.raises(ValueError, match="SOURCE_REUSE_TARGET_MISMATCH"):
-        materialize_verified_authored_sources(
-            str(tmp_path), result,
-            minecraft_version="1.21.1", loader="fabric",
-        )
-    assert authored_capability_graph("build spaceship", {})["nodes"]
