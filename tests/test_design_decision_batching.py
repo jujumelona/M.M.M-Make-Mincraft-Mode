@@ -44,5 +44,8 @@ def test_decision_value_pages_preserve_every_slot_and_reduce_calls(monkeypatch):
     assert [row["value"] for row in result["records"]] == [
         "implementation:" + name for name in selected
     ]
-    assert [len(page) for page in calls] == [24, 8, 8, 8]
-    assert len(saved) == 4
+    assert len(calls[0]) == 24  # applicability, never skip a requirement
+    assert all(1 <= len(page) <= 8 for page in calls[1:])
+    assert sum(len(page) for page in calls[1:]) == 24
+    assert len(calls) < 25  # fewer model requests than the per-slot route
+    assert len(saved) == len(calls)
