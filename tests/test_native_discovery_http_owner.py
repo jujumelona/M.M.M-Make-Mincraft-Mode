@@ -27,7 +27,7 @@ def test_persistent_discovery_pool_keeps_native_policy_and_allows_parallel_reque
 
     client = discovery.EcosystemDiscoveryClient(
         transport=httpx.MockTransport(handler),
-        github_token="test-token",
+        openverse_token="test-token",
     )
     errors: list[BaseException] = []
     pooled_client = client._http_client
@@ -40,9 +40,9 @@ def test_persistent_discovery_pool_keeps_native_policy_and_allows_parallel_reque
     def fetch(query: str) -> None:
         try:
             client._get_json(
-                "https://api.github.com/search/repositories",
+                "https://api.openverse.org/v1/images/",
                 params={"q": query},
-                provider="github",
+                provider="openverse",
             )
         except BaseException as exc:  # pragma: no cover - asserted below
             errors.append(exc)
@@ -59,9 +59,8 @@ def test_persistent_discovery_pool_keeps_native_policy_and_allows_parallel_reque
     assert errors == []
     assert client._http_client is pooled_client
     assert len(requests) == 2
-    assert all(request.headers["X-GitHub-Api-Version"] == "2022-11-28" for request in requests)
     assert all(request.headers["Authorization"] == "Bearer test-token" for request in requests)
-    assert all(request.headers["Accept"] == "application/vnd.github+json" for request in requests)
+    assert all(request.headers["Accept"] == "application/json" for request in requests)
 
     with pytest.raises(discovery.SpecValidationError, match="allowlist"):
         client._get_json("https://example.com/escape")
