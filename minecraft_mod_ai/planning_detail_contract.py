@@ -3,7 +3,7 @@ from __future__ import annotations
 """Shared detailed-plan grounding contract.
 
 Authored design rows may cite zero or more evidence constraints. Externally verifiable
-facts and reuse claims must cite sufficient grounded evidence. Keeping this validation in
+facts must cite sufficient grounded evidence. Keeping this validation in
 one neutral module prevents compiler/state-invariant schema drift.
 """
 
@@ -19,7 +19,6 @@ GROUNDED_BINDING_KINDS = frozenset(
         "source_behavior",
     }
 )
-REUSE_MODES = frozenset({"reuse", "adapt", "reference_only", "new_required"})
 
 _AUTHORED_COLLECTIONS = (
     "implementation_capabilities",
@@ -102,31 +101,10 @@ def validate_detailed_plan_grounding(
             require=True,
         )
 
-    reuse = plan.get("reuse_candidates", [])
-    if not isinstance(reuse, list):
-        raise ValueError("PROMPT_STATE_DECISION: reuse_candidates must be an array")
-    for index, row in enumerate(reuse):
-        if not isinstance(row, Mapping):
-            raise ValueError(
-                f"PROMPT_STATE_DECISION: reuse_candidates[{index}] must be an object"
-            )
-        mode = _text(row.get("mode"))
-        reason = _text(row.get("reason"))
-        if mode not in REUSE_MODES or not reason:
-            raise ValueError(
-                f"PROMPT_STATE_DECISION: reuse_candidates[{index}] has invalid mode/reason"
-            )
-        validate_evidence_refs(
-            [row.get("evidence_ref")],
-            sufficient_refs,
-            field=f"reuse_candidate_{index}",
-            require=True,
-        )
 
 
 __all__ = [
     "GROUNDED_BINDING_KINDS",
-    "REUSE_MODES",
     "validate_detailed_plan_grounding",
     "validate_evidence_refs",
 ]

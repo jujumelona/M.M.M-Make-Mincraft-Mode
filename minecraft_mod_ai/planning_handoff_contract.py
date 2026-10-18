@@ -20,7 +20,6 @@ _DETAIL_COLLECTIONS = (
     "implementation_obligations",
     "artifact_obligations",
     "grounded_bindings",
-    "reuse_candidates",
     "verification_obligations",
 )
 
@@ -87,9 +86,6 @@ def _allowed_refs_from_detail(detail: Mapping[str, Any]) -> set[str]:
     for row in detail.get("grounded_bindings", []):
         if isinstance(row, Mapping) and isinstance(row.get("evidence_refs"), list):
             refs.update(_text(ref) for ref in row["evidence_refs"] if _text(ref))
-    for row in detail.get("reuse_candidates", []):
-        if isinstance(row, Mapping) and _text(row.get("evidence_ref")):
-            refs.add(_text(row.get("evidence_ref")))
     worksheet = detail.get("engineering_worksheet")
     if isinstance(worksheet, Mapping):
         for row in worksheet.values():
@@ -165,7 +161,6 @@ def project_detailed_plan_for_request_catalog(
         "implementation_obligations": obligations,
         "artifact_obligations": _legacy_artifacts(canonical),
         "grounded_bindings": deepcopy(canonical["grounded_bindings"]),
-        "reuse_candidates": deepcopy(canonical["reuse_candidates"]),
         "verification_obligations": deepcopy(canonical["verification_obligations"]),
         "verification_checks": verification,
     }
@@ -199,7 +194,6 @@ def validate_request_requirement_detail(requirement: Mapping[str, Any]) -> None:
         ),
         "artifact_obligations": _legacy_artifacts(canonical),
         "grounded_bindings": canonical["grounded_bindings"],
-        "reuse_candidates": canonical["reuse_candidates"],
         "verification_obligations": canonical["verification_obligations"],
         "verification_checks": _flatten(
             canonical, "verification_obligations", "check"

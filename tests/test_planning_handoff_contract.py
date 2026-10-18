@@ -58,13 +58,6 @@ def _detail() -> dict[str, object]:
                 "evidence_refs": ["source:1"],
             }
         ],
-        "reuse_candidates": [
-            {
-                "evidence_ref": "source:1",
-                "mode": "adapt",
-                "reason": "The researched source establishes the integration shape but not the authored economy behavior.",
-            }
-        ],
         "verification_obligations": [
             {
                 "check": "Given a valid transaction, when the server applies it, then the authoritative balance changes exactly once.",
@@ -95,7 +88,6 @@ def test_projection_preserves_canonical_grounding_and_verification() -> None:
 def test_authored_detail_lowers_without_separate_readiness_owner() -> None:
     detail = _detail()
     detail["grounded_bindings"] = []
-    detail["reuse_candidates"] = []
     detail["artifact_obligations"][0]["constraint_evidence_refs"] = []
 
     projection = project_detailed_plan_for_request_catalog(detail, set())

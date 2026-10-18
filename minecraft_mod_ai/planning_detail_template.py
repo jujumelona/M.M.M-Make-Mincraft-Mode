@@ -102,17 +102,6 @@ DETAIL_SLOT_GUIDANCE: dict[str, tuple[str, ...]] = {
         "logging/diagnostic signal required for non-user-visible failures",
         "fail-closed conditions where inventing a fallback would change semantics",
     ),
-    "reuse_assessment": (
-        "source/evidence locator and exact relevant implementation pattern",
-        "what can transfer unchanged",
-        "what must be adapted for the selected target and authored semantics",
-        "API/version/loader/mappings compatibility",
-        "dependency and transitive-dependency impact",
-        "license or provenance constraint when supplied by evidence",
-        "ownership/path collision risk with the current project",
-        "missing evidence that prevents direct reuse",
-        "verdict: reuse, adapt, reference-only or new implementation required",
-    ),
     "verification": (
         "at least one success Given/When/Then observation",
         "at least one rejection or failure observation",
@@ -136,7 +125,6 @@ DETAIL_FIELDS = {
     "persistence": "Freeze persistence ownership, codec lifecycle, migration and malformed-data behavior.",
     "resources_and_ui": "Freeze required registries, data/resources, assets and UI interaction contracts.",
     "failure_and_limits": "Freeze rejection, recovery, cleanup, concurrency and resource-limit behavior.",
-    "reuse_assessment": "Freeze evidence-backed reuse/adaptation boundaries and compatibility constraints.",
     "verification": "Freeze executable/observable proof obligations for success, failure and boundaries.",
 }
 
