@@ -350,6 +350,10 @@ def audit_authored_source_reuse(
             isinstance(row, Mapping) and row.get("status") in {"proof_error", "rejected"}
             for row in proofs if isinstance(proofs, (list, tuple))
         ),
+        "behavior_contract_unavailable_count": sum(
+            isinstance(row, Mapping) and row.get("status") == "behavior_contract_unavailable"
+            for row in proofs if isinstance(proofs, (list, tuple))
+        ),
         "compile_only_behavior_unverified_count": sum(
             isinstance(row, Mapping) and row.get("status") == "compile_only_unverified_behavior"
             for row in proofs if isinstance(proofs, (list, tuple))
