@@ -205,7 +205,8 @@ def test_mimo_structured_payload_keeps_json_validation_host_side_and_native_tool
     payload = hardware_policy._server_payload(adapter, structured)
     assert structured.response_schema == schema
     assert payload["response_format"] == {"type": "json_object"}
-    assert payload["json_schema"] == schema
+    assert payload["json_schema"]["properties"]["value"]["type"] == "string"
+    assert payload["json_schema"]["properties"]["value"]["maxLength"] == 256
     assert "grammar" not in payload
 
     tool = {
