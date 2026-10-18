@@ -65,10 +65,9 @@ agents:
   AssetGenerator:
     model_role: image_generator
     skills:
-    - generate-textures
     - model-with-blockbench
-    purpose: original concept art and texture candidates; image generation remains
-      outside text-model residency
+    purpose: Blockbench geometry and UV/model assistance using approved resources;
+      deprecated AI texture generation is not routed
     mcp_servers:
     - mmm-generation
     - mmm-quality
