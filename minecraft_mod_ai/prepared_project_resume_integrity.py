@@ -109,7 +109,26 @@ def prepared_project_matches_spec(project_root: Path, spec: Any) -> bool:
         return False
     if main_entrypoint not in _entrypoint_values(entrypoints.get("main")):
         return False
-    if gametest_entrypoint not in _entrypoint_values(entrypoints.get("fabric-gametest")):
+    # GameTests belong to Loom's dedicated gametest source set, not the main mod.
+    # A pre-migration in-main entrypoint must never make a stale workspace resumable.
+    if gametest_entrypoint in _entrypoint_values(entrypoints.get("fabric-gametest")):
+        return False
+    gametest_metadata = _json_object(root / "src/gametest/resources/fabric.mod.json")
+    gametest_source = (
+        root / "src/gametest/java" / Path(*spec.package_name.split("."))
+        / f"{main_class}GameTests.java"
+    )
+    if not _regular_file(gametest_source) or gametest_metadata is None:
+        return False
+    if gametest_metadata.get("id") != f"{spec.mod_id}_gametest":
+        return False
+    gametest_entries = gametest_metadata.get("entrypoints")
+    if not isinstance(gametest_entries, Mapping):
+        return False
+    if gametest_entrypoint not in _entrypoint_values(gametest_entries.get("fabric-gametest")):
+        return False
+    gametest_depends = gametest_metadata.get("depends")
+    if not isinstance(gametest_depends, Mapping) or gametest_depends.get(spec.mod_id) != "*":
         return False
 
     pack_section = pack.get("pack")
