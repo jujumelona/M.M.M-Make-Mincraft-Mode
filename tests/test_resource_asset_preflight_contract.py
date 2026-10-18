@@ -81,4 +81,8 @@ def test_live_orchestrator_uses_contract_owned_resource_preflight() -> None:
     import minecraft_mod_ai.complete_orchestrator as orchestrator
 
     assert resource_module._CONTRACT_OWNED_PREFLIGHT is True
-    assert orchestrator.generate_assets is resource_module.generate_assets
+    # Wrapping/resume optimizations may change the exported callable identity.
+    # The orchestrator boundary must still block retired image production.
+    proposal = _Proposal("assets/example/textures/item/test.png")
+    with pytest.raises(ValueError, match="AI_TEXTURE_GENERATION_REMOVED"):
+        orchestrator.generate_assets(object(), proposal, Path("."), Path("."))
