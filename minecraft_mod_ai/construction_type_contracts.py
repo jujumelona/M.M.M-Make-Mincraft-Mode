@@ -12,10 +12,31 @@ def owner_package(symbols, owner):
     return symbols.get(owner, {}).get('package', owner.rpartition('.')[0])
 
 
+def _source_set_owner_accessible(owner: str, target_path: str) -> bool:
+    """Reject client-only and private Fabric implementation owners.
+
+    Some classpath symbols have no explicit side annotation; their package
+    still denotes a runtime boundary for a common Java compilation unit.
+    """
+    canonical = canonical_type_name(owner)
+    if canonical.startswith("net.fabricmc.fabric.impl."):
+        return False
+    if target_path.startswith("src/client/"):
+        return True
+    return not canonical.startswith((
+        "net.minecraft.client.",
+        "net.fabricmc.fabric.api.client.",
+        "net.fabricmc.fabric.mixin.client.",
+        "com.mojang.blaze3d.",
+    ))
+
+
 def class_accessible(symbols, owner, current, target_path):
     """Check the inspected leaf and every enclosing type from this caller."""
     seen = set()
     while owner:
+        if not _source_set_owner_accessible(owner, target_path):
+            return False
         if owner in seen:
             return False
         seen.add(owner)

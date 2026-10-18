@@ -112,3 +112,18 @@ def test_register_requires_matching_registry_domain_not_just_name():
     assert api_semantic_admissible(
         "call", "Register a crafting recipe",
         row("net.minecraft.world.item.crafting.RecipeType", "register"))
+
+def test_target_retrieval_excludes_client_only_and_internal_fabric_bytecode():
+    from minecraft_mod_ai.construction_type_contracts import class_accessible
+
+    owner = "demo.CommonMod"
+    client = "net.minecraft.client.gui.components.debug.DebugScreenEntries"
+    internal = "net.fabricmc.fabric.impl.resource.conditions.conditions.TagsPopulatedResourceCondition"
+    symbols = {
+        owner: {"kind": "CLASS", "owner": owner, "access": 1},
+        client: {"kind": "CLASS", "owner": client, "access": 1},
+        internal: {"kind": "CLASS", "owner": internal, "access": 1},
+    }
+    assert not class_accessible(symbols, client, owner, "src/main/java/demo/CommonMod.java")
+    assert class_accessible(symbols, client, owner, "src/client/java/demo/ClientMod.java")
+    assert not class_accessible(symbols, internal, owner, "src/main/java/demo/CommonMod.java")
