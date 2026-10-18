@@ -476,14 +476,32 @@ class ModelRouter:
             from .llama_completion_liveness_contract import (
                 LlamaCompletionDeadlineExceeded, LlamaDegenerateOutputError,
             )
-            if not isinstance(exc, (LlamaCompletionDeadlineExceeded,
-                                    LlamaDegenerateOutputError)):
+            # llama_cpp_adapter.generate_turn wraps the original stream error
+            # in ModelBackendError(cause=...). Inspect only real exception
+            # objects, never strings that merely mention the failure name.
+            underlying: BaseException = exc
+            visited = set()
+            while id(underlying) not in visited:
+                visited.add(id(underlying))
+                if isinstance(underlying, (
+                    LlamaCompletionDeadlineExceeded, LlamaDegenerateOutputError,
+                )):
+                    break
+                candidate = getattr(underlying, "cause", None)
+                if not isinstance(candidate, BaseException):
+                    candidate = underlying.__cause__
+                if not isinstance(candidate, BaseException):
+                    raise
+                underlying = candidate
+            if not isinstance(underlying, (
+                LlamaCompletionDeadlineExceeded, LlamaDegenerateOutputError,
+            )):
                 raise
             from .model_concurrency import raise_if_model_execution_cancelled
             raise_if_model_execution_cancelled()
             print("CONSTRUCTION_DECODE_STRATEGY_SWITCH: " + json.dumps({
                 "data_name": data_name,
-                "failure": type(exc).__name__,
+                "failure": type(underlying).__name__,
                 "from": "native_java_gbnf",
                 "to": "bounded_json_source",
                 "max_source_chars": 2400,
