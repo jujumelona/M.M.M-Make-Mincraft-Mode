@@ -207,6 +207,9 @@ def prepare_construction_context(spec, *, java_classpath, project_root, source_c
         "reference_port_obligations": reference_members,
         "donor_callable_symbols": {cap: sorted(keys) for cap, keys in donor_members.items()},
         "project_root": str(root),
+        # Direct Java members must prove their references against the SAME
+        # selected version and Gradle classpath before any checkpoint commit.
+        "java_classpath": classpath_paths,
         "source_symbol_rejections": list(rejected),
         "project_symbols": project_symbols,
         "symbols": symbols,
