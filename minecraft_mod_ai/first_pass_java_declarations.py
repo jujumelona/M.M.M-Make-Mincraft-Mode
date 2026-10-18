@@ -210,6 +210,40 @@ def _parse_one_member(source: str, *, kind: str, name: str, owner: str) -> str:
     return _text(raw, node)
 
 
+def validate_source_frame(source: str, frame: Mapping[str, Any]) -> None:
+    """Prove that unconstrained source contains exactly its host-owned member.
+
+    A matching prefix/suffix alone permits an extra static initializer, sibling
+    method or escaped class. Derive the immutable identity from the frame's
+    syntax, then use the same parser-backed declaration gate as final rendering.
+    No guessed return type, import, or target API is introduced by this check.
+    """
+    from .java_region_parser import JavaRegionParseError, _class_body, _parse, _text
+
+    kind = frame.get("kind")
+    if kind not in {"field", "method", "constructor"}:
+        raise JavaRegionParseError("unknown source declaration kind", category="scope")
+    stub = (str(frame["prefix"]) + ("null" if kind == "field" else "")
+            + str(frame["suffix"]))
+    raw, root = _parse("class MmmSourceFrame {\n" + stub + "\n}")
+    members = [node for node in _class_body(root).named_children
+               if node.type not in {"line_comment", "block_comment"}]
+    if len(members) != 1:
+        raise JavaRegionParseError("host source frame is not one member", category="scope")
+    node = members[0]
+    if kind == "field":
+        variables = [child for child in node.named_children if child.type == "variable_declarator"]
+        if len(variables) != 1:
+            raise JavaRegionParseError("host field frame is not one variable", category="scope")
+        node = variables[0]
+    name = node.child_by_field_name("name")
+    if name is None:
+        raise JavaRegionParseError("host source frame has no member identity", category="scope")
+    member_name = _text(raw, name)
+    owner = member_name if kind == "constructor" else "MmmSourceFrame"
+    _parse_one_member(source, kind=kind, name=member_name, owner=owner)
+
+
 def render_declaration(kind: str, name: str, parts: Mapping[str, Any], *, owner: str,
                        phase: str = "implementation") -> str:
     header = declaration_header(kind, name, parts)

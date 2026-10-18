@@ -458,19 +458,7 @@ def apply_request_generation_budget(
     metadata = getattr(request, "metadata", {})
     if isinstance(metadata, Mapping):
         ceiling = int(metadata.get("mmm_output_token_ceiling") or 0)
-        # Dynamic models normally use their full remaining context. The ONE
-        # exception is an explicitly marked Java recovery after a proven
-        # runaway GBNF decode. Its bounded raw text must not inherit another
-        # 30k-token allowance for the same stuck method.
-        explicitly_bounded_recovery = (
-            metadata.get("mmm_native_java_recovery") is True
-            and metadata.get("mmm_strict_source_data") is True
-            and not metadata.get("mmm_java_source_frame")
-            and getattr(request, "response_format", None) == "text"
-        )
-        if ceiling > 0 and (
-            not dynamic_output_budget_enabled(config) or explicitly_bounded_recovery
-        ):
+        if ceiling > 0 and not dynamic_output_budget_enabled(config):
             bounded["max_tokens"] = min(bounded["max_tokens"], ceiling)
     return bounded
 

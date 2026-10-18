@@ -453,14 +453,29 @@ def test_repetition_guard_recognizes_token_splitting_without_false_positive():
         }))
 
 
-def test_finite_token_budget_still_has_absolute_wall_clock_guard(monkeypatch):
+def test_java_grammar_does_not_introduce_an_implicit_wall_clock_guard(monkeypatch):
     monkeypatch.delenv("MMM_LLAMA_COMPLETION_WALL_TIMEOUT_SECONDS", raising=False)
     monkeypatch.delenv("MMM_LLAMA_TOOL_COMPLETION_WALL_TIMEOUT_SECONDS", raising=False)
     assert contract._completion_wall_timeout_seconds({
         "max_tokens": 32000, "grammar": 'root ::= "public"',
-    }) == 300.0
+    }) is None
     assert contract._completion_wall_timeout_seconds({
         "max_tokens": 32000, "tools": [{"type": "function"}],
         "grammar": 'root ::= "public"',
-    }) == 600.0
+    }) is None
     assert contract._completion_wall_timeout_seconds({"max_tokens": 8192}) is None
+
+
+def test_repetition_guard_detects_the_reported_long_java_pattern():
+    pattern = (
+        "BuiltInRegistriesATTRIBUTE_TYPEregisterAliasWithExistingNameAndId"
+        "AliasHolderLookupProviderAliasHolderLookupProviderAliasHolderOf ? null : "
+    )
+    assert len(pattern) > 128
+    guard = contract._RepeatedOutputWatchdog()
+    with pytest.raises(contract.LlamaDegenerateOutputError):
+        source = pattern * 100
+        for offset in range(0, len(source), 11):
+            guard.observe("data: " + contract.json.dumps({
+                "choices": [{"delta": {"content": source[offset:offset + 11]}}],
+            }))

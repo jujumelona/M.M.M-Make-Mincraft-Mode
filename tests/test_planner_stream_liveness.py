@@ -139,10 +139,10 @@ def test_finite_long_request_still_aborts_semantic_stall_with_keepalives(monkeyp
     ([], "MMM_LLAMA_COMPLETION_WALL_TIMEOUT_SECONDS", 300.0),
     ([{"type": "function"}], "MMM_LLAMA_TOOL_COMPLETION_WALL_TIMEOUT_SECONDS", 600.0),
 ])
-def test_unbounded_decode_keeps_fallback_and_explicit_deadline_is_honored(monkeypatch, tools, env_name, fallback):
+def test_only_explicit_completion_deadline_is_honored(monkeypatch, tools, env_name, fallback):
     monkeypatch.delenv(env_name, raising=False)
-    assert liveness._completion_wall_timeout_seconds({"tools": tools}) == fallback
-    assert liveness._completion_wall_timeout_seconds({"tools": tools, "max_tokens": -1}) == fallback
+    assert liveness._completion_wall_timeout_seconds({"tools": tools}) is None
+    assert liveness._completion_wall_timeout_seconds({"tools": tools, "max_tokens": -1}) is None
     monkeypatch.setenv(env_name, "45")
     assert liveness._completion_wall_timeout_seconds({"tools": tools, "max_tokens": 8192}) == 45
     monkeypatch.setenv(env_name, "nan")

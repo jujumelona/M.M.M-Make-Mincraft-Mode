@@ -133,7 +133,20 @@ def build_source_reuse_evidence(requirements, reuse_plan, target_symbols):
     for reference in reuse_plan.get("reference_sources", ()):
         donor = reference.get("donor") or {}
         capability = str(reference.get("capability", ""))
-        source_id = "host-donor:" + str(donor.get("repository", "")) + "@" + str(donor.get("commit_sha", ""))
+        if donor:
+            repository = str(donor.get("repository", ""))
+            commit_sha = str(donor.get("commit_sha", ""))
+            license_id = str(donor.get("license_id", ""))
+            files = _donor_files(donor)
+        else:
+            from .curseforge_semantic_source_review import direct_source_identity
+            _, owner, name = direct_source_identity(str(reference.get("source_url") or ""))
+            repository = owner + "/" + name
+            commit_sha = str(reference.get("pinned_sha") or "")
+            license_id = str(reference.get("license_spdx") or "")
+            files = ({"path": str(reference.get("selected_file") or ""),
+                      "sha256": str(reference.get("file_sha256") or "")},)
+        source_id = "host-donor:" + repository + "@" + commit_sha
         rows.append(SourceReuseEvidence(
             evidence_id=_evidence_id(capability, source_id, "reference_available"),
             capability=capability,
@@ -141,10 +154,10 @@ def build_source_reuse_evidence(requirements, reuse_plan, target_symbols):
             # Partial slices and rejected target proofs can guide an optional
             # port without becoming mandatory source dependencies or APIs.
             mode="reference", status="reference_available", source_id=source_id,
-            repository=str(donor.get("repository", "")),
-            commit_sha=str(donor.get("commit_sha", "")),
-            license_id=str(donor.get("license_id", "")),
-            files=_donor_files(donor),
+            repository=repository,
+            commit_sha=commit_sha,
+            license_id=license_id,
+            files=files,
             dependencies=tuple(donor.get("required_dependencies", ())),
             failure_detail=str(reference.get("migration_diagnostics", "")),
         ))

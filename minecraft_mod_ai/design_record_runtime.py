@@ -830,137 +830,110 @@ def _run_relations(router, identifier, context, progress, checkpoint):
         progress=progress,
         checkpoint=safe_checkpoint,
     )
-    pairs = tuple(
-        (source_id, target_id)
-        for source_id in entity_ids
-        for target_id in entity_ids
-        if source_id != target_id and source_id not in resource_sources
-    )
-
-    def run_pair(pair):
-        source_id, target_id = pair
-        allowed_relation_types = [
-            relation_type
-            for relation_type in relation_types
-            if relation_type_supported_for_content_pair(
-                relation_type,
-                entity_kind_by_id[source_id],
-                entity_kind_by_id[target_id],
-            )
-        ]
-        # An impossible pair is a host-known empty relation set. Do not ask the
-        # model to choose cardinality or expose the unbound full relation schema.
-        if not allowed_relation_types:
+    def run_source(source_id):
+        # Every admissible edge is still considered. The model answers one
+        # schema-closed boolean per edge in a shared page instead of spending
+        # a count request (and then one request per relation) on every pair.
+        candidates = []
+        for target_id in entity_ids:
+            if source_id == target_id:
+                continue
+            for relation_type in relation_types:
+                if relation_type_supported_for_content_pair(
+                    relation_type, entity_kind_by_id[source_id], entity_kind_by_id[target_id],
+                ):
+                    candidates.append({"id": f"r{len(candidates)}",
+                                       "source_id": source_id, "target_id": target_id,
+                                       "relation_type": relation_type})
+        if not candidates:
             return []
 
-        pair_context = {
-            **_pair_relation_prompt_context(
-                normalized,
-                entity_by_id[source_id],
-                entity_by_id[target_id],
-                entity_by_id,
-            ),
-            "source_entity": entity_by_id[source_id],
-            "target_entity": entity_by_id[target_id],
-            "allowed_relation_types": list(allowed_relation_types),
+        def schema_for(rows):
+            return {"type": "object", "additionalProperties": False,
+                    "properties": {row["id"]: {"type": "boolean"} for row in rows},
+                    "required": [row["id"] for row in rows]}
+
+        pair_contexts = {
+            target_id: _pair_relation_prompt_context(
+                normalized, entity_by_id[source_id], entity_by_id[target_id], entity_by_id,
+            ) for target_id in dict.fromkeys(row["target_id"] for row in candidates)
         }
 
-        # Generic bounded-record authoring lets each ordinal see the same enum.
-        # For relation_type-only records that makes duplicate sibling decisions
-        # possible, while the generic runtime rejects duplicates before this
-        # caller can normalize them. Make uniqueness structural instead: choose
-        # the pair cardinality once, then remove each selected relation type
-        # from the enum before the next model call.
-        count_schema = {
-            "type": "object",
-            "properties": {
-                "count": {
-                    "type": "integer",
-                    "enum": list(range(0, len(allowed_relation_types) + 1)),
-                },
-            },
-            "required": ["count"],
-            "additionalProperties": False,
-        }
-        count_value = _relation_selector(
-            router,
-            template,
-            normalized,
-            selector_id=f"pair-relations:{source_id}:{target_id}:count",
-            selector_context=pair_context,
-            response_schema=count_schema,
-            progress=progress,
-            checkpoint=safe_checkpoint,
-            instruction=(
-                "Choose how many distinct explicit relationships are required "
-                "for this fixed ordered entity pair. Zero is valid when the "
-                "active requirements do not explicitly relate the pair."
-            ),
-        )
+        def context_for(rows):
+            targets = list(dict.fromkeys(row["target_id"] for row in rows))
+            combined = {"requirements": [], "design_contexts": []}
+            for key in combined:
+                seen = set()
+                for target in targets:
+                    for value in pair_contexts[target].get(key, ()):
+                        identity = _record_key(value)
+                        if identity not in seen:
+                            seen.add(identity)
+                            combined[key].append(value)
+            return {**combined, "source_entity": entity_by_id[source_id],
+                    "target_entities": [entity_by_id[target] for target in targets],
+                    "relation_candidates": rows}
 
-        remaining = list(allowed_relation_types)
-        selected_relation_types: list[str] = []
-        for index in range(int(count_value["count"])):
-            relation_schema = {
-                "type": "object",
-                "properties": {
-                    "relation_type": {
-                        "type": "string",
-                        "enum": list(remaining),
-                    },
-                },
-                "required": ["relation_type"],
-                "additionalProperties": False,
-            }
-            decision = _relation_selector(
-                router,
-                template,
-                normalized,
-                selector_id=f"pair-relations:{source_id}:{target_id}:member:{index}",
-                selector_context={
-                    **pair_context,
-                    "selected_relation_types": list(selected_relation_types),
-                    "remaining_relation_types": list(remaining),
-                    "member_index": index,
-                },
-                response_schema=relation_schema,
-                progress=progress,
-                checkpoint=safe_checkpoint,
+        # Page by the actual closed schema capacity; this never limits how
+        # many relationships or entities the user may request.
+        from .execution_contract_policy import PLANNER_RECORD_PAGE_OUTPUT_TOKEN_CEILING
+        input_capacity = None
+        registry = getattr(router, "registry", None)
+        if registry is not None:
+            from .model_context_budget import request_message_budget
+            config = registry.role(router.profile, "planner")
+            input_capacity = request_message_budget(config)
+        selected = []
+        offset = 0
+        while offset < len(candidates):
+            page = []
+            for row in candidates[offset:]:
+                proposed = [*page, row]
+                projected = schema_for(proposed)
+                too_large = structured_output_token_ceiling(
+                    projected, absolute_ceiling=None,
+                ) > PLANNER_RECORD_PAGE_OUTPUT_TOKEN_CEILING
+                if input_capacity is not None:
+                    too_large = too_large or len(json.dumps(
+                        context_for(proposed), ensure_ascii=False,
+                    ).encode("utf-8")) > input_capacity
+                if too_large and page:
+                    break
+                page = proposed
+                if too_large:
+                    # Let the normal schema/context checker diagnose a single
+                    # unrepresentable obligation; never silently omit it.
+                    break
+            schema = schema_for(page)
+            value = _relation_selector(
+                router, template, normalized,
+                selector_id=f"relation-matrix-v2:{source_id}:{offset}",
+                selector_context=context_for(page), response_schema=schema,
+                progress=progress, checkpoint=safe_checkpoint,
                 instruction=(
-                    f"Choose distinct explicit relationship {index + 1} for "
-                    "this fixed ordered entity pair. Previously selected "
-                    "relationship types have been removed by the host."
+                    "For EVERY supplied relation candidate, choose whether the original "
+                    "requirements explicitly require that directed relationship. Return "
+                    "exactly its host-owned id with a boolean value. True selects that "
+                    "exact edge; false means it is not required. Consider every candidate "
+                    "independently. Do not create relations just because two entities "
+                    "exist, and do not omit requested dependencies."
                 ),
             )
-            relation_type = decision["relation_type"]
-            selected_relation_types.append(relation_type)
-            remaining.remove(relation_type)
-
-        key_relations = [
-            relation_type
-            for relation_type in selected_relation_types
-            if relation_type.startswith("key_")
-        ]
-        if len(key_relations) > 1:
-            raise TemplateBlocked(
-                f"TEMPLATE_RELATION_KEY_DUPLICATE: {source_id}->{target_id}"
-            )
-
-        return [
-            {
-                "relation_type": relation_type,
-                "source_id": str(source_id),
-                "target_id": str(target_id),
-            }
-            for relation_type in selected_relation_types
-        ]
+            # Validate resumed pages too; malformed checkpoints cannot create
+            # extra edges or silently remove a required decision.
+            Draft202012Validator(schema).validate(value)
+            selected.extend({"relation_type": row["relation_type"],
+                             "source_id": row["source_id"], "target_id": row["target_id"]}
+                            for row in page if value[row["id"]])
+            offset += len(page)
+        return selected
 
     pair_results = deterministic_model_map(
         router,
-        pairs,
-        run_pair,
+        tuple(source_id for source_id in entity_ids if source_id not in resource_sources),
+        run_source,
         role="planner",
-        thread_name_prefix="design-relation-pair",
+        thread_name_prefix="design-relation-source",
     )
     records: list[dict[str, Any]] = []
     seen: set[str] = set()

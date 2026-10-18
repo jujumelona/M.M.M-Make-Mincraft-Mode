@@ -213,16 +213,20 @@ def verified_source_rag(reuse_plan: Mapping[str, Any], *, adapter: Any,
             if capability in installed_capabilities:
                 continue
             try:
-                donor_slice = DonorSlice.from_dict(reference["donor"])
-                if (donor_slice.compatibility_evidence is None or
-                        not donor_slice.compatibility_evidence.minecraft_version or
-                        not donor_slice.compatibility_evidence.loader):
-                    raise ValueError("SOURCE_REFERENCE_VERSION_EVIDENCE_MISSING")
-                # This is an authoring REFERENCE, never executable donor code.
-                # Older releases are valid examples once pinned hashes and
-                # permissive licensing have been checked independently.
-                blobs = materialize_pinned_donor(donor_slice)
-                donor = donor_slice.to_dict()
+                if isinstance(reference.get("donor"), Mapping):
+                    donor_slice = DonorSlice.from_dict(reference["donor"])
+                    if (donor_slice.compatibility_evidence is None or
+                            not donor_slice.compatibility_evidence.minecraft_version or
+                            not donor_slice.compatibility_evidence.loader):
+                        raise ValueError("SOURCE_REFERENCE_VERSION_EVIDENCE_MISSING")
+                    blobs = materialize_pinned_donor(donor_slice)
+                    donor = donor_slice.to_dict()
+                else:
+                    # Current CurseForge semantic reviews carry pinned file
+                    # identities, not the legacy nested DonorSlice envelope.
+                    # Verify those exact bytes/license before indexing them.
+                    from .curseforge_reuse_production import read_pinned_source_reference
+                    donor, blobs = read_pinned_source_reference(reference)
                 notice_path, notice_bytes = _verified_donor_license_notice(donor, blobs)
                 root = workspace / ("reference_" + str(ordinal)) / "source"
                 for relative, content in blobs.items():
@@ -241,12 +245,13 @@ def verified_source_rag(reuse_plan: Mapping[str, Any], *, adapter: Any,
                     "source_kind": "pinned_reference_requires_target_adaptation",
                 })
                 notice = notice_bytes.decode("utf-8")
-            except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
+            except (OSError, ValueError, RuntimeError, KeyError, sqlite3.Error) as exc:
                 # Optional migration guidance has no installed-source authority.
                 # Unavailable or invalid evidence must not block fresh authoring.
                 rag.reference_failures.append({
                     "capability": capability,
-                    "repository": str((reference.get("donor") or {}).get("repository", "")),
+                    "repository": str((reference.get("donor") or {}).get("repository")
+                                      or reference.get("source_url") or ""),
                     "status": "reference_unavailable", "error": f"{type(exc).__name__}: {exc}"[:1200],
                 })
                 print(f"SOURCE_RAG: reference unavailable for {capability} ({type(exc).__name__})",

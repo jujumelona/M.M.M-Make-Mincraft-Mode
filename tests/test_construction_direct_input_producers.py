@@ -89,3 +89,21 @@ def test_direct_evidence_excludes_unrelated_entity_registrars_and_client_renderi
     result = _evidence(index, "Register alien entity type on the common side", {})
     assert result["target_api"] == [{"symbol_id": "example.Registry#register"}]
     assert result["rejected_unrelated_api_count"] == 3
+
+
+def test_unimplemented_current_owner_is_not_presented_as_an_available_api():
+    index = _Index()
+    index.owner = "example.GeneratedAlienRegistry"
+    own = index.owner + "#registerAlienCombatHostileEntity"
+    index.symbols[own] = {
+        "kind": "METHOD", "owner": index.owner,
+        "name": "registerAlienCombatHostileEntity", "return_type": "void",
+        "parameters": [], "provenance": "construction_plan",
+    }
+    original = index.page
+    index.page = lambda goal, offset: {
+        **original(goal, offset), "matches": [{"symbol_id": own},
+                                               {"symbol_id": "example.Registry#register"}],
+    }
+    evidence = _evidence(index, "Register alien combat hostile entity", {})
+    assert evidence["target_api"] == [{"symbol_id": "example.Registry#register"}]

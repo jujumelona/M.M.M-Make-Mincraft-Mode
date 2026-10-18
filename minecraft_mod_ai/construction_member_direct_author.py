@@ -154,12 +154,13 @@ def compose_method(router, member_task, context, *, owner_name: str) -> str:
         ]
         # One authored method; at most one tightly scoped syntax correction.
         for attempt in range(2):
-            candidate = router.generate_java_source(
-                "coder", messages,
-                data_name="construction_unit_" + member_task.task_id[:64],
-                source_frame=frame,
-            )
+            candidate = None
             try:
+                candidate = router.generate_java_source(
+                    "coder", messages,
+                    data_name="construction_unit_" + member_task.task_id[:64],
+                    source_frame=frame,
+                )
                 if (not isinstance(candidate, str)
                         or not candidate.startswith(frame["prefix"])
                         or not candidate.endswith(frame["suffix"])):

@@ -20,7 +20,7 @@ def _sha(payload: Any) -> str:
 
 def source_discovery_algorithm_version() -> str:
     """Change when provider discovery or donor handoff semantics change."""
-    return "shared-source-candidate-retrieval-v2"
+    return "shared-source-candidate-retrieval-v3"
 
 
 def source_reference_fingerprint(reference_repositories: Sequence[str]) -> str:

@@ -34,6 +34,15 @@ def test_typed_intermediate_values_are_not_blocked_by_parent_action():
         [{"mode": "expression", "expected_type": "example.Target"}])
 
 
+def test_registry_accessor_is_not_a_registration_action():
+    purpose = "Register the alien combat hostile entity type on the common side"
+    accessor = row("net.minecraft.data.loot.packs.VanillaEntityInteractLoot", "registries",
+                   "net.minecraft.core.HolderLookup$Provider")
+    assert not api_semantic_admissible("call", purpose, accessor)
+    assert api_semantic_admissible("call", purpose,
+                                   row("net.minecraft.core.Registry", "register"))
+
+
 def test_binder_never_offers_unrelated_registration_candidate():
     chosen = row("net.minecraft.world.level.levelgen.DensityFunctions", "argument1")
     state = SimpleNamespace(evidence_index=SimpleNamespace(

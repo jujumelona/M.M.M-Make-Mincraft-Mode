@@ -123,6 +123,13 @@ def _evidence(index, intent, source_pages):
     rejected = 0
     for candidate in page["matches"]:
         row = index.symbols.get(candidate.get("symbol_id"), {})
+        if (row.get("kind") == "METHOD"
+                and row.get("owner") == getattr(index, "owner", None)):
+            # A planned declaration of the very class being authored is not
+            # a target API implementation. Accepted siblings remain available
+            # as actual source below, rather than inviting recursive self-calls.
+            rejected += 1
+            continue
         if (action_required and row.get("kind") == "METHOD"
                 and not api_semantic_admissible("call", intent, row)):
             rejected += 1
@@ -295,12 +302,13 @@ def _compose_claimed(router, spec, context, behaviors, package, name, owner,
         # unbounded planner or sampler loop.
         attempts = 1 if behavior_id in saved else 2
         for attempt in range(attempts):
-            candidate = (saved[behavior_id] if behavior_id in saved else
-                         router.generate_java_source(
-                             "coder", messages,
-                             data_name="construction_direct_" + behavior_id[:60],
-                             source_frame=frame))
+            candidate = None
             try:
+                candidate = (saved[behavior_id] if behavior_id in saved else
+                             router.generate_java_source(
+                                 "coder", messages,
+                                 data_name="construction_direct_" + behavior_id[:60],
+                                 source_frame=frame))
                 if (not isinstance(candidate, str)
                         or not candidate.startswith(frame["prefix"])
                         or not candidate.endswith(frame["suffix"])):

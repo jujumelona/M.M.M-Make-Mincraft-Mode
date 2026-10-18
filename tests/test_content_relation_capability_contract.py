@@ -71,6 +71,8 @@ def test_distinct_selector_cannot_repeat_model_preferred_identifier(monkeypatch)
             choices = list(props["id"]["enum"])
             seen_enums.append(choices)
             return {"id": choices[0]}
+        if props and all(child.get("type") == "boolean" for child in props.values()):
+            return {key: False for key in props}
         raise AssertionError(response_schema)
 
     monkeypatch.setattr(
@@ -109,6 +111,8 @@ def test_registry_tag_relations_have_host_owned_nonempty_membership(monkeypatch)
             return {"count": 1}
         if "id" in props:
             return {"id": "ship_blueprint"}
+        if props and all(child.get("type") == "boolean" for child in props.values()):
+            return {key: False for key in props}
         raise AssertionError(response_schema)
 
     monkeypatch.setattr(design_record_runtime, "deterministic_model_map", _serial_map)
@@ -176,6 +180,8 @@ def test_crafting_recipe_relations_have_exact_output_and_bounded_inputs(monkeypa
             if "steel_plate" in choices:
                 return {"id": "steel_plate"}
             return {"id": "engine_core"}
+        if props and all(child.get("type") == "boolean" for child in props.values()):
+            return {key: False for key in props}
         raise AssertionError(response_schema)
 
     monkeypatch.setattr(design_record_runtime, "deterministic_model_map", _serial_map)
@@ -260,6 +266,8 @@ def test_smelting_recipe_relations_have_exact_input_and_output(monkeypatch) -> N
                 "output_id": "refined_alloy",
                 "ingredient_id": "raw_alloy",
             }
+        if props and all(child.get("type") == "boolean" for child in props.values()):
+            return {key: False for key in props}
         raise AssertionError(response_schema)
 
     monkeypatch.setattr(design_record_runtime, "deterministic_model_map", _serial_map)

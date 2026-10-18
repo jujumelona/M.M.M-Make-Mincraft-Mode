@@ -446,106 +446,49 @@ class ModelRouter:
         self, role: str, messages: Sequence[Mapping[str, Any]], *,
         data_name: str, source_frame: Mapping[str, Any],
     ) -> str:
-        """One raw Java declaration, constrained by native Java productions."""
+        """Author one complete declaration; syntax/API admission remains host-owned.
+
+        A general recursive Java grammar proves only syntactic possibility. It
+        trapped the small model in legal identifier/conditional loops without
+        helping it implement the behavior. Use ordinary source decoding from
+        the first request, then validate the fixed declaration frame. Existing
+        Java parsing, inspected-API admission and target compilation still gate
+        acceptance; no timed grammar attempt or capped recovery precedes it.
+        """
         from .model_context_budget import fit_messages_to_context
 
+        prefix, suffix = source_frame.get("prefix"), source_frame.get("suffix")
+        if (not isinstance(prefix, str) or not prefix
+                or not isinstance(suffix, str) or not suffix):
+            raise ModelConfigurationError("CONSTRUCTION_SOURCE_FRAME_INVALID")
         config, adapter = self._generation_adapter(role)
         request_messages = fit_messages_to_context(
             [*messages, {"role": "system", "content": (
-                "Return ONLY the complete raw Java declaration selected by "
-                "response_source_frame. No JSON, Markdown, reasoning, tool call "
-                "or package/import wrapper. Use ASCII identifiers and preserve "
-                "Unicode string values. The native Java grammar owns syntax."
+                "Return ONLY one complete raw Java declaration for the supplied "
+                "host-owned frame. Start with its exact prefix and end with its "
+                "exact suffix. If empty_value is supplied, it is the only allowed "
+                "uninitialized-field alternative. Use actual inspected APIs and "
+                "implement all requested effects. No JSON, Markdown, reasoning, "
+                "package/import wrapper or additional declarations. "
+                "Declaration frame: " + json.dumps(dict(source_frame), ensure_ascii=False)
             )}], config=config, tools=(),
         )
         request = GenerationRequest(
             messages=request_messages, response_format="text", tools=(),
             metadata={"role": role, "mmm_data_page": data_name,
-                      "mmm_java_source_frame": dict(source_frame),
+                      "mmm_source_declaration_frame": dict(source_frame),
                       "mmm_strict_source_data": True, "mmm_force_non_thinking": True},
         )
-        try:
-            with self._generation_scope(config):
-                return adapter.generate(request)
-        except Exception as exc:
-            # The Java grammar can legally cycle on one identifier forever.
-            # Do not replay the same GBNF sampler after a periodic decode or
-            # its absolute wall ceiling. Switch ONCE to a schema-bounded Java
-            # declaration; the host still validates the exact frame and
-            # compiles the result before publication.
-            from .llama_completion_liveness_contract import (
-                LlamaCompletionDeadlineExceeded, LlamaDegenerateOutputError,
-            )
-            # llama_cpp_adapter.generate_turn wraps the original stream error
-            # in ModelBackendError(cause=...). Inspect only real exception
-            # objects, never strings that merely mention the failure name.
-            underlying: BaseException = exc
-            visited = set()
-            while id(underlying) not in visited:
-                visited.add(id(underlying))
-                if isinstance(underlying, (
-                    LlamaCompletionDeadlineExceeded, LlamaDegenerateOutputError,
-                )):
-                    break
-                candidate = getattr(underlying, "cause", None)
-                if not isinstance(candidate, BaseException):
-                    candidate = underlying.__cause__
-                if not isinstance(candidate, BaseException):
-                    raise
-                underlying = candidate
-            if not isinstance(underlying, (
-                LlamaCompletionDeadlineExceeded, LlamaDegenerateOutputError,
-            )):
-                raise
-            from .model_concurrency import raise_if_model_execution_cancelled
-            raise_if_model_execution_cancelled()
-            print("CONSTRUCTION_DECODE_STRATEGY_SWITCH: " + json.dumps({
-                "data_name": data_name,
-                "failure": type(underlying).__name__,
-                "from": "native_java_gbnf",
-                "to": "bounded_raw_java",
-                "output_token_ceiling": 4096,
-            }), flush=True)
-            # A 2400-character JSON string is NOT atomic under MMM's escaped
-            # JSON worst-case budget (6 * 2400 > 4096); that route can never
-            # pass the real schema preflight. Instead make one bounded, plain
-            # Java decode without the recursive GBNF, then enforce the signed
-            # prefix/suffix before downstream Java admission/Gradle proof.
-            repair_messages = fit_messages_to_context(
-                [*messages, {"role": "system", "content": (
-                    "Produce exactly one complete raw Java declaration for the "
-                    "existing host-owned signature, without JSON, Markdown, "
-                    "reasoning, packages or any additional class/member. "
-                    "The previous Java grammar became trapped repeating a token. "
-                    "Do not repeat any identifier unnecessarily; implement all "
-                    "requested effects using actual inspected APIs. "
-                    "Required exact prefix: " + str(source_frame.get("prefix", "")) +
-                    "\\nRequired exact suffix: " + str(source_frame.get("suffix", ""))
-                )}],
-                config=config, tools=(),
-            )
-            recovery = GenerationRequest(
-                messages=repair_messages,
-                response_format="text",
-                tools=(),
-                metadata={
-                    "role": role,
-                    "mmm_data_page": data_name + ".bounded_java_fallback",
-                    "mmm_strict_source_data": True,
-                    "mmm_native_java_recovery": True,
-                    "mmm_output_token_ceiling": 4096,
-                    "mmm_force_non_thinking": True,
-                },
-            )
-            with self._generation_scope(config):
-                result = adapter.generate(recovery)
-            if (not isinstance(result, str)
-                    or not result.startswith(str(source_frame.get("prefix", "")))
-                    or not result.endswith(str(source_frame.get("suffix", "")))):
-                raise ModelConfigurationError(
-                    "CONSTRUCTION_BOUNDED_SOURCE_SIGNATURE_INVALID"
-                ) from exc
-            return result
+        with self._generation_scope(config):
+            result = adapter.generate(request)
+        if (not isinstance(result, str) or not (
+            result == source_frame.get("empty_value")
+            or (result.startswith(prefix) and result.endswith(suffix))
+        )):
+            raise ModelConfigurationError("CONSTRUCTION_SOURCE_SIGNATURE_INVALID")
+        from .first_pass_java_declarations import validate_source_frame
+        validate_source_frame(result, source_frame)
+        return result
 
     def generate_tool_decision(
         self,

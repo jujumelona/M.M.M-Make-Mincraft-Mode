@@ -1,6 +1,7 @@
 from __future__ import annotations
 """CurseForge catalogue research handoff; no external source repositories."""
 import json
+from collections import Counter
 from collections.abc import Mapping
 from typing import Any
 from .curseforge_catalog import curseforge_api_key
@@ -84,6 +85,7 @@ def build_repository_reuse_plan(design: Mapping[str, Any], **kwargs: Any) -> dic
                     "source_excerpt": candidate.get("licensed_reference_excerpt", ""),
                     "proof_status": "NOT_RUN", "reference_only": True,
                 })
+        reference_count = sum(ref["capability"] == name for ref in reference_sources)
         if discovery_status in {"provider_error", "not_configured"}:
             status, failure_code = ("provider_error",
                 "CURSEFORGE_NOT_CONFIGURED" if discovery_status == "not_configured"
@@ -96,11 +98,13 @@ def build_repository_reuse_plan(design: Mapping[str, Any], **kwargs: Any) -> dic
             status, failure_code = "search_empty", ""
         else:
             status, failure_code = "unresolved", ""
+        if reference_count and status == "unresolved":
+            status = "reference_available"
         decisions.append({
             "capability": name, "mode": "fresh", "search_status": status,
             "discovery_status": discovery_status,
             "failure_code": failure_code, "source_id": "",
-            "component_refs": [], "reference_source_count": 0,
+            "component_refs": [], "reference_source_count": reference_count,
             "catalogue_evidence": matched,  # Already bounded per distinct topic.
             "semantic_assessments": inspections,
             "catalogue_queries": list(row.get("queries") or ()),
@@ -118,6 +122,15 @@ def build_repository_reuse_plan(design: Mapping[str, Any], **kwargs: Any) -> dic
                                     == "semantic_reviewed" for item in inspections),
             "proof_attempts": 0, "status": discovery_status,
             "evidence_status": status, "catalogue_match_count": len(matched),
+            "reference_source_count": reference_count,
+            "inspection_outcomes": [
+                {"source_id": item.get("source_id"),
+                 "status": item.get("inspection_status"),
+                 "semantic_status": (item.get("semantic") or {}).get("status"),
+                 "semantic_intent": (item.get("semantic") or {}).get("intent"),
+                 "error": item.get("error") or (item.get("semantic") or {}).get("error", "")}
+                for item in inspections
+            ],
             "queries": list(row.get("queries") or ()),
         }, ensure_ascii=False), flush=True)
     # Explicit local CurseForge dependency selections remain UNVERIFIED here.
@@ -139,6 +152,10 @@ def build_repository_reuse_plan(design: Mapping[str, Any], **kwargs: Any) -> dic
         "semantic_cache_hits": sum(int(x.get("semantic_cache_hits") or 0) for x in inspection_receipts),
         "inspection_wall_ms": round(sum(float(x.get("elapsed_ms") or 0) for x in inspection_receipts), 1),
         "inspected_candidate_count": len(inspection_receipts),
+        "successful_source_inspections": sum(
+            item.get("inspection_status") == "inspected" for item in inspection_receipts),
+        "inspection_status_counts": dict(Counter(
+            str(item.get("inspection_status") or "unknown") for item in inspection_receipts)),
         "capability_count": len(capabilities),
     }
     print("SOURCE_REUSE_COSTS: " + json.dumps(performance, ensure_ascii=False), flush=True)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import minecraft_mod_ai.design_record_runtime as runtime
 
 
-def test_relation_pair_selection_removes_previously_selected_types(monkeypatch) -> None:
+def test_relation_pages_cannot_author_duplicate_relation_type_siblings(monkeypatch) -> None:
     """A fixed entity pair must never author duplicate relation-type siblings."""
 
     monkeypatch.setattr(
@@ -12,7 +12,7 @@ def test_relation_pair_selection_removes_previously_selected_types(monkeypatch) 
         lambda _router, values, worker, **_kwargs: [worker(value) for value in values],
     )
 
-    seen_relation_enums: list[tuple[str, ...]] = []
+    seen_relation_pages: list[tuple[str, ...]] = []
 
     def fake_selector(
         _router,
@@ -23,11 +23,10 @@ def test_relation_pair_selection_removes_previously_selected_types(monkeypatch) 
         **_kwargs,
     ):
         properties = response_schema["properties"]
-        if "count" in properties:
-            return {"count": 2}
-        relation_enum = tuple(properties["relation_type"]["enum"])
-        seen_relation_enums.append(relation_enum)
-        return {"relation_type": relation_enum[0]}
+        assert all(child["type"] == "boolean" for child in properties.values())
+        fields = tuple(properties)
+        seen_relation_pages.append(fields)
+        return {field: index < 2 for index, field in enumerate(fields)}
 
     monkeypatch.setattr(runtime, "_relation_selector", fake_selector)
 
@@ -58,10 +57,7 @@ def test_relation_pair_selection_removes_previously_selected_types(monkeypatch) 
         assert len(relation_types) == 2
         assert len(relation_types) == len(set(relation_types))
 
-    # Each pair authors two members. The second member must see an enum with the
-    # first choice physically removed, so duplicate output is impossible even if
-    # the model always selects the first enum member.
-    assert len(seen_relation_enums) == 4
-    for first, second in zip(seen_relation_enums[::2], seen_relation_enums[1::2], strict=True):
-        assert len(second) == len(first) - 1
-        assert first[0] not in second
+    # One boolean per host-owned edge makes duplicates structurally impossible;
+    # there is no count request or a separate request for each selected type.
+    assert len(seen_relation_pages) == 2
+    assert all(len(page) == len(set(page)) for page in seen_relation_pages)

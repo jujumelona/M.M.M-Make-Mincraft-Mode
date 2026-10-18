@@ -5,8 +5,8 @@ from __future__ import annotations
 Transport keepalive activity is not model progress. The watchdog is reset only by
 prompt processing, decode/tool deltas, or terminal completion events. Lifecycle logging
 must also distinguish a real request failure from Python's normal generator close after
-the consumer has already observed ``data: [DONE]``. Periodic output and a native Java grammar wall ceiling constrain
-pathological decoding; ordinary bounded planning retains semantic liveness.
+the consumer has already observed ``data: [DONE]``. Repeated output and semantic
+inactivity are distinct from a healthy request that simply takes a long time.
 """
 
 import json
@@ -65,7 +65,7 @@ class _RepeatedOutputWatchdog:
     a shared GPU lease indefinitely just because characters keep arriving.
     """
 
-    def __init__(self, *, min_periodic_chars: int = 4096, max_period: int = 128):
+    def __init__(self, *, min_periodic_chars: int = 4096, max_period: int = 1024):
         self._suffix = ""
         self._min_periodic_chars = min_periodic_chars
         self._max_period = max_period
@@ -269,11 +269,11 @@ def _completion_token_budget(payload: Mapping[str, Any]) -> int | None:
 
 
 def _completion_wall_timeout_seconds(payload: Mapping[str, Any]) -> float | None:
-    """Honor explicit deadlines; finite decodes otherwise use semantic inactivity.
+    """Honor a user's explicit deadline without inventing a completion duration.
 
-    A healthy 8192-token plan can take longer than 300 seconds on the selected GPU.
-    Its finite output ceiling and the independent inactivity guard already bound the
-    request. Retain a wall fallback only when no finite decode budget is known.
+    Grammar, output capacity and GPU speed do not imply a 300/600-second runtime
+    contract. Inactivity and demonstrably periodic output have independent guards;
+    progressing work must be allowed to finish.
     """
 
     has_tools = bool(payload.get("tools"))
@@ -285,13 +285,7 @@ def _completion_wall_timeout_seconds(payload: Mapping[str, Any]) -> float | None
     )
     if os.environ.get(name, "").strip():
         return _positive_env_float(name, default)
-    # Native Java GBNF has an exceptionally wide recursive production and
-    # can loop on one valid identifier for the entire 30k-token allowance.
-    # Only that surface requires a fixed wall: applying it to every 8192-token
-    # planning page falsely terminates healthy long plans.
-    if isinstance(payload.get("grammar"), str) and payload["grammar"]:
-        return default
-    return None if _completion_token_budget(payload) is not None else default
+    return None
 
 
 def _semantic_idle_timeout_seconds(

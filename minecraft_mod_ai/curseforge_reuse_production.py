@@ -64,6 +64,48 @@ def fetch_pinned_archive(source_url: str, commit_sha: str, *, repository: str = 
     return _safe_archive_files(payload)
 
 
+def read_pinned_source_reference(reference: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, bytes]]:
+    """Bridge a semantic-review receipt to complete, byte-checked reference code.
+
+    A reference needs the inspected file and its license, not a transplant's
+    dependency/resource closure or an invented claim of target compatibility.
+    This also supports genuine multi-module source paths in the pinned archive.
+    The returned files are for authoring context only and are never installed.
+    """
+    capability = str(reference.get("capability") or "").strip()
+    selected = str(reference.get("selected_file") or "")
+    symbol = str(reference.get("selected_symbol") or "")
+    url = str(reference.get("source_url") or "")
+    sha = str(reference.get("pinned_sha") or "")
+    license_id = str(reference.get("license_spdx") or "")
+    if (reference.get("reference_only") is not True or not capability
+            or not selected.endswith(".java") or selected.startswith("/")
+            or "\\" in selected or any(p in {"", ".", ".."} for p in selected.split("/"))):
+        raise SourceInspectionError("SOURCE_REFERENCE_NOT_GROUNDED")
+    _, owner, name = direct_source_identity(url)
+    repository = owner + "/" + name
+    import httpx
+    try:
+        files = fetch_pinned_archive(url, sha, repository=repository)
+    except httpx.HTTPError as exc:
+        raise SourceInspectionError("SOURCE_PINNED_REFERENCE_HTTP_FAILED") from exc
+    raw = files.get(selected)
+    if raw is None:
+        raise SourceInspectionError("SOURCE_SELECTION_FILE_NOT_FOUND")
+    if "sha256:" + hashlib.sha256(raw).hexdigest() != reference.get("file_sha256"):
+        raise SourceInspectionError("SOURCE_REFERENCE_HASH_CHANGED")
+    source = raw.decode("utf-8", errors="replace")
+    if not symbol or symbol not in set(_JAVA_TYPE.findall(source) + _JAVA_METHOD.findall(source)):
+        raise SourceInspectionError("SOURCE_SELECTED_TYPE_NOT_DECLARED")
+    license_path = _license_path(files, license_id)
+    blobs = {selected: raw, license_path: files[license_path]}
+    blobs.update({path: content for path, content in files.items()
+                  if path.upper() in {"NOTICE", "NOTICE.TXT", "NOTICE.MD", "COPYRIGHT"}})
+    return {"repository": repository, "commit_sha": sha, "license_id": license_id,
+            "source_url": url, "closure_complete": False,
+            "compatibility_evidence": {}}, blobs
+
+
 def git_blob_sha1(raw: bytes) -> str:
     return hashlib.sha1(b"blob " + str(len(raw)).encode("ascii") + b"\0" + raw).hexdigest()
 
@@ -459,5 +501,5 @@ def certify_sources_at_production(reuse_plan: Mapping[str, Any], *,
 
 
 __all__ = ["certify_sources_at_production", "stage_verified_donors",
-           "donor_from_reference", "read_pinned_manifest", "fetch_pinned_archive",
+           "donor_from_reference", "read_pinned_manifest", "read_pinned_source_reference", "fetch_pinned_archive",
            "git_blob_sha1"]

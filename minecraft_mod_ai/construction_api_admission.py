@@ -129,7 +129,8 @@ def api_semantic_admissible(
     # Match actual callable names, not package/return types.
     matching_actions = {
         action for action in action_stems
-        if any(part.startswith(action) for part in method)
+        if any(part.startswith("register" if action == "regis" else action)
+               for part in method)
     }
     if not matching_actions:
         return False
