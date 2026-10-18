@@ -328,6 +328,8 @@ def test_runtime_install_covers_central_and_project_boundaries_idempotently() ->
     from minecraft_mod_ai.generator import FabricProjectGenerator
     from minecraft_mod_ai.scalable_generator import ScalableFabricProjectGenerator
 
+    # Import-by-value aliases are synchronized by installation, not module import order.
+    contract.install()
     content_generate = extended_content_generator.generate_extended_content
     base_generate = FabricProjectGenerator.generate
     scalable_generate = ScalableFabricProjectGenerator.generate
