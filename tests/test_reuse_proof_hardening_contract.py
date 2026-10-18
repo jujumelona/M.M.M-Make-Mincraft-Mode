@@ -136,3 +136,20 @@ def test_unresolved_dependency_receipt_cannot_be_injected() -> None:
         assert "cannot inject unresolved dependencies" in str(exc)
     else:
         raise AssertionError("unresolved dependency was injected")
+
+
+def test_missing_user_target_never_downloads_or_builds_donor(monkeypatch):
+    from minecraft_mod_ai import source_transplant
+
+    def must_not_download(*_args, **_kwargs):
+        raise AssertionError("A targetless reuse proof must not fetch donor bytes")
+
+    monkeypatch.setattr(source_transplant, "materialize_pinned_donor", must_not_download)
+    receipt = execute_reuse_proof(
+        _donor(),
+        target_workspace="",
+        target_context={},
+    )
+    assert receipt.failure_code == "TARGET_SELECTION_REQUIRED"
+    assert receipt.authoritative_compile is False
+    assert receipt.compile_passed is False
