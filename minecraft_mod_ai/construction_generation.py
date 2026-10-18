@@ -162,9 +162,25 @@ def compose(router, spec, *, source_context=(), construction_context=None,
     # Never relabel installed source or bytecode as a provisional declaration.
     if owner in symbols or any(row.get('owner') == owner for row in symbols.values()):
         raise ValueError('CONSTRUCTION_OWNER_ALREADY_EXISTS: ' + owner)
-    # The model's complete-declaration Java writer is the default for
-    # independent behaviors. Stateful features keep
-    # the fully typed, evidence-bound operation author below.
+    # Default: let the model author a COMPLETE Java compilation unit, then
+    # repair its actual compiler diagnostics. Do not silently fall back to
+    # the historical node-by-node Typed IR on a failed candidate: that route
+    # can indefinitely expand missing block inputs without executable Java.
+    # The old path remains manually opt-in for controlled regression tests.
+    import os
+    if os.environ.get("MMM_LEGACY_TYPED_IR") != "1":
+        from .construction_file_author import compose_complete_source
+        print('CONSTRUCTION_AUTHOR_ROUTE: ' + json.dumps({
+            'mode': 'file_level_java', 'owner': owner,
+            'assigned_behaviors': len(behaviors),
+            'target_build_verified': False,
+            'legacy_automatic_fallback': False,
+        }, ensure_ascii=False), flush=True)
+        return compose_complete_source(
+            router, spec, context, package=package, name=name, owner=owner,
+            behaviors=behaviors, source_context=source_context,
+        )
+    # Explicitly selected legacy implementation, never an automatic fallback.
     from .construction_direct_writer import eligible as direct_eligible, compose_feature
     if direct_eligible(bindings, context, behaviors):
         print('CONSTRUCTION_AUTHOR_ROUTE: ' + json.dumps({
