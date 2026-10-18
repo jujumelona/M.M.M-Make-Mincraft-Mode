@@ -60,7 +60,11 @@ def test_native_java_loop_switches_once_to_bounded_json(monkeypatch, failure):
     assert fake.name.endswith(".bounded_json_fallback")
 
 
-def test_unrelated_server_exception_does_not_retry():
+def test_unrelated_server_exception_does_not_retry(monkeypatch):
+    monkeypatch.setattr(
+        "minecraft_mod_ai.model_context_budget.fit_messages_to_context",
+        lambda messages, **_kwargs: messages,
+    )
     fake = FakeRouter(ValueError("bad external state"))
     with pytest.raises(ValueError, match="bad external state"):
         router_module.ModelRouter.generate_java_source(
