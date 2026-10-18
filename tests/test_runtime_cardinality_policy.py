@@ -15,7 +15,7 @@ def _runtime_concern_ids():
 
 def test_runtime_cardinality_metadata_is_not_model_visible():
     identifiers = _runtime_concern_ids()
-    assert len(identifiers) == 83
+    assert len(identifiers) == 74
     assert len(identifiers) == len(set(identifiers))
 
     for identifier in identifiers:
