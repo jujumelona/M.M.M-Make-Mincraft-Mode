@@ -1,17 +1,16 @@
 from __future__ import annotations
 
+from pathlib import Path
 
-def test_season_repository_candidate_is_not_false_negative():
-    from minecraft_mod_ai import pre_design_external_source_contract as external
 
-    query = "minecraft seasonal crop planting mod"
-    repository = {
-        "full_name": "lucaargolo/fabric-seasons",
-        "description": "A Fabric mod that adds seasons to Minecraft",
-        "topics": ["minecraft", "fabric", "mod", "seasons"],
-    }
-    assert external._repository_candidate_relevant(query, repository)
-    assert external._body_relevant(
-        query,
-        "Fabric Seasons is a mod for Minecraft that adds seasons and seasonal world behavior.",
+def test_removed_github_source_reuse_is_not_restored() -> None:
+    root = Path(__file__).resolve().parents[1] / "minecraft_mod_ai"
+    assert not (root / "pre_design_external_source_contract.py").exists()
+    assert not (root / "reuse_template_pipeline.py").exists()
+
+    from minecraft_mod_ai.pre_design_research_pipeline import _pre_design_brief
+    brief = _pre_design_brief("minecraft seasonal crop planting")
+    assert brief["domains"][0]["domain_id"] == "request"
+    assert {"github", "curseforge", "modrinth"}.isdisjoint(
+        brief["domains"][0]["providers"]
     )
