@@ -54,12 +54,9 @@ def test_target_binding_invalidates_old_work_order():
     assert baseline.fingerprint() != changed_loader.fingerprint()
 
 
-@pytest.mark.parametrize("route", ["dependency", "source_reuse"])
-def test_unverified_external_route_cannot_claim_implementation(route):
-    with pytest.raises(ValueError, match="SOURCE_PROOF_REQUIRED"):
-        _order(route=route)
-    proof = _order(route=route, evidence_id="target-verified-receipt:001")
-    assert proof.source_route == route
+def test_external_donor_routes_are_not_accepted():
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        _order(route="source_reuse", evidence_id="legacy-donor")
 
 
 def test_duplicate_or_missing_behavior_is_never_dropped():
