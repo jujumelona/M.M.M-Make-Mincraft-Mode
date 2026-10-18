@@ -538,24 +538,9 @@ def compose(router, spec, *, source_context=(), construction_context=None,
                     router, member_task, context, owner_name=name)
                 member_invocations[member_task.owner_symbol] = set()
             except ValueError as exc:
-                from .java_region_parser import JavaRegionParseError
-                # Syntax/frame errors are model-authored code failures, not
-                # infrastructure faults. After two direct tries, let the
-                # existing type-checked operation author build this member.
-                recoverable = (isinstance(exc, JavaRegionParseError)
-                               or str(exc).startswith((
-                                   "CONSTRUCTION_DIRECT_TARGET_SYMBOL_INVALID",
-                                   "CONSTRUCTION_UNIT_",
-                                   "CONSTRUCTION_SOURCE_SIGNATURE_INVALID",
-                               )))
-                if not recoverable:
+                from .construction_source_repair import report_recoverable_direct_failure
+                if not report_recoverable_direct_failure(member_task.owner_symbol, exc):
                     raise
-                print("CONSTRUCTION_AUTHOR_ROUTE_SWITCH: " + json.dumps({
-                    "member": member_task.owner_symbol,
-                    "from": "direct_java", "to": "typed_ir",
-                    "reason": "direct_source_validation_failed",
-                    "diagnostic": str(exc)[:1200],
-                }, ensure_ascii=False), flush=True)
                 direct_candidate = False
         if not direct_candidate:
             # The fallback is not free-form Java regeneration. Every operation

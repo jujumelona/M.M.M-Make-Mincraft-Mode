@@ -358,14 +358,9 @@ def assess_ranked_sources(capability: str, candidates: Sequence[Mapping[str, obj
             host, owner, repository = direct_source_identity(url)
             receipt["repository"] = owner + "/" + repository
             if url in cache:
-                previous = cache[url]
+                from .source_inspection_recovery import cached_archive
+                revision, archive = cached_archive(cache, url)
                 receipt["source_cache_hits"] = 1
-                # Archive size/safety failures are reproducible for this same
-                # official source URL in one run. Do not download again for
-                # each differently worded requirement.
-                if isinstance(previous, SourceInspectionError):
-                    raise SourceInspectionError(str(previous))
-                revision, archive = previous
             else:
                 receipt["source_fetches"] = 1
                 with httpx.Client() as client:
@@ -447,12 +442,8 @@ def assess_ranked_sources(capability: str, candidates: Sequence[Mapping[str, obj
         except Exception as exc:
             receipt["inspection_status"] = "inspection_error"
             receipt["error"] = str(exc)[:250] if isinstance(exc, SourceInspectionError) else type(exc).__name__
-            # Cache only deterministic archive validation failures. Network,
-            # authentication and timeout errors remain independently retryable.
-            if (isinstance(exc, SourceInspectionError)
-                    and str(exc).startswith(("SOURCE_ARCHIVE_", "SOURCE_MEMBER_"))
-                    and url not in cache):
-                cache[url] = exc
+            from .source_inspection_recovery import cache_archive_failure
+            cache_archive_failure(cache, url, exc)
         finally:
             receipt["elapsed_ms"] = round(1000 * (time.monotonic() - started), 1)
         result.append(receipt)

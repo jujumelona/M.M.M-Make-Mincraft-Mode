@@ -321,22 +321,12 @@ def _compose_claimed(router, spec, context, behaviors, package, name, owner,
                                             {**metadata, "source": candidate}, owner=name)
                 break
             except ValueError as error:
-                if candidate is None and isinstance(getattr(error, "failed_source", None), str):
-                    candidate = error.failed_source
-                if isinstance(candidate, str):
-                    from .first_pass_java_declarations import _record_source_failure
-                    _record_source_failure(candidate, kind="method", name=method,
-                                           owner=name, phase="direct_feature", exc=error)
+                from .construction_source_repair import preserve_failed_java, java_correction_message
+                candidate = preserve_failed_java(error, candidate, kind="method", name=method,
+                                                 owner=name, phase="direct_feature")
                 if behavior_id in saved or attempt + 1 >= attempts:
                     raise
-                messages.append({"role": "user", "content": json.dumps({
-                    "repair_current_declaration": True,
-                    "error": str(error),
-                    "previous_candidate": candidate,
-                    "required_signature": frame["prefix"],
-                    "required_suffix": frame["suffix"],
-                    "instruction": "Return the whole corrected method, keep the exact frame.",
-                }, ensure_ascii=False)})
+                messages.append(java_correction_message(error, candidate, frame, feature=True))
         if member is None:
             raise ValueError("CONSTRUCTION_DIRECT_BODY_NOT_VALIDATED")
         if behavior_id not in saved:
