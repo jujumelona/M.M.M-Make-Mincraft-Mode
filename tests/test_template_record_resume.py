@@ -150,7 +150,7 @@ def test_rejected_duplicate_never_poison_singleton_resume(monkeypatch):
         index = len(context["accepted_records"])
         fields = tuple(response_schema["required"])
         field_calls.append((index, ",".join(fields)))
-        return {field: _record(index if corrected else 0)[field]}
+        return {field: _record(index if corrected else 0)[field] for field in fields}
 
     monkeypatch.setattr(single, "generate_fixed_template_value", generate_field)
     kwargs = {
