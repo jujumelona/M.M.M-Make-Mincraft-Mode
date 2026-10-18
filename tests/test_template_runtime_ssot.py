@@ -16,7 +16,6 @@ HOST_WORKFLOWS = (
     "asset/workflow",
     "integration/workflow",
     "validation/workflow",
-    "reuse/workflow",
 )
 
 SYSTEM_FIELDS = {
@@ -126,11 +125,10 @@ def test_workflow_sequences_have_one_authority() -> None:
     assert not (PKG / "research_template_pipeline.py").exists()
     assert not (TEMPLATES / "research" / "workflow.yaml").exists()
 
-    reuse = (PKG / "reuse_template_pipeline.py").read_text(encoding="utf-8")
-    assert "REUSE_SEQUENCE" not in reuse
-    assert 'load_template("reuse/workflow")' in reuse
-    workflow = yaml.safe_load((TEMPLATES / "reuse" / "workflow.yaml").read_text(encoding="utf-8"))
-    assert "standalone" not in workflow
+    # Donor/reuse execution was deliberately removed. Never restore a second
+    # source-reuse planning authority to satisfy this regression suite.
+    assert not (PKG / "reuse_template_pipeline.py").exists()
+    assert not (TEMPLATES / "reuse" / "workflow.yaml").exists()
 
 
 def test_host_workflow_children_are_manifests_not_dead_prompts() -> None:
