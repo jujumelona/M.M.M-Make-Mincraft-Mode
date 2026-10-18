@@ -369,8 +369,15 @@ def assess_ranked_sources(capability: str, candidates: Sequence[Mapping[str, obj
                         else _gitlab_archive(client, owner, repository)
                     )
                 cache[url] = (revision, archive)
+            # A Korean capability may have no English lexical tokens while
+            # CurseForge's target-filtered official record provides the actual
+            # English mod title/description. These are search hints ONLY; the
+            # reviewer must still inspect the selected Java implementation.
             search_terms = tuple(str(term) for term in
                                  (candidate.get("matched_queries") or ()) if str(term).strip())
+            title = str(candidate.get("title") or "").strip()[:90]
+            summary = str(candidate.get("summary") or "").strip()[:140]
+            search_terms += tuple(term for term in (title, summary) if term)
             observation = inventory_from_archive(
                 capability, archive, search_terms=search_terms,
             )
