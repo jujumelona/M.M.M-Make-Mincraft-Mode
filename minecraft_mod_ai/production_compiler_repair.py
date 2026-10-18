@@ -85,7 +85,7 @@ def repair_failed_build_with_model(
         source = (root / paths[0]).read_text(encoding="utf-8")
         record_authored_source_calls(
             root, paths[0], source,
-            selected_ports=[], installed_donor_calls=[], source_kind="direct",
+            source_kind="direct",
         )
         receipt["status"] = "COMPILER_REPAIRED"
         receipt["repaired_files"] = paths
