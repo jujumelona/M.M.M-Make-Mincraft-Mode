@@ -62,6 +62,11 @@ def test_direct_method_authors_one_whole_method_and_resumes(tmp_path, monkeypatc
                 'System.out.println("registered");'
             ) + source_frame["suffix"]
 
+    # Production always passes pinned classpath; these author-only unit tests
+    # mock compiler proof rather than requiring JDK 25 and a real Fabric JAR.
+    from minecraft_mod_ai import javac_bridge
+    ctx["java_classpath"] = ["/pinned/fabric.jar"]
+    monkeypatch.setattr(javac_bridge, "analyze_java", lambda *_a, **_k: [])
     router = Router()
     first = compose_method(router, task, ctx, owner_name="AlienRegistry")
     second = compose_method(router, task, ctx, owner_name="AlienRegistry")
@@ -96,6 +101,9 @@ def test_direct_field_generates_whole_initialized_declaration(tmp_path, monkeypa
             assert "empty_value" not in source_frame
             return source_frame["prefix"] + '"alien"' + source_frame["suffix"]
 
+    from minecraft_mod_ai import javac_bridge
+    ctx["java_classpath"] = ["/pinned/fabric.jar"]
+    monkeypatch.setattr(javac_bridge, "analyze_java", lambda *_a, **_k: [])
     router = FieldRouter()
     source = compose_method(router, task, ctx, owner_name="AlienRegistry")
     assert router.calls == 1
