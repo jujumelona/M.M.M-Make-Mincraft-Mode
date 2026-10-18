@@ -145,23 +145,29 @@ def _check_entrypoint(source: str, spec: dict) -> None:
     if lifecycle is None:
         raise ConstructionFileError('CONSTRUCTION_FILE_ENTRYPOINT_METHOD_MISSING')
     for behavior in behaviors:
-        key = str(behavior['behavior_id'])
-        registrar = 'registerBehavior' + hashlib.sha256(key.encode('utf-8')).hexdigest()[:20]
-        member_body = _method_body(code, registrar)
-        if member_body is None or not member_body.strip():
-            raise ConstructionFileError('CONSTRUCTION_FILE_BEHAVIOR_METHOD_MISSING: ' + key)
-        # An empty statement or an immediate bare return is not gameplay.
-        # Compile-time validity alone cannot certify behavior, but it must not
-        # admit the most obvious no-effect registrar implementation.
-        if re.fullmatch(r'(?:\s*return\s*;|\s*;)*\s*', member_body):
-            raise ConstructionFileError('CONSTRUCTION_FILE_BEHAVIOR_NOOP: ' + key)
-        if not re.search(r'\bthis\s*\.\s*' + registrar + r'\s*\(\s*\)\s*;', lifecycle):
-            raise ConstructionFileError('CONSTRUCTION_FILE_BEHAVIOR_REGISTRATION_MISSING: ' + key)
-        # Downstream construction_coverage.record_constructed_requirement
-        # requires these literal call/registration strings. Match that exact
-        # receipt contract here, before persisting a misleading checkpoint.
-        if registrar + '()' not in code or 'this.' + registrar + '();' not in lifecycle:
-            raise ConstructionFileError('CONSTRUCTION_FILE_COVERAGE_SIGNATURE_MISMATCH: ' + key)
+        _check_behavior_registration(code, lifecycle, behavior)
+
+
+def _check_behavior_registration(code: str, lifecycle: str, behavior: dict) -> None:
+    """Enforce method, nonempty effect, lifecycle call, and coverage receipt."""
+    key = str(behavior['behavior_id'])
+    registrar = 'registerBehavior' + hashlib.sha256(key.encode('utf-8')).hexdigest()[:20]
+    member_body = _method_body(code, registrar)
+    if member_body is None or not member_body.strip():
+        raise ConstructionFileError('CONSTRUCTION_FILE_BEHAVIOR_METHOD_MISSING: ' + key)
+    # An empty statement or an immediate bare return is not gameplay.
+    # Compile-time validity alone cannot certify behavior, but it must not
+    # admit the most obvious no-effect registrar implementation.
+    if re.fullmatch(r'(?:\s*return\s*;|\s*;)*\s*', member_body):
+        raise ConstructionFileError('CONSTRUCTION_FILE_BEHAVIOR_NOOP: ' + key)
+    if not re.search(r'\bthis\s*\.\s*' + registrar + r'\s*\(\s*\)\s*;', lifecycle):
+        raise ConstructionFileError('CONSTRUCTION_FILE_BEHAVIOR_REGISTRATION_MISSING: ' + key)
+    # Downstream construction_coverage.record_constructed_requirement
+    # requires these literal call/registration strings. Match that exact
+    # receipt contract here, before persisting a misleading checkpoint.
+    if registrar + '()' not in code or 'this.' + registrar + '();' not in lifecycle:
+        raise ConstructionFileError('CONSTRUCTION_FILE_COVERAGE_SIGNATURE_MISMATCH: ' + key)
+
 
 
 def _read_materialized_context(context: dict, *, target_path: str, source_context=()) -> list[dict]:
