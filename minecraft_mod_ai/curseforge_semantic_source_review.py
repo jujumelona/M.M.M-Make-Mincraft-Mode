@@ -166,7 +166,9 @@ def _safe_archive_files(data: bytes) -> dict[str, bytes]:
                                      "NOTICE", "NOTICE.TXT", "NOTICE.MD", "COPYRIGHT"}
                         and "/" not in path)):
                 if path.endswith(".java") and sum(k.endswith(".java") for k in extracted) >= _MAX_JAVA_FILES:
-                    continue
+                    # Silently discarding later source files can turn an
+                    # incomplete donor inventory into a false closure proof.
+                    raise SourceInspectionError("SOURCE_ARCHIVE_JAVA_FILE_LIMIT")
                 with archive.open(item, "r") as fh:
                     contents = fh.read(item.file_size + 1)
                 if len(contents) != item.file_size:
