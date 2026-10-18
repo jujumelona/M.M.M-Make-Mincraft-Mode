@@ -581,8 +581,6 @@ def _compile_content_artifact_graph(
     adapter: Any,
     mod_id: str,
     package_name: str,
-    source_rag: Any = None,
-    source_reuse: Mapping[str, Any] | None = None,
 ) -> tuple[tuple[ProductionModule, ...], tuple[AssetRequest, ...], tuple[Any, ...]]:
     """Restore canonical content facts and lower them through the artifact graph."""
 
@@ -906,13 +904,14 @@ def _compile_content_artifact_graph(
             sort_keys=True,
             separators=(",", ":"),
         )
-        from .authored_source_rag import VerifiedSourceRAG, bind_owner_source_context
-
-        bind_owner_source_context(
-            bindings, owner=owner, request_scope=plan.request_scope,
-            reuse_plan=source_reuse or {}, rag=source_rag or VerifiedSourceRAG(),
-            requirement=str(spec_input.get("requirement") or ""),
-        )
+        requests = [
+            {"requirement_id": row["requirement_id"], "statement": row["statement"]}
+            for row in plan.request_scope.get("requirements", ())
+            if row.get("requirement_id") in owner.config.get("requirement_refs", ())
+        ]
+        if requests:
+            bindings["request_features_json"] = json.dumps(
+                requests, ensure_ascii=False, separators=(",", ":"))
 
     module_ids = {module.module_id for module in modules}
     from .artifact_job import validate_artifact_job_graph
@@ -1050,98 +1049,9 @@ def compile_authored_design(
         ))
         design["authored_plan"] = plan.to_dict()
 
-    # External-source discovery/proof is a host decision and must be explicitly
-    # attached to the production artifact, not left in an unrelated research log.
-    # Resolve after immutable target binding for AUTO; reuse planning receipts
-    # only when they were proven against the exact selected target.
-    from .authored_reuse_bridge import (
-        authored_capability_graph,
-        resolve_authored_source_reuse,
-        source_candidate_fingerprint,
-        source_discovery_algorithm_version,
-        source_reference_fingerprint,
-    )
-    from .research_reuse_candidates import ensure_authored_source_handoff
-
-    content_design, candidate_rows = ensure_authored_source_handoff(
-        content_design, router=router, prompt=plan.requested_prompt,
-    )
-    if content_design != plan.content_design:
-        from dataclasses import replace
-
-        plan = replace(plan, content_design=content_design)
-        design["authored_plan"] = plan.to_dict()
-
-    # Validate user/debug references before consulting a prior reuse decision.
-    # A changed selected reference is a real search-input change.
-    # A debug fixture may preselect reference-only repository identities.
-    # The normal inspector must still establish closure/license/compile proof;
-    # preselection is never a donor admission or a reusable proof receipt.
-    debug_selection = content_design.get("_debug_reference_selection")
-    reference_repositories: list[str] = []
-    if isinstance(debug_selection, Mapping):
-        if debug_selection.get("policy") != "reference_only_until_host_inspection_and_proof":
-            raise ValueError("DEBUG_REFERENCE_SELECTION_POLICY_INVALID")
-        rows = debug_selection.get("reference_candidates", ())
-        if not isinstance(rows, list):
-            raise ValueError("DEBUG_REFERENCE_CANDIDATES_INVALID")
-        for row in rows:
-            if (
-                not isinstance(row, Mapping)
-                or row.get("selection_role") != "reference_only"
-                or not isinstance(row.get("repository"), str)
-            ):
-                raise ValueError("DEBUG_REFERENCE_CANDIDATE_INVALID")
-            reference_repositories.append(row["repository"])
-    expected_reference_fingerprint = source_reference_fingerprint(
-        tuple(reference_repositories)
-    )
-    expected_candidate_fingerprint = source_candidate_fingerprint(candidate_rows)
-    source_reuse = content_design.get("_host_source_reuse")
-    exact_reuse_target = {
-        "minecraft_version": str(adapter.minecraft_version),
-        "loader": str(adapter.loader),
-    }
-    expected_reuse_graph = authored_capability_graph(
-        plan.requested_prompt, plan.structured_sections,
-        request_scope=plan.request_scope,
-    )
-    cached_graph = (
-        source_reuse.get("capability_graph")
-        if isinstance(source_reuse, Mapping) else None
-    )
-    # A matching Minecraft version is NOT proof that a cached search used
-    # the current plan or retrieval algorithm. Invalidate old all-fresh
-    # receipts after the structured-intent search upgrade.
-    if (
-        not isinstance(source_reuse, Mapping)
-        or source_reuse.get("bound_target") != exact_reuse_target
-        or source_reuse.get("pre_design_candidates_sha256") != expected_candidate_fingerprint
-        or source_reuse.get("discovery_algorithm_version") != source_discovery_algorithm_version()
-        or source_reuse.get("reference_repositories_sha256") != expected_reference_fingerprint
-        or not isinstance(cached_graph, Mapping)
-        or any(
-            cached_graph.get(key) != expected_reuse_graph.get(key)
-            for key in ("nodes", "search_terms", "retrieval_policy_version")
-        )
-    ):
-        # Reuse real research candidates without re-fetching their catalogues.
-        source_reuse = resolve_authored_source_reuse(
-            plan.requested_prompt,
-            plan.structured_sections,
-            minecraft_version=exact_reuse_target["minecraft_version"],
-            loader=exact_reuse_target["loader"],
-            reference_repositories=tuple(reference_repositories),
-            request_scope=plan.request_scope,
-            repository_candidates=candidate_rows,
-        )
-    if source_reuse.get("schema_version") != "mmm/grounded-repository-reuse-plan-v2":
-        raise ValueError("AUTHORED_SOURCE_REUSE_CONTRACT_INVALID")
-    design["_host_source_reuse"] = deepcopy(dict(source_reuse))
-
     # Repair saved plans without re-authoring unrelated gameplay semantics.
     from .authored_ui_action_repair import repair_authored_ui_action_plan
-    plan = repair_authored_ui_action_plan(router, plan, source_reuse)
+    plan = repair_authored_ui_action_plan(router, plan)
     design["authored_plan"] = plan.to_dict()
 
     # The conversational plan preserves the user's source without making
@@ -1165,53 +1075,41 @@ def compile_authored_design(
         production_state_section=production_state_section,
         deterministic_module_kinds=deterministic_backend_capabilities(adapter),
     )
-    from .authored_source_rag import verified_source_rag
-
-    with verified_source_rag(
-        source_reuse, adapter=adapter, mod_id=base.spec.mod_id,
+    content_modules, content_assets, artifact_jobs = _compile_content_artifact_graph(
+        plan, adapter=adapter, mod_id=base.spec.mod_id,
         package_name=base.spec.package_name,
-    ) as source_rag:
-        content_modules, content_assets, artifact_jobs = _compile_content_artifact_graph(
-            plan, adapter=adapter, mod_id=base.spec.mod_id,
-            package_name=base.spec.package_name, source_rag=source_rag,
-            source_reuse=source_reuse,
-        )
-        from .authored_feature_implementation import compile_request_feature_jobs
+    )
+    from .authored_feature_implementation import compile_request_feature_jobs
 
-        feature_modules, feature_jobs = compile_request_feature_jobs(
-            plan, adapter=adapter, mod_id=base.spec.mod_id,
-            package_name=base.spec.package_name, content_modules=content_modules,
-            content_jobs=artifact_jobs, source_rag=source_rag, source_reuse=source_reuse,
-            runtime_modules=modules,
-        )
-        feature_units = []
-        feature_lookup = {module.module_id: module for module in feature_modules}
-        from .task_template_catalog import canonical_specification_input
+    feature_modules, feature_jobs = compile_request_feature_jobs(
+        plan, adapter=adapter, mod_id=base.spec.mod_id,
+        package_name=base.spec.package_name, content_modules=content_modules,
+        content_jobs=artifact_jobs, runtime_modules=modules,
+    )
+    feature_units = []
+    feature_lookup = {module.module_id: module for module in feature_modules}
+    from .task_template_catalog import canonical_specification_input
 
-        for job in feature_jobs:
-            inputs = job.deterministic_inputs['_canonical_inputs']
-            specification = canonical_specification_input(job.canonical_leaf, inputs)
-            if specification.get('language') != 'java':
-                raise ValueError(f"REQUEST_FEATURE_JAVA_SPECIFICATION_REQUIRED: {job.job_id}")
-            feature_units.append({
-                'module_id': job.owner_module, 'job_id': job.job_id,
-                'path': specification['target_path'],
-                'symbol': specification['bindings']['request_feature_entrypoint'],
-                'requirement_ids': list(feature_lookup[job.owner_module].config['requirement_refs']),
-                'canonical_leaf': job.canonical_leaf,
-                'implementation_id': job.implementation_id, 'context_id': job.context_id,
-                'canonical_input_sha256': _sha256_json(inputs),
-                'source_text_sha256': manifest['source_text_sha256'],
-            })
-        manifest = {key: value for key, value in manifest.items() if key != 'manifest_sha256'}
-        manifest['request_feature_units'] = feature_units
-        manifest['manifest_sha256'] = _sha256_json(manifest)
-        content_modules = (*content_modules, *feature_modules)
-        artifact_jobs = (*artifact_jobs, *feature_jobs)
-        if source_rag.license_notices:
-            design["_host_source_reuse"]["reference_license_notices"] = dict(source_rag.license_notices)
-        if source_rag.reference_failures:
-            design["_host_source_reuse"]["reference_failures"] = list(source_rag.reference_failures)
+    for job in feature_jobs:
+        inputs = job.deterministic_inputs['_canonical_inputs']
+        specification = canonical_specification_input(job.canonical_leaf, inputs)
+        if specification.get('language') != 'java':
+            raise ValueError(f"REQUEST_FEATURE_JAVA_SPECIFICATION_REQUIRED: {job.job_id}")
+        feature_units.append({
+            'module_id': job.owner_module, 'job_id': job.job_id,
+            'path': specification['target_path'],
+            'symbol': specification['bindings']['request_feature_entrypoint'],
+            'requirement_ids': list(feature_lookup[job.owner_module].config['requirement_refs']),
+            'canonical_leaf': job.canonical_leaf,
+            'implementation_id': job.implementation_id, 'context_id': job.context_id,
+            'canonical_input_sha256': _sha256_json(inputs),
+            'source_text_sha256': manifest['source_text_sha256'],
+        })
+    manifest = {key: value for key, value in manifest.items() if key != 'manifest_sha256'}
+    manifest['request_feature_units'] = feature_units
+    manifest['manifest_sha256'] = _sha256_json(manifest)
+    content_modules = (*content_modules, *feature_modules)
+    artifact_jobs = (*artifact_jobs, *feature_jobs)
     typed_ids = {module.module_id for module in modules}
     duplicate_content_ids = sorted(
         typed_ids & {module.module_id for module in content_modules}
