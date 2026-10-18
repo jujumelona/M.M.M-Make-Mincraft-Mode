@@ -130,6 +130,7 @@ def resolve_authored_source_reuse(
     request_scope: Mapping[str, Any] | None = None,
     repository_candidates: Sequence[Mapping[str, Any]] = (),
     requested_curseforge_dependencies: Sequence[Mapping[str, Any]] = (),
+    prior_reuse_plan: Mapping[str, Any] | None = None,
     router: Any | None = None,
 ) -> dict[str, Any]:
     from .grounded_source_reuse import build_repository_reuse_plan
@@ -139,6 +140,32 @@ def resolve_authored_source_reuse(
         "plan_sha256": "sha256:" + _sha(graph),
         "capability_graph": graph,
     }
+    # Reusing pinned source observations is safe only for EXACTLY the same
+    # authored capability graph, platform and source-discovery contract.
+    # It eliminates the second CurseForge search on resume; execution still
+    # independently re-downloads pinned bytes and proves installation.
+    target = {"minecraft_version": minecraft_version, "loader": loader}
+    if isinstance(prior_reuse_plan, Mapping) and (
+        prior_reuse_plan.get("schema_version") == "mmm/grounded-repository-reuse-plan-v2"
+        and prior_reuse_plan.get("source_plan_sha256") == frozen["plan_sha256"]
+        and prior_reuse_plan.get("capability_graph") == graph
+        and prior_reuse_plan.get("bound_target") == target
+        and prior_reuse_plan.get("pre_design_candidates_sha256")
+            == source_candidate_fingerprint(repository_candidates)
+        and prior_reuse_plan.get("discovery_algorithm_version")
+            == source_discovery_algorithm_version()
+        and prior_reuse_plan.get("requested_curseforge_dependencies") == [
+            dict(x) for x in requested_curseforge_dependencies if isinstance(x, Mapping)
+        ]
+    ):
+        from copy import deepcopy
+        cached = deepcopy(dict(prior_reuse_plan))
+        cached["planning_cache_reused"] = True
+        cached["incremental_source_reuse_costs"] = {
+            "source_downloads": 0, "model_judgement_calls": 0,
+            "inspected_candidate_count": 0,
+        }
+        return cached
     design = {
         "_pre_retrieval_plan": frozen,
         "_requested_curseforge_dependencies": [
