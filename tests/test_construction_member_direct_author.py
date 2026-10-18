@@ -210,7 +210,8 @@ def test_invalid_java_from_router_is_passed_to_repair_not_none(tmp_path, monkeyp
     assert router.calls == 2
     assert 'System.out.println("fixed");' in fixed
     assert len(failures) == 1
-    assert failures[0][0].endswith("}" + "}")
+    assert failures[0][0].startswith("private void registerAliens()")
+    assert failures[0][0].rstrip().endswith("}")
     assert failures[0][1]["phase"] == "direct_author"
 
 
