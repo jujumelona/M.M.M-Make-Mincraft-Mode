@@ -503,32 +503,42 @@ class ModelRouter:
                 "data_name": data_name,
                 "failure": type(underlying).__name__,
                 "from": "native_java_gbnf",
-                "to": "bounded_json_source",
-                "max_source_chars": 2400,
+                "to": "bounded_raw_java",
+                "output_token_ceiling": 4096,
             }), flush=True)
-            bounded_schema = {
-                "type": "object", "additionalProperties": False,
-                "properties": {"source": {
-                    "type": "string", "minLength": 1, "maxLength": 2400,
-                }},
-                "required": ["source"],
-            }
-            alternate = self.generate_structured_data(
-                role,
+            # A 2400-character JSON string is NOT atomic under MMM's escaped
+            # JSON worst-case budget (6 * 2400 > 4096); that route can never
+            # pass the real schema preflight. Instead make one bounded, plain
+            # Java decode without the recursive GBNF, then enforce the signed
+            # prefix/suffix before downstream Java admission/Gradle proof.
+            repair_messages = fit_messages_to_context(
                 [*messages, {"role": "system", "content": (
-                    "The native grammar was unable to finish the declaration. "
-                    "Produce one complete Java declaration only inside the JSON "
-                    "field source (maximum 2400 characters). It MUST start with "
-                    "the exact host-provided prefix and end with its exact suffix. "
-                    "Keep all original gameplay effects, no stubs or invented APIs. "
-                    "Do not repeat identifiers or output any additional members. "
-                    "Required prefix: " + str(source_frame.get("prefix", "")) +
-                    "\\nRequired suffix: " + str(source_frame.get("suffix", ""))
+                    "Produce exactly one complete raw Java declaration for the "
+                    "existing host-owned signature, without JSON, Markdown, "
+                    "reasoning, packages or any additional class/member. "
+                    "The previous Java grammar became trapped repeating a token. "
+                    "Do not repeat any identifier unnecessarily; implement all "
+                    "requested effects using actual inspected APIs. "
+                    "Required exact prefix: " + str(source_frame.get("prefix", "")) +
+                    "\\nRequired exact suffix: " + str(source_frame.get("suffix", ""))
                 )}],
-                data_name=data_name + ".bounded_json_fallback",
-                parameters=bounded_schema,
+                config=config, tools=(),
             )
-            result = alternate["source"]
+            recovery = GenerationRequest(
+                messages=repair_messages,
+                response_format="text",
+                tools=(),
+                metadata={
+                    "role": role,
+                    "mmm_data_page": data_name + ".bounded_java_fallback",
+                    "mmm_strict_source_data": True,
+                    "mmm_native_java_recovery": True,
+                    "mmm_output_token_ceiling": 4096,
+                    "mmm_force_non_thinking": True,
+                },
+            )
+            with self._generation_scope(config):
+                result = adapter.generate(recovery)
             if (not isinstance(result, str)
                     or not result.startswith(str(source_frame.get("prefix", "")))
                     or not result.endswith(str(source_frame.get("suffix", "")))):
