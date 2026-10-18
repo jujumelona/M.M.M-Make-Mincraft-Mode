@@ -25,7 +25,6 @@ def test_feature_glue_uses_registered_java_and_real_fabric_startup():
     from minecraft_mod_ai.authored_feature_implementation import (
         compile_request_feature_jobs,
     )
-    from minecraft_mod_ai.authored_source_rag import VerifiedSourceRAG
     from minecraft_mod_ai.host_version_catalog import host_target
 
     adapter = host_target("26.1.2")
@@ -43,7 +42,7 @@ def test_feature_glue_uses_registered_java_and_real_fabric_startup():
     })
     modules, jobs = compile_request_feature_jobs(
         plan, adapter=adapter, mod_id="space", package_name="test.space",
-        content_modules=(), content_jobs=(), source_rag=VerifiedSourceRAG(), source_reuse={},
+        content_modules=(), content_jobs=(),
     )
     assert modules[0].kind == "integration"
     assert modules[0].config["requirement_refs"] == ["request_planet"]
@@ -86,7 +85,6 @@ def test_explicit_gui_feature_uses_existing_screen_without_extra_server_class():
     from minecraft_mod_ai.authored_feature_implementation import (
         compile_request_feature_jobs,
     )
-    from minecraft_mod_ai.authored_source_rag import VerifiedSourceRAG
 
     plan = AuthoredPlan("Shipyard screen", "Saved", request_scope={"requirements": [{
         "requirement_id": "screen", "statement": "Show shipyard screen", "implementation_role": "interface",
@@ -94,6 +92,6 @@ def test_explicit_gui_feature_uses_existing_screen_without_extra_server_class():
     modules, jobs = compile_request_feature_jobs(
         plan, adapter=SimpleNamespace(), mod_id="space", package_name="test.space",
         content_modules=(SimpleNamespace(kind="gui", config={"requirement_refs": ["screen"]}),),
-        content_jobs=(), source_rag=VerifiedSourceRAG(), source_reuse={},
+        content_jobs=(),
     )
     assert modules == jobs == ()
