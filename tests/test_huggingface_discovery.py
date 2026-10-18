@@ -11,18 +11,18 @@ from minecraft_mod_ai.spec import SpecValidationError
 def _client(handler) -> EcosystemDiscoveryClient:
     return EcosystemDiscoveryClient(transport=httpx.MockTransport(handler))
 
-def test_target_profile_binds_numeric_cursors_too() -> None:
+def test_removed_github_discovery_is_rejected_without_http_requests() -> None:
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        return httpx.Response(200, json={'total_count': 2, 'items': []})
+        raise AssertionError("removed GitHub discovery must never issue HTTP")
+
     client = _client(handler)
-    first = client.search('github', 'runtime', target_profile='ai_runtime', limit=1)
-    assert first['next_cursor'].startswith('page:2:')
-    with pytest.raises(SpecValidationError, match='target profile'):
-        client.search('github', 'runtime', target_profile='minecraft_mod', cursor=first['next_cursor'], limit=1)
-    assert len(requests) == 1
+    with pytest.raises(SpecValidationError, match="Unsupported ecosystem discovery provider"):
+        client.search("github", "runtime", target_profile="ai_runtime")
+    assert requests == []
+
 
 def test_huggingface_inspection_rejects_revision_mismatch() -> None:
     calls = 0
