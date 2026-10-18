@@ -5,8 +5,8 @@ from __future__ import annotations
 Transport keepalive activity is not model progress. The watchdog is reset only by
 prompt processing, decode/tool deltas, or terminal completion events. Lifecycle logging
 must also distinguish a real request failure from Python's normal generator close after
-the consumer has already observed ``data: [DONE]``. Periodic output and an absolute wall limit must both constrain
-decoding; an output token allowance alone cannot prove semantic progress.
+the consumer has already observed ``data: [DONE]``. Periodic output and a native Java grammar wall ceiling constrain
+pathological decoding; ordinary bounded planning retains semantic liveness.
 """
 
 import json
@@ -285,10 +285,13 @@ def _completion_wall_timeout_seconds(payload: Mapping[str, Any]) -> float | None
     )
     if os.environ.get(name, "").strip():
         return _positive_env_float(name, default)
-    # A finite token allowance is *not* an execution wall bound: a broken
-    # grammar can emit the same token for minutes and keep refreshing its
-    # parent work-unit deadline. Every request must have an absolute ceiling.
-    return default
+    # Native Java GBNF has an exceptionally wide recursive production and
+    # can loop on one valid identifier for the entire 30k-token allowance.
+    # Only that surface requires a fixed wall: applying it to every 8192-token
+    # planning page falsely terminates healthy long plans.
+    if isinstance(payload.get("grammar"), str) and payload["grammar"]:
+        return default
+    return None if _completion_token_budget(payload) is not None else default
 
 
 def _semantic_idle_timeout_seconds(
