@@ -28,10 +28,16 @@ def _source_link(record: Mapping[str, Any]) -> dict[str, Any] | None:
     parts = [part for part in parsed.path.split("/") if part]
     if parsed.hostname.casefold() not in {"github.com", "gitlab.com"} or len(parts) < 2:
         return None
-    owner, name = parts[:2]
+    if parsed.hostname.casefold() == "gitlab.com":
+        parts = parts[:parts.index("-")] if "-" in parts else parts
+        if len(parts) < 2:
+            return None
+        owner, name = "/".join(parts[:-1]), parts[-1]
+    else:
+        owner, name = parts[:2]
     name = name.removesuffix(".git")
     if not all(value and value.replace("-", "").replace("_", "").replace(".", "").isalnum()
-               for value in (owner, name)):
+               for value in (*owner.split("/"), name)):
         return None
     repository = owner + "/" + name
     return {
@@ -76,7 +82,7 @@ def merge_repository_candidates(existing: Sequence[Mapping[str, Any]] | None,
                    for value in row.get("source_ids", ())):
             continue
         name = str(row.get("repository") or "").strip()
-        if not name or name.count("/") != 1:
+        if not name or "/" not in name or any(not part for part in name.split("/")):
             continue
         if name not in result:
             result[name] = dict(row)
