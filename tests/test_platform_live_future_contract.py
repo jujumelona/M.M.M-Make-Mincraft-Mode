@@ -98,6 +98,7 @@ def test_live_validator_does_not_guess_future_pack_format_or_legacy_paths(
     spec = SimpleNamespace(
         platform=SimpleNamespace(),
         mod_id="future_probe",
+        contents=(),
     )
 
     report = ProjectValidator().validate(root, spec)

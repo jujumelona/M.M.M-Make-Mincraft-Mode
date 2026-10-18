@@ -208,7 +208,16 @@ def test_execution_manifest_reuse_stays_before_build_repair_mutation() -> None:
         if (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name)
-            and node.func.id == "run_build_repair_checkpoint"
+            and node.func.id in {"run_build_repair_checkpoint", "run_named_checkpoint"}
+            and (
+                node.func.id == "run_build_repair_checkpoint"
+                or any(
+                    keyword.arg == "stage"
+                    and isinstance(keyword.value, ast.Constant)
+                    and keyword.value.value == "build"
+                    for keyword in node.keywords
+                )
+            )
         ):
             build_call_line = node.lineno
 
