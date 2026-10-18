@@ -74,3 +74,24 @@ def test_unrelated_first_five_allow_only_one_extra_semantic_window(monkeypatch):
     assert calls == {"model": 2, "pages": [0, 5]}
     assert rows[0]["semantic"]["selected_symbol"] == "Teleport"
     assert rows[0]["model_judgement_calls"] == 2
+
+
+def test_korean_capability_passes_curated_curseforge_english_hint(monkeypatch):
+    seen = []
+    monkeypatch.setattr(review, "_github_archive",
+                        lambda *_a: ("c" * 40, b"source"))
+    def inventory(feature, _archive, search_terms=()):
+        seen.append((feature, tuple(search_terms)))
+        return {"status": "source_unavailable", "license_spdx": "MIT",
+                "evidence": [], "java_file_count": 0}
+    monkeypatch.setattr(review, "inventory_from_archive", inventory)
+    review.assess_ranked_sources(
+        "순간 이동 포탈",
+        [{"source_url": "https://github.com/team/teleport",
+          "source_id": "curseforge:32",
+          "title": "Teleport Portal",
+          "summary": "Teleport players between locations"}],
+    )
+    assert seen and seen[0][0] == "순간 이동 포탈"
+    assert "Teleport Portal" in seen[0][1]
+    assert "Teleport players between locations" in seen[0][1]
