@@ -12,7 +12,9 @@ curseforge_source_attestation donor_source_authority grounded_source_reuse
 planning_mod_discovery research_reuse_candidates reuse_adapters reuse_artifacts
 reuse_build_verifier reuse_discovery reuse_license reuse_planner reuse_proof_executor
 reuse_template_pipeline source_inspection_recovery source_intent_aliases
-source_reuse_evidence source_transplant
+source_reuse_evidence source_transplant repository_artifact_index
+capability_implementation_locator versioned_mod_reference_catalog
+versioned_mod_reference_resolver versioned_mod_reference_retriever
 """.split())
 
 
@@ -29,6 +31,12 @@ def test_no_production_import_of_removed_donor_module():
     for path in sorted(PACKAGE.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    module = alias.name.split(".")[-1]
+                    if module in REMOVED:
+                        offenders.append(f"{path.relative_to(ROOT)}:{node.lineno}:{module}")
+                continue
             if not isinstance(node, ast.ImportFrom):
                 continue
             module = (node.module or "").split(".")[-1]
