@@ -24,7 +24,6 @@ jobs:
             'minecraft_mod_ai/resource_asset_production.py:600:640' \
             'minecraft_mod_ai/resource_asset_production.py:885:945' \
             'minecraft_mod_ai/artifact_graph_executor.py:195:300' \
-            'minecraft_mod_ai/source_transplant.py:720:855' \
             'minecraft_mod_ai/parallel_runtime_contract.py:1:125' \
             'minecraft_mod_ai/parallel_runtime_contract.py:200:240' \
             'minecraft_mod_ai/parallel_runtime_contract.py:295:330' \
