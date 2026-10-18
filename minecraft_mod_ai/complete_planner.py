@@ -143,16 +143,6 @@ class CompleteGameDesignPlanner:
             "restored_checkpoint": restored_sections,
         }, ensure_ascii=False), flush=True)
 
-        # The saved plan must carry the real, host-owned catalogue evidence
-        # discovered for this exact prompt. No model is called by this handoff,
-        # and provider failures are recorded rather than blocking authorship.
-        # Full code inspection, license admission and compile proof remain
-        # production-only decisions.
-        from .research_reuse_candidates import ensure_authored_source_handoff
-
-        research_design, _research_candidates = ensure_authored_source_handoff(
-            {}, router=self.router, prompt=prompt,
-        )
         text = request_scope_context(request_scope).strip() + "\n\n" + render_structured_sections(structured_sections)
         return AuthoredPlan(
             requested_prompt=prompt,
@@ -160,12 +150,12 @@ class CompleteGameDesignPlanner:
             existing_input_sha256=existing_input_sha256,
             media_paths=tuple(str(path) for path in media_paths),
             structured_sections=structured_sections,
-            content_design=research_design,
+            content_design={},
             request_scope=request_scope,
         )
 
     def _author_for_production(self, plan: AuthoredPlan) -> AuthoredPlan:
-        """Use the saved design to select reusable code and author execution.
+        """Use the saved design to author executable code directly.
 
         Do not gate creation of the user-facing plan on availability of a
         specific state, currency, gameplay capability or Java backend.
@@ -186,12 +176,10 @@ class CompleteGameDesignPlanner:
         from .request_scope import request_scope_context
 
         request_scope = plan.request_scope
-        from .research_reuse_candidates import ensure_authored_source_handoff
-
-        prior_content_design, research_candidates = ensure_authored_source_handoff(
-            plan.content_design if isinstance(plan.content_design, Mapping) else {},
-            router=self.router, prompt=prompt,
-        )
+        prior_content_design = dict(plan.content_design or {})
+        for stale in ("_host_source_reuse", "_pre_design_source_handoff",
+                      "_requested_curseforge_dependencies", "repository_candidates"):
+            prior_content_design.pop(stale, None)
         adapter = self.adapter
         deterministic_module_kinds = self.deterministic_module_kinds
         budget = PlannerBudget()
@@ -225,64 +213,11 @@ class CompleteGameDesignPlanner:
         # commands, resources or gameplay mechanics into the user's design.
         text = request_scope_context(request_scope) + render_structured_sections(structured_sections)
 
-        # Research/inspection happens before content identities are authored:
-        # verified source APIs are model-readable bounded facts, while unproved
-        # repository search results never enter the local model's prompt.
-        reuse_receipt = None
-        # A capability-only adapter is not an immutable platform lock.
-        # The later production resolver owns AUTO-target binding. Never use a
-        # partial adapter to fabricate target coordinates or trigger discovery.
-        if target_version and target_loader:
-            from .authored_reuse_bridge import (
-                resolve_authored_source_reuse, verified_reuse_context,
-            )
-
-            reuse_receipt = resolve_authored_source_reuse(
-                prompt, structured_sections, router=self.router,
-                minecraft_version=target_version,
-                loader=target_loader,
-                request_scope=request_scope,
-                prior_reuse_plan=prior_content_design.get("_host_source_reuse")
-                if isinstance(prior_content_design.get("_host_source_reuse"), Mapping)
-                else None,
-                **({"repository_candidates": research_candidates} if research_candidates else {}),
-                **({"requested_curseforge_dependencies":
-                    prior_content_design.get("_requested_curseforge_dependencies", ())}
-                   if isinstance(prior_content_design, Mapping)
-                   and prior_content_design.get("_requested_curseforge_dependencies")
-                   else {}),
-            )
-            text += verified_reuse_context(reuse_receipt)
-
         content_catalog = content_request_catalog(
             structured_sections,
             requested_prompt=prompt,
             request_scope=request_scope,
         )
-        if reuse_receipt is not None:
-            from copy import deepcopy
-
-            source_apis = [
-                {
-                    "capability": row.get("capability"),
-                    "source_id": row.get("source_id"),
-                    "verified_symbols": list(
-                        row.get("proof_receipt", {}).get("verified_symbols", ())
-                    )[:16],
-                    "residual_work": row.get("proof_receipt", {}).get("work_order"),
-                }
-                for row in reuse_receipt.get("capabilities", ())
-                if isinstance(row, Mapping)
-                and row.get("mode") == "source_transplant"
-                and isinstance(row.get("proof_receipt"), Mapping)
-            ]
-            for item in content_catalog["requirements"]:
-                context = item.get("design_context")
-                if isinstance(context, Mapping):
-                    item["design_context"] = {
-                        **deepcopy(dict(context)),
-                        "host_verified_source_apis": source_apis,
-                    }
         content_design: dict[str, Any] = {}
         if content_catalog["requirements"]:
             from .content_design_graph import compile_content_graph
@@ -320,7 +255,7 @@ class CompleteGameDesignPlanner:
         from copy import deepcopy
 
         for field in (
-            "_pre_design_research", "_pre_design_source_handoff", "_planning_state",
+            "_pre_design_research", "_planning_state",
         ):
             prior = prior_content_design.get(field)
             if isinstance(prior, Mapping):
@@ -337,9 +272,6 @@ class CompleteGameDesignPlanner:
             )
             checkpoint.save_content_design(content_catalog, content_design)
         runtime_owners = content_design.get("_request_runtime_owners", ())
-
-        if reuse_receipt is not None:
-            content_design["_host_source_reuse"] = reuse_receipt
 
         kinds = deterministic_module_kinds
         if kinds is None and adapter is not None:

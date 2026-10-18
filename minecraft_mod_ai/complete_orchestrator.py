@@ -78,7 +78,6 @@ from .final_artifact import (
     build_authored_design_coverage_receipt,
     build_debug_fixture_coverage_receipt,
     build_requirement_coverage_receipt,
-    load_or_empty_reuse_manifest,
     verify_debug_fixture_source,
     verify_final_mod_artifact,
     verify_runtime_artifact_binding,
@@ -489,74 +488,6 @@ class CompleteProductionOrchestrator:
         module_receipts.extend(collision_receipts)
         project_root = run_named_checkpoint(ledger, 'prepare-project', stage='prepare', input_value={'graph_hash': work_plan.graph_hash, 'existing_input_sha256': approved.existing_input_sha256}, action=lambda: self._prepare_project(approved, run_root=run_root, existing_input=existing_input), encode=lambda value: {'project_root': str(value)}, decode=lambda receipt: Path(str(receipt['project_root'])).resolve(), validate_cached=self._valid_project_root)
         self._write_complete_approval(project_root, approved)
-        # A source-reuse proof is only meaningful if its verified Java/resources
-        # actually enter the project being compiled. Stage proof-bound files
-        # before generation and reject collisions or missing dependencies.
-        authored_reuse = approved.game_design.get("_host_source_reuse")
-        if isinstance(authored_reuse, dict):
-            from .authored_reuse_bridge import materialize_verified_authored_sources
-
-            bound = authored_reuse.get("bound_target")
-            if not isinstance(bound, dict):
-                raise CompleteProductionError("SOURCE_REUSE_TARGET_RECEIPT_MISSING")
-            approved_target = {
-                "minecraft_version": str(spec.platform.minecraft_version),
-                "loader": str(spec.platform.loader),
-            }
-            if bound != approved_target:
-                raise CompleteProductionError(
-                    "SOURCE_REUSE_APPROVED_TARGET_MISMATCH: the donor proof must "
-                    "match the immutable approved Minecraft version and loader."
-                )
-            from .curseforge_reuse_production import certify_sources_at_production
-            from .platform_catalog import adapter_for_target
-
-            source_adapter = adapter_for_target(
-                str(bound.get("minecraft_version") or ""),
-                str(bound.get("loader") or ""),
-            )
-            target_context = {
-                "minecraft_version": source_adapter.minecraft_version,
-                "loader": source_adapter.loader,
-                "mappings": source_adapter.yarn_mappings,
-                "mappings_kind": source_adapter.mappings_kind,
-                "java_version": source_adapter.java_version,
-                "fabric_loader": source_adapter.fabric_loader,
-                "fabric_api": source_adapter.fabric_api,
-                "fabric_loom": source_adapter.fabric_loom,
-                "gradle": source_adapter.gradle,
-                "target_package": spec.package_name,
-                "target_modid": spec.mod_id,
-            }
-            # Runtime copy, not a mutation of the approved proposal hash.
-            # Unproved donors remain fresh and may be implemented normally.
-            authored_reuse = certify_sources_at_production(
-                authored_reuse, project_root=project_root,
-                target_context=target_context,
-            )
-            # Durable evidence is written before installation and content
-            # generation. A later failure cannot masquerade as a reuse success.
-            reuse_dir = project_root / ".minecraft_ai" / "reuse"
-            reuse_dir.mkdir(parents=True, exist_ok=True)
-            (reuse_dir / "runtime-proof.json").write_text(
-                json.dumps(authored_reuse, ensure_ascii=False, indent=2, sort_keys=True)
-                + "\n", encoding="utf-8",
-            )
-            installed_reuse = materialize_verified_authored_sources(
-                str(project_root),
-                authored_reuse,
-                minecraft_version=str(bound.get("minecraft_version") or ""),
-                loader=str(bound.get("loader") or ""),
-                package_name=spec.package_name,
-                mod_id=spec.mod_id,
-            )
-            module_receipts.append(installed_reuse)
-            if installed_reuse.get('dependency_count', 0):
-                # Local host-installed CurseForge JARs are NOT portable release
-                # dependencies. Keep them visible as unresolved until an
-                # authenticated remote dependency acquisition/redistribution
-                # policy is implemented; passing local Gradle alone is not proof.
-                unresolved.append('external-dependency:nonportable-local-jar')
         self._succeed_work_node(ledger, 'prepare-project', {'schema_version': 'mmm/work-node-receipt-v1', 'status': 'SUCCEEDED', 'project_root': str(project_root)})
         generation = self._execute_generation_work(approved=approved, ordered=ordered, work_plan=work_plan, ledger=ledger, project_root=project_root, run_root=run_root, options=options, router=router)
         mark_post_generation()
@@ -1362,27 +1293,6 @@ class CompleteProductionOrchestrator:
             json.dumps(coverage_receipt, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
             encoding='utf-8',
         )
-        reuse_manifest = load_or_empty_reuse_manifest(project_root, spec.mod_id)
-        source_reuse_audit = None
-        if isinstance(authored_reuse, dict):
-            from .authored_reuse_bridge import audit_authored_source_reuse
-
-            source_reuse_audit = audit_authored_source_reuse(
-                authored_reuse,
-                installed_donor_count=int(installed_reuse["donor_count"]),
-            )
-            (metadata_root / "source-reuse-audit.json").write_text(
-                json.dumps(source_reuse_audit, ensure_ascii=False, indent=2, sort_keys=True)
-                + "\n",
-                encoding="utf-8",
-            )
-        if not (project_root / 'reuse-manifest.json').is_file() and not (
-            project_root / '.minecraft_ai/reuse-manifest.json'
-        ).is_file():
-            (metadata_root / 'reuse-manifest.json').write_text(
-                json.dumps(reuse_manifest, ensure_ascii=False, indent=2, sort_keys=True) + '\n',
-                encoding='utf-8',
-            )
         release_ready = (
             not normalized_unresolved
             and quality_passed
@@ -1483,7 +1393,6 @@ class CompleteProductionOrchestrator:
                         'jar-validation.json': jar_validation,
                         'requirement-coverage.json': coverage_receipt,
                         'quality-report.json': quality_report,
-                        'source-reuse-audit.json': source_reuse_audit,
                     },
                 ),
             ),
@@ -1534,7 +1443,6 @@ class CompleteProductionOrchestrator:
                 'coverage_sha256': str(coverage_receipt.get('coverage_sha256') or ''),
                 'runtime_receipt_sha256': _stable_payload_sha256(persisted_runtime_receipt),
                 'build_receipt_sha256': _stable_payload_sha256(build_receipt),
-                'reuse_manifest_sha256': _stable_payload_sha256(reuse_manifest),
                 'quality_report_sha256': _stable_payload_sha256(quality_report),
                 'resource_pack_sha256': str(
                     resource_pack_bundle.get('sha256') if resource_pack_bundle else ''
@@ -1665,8 +1573,6 @@ class CompleteProductionOrchestrator:
                 'proposal_hash': approved.calculate_hash(),
                 'artifact_sha256': str(artifact_receipt.get('sha256') or ''),
                 'coverage_sha256': str(coverage_receipt.get('coverage_sha256') or ''),
-                'reuse_manifest_sha256': _stable_payload_sha256(reuse_manifest),
-                'source_reuse_audit_sha256': _stable_payload_sha256(source_reuse_audit),
                 'build_receipt_sha256': _stable_payload_sha256(build_receipt),
                 'runtime_receipt_sha256': _stable_payload_sha256(persisted_runtime_receipt),
                 'resource_pack_sha256': str(
@@ -1693,21 +1599,10 @@ class CompleteProductionOrchestrator:
                         downloadable_target,
                         artifact_receipt=artifact_receipt,
                         requirement_coverage=coverage_receipt,
-                        reuse_manifest=reuse_manifest,
                         build_receipt=build_receipt,
                         runtime_receipt=persisted_runtime_receipt,
                         proposal_hash=approved.calculate_hash(),
                         additional_artifacts={
-                            **(
-                                {
-                                    'source-reuse-audit.json': {
-                                        'path': str(metadata_root / 'source-reuse-audit.json'),
-                                        'sha256': file_sha256(metadata_root / 'source-reuse-audit.json'),
-                                    }
-                                }
-                                if source_reuse_audit is not None
-                                else {}
-                            ),
                             **(
                                 {
                                     'generated-resource-pack.zip': resource_pack_bundle

@@ -11,12 +11,10 @@ shared deadline executor. Provider/source retrieval remains independently bounde
 transport timeouts, while deterministic output order is reconstructed from authored specs.
 """
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
-from .curseforge_catalog import curseforge_api_key
 from .deadline_executor import iter_completed_with_deadlines
-from .planning_mod_discovery import CATALOG_PROVIDERS
 
 
 def _text(value: Any) -> str:
@@ -33,29 +31,13 @@ def _providers(domain: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(values))
 
 
-def _domain_spec_occurrences(
-    domain: Mapping[str, Any],
-) -> list[tuple[str, tuple[str, ...]]]:
-    """Return authored query occurrences without collapsing duplicate user intent."""
-
-    providers = _providers(domain)
-    catalog = domain.get("catalog_queries")
-    groups = [(domain.get("queries", []), providers)]
-    if isinstance(catalog, list):
-        groups = [
-            (catalog, tuple(p for p in providers if p in CATALOG_PROVIDERS)),
-            (
-                domain.get("queries", []),
-                tuple(p for p in providers if p not in CATALOG_PROVIDERS),
-            ),
-        ]
-    return [
-        (_text(query), allowed)
-        for queries, allowed in groups
-        if allowed
-        for query in (queries if isinstance(queries, list) else [])
-        if _text(query)
-    ]
+def _domain_spec_occurrences(domain: Mapping[str, Any]) -> list[tuple[str, tuple[str, ...]]]:
+    """Only authored queries against official APIs and the current project."""
+    requested = _providers(domain)
+    allowed = tuple(p for p in requested if p in {"official_docs", "project_rag"})
+    if not allowed:
+        allowed = ("official_docs", "project_rag")
+    return [(_text(query), allowed) for query in domain.get("queries", []) if _text(query)]
 
 
 def _domain_specs(domain: Mapping[str, Any]) -> list[tuple[str, tuple[str, ...]]]:
@@ -64,109 +46,18 @@ def _domain_specs(domain: Mapping[str, Any]) -> list[tuple[str, tuple[str, ...]]
     return list(dict.fromkeys(_domain_spec_occurrences(domain)))
 
 
-def _run_catalogs(
-    backend: Any,
-    query: str,
-    allowed: set[str],
-    *,
-    minecraft_version: str | None = None,
-    loader: str | None = None,
-) -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]]]:
-    """Run catalogs in authority order; leaf source retrieval owns parallelism."""
-
-    calls: dict[str, Callable[[], tuple[list[dict[str, Any]], dict[str, Any]]]] = {}
-    receipts: dict[str, Any] = {}
-    errors: list[dict[str, Any]] = []
-
-    if "curseforge" in allowed and curseforge_api_key():
-        # Bound target values come from the current approved request, NEVER a
-        # release constant. Do not retry unfiltered if a target lookup is empty.
-        target = {"minecraft_version": minecraft_version} if minecraft_version else {}
-        if minecraft_version and loader:
-            target["loader"] = loader
-        calls["curseforge"] = lambda: backend._search_curseforge(query, **target)
-    else:
-        if "curseforge" in allowed:
-            receipts["curseforge"] = {
-                "provider": "curseforge", "status": "not_configured",
-                "result_count": 0,
-            }
-
-    results: dict[str, list[dict[str, Any]]] = {}
-    for provider, call in calls.items():
-        try:
-            found, receipt = call()
-            results[provider] = list(found)
-            receipts[provider] = receipt
-        except Exception as exc:
-            receipt = backend._error(provider, exc)
-            receipts[provider] = receipt
-            errors.append(receipt)
-            results[provider] = []
-
-    records = results.get("curseforge", [])
-    return records, receipts, errors
-
-
-def _dedupe(records: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    output: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for raw in records:
-        record = dict(raw)
-        key = _text(record.get("source_id") or record.get("url"))
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        output.append(record)
-    return output
-
-
-def _query_bundle(
-    backend: Any,
-    router: Any,
-    query: str,
-    providers: tuple[str, ...],
-) -> dict[str, Any]:
-    # Only CurseForge is allowed for external mod catalogues.
-    allowed = (set(providers) & {"official_docs", "project_rag"}) | {"curseforge"}
-    records: list[dict[str, Any]] = []
-    receipts: dict[str, Any] = {}
-    errors: list[dict[str, Any]] = []
-
-    catalog_allowed = bool(allowed & {"curseforge", "modrinth"})
-    catalog_records: list[dict[str, Any]] = []
+def _query_bundle(backend: Any, router: Any, query: str,
+                  providers: tuple[str, ...]) -> dict[str, Any]:
+    """Consult target-appropriate official API and local project only."""
+    allowed = set(providers) & {"official_docs", "project_rag"}
+    if not allowed:
+        allowed = {"official_docs", "project_rag"}
     versions = backend._versions(router)
-    requested_version = str(getattr(router, "_mmm_requested_minecraft_version", "") or "").strip()
-    loader = str(getattr(router, "_mmm_requested_loader" if requested_version else "_mmm_existing_loader", "") or "").strip()
-    if catalog_allowed:
-        catalog_records, catalog_receipts, catalog_errors = _run_catalogs(
-            backend, query, allowed, minecraft_version=versions[0] if versions else None,
-            loader=loader or None,
-        )
-        records.extend(catalog_records)
-        receipts.update(catalog_receipts)
-        errors.extend(catalog_errors)
-
-    project_rag = (
-        backend._search_authoritative_catalog(query, versions)
-        if allowed & {"official_docs", "project_rag"}
-        else {
-            "schema_version": "mmm/project-rag-query-v3",
-            "sources": [],
-            "errors": [],
-        }
-    )
-    code_rag = (
-        backend._search_code_index(backend._existing_code_index(), query)
-        if "project_rag" in allowed
-        else {
-            "schema_version": "mmm/code-rag-query-v3",
-            "status": "not_requested",
-            "hits": [],
-        }
-    )
-
-    unique = _dedupe(records)
+    project_rag = backend._search_authoritative_catalog(query, versions)
+    code_rag = (backend._search_code_index(backend._existing_code_index(), query)
+                if "project_rag" in allowed else
+                {"schema_version": "mmm/code-rag-query-v3",
+                 "status": "not_requested", "hits": []})
     return {
         "query": query,
         "query_sha256": backend._sha256_text(query),
@@ -174,18 +65,8 @@ def _query_bundle(
         "code_rag": code_rag,
         "external_rag": {
             "schema_version": "mmm/external-pre-design-discovery-v4",
-            "sources": unique,
-            "errors": errors,
-            "providers": receipts,
-            "provider_policy": {
-                "catalog_first": catalog_allowed,
-                "catalog_order": [
-                    provider
-                    for provider in ("curseforge",)
-                    if provider in allowed
-                ],
-            },
-
+            "sources": [], "errors": [], "providers": {},
+            "provider_policy": {"catalog_first": False, "catalog_order": []},
         },
     }
 

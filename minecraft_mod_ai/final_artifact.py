@@ -1287,26 +1287,6 @@ def build_requirement_coverage_receipt(
     return core
 
 
-def empty_reuse_manifest(project_name: str) -> dict[str, Any]:
-    return {
-        "schema_version": "mmm/reuse-manifest-v1",
-        "project_name": project_name,
-        "total_reused_files": 0,
-        "reused_file_count": 0,
-        "donor_count": 0,
-        "bundle_count": 0,
-        "donors": [],
-        "bundles": [],
-        "files": [],
-    }
-
-
-def load_or_empty_reuse_manifest(
-    project_root: str | Path, project_name: str
-) -> dict[str, Any]:
-    return _load_reuse_manifest(_project_root(project_root), project_name)
-
-
 def write_build_artifact_bundle(
     output_zip: str | Path,
     *,
@@ -1400,7 +1380,6 @@ def write_downloadable_bundle(
     *,
     artifact_receipt: Mapping[str, Any],
     requirement_coverage: Mapping[str, Any],
-    reuse_manifest: Mapping[str, Any],
     build_receipt: Mapping[str, Any],
     runtime_receipt: Mapping[str, Any],
     additional_artifacts: Mapping[str, Mapping[str, Any]] | None = None,
@@ -1487,7 +1466,6 @@ def write_downloadable_bundle(
         receipts = {
             "artifact-receipt.json": dict(artifact_receipt),
             "requirement-coverage.json": dict(requirement_coverage),
-            "reuse-manifest.json": dict(reuse_manifest),
             "build-receipt.json": dict(build_receipt),
             "runtime-receipt.json": dict(runtime_receipt),
         }
@@ -1576,7 +1554,6 @@ def bundle_from_pipeline_result(
         raise FinalArtifactError(
             "Requirement coverage is not bound to this pipeline result proposal."
         )
-    reuse = _load_reuse_manifest(project_root, artifact["mod_id"])
     build_payload = _read_optional_json(project_root / ".minecraft_ai/build-receipt.json")
     if build_payload is None:
         build_payload = dict(build)
@@ -1598,7 +1575,6 @@ def bundle_from_pipeline_result(
         bundle_dir,
         artifact_receipt=artifact,
         requirement_coverage=coverage,
-        reuse_manifest=reuse,
         build_receipt=build_payload,
         runtime_receipt=runtime_payload,
         additional_artifacts=additional_artifacts,
@@ -1886,20 +1862,6 @@ def _coverage_from_project(
     )
 
 
-def _load_reuse_manifest(project_root: Path, project_name: str) -> dict[str, Any]:
-    candidates = (
-        project_root / "reuse-manifest.json",
-        project_root / ".minecraft_ai/reuse-manifest.json",
-    )
-    for path in candidates:
-        value = _read_optional_json(path)
-        if value is not None:
-            if value.get("schema_version") != "mmm/reuse-manifest-v1":
-                raise FinalArtifactError("Reuse manifest has an unsupported schema.")
-            return value
-    return empty_reuse_manifest(project_name)
-
-
 __all__ = [
     "FinalArtifactError",
     "FinalModArtifactReceipt",
@@ -1907,8 +1869,6 @@ __all__ = [
     "build_authored_design_coverage_receipt",
     "build_requirement_coverage_receipt",
     "bundle_from_pipeline_result",
-    "empty_reuse_manifest",
-    "load_or_empty_reuse_manifest",
     "normalize_sha256",
     "select_production_jar",
     "sha256_file",

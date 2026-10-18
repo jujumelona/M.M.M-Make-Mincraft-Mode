@@ -48,28 +48,11 @@ and bounded source excerpts, alongside assigned state and atomic mutation record
 Independent ownership calls use the measured native model slots and retain input
 order. Execution reads pure record/source views without importing planning models.
 
-Production searches related mod source for each feature, pins and inspects candidate
-code, adapts compatible slices, verifies them against the selected target, and gives
-the remaining work to implementation. Source discovery can find older mod versions;
-target compatibility is checked when adapting and compiling. A pinned commit archive
-is downloaded and its files are checked against the immutable Git tree before source
-analysis. Short authored feature queries precede classifier aliases; shared searches
-are scored separately for each feature, and untried ranked candidates are retained.
-Candidates are inspected and proved in small ranked batches; a usable result avoids
-downloading the rest of the frontier. Failed batches continue to later candidates.
-Compound feature queries also try underlying source nouns, with plural/compound
-matching. Every catalogue candidate needs feature evidence; bounded project bodies
-recover context missing from short descriptions without accepting unrelated mods.
-
-Each implementation task receives only its related source excerpts and original
-feature. Target-proven slices are installed; older licensed slices that need migration
-are supplied with the failed compilation diagnostics for target adaptation. Original
-gameplay features also receive startup-bound Java callback/glue jobs, including
-features that need no new content registry. Explicit UI features retain their screen
-owner. Search hits are never reported as installed reusable code. A production error
-leaves the saved plan intact.
-Unavailable optional migration references are recorded and skipped so fresh
-implementation can continue; installed donor source still requires its pinned files.
+Production generates feature code directly from the selected Minecraft/Fabric
+API and the current project. The planning and execution path does not retrieve
+external mod candidates, transplant donor source or install source-reuse proofs.
+Compiler diagnostics retain the failed Java source for repair. Real build,
+GameTest and runtime evidence remain independent acceptance gates.
 
 Successful model calls emit a compact completion line; failures and periodic progress
 remain visible. Set `MMM_LLAMA_LIFECYCLE_VERBOSE=1` for detailed transport lifecycle logs.
