@@ -217,7 +217,11 @@ class ModIdRewriteAdapter:
         donor_modid = str(target_context.get("donor_modid") or "").strip()
         return bool(target_modid) and (
             bool(donor_modid)
-            or any("Identifier" in content or "mod.json" in path for path, content in files.items())
+            or any(
+                "Identifier" in content or "mod.json" in path
+                or re.match(r"src/(?:main|client)/resources/(?:assets|data)/[a-z0-9_.-]+/", path)
+                for path, content in files.items()
+            )
         )
 
     def apply(
