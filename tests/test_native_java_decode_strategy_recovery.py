@@ -92,3 +92,44 @@ def test_recovery_cannot_bypass_signed_declaration_signature(monkeypatch):
                           "suffix": "}"},
         )
     assert fake.native_calls == fake.json_calls == 1
+
+
+def test_actual_llama_adapter_wraps_stall_in_model_backend_error(monkeypatch):
+    """Production generate_turn wraps the stream exception before router sees it."""
+    from minecraft_mod_ai.model_adapters.base import ModelBackendError
+
+    monkeypatch.setattr(
+        "minecraft_mod_ai.model_context_budget.fit_messages_to_context",
+        lambda messages, **_kwargs: messages,
+    )
+    underlying = LlamaDegenerateOutputError("LLAMA_DEGENERATE_REPEATED_OUTPUT")
+    fake = FakeRouter(ModelBackendError(
+        role="coder", model_id="mimo", cause=underlying,
+    ))
+    result = router_module.ModelRouter.generate_java_source(
+        fake, "coder", [], data_name="construction_unit_foo",
+        source_frame={"kind": "method", "prefix": "public void foo() {",
+                      "suffix": "}"},
+    )
+    assert result == fake.returned_source
+    assert fake.native_calls == 1
+    assert fake.json_calls == 1
+
+
+def test_plain_model_backend_error_not_misclassified_as_decode_loop(monkeypatch):
+    from minecraft_mod_ai.model_adapters.base import ModelBackendError
+    monkeypatch.setattr(
+        "minecraft_mod_ai.model_context_budget.fit_messages_to_context",
+        lambda messages, **_kwargs: messages,
+    )
+    fake = FakeRouter(ModelBackendError(
+        role="coder", model_id="mimo", cause=RuntimeError("connection denied"),
+    ))
+    with pytest.raises(ModelBackendError):
+        router_module.ModelRouter.generate_java_source(
+            fake, "coder", [], data_name="construction_unit_foo",
+            source_frame={"kind": "method", "prefix": "public void foo() {",
+                          "suffix": "}"},
+        )
+    assert fake.native_calls == 1
+    assert fake.json_calls == 0
