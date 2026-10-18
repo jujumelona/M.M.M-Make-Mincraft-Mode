@@ -1,8 +1,8 @@
 """Pre-authored Debug input. No planner/model call is made to construct it.
 
 This is a realistic *simulated* authored plan, not a claim that a local model
-or a donor repository has produced or verified these choices. Production still
-owns platform binding, source-reuse inspection/proofs and every build gate.
+or another source has verified these choices. Production still
+owns platform binding, compilation and runtime verification.
 """
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any
 
 from .authored_plan import AuthoredPlan
-from .authored_reuse_bridge import authored_capability_graph
 from .authored_structured_design import normalize_structured_sections
 from .implementation_fact import ImplementationFact
 from .planning_detail_slots import DETAIL_RECORDS
@@ -35,10 +34,6 @@ DEBUG_PREBUILT_TEXT = """# Crystal crafting – pre-authored production-debug sc
 2. Craft one crystal_block from four crystal_fragments in a 2×2 shaped recipe.
 3. Generate the item/block registry, models, localization and recipe through the
    canonical content artifact graph, not through a bypassed fixture source writer.
-## Source-reuse selection
-Search for Fabric item, block and crafting-recipe examples. Candidates are
-reference-only until host inspection, license checks and target-specific proof.
-An unverified repository is NEVER treated as a compilable donor.
 ## Acceptance
 Confirm item and block registry identities; confirm the crafting data and its
 dependencies; run the normal source, Java, Gradle, packaging and runtime gates.
@@ -78,14 +73,6 @@ def build_prebuilt_debug_plan() -> AuthoredPlan:
                 },
                 "registries": {
                     "name": "crystal_fragment and crystal_block registry identities",
-                },
-            },
-        ),
-        "reuse_assessment": _records(
-            "reuse_assessment",
-            {
-                "adaptations": {
-                    "part": "minecraft fabric item block crafting recipe registration",
                 },
             },
         ),
@@ -151,25 +138,11 @@ def build_prebuilt_debug_plan() -> AuthoredPlan:
             source_clause="Craft crystal_block using four crystal_fragment items.",
         ).to_dict(),
     ]
-    graph = authored_capability_graph(DEBUG_PREBUILT_PROMPT, structured)
     content_design = {
         "_mod_id": "mmm_debug_crystal",
         "modules": modules,
         "assets": [],
         "_implementation_facts": facts,
-        "_debug_reference_selection": {
-            "policy": "reference_only_until_host_inspection_and_proof",
-            "search_terms": graph["search_terms"],
-            "verification_stage": "production_after_target_binding",
-            "donor_claims": [],
-            "reference_candidates": [
-                {
-                    "repository": "FabricMC/fabric-example-mod",
-                    "selection_role": "reference_only",
-                    "purpose": "Example Fabric item/block registration; compatibility must be proven",
-                }
-            ],
-        },
         "acceptance_tests": [
             "Item and block registration are generated and loadable.",
             "Crafting recipe produces crystal_block from four crystal_fragments.",
