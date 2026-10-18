@@ -464,8 +464,60 @@ class ModelRouter:
                       "mmm_java_source_frame": dict(source_frame),
                       "mmm_strict_source_data": True, "mmm_force_non_thinking": True},
         )
-        with self._generation_scope(config):
-            return adapter.generate(request)
+        try:
+            with self._generation_scope(config):
+                return adapter.generate(request)
+        except Exception as exc:
+            # The Java grammar can legally cycle on one identifier forever.
+            # Do not replay the same GBNF sampler after a periodic decode or
+            # its absolute wall ceiling. Switch ONCE to a schema-bounded Java
+            # declaration; the host still validates the exact frame and
+            # compiles the result before publication.
+            from .llama_completion_liveness_contract import (
+                LlamaCompletionDeadlineExceeded, LlamaDegenerateOutputError,
+            )
+            if not isinstance(exc, (LlamaCompletionDeadlineExceeded,
+                                    LlamaDegenerateOutputError)):
+                raise
+            from .model_concurrency import raise_if_model_execution_cancelled
+            raise_if_model_execution_cancelled()
+            print("CONSTRUCTION_DECODE_STRATEGY_SWITCH: " + json.dumps({
+                "data_name": data_name,
+                "failure": type(exc).__name__,
+                "from": "native_java_gbnf",
+                "to": "bounded_json_source",
+                "max_source_chars": 2400,
+            }), flush=True)
+            bounded_schema = {
+                "type": "object", "additionalProperties": False,
+                "properties": {"source": {
+                    "type": "string", "minLength": 1, "maxLength": 2400,
+                }},
+                "required": ["source"],
+            }
+            alternate = self.generate_structured_data(
+                role,
+                [*messages, {"role": "system", "content": (
+                    "The native grammar was unable to finish the declaration. "
+                    "Produce one complete Java declaration only inside the JSON "
+                    "field source (maximum 2400 characters). It MUST start with "
+                    "the exact host-provided prefix and end with its exact suffix. "
+                    "Keep all original gameplay effects, no stubs or invented APIs. "
+                    "Do not repeat identifiers or output any additional members. "
+                    "Required prefix: " + str(source_frame.get("prefix", "")) +
+                    "\\nRequired suffix: " + str(source_frame.get("suffix", ""))
+                )}],
+                data_name=data_name + ".bounded_json_fallback",
+                parameters=bounded_schema,
+            )
+            result = alternate["source"]
+            if (not isinstance(result, str)
+                    or not result.startswith(str(source_frame.get("prefix", "")))
+                    or not result.endswith(str(source_frame.get("suffix", "")))):
+                raise ModelConfigurationError(
+                    "CONSTRUCTION_BOUNDED_SOURCE_SIGNATURE_INVALID"
+                ) from exc
+            return result
 
     def generate_tool_decision(
         self,
