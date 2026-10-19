@@ -54,7 +54,15 @@ class FileAPIEvidence:
 
     def source_owners(self, source, diagnostic):
         imports = {}
-        for reference in re.findall(r'\bimport\s+(?:static\s+)?([\w.$]+)(?:\.\*)?\s*;', source):
+        package = re.search(r'\bpackage\s+([\w.]+)\s*;', source)
+        package_name = package.group(1) if package else ''
+        wildcard_scopes = []
+        pattern = r'\bimport\s+(static\s+)?([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)(\.\*)?\s*;'
+        for is_static, reference, wildcard in re.findall(pattern, source):
+            if wildcard:
+                if not is_static or self._resolve(reference):
+                    wildcard_scopes.append(reference)
+                continue
             resolved = self._resolve(reference)
             if not resolved:
                 # Recover a wrong mappings import only when the actual target
@@ -70,9 +78,19 @@ class FileAPIEvidence:
             first, _, rest = reference.partition('.')
             resolved = self._resolve(imports[first] + ('.' + rest if rest else '')) if first in imports else self._resolve(reference)
             if not resolved and first[:1].isupper():
-                candidates = [name for name in self.simple.get(first, ()) if self._accessible(name)]
-                if len(candidates) == 1:
-                    resolved = self._resolve(candidates[0] + ('.' + rest if rest else ''))
+                # Java's package/import scopes take precedence over unrelated
+                # library classes with the same simple name.
+                if package_name:
+                    resolved = self._resolve(package_name + '.' + reference)
+                if not resolved:
+                    candidates = {self._resolve(scope + '.' + reference) for scope in wildcard_scopes}
+                    candidates.discard(None)
+                    if len(candidates) == 1:
+                        resolved = next(iter(candidates))
+                if not resolved:
+                    candidates = [name for name in self.simple.get(first, ()) if self._accessible(name)]
+                    if len(candidates) == 1:
+                        resolved = self._resolve(candidates[0] + ('.' + rest if rest else ''))
             if resolved:
                 selected.add(resolved)
         locations = set(re.findall(r'\blocation:\s+(?:class|interface|enum)\s+([\w.$]+)', diagnostic))
@@ -109,6 +127,13 @@ class FileAPIEvidence:
                 if not access & 1 and not same_package:
                     continue
                 if row.get('side') == 'CLIENT' and not self.target_path.startswith('src/client/'):
+                    continue
+                signature_types = [row.get('return_type', ''), *parameter_types(row),
+                                   *row.get('functional_parameters', ())]
+                references = {canonical_type_name(value)
+                              for type_ in signature_types
+                              for value in re.findall(r'[A-Za-z_$][\w$]*(?:[./][A-Za-z_$][\w$]*)*', type_)}
+                if any(value in self.classes and not self._accessible(value) for value in references):
                     continue
                 options.append((member_key, row))
 

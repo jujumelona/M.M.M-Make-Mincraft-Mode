@@ -15,7 +15,9 @@ def load_compiler(monkeypatch):
     pkg.__path__ = []
     monkeypatch.setitem(sys.modules,'minecraft_mod_ai',pkg)
     java = types.ModuleType('minecraft_mod_ai.java_lsp')
-    compiler = Path(shutil.which('javac')).resolve()
+    # Path validation is tested without launching a compiler. Real compile
+    # cases below already require javac explicitly through skipif.
+    compiler = Path(shutil.which('javac') or '/unavailable-test-jdk/bin/javac').resolve()
     java._resolve_project_java_home = lambda version, **kw: compiler.parent.parent
     monkeypatch.setitem(sys.modules,'minecraft_mod_ai.java_lsp',java)
     source = Path(__file__).resolve().parents[1]/'minecraft_mod_ai'/'construction_project_compile.py'

@@ -150,3 +150,34 @@ def test_qualified_jdk_builder_still_resolves_when_explicitly_used():
     evidence = _diagnostic_api_evidence(context(),
         'package demo; class T { Object x = java.example12.Builder.create(); }', DIAGNOSTIC)
     assert evidence[0]['verified_class'] == 'java.example12.Builder'
+
+
+def test_wildcard_import_resolves_package_before_global_simple_names():
+    symbols = inventory()
+    other = 'vendor.other.EntityType'
+    symbols[other] = {'kind': 'CLASS', 'owner': other, 'name': 'EntityType', 'access': 1}
+    source = SOURCE.replace(f'import {ENTITY};', 'import net.minecraft.world.entity.*;')
+    evidence = _diagnostic_api_evidence(context(symbols), source, DIAGNOSTIC)
+    assert evidence[0]['verified_class'] == BUILDER
+    assert other not in {row['verified_class'] for row in evidence}
+
+
+def test_same_package_type_resolves_before_global_namesake():
+    symbols = inventory()
+    other = 'vendor.other.EntityType'
+    symbols[other] = {'kind': 'CLASS', 'owner': other, 'name': 'EntityType', 'access': 1}
+    source = SOURCE.replace('package demo;', 'package net.minecraft.world.entity;')
+    source = source.replace(f'import {ENTITY};', '')
+    evidence = _diagnostic_api_evidence(context(symbols), source, DIAGNOSTIC)
+    assert evidence[0]['verified_class'] == BUILDER
+
+
+def test_inaccessible_signature_type_is_not_offered_to_common_author():
+    symbols = inventory()
+    client = 'net.minecraft.client.ClientToken'
+    symbols[client] = {'kind': 'CLASS', 'owner': client, 'name': 'ClientToken', 'access': 1}
+    symbols[BUILDER + '#clientOnly'] = {'kind': 'METHOD', 'owner': BUILDER,
+        'name': 'clientOnly', 'return_type': 'void', 'parameters': [client], 'access': 1}
+    evidence = _diagnostic_api_evidence(context(symbols), SOURCE, DIAGNOSTIC)
+    assert all(member['name'] != 'clientOnly' for row in evidence for member in row['members'])
+
