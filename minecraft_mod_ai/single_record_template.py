@@ -202,6 +202,41 @@ def _deterministic_record_slice(
     Draft202012Validator(schema).validate(part)
     return part
 
+
+def _host_forced_fields(schema: dict[str, Any]) -> dict[str, Any]:
+    """Own singleton output fields on the host, not in model inference."""
+    properties = schema.get("properties", {})
+    forced: dict[str, Any] = {}
+    for field in schema.get("required", ()):
+        child = properties.get(field)
+        if not isinstance(child, Mapping):
+            continue
+        if "const" in child:
+            value = child["const"]
+        elif isinstance(child.get("enum"), list) and len(child["enum"]) == 1:
+            value = child["enum"][0]
+        else:
+            continue
+        Draft202012Validator(child).validate(value)
+        forced[field] = deepcopy(value)
+    return forced
+
+
+def _unforced_record_schema(
+    schema: dict[str, Any], forced: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Keep host-forced fields out of each bounded model response schema."""
+    projected = deepcopy(schema)
+    projected["required"] = [
+        field for field in schema["required"] if field not in forced
+    ]
+    projected["properties"] = {
+        field: child for field, child in schema["properties"].items()
+        if field not in forced
+    }
+    return projected
+
+
 def run_single_record_template(
     router: Any,
     identifier: str,
@@ -248,8 +283,13 @@ def run_single_record_template(
                 "content": json.dumps(normalized_context, ensure_ascii=False),
             },
         ]
-        slices = _atomic_record_schema_slices(schema, identifier=identifier)
-        value: dict[str, Any] = {}
+        forced = _host_forced_fields(schema)
+        model_schema = _unforced_record_schema(schema, forced)
+        slices = (
+            _atomic_record_schema_slices(model_schema, identifier=identifier)
+            if model_schema["required"] else ()
+        )
+        value: dict[str, Any] = deepcopy(forced)
         for part_index, part_schema in enumerate(slices, start=1):
             messages = list(base_messages)
             if value:
