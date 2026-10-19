@@ -73,9 +73,9 @@ def host_add_verified_imports(source: str, *, symbols: dict,
     Any ambiguous simple name is a hard error, not a guess. Unknown names are
     left for javac's concrete error (e.g. same-package sibling declarations).
     """
-    if re.search(r"(?m)^\\s*import\\s", source):
+    if re.search(r"(?m)^\s*import\s", source):
         raise ValueError("JAVA_HOST_IMPORTS_MUST_BE_HOST_OWNED")
-    package_match = re.match(r"\\s*package\\s+([A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)*)\\s*;", source)
+    package_match = re.match(r"\s*package\s+([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*;", source)
     if not package_match:
         raise ValueError("JAVA_HOST_IMPORTS_PACKAGE_REQUIRED")
     package = package_match.group(1)
@@ -99,5 +99,5 @@ def host_add_verified_imports(source: str, *, symbols: dict,
             imports.add(_JDK_IMPORTS[simple])
     if not imports:
         return source
-    header = "\\n".join("import " + item + ";" for item in sorted(imports))
-    return source[:package_match.end()] + "\\n\\n" + header + source[package_match.end():]
+    header = "\n".join("import " + item + ";" for item in sorted(imports))
+    return source[:package_match.end()] + "\n\n" + header + source[package_match.end():]
