@@ -95,6 +95,23 @@ jobs:
           }
 
           targeted_source_tests = {
+              "minecraft_mod_ai/construction_context.py": (
+                  "tests/test_small_model_java_api_context.py",
+              ),
+              "minecraft_mod_ai/construction_file_api_evidence.py": (
+                  "tests/test_small_model_java_api_context.py",
+                  "tests/test_construction_file_api_evidence.py",
+              ),
+              "minecraft_mod_ai/construction_file_prompt.py": (
+                  "tests/test_small_model_java_api_context.py",
+                  "tests/test_construction_file_author.py",
+              ),
+              "minecraft_mod_ai/jar_api_extractor.py": (
+                  "tests/test_small_model_java_api_context.py",
+              ),
+              "minecraft_mod_ai/java_generic_signature.py": (
+                  "tests/test_small_model_java_api_context.py",
+              ),
               "minecraft_mod_ai/complete_planner.py": (
                   "tests/test_typed_plan_authoring.py",
               ),
@@ -225,6 +242,7 @@ jobs:
               "minecraft_mod_ai/java_symbol_resolver",
               "minecraft_mod_ai/java_lsp",
               "minecraft_mod_ai/jar_api_extractor",
+              "minecraft_mod_ai/java_generic_signature",
               "minecraft_mod_ai/jdk_runtime_inventory",
               "minecraft_mod_ai/target_contract",
               "minecraft_mod_ai/generation_target_compile",

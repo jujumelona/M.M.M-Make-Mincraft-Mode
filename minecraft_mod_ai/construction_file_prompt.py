@@ -18,18 +18,38 @@ def file_messages(system, prompt, repair=None):
     if repair:
         repair = deepcopy(repair)
         diagnostics = repair.get('verified_symbols_from_compiler_failure', ())
+        # A repair is about the current complete source and actual diagnostics.
+        # Imported-but-unused classes and dependencies of unused API methods do
+        # not justify growing the next prompt into a server/classpath catalog.
+        from .construction_file_author import _lexical_code
+        source = _lexical_code(str(repair.get('previous_source') or ''))
+        static_imports = re.findall(r'\bimport\s+static\s+([\w.$]+)\.(\*|[\w$]+)\s*;', source)
+        source = re.sub(r'\bimport\s+(?:static\s+)?[\w.*$]+\s*;', '', source)
+        referenced = set(re.findall(r'\b[A-Za-z_$][\w$]*',
+                                   source + '\n' + str(repair.get('error') or '')))
         api = current.setdefault('inspected_target_api', {})
         if isinstance(api, dict):
             # Retain verified contracts in the durable task view. Replacing
             # the latest failed-source message must not erase discovery or
             # contracts learned from an earlier compiler diagnostic.
             records = api.setdefault('class_members', [])
+            for record in records:
+                record.pop('unavailable_requested_members', None)
             by_owner = {row.get('verified_class'): row for row in records}
             for latest in diagnostics:
-                initial = by_owner.get(latest.get('verified_class'))
+                owner = str(latest.get('verified_class') or '')
+                initial = by_owner.get(owner)
                 if initial is None:
+                    static_reference = any(
+                        scope.replace('$', '.') == owner and
+                        (member in referenced or member == '*' and any(
+                            row.get('static') and row.get('name') in referenced
+                            for row in latest.get('members', ())))
+                        for scope, member in static_imports)
+                    if owner.rsplit('.', 1)[-1] not in referenced and not static_reference:
+                        continue
                     records.append(latest)
-                    by_owner[latest.get('verified_class')] = latest
+                    by_owner[owner] = latest
                     continue
                 combined = {_json(row): row for row in latest.get('members', ())}
                 combined.update({_json(row): row for row in initial.get('members', ())})
@@ -42,6 +62,8 @@ def file_messages(system, prompt, repair=None):
                 initial['member_count'] = max(initial.get('member_count', 0),
                     latest.get('member_count', 0), len(combined))
                 initial['members_truncated'] = len(combined) < initial['member_count']
+                if latest.get('unavailable_requested_members'):
+                    initial['unavailable_requested_members'] = latest['unavailable_requested_members']
             if diagnostics:
                 repair['verified_symbol_owners_from_compiler_failure'] = [
                     row.get('verified_class') for row in diagnostics]
@@ -116,8 +138,8 @@ def compact_api_observations(messages):
 
 
 def _record_context_pressure(messages, candidate, boundary, target_path, *, kind):
-    from .root_cause_trace import durable_trace_path, emit_root_cause
     from .planner_trace_artifacts import save_trace_artifact
+    from .root_cause_trace import durable_trace_path, emit_root_cause
 
     details = {'path': target_path, 'input_tokens': boundary.prompt_tokens if boundary is not None else 0,
                'boundary_kind': kind,
@@ -156,8 +178,11 @@ def _completion_retry_candidate(messages, exc, target_path, *, output_retry_used
                                 repetition_retry_used=False):
     """Never continue partial Java; only reduced optional evidence permits a retry."""
     from .llama_finish_reason_contract import (
-        CONTEXT_PRESSURE, OUTPUT_EXHAUSTED, completion_boundary_error,
-        completion_boundary_kind)
+        CONTEXT_PRESSURE,
+        OUTPUT_EXHAUSTED,
+        completion_boundary_error,
+        completion_boundary_kind,
+    )
 
     boundary = completion_boundary_error(exc)
     kind = completion_boundary_kind(exc)

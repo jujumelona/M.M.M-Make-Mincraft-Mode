@@ -9,7 +9,9 @@ from minecraft_mod_ai.prompt_fact_types import FactType
 def test_artifact_and_generator_routes_are_explicit():
     assert FACT_TO_CANONICAL_LEAVES[FactType.ITEM_EXISTS][0] == "minecraft/item/registry"
     assert FACT_TO_CANONICAL_LEAVES[FactType.CRAFTING_RECIPE] == ("minecraft/recipe/serializer",)
-    assert FACT_TO_CANONICAL_LEAVES[FactType.ENTITY_EXISTS] == ("minecraft/entity/registry",)
+    assert FACT_TO_CANONICAL_LEAVES[FactType.ENTITY_EXISTS] == (
+        "minecraft/entity/type", "minecraft/entity/registry",
+    )
 
 
 def test_geckolib_has_no_magic_blue_entity_texture():

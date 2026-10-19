@@ -3,10 +3,14 @@ from __future__ import annotations
 
 import hashlib
 from copy import deepcopy
+from functools import partial
 from pathlib import Path
 from zipfile import ZipFile
-from .construction_type_contracts import canonical_type_name, annotate_functional_interfaces
 
+from .construction_type_contracts import (
+    annotate_functional_interfaces,
+    canonical_type_name,
+)
 
 _PRIMITIVE_DESCRIPTORS = {"Z": "boolean", "B": "byte", "S": "short", "I": "int",
                           "J": "long", "C": "char", "F": "float", "D": "double", "V": "void"}
@@ -89,6 +93,8 @@ def build_target_symbols(classpath, *, java_version: int, namespace: str, classp
                              'enclosing_instance_type': canonical_type_name(item.enclosing_class)
                                 if item.enclosing_class and not (item.inner_access or 0) & 8 else '',
                              "source_path": str(path)}
+            if item.generic_signature:
+                result[owner]['bytecode_generic_signature'] = item.generic_signature
             for member in item.members:
                 # Visibility belongs to the actual caller, not inventory
                 # construction. Same-package APIs must remain discoverable.
@@ -109,6 +115,8 @@ def build_target_symbols(classpath, *, java_version: int, namespace: str, classp
                 result[key]['binary_owner'] = item.name
                 result[key]['throws'] = [canonical_type_name(x) for x in member.exceptions]
                 result[key]['enclosing_instance_type'] = enclosing
+                if member.generic_signature:
+                    result[key]['bytecode_generic_signature'] = member.generic_signature
     if mappings_file is not None:
         from .api_symbol_extractor import APISymbol, MinecraftAPIExtractor
         from .tiny_mappings import TinyMappings
@@ -142,6 +150,29 @@ def build_target_symbols(classpath, *, java_version: int, namespace: str, classp
             row['enclosing_instance_type'] = owner_names.get(row.get('enclosing_instance_type', ''), row.get('enclosing_instance_type', ''))
             row['enclosing_owner'] = owner_names.get(row.get('enclosing_owner', ''), row.get('enclosing_owner', ''))
         result = remapped
+    from .java_generic_signature import generic_contract
+    if mappings_file is not None:
+        generic_source = next(value for value in mapping.namespaces
+                              if value.casefold() == source_namespace.casefold())
+        generic_target = next(value for value in mapping.namespaces
+                              if value.casefold() == namespace.casefold())
+        mapper = partial(mapping.class_name, source=generic_source, target=generic_target)
+    else:
+        mapper = str
+    for row in result.values():
+        signature = row.get('bytecode_generic_signature', '')
+        if not signature:
+            continue
+        contract = generic_contract(signature, row['kind'], class_name=mapper)
+        # Inner constructor Signature attributes can omit the synthetic outer
+        # argument already removed from the descriptor. Remove it only if it
+        # is actually present in this inspected generic signature.
+        params = contract.get('generic_parameters')
+        if (row.get('enclosing_instance_type') and params
+                and len(params) == len(row.get('parameters', ())) + 1
+                and params[0].split('<', 1)[0] == row['enclosing_instance_type']):
+            contract['generic_parameters'] = params[1:]
+        row.update(contract)
     # Model lambdas may target only inspected single-abstract-method interfaces.
     # Derive the callback shape from the resolved bytecode, never from Fabric names.
     from .construction_inheritance import project_inherited_api
@@ -152,7 +183,7 @@ def build_target_symbols(classpath, *, java_version: int, namespace: str, classp
 
 def java_source_units(source, *, path=""):
     """Parse whole declarations. Never slice a statement by a character allowance."""
-    from .java_region_parser import _parse, _text, _modifiers
+    from .java_region_parser import _modifiers, _parse, _text
     raw, root = _parse(source)
     package = ""
     imports = []

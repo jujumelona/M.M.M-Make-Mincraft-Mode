@@ -21,6 +21,8 @@ def prompt_symbol_record(row):
     """
     fields = ('kind', 'owner', 'name', 'access', 'return_type', 'static', 'varargs',
               'generic_signature', 'signature', 'type_parameters', 'throws',
+              'generic_parameters', 'generic_return_type', 'generic_superclass',
+              'generic_interfaces', 'generic_throws',
               'superclass', 'interfaces', 'enclosing_owner', 'enclosing_instance_type',
               'functional_parameters', 'functional_return_type', 'functional_throws')
     answer = {key: row[key] for key in fields if key in row}
@@ -34,6 +36,7 @@ class FileAPIEvidence:
         self.symbols = symbols
         self.target_path, self.owner = target_path, owner
         self.classes = {}
+        self.superclasses = set()
         self.simple = defaultdict(list)
         self.children = defaultdict(list)
         self.members = defaultdict(list) if by_owner is None else by_owner
@@ -69,6 +72,7 @@ class FileAPIEvidence:
 
     def source_owners(self, source, diagnostic):
         imports = {}
+        static_members, static_scopes = {}, []
         package = re.search(r'\bpackage\s+([\w.]+)\s*;', source)
         package_name = package.group(1) if package else ''
         wildcard_scopes = []
@@ -77,6 +81,8 @@ class FileAPIEvidence:
             if wildcard:
                 if not is_static or self._resolve(reference):
                     wildcard_scopes.append(reference)
+                    if is_static:
+                        static_scopes.append(self._resolve(reference))
                 continue
             resolved = self._resolve(reference)
             if not resolved:
@@ -88,8 +94,19 @@ class FileAPIEvidence:
                 resolved = candidates[0] if len(candidates) == 1 else None
             if resolved:
                 imports[resolved.rsplit('.', 1)[-1]] = resolved
-        selected = set(imports.values())
-        for reference in re.findall(r'\b[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*', source):
+                if is_static and canonical_type_name(reference) != resolved:
+                    static_members[reference.rsplit('.', 1)[-1]] = resolved
+        selected = set()
+        body = re.sub(pattern, '', source)
+        names = set(re.findall(r'\b[A-Za-z_$][\w$]*', body))
+        selected.update(owner for name, owner in static_members.items() if name in names)
+        for scope in static_scopes:
+            if any(row.get('static') and row.get('name') in names
+                   for _, row in self._member_options(scope)):
+                selected.add(scope)
+        superclass_refs = set(re.findall(
+            r'\bclass\s+[\w$]+(?:\s*<[^{};]+>)?\s+extends\s+([\w.$]+)', body))
+        for reference in re.findall(r'\b[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*', body):
             first, _, rest = reference.partition('.')
             resolved = self._resolve(imports[first] + ('.' + rest if rest else '')) if first in imports else self._resolve(reference)
             if not resolved and first[:1].isupper():
@@ -108,6 +125,10 @@ class FileAPIEvidence:
                         resolved = self._resolve(candidates[0] + ('.' + rest if rest else ''))
             if resolved:
                 selected.add(resolved)
+                if first in imports:
+                    selected.add(imports[first])
+                if reference in superclass_refs:
+                    self.superclasses.add(resolved)
         locations = set(re.findall(r'\blocation:\s+(?:class|interface|enum)\s+([\w.$]+)', diagnostic))
         locations.update(re.findall(r'\blocation:\s+variable\s+[\w$]+\s+of type\s+([\w.$]+)', diagnostic))
         return sorted(selected, key=lambda name: (
@@ -119,7 +140,7 @@ class FileAPIEvidence:
                       for value in re.findall(r'[A-Za-z_$][\w$]*(?:[./][A-Za-z_$][\w$]*)*', type_)}
         return all(value not in self.classes or self._accessible(value) for value in references)
 
-    def _member_options(self, name):
+    def _member_options(self, name, *, subclass=False):
         """Keep true declaring owners; inheritance never fabricates a member."""
         pending, seen, signatures, options = [name], set(), set(), []
         while pending:
@@ -144,11 +165,13 @@ class FileAPIEvidence:
                 if access & 2 or row.get('visibility') == 'private':
                     continue
                 same_package = declaration.get('package', declaration['owner'].rpartition('.')[0]) == self.owner.rpartition('.')[0]
-                if not access & 1 and not same_package:
+                if not access & 1 and not same_package and not (subclass and access & 4):
                     continue
                 if row.get('side') == 'CLIENT' and not self.target_path.startswith('src/client/'):
                     continue
                 signature_types = [row.get('return_type', ''), *parameter_types(row),
+                    row.get('generic_return_type', ''), *row.get('generic_parameters', ()),
+                    *row.get('type_parameters', ()), *row.get('generic_throws', ()),
                     *row.get('throws', ()), *row.get('functional_parameters', ()),
                     row.get('functional_return_type', ''), *row.get('functional_throws', ())]
                 if not self._signature_accessible(signature_types):
@@ -172,7 +195,7 @@ class FileAPIEvidence:
 
     def _selected_members(self, name, used, missing):
         # Preserve referenced names and factory/build roles before incidental overloads.
-        options = [(key, row) for key, row in self._member_options(name)
+        options = [(key, row) for key, row in self._member_options(name, subclass=name in self.superclasses)
                    if name == 'java.lang.Object' or row.get('owner') != 'java.lang.Object'
                    or row.get('name') in used or row.get('name') in missing]
         options.sort(key=lambda item: self._rank_member(name, used, missing, item))
@@ -229,23 +252,72 @@ class FileAPIEvidence:
         pending.extend(incidental)
         return actionable
 
+    def entity_type_evidence(self):
+        """A concrete subclass needs super constructors, not a registry builder.
+
+        Every declaration is still resolved from the selected target inventory.
+        Protected members here are usable only through subclass inheritance.
+        """
+        bases = ('net.minecraft.world.entity.Entity', 'net.minecraft.world.entity.Mob',
+                 'net.minecraft.world.entity.monster.Monster')
+        roots = (*bases, 'net.minecraft.world.entity.EntityType', 'net.minecraft.world.level.Level')
+        records, declarations = [], []
+        for name in roots:
+            if not self._accessible(name):
+                continue
+            declaration = self.symbols[self.classes[name]]
+            declarations.append(prompt_symbol_record(declaration))
+            options = self._member_options(name, subclass=name in bases)
+            chosen = [item for item in options if name in bases and (
+                item[1].get('kind') == 'CONSTRUCTOR' or
+                item[1].get('kind') == 'METHOD' and item[1].get('access', 0) & 0x0400)]
+            record = self._class_record(name, declaration, options, chosen)
+            if name in bases:
+                record['access_context'] = 'generated_subclass_super_constructor_and_overrides'
+            records.append(record)
+        return {'target_api': declarations, 'class_members': records, 'source': [],
+                'typed_input_producers': []}
+
     def records(self, owners, *, source='', diagnostic='', intent=''):
         roots = list(dict.fromkeys(canonical_type_name(name) for name in owners))
         roots = [name for name in roots if self._accessible(name)]
         # Nested builders/factories are actionable API, not incidental text matches.
-        pending = [*roots, *(child for name in roots
-                             for child in sorted(self.children.get(name, ())))]
+        # Required owner contracts cannot be displaced by the first root's
+        # incidental parameter types. Prioritize inspected nested factories,
+        # then navigate supplemental signature dependencies separately.
+        children = list(dict.fromkeys(child for name in roots
+                         for child in sorted(self.children.get(name, ()))))
+        factories = [child for child in children if
+            self.symbols[self.classes[child]].get('functional_parameters') is not None or any(
+                row.get('name') == 'build' or row.get('static') and
+                canonical_type_name(str(row.get('return_type', '')).split('<', 1)[0]) == child
+                for _, row in self._member_options(child))]
+        required = list(dict.fromkeys([*roots, *factories]))
+        pending = [child for child in children if child not in required]
         answer, seen, builder_inputs = [], set(), set()
         used = set(re.findall(r'\b[A-Za-z_$][\w$]*', source + '\n' + diagnostic + '\n' + intent))
         missing = set(re.findall(r'\bsymbol:\s+(?:method|variable|class)\s+([\w$]+)', diagnostic))
-        while pending and len(answer) < 12:
-            name = pending.pop(0)
+        missing_at = defaultdict(set)
+        for member, location in re.findall(
+                r'\bsymbol:\s+(?:method|variable)\s+([\w$]+)'
+                r'(?:(?!\bsymbol:).)*?\blocation:\s+'
+                r'(?:(?:class|interface|enum)\s+|variable\s+[\w$]+\s+of type\s+)([\w.$]+)',
+                diagnostic, re.DOTALL):
+            missing_at[canonical_type_name(location)].add(member)
+        while (required or pending) and len(answer) < max(12, len(roots) + len(factories)):
+            name = required.pop(0) if required else pending.pop(0)
             if name in seen or not self._accessible(name):
                 continue
             seen.add(name)
             declaration = self.symbols[self.classes[name]]
             options, chosen = self._selected_members(name, used, missing)
-            answer.append(self._class_record(name, declaration, options, chosen))
+            record = self._class_record(name, declaration, options, chosen)
+            owner_missing = set().union(*(names for location, names in missing_at.items()
+                if name == location or name.endswith('.' + location)))
+            absent = owner_missing - {row.get('name') for _, row in options}
+            if absent:
+                record['unavailable_requested_members'] = sorted(absent)
+            answer.append(record)
             if name in roots or canonical_type_name(declaration.get('enclosing_owner', '')) in roots:
                 builder_inputs.update(self._append_signature_dependencies(pending, name, chosen, seen))
             elif name in builder_inputs:

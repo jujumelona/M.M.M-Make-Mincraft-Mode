@@ -1,9 +1,9 @@
 """Read JVM class declarations directly from JAR bytes; never invent descriptors."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
 import struct
+from dataclasses import dataclass
 from pathlib import Path
 from zipfile import BadZipFile, ZipFile
 
@@ -68,6 +68,7 @@ class ApiMember:
     access: int
     side: str
     exceptions: tuple[str, ...] = ()
+    generic_signature: str = ''
 
     @property
     def is_static(self):
@@ -85,6 +86,7 @@ class ApiClass:
     content_hash: str
     enclosing_class: str = ''
     inner_access: int | None = None
+    generic_signature: str = ''
 
 
 def parse_class(data: bytes, *, default_side: str = "COMMON") -> ApiClass:
@@ -150,6 +152,7 @@ def parse_class(data: bytes, *, default_side: str = "COMMON") -> ApiClass:
         annotations = []
         exceptions = []
         inner_classes = []
+        generic_signature = ''
         for _ in range(r.u2()):
             name, payload = utf(r.u2()), r.take(r.u4())
             if name in {"RuntimeVisibleAnnotations", "RuntimeInvisibleAnnotations"}:
@@ -169,7 +172,11 @@ def parse_class(data: bytes, *, default_side: str = "COMMON") -> ApiClass:
                     inner_classes.append((cname(inner), cname(outer), utf(simple) if simple else '', flags))
                 if a.pos != len(payload):
                     raise ClassFormatError('Trailing inner class data')
-        return annotations, tuple(exceptions), inner_classes
+            elif name == 'Signature':
+                if len(payload) != 2 or generic_signature:
+                    raise ClassFormatError('Invalid Signature attribute')
+                generic_signature = utf(_Reader(payload).u2())
+        return annotations, tuple(exceptions), inner_classes, generic_signature
 
     def side(annotations, fallback):
         values = []
@@ -193,17 +200,17 @@ def parse_class(data: bytes, *, default_side: str = "COMMON") -> ApiClass:
     for kind in ("FIELD", "METHOD"):
         for _ in range(r.u2()):
             flags, member_name, descriptor = r.u2(), utf(r.u2()), utf(r.u2())
-            annotations, exceptions, _ = attributes()
-            raw_members.append((member_name, descriptor, kind, flags, annotations, exceptions))
-    class_annotations, _, inner_classes = attributes()
+            annotations, exceptions, _, signature = attributes()
+            raw_members.append((member_name, descriptor, kind, flags, annotations, exceptions, signature))
+    class_annotations, _, inner_classes, class_signature = attributes()
     class_side = side(class_annotations, default_side)
     if r.pos != len(data):
         raise ClassFormatError("Trailing class bytes")
-    members = tuple(ApiMember(name, n, d, "CONSTRUCTOR" if n == "<init>" else k, f, side(a, class_side), e)
-                    for n, d, k, f, a, e in raw_members)
+    members = tuple(ApiMember(name, n, d, "CONSTRUCTOR" if n == "<init>" else k, f, side(a, class_side), e, s)
+                    for n, d, k, f, a, e, s in raw_members)
     own_inner = next((row for row in inner_classes if row[0] == name and row[1]), None)
     return ApiClass(name, superclass, interfaces, access, class_side, members, compute_content_hash(data),
-                    own_inner[1] if own_inner else '', own_inner[3] if own_inner else None)
+                    own_inner[1] if own_inner else '', own_inner[3] if own_inner else None, class_signature)
 
 
 def inspect_jar(path: Path, *, java_version: int, default_side: str = "COMMON",

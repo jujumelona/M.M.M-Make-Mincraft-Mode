@@ -12,7 +12,12 @@ import json
 import re
 from pathlib import Path
 
-from .construction_direct_writer import _claim_checkpoint, _digest, _read_checkpoint, _save_checkpoint
+from .construction_direct_writer import (
+    _claim_checkpoint,
+    _digest,
+    _read_checkpoint,
+    _save_checkpoint,
+)
 
 
 class ConstructionFileError(ValueError):
@@ -153,6 +158,11 @@ def _check_concrete_entity(source: str, context: dict, name: str) -> None:
     )
     if declaration is None or declaration.group(1) in {"Object", "java.lang.Object"}:
         raise ConstructionFileError("CONSTRUCTION_ENTITY_SUPERCLASS_REQUIRED")
+    if re.search(r'\bEntityType\s*\.\s*Builder\b', code):
+        raise ConstructionFileError(
+            'CONSTRUCTION_ENTITY_REGISTRY_OUTSIDE_TYPE: This file only implements the concrete '
+            'entity subclass and its constructor. Remove EntityType.Builder/factory/registry '
+            'creation here; the dependent minecraft/entity/registry artifact owns registration.')
     if not re.search(r"\b" + re.escape(name) + r"\s*\([^)]*\)\s*\{", code):
         raise ConstructionFileError("CONSTRUCTION_ENTITY_CONSTRUCTOR_REQUIRED")
 
@@ -273,9 +283,16 @@ def _project_file_evidence(evidence: dict, members, symbols: dict, intent: str) 
 
 def _evidence(context: dict, intent: str, *, target_path: str, owner: str, router,
               feature_entrypoint=False) -> dict:
-    from .construction_retrieval import ConstructionEvidenceIndex
     from .construction_direct_writer import _evidence as _scoped_api_evidence
     from .construction_file_api_evidence import FileAPIEvidence
+    from .construction_retrieval import ConstructionEvidenceIndex
+    if (not feature_entrypoint and
+            (context.get('authoring_contract') or {}).get('canonical_leaf') == 'minecraft/entity/type'):
+        # Registration and concrete subclass construction are distinct graph
+        # responsibilities. Do not ask the coder to choose a registry builder
+        # while its task is only the entity class's usable super constructor.
+        return FileAPIEvidence(context['symbols'], target_path=target_path,
+                               owner=owner).entity_type_evidence()
     intent = _file_api_intent(context, intent, feature_entrypoint=feature_entrypoint)
     index = ConstructionEvidenceIndex(context["symbols"], context.get("source_pages", {}),
         router, target_path=target_path, owner=owner,
@@ -313,6 +330,7 @@ def _verify_full_source(source: str, spec: dict, context: dict, *, package: str,
     # signatures. Only then reject semantic placeholders. Otherwise MiMo receives
     # the same generic placeholder error and reproduces identical broken Java.
     _check_identity(source, package, name, reject_placeholders=False)
+    _check_concrete_entity(source, context, name)
     from .java_region_parser import _parse
     _parse(source)
     classpath = context.get("java_classpath")
@@ -325,7 +343,6 @@ def _verify_full_source(source: str, spec: dict, context: dict, *, package: str,
         target_path=spec["target_path"], filename=name + ".java",
         source_context=source_context)
     _check_identity(source, package, name)
-    _check_concrete_entity(source, context, name)
     _check_entrypoint(source, spec)
     verify_source = context.get("verify_source")
     if verify_source:
