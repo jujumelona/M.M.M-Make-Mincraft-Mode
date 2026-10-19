@@ -237,6 +237,16 @@ def _unforced_record_schema(
     return projected
 
 
+
+def _model_record_slices(
+    schema: dict[str, Any], forced: Mapping[str, Any], identifier: str,
+) -> tuple[dict[str, Any], ...]:
+    projected = _unforced_record_schema(schema, forced)
+    if not projected["required"]:
+        return ()
+    return _atomic_record_schema_slices(projected, identifier=identifier)
+
+
 def run_single_record_template(
     router: Any,
     identifier: str,
@@ -284,11 +294,7 @@ def run_single_record_template(
             },
         ]
         forced = _host_forced_fields(schema)
-        model_schema = _unforced_record_schema(schema, forced)
-        slices = (
-            _atomic_record_schema_slices(model_schema, identifier=identifier)
-            if model_schema["required"] else ()
-        )
+        slices = _model_record_slices(schema, forced, identifier)
         value: dict[str, Any] = deepcopy(forced)
         for part_index, part_schema in enumerate(slices, start=1):
             messages = list(base_messages)
