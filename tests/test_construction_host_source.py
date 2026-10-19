@@ -1,10 +1,6 @@
 """Integration proof for host-assembled Java route and complete-file checkpoint."""
 from __future__ import annotations
 
-from pathlib import Path
-
-import pytest
-
 from minecraft_mod_ai.construction_host_source import compose_host_java_source
 
 
