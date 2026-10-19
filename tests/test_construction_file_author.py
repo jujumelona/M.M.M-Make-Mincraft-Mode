@@ -570,7 +570,7 @@ def test_feature_entrypoint_keeps_gameplay_api_intent(monkeypatch, tmp_path):
               'owner': 'demo.ModUnit', 'router': Router([])}
     registration = module._evidence(context, request, **kwargs)
     entrypoint = module._evidence(context, request, feature_entrypoint=True, **kwargs)
-    assert 'Register supplied entities' in registration['lookup_purpose']
+    assert registration['lookup_purpose'].startswith('register entity in registry')
     assert 'Teleport' not in registration['lookup_purpose']
     assert entrypoint['lookup_purpose'] == request
 
