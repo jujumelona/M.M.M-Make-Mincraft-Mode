@@ -118,8 +118,17 @@ def _evidence(index, intent, source_pages):
     action_required = bool(root_action_stems(intent))
     target_api = []
     rejected = 0
+    # The Minecraft gameplay author must not receive Vulkan/graphics SDK
+    # symbols merely because an intent mentions "space" or "world".
+    # Real client rendering tasks are the exception, never server gameplay.
+    path_lower = str(getattr(index, "target_path", "")).casefold()
+    client_rendering = ("render" in path_lower or "src/client/" in path_lower)
     for candidate in page["matches"]:
         row = index.symbols.get(candidate.get("symbol_id"), {})
+        owner_name = str(row.get("owner", ""))
+        if owner_name.startswith(("org.lwjgl.", "org.joml.")) and not client_rendering:
+            rejected += 1
+            continue
         if (row.get("kind") == "METHOD"
                 and row.get("owner") == getattr(index, "owner", None)):
             # A planned declaration of the very class being authored is not
@@ -136,6 +145,42 @@ def _evidence(index, intent, source_pages):
             rejected += 1
             continue
         target_api.append(candidate)
+        if len(target_api) >= 8:
+            break
+    # A ranked free-text search can return only irrelevant classes. For
+    # recognizable gameplay kinds, recover a small set of *actual indexed*
+    # official/Fabric symbols instead of sending ungrounded suggestions.
+    hints = (intent + " " + path_lower).casefold()
+    anchors = {
+        "entity": ("net.minecraft.world.entity.EntityType",
+                   "net.minecraft.world.entity.MobCategory",
+                   "net.minecraft.core.Registry",
+                   "net.minecraft.core.registries.BuiltInRegistries"),
+        "block": ("net.minecraft.world.level.block.Block",
+                  "net.minecraft.world.level.block.state.BlockBehaviour",
+                  "net.minecraft.core.registries.BuiltInRegistries"),
+        "item": ("net.minecraft.world.item.Item",
+                 "net.minecraft.core.registries.BuiltInRegistries"),
+        "command": ("net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback",
+                    "net.minecraft.commands.Commands"),
+    }
+    from .construction_state import symbol_record
+    known_keys = {item.get("symbol_id") for item in target_api}
+    for cue, owners in anchors.items():
+        if cue not in hints:
+            continue
+        for owner_name in owners:
+            # Never fabricate a symbol from a guessed API name: it must exist
+            # as a CLASS record in the exact selected target symbol index.
+            for key in index.by_owner.get(owner_name, ()):
+                row = index.symbols.get(key, {})
+                if row.get("kind") != "CLASS" or key in known_keys:
+                    continue
+                target_api.append(symbol_record(key, row))
+                known_keys.add(key)
+                break
+            if len(target_api) >= 8:
+                break
         if len(target_api) >= 8:
             break
     result = {"target_api": target_api, "source": [],
