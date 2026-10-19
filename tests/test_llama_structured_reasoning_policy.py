@@ -63,7 +63,7 @@ def test_qwen35_schema_less_json_keeps_validation_host_side() -> None:
 
     assert payload["response_format"] == {"type": "json_object"}
     assert "json_schema" not in payload
-    assert "reasoning_effort" not in payload
+    assert payload["reasoning_effort"] == "none"
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
 
 
