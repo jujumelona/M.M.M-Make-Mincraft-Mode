@@ -29,3 +29,11 @@ Validation for that commit: 28 tests passed; 1 real-JDK smoke test was skipped b
 ## Follow-up validation
 
 Further boundary checks and full-suite/Actions results are recorded in follow-up commits. The first independent reviewer could not run due usage limits. A fallback reviewer completed review and reproduced four additional boundary defects, which are handled with failing tests before fixes.
+
+
+### Follow-up commits and verification
+
+- `c668dcb`: wildcard and same-package type resolution; inaccessible member signature filtering; path tests that do not require javac. Focused verification: 32 passed, 10 skipped. Direct Implementation Migration and Cross-stage Contract ABI Actions succeeded for this commit.
+- Review follow-up: preserve a representative of each referenced member/factory/build role before filling overload slots, with explicit member/overload truncation metadata. Include public superclass/interface members while preserving declaring owners and overrides. Prioritize javac instance receiver diagnostics. Remove inaccessible callback functional metadata without mutating the symbol inventory.
+- Five review regressions failed before these fixes. Final focused verification: 37 passed, 10 skipped (javac unavailable). Ruff passed.
+- An earlier whole-suite run was interrupted after source changes made its loaded code obsolete; it is not a whole-suite pass. Its three failures were the wildcard/same-package/signature-boundary regressions subsequently verified passing. Broader final construction checks and latest whole CI are tracked separately; no runtime gameplay completion claim is made.

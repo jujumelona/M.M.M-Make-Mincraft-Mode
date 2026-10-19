@@ -181,3 +181,81 @@ def test_inaccessible_signature_type_is_not_offered_to_common_author():
     evidence = _diagnostic_api_evidence(context(symbols), SOURCE, DIAGNOSTIC)
     assert all(member['name'] != 'clientOnly' for row in evidence for member in row['members'])
 
+
+def test_factory_overloads_cannot_displace_referenced_build_member():
+    symbols = inventory()
+    for i in range(24):
+        symbols[BUILDER + f'#of{i:02d}'] = {'kind': 'METHOD', 'owner': BUILDER,
+            'name': 'of', 'return_type': BUILDER, 'parameters': ['int'] * (i + 1),
+            'static': True, 'access': 1}
+    evidence = _diagnostic_api_evidence(context(symbols), SOURCE.replace('create(', 'of('), DIAGNOSTIC)
+    builder = next(row for row in evidence if row['verified_class'] == BUILDER)
+    assert {'of', 'build'} <= {row['name'] for row in builder['members']}
+    assert builder['member_count'] > len(builder['members'])
+    assert builder['members_truncated'] is True
+
+
+def test_public_inherited_member_is_available_on_imported_child():
+    symbols = inventory()
+    base, child = 'example.Base', 'example.Child'
+    symbols[base] = {'kind': 'CLASS', 'owner': base, 'name': 'Base', 'access': 1}
+    symbols[child] = {'kind': 'CLASS', 'owner': child, 'name': 'Child', 'access': 1,
+                      'superclass': base}
+    symbols[base + '#run'] = {'kind': 'METHOD', 'owner': base, 'name': 'run',
+        'return_type': 'void', 'parameters': [], 'access': 1}
+    symbols[base + '#private'] = {'kind': 'METHOD', 'owner': base, 'name': 'privateRun',
+        'return_type': 'void', 'parameters': [], 'access': 2}
+    source = 'package demo; import example.Child; class T { void f(Child c) { c.run(); } }'
+    evidence = _diagnostic_api_evidence(context(symbols), source,
+        'cannot find symbol\n symbol: method run()\n location: class Child')
+    child_record = next(row for row in evidence if row['verified_class'] == child)
+    run = next(row for row in child_record['members'] if row['name'] == 'run')
+    assert run['owner'] == base
+    assert all(row['name'] != 'privateRun' for row in child_record['members'])
+
+
+def test_instance_diagnostic_owner_precedes_incidental_imports():
+    symbols = inventory()
+    imports = []
+    for n in range(15):
+        owner = f'example.A{n:02d}'
+        symbols[owner] = {'kind': 'CLASS', 'owner': owner, 'name': f'A{n:02d}', 'access': 1}
+        imports.append('import ' + owner + ';')
+    source = ('package demo; ' + ' '.join(imports) + f' import {BUILDER}; '
+              'class T { void f(Builder builder) { builder.create(); } }')
+    evidence = _diagnostic_api_evidence(context(symbols), source,
+        'cannot find symbol\n symbol: method create()\n location: variable builder of type Builder<T>')
+    assert evidence[0]['verified_class'] == BUILDER
+    assert 'build' in {row['name'] for row in evidence[0]['members']}
+
+
+def test_callback_class_cannot_expose_inaccessible_functional_signature():
+    symbols = inventory()
+    client, callback = 'net.minecraft.client.ClientToken', 'example.Callback'
+    symbols[client] = {'kind': 'CLASS', 'owner': client, 'name': 'ClientToken', 'access': 1}
+    symbols[callback] = {'kind': 'CLASS', 'owner': callback, 'name': 'Callback', 'access': 0x601,
+        'functional_parameters': ['java.lang.Object'], 'functional_return_type': client,
+        'functional_throws': [client], 'functional_contract_sources': [callback + '#apply']}
+    source = 'package demo; import example.Callback; class T { Callback c; }'
+    evidence = _diagnostic_api_evidence(context(symbols), source,
+        'cannot find symbol\n symbol: class Callback\n location: class T')
+    declaration = next(row for row in evidence if row['verified_class'] == callback)['declaration']
+    assert all(not key.startswith('functional_') for key in declaration)
+    assert symbols[callback]['functional_return_type'] == client  # inventory stays immutable
+
+
+def test_inherited_default_interface_method_and_override_keep_exact_owner():
+    symbols = inventory()
+    base, child = 'example.Interface', 'example.Implementation'
+    symbols[base] = {'kind': 'CLASS', 'owner': base, 'name': 'Interface', 'access': 0x201}
+    symbols[child] = {'kind': 'CLASS', 'owner': child, 'name': 'Implementation', 'access': 1,
+                      'interfaces': [base]}
+    for owner, name in ((base, 'defaultAction'), (base, 'overridden'), (child, 'overridden')):
+        symbols[owner + '#' + name] = {'kind': 'METHOD', 'owner': owner, 'name': name,
+            'return_type': 'void', 'parameters': [], 'access': 1}
+    source = f'package demo; import {child}; class T {{ Implementation c; }}'
+    evidence = _diagnostic_api_evidence(context(symbols), source,
+        'cannot find symbol\n symbol: method action()\n location: class Implementation')
+    members = next(row for row in evidence if row['verified_class'] == child)['members']
+    assert next(row for row in members if row['name'] == 'defaultAction')['owner'] == base
+    assert [row['owner'] for row in members if row['name'] == 'overridden'] == [child]

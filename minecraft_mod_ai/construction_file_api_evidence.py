@@ -7,7 +7,7 @@ callable signatures instead of handing the model a bare class name.
 from __future__ import annotations
 
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 from .construction_state import symbol_record
 from .construction_type_contracts import canonical_type_name, class_accessible
@@ -94,8 +94,56 @@ class FileAPIEvidence:
             if resolved:
                 selected.add(resolved)
         locations = set(re.findall(r'\blocation:\s+(?:class|interface|enum)\s+([\w.$]+)', diagnostic))
+        locations.update(re.findall(r'\blocation:\s+variable\s+[\w$]+\s+of type\s+([\w.$]+)', diagnostic))
         return sorted(selected, key=lambda name: (
             not any(name == loc or name.endswith('.' + loc) for loc in locations), name))
+
+    def _signature_accessible(self, types):
+        references = {canonical_type_name(value)
+                      for type_ in types
+                      for value in re.findall(r'[A-Za-z_$][\w$]*(?:[./][A-Za-z_$][\w$]*)*', type_)}
+        return all(value not in self.classes or self._accessible(value) for value in references)
+
+    def _member_options(self, name):
+        """Keep true declaring owners; inheritance never fabricates a member."""
+        pending, seen, signatures, options = [name], set(), set(), []
+        while pending:
+            ancestor = pending.pop(0)
+            if ancestor in seen or ancestor not in self.classes:
+                continue
+            seen.add(ancestor)
+            declaration = self.symbols[self.classes[ancestor]]
+            pending.extend(canonical_type_name(value) for value in
+                (declaration.get('superclass', ''), *declaration.get('interfaces', ())) if value)
+            if not self._accessible(ancestor):
+                continue
+            for key in sorted(self.members.get(declaration['owner'], ())):
+                row = self.symbols[key]
+                kind = row.get('kind')
+                if kind not in {'METHOD', 'FIELD', 'CONSTRUCTOR'} or row.get('provenance') == 'construction_plan':
+                    continue
+                if ancestor != name and (kind == 'CONSTRUCTOR' or
+                    kind == 'METHOD' and row.get('static') and declaration.get('access', 0) & 0x0200):
+                    continue
+                access = row.get('access', 1)
+                if access & 2 or row.get('visibility') == 'private':
+                    continue
+                same_package = declaration.get('package', declaration['owner'].rpartition('.')[0]) == self.owner.rpartition('.')[0]
+                if not access & 1 and not same_package:
+                    continue
+                if row.get('side') == 'CLIENT' and not self.target_path.startswith('src/client/'):
+                    continue
+                signature_types = [row.get('return_type', ''), *parameter_types(row),
+                    *row.get('throws', ()), *row.get('functional_parameters', ()),
+                    row.get('functional_return_type', ''), *row.get('functional_throws', ())]
+                if not self._signature_accessible(signature_types):
+                    continue
+                signature = (kind, row.get('name'), tuple(parameter_types(row)) if kind != 'FIELD' else ())
+                if signature in signatures:
+                    continue
+                signatures.add(signature)
+                options.append((key, row))
+        return options
 
     def records(self, owners, *, source='', diagnostic='', intent=''):
         roots = list(dict.fromkeys(canonical_type_name(name) for name in owners))
@@ -115,27 +163,7 @@ class FileAPIEvidence:
             seen.add(name)
             key = self.classes[name]
             declaration = self.symbols[key]
-            options = []
-            for member_key in self.members.get(declaration['owner'], ()):
-                row = self.symbols[member_key]
-                if row.get('kind') not in {'METHOD', 'FIELD', 'CONSTRUCTOR'} or row.get('provenance') == 'construction_plan':
-                    continue
-                access = row.get('access', 1)
-                if access & 2 or row.get('visibility') == 'private':
-                    continue
-                same_package = declaration.get('package', declaration['owner'].rpartition('.')[0]) == self.owner.rpartition('.')[0]
-                if not access & 1 and not same_package:
-                    continue
-                if row.get('side') == 'CLIENT' and not self.target_path.startswith('src/client/'):
-                    continue
-                signature_types = [row.get('return_type', ''), *parameter_types(row),
-                                   *row.get('functional_parameters', ())]
-                references = {canonical_type_name(value)
-                              for type_ in signature_types
-                              for value in re.findall(r'[A-Za-z_$][\w$]*(?:[./][A-Za-z_$][\w$]*)*', type_)}
-                if any(value in self.classes and not self._accessible(value) for value in references):
-                    continue
-                options.append((member_key, row))
+            options = self._member_options(name)
 
             def rank(item):
                 member_key, row = item
@@ -147,9 +175,31 @@ class FileAPIEvidence:
                         row.get('kind') != 'FIELD', member_name, member_key)
 
             options.sort(key=rank)
-            chosen = options[:16]
-            answer.append({'verified_class': name, 'declaration': symbol_record(key, declaration),
+            # Preserve each referenced name and the construction/build roles
+            # before adding more overloads of a single method. Explicit uses
+            # may require more than the usual sixteen-member discovery view.
+            covered, representatives = set(), []
+            for item in options:
+                _, row = item
+                member_name = row.get('name')
+                factory = (row.get('kind') == 'CONSTRUCTOR' or
+                           row.get('static') and canonical_type_name(row.get('return_type', '')) == name)
+                if member_name not in covered and (member_name in used or member_name in missing or
+                    factory or member_name in {'build', 'register'}):
+                    representatives.append(item)
+                    covered.add(member_name)
+            selected_keys = {member_key for member_key, _ in representatives}
+            chosen = (representatives + [item for item in options if item[0] not in selected_keys])[:max(16, len(representatives))]
+            public_declaration = symbol_record(key, declaration)
+            callback_types = [*declaration.get('functional_parameters', ()),
+                declaration.get('functional_return_type', ''), *declaration.get('functional_throws', ())]
+            if not self._signature_accessible(callback_types):
+                public_declaration = {field: value for field, value in public_declaration.items()
+                                      if not field.startswith('functional_')}
+            answer.append({'verified_class': name, 'declaration': public_declaration,
                            'members': [symbol_record(member_key, row) for member_key, row in chosen],
+                           'member_count': len(options), 'members_truncated': len(chosen) < len(options),
+                           'overload_counts': dict(sorted(Counter(row.get('name') for _, row in options).items())),
                            'evidence': 'actual_target_symbol_index', 'behavior_verified': False})
             # Exact signature input types expose ResourceKey constructors and
             # functional factory contracts; do not recurse through the world.
