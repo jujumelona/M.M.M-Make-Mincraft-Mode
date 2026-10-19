@@ -39,6 +39,9 @@ class _Index:
                 "example.EntityType#member",
             }
         }
+        self.by_owner = {}
+        for key, row in self.symbols.items():
+            self.by_owner.setdefault(row['owner'], []).append(key)
 
     def prepare(self, intent, *, kinds):
         assert intent

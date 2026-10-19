@@ -18,7 +18,7 @@ import pytest
 def load_author(monkeypatch, tmp_path):
     root_name = 'minecraft_mod_ai'
     pkg = types.ModuleType(root_name)
-    pkg.__path__ = []
+    pkg.__path__ = [str(Path(__file__).resolve().parents[1] / root_name)]
     monkeypatch.setitem(sys.modules, root_name, pkg)
     def dependency(name, **attributes):
         obj = types.ModuleType(root_name + '.' + name)
@@ -45,7 +45,7 @@ def load_author(monkeypatch, tmp_path):
                _digest=digest, _claim_checkpoint=lambda path:nullcontext(),
                _read_checkpoint=checkpoint_read, _save_checkpoint=checkpoint_save,
                _evidence=lambda index, intent, source_pages:{'target_api':[], 'source':[]})
-    dependency('construction_retrieval', ConstructionEvidenceIndex=lambda *a,**k:object())
+    dependency('construction_retrieval', ConstructionEvidenceIndex=lambda *a,**k:types.SimpleNamespace(by_owner={}))
     observations = []
     dependency('java_region_parser', _parse=lambda src: observations.append(('parsed', src)))
     def compile_unit(src, *, classpath, java_version, filename):

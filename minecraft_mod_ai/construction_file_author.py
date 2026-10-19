@@ -224,7 +224,14 @@ def _evidence(context: dict, intent: str, *, target_path: str, owner: str, route
     index = ConstructionEvidenceIndex(context["symbols"], context.get("source_pages", {}),
         router, target_path=target_path, owner=owner,
         authoring_contract=context.get("authoring_contract", {}))
-    return _scoped_api_evidence(index, intent, context.get("source_pages", {}))
+    evidence = _scoped_api_evidence(index, intent, context.get("source_pages", {}))
+    from .construction_file_api_evidence import FileAPIEvidence
+    members = FileAPIEvidence(context['symbols'], target_path=target_path,
+                              owner=owner, by_owner=index.by_owner)
+    owners = [context['symbols'].get(row.get('symbol_id'), {}).get('owner', '')
+              for row in evidence.get('target_api', ())]
+    evidence['class_members'] = members.records(owners, intent=intent)
+    return evidence
 
 
 def _diagnostic_api_evidence(context: dict, source: str, diagnostic: str) -> list[dict]:
@@ -237,54 +244,14 @@ def _diagnostic_api_evidence(context: dict, source: str, diagnostic: str) -> lis
     """
     if 'cannot find symbol' not in diagnostic and 'JAVA_PROJECT_ANALYSIS_FAILED' not in diagnostic:
         return []
-    symbols = context.get('symbols') or {}
-    missing = set(re.findall(r'(?m)^\s*symbol:\s+(?:class|variable|method)\s+([A-Za-z_$][\w$]*)', diagnostic))
-    # Qualified names already attempted by the candidate tell us which
-    # classes should be inspected, even when the compiler only reports a
-    # missing static field (or the import is absent).
-    owner_names = set(re.findall(r'\b([A-Z][A-Za-z0-9_$]*)\s*\.', source))
-    owner_names.update(token for token in missing if token[:1].isupper())
-    if not owner_names and not missing:
-        return []
-    matched_owners = {}
-    for key, row in symbols.items():
-        if not isinstance(row, dict):
-            continue
-        if row.get('kind') != 'CLASS':
-            continue
-        owner = str(row.get('owner') or key).split('#')[0]
-        if owner.rsplit('.', 1)[-1] in owner_names:
-            matched_owners[owner] = row
-        if len(matched_owners) >= 20:
-            break
-    # Retain only exact classpath declarations. No guessed aliases/types.
-    members: dict[str, list[dict]] = {name: [] for name in matched_owners}
-    for row in symbols.values():
-        if not isinstance(row, dict):
-            continue
-        owner = str(row.get('owner') or '')
-        if owner not in members or row.get('kind') not in {'FIELD', 'METHOD', 'CONSTRUCTOR'}:
-            continue
-        record = {'kind': row['kind'], 'owner': owner, 'name': row.get('name'),
-                  'return_type': row.get('return_type'),
-                  'parameters': row.get('parameters', []), 'static': row.get('static', False)}
-        members[owner].append(record)
-    answer = []
-    hints = set(re.findall(r'[A-Za-z][A-Za-z0-9]*', source.lower()))
-    for owner, row in matched_owners.items():
-        options = members.get(owner, [])
-        def rank(item):
-            name = str(item.get('name') or '')
-            words = set(re.findall(r'[a-z]+|[A-Z]?[a-z]+|[A-Z]+(?![a-z])', name))
-            lowered = {word.lower() for word in words}
-            return (int(name in missing), int(bool(lowered & hints)),
-                    int('entity' in name.lower()), int('register' in name.lower()),
-                    int(item['kind'] == 'FIELD'))
-        options.sort(key=rank, reverse=True)
-        answer.append({'verified_class': owner, 'members': options[:16],
-                       'evidence': 'actual_target_symbol_index',
-                       'behavior_verified': False})
-    return answer[:8]
+    from .construction_file_api_evidence import FileAPIEvidence
+    code = _lexical_code(source)
+    package = re.search(r'\bpackage\s+([\w.]+)\s*;', code)
+    name = re.search(r'\bclass\s+([\w$]+)', code)
+    owner = (package.group(1) + '.' + name.group(1)) if package and name else ''
+    index = FileAPIEvidence(context.get('symbols') or {},
+        target_path=context.get('target_path', 'src/main/java/'), owner=owner)
+    return index.records(index.source_owners(code, diagnostic), source=code, diagnostic=diagnostic)
 
 
 def _verify_full_source(source: str, spec: dict, context: dict, *, package: str, name: str,
@@ -388,6 +355,8 @@ def compose_complete_source(router, spec: dict, context: dict, *, package: str, 
             "Implement functionality directly, without another planning response, node graph, stub, "
             "TODO, fake API, silent success, or external mod source reuse. "
             "A listed API is evidence only when its exact owner/signature is verified. "
+            "class_members contains inspected overloads, nested builders and factory contracts; "
+            "use those exact parameter types rather than recalling an API from another version. "
             "Never invent a Minecraft registry or method. If prerequisite types are not yet in the "
             "materialized project, use existing actual APIs or implement viable logic in this unit. "
             "If required_registrations exist, implement each named zero-argument registration method "
