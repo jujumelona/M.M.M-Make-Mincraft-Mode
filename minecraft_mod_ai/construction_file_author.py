@@ -127,7 +127,7 @@ def _method_body(code: str, name: str) -> str | None:
     return None
 
 
-def _check_identity(source: str, package: str, name: str) -> None:
+def _check_identity(source: str, package: str, name: str, *, reject_placeholders=True) -> None:
     code = _lexical_code(source)
     package_decls = re.findall(r"(?m)^\s*package\s+([\w.]+)\s*;", code)
     if package_decls != [package]:
@@ -135,7 +135,7 @@ def _check_identity(source: str, package: str, name: str) -> None:
     pattern = r"\bpublic\s+(?:(?:final|abstract)\s+)?class\s+" + re.escape(name) + r"\b"
     if not re.search(pattern, code):
         raise ConstructionFileError("CONSTRUCTION_FILE_PUBLIC_CLASS_MISMATCH")
-    if re.search(r"\b(?:TODO|FIXME|UnsupportedOperationException)\b", source):
+    if reject_placeholders and re.search(r"\b(?:TODO|FIXME|UnsupportedOperationException)\b", source):
         raise ConstructionFileError("CONSTRUCTION_FILE_UNIMPLEMENTED_PLACEHOLDER")
     if not re.search(r"\{[^}]*[;{]", code, re.DOTALL):
         raise ConstructionFileError("CONSTRUCTION_FILE_EMPTY_CLASS")
@@ -288,8 +288,11 @@ def _diagnostic_api_evidence(context: dict, source: str, diagnostic: str) -> lis
 
 def _verify_full_source(source: str, spec: dict, context: dict, *, package: str, name: str,
                         source_context=()) -> None:
-    _check_identity(source, package, name)
-    _check_entrypoint(source, spec)
+    # A placeholder and a nonexistent Minecraft API are two different failures.
+    # Check structural identity first, then compile to capture concrete missing
+    # signatures. Only then reject semantic placeholders. Otherwise MiMo receives
+    # the same generic placeholder error and reproduces identical broken Java.
+    _check_identity(source, package, name, reject_placeholders=False)
     from .java_region_parser import _parse
     _parse(source)
     classpath = context.get("java_classpath")
@@ -301,6 +304,8 @@ def _verify_full_source(source: str, spec: dict, context: dict, *, package: str,
     verify_java_source_with_dependencies(source, context=context,
         target_path=spec["target_path"], filename=name + ".java",
         source_context=source_context)
+    _check_identity(source, package, name)
+    _check_entrypoint(source, spec)
     verify_source = context.get("verify_source")
     if verify_source:
         verify_source(source, spec["target_path"])
@@ -359,9 +364,20 @@ def compose_complete_source(router, spec: dict, context: dict, *, package: str, 
                 return saved["source"]
         requirement = str(spec.get("requirement", ""))
         behavior_specs = list(behaviors or ())
+        contract = context.get("authoring_contract") or {}
+        leaf_responsibility = str(contract.get("responsibility") or "").strip()
+        # The user feature goal is not the assignment of a registry/constructor
+        # leaf. A generated registry must implement registration, not "fight
+        # aliens" or whole-game features. Keep the goal for traceability.
+        scoped_requirement = (
+            leaf_responsibility if contract.get("canonical_leaf") and leaf_responsibility
+            and not spec.get("bindings", {}).get("request_feature_entrypoint")
+            else requirement
+        )
         prompt = {
             "task": "Implement the complete Minecraft/Fabric Java compilation unit",
-            "requirement": requirement,
+            "requirement": scoped_requirement,
+            "original_feature_goal": requirement,
             "assigned_behaviors": behavior_specs,
             "feature_work_order": context.get("feature_work_order"),
             "target": context["target"],
@@ -397,8 +413,12 @@ def compose_complete_source(router, spec: dict, context: dict, *, package: str, 
             "A listed API is evidence only when its exact owner/signature is verified. "
             "class_members contains inspected overloads, nested builders and factory contracts; "
             "use those exact parameter types rather than recalling an API from another version. "
-            "Never invent a Minecraft registry or method. If prerequisite types are not yet in the "
-            "materialized project, use existing actual APIs or implement viable logic in this unit. "
+            "Never invent a Minecraft registry or method. The assigned canonical_leaf is the "
+            "only Java responsibility of this file; the original_feature_goal is context, "
+            "not permission to implement every game feature in the registry. "
+            "If materialized_project_source lacks a required user-defined entity type, "
+            "do not reference an imaginary class, fabricate a factory overload, or "
+            "substitute an UnsupportedOperationException implementation. "
             "If required_registrations exist, implement each named zero-argument registration method "
             "and invoke this.method_name() from onInitialize/onInitializeClient. The project verifies "
             "their exact identities. Implement their effects rather than empty placeholders. "
