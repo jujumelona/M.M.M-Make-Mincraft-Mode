@@ -85,6 +85,21 @@ def test_mimo_thinking_and_tool_payload_follow_native_template() -> None:
     assert plain["chat_template_kwargs"] == {"enable_thinking": True}
 
 
+@pytest.mark.parametrize('role', ['planner', 'coder', 'coder_safe'])
+def test_mimo_honors_explicit_non_thinking_plain_source_request(role) -> None:
+    """The file author already requests this; the MiMo wire policy must honor it."""
+    adapter = SimpleNamespace(config=ModelRegistry().role('t4_local', role))
+    request = GenerationRequest(
+        messages=({'role': 'user', 'content': 'Return the complete Java source.'},),
+        metadata={'mmm_force_non_thinking': True},
+    )
+    payload = _server_payload(adapter, request)
+    assert payload['chat_template_kwargs'] == {'enable_thinking': False}
+    assert payload['temperature'] == 0.0
+    assert 'top_p' not in payload
+    assert 'tools' not in payload and 'json_schema' not in payload
+
+
 
 def test_mimo_old_server_fails_closed(monkeypatch) -> None:
     from minecraft_mod_ai import llama_server_autotune

@@ -195,7 +195,9 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
         # Qwen3.5 request policies or reuse Qwen tool-call sampling.
         metadata = getattr(request, "metadata", {})
         is_action = (bool(tools) or getattr(request, "response_format", None) == "json"
-                     or bool(isinstance(metadata, Mapping) and metadata.get("mmm_strict_source_data")))
+                     or bool(isinstance(metadata, Mapping) and (
+                         metadata.get("mmm_strict_source_data")
+                         or metadata.get("mmm_force_non_thinking") is True)))
         payload["chat_template_kwargs"] = {"enable_thinking": not is_action}
         payload.pop("reasoning_effort", None)
         if not is_action:
