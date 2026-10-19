@@ -218,23 +218,18 @@ def _read_materialized_context(context: dict, *, target_path: str, source_contex
     return rows
 
 
-def _evidence(context: dict, intent: str, *, target_path: str, owner: str, router) -> dict:
-    from .construction_retrieval import ConstructionEvidenceIndex
-    from .construction_direct_writer import _evidence as _scoped_api_evidence
+def _file_api_intent(context: dict, intent: str) -> str:
     contract = context.get('authoring_contract') or {}
     if contract.get('canonical_leaf') and contract.get('responsibility'):
-        # The overall feature may say "fight aliens" while this artifact owns
-        # entity registration. Query that host-owned role, not the whole game.
-        intent = ' '.join((str(contract['responsibility']), str(contract['canonical_leaf']),
+        # A registry file is searched by its assigned role, not the whole game.
+        return ' '.join((str(contract['responsibility']), str(contract['canonical_leaf']),
             *map(str, contract.get('host_requirements', {}).get('symbols', ()))))
-    index = ConstructionEvidenceIndex(context["symbols"], context.get("source_pages", {}),
-        router, target_path=target_path, owner=owner,
-        authoring_contract=context.get("authoring_contract", {}))
-    evidence = _scoped_api_evidence(index, intent, context.get("source_pages", {}))
-    from .construction_file_api_evidence import FileAPIEvidence, prompt_symbol_record
-    members = FileAPIEvidence(context['symbols'], target_path=target_path,
-                              owner=owner, by_owner=index.by_owner)
-    owners = [context['symbols'].get(row.get('symbol_id'), {}).get('owner', '')
+    return intent
+
+
+def _project_file_evidence(evidence: dict, members, symbols: dict, intent: str) -> dict:
+    from .construction_file_api_evidence import prompt_symbol_record
+    owners = [symbols.get(row.get('symbol_id'), {}).get('owner', '')
               for row in evidence.get('target_api', ())]
     evidence['class_members'] = members.records(owners, intent=intent)
     evidence['target_api'] = [prompt_symbol_record(row) for row in evidence.get('target_api', ())]
@@ -242,6 +237,20 @@ def _evidence(context: dict, intent: str, *, target_path: str, owner: str, route
         inputs['verified_producers'] = [prompt_symbol_record(row)
                                        for row in inputs.get('verified_producers', ())]
     return evidence
+
+
+def _evidence(context: dict, intent: str, *, target_path: str, owner: str, router) -> dict:
+    from .construction_retrieval import ConstructionEvidenceIndex
+    from .construction_direct_writer import _evidence as _scoped_api_evidence
+    from .construction_file_api_evidence import FileAPIEvidence
+    intent = _file_api_intent(context, intent)
+    index = ConstructionEvidenceIndex(context["symbols"], context.get("source_pages", {}),
+        router, target_path=target_path, owner=owner,
+        authoring_contract=context.get("authoring_contract", {}))
+    evidence = _scoped_api_evidence(index, intent, context.get("source_pages", {}))
+    members = FileAPIEvidence(context['symbols'], target_path=target_path,
+                              owner=owner, by_owner=index.by_owner)
+    return _project_file_evidence(evidence, members, context['symbols'], intent)
 
 
 def _diagnostic_api_evidence(context: dict, source: str, diagnostic: str) -> list[dict]:
@@ -282,6 +291,24 @@ def _verify_full_source(source: str, spec: dict, context: dict, *, package: str,
     verify_source = context.get("verify_source")
     if verify_source:
         verify_source(source, spec["target_path"])
+
+
+def _required_entrypoint_bindings(spec: dict, behavior_specs) -> dict:
+    client_side = str(spec.get("side", "")).upper() == "CLIENT"
+    return {
+        "required_registrations": [
+            {"behavior_id": str(row["behavior_id"]),
+             "method_name": "registerBehavior" + hashlib.sha256(
+                 str(row["behavior_id"]).encode("utf-8")).hexdigest()[:20],
+             "intent": row["intent"]}
+            for row in behavior_specs
+        ],
+        "required_entrypoint": {
+            "interface": ("net.fabricmc.api.ClientModInitializer" if client_side
+                          else "net.fabricmc.api.ModInitializer"),
+            "method": "onInitializeClient" if client_side else "onInitialize",
+        },
+    }
 
 
 def compose_complete_source(router, spec: dict, context: dict, *, package: str, name: str,
@@ -340,19 +367,7 @@ def compose_complete_source(router, spec: dict, context: dict, *, package: str, 
                 context, target_path=spec["target_path"], source_context=source_context),
         }
         if spec.get("bindings", {}).get("request_feature_entrypoint"):
-            prompt["required_registrations"] = [
-                {"behavior_id": str(row["behavior_id"]),
-                 "method_name": "registerBehavior" + hashlib.sha256(
-                     str(row["behavior_id"]).encode("utf-8")).hexdigest()[:20],
-                 "intent": row["intent"]}
-                for row in behavior_specs
-            ]
-            prompt["required_entrypoint"] = {
-                "interface": ("net.fabricmc.api.ClientModInitializer" if str(spec.get("side", "")).upper() == "CLIENT"
-                              else "net.fabricmc.api.ModInitializer"),
-                "method": ("onInitializeClient" if str(spec.get("side", "")).upper() == "CLIENT"
-                           else "onInitialize"),
-            }
+            prompt.update(_required_entrypoint_bindings(spec, behavior_specs))
         system = (
             "You implement real Java source files for the EXACT selected Fabric and Minecraft versions. "
             "Return ONLY the complete Java file, starting with its package statement. "
