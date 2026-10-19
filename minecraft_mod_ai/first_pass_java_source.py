@@ -7,6 +7,7 @@ Fabric entrypoint declarations are immutable host data, not model suggestions.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from copy import deepcopy
@@ -267,7 +268,7 @@ def compose_first_pass_java(
                    "for example ['java.util.List', 'java.util.Map']. "
                    "Do not include import keywords, semicolons or package lines. "
                    "Use 'static package.Type.member' only for a static import. ")
-                "The HOST writes the package and class header using the exact "
+                + "The HOST writes the package and class header using the exact "
                 f"class name {class_name}; do not generate those declarations. "
                 "Provide superclass as just the optional Java type name (no "
                 "'extends' keyword), and interfaces as optional comma-separated "
@@ -325,7 +326,7 @@ def compose_first_pass_java(
             if not behavior_id or behavior_id in seen_behaviors or not row.get("intent"):
                 raise ValueError("JAVA_HOST_BEHAVIOR_INVALID")
             seen_behaviors.add(behavior_id)
-            registrar = "registerBehavior" + __import__("hashlib").sha256(
+            registrar = "registerBehavior" + hashlib.sha256(
                 behavior_id.encode("utf-8")).hexdigest()[:20]
             units.append({"kind": "method", "name": registrar,
                           "purpose": str(row["intent"]),
