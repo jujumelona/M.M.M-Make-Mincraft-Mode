@@ -232,3 +232,50 @@ def test_client_entrypoint_is_host_owned_and_not_redeclared_by_model():
     ]
     assert "submit_java_construction_plan_superclass" not in _data_names(router)
     assert "submit_java_construction_plan_interfaces" not in _data_names(router)
+
+
+def test_host_mode_owns_imports_entrypoint_and_all_behavior_registrars():
+    import hashlib
+
+    behaviors = [
+        {"behavior_id": "alien.spawn", "intent": "Register alien spawn", "effects": "spawn"},
+        {"behavior_id": "alien.attack", "intent": "Register alien attack", "effects": "attack"},
+    ]
+
+    class HostRouter(RecordingJavaRouter):
+        def __init__(self):
+            super().__init__(units=[])
+
+        def generate_java_source(self, role, messages, *, data_name, source_frame):
+            self.source_calls.append((data_name, source_frame))
+            assert data_name.startswith("submit_java_implementation_")
+            return (source_frame["prefix"]
+                    + '    System.out.println("registered");'
+                    + source_frame["suffix"])
+
+    router = HostRouter()
+    spec = {**SPEC, "bindings": {**SPEC["bindings"],
+        "request_feature_entrypoint": True}}
+    source = compose_first_pass_java(router, spec, [],
+        construction_context={"symbols": {}, "authoring_contract": {}},
+        behaviors=behaviors)
+    assert source.count("void onInitialize()") == 1
+    assert "implements net.fabricmc.api.ModInitializer" in source
+    assert len(router.source_calls) == len(behaviors)
+    assert "submit_java_entrypoint_source" not in _source_names(router)
+    assert all("imports" not in name for name in _data_names(router))
+    for item in behaviors:
+        method = ("registerBehavior"
+                  + hashlib.sha256(item["behavior_id"].encode()).hexdigest()[:20])
+        assert ("private void " + method + "()") in source
+        assert ("this." + method + "();") in source
+
+
+def test_host_mode_rejects_missing_required_behavior_scope():
+    router = RecordingJavaRouter(units=[])
+    spec = {**SPEC, "bindings": {**SPEC["bindings"],
+        "request_feature_entrypoint": True}}
+    with pytest.raises(ValueError, match="JAVA_HOST_BEHAVIOR_COVERAGE_MISSING"):
+        compose_first_pass_java(router, spec, [],
+            construction_context={"symbols": {}, "authoring_contract": {}},
+            behaviors=[])
