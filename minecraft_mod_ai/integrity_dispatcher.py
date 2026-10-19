@@ -197,10 +197,17 @@ def execute_generator_job(job, *, context, router, port_registry=None, base_dir=
         raise ValueError("GENERATOR_OUTPUT_PORT_CONFLICT")
     generator = authority.executors[job.implementation_id]
     source_context = ()
-    if base_dir is not None and spec.get("bindings", {}).get("content_dependency_paths_json"):
-        from .request_runtime_records import generated_owner_source_context
+    if base_dir is not None and spec.get("language") == "java":
+        from .request_runtime_records import (
+            generated_owner_source_context, verified_graph_java_source_paths,
+        )
 
-        source_context = generated_owner_source_context(base_dir, spec)
+        required_paths = verified_graph_java_source_paths(
+            job, context=context, port_registry=port_registry, project_root=base_dir,
+        )
+        source_context = generated_owner_source_context(
+            base_dir, spec, required_paths=required_paths,
+        )
     extra_context = {"source_context": source_context} if source_context else {}
     if manifest.get("resource_contract"):
         from .canonical_resource_contract import prepare_resource_context
