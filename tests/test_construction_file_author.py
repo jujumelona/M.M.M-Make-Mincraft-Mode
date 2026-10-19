@@ -551,3 +551,25 @@ def test_module_binding_values_reach_the_complete_file_author(monkeypatch, tmp_p
     assert create(module, context, spec, router) == GOOD
     prompt = json.loads(router.calls[0][1][1]['content'])
     assert prompt['construction_bindings'] == bindings
+
+
+def test_feature_entrypoint_keeps_gameplay_api_intent(monkeypatch, tmp_path):
+    """A file's registration leaf cannot suppress its requested teleport/trade actions."""
+    module, context, spec, _ = load_author(monkeypatch, tmp_path)
+    context['authoring_contract'] = {
+        'canonical_leaf': 'minecraft/entity/registry',
+        'responsibility': 'Register supplied entities',
+        'host_requirements': {'symbols': ['EntityType']},
+    }
+    writer = sys.modules['minecraft_mod_ai.construction_direct_writer']
+    monkeypatch.setattr(writer, '_evidence', lambda index, intent, pages: {
+        'target_api': [], 'source': [], 'lookup_purpose': intent,
+    })
+    request = 'Teleport the player and trade with the alien'
+    kwargs = {'target_path': spec['target_path'],
+              'owner': 'demo.ModUnit', 'router': Router([])}
+    registration = module._evidence(context, request, **kwargs)
+    entrypoint = module._evidence(context, request, feature_entrypoint=True, **kwargs)
+    assert 'Register supplied entities' in registration['lookup_purpose']
+    assert 'Teleport' not in registration['lookup_purpose']
+    assert entrypoint['lookup_purpose'] == request
