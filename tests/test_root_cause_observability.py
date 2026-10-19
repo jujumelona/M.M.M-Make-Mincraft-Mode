@@ -53,7 +53,11 @@ def test_bounded_safe_keeps_large_set_output_bounded_and_ordered() -> None:
     assert bounded[-1] == "<truncated:936>"
 
 
-def test_traced_callable_preserves_original_exception_chain(capsys: pytest.CaptureFixture[str]) -> None:
+def test_traced_callable_preserves_original_exception_chain(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Normal operation_start is durable but only failures reach stderr by default.
+    monkeypatch.setenv("MMM_ROOT_CAUSE_TRACE_STDERR", "all")
     def failing(api_key: str) -> None:
         try:
             raise KeyError("first-cause")
