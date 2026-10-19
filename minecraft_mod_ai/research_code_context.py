@@ -494,6 +494,7 @@ class ResearchCodeContext:
         self.evidence: dict[str, Evidence] = {}
         self.query_history: list[str] = []
         self.query_seen: set[str] = set()
+        self._generation_query_cache: dict[str, tuple[str, ...]] = {}
         self.knowledge_terms: Counter[str] = Counter()
         self.rounds: list[dict[str, Any]] = []
         self.monitor = DependencyMonitor(
@@ -601,6 +602,7 @@ class ResearchCodeContext:
             "evidence": {key: _clone_evidence(value) for key, value in self.evidence.items()},
             "query_history": list(self.query_history),
             "query_seen": set(self.query_seen),
+            "generation_query_cache": dict(self._generation_query_cache),
             "knowledge_terms": Counter(self.knowledge_terms),
             "rounds": copy.deepcopy(self.rounds),
         }
@@ -615,8 +617,20 @@ class ResearchCodeContext:
             }
         self.query_history = list(state.get("query_history", ()))
         self.query_seen = set(state.get("query_seen", ()))
+        self._generation_query_cache = dict(state.get("generation_query_cache", {}))
         self.knowledge_terms = Counter(state.get("knowledge_terms", {}))
         self.rounds = copy.deepcopy(list(state.get("rounds", ())))
+
+    def _generation_queries(self, text: str) -> list[str]:
+        """Reuse the query plan for an unchanged draft instead of evolving forever."""
+        digest = _sha(text)
+        cached = self._generation_query_cache.get(digest)
+        if cached is not None:
+            return list(cached)
+        queries = list(_draft_queries(_extract_json_object(text)))
+        queries.extend(self._knowledge_evolution_queries(text, limit=4))
+        self._generation_query_cache[digest] = tuple(queries)
+        return queries
 
     def evolve_from_generation(
         self, text: str
@@ -626,8 +640,7 @@ class ResearchCodeContext:
         violations = self.monitor.validate_model_output(text)
         before = len(self.evidence)
         before_terms = set(self.knowledge_terms)
-        queries = list(_draft_queries(_extract_json_object(text)))
-        queries.extend(self._knowledge_evolution_queries(text, limit=4))
+        queries = self._generation_queries(text)
         executed: list[str] = []
         for query in queries:
             if len(self.query_history) >= self.query_budget:
