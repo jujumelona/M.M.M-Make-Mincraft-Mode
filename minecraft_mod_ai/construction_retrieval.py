@@ -29,6 +29,13 @@ def _name_parts(row):
     return tuple(_meaningful_terms(_words(row.get('name', ''))))
 
 
+def _matches_method_prefix(part, prefix):
+    """Unify actual callable postings with recognized inflected action verbs."""
+    if prefix.startswith('action:'):
+        return prefix[7:] in root_action_stems(part)
+    return len(part) >= 5 and part[:5] == prefix
+
+
 def _purpose_name_weights(purpose):
     """Use matching, inspected method names to bridge inflected goal terms.
 
@@ -185,9 +192,11 @@ class ConstructionEvidenceIndex:
     def _index_name_owner(self, key, row):
         if row.get('kind') == 'METHOD':
             for part in _name_parts(row):
-                if len(part) >= 5:
-                    self.member_name_owners[part[:5]].add(row['owner'])
-                    self.member_name_keys[part[:5]].add(key)
+                prefixes = ([part[:5]] if len(part) >= 5 else [])
+                prefixes.extend('action:' + action for action in root_action_stems(part))
+                for prefix in prefixes:
+                    self.member_name_owners[prefix].add(row['owner'])
+                    self.member_name_keys[prefix].add(key)
 
     def _index_result_type(self, key, row):
         if row.get('kind') in {'METHOD', 'FIELD'} and row.get('return_type'):
@@ -279,8 +288,11 @@ class ConstructionEvidenceIndex:
         parts = _name_parts(self.symbols[key])
         if not parts:
             return 0.0
-        matches = sum(self.name_weights.get(part[:5], 0)
-                      for part in parts if len(part) >= 5)
+        matches = sum(max(
+            (self.name_weights.get(part[:5], 0) if len(part) >= 5 else 0),
+            *(self.name_weights.get('action:' + action, 0)
+              for action in root_action_stems(part)),
+        ) for part in parts)
         return matches / (1.0 + 0.65 * (len(parts) - 1))
 
     def intent_compatible(self, key):
@@ -291,10 +303,12 @@ class ConstructionEvidenceIndex:
         if not self.exact_action_available or not self.strong_name_prefixes:
             return True
         parts = _name_parts(self.symbols[key])
-        if not any(part[:5] in self.strong_name_prefixes for part in parts):
+        if not any(_matches_method_prefix(part, prefix)
+                   for part in parts for prefix in self.strong_name_prefixes):
             return False
-        return all(part[:5] in self.strong_name_prefixes or part in self.query_terms
-                   for part in parts)
+        return all(part in self.query_terms or any(
+            _matches_method_prefix(part, prefix) for prefix in self.strong_name_prefixes)
+            for part in parts)
 
     def _member_lexical_score(self, key):
         # Memoize only members of displayed owners. Duplicating every full
@@ -388,7 +402,7 @@ class ConstructionEvidenceIndex:
         for key in self.member_name_keys.get(prefix, ()):
             row = self.symbols[key]
             parts = _name_parts(row)
-            if not all(part[:5] == prefix or part in terms for part in parts):
+            if not all(_matches_method_prefix(part, prefix) or part in terms for part in parts):
                 continue
             if key in excluded or row.get('inherited_from') in excluded:
                 continue
@@ -447,13 +461,20 @@ class ConstructionEvidenceIndex:
         return dict(rows)
 
     def _focused_action_owners(self, purpose, selection):
-        """Prefer actual callable-name postings for a verb before broad owners."""
+        """Choose inspected callable postings using the same verbs as admission.
+
+        Action aliases (trading/trade, mining/mine) share one canonical key.
+        Keep the older strongly inflected lexical lookup as a fallback for
+        legitimate actions outside the explicit action vocabulary.
+        """
         weights = _purpose_name_weights(purpose)
-        ordered = sorted((prefix for prefix in weights if prefix in self.member_name_keys),
-                         key=lambda prefix: (-weights[prefix], len(self.member_name_keys[prefix]), prefix))
-        for prefix in ordered:
-            if weights[prefix] < 4 and prefix not in {'regis', 'creat', 'spaw', 'updat', 'remov', 'rende', 'inter', 'craft', 'attac', 'tradi'}:
-                continue
+        actions = sorted(('action:' + action for action in root_action_stems(purpose)
+                          if 'action:' + action in self.member_name_keys),
+                         key=lambda prefix: (len(self.member_name_keys[prefix]), prefix))
+        fallback = sorted((prefix for prefix, weight in weights.items()
+                           if weight >= 4 and prefix in self.member_name_keys),
+                          key=lambda prefix: (-weights[prefix], len(self.member_name_keys[prefix]), prefix))
+        for prefix in (*actions, *fallback):
             found = self._focused_method_owners(prefix, purpose, selection)
             if found:
                 return found, prefix
