@@ -246,6 +246,13 @@ def test_host_mode_owns_imports_entrypoint_and_all_behavior_registrars():
         def __init__(self):
             super().__init__(units=[])
 
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            if data_name == "submit_java_construction_plan_count":
+                self.data_calls.append((data_name, parameters))
+                return {"count": 0}
+            return super().generate_structured_data(
+                role, messages, data_name=data_name, parameters=parameters)
+
         def generate_java_source(self, role, messages, *, data_name, source_frame):
             self.source_calls.append((data_name, source_frame))
             assert data_name.startswith("submit_java_implementation_")
