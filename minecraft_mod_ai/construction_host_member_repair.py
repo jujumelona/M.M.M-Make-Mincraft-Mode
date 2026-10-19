@@ -9,7 +9,7 @@ import hashlib
 import json
 import re
 
-from .java_region_parser import _parse, _text
+from .java_region_parser import _parse
 
 
 def _failing_member(source: str, diagnostic: str, *, filename: str):
