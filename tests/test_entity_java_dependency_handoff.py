@@ -89,3 +89,27 @@ def test_registry_without_concrete_producer_is_rejected_before_model(tmp_path):
     with pytest.raises(ValueError, match="ARTIFACT_ENTITY_TYPE_SOURCE_DEPENDENCY_MISSING"):
         verified_graph_java_source_paths(
             job, context={}, port_registry=PortRegistry(), project_root=tmp_path)
+
+
+def test_entity_type_requires_concrete_supertype_and_constructor():
+    from minecraft_mod_ai.construction_file_author import (
+        ConstructionFileError, _check_concrete_entity,
+    )
+
+    context = {"authoring_contract": {"canonical_leaf": "minecraft/entity/type"}}
+    name = "AlienCombatHostileEntity"
+    with pytest.raises(ConstructionFileError, match="SUPERCLASS_REQUIRED"):
+        _check_concrete_entity(
+            "package example; public class AlienCombatHostileEntity { public void ping() {} }",
+            context, name,
+        )
+    with pytest.raises(ConstructionFileError, match="CONSTRUCTOR_REQUIRED"):
+        _check_concrete_entity(
+            "package example; public class AlienCombatHostileEntity extends Entity { public void ping() {} }",
+            context, name,
+        )
+    _check_concrete_entity(
+        "package example; public class AlienCombatHostileEntity extends Entity { "
+        "public AlienCombatHostileEntity(EntityType<?> type, Level level) {} }",
+        context, name,
+    )
