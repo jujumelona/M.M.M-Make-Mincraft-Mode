@@ -340,3 +340,42 @@ def test_object_members_are_only_included_when_the_source_references_them():
         '\nclass Helper { void call(Object value) { value.toString(); } }\n', DIAGNOSTIC)
     builder = next(row for row in explicit if row['verified_class'] == BUILDER)
     assert next(row for row in builder['members'] if row['name'] == 'toString')['owner'] == root
+
+
+def test_registry_leaf_targets_real_registry_method_not_jdi_implementors():
+    """The production registry responsibility must not become a JDI inspection request."""
+    from minecraft_mod_ai.construction_file_author import _file_api_intent
+    symbols = inventory()
+    jdi = 'com.sun.jdi.InterfaceType'
+    symbols[jdi] = {'kind': 'CLASS', 'owner': jdi, 'name': 'InterfaceType', 'access': 1}
+    symbols[jdi + '#implementors'] = {'kind': 'METHOD', 'owner': jdi,
+                                     'name': 'implementors', 'return_type': 'java.util.List',
+                                     'parameters': [], 'access': 1}
+    selected = context(symbols)
+    selected['authoring_contract'] = {
+        'canonical_leaf': 'minecraft/entity/registry',
+        'responsibility': 'Implement only the registry responsibility of the supplied entity artifact.',
+        'host_requirements': {'symbols': ['EntityType']},
+    }
+    intent = _file_api_intent(selected, 'Fight aliens and colonize planets.')
+    evidence = _evidence(selected, intent,
+                         target_path='src/main/java/demo/AlienRegistry.java',
+                         owner='demo.AlienRegistry', router=SimpleNamespace())
+    assert any(row.get('owner') == REGISTRY and row.get('name') == 'register'
+               for row in evidence['target_api'])
+    assert not any(row.get('owner', '').startswith('com.sun.jdi.')
+                   for row in evidence['target_api'])
+
+
+def test_initial_registry_api_includes_exact_resource_key_build_dependency():
+    symbols = inventory()
+    for i in range(24):
+        owner = ENTITY + f'.Noise{i:02d}'
+        symbols[owner] = {'kind': 'CLASS', 'owner': owner, 'name': owner.rsplit('.', 1)[-1],
+                          'enclosing_owner': ENTITY, 'access': 1}
+    evidence = _evidence(context(symbols), 'Register alien entity type',
+                         target_path='src/main/java/demo/AlienRegistry.java',
+                         owner='demo.AlienRegistry', router=SimpleNamespace())
+    shown = {row['verified_class'] for row in evidence['class_members']}
+    assert BUILDER in shown
+    assert KEY in shown  # Builder.build(ResourceKey) cannot be guessed.
