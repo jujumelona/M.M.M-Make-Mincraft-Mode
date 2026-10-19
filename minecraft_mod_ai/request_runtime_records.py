@@ -123,3 +123,47 @@ def generated_owner_source_context(project_root, spec, *, required_paths=()):
                        "truncated": len(excerpt) < len(source),
                        "authority": "materialized_prerequisite_source"})
     return result
+
+
+def verified_graph_java_source_paths(job, *, context, port_registry, project_root):
+    """Consume exact admitted producer ports instead of trusting model-supplied paths.
+
+    The registry of typed ports comes from completed ArtifactJobs. A producer
+    must have actually published a code fragment identical to its materialized
+    source; mere presence of a filename does not satisfy the dependency.
+    """
+    from .artifact_ports import PortKind
+
+    mapping = context.get("_artifact_java_source_ports") or {}
+    declared = tuple(name for name in job.requires if name in mapping)
+    if job.canonical_leaf == "minecraft/entity/registry" and not declared:
+        raise ValueError("ARTIFACT_ENTITY_TYPE_SOURCE_DEPENDENCY_MISSING: " + job.job_id)
+    root = Path(project_root).resolve()
+    paths = []
+    for name in declared:
+        port = port_registry.get(name) if port_registry is not None else None
+        if port is None or port.port_kind is not PortKind.GENERIC or port.target_type != "code_fragment":
+            raise ValueError("ARTIFACT_REQUIRED_SOURCE_PORT_MISSING: " + name)
+        try:
+            source = json.loads(port.value)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise ValueError("ARTIFACT_REQUIRED_SOURCE_PORT_INVALID: " + name) from exc
+        if not isinstance(source, str) or not source.strip():
+            raise ValueError("ARTIFACT_REQUIRED_SOURCE_PORT_INVALID: " + name)
+        relative = mapping[name]
+        if not isinstance(relative, str) or not relative.startswith(("src/main/java/", "src/client/java/")):
+            raise ValueError("ARTIFACT_REQUIRED_SOURCE_PATH_INVALID: " + name)
+        path = root / relative
+        # Reject symlink components so we cannot accept a different on-disk owner.
+        current = root
+        for segment in Path(relative).parts:
+            current = current / segment
+            if current.is_symlink():
+                raise ValueError("ARTIFACT_REQUIRED_SOURCE_PATH_SYMLINK: " + name)
+        resolved = path.resolve()
+        if not resolved.is_relative_to(root) or not resolved.is_file():
+            raise ValueError("ARTIFACT_REQUIRED_SOURCE_NOT_MATERIALIZED: " + name)
+        if resolved.read_text(encoding="utf-8") != source:
+            raise ValueError("ARTIFACT_REQUIRED_SOURCE_CONTENT_MISMATCH: " + name)
+        paths.append(relative)
+    return tuple(dict.fromkeys(paths))
