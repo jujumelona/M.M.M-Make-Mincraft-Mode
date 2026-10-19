@@ -113,7 +113,7 @@ def test_relations_use_host_owned_pair_cardinality_without_model_continuation():
     observed_pairs = {
         (row["source_id"], row["target_id"])
         for _, call in router.calls
-        for row in call["candidates"]
+        for row in call["relation_candidates"]
     }
     expected = {(source, target) for source in entity_ids for target in entity_ids if source != target}
     assert observed_pairs == expected
