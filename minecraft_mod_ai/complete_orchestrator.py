@@ -2348,6 +2348,11 @@ class CompleteProductionOrchestrator:
         review_pool = ThreadPoolExecutor(max_workers=max(1, review_workers), thread_name_prefix='blockbench_review')
         node_futures: dict[str, Future[Any]] = {}
         generation_errors: dict[str, str] = {}
+        # A single failed coder decode must not discard accepted independent
+        # work or require a manual Colab restart. Failed tasks can be re-queued
+        # once within this invocation; the existing ledger and source
+        # checkpoints remain the authority.
+        generation_decode_retries: dict[str, int] = {}
         idle_wait = threading.Event()
         lease_seconds = 900
         heartbeat_seconds = 60.0
@@ -2408,9 +2413,28 @@ class CompleteProductionOrchestrator:
                             f"[ORCHESTRATOR MODULE] {__file__}\n",
                             flush=True,
                         )
+                        # The generation worker has fenced/persisted its failure.
+                        # Retry only the known side-effect-free decoder loop,
+                        # never an unknown compiler failure or an input-required
+                        # gate. This uses the same durable plan and leaves
+                        # succeeded independent nodes/checkpoints untouched.
+                        error_text = f'{type(exc).__name__}: {exc}'
+                        if (
+                            'LLAMA_DEGENERATE_REPEATED_OUTPUT' in error_text
+                            and generation_decode_retries.get(node_id, 0) < 1
+                            and str(ledger.task(node_id)['state']) == 'failed'
+                        ):
+                            generation_decode_retries[node_id] = 1
+                            ledger.retry(node_id)
+                            print(
+                                'GENERATION_RESUME: decoder loop; retry failed '
+                                f'node={node_id} once with saved work intact',
+                                flush=True,
+                            )
+                            continue
                         # Preserve this node's failure but continue ready,
                         # independent work; failed prerequisites remain blocked.
-                        generation_errors[node_id] = f'{type(exc).__name__}: {exc}'
+                        generation_errors[node_id] = error_text
 
                 if generation_stages:
                     while True:
