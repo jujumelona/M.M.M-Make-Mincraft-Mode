@@ -288,11 +288,11 @@ class ConstructionEvidenceIndex:
         parts = _name_parts(self.symbols[key])
         if not parts:
             return 0.0
-        matches = sum(max(
+        matches = sum(max((
             (self.name_weights.get(part[:5], 0) if len(part) >= 5 else 0),
             *(self.name_weights.get('action:' + action, 0)
               for action in root_action_stems(part)),
-        ) for part in parts)
+        )) for part in parts)
         return matches / (1.0 + 0.65 * (len(parts) - 1))
 
     def intent_compatible(self, key):
