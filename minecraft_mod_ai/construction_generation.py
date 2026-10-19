@@ -169,15 +169,23 @@ def compose(router, spec, *, source_context=(), construction_context=None,
     # The old path remains manually opt-in for controlled regression tests.
     import os
     if os.environ.get("MMM_LEGACY_TYPED_IR") != "1":
-        from .construction_file_author import compose_complete_source
+        # Host-owned Java declaration frames are the production default.
+        # The former whole-file model author remains explicitly opt-in only;
+        # never recover a failed member by switching back to unbounded imports.
+        if os.environ.get("MMM_LEGACY_FILE_AUTHOR") == "1":
+            from .construction_file_author import compose_complete_source as author
+            mode = "legacy_file_level_java"
+        else:
+            from .construction_host_source import compose_host_java_source as author
+            mode = "host_scaffold_java"
         print('CONSTRUCTION_AUTHOR_ROUTE: ' + json.dumps({
-            'mode': 'file_level_java', 'owner': owner,
+            'mode': mode, 'owner': owner,
             'assigned_behaviors': len(behaviors),
             'target_build_verified': False,
             'legacy_automatic_fallback': False,
         }, ensure_ascii=False), flush=True)
-        return compose_complete_source(
-            router, spec, context, package=package, name=name, owner=owner,
+        return author(
+            planning_router, spec, context, package=package, name=name, owner=owner,
             behaviors=behaviors, source_context=source_context,
         )
     # Explicitly selected legacy implementation, never an automatic fallback.
