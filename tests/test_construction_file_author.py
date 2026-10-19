@@ -645,3 +645,33 @@ def test_registry_leaf_queries_true_action_not_generic_implement(monkeypatch, tm
     assert 'EntityType' in intent
     assert 'Implement' not in intent and 'Fight aliens' not in intent
     assert module._file_api_intent(context, 'Fight aliens', feature_entrypoint=True) == 'Fight aliens'
+
+
+def test_compiler_diagnostic_precedes_placeholder_when_both_are_broken(monkeypatch, tmp_path):
+    """Do not mask a fake Minecraft method behind a generic TODO exception."""
+    module, context, spec, observations = load_author(monkeypatch, tmp_path)
+    source = BAD.replace('INVALID_API()', 'INVALID_API(); throw new UnsupportedOperationException()')
+    router = Router([source, GOOD])
+    assert create(module, context, spec, router) == GOOD
+    assert 'compiled' in [row[0] for row in observations]
+    repair = json.loads(router.calls[1][1][-1]['content'])
+    assert 'cannot find symbol INVALID_API' in repair['error']
+    assert 'CONSTRUCTION_FILE_UNIMPLEMENTED_PLACEHOLDER' not in repair['error']
+    assert repair['previous_source'] == source.rstrip() + '\n'
+
+
+def test_registry_author_prompt_scopes_feature_goal_to_leaf(monkeypatch, tmp_path):
+    """The registry file cannot be tasked with the whole combat/colony feature."""
+    module, context, spec, _ = load_author(monkeypatch, tmp_path)
+    spec['requirement'] = 'Fight aliens and colonize planets.'
+    context['authoring_contract'] = {
+        'canonical_leaf': 'minecraft/entity/registry',
+        'responsibility': 'Implement only the registry responsibility of the supplied entity artifact.',
+        'host_requirements': {'symbols': ['EntityType']},
+    }
+    router = Router([GOOD])
+    assert create(module, context, spec, router) == GOOD
+    prompt = json.loads(router.calls[0][1][1]['content'])
+    assert prompt['requirement'] == context['authoring_contract']['responsibility']
+    assert prompt['original_feature_goal'] == spec['requirement']
+    assert prompt['construction_requirements']['canonical_leaf'] == 'minecraft/entity/registry'
