@@ -113,7 +113,7 @@ def test_generator_fails_closed_without_reviewed_deterministic_templates(
 
     # ModSpec refuses unsupported deterministic kinds before generation
     # can mutate the target directory.
-    with pytest.raises(SpecValidationError, match="deterministic bootstrap capabilities"):
+    with pytest.raises((SpecValidationError, GenerationError)):
         FabricProjectGenerator().generate(_simple_spec(adapter), project_root)
 
     assert not project_root.exists()

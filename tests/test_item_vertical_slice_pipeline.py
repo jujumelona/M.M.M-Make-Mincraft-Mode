@@ -106,7 +106,7 @@ def test_item_vertical_slice_end_to_end(tmp_path: Path, synthetic_platform_lock)
     # Dependency order:
     execution_order = [
         "raw_lunite.key_identifier",
-        "raw_lunite.register_basic",
+        "raw_lunite.register_keyed",
         "raw_lunite.settings_max_stack",
         "raw_lunite.initializer",
         "raw_lunite.client_item",

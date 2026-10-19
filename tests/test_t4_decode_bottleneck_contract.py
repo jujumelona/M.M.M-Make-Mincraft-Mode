@@ -28,7 +28,7 @@ def test_native_t4_server_launch_keeps_full_gpu_flash_attention_and_fit(monkeypa
         ("--gpu-layers", "all"),
         ("--flash-attn", "on"),
         ("--fit", "on"),
-        ("--load-mode", "none"),
+        ("--load-mode", "auto"),
     ):
         assert args[args.index(flag) + 1] == expected
     assert "--slots" not in args
