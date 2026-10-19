@@ -147,6 +147,29 @@ def _evidence(index, intent, source_pages):
         target_api.append(candidate)
         if len(target_api) >= 8:
             break
+    # CONSTRUCTION_ENTITY_TYPE_CLASS_ANCHORS: exact installed classes only.
+    # Concrete entity source needs a real inherited constructor contract,
+    # which a free-text "implement entity" method search cannot guarantee.
+    if (getattr(index, "contract", {}) or {}).get("canonical_leaf") == "minecraft/entity/type":
+        from .construction_state import symbol_record
+        anchors = (
+            "net.minecraft.world.entity.Entity",
+            "net.minecraft.world.entity.Mob",
+            "net.minecraft.world.entity.monster.Monster",
+            "net.minecraft.world.level.Level",
+            "net.minecraft.world.entity.EntityType",
+        )
+        grounded = []
+        for anchor in anchors:
+            for key in index.by_owner.get(anchor, ()):
+                row = index.symbols.get(key, {})
+                if row.get("kind") == "CLASS":
+                    grounded.append(symbol_record(key, row))
+                    break
+        known = {row.get("symbol_id") for row in grounded}
+        target_api = (grounded + [
+            row for row in target_api if row.get("symbol_id") not in known
+        ])[:8]
     # A ranked free-text search can return only irrelevant classes. For
     # recognizable gameplay kinds, recover a small set of *actual indexed*
     # official/Fabric symbols instead of sending ungrounded suggestions.
