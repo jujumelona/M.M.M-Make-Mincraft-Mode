@@ -136,7 +136,9 @@ def test_legacy_ir_not_automatic_default():
         pytest.skip('Integration entrypoint is supplied by the unified patch')
     code = path.read_text()
     assert 'MMM_LEGACY_TYPED_IR' in code
-    assert 'compose_complete_source(' in code
+    assert 'MMM_LEGACY_FILE_AUTHOR' in code
+    assert 'compose_host_java_source as author' in code
+    assert 'legacy_automatic_fallback' in code
 
 
 def test_feature_registrations_are_preserved_during_full_file_repair(monkeypatch,tmp_path):
