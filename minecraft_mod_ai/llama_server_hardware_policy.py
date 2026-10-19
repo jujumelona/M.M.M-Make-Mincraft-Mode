@@ -110,7 +110,11 @@ def _enforce_required_tool_sampling(payload: dict[str, Any]) -> dict[str, Any]:
     # A modest native repeat penalty prevents small local models from getting trapped
     # in exact argument loops while preserving repeated JSON keys across record arrays.
     payload["repeat_penalty"] = 1.05
-    payload["chat_template_kwargs"] = {"enable_thinking": False}
+    # Preserve family-specific native template keys (Qwen3.8 requires
+    # preserve_thinking=False) while forcing this action to non-thinking.
+    kwargs = dict(payload.get("chat_template_kwargs") or {})
+    kwargs["enable_thinking"] = False
+    payload["chat_template_kwargs"] = kwargs
     return payload
 
 
