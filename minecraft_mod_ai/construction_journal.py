@@ -95,3 +95,51 @@ class JournaledConstructionRouter:
                 if tmp.exists():
                     tmp.unlink()
         return result
+
+    def generate_java_source(self, role, messages, *, data_name, source_frame, **kwargs):
+        """Replay a previously validated declaration without consuming another LLM call.
+
+        A source frame, prompt, or project change changes the identity and cannot
+        silently reuse a different member. Failed decoding/validation is never saved.
+        """
+        identity = _sha({"role": role, "messages": messages,
+                         "data_name": data_name, "source_frame": source_frame,
+                         "kwargs": kwargs})
+        with _LOCK:
+            index = self.position
+            self.position += 1
+            if index < len(self.rows):
+                row = self.rows[index]
+                if row.get("input_sha256") != identity:
+                    raise ValueError("CONSTRUCTION_INFERENCE_REPLAY_DRIFT: " + str(index))
+                source = json.loads(row["response_json"])
+                if not isinstance(source, str):
+                    raise ValueError("CONSTRUCTION_INFERENCE_SOURCE_CORRUPT")
+                from .construction_source_repair import validate_generated_java_source
+                return validate_generated_java_source(source, source_frame,
+                    source_frame["prefix"], source_frame["suffix"])
+            if index != len(self.rows):
+                raise ValueError("CONSTRUCTION_INFERENCE_GAP")
+        source = self.router.generate_java_source(role, messages,
+            data_name=data_name, source_frame=source_frame, **kwargs)
+        if not isinstance(source, str):
+            raise ValueError("CONSTRUCTION_INFERENCE_SOURCE_REQUIRED")
+        from .construction_source_repair import validate_generated_java_source
+        validate_generated_java_source(source, source_frame,
+            source_frame["prefix"], source_frame["suffix"])
+        with _LOCK:
+            if len(self.rows) != index:
+                raise ValueError("CONSTRUCTION_INFERENCE_CONCURRENT_CONFLICT")
+            self.rows.append({"input_sha256": identity, "response_json": _json(source)})
+            envelope = {"binding": self.binding, "rows": self.rows,
+                        "digest": _sha(self.rows)}
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_name("." + self.path.name + "." + uuid4().hex + ".tmp")
+            try:
+                tmp.write_text(_json(envelope), encoding="utf-8")
+                with model_execution_publication():
+                    tmp.replace(self.path)
+            finally:
+                if tmp.exists():
+                    tmp.unlink()
+        return source
