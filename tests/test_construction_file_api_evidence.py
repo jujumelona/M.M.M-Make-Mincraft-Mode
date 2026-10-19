@@ -379,3 +379,22 @@ def test_initial_registry_api_includes_exact_resource_key_build_dependency():
     shown = {row['verified_class'] for row in evidence['class_members']}
     assert BUILDER in shown
     assert KEY in shown  # Builder.build(ResourceKey) cannot be guessed.
+
+
+def test_registry_builder_evidence_includes_resource_key_identifier_factory():
+    symbols = inventory()
+    identifier = 'net.minecraft.resources.Identifier'
+    symbols[identifier] = {'kind': 'CLASS', 'owner': identifier,
+                           'name': 'Identifier', 'access': 1}
+    symbols[identifier + '#parse'] = {'kind': 'METHOD', 'owner': identifier,
+                                     'name': 'parse', 'static': True,
+                                     'parameters': ['java.lang.String'],
+                                     'return_type': identifier, 'access': 1}
+    evidence = _evidence(context(symbols), 'Register alien entity type',
+                         target_path='src/main/java/demo/AlienRegistry.java',
+                         owner='demo.AlienRegistry', router=SimpleNamespace())
+    classes = {row['verified_class']: row for row in evidence['class_members']}
+    assert KEY in classes
+    assert identifier in classes
+    assert any(row['name'] == 'create' and identifier in row['parameters']
+               for row in classes[KEY]['members'])
