@@ -62,3 +62,23 @@ def test_standard_collection_import_from_jdk():
         code, symbols={}, owner="example.Demo",
         target_path="src/main/java/example/Demo.java")
     assert "import java.util.List;" in result
+
+
+def test_static_registry_reference_requires_verified_import():
+    code = ("package example;\npublic class Demo {\n"
+            " void init() { Registry.register(null, null, null); }\n}\n")
+    result = host_add_verified_imports(
+        code, symbols=inventory("net.minecraft.core.Registry"),
+        owner="example.Demo", target_path="src/main/java/example/Demo.java")
+    assert "import net.minecraft.core.Registry;" in result
+
+
+def test_nested_type_reference_does_not_import_unrelated_builder():
+    code = ("package example;\npublic class Demo {\n"
+            "  EntityType.Builder<?> builder;\n}\n")
+    result = host_add_verified_imports(
+        code, symbols=inventory("net.minecraft.world.entity.EntityType",
+            "java.example.Builder", "net.minecraft.world.entity.EntityType.Builder"),
+        owner="example.Demo", target_path="src/main/java/example/Demo.java")
+    assert "import net.minecraft.world.entity.EntityType;" in result
+    assert "import java.example.Builder;" not in result
