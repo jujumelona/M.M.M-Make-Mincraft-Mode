@@ -2,8 +2,6 @@ import pytest
 
 from minecraft_mod_ai.artifact_expansion import expand_facts_to_jobs
 from minecraft_mod_ai.artifact_graph_executor import execute_artifact_graph
-from minecraft_mod_ai.artifact_materializer import (
-)
 from minecraft_mod_ai.prompt_fact_types import FactType, PromptFact
 from minecraft_mod_ai.host_version_catalog import host_target
 from minecraft_mod_ai.resolved_version_context import VersionContextError
