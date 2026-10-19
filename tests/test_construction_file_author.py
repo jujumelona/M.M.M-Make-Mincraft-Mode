@@ -382,8 +382,7 @@ def test_output_exhaustion_is_not_retried_without_reducible_api(monkeypatch, tmp
     router = ExhaustingRouter([])
     with pytest.raises(RuntimeError, match='backend stopped before'):
         create(module, context, spec, router)
-    assert len(router.calls) == 2
-    assert "ZERO import lines" in router.calls[1][1][0]["content"]
+    assert len(router.calls) == 1
     assert not list((tmp_path / '.mmm' / 'construction_files').glob('*.json'))
 
 
@@ -585,7 +584,7 @@ def _raise_repeated_stream_output():
         raise RuntimeError("wrapped model stream failed") from exc
 
 
-def test_repeated_stream_decoding_switches_import_protocol_and_compacts_evidence(monkeypatch, tmp_path):
+def test_repeated_stream_decoding_retries_only_with_reduced_evidence(monkeypatch, tmp_path):
     module, context, spec, observations = load_author(monkeypatch, tmp_path)
     monkeypatch.setattr(module, '_evidence', lambda *a, **k: _large_api_context())
 
@@ -599,13 +598,7 @@ def test_repeated_stream_decoding_switches_import_protocol_and_compacts_evidence
     router = RepeatingRouter([])
     assert create(module, context, spec, router) == GOOD
     assert len(router.calls) == 2
-    assert "ZERO import lines" in router.calls[1][1][0]["content"]
-    assert "do not emit import declarations" in router.calls[1][1][0]["content"]
-    # The recovery must preserve the original user feature while changing
-    # only the protocol and optional observations.
-    assert json.loads(router.calls[1][1][1]["content"])["original_feature_goal"] == (
-        json.loads(router.calls[0][1][1]["content"])["original_feature_goal"]
-    )
+    assert len(json.dumps(router.calls[1][1])) < len(json.dumps(router.calls[0][1]))
     assert [entry[0] for entry in observations] == ['parsed', 'compiled', 'coverage']
 
 

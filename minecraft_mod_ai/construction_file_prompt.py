@@ -176,7 +176,7 @@ def _degenerate_decode_error(exc):
 
 def _completion_retry_candidate(messages, exc, target_path, *, output_retry_used,
                                 repetition_retry_used=False):
-    """Never continue partial Java; recover stalled decoding by changing the source protocol."""
+    """Never continue partial Java; only reduced optional evidence permits a retry."""
     from .llama_finish_reason_contract import (
         CONTEXT_PRESSURE,
         OUTPUT_EXHAUSTED,
@@ -189,33 +189,8 @@ def _completion_retry_candidate(messages, exc, target_path, *, output_retry_used
     if boundary is None or kind not in {CONTEXT_PRESSURE, OUTPUT_EXHAUSTED}:
         if repetition_retry_used or _degenerate_decode_error(exc) is None:
             return None
-        # A repeated import/identifier stream is a decoder mode collapse,
-        # not a context shortage. Merely removing a few optional API records
-        # reproduced the failure in production. Switch the Java *protocol*:
-        # fully-qualified references, no imports, no import-list prefix.
-        candidate = compact_api_observations(messages) or deepcopy(messages)
-        for message in candidate:
-            if message.get('role') != 'system':
-                continue
-            original = str(message.get('content') or '')
-            message['content'] = original.replace(
-                'include all necessary imports,',
-                'do not emit import declarations (use fully qualified Java names),',
-            ).replace(
-                'include only imports for types actually referenced by the completed class.',
-                'do not emit import declarations (use fully qualified Java names).',
-            ) + (
-                "\nREPETITION RECOVERY: The previous decoder became stuck emitting "
-                "repeated Java imports. After the package statement, start the "
-                "public class declaration immediately. Emit ZERO import lines. "
-                "Use fully qualified type names in the implementation. "
-                "Write the complete real feature; no placeholders, no skipped "
-                "behavior, and no commentary. Never repeat an import or type list."
-            )
-        _record_context_pressure(
-            messages, candidate, boundary, target_path, kind='repeated_output')
-        return candidate, 'repeated_output'
-    if kind == OUTPUT_EXHAUSTED and output_retry_used:
+        kind = 'repeated_output'
+    elif kind == OUTPUT_EXHAUSTED and output_retry_used:
         return None
     candidate = compact_api_observations(messages)
     _record_context_pressure(messages, candidate, boundary, target_path, kind=kind)
