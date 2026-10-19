@@ -292,3 +292,185 @@ def test_entrypoint_rejects_noop_registrars(monkeypatch, tmp_path):
         )
         with pytest.raises(module.ConstructionFileError, match='BEHAVIOR_NOOP'):
             module._check_entrypoint(source, spec)
+
+
+def _large_api_context():
+    return {'target_api': [], 'source': [], 'typed_input_producers': [],
+            'class_members': [
+                {'verified_class': f'example.Api{i}',
+                 'declaration': {'kind': 'CLASS', 'owner': f'example.Api{i}', 'name': f'Api{i}'},
+                 'members': [{'kind': 'METHOD', 'owner': f'example.Api{i}',
+                              'name': f'auxiliary{n}', 'parameters': [], 'return_type': 'void'}
+                             for n in range(16)],
+                 'evidence': 'actual_target_symbol_index', 'behavior_verified': False}
+                for i in range(12)]}
+
+
+def _raise_context_pressure():
+    from minecraft_mod_ai.llama_finish_reason_contract import LlamaCompletionBoundaryError, CONTEXT_PRESSURE
+    try:
+        raise LlamaCompletionBoundaryError('49422 input tokens exceed 32768 context',
+            kind=CONTEXT_PRESSURE, prompt_tokens=49422)
+    except LlamaCompletionBoundaryError as exc:
+        raise RuntimeError('backend rejected exact context') from exc
+
+
+def test_context_pressure_recovers_without_spending_compiler_repair(monkeypatch, tmp_path):
+    module, context, spec, observations = load_author(monkeypatch, tmp_path)
+    monkeypatch.setattr(module, '_evidence', lambda *a, **k: _large_api_context())
+    context['feature_work_order'] = {'acceptance': {'max_compiler_repair_attempts': 0}}
+    class PressureRouter(Router):
+        def generate_text(self, role, messages, **kwargs):
+            self.calls.append((role, list(messages), kwargs))
+            if len(self.calls) == 1:
+                _raise_context_pressure()
+            return GOOD
+    router = PressureRouter([])
+    assert create(module, context, spec, router) == GOOD
+    assert len(router.calls) == 2
+    first = json.loads(router.calls[0][1][1]['content'])
+    retried = json.loads(router.calls[1][1][1]['content'])
+    assert first['requirement'] == retried['requirement'] == spec['requirement']
+    assert retried['target'] == context['target']
+    assert retried['feature_work_order'] == context['feature_work_order']
+    assert len(json.dumps(router.calls[1][1])) < len(json.dumps(router.calls[0][1]))
+    assert [row[0] for row in observations] == ['parsed', 'compiled', 'coverage']
+
+
+def test_compiler_repairs_do_not_accumulate_old_source_and_api_history(monkeypatch, tmp_path):
+    module, context, spec, _ = load_author(monkeypatch, tmp_path)
+    second = BAD.replace('INVALID_API()', 'INVALID_API(1)')
+    router = Router([BAD, second, GOOD])
+    assert create(module, context, spec, router) == GOOD
+    repairs = [json.loads(row['content']) for row in router.calls[2][1]
+               if row['role'] == 'user' and json.loads(row['content']).get('repair_complete_file')]
+    assert len(repairs) == 1
+    assert repairs[0]['previous_source'] == second
+    assert 'cannot find symbol' in repairs[0]['error']
+
+
+def test_pressure_during_repair_preserves_complete_failed_source(monkeypatch, tmp_path):
+    module, context, spec, _ = load_author(monkeypatch, tmp_path)
+    monkeypatch.setattr(module, '_evidence', lambda *a, **k: _large_api_context())
+    class RepairPressureRouter(Router):
+        def generate_text(self, role, messages, **kwargs):
+            self.calls.append((role, list(messages), kwargs))
+            if len(self.calls) == 1:
+                return BAD
+            if len(self.calls) == 2:
+                _raise_context_pressure()
+            return GOOD
+    router = RepairPressureRouter([])
+    assert create(module, context, spec, router) == GOOD
+    repair = json.loads(router.calls[-1][1][-1]['content'])
+    assert repair['previous_source'] == BAD
+    assert 'cannot find symbol' in repair['error']
+
+
+def test_diagnostic_dedup_preserves_other_initial_contracts_for_same_class(monkeypatch, tmp_path):
+    module, context, spec, _ = load_author(monkeypatch, tmp_path)
+    initial = _large_api_context()
+    owner = 'example.Api0'
+    initial['class_members'][0]['members'][0]['name'] = 'initialFactory'
+    monkeypatch.setattr(module, '_evidence', lambda *a, **k: initial)
+    diagnostic = {'verified_class': owner, 'declaration': initial['class_members'][0]['declaration'],
+                  'members': [{'kind': 'METHOD', 'owner': owner, 'name': 'correctedCall',
+                               'parameters': ['int'], 'return_type': 'void'}]}
+    monkeypatch.setattr(module, '_diagnostic_api_evidence', lambda *a, **k: [diagnostic])
+    router = Router([BAD, GOOD])
+    assert create(module, context, spec, router) == GOOD
+    current = [json.loads(row['content']) for row in router.calls[-1][1] if row['role'] == 'user']
+    records = [*current[0]['inspected_target_api']['class_members'],
+               *current[-1]['verified_symbols_from_compiler_failure']]
+    matching = [row for row in records if row['verified_class'] == owner]
+    assert len(matching) == 1
+    assert {'initialFactory', 'correctedCall'} <= {row['name'] for row in matching[0]['members']}
+
+
+def test_second_repair_retains_discovery_and_prior_verified_contracts(monkeypatch, tmp_path):
+    module, context, spec, _ = load_author(monkeypatch, tmp_path)
+    initial = _large_api_context()
+    owner = 'example.Api0'
+    initial['class_members'][0]['members'][0]['name'] = 'initialFactory'
+    monkeypatch.setattr(module, '_evidence', lambda *a, **k: initial)
+    def diagnostic(_context, source, _error):
+        return [{'verified_class': owner,
+                 'declaration': initial['class_members'][0]['declaration'],
+                 'members': [{'kind': 'METHOD', 'owner': owner,
+                              'name': 'repairTwo' if 'INVALID_API(1)' in source else 'repairOne',
+                              'parameters': [], 'return_type': 'void'}]}]
+    monkeypatch.setattr(module, '_diagnostic_api_evidence', diagnostic)
+    router = Router([BAD, BAD.replace('INVALID_API()', 'INVALID_API(1)'), GOOD])
+    assert create(module, context, spec, router) == GOOD
+    current = [json.loads(row['content']) for row in router.calls[-1][1] if row['role'] == 'user']
+    records = [*current[0]['inspected_target_api']['class_members'],
+               *current[-1]['verified_symbols_from_compiler_failure']]
+    matching = [row for row in records if row['verified_class'] == owner]
+    assert len(matching) == 1
+    assert {'initialFactory', 'repairOne', 'repairTwo'} <= {row['name'] for row in matching[0]['members']}
+
+
+def test_context_recovery_never_retries_an_unchanged_mandatory_prompt(monkeypatch, tmp_path):
+    module, context, spec, _ = load_author(monkeypatch, tmp_path)
+    class NoRoomRouter(Router):
+        def generate_text(self, role, messages, **kwargs):
+            self.calls.append((role, list(messages), kwargs))
+            _raise_context_pressure()
+    router = NoRoomRouter([])
+    with pytest.raises(RuntimeError, match='backend rejected exact context'):
+        create(module, context, spec, router)
+    assert len(router.calls) == 1
+    assert not list((tmp_path / '.mmm' / 'construction_files').glob('*.json'))
+
+
+def test_exhausted_canonical_context_recovery_is_not_started_again(monkeypatch, tmp_path):
+    module, context, spec, _ = load_author(monkeypatch, tmp_path)
+    monkeypatch.setattr(module, '_evidence', lambda *a, **k: _large_api_context())
+    from minecraft_mod_ai.llama_finish_reason_contract import (
+        LlamaCompletionBoundaryError, CONTEXT_PRESSURE, mark_context_recovery_exhausted)
+    error = LlamaCompletionBoundaryError('already handled', kind=CONTEXT_PRESSURE)
+    mark_context_recovery_exhausted(error)
+    class ExhaustedRouter(Router):
+        def generate_text(self, role, messages, **kwargs):
+            self.calls.append((role, list(messages), kwargs))
+            raise error
+    router = ExhaustedRouter([])
+    with pytest.raises(LlamaCompletionBoundaryError, match='already handled'):
+        create(module, context, spec, router)
+    assert len(router.calls) == 1
+
+
+def test_non_context_backend_error_is_not_retried(monkeypatch, tmp_path):
+    module, context, spec, _ = load_author(monkeypatch, tmp_path)
+    class UnavailableRouter(Router):
+        def generate_text(self, role, messages, **kwargs):
+            self.calls.append((role, list(messages), kwargs))
+            raise RuntimeError('server unavailable')
+    router = UnavailableRouter([])
+    with pytest.raises(RuntimeError, match='server unavailable'):
+        create(module, context, spec, router)
+    assert len(router.calls) == 1
+
+
+def test_context_compaction_preserves_generic_factories_and_referenced_overloads():
+    from minecraft_mod_ai.construction_file_prompt import compact_api_observations
+    api = _large_api_context()
+    factory = {'kind': 'METHOD', 'owner': 'example.Api0', 'name': 'fromConfig',
+               'static': True, 'return_type': 'example.Api0<java.lang.String>',
+               'parameters': ['example.Config<java.lang.String>']}
+    overloads = [{'kind': 'METHOD', 'owner': 'example.Api0', 'name': 'wanted',
+                  'parameters': [type_], 'return_type': 'void'}
+                 for type_ in ('int', 'java.lang.String')]
+    api['class_members'][0]['members'].extend([*overloads, factory])
+    source = 'package demo; class ModUnit { void f() { api.wanted(1); } }'
+    prompt = {'requirement': '정확한 전체 요구사항', 'previous_source': source,
+              'inspected_target_api': api}
+    messages = [{'role': 'user', 'content': json.dumps(prompt, ensure_ascii=False)}]
+    result = compact_api_observations(messages)
+    assert result is not None
+    current = json.loads(result[0]['content'])
+    assert current['previous_source'] == source
+    assert current['requirement'] == prompt['requirement']
+    members = current['inspected_target_api']['class_members'][0]['members']
+    assert factory in members
+    assert all(row in members for row in overloads)

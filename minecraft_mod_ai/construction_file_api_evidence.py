@@ -19,7 +19,7 @@ def prompt_symbol_record(row):
     Hashes, binary descriptors, classpath/debug receipts and repeated symbol IDs
     stay in the authoritative host index. Never shorten a type or signature.
     """
-    fields = ('kind', 'owner', 'name', 'return_type', 'static', 'varargs',
+    fields = ('kind', 'owner', 'name', 'access', 'return_type', 'static', 'varargs',
               'generic_signature', 'signature', 'type_parameters', 'throws',
               'superclass', 'interfaces', 'enclosing_owner', 'enclosing_instance_type',
               'functional_parameters', 'functional_return_type', 'functional_throws')

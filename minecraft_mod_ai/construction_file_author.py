@@ -369,15 +369,16 @@ def compose_complete_source(router, spec: dict, context: dict, *, package: str, 
             "For each repair, rewrite the WHOLE compilable file, including corrections to bad design "
             "and imports, not just the line of the compiler error."
         )
-        messages = [{"role": "system", "content": system},
-                    {"role": "user", "content": json.dumps(prompt, ensure_ascii=False, default=str)}]
+        from .construction_file_prompt import file_messages, generate_file_text
+        repair = None
         if checkpoint_error is not None:
-            messages.append({"role": "user", "content": json.dumps({
+            repair = {
                 "repair_complete_file": True,
                 "error": checkpoint_error,
                 "previous_source": saved["source"],
                 "instruction": "The previously accepted compilation unit no longer resolves. Repair the WHOLE source against the new project context."
-            }, ensure_ascii=False)})
+            }
+        messages = file_messages(system, prompt, repair)
         previous = {hashlib.sha256(saved['source'].encode()).hexdigest()} if checkpoint_error is not None else set()
         last_error = "No candidate received"
         # This is an execution safety boundary, not the remedy for a bad
@@ -389,7 +390,10 @@ def compose_complete_source(router, spec: dict, context: dict, *, package: str, 
         if type(repair_budget) is not int or repair_budget < 0:
             raise ConstructionFileError('CONSTRUCTION_FILE_REPAIR_CONTRACT_INVALID')
         for attempt in range(1 + repair_budget):
-            raw = router.generate_text("coder", messages, enable_tools=False, force_non_thinking=True)
+            raw = generate_file_text(router, messages, target_path=spec['target_path'])
+            # Carry any compacted discovery view forward instead of restoring
+            # the oversized initial observations after a compiler rejection.
+            prompt = json.loads(messages[1]['content'])
             source = None
             try:
                 source = _only_java(raw)
@@ -412,14 +416,15 @@ def compose_complete_source(router, spec: dict, context: dict, *, package: str, 
                 failed = trace / (identifier + "-" + str(attempt) + ".json")
                 failed.write_text(json.dumps({"path": spec["target_path"], "error": last_error,
                     "source": source if source is not None else raw}, ensure_ascii=False, indent=2))
-                messages.append({"role": "user", "content": json.dumps({
+                repair = {
                     "repair_complete_file": True, "error": last_error,
                     "previous_source": source if source is not None else raw,
                     "required_behavior": requirement,
                     "verified_symbols_from_compiler_failure": _diagnostic_api_evidence(
                         context, source or '', last_error),
                     "instruction": "Fix the cause, including architecture/dependency/actual API mistakes. Only the listed inspected symbols are verified; missing prerequisite source may require structural changes. Return the entire Java file."
-                }, ensure_ascii=False)})
+                }
+                messages = file_messages(system, prompt, repair)
                 continue
             from .construction_coverage import record_authored_source_calls
             record_authored_source_calls(root, spec["target_path"], source, source_kind="direct")

@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import json
 
 from minecraft_mod_ai.construction_file_author import _diagnostic_api_evidence, _evidence
+from minecraft_mod_ai.construction_file_api_evidence import prompt_symbol_record
 
 
 ENTITY = 'net.minecraft.world.entity.EntityType'
@@ -13,6 +14,15 @@ REGISTRY = 'net.minecraft.core.Registry'
 BUILTINS = 'net.minecraft.core.registries.BuiltInRegistries'
 KEY = 'net.minecraft.resources.ResourceKey'
 FACTORY = ENTITY + '.EntityFactory'
+
+
+def test_prompt_projection_preserves_semantic_java_modifiers():
+    declaration = {'kind': 'CLASS', 'owner': 'example.Base', 'name': 'Base'}
+    for access in (0x0001, 0x0401, 0x0601):
+        assert prompt_symbol_record({**declaration, 'access': access})['access'] == access
+    field = {'kind': 'FIELD', 'owner': 'example.Base', 'name': 'VALUE', 'return_type': 'int'}
+    for access in (0x0009, 0x0019):
+        assert prompt_symbol_record({**field, 'access': access})['access'] == access
 
 
 def inventory():
