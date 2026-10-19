@@ -148,12 +148,12 @@ def _check_concrete_entity(source: str, context: dict, name: str) -> None:
         return
     code = _lexical_code(source)
     declaration = re.search(
-        r"\\bclass\\s+" + re.escape(name) +
-        r"\\s+extends\\s+([A-Za-z_$][\\w$.]*)\\b", code,
+        r"\bclass\s+" + re.escape(name) +
+        r"\s+extends\s+([A-Za-z_$][\w$.]*)\b", code,
     )
     if declaration is None or declaration.group(1) in {"Object", "java.lang.Object"}:
         raise ConstructionFileError("CONSTRUCTION_ENTITY_SUPERCLASS_REQUIRED")
-    if not re.search(r"\\b" + re.escape(name) + r"\\s*\\([^)]*\\)\\s*\\{", code):
+    if not re.search(r"\b" + re.escape(name) + r"\s*\([^)]*\)\s*\{", code):
         raise ConstructionFileError("CONSTRUCTION_ENTITY_CONSTRUCTOR_REQUIRED")
 
 
