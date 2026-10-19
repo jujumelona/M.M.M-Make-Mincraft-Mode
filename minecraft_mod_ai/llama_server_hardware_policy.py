@@ -226,6 +226,20 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
         payload.pop("json_schema", None)
         payload["grammar"] = native_java_source_grammar(metadata["mmm_java_source_frame"])
         payload["chat_template_kwargs"] = {"enable_thinking": False}
+    # The standard MiMo coder profile is greedy. When its decoder enters an
+    # exact periodic loop, one *new* sample must change the decoding dynamics,
+    # not repeat the same greedy result. Do not alter structured/tool turns.
+    if (
+        isinstance(metadata, Mapping)
+        and metadata.get("mmm_decode_repetition_recovery") is True
+        and str(getattr(adapter.config, "role", "")) == "coder"
+        and not tools
+        and getattr(request, "response_format", None) == "text"
+    ):
+        payload["temperature"] = 0.35
+        payload["top_p"] = 0.90
+        payload["repeat_penalty"] = 1.20
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
     payload = _enforce_required_tool_sampling(payload)
     return apply_request_generation_budget(payload, config=adapter.config, request=request)
 
