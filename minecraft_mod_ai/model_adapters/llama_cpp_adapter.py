@@ -79,6 +79,24 @@ def _transient_transport_failure(exc: BaseException) -> bool:
     return False
 
 
+def _is_degenerate_decode_error(exc: BaseException) -> bool:
+    """Unwrap the stream watchdog error without matching unrelated failures."""
+    from ..llama_completion_liveness_contract import LlamaDegenerateOutputError
+
+    visited: set[int] = set()
+    current: Any = exc
+    while isinstance(current, BaseException) and id(current) not in visited:
+        if isinstance(current, LlamaDegenerateOutputError):
+            return True
+        visited.add(id(current))
+        current = (
+            getattr(current, "cause", None)
+            or current.__cause__
+            or current.__context__
+        )
+    return False
+
+
 def _native_format_replay_request(request: GenerationRequest) -> GenerationRequest:
     """Downgrade one side-effect-free JSON turn after native schema rejection.
 
@@ -200,6 +218,34 @@ class LlamaCppAdapter(ModelAdapter):
                     return _generate_one_turn(self, server_url, active_request)
                 except Exception as replay_exc:
                     exc = replay_exc
+
+            # A periodic decoder loop is not a network failure. Deterministically
+            # replaying the same prompt at temperature zero reproduces it.
+            # Re-sample ONLY a side-effect-free coder text turn, once, with a
+            # native anti-loop sampling profile. Structured/tool turns retain
+            # their existing schema and execution boundaries.
+            if (
+                self.config.role == "coder"
+                and not request.tools
+                and request.response_format == "text"
+                and _is_degenerate_decode_error(exc)
+            ):
+                metadata = (
+                    dict(active_request.metadata)
+                    if isinstance(active_request.metadata, Mapping)
+                    else {}
+                )
+                if not metadata.get("mmm_decode_repetition_recovery"):
+                    metadata["mmm_decode_repetition_recovery"] = True
+                    metadata["mmm_force_non_thinking"] = True
+                    try:
+                        return _generate_one_turn(
+                            self,
+                            server_url,
+                            replace(active_request, metadata=metadata),
+                        )
+                    except Exception as recovery_exc:
+                        exc = recovery_exc
 
             if isinstance(exc, ModelBackendError):
                 raise exc
