@@ -260,35 +260,10 @@ def validate_block_vertical_slice(
         checks["texture_asset_present"] = False
         unresolved_obligations.append(f"{mod_id}:textures/block/{block_name}.png")
 
-    # 8. Check Loot Table if drop item specified
+    # 8. Cross-check the versioned datapack loot table when a drop is required.
     if expected_drop_item:
-        loot_root = root / "src" / "main" / "resources" / "data" / mod_id
-        # Since Minecraft 1.21, datapack loot tables use singular loot_table.
-        # Older imported projects still use the legacy loot_tables directory.
-        candidates = (
-            loot_root / "loot_table" / "blocks" / f"{block_name}.json",
-            loot_root / "loot_tables" / "blocks" / f"{block_name}.json",
-        )
-        loot_file = next((candidate for candidate in candidates if candidate.is_file()), candidates[0])
-        if not loot_file.is_file():
-            raise ReferenceValidationError(f"REF_MISSING_FILE: Loot table JSON not found at {loot_file}")
-        try:
-            loot_data = json.loads(loot_file.read_text(encoding="utf-8"))
-            pools = loot_data.get("pools", [])
-            found_drop = False
-            expected_entry_name = f"{mod_id}:{expected_drop_item}"
-            for pool in pools:
-                for entry in pool.get("entries", []):
-                    if entry.get("name") == expected_entry_name:
-                        found_drop = True
-                        break
-            if not found_drop:
-                raise ReferenceValidationError(
-                    f"REF_LOOT_DROP_MISMATCH: Loot table {loot_file.name} does not drop {expected_entry_name!r}"
-                )
-            checks["loot_drop_matched"] = True
-        except json.JSONDecodeError as exc:
-            raise ReferenceValidationError(f"REF_INVALID_JSON: Loot table JSON is invalid: {exc}") from exc
+        _validate_block_drop(root, mod_id, block_name, expected_drop_item)
+        checks["loot_drop_matched"] = True
 
     details["checks"] = checks
     details["unresolved_asset_obligations"] = unresolved_obligations
@@ -299,3 +274,29 @@ def validate_block_vertical_slice(
         "mod_id": mod_id,
         "details": details,
     }
+
+
+def _validate_block_drop(root: Path, mod_id: str, block_name: str, drop_item: str) -> None:
+    """Validate block drop from either reviewed 1.21+ or legacy datapack layout."""
+    loot_root = root / "src/main/resources/data" / mod_id
+    candidates = (
+        loot_root / "loot_table/blocks" / f"{block_name}.json",
+        loot_root / "loot_tables/blocks" / f"{block_name}.json",
+    )
+    loot_file = next((path for path in candidates if path.is_file()), candidates[0])
+    if not loot_file.is_file():
+        raise ReferenceValidationError(f"REF_MISSING_FILE: Loot table JSON not found at {loot_file}")
+    try:
+        loot_data = json.loads(loot_file.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ReferenceValidationError(f"REF_INVALID_JSON: Loot table JSON is invalid: {exc}") from exc
+    expected = f"{mod_id}:{drop_item}"
+    if not any(
+        entry.get("name") == expected
+        for pool in loot_data.get("pools", [])
+        for entry in pool.get("entries", [])
+        if isinstance(entry, dict)
+    ):
+        raise ReferenceValidationError(
+            f"REF_LOOT_DROP_MISMATCH: Loot table {loot_file.name} does not drop {expected!r}"
+        )

@@ -12,6 +12,7 @@ from typing import Any
 from .deadline_executor import iter_completed_with_deadlines
 from .execution_contract_policy import DEFAULT_ATOMIC_SCHEMA_LIMITS
 from .fixed_template_generation import generate_fixed_template_value
+from .model_output_atomicity_contract import structured_output_token_ceiling
 
 _MARKER = "_mmm_central_intelligence_amplifier_v1"
 _PARALLEL_CORE_MARKER = "_mmm_parallel_research_design_core_v1"
@@ -45,7 +46,7 @@ def _research_string_list_schema() -> dict[str, Any]:
         "items": {
             "type": "string",
             "minLength": 1,
-            "maxLength": _RESEARCH_STRING_MAX,
+            "maxLength": min(128, _RESEARCH_STRING_MAX),
         },
     }
 
@@ -61,7 +62,7 @@ _COUNCIL_SCHEMA: dict[str, Any] = {
                 "subproblems": _research_string_list_schema(),
                 "risks": _research_string_list_schema(),
                 "research_questions": _research_string_list_schema(),
-                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                "confidence": {"type": "number", "enum": [step / 10 for step in range(11)]},
             },
             "required": [
                 "must_preserve",
@@ -119,7 +120,7 @@ _REVIEW_SCHEMA: dict[str, Any] = {
                     "type": "string",
                     "enum": ["none", "low", "medium", "high", "critical"],
                 },
-                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                "confidence": {"type": "number", "enum": [step / 10 for step in range(11)]},
             },
             "required": [
                 "missing_requirements",
@@ -157,25 +158,39 @@ def _generate_atomic_research_object(
         raise ValueError(f"research schema {wrapper!r} properties are invalid")
 
     merged: dict[str, Any] = {}
-    width = DEFAULT_ATOMIC_SCHEMA_LIMITS.max_fields
-    for start in range(0, len(required), width):
-        names = required[start : start + width]
-        part_schema = {
+    pending: list[str] = []
+
+    def page(names: Sequence[str]) -> dict[str, Any]:
+        return {
             "type": "object",
             "properties": {name: properties[name] for name in names},
             "required": list(names),
             "additionalProperties": False,
         }
+
+    def submit(names: Sequence[str]) -> None:
+        part_schema = page(names)
+        structured_output_token_ceiling(part_schema)
         value = generate_fixed_template_value(
-            router,
-            role,
-            messages,
-            response_schema=part_schema,
-            enable_tools=False,
+            router, role, messages,
+            response_schema=part_schema, enable_tools=False,
         )
         if not isinstance(value, Mapping):
             raise ValueError(f"research batch for {wrapper!r} was not an object")
         merged.update({name: value[name] for name in names})
+
+    for name in required:
+        proposal = [*pending, name]
+        if pending and (
+            len(proposal) > DEFAULT_ATOMIC_SCHEMA_LIMITS.max_fields
+            or structured_output_token_ceiling(page(proposal), absolute_ceiling=None)
+            > 4096
+        ):
+            submit(pending)
+            pending = []
+        pending.append(name)
+    if pending:
+        submit(pending)
     return merged
 
 
