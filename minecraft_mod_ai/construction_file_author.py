@@ -221,6 +221,12 @@ def _read_materialized_context(context: dict, *, target_path: str, source_contex
 def _evidence(context: dict, intent: str, *, target_path: str, owner: str, router) -> dict:
     from .construction_retrieval import ConstructionEvidenceIndex
     from .construction_direct_writer import _evidence as _scoped_api_evidence
+    contract = context.get('authoring_contract') or {}
+    if contract.get('canonical_leaf') and contract.get('responsibility'):
+        # The overall feature may say "fight aliens" while this artifact owns
+        # entity registration. Query that host-owned role, not the whole game.
+        intent = ' '.join((str(contract['responsibility']), str(contract['canonical_leaf']),
+            *map(str, contract.get('host_requirements', {}).get('symbols', ()))))
     index = ConstructionEvidenceIndex(context["symbols"], context.get("source_pages", {}),
         router, target_path=target_path, owner=owner,
         authoring_contract=context.get("authoring_contract", {}))
@@ -323,6 +329,7 @@ def compose_complete_source(router, spec: dict, context: dict, *, package: str, 
             "output_path": spec["target_path"],
             "side": spec.get("side", "COMMON"),
             "construction_requirements": context.get("authoring_contract", {}),
+            "construction_bindings": context.get("binding_pages", {}),
             "assigned_runtime_records": spec.get("bindings", {}).get("owned_runtime_records_json", "[]"),
             "retained_effect_ownership": spec.get("bindings", {}).get("retained_typed_behavior_json", "{}"),
             "implementation_requirements": spec.get("bindings", {}).get("java_implementation_requirements", ""),

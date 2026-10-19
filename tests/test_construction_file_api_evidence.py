@@ -304,3 +304,39 @@ def test_large_class_name_catalog_does_not_fill_the_model_prompt():
     assert set(builder['overload_counts']) <= shown
     assert builder['member_count'] == 2502
     assert builder['members_truncated'] is True
+
+
+def test_artifact_responsibility_drives_api_lookup_for_broad_gameplay_request():
+    symbols = inventory()
+    for owner in ('net.minecraft.util.datafix.fixes.LegacyDragonFightFix',
+                  'net.minecraft.world.level.dimension.end.EnderDragonFight'):
+        symbols[owner] = {'kind': 'CLASS', 'owner': owner, 'name': owner.rsplit('.', 1)[-1], 'access': 1}
+    selected = context(symbols)
+    selected['authoring_contract'] = {
+        'canonical_leaf': 'minecraft/entity/registry',
+        'responsibility': 'Register the supplied entity type.',
+        'host_requirements': {'symbols': ['EntityType']},
+    }
+    evidence = _evidence(selected, 'Fight aliens and colonize planets.',
+                         target_path='src/main/java/demo/AlienRegistry.java',
+                         owner='demo.AlienRegistry', router=SimpleNamespace())
+    owners = {row['verified_class'] for row in evidence['class_members']}
+    assert ENTITY in owners and BUILDER in owners
+    assert not any('DragonFight' in owner for owner in owners)
+
+
+def test_object_members_are_only_included_when_the_source_references_them():
+    symbols = inventory()
+    root = 'java.lang.Object'
+    symbols[root] = {'kind': 'CLASS', 'owner': root, 'name': 'Object', 'access': 1}
+    for name, params in (('wait', []), ('toString', []), ('equals', [root])):
+        symbols[root + '#' + name] = {'kind': 'METHOD', 'owner': root, 'name': name,
+            'parameters': params, 'return_type': 'void', 'access': 1}
+    symbols[BUILDER]['superclass'] = root
+    initial = _diagnostic_api_evidence(context(symbols), SOURCE, DIAGNOSTIC)
+    builder = next(row for row in initial if row['verified_class'] == BUILDER)
+    assert not any(row['owner'] == root for row in builder['members'])
+    explicit = _diagnostic_api_evidence(context(symbols), SOURCE +
+        '\nclass Helper { void call(Object value) { value.toString(); } }\n', DIAGNOSTIC)
+    builder = next(row for row in explicit if row['verified_class'] == BUILDER)
+    assert next(row for row in builder['members'] if row['name'] == 'toString')['owner'] == root

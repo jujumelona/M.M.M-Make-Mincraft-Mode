@@ -179,6 +179,11 @@ class FileAPIEvidence:
             key = self.classes[name]
             declaration = self.symbols[key]
             options = self._member_options(name)
+            # Object utilities repeated on every class consumed most of the
+            # discovery view. Preserve them when the current source needs one.
+            options = [(member_key, row) for member_key, row in options
+                       if name == 'java.lang.Object' or row.get('owner') != 'java.lang.Object'
+                       or row.get('name') in used or row.get('name') in missing]
 
             def rank(item):
                 member_key, row = item

@@ -474,3 +474,14 @@ def test_context_compaction_preserves_generic_factories_and_referenced_overloads
     members = current['inspected_target_api']['class_members'][0]['members']
     assert factory in members
     assert all(row in members for row in overloads)
+
+
+def test_module_binding_values_reach_the_complete_file_author(monkeypatch, tmp_path):
+    module, context, spec, _ = load_author(monkeypatch, tmp_path)
+    bindings = {'module_config_json': [{'key': 'max_health', 'value': 100.0},
+                                     {'key': 'movement_speed', 'value': 0.25}]}
+    context['binding_pages'] = bindings
+    router = Router([GOOD])
+    assert create(module, context, spec, router) == GOOD
+    prompt = json.loads(router.calls[0][1][1]['content'])
+    assert prompt['construction_bindings'] == bindings
