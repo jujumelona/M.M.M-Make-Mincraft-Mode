@@ -337,6 +337,72 @@ def test_context_pressure_recovers_without_spending_compiler_repair(monkeypatch,
     assert [row[0] for row in observations] == ['parsed', 'compiled', 'coverage']
 
 
+
+def _raise_output_exhaustion():
+    from minecraft_mod_ai.llama_finish_reason_contract import (
+        LlamaCompletionBoundaryError, OUTPUT_EXHAUSTED)
+    try:
+        raise LlamaCompletionBoundaryError(
+            'native llama-server exhausted bounded output allowance',
+            kind=OUTPUT_EXHAUSTED,
+            partial_message={'content': 'package demo; public class ModUnit { /* unfinished'},
+            prompt_tokens=23824, completion_tokens=8944, max_tokens=8944)
+    except LlamaCompletionBoundaryError as exc:
+        raise RuntimeError('backend stopped before the Java source completed') from exc
+
+
+def test_output_exhaustion_compacts_optional_api_once_without_accepting_partial(monkeypatch, tmp_path):
+    module, context, spec, observations = load_author(monkeypatch, tmp_path)
+    monkeypatch.setattr(module, '_evidence', lambda *a, **k: _large_api_context())
+    context['feature_work_order'] = {'acceptance': {'max_compiler_repair_attempts': 0}}
+
+    class ExhaustingRouter(Router):
+        def generate_text(self, role, messages, **kwargs):
+            self.calls.append((role, list(messages), kwargs))
+            if len(self.calls) == 1:
+                _raise_output_exhaustion()
+            return GOOD
+
+    router = ExhaustingRouter([])
+    assert create(module, context, spec, router) == GOOD
+    assert len(router.calls) == 2
+    assert len(json.dumps(router.calls[1][1])) < len(json.dumps(router.calls[0][1]))
+    assert all('unfinished' not in row['content'] for row in router.calls[1][1])
+    assert [row[0] for row in observations] == ['parsed', 'compiled', 'coverage']
+
+
+def test_output_exhaustion_is_not_retried_without_reducible_api(monkeypatch, tmp_path):
+    module, context, spec, _ = load_author(monkeypatch, tmp_path)
+
+    class ExhaustingRouter(Router):
+        def generate_text(self, role, messages, **kwargs):
+            self.calls.append((role, list(messages), kwargs))
+            _raise_output_exhaustion()
+
+    router = ExhaustingRouter([])
+    with pytest.raises(RuntimeError, match='backend stopped before'):
+        create(module, context, spec, router)
+    assert len(router.calls) == 1
+    assert not list((tmp_path / '.mmm' / 'construction_files').glob('*.json'))
+
+
+def test_output_exhaustion_has_only_one_recovery_even_if_api_can_shrink_again(monkeypatch, tmp_path):
+    module, context, spec, _ = load_author(monkeypatch, tmp_path)
+    monkeypatch.setattr(module, '_evidence', lambda *a, **k: _large_api_context())
+
+    class ExhaustingRouter(Router):
+        def generate_text(self, role, messages, **kwargs):
+            self.calls.append((role, list(messages), kwargs))
+            _raise_output_exhaustion()
+
+    router = ExhaustingRouter([])
+    with pytest.raises(RuntimeError, match='backend stopped before'):
+        create(module, context, spec, router)
+    assert len(router.calls) == 2
+    assert len(json.dumps(router.calls[1][1])) < len(json.dumps(router.calls[0][1]))
+    assert not list((tmp_path / '.mmm' / 'construction_files').glob('*.json'))
+
+
 def test_compiler_repairs_do_not_accumulate_old_source_and_api_history(monkeypatch, tmp_path):
     module, context, spec, _ = load_author(monkeypatch, tmp_path)
     second = BAD.replace('INVALID_API()', 'INVALID_API(1)')
