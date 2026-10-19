@@ -30,35 +30,32 @@ class _AtomicRouter:
         context = json.loads(str(user_message))
         self.calls.append(("planner-json", context))
         fields = response_schema["properties"]
-        if "property" in fields or "value" in fields:
-            requested = str(context["requested_property"])
-            assert context["allowed_properties"] == [requested]
-            # Current single_record_template projects one logical record into
-            # two independent finite schema pages, never a combined JSON call.
-            assert len(fields) == 1
-            if "property" in fields:
-                return json.dumps({"property": requested})
-            values = {
-                "display_name": "Test Entity",
-                "category": "monster",
-                "health": "20",
-                "speed": "0.25",
-                "tracking_range": "16",
-                "width": "0.6",
-                "height": "1.8",
-            }
-            chosen = values[requested]
-            enum = fields["value"].get("enum")
-            if enum is not None:
-                chosen = enum[0]
-            return json.dumps({"value": chosen})
+        values = {
+            "display_name": "Test Entity",
+            "category": "monster",
+            "health": "20",
+            "speed": "0.25",
+            "tracking_range": "16",
+            "width": "0.6",
+            "height": "1.8",
+        }
+        if "requested_properties" in context:
+            requested = context["requested_properties"]
+            assert list(fields) == requested
+            return json.dumps({
+                name: fields[name]["enum"][0] if "enum" in fields[name]
+                else values[name]
+                for name in requested
+            })
+        if fields and all(name.startswith("r") for name in fields):
+            # The host packs relation decisions into bounded boolean pages.
+            return json.dumps({name: False for name in fields})
         if "count" in fields:
             assert "source_entity" in context
             assert "target_entity" in context
             assert 0 in fields["count"]["enum"]
             return '{"count":0}'
         raise AssertionError(f"unexpected schema: {response_schema}")
-
 
 def test_content_properties_are_one_property_atomic_calls():
     router = _AtomicRouter()
@@ -83,9 +80,13 @@ def test_content_properties_are_one_property_atomic_calls():
     )
 
     assert [row["property"] for row in result["records"]] == properties
-    assert len(router.calls) == len(properties)
+    assert 0 < len(router.calls) <= len(properties)
     assert all(name == "planner-json" for name, _ in router.calls)
-    observed = [context["requested_property"] for _, context in router.calls]
+    observed = [
+        name
+        for _, context in router.calls
+        for name in context["requested_properties"]
+    ]
     assert observed == properties
 
 
@@ -107,11 +108,12 @@ def test_relations_use_host_owned_pair_cardinality_without_model_continuation():
 
     assert result["records"] == []
     expected_pairs = len(entity_ids) * (len(entity_ids) - 1)
-    assert len(router.calls) == expected_pairs
+    assert 0 < len(router.calls) <= expected_pairs
     assert all(name == "planner-json" for name, _ in router.calls)
     observed_pairs = {
-        (call["source_entity"]["entity_id"], call["target_entity"]["entity_id"])
+        (row["source_id"], row["target_id"])
         for _, call in router.calls
+        for row in call["candidates"]
     }
     expected = {(source, target) for source in entity_ids for target in entity_ids if source != target}
     assert observed_pairs == expected

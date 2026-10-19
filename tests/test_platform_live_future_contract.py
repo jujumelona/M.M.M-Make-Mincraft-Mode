@@ -102,6 +102,11 @@ def test_live_validator_does_not_guess_future_pack_format_or_legacy_paths(
         boss=None,
     )
 
+    # Exercise the provider-owned future-target validator, not the legacy
+    # reviewed-template validator that assumes a historical pack layout.
+    from minecraft_mod_ai import validator as validator_module
+
+    live_validation.install(validator_module)
     report = ProjectValidator().validate(root, spec)
     assert report.status == "PASS", [item.__dict__ for item in report.findings]
     assert not any(item.code == "BAD_RESOURCE_PACK_FORMAT" for item in report.findings)

@@ -270,15 +270,28 @@ def _cache_path() -> Path:
     return (Path.home() / ".cache" / "mmm" / "llama-server-autotune.json").resolve()
 
 
-def _load_cached_decision(fingerprint: str) -> AutotuneDecision | None:
-    path = _cache_path()
+def _read_autotune_entries() -> dict[str, Any]:
+    """Read the versioned multi-model store, including legacy single-model files."""
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+        payload = json.loads(_cache_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    if payload.get("store_schema") == "mmm/llama-server-autotune-store-v1":
+        entries = payload.get("entries")
+        return dict(entries) if isinstance(entries, dict) else {}
+    if (payload.get("schema_version") == _BENCHMARK_SCHEMA_VERSION
+            and isinstance(payload.get("fingerprint"), str)):
+        return {payload["fingerprint"]: payload}
+    return {}
+
+
+def _load_cached_decision(fingerprint: str) -> AutotuneDecision | None:
+    payload = _read_autotune_entries().get(fingerprint)
+    if not isinstance(payload, dict):
         return None
     if payload.get("schema_version") != _BENCHMARK_SCHEMA_VERSION:
-        return None
-    if payload.get("fingerprint") != fingerprint:
         return None
     try:
         selected = ServerVariant(**payload["selected"])
@@ -325,12 +338,19 @@ def _save_decision(decision: AutotuneDecision) -> None:
             for probe in decision.probes
         ],
     }
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    temporary.replace(path)
+    with _AUTOTUNE_LOCK:
+        entries = _read_autotune_entries()
+        entries[decision.fingerprint] = payload
+        store = {
+            "store_schema": "mmm/llama-server-autotune-store-v1",
+            "entries": entries,
+        }
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_text(
+            json.dumps(store, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(path)
 
 
 def _free_port(preferred: int) -> int:

@@ -59,6 +59,11 @@ def test_strict_server_generate_reuses_shared_http_client_without_auxiliary_metr
     requested_urls: list[str] = []
     fake_httpx = SimpleNamespace(
         Timeout=lambda **_kwargs: object(),
+        # Importing the adapter captures httpx.post even though this test
+        # exclusively exercises the shared streaming client.
+        post=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("unexpected direct HTTP request")
+        ),
     )
     monkeypatch.setitem(sys.modules, "httpx", fake_httpx)
     monkeypatch.setattr(
