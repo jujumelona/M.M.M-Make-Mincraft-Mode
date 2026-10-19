@@ -1,4 +1,4 @@
-name: RAG and Construction Progress Contracts
+name: Host Java and Construction Progress Contracts
 
 on:
   workflow_dispatch:
@@ -13,7 +13,11 @@ on:
       - 'minecraft_mod_ai/construction_journal.py'
       - 'minecraft_mod_ai/construction_memory.py'
       - 'minecraft_mod_ai/construction_declaration_choices.py'
-      - 'tests/test_ecosystem_discovery.py'
+      - 'tests/test_first_pass_java_source.py'
+      - 'tests/test_host_java_imports.py'
+      - 'tests/test_construction_host_source.py'
+      - 'tests/test_construction_host_member_repair.py'
+      - 'tests/test_construction_java_member_journal.py'
       - 'tests/test_construction_operation_progress_gate.py'
       - '.github/workflows/rag-construction-progress-contract.yml'
 
@@ -48,5 +52,9 @@ jobs:
       - name: Run regression contracts
         run: |
           python -m pytest -q --maxfail=1 \
-            tests/test_ecosystem_discovery.py \
+            tests/test_first_pass_java_source.py \
+            tests/test_host_java_imports.py \
+            tests/test_construction_host_source.py \
+            tests/test_construction_host_member_repair.py \
+            tests/test_construction_java_member_journal.py \
             tests/test_construction_operation_progress_gate.py
