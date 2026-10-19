@@ -129,38 +129,45 @@ def _record_context_pressure(messages, candidate, boundary, target_path, *, kind
             {'messages': messages, **details}, durable_trace_path().parent / 'file_author_context')
     except (OSError, ValueError) as exc:
         details['prompt_artifact_error'] = type(exc).__name__
-    event = ('construction_file_output_compaction' if kind == 'output_exhausted'
-             else 'construction_file_context_compaction')
+    event = {
+        'context_pressure': 'construction_file_context_compaction',
+        'output_exhausted': 'construction_file_output_compaction',
+    }[kind]
     emit_root_cause(event, stage='generate',
                    operation=target_path, result='RETRY' if candidate is not None else 'BLOCKED',
                    details=details)
 
 
-def generate_file_text(router, messages, *, target_path):
-    """Context preflight rejections do not spend the compiler repair contract."""
+def _completion_retry_candidate(messages, exc, target_path, *, output_retry_used):
+    """Never continue partial Java; only reduced optional evidence permits a retry."""
     from .llama_finish_reason_contract import (
         CONTEXT_PRESSURE, OUTPUT_EXHAUSTED, completion_boundary_error,
         completion_boundary_kind)
 
+    boundary = completion_boundary_error(exc)
+    kind = completion_boundary_kind(exc)
+    if boundary is None or kind not in {CONTEXT_PRESSURE, OUTPUT_EXHAUSTED}:
+        return None
+    if kind == OUTPUT_EXHAUSTED and output_retry_used:
+        return None
+    candidate = compact_api_observations(messages)
+    _record_context_pressure(messages, candidate, boundary, target_path, kind=kind)
+    if candidate is None:
+        return None
+    return candidate, kind
+
+
+def generate_file_text(router, messages, *, target_path):
+    """Reduce optional API evidence, never truncate or checkpoint partial Java."""
     output_retry_used = False
     while True:
         try:
             return router.generate_text('coder', messages, enable_tools=False, force_non_thinking=True)
         except Exception as exc:
-            boundary = completion_boundary_error(exc)
-            kind = completion_boundary_kind(exc)
-            if boundary is None or kind not in {CONTEXT_PRESSURE, OUTPUT_EXHAUSTED}:
+            retry = _completion_retry_candidate(
+                messages, exc, target_path, output_retry_used=output_retry_used)
+            if retry is None:
                 raise
-            if kind == OUTPUT_EXHAUSTED and output_retry_used:
-                # One atomic output retry per file action: never continue a
-                # half-written Java response or loop over an exhausted model.
-                raise
-            candidate = compact_api_observations(messages)
-            _record_context_pressure(messages, candidate, boundary, target_path, kind=kind)
-            if candidate is None:
-                # Required inputs and verified signatures cannot be shortened.
-                # Propagate the original typed boundary, not partial source.
-                raise
-            if kind == OUTPUT_EXHAUSTED:
-                output_retry_used = True
+            candidate, kind = retry
+            output_retry_used |= kind == 'output_exhausted'
             messages[:] = candidate
