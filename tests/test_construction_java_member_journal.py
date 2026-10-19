@@ -6,8 +6,8 @@ import pytest
 from minecraft_mod_ai.construction_journal import JournaledConstructionRouter
 
 
-FRAME = {"kind": "method", "prefix": "public void ping() {\\n",
-         "suffix": "\\n}"}
+FRAME = {"kind": "method", "prefix": "public void ping() {\n",
+         "suffix": "\n}"}
 MESSAGES = [{"role": "user", "content": "Implement ping"}]
 SPEC = {"language": "java", "target_path": "src/main/java/example/Ping.java"}
 CONTEXT = {"target": {"loader": "fabric", "minecraft": "26.2"},
