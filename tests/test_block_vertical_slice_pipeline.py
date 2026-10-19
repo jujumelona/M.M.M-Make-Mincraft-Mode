@@ -234,7 +234,7 @@ def test_block_vertical_slice_end_to_end(tmp_path: Path, synthetic_platform_lock
             / "resources"
             / "data"
             / mod_id
-            / "loot_tables"
+            / "loot_table"
             / "blocks"
             / "lunite_ore.json"
         ).read_text(encoding="utf-8")

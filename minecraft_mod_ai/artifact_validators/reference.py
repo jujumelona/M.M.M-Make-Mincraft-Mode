@@ -262,7 +262,14 @@ def validate_block_vertical_slice(
 
     # 8. Check Loot Table if drop item specified
     if expected_drop_item:
-        loot_file = root / "src" / "main" / "resources" / "data" / mod_id / "loot_tables" / "blocks" / f"{block_name}.json"
+        loot_root = root / "src" / "main" / "resources" / "data" / mod_id
+        # Since Minecraft 1.21, datapack loot tables use singular loot_table.
+        # Older imported projects still use the legacy loot_tables directory.
+        candidates = (
+            loot_root / "loot_table" / "blocks" / f"{block_name}.json",
+            loot_root / "loot_tables" / "blocks" / f"{block_name}.json",
+        )
+        loot_file = next((candidate for candidate in candidates if candidate.is_file()), candidates[0])
         if not loot_file.is_file():
             raise ReferenceValidationError(f"REF_MISSING_FILE: Loot table JSON not found at {loot_file}")
         try:
