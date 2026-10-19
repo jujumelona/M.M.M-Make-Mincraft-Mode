@@ -36,4 +36,9 @@ Further boundary checks and full-suite/Actions results are recorded in follow-up
 - `c668dcb`: wildcard and same-package type resolution; inaccessible member signature filtering; path tests that do not require javac. Focused verification: 32 passed, 10 skipped. Direct Implementation Migration and Cross-stage Contract ABI Actions succeeded for this commit.
 - Review follow-up: preserve a representative of each referenced member/factory/build role before filling overload slots, with explicit member/overload truncation metadata. Include public superclass/interface members while preserving declaring owners and overrides. Prioritize javac instance receiver diagnostics. Remove inaccessible callback functional metadata without mutating the symbol inventory.
 - Five review regressions failed before these fixes. Final focused verification: 37 passed, 10 skipped (javac unavailable). Ruff passed.
-- An earlier whole-suite run was interrupted after source changes made its loaded code obsolete; it is not a whole-suite pass. Its three failures were the wildcard/same-package/signature-boundary regressions subsequently verified passing. Broader final construction checks and latest whole CI are tracked separately; no runtime gameplay completion claim is made.
+- An earlier whole-suite run was interrupted after source changes made its loaded code obsolete; it is not a whole-suite pass. It stopped with three failure markers before producing a failure summary, so their names are not inferred from that interrupted run. Broader final construction checks and latest whole CI are tracked separately; no runtime gameplay completion claim is made.
+
+
+Final source commit: `60ac28ad3c39ce3fe99519bf43eb94bb4e53543f`.
+
+The completed broader run, `python -m pytest -o addopts='' -q tests/test_construction*.py`, covered all 19 construction test files: **117 passed, 10 skipped in 66.37 seconds**. The skipped cases require a real javac executable, unavailable in this local runtime. Modified-source compileall, Ruff F/E7/E9 and git whitespace checks passed. Latest full CI/production kill gates and actual MiMo 9B + Minecraft execution are not certified by this result.

@@ -34,9 +34,11 @@
 - [x] Write regressions for the production import/nested-owner collision, initial builder signatures, deterministic order, access/side boundaries and unknown APIs.
 - [x] Run regressions against the current source and observe assertion failures.
 - [x] Implement exact import/receiver resolution and a reusable inspected member evidence builder; retain field/method signatures and functional/generic metadata.
-- [ ] Verify focused tests and existing construction tests, then run the repository suite and report any environment limitations explicitly.
-- [ ] Commit and push the repair; inspect Actions for this commit.
+- [x] Verify focused tests and existing construction tests, then run the repository suite and report any environment limitations explicitly.
+- [x] Commit and push the repair; inspect Actions for this commit.
 
 Progress: Baseline: 17 passed, 1 skipped, 3 pre-existing failures in test_construction_direct_input_producers because its fake index lacks by_owner. Update the test fixture to the real index protocol alongside this fix. New production regressions fail before implementation as expected.
 
 Independent fallback review completed: four Important findings reproduced by five failing tests, then fixed; 37 passed, 10 JDK skips. First two commits pushed as 42050eb and c668dcb. Full-suite interruption and runtime limits documented in the production report.
+
+Completed broader construction suite: 117 passed, 10 JDK-dependent skips across 19 files in 66.37 seconds. Code repair pushed as 60ac28a; original full-suite run was interrupted and is explicitly not reported as passing. Selected-model/gameplay verification remains external to this local run.
