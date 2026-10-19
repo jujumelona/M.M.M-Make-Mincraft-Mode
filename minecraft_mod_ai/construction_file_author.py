@@ -23,6 +23,14 @@ def _only_java(text: object) -> str:
     if not isinstance(text, str) or not text.strip():
         raise ConstructionFileError("CONSTRUCTION_FILE_SOURCE_MISSING")
     source = text.strip()
+    # Small chat-tuned models sometimes emit a fictitious file-write tool
+    # invocation despite enable_tools=False. Extract exactly one embedded
+    # compilation unit, then apply all normal identity/parser/compile gates.
+    # A tool-only response is never treated as an executable action.
+    if not source.startswith("package ") and source.count("<parameter=content>") == 1:
+        embedded = source.split("<parameter=content>", 1)[1].split("</parameter>", 1)[0].strip()
+        if embedded.startswith("package "):
+            source = embedded
     if source.startswith("```"):
         lines = source.splitlines()
         if len(lines) < 3 or not lines[-1].strip() == "```":
@@ -30,6 +38,8 @@ def _only_java(text: object) -> str:
         source = "\n".join(lines[1:-1]).strip()
     if "```" in source:
         raise ConstructionFileError("CONSTRUCTION_FILE_EXTRA_CONTENT")
+    if not source.startswith("package "):
+        raise ConstructionFileError("CONSTRUCTION_FILE_NON_JAVA_RESPONSE")
     return source.rstrip() + "\n"
 
 
@@ -185,8 +195,8 @@ def _read_materialized_context(context: dict, *, target_path: str, source_contex
         if relative == target_path or absolute.stat().st_size > 120_000:
             continue
         rows.append({"path": relative, "authority": "materialized_prerequisite",
-                     "code": absolute.read_text(encoding="utf-8")[:7000]})
-        if len(rows) >= 6:
+                     "code": absolute.read_text(encoding="utf-8")[:3500]})
+        if len(rows) >= 4:
             return rows
     # Workspace paths are already materialized prerequisites, never donor code
     # fetched from an external mod repository.
@@ -200,8 +210,8 @@ def _read_materialized_context(context: dict, *, target_path: str, source_contex
             if isinstance(code, str) and code.strip():
                 rows.append({"path": str(relative), "signature": str(item.get("signature", "")),
                              "authority": str(item.get("authority", "source_only")),
-                             "code": code[:5000]})
-            if len(rows) >= 6:
+                             "code": code[:3500]})
+            if len(rows) >= 4:
                 return rows
     # The full project will be verified by the normal production build after
     # emission; this bounded view is only a prompt context for the 9B model.
@@ -368,6 +378,11 @@ def compose_complete_source(router, spec: dict, context: dict, *, package: str, 
         system = (
             "You implement real Java source files for the EXACT selected Fabric and Minecraft versions. "
             "Return ONLY the complete Java file, starting with its package statement. "
+            "You have NO shell, file-write, tool-call or code-execution tools. Never emit "
+            "<tool_call>, <function=...>, prose, XML, or a filename as your answer. "
+            "The response itself must begin with 'package ' and contain Java source only. "
+            "The selected mappings use Minecraft OFFICIAL names, not Yarn names; "
+            "do not import net.minecraft.entity or net.minecraft.registry from Yarn. "
             "Use exactly the specified package and public class; include all necessary imports, "
             "members, constructors, registry fields, lifecycle and required behavior. "
             "Implement functionality directly, without another planning response, node graph, stub, "
