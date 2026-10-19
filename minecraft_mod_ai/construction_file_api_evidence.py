@@ -227,6 +227,7 @@ class FileAPIEvidence:
         pending[:0] = actionable
         pending.extend(sorted(self.children.get(name, ())))
         pending.extend(incidental)
+        return actionable
 
     def records(self, owners, *, source='', diagnostic='', intent=''):
         roots = list(dict.fromkeys(canonical_type_name(name) for name in owners))
@@ -234,7 +235,7 @@ class FileAPIEvidence:
         # Nested builders/factories are actionable API, not incidental text matches.
         pending = [*roots, *(child for name in roots
                              for child in sorted(self.children.get(name, ())))]
-        answer, seen = [], set()
+        answer, seen, builder_inputs = [], set(), set()
         used = set(re.findall(r'\b[A-Za-z_$][\w$]*', source + '\n' + diagnostic + '\n' + intent))
         missing = set(re.findall(r'\bsymbol:\s+(?:method|variable|class)\s+([\w$]+)', diagnostic))
         while pending and len(answer) < 12:
@@ -246,5 +247,9 @@ class FileAPIEvidence:
             options, chosen = self._selected_members(name, used, missing)
             answer.append(self._class_record(name, declaration, options, chosen))
             if name in roots or canonical_type_name(declaration.get('enclosing_owner', '')) in roots:
+                builder_inputs.update(self._append_signature_dependencies(pending, name, chosen, seen))
+            elif name in builder_inputs:
+                # Exactly one additional hop exposes the constructors/factories
+                # of a required parameter type (e.g. Identifier for ResourceKey).
                 self._append_signature_dependencies(pending, name, chosen, seen)
         return answer
