@@ -315,8 +315,6 @@ def runtime():
 
 
 def test_production_consumes_registry_and_checks_real_resource_set(tmp_path):
-    from PIL import Image
-
     from minecraft_mod_ai.resource_asset_production import generate_assets
 
     router, proposal, calls = runtime()
@@ -326,10 +324,7 @@ def test_production_consumes_registry_and_checks_real_resource_set(tmp_path):
 
 
 def test_tampered_manifest_is_rejected_before_backend(tmp_path):
-    from minecraft_mod_ai.resource_asset_production import (
-        AssetProductionError,
-        generate_assets,
-    )
+    from minecraft_mod_ai.resource_asset_production import generate_assets
 
     router, proposal, calls = runtime()
     proposal.game_design["_asset_generation_plan"]["assets"][0]["textures"] = []
@@ -569,7 +564,7 @@ def test_opaque_flux_like_cube_runs_single_candidate_with_birefnet_alpha(tmp_pat
     with pytest.raises(ValueError, match="AI_TEXTURE_GENERATION_REMOVED"):
         generate_assets(router, proposal, tmp_path / "mod", tmp_path / "run")
     assert calls == []
-    assert not output.exists()
+    assert not (tmp_path / "mod").exists()
 
 
 def test_alpha_prefetch_occurs_only_after_text_server_shutdown(tmp_path, monkeypatch):
@@ -611,7 +606,7 @@ def test_alpha_preflight_failure_still_releases_image_session(tmp_path, monkeypa
     from contextlib import contextmanager
 
     from minecraft_mod_ai import resource_alpha_segmentation as alpha
-    from minecraft_mod_ai.resource_asset_production import AssetProductionError, generate_assets
+    from minecraft_mod_ai.resource_asset_production import generate_assets
 
     router, proposal, _calls = runtime()
     events = []
