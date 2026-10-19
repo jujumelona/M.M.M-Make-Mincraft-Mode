@@ -40,6 +40,36 @@ def _producer_index(jobs: list[ArtifactJob]) -> dict[str, str]:
     return producers
 
 
+def _declared_java_source_ports(jobs: list[ArtifactJob]) -> dict[str, str]:
+    """Map admitted producer ports to actual Java paths, not guessed class names."""
+    from .implementation_identity import ExecutorType
+    from .task_template_catalog import load_template
+
+    paths: dict[str, str] = {}
+    for job in jobs:
+        if job.executor_type is not ExecutorType.PYTHON_GENERATOR or not job.canonical_leaf:
+            continue
+        inputs = job.deterministic_inputs.get("_canonical_inputs")
+        if not isinstance(inputs, dict):
+            continue
+        manifest = load_template(job.canonical_leaf)
+        try:
+            port = next(x["name"] for x in manifest["inputs"]
+                        if x["type"] == "specification")
+            spec = inputs[port]
+        except (KeyError, StopIteration, TypeError):
+            continue
+        if not isinstance(spec, dict) or spec.get("language") != "java":
+            continue
+        for name, output in zip(job.produces, manifest["outputs"], strict=True):
+            if output["type"] == "code_fragment":
+                path = spec.get("target_path")
+                if not isinstance(path, str) or not path.endswith(".java"):
+                    raise ArtifactGraphError("ARTIFACT_JAVA_SOURCE_PATH_MISSING: " + job.job_id)
+                paths[name] = path
+    return paths
+
+
 def _configured_positive_int(name: str, default: int) -> int:
     raw = os.getenv(name, "").strip()
     if not raw:
@@ -198,6 +228,9 @@ def execute_artifact_graph(
         }
 
     producers = _producer_index(ordered_jobs)
+    # The scheduler already knows which approved producer owns each code port.
+    # Make its materialized path visible to the consumer before Java authoring.
+    context["_artifact_java_source_ports"] = _declared_java_source_ports(ordered_jobs)
     missing_external: dict[str, list[str]] = {}
     for job in ordered_jobs:
         missing = [
