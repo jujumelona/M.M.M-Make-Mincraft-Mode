@@ -19,7 +19,17 @@ def test_geckolib_has_no_magic_blue_entity_texture():
 
 
 def test_entity_orchestrator_requires_atomic_semantics():
+    from minecraft_mod_ai.geckolib_generation_contract import (
+        GeckoLibGenerationContractError,
+        geckolib_entity_inputs_from_module_config,
+    )
+    import pytest
+
     source = Path("minecraft_mod_ai/complete_orchestrator.py").read_text(encoding="utf-8")
-    assert "ENTITY_DESIGN_UNRESOLVED" in source
-    assert 'max_health=float(config["max_health"])' in source
-    assert 'movement_speed=float(config["movement_speed"])' in source
+    assert "geckolib_entity_inputs_from_module_config(" in source
+    with pytest.raises(GeckoLibGenerationContractError, match="explicit main_color"):
+        geckolib_entity_inputs_from_module_config("entity", {})
+    with pytest.raises(GeckoLibGenerationContractError, match="positive finite"):
+        geckolib_entity_inputs_from_module_config(
+            "entity", {"main_color": "#AA55CC", "max_health": 0}
+        )

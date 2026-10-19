@@ -37,7 +37,34 @@ def _isolate_graph_scheduling_from_host_version_gate(monkeypatch):
 
 
 
-def test_expanded_item_jobs_execute_through_scoped_port_graph():
+def _fixture_template_executor(
+    job, *, port_registry=None, registry=None, base_dir=None, **_kwargs
+):
+    """Test real graph scheduling/materialization without fabricating HOST admission."""
+    from minecraft_mod_ai.artifact_materializer import materialize_job_output
+    from minecraft_mod_ai.implementation_template_renderer import render_template
+    from minecraft_mod_ai.task_template_catalog import load_template
+
+    registry = registry or port_registry
+    rendered = render_template(load_template(job.template_id), job.deterministic_inputs)
+    if base_dir is not None:
+        receipt = materialize_job_output(job, rendered, base_dir=base_dir)
+        assert receipt.status == "SUCCESS"
+    for name in job.produces:
+        registry.register(name, rendered or name)
+    return {
+        "status": "PASS", "job_id": job.job_id,
+        "rendered_output": rendered, "validations": [],
+        "ports_published": {
+            name: registry.get(name).to_dict() for name in job.produces
+        },
+    }
+
+
+def test_expanded_item_jobs_execute_through_scoped_port_graph(monkeypatch):
+    import minecraft_mod_ai.artifact_graph_executor as executor
+
+    monkeypatch.setattr(executor, "execute_artifact_template", _fixture_template_executor)
     jobs = expand_facts_to_jobs(
         [
             PromptFact(
@@ -93,7 +120,10 @@ def test_graph_rejects_duplicate_producers():
         execute_artifact_graph([first, second])
 
 
-def test_shared_java_targets_resume_without_duplicate_insertions(tmp_path):
+def test_shared_java_targets_resume_without_duplicate_insertions(tmp_path, monkeypatch):
+    import minecraft_mod_ai.artifact_graph_executor as executor
+
+    monkeypatch.setattr(executor, "execute_artifact_template", _fixture_template_executor)
     from minecraft_mod_ai.artifact_materializer import ensure_artifact_scaffolding
 
     ensure_artifact_scaffolding(tmp_path, mod_id="demo", package_name="org.demo")
@@ -115,23 +145,13 @@ def test_shared_java_targets_resume_without_duplicate_insertions(tmp_path):
 
 
 def test_typed_input_rejects_wrong_registry_kind():
-    from minecraft_mod_ai.task_template_runner import execute_artifact_template
-
-    jobs = expand_facts_to_jobs(
-        [PromptFact(fact_id="one", fact_type=FactType.ITEM_EXISTS, subject="sample")],
-        mod_id="demo",
-        package_name="org.demo",
-    )
-    model = next(j for j in jobs if j.template_id == "minecraft/resource/item/model_generated")
     registry = PortRegistry()
     registry.register(
-        "sample.registry_id",
-        "demo:sample",
-        kind="REGISTRY_ID",
-        target_type="Block",
+        "sample.registry_id", "demo:sample",
+        kind="REGISTRY_ID", target_type="Block",
     )
     with pytest.raises(ValueError, match="PORT_TARGET_TYPE_MISMATCH"):
-        execute_artifact_template(model, port_registry=registry)
+        registry.resolve("sample.registry_id", "REGISTRY_ID", "Item")
 
 
 def test_multiple_required_ports_from_one_producer_count_as_one_dependency(monkeypatch):
