@@ -1,6 +1,8 @@
 """A real registry operation must outrank and exclude near-name distractors."""
 from types import SimpleNamespace
 
+import pytest
+
 from minecraft_mod_ai.construction_retrieval import ConstructionEvidenceIndex
 
 
@@ -155,3 +157,64 @@ def test_intent_rank_is_not_reused_for_unrelated_query():
     assert index.page(first, 0)['matches'][0]['symbol_id'].endswith('#register')
     second = index.prepare('create an entity', kinds=('METHOD',))
     assert index.page(second, 0)['matches'][0]['symbol_id'].endswith('#create')
+
+
+@pytest.mark.parametrize("purpose, callable_name", [
+    ("teleport the player", "teleport"),
+    ("teleporting the player", "teleport"),
+    ("launch a spacecraft", "launch"),
+    ("initialize game state", "initialize"),
+    ("initialization of game state", "initialize"),
+    ("subscribe to events", "subscribe"),
+    ("subscription to events", "subscribe"),
+    ("trade with a merchant", "trade"),
+    ("trading with a merchant", "trade"),
+    ("mine an ore", "mine"),
+    ("mining an ore", "mine"),
+    ("spawn an alien", "spawn"),
+    ("spawning an alien", "spawn"),
+    ("remove the entity", "remove"),
+    ("removal of an entity", "remove"),
+])
+def test_recognized_action_inflections_use_actual_method_postings(purpose, callable_name):
+    """Every recognized root verb must use real indexed callables without global scan."""
+    owner = "example.GeneratedAction"
+    target = "example.ActionService"
+    symbols = {
+        owner: {"owner": owner, "kind": "CLASS", "name": "GeneratedAction",
+                "access": 1, "provenance": "construction_plan"},
+        target: {"owner": target, "kind": "CLASS", "name": "ActionService", "access": 1},
+        target + "#" + callable_name: _row(target, callable_name),
+        target + "#get": _row(target, "get"),
+    }
+    index = ConstructionEvidenceIndex(symbols, {}, SimpleNamespace(),
+        target_path="src/main/java/example/GeneratedAction.java",
+        owner=owner, authoring_contract={})
+    index._eligible_owners = lambda *_a, **_k: (_ for _ in ()).throw(
+        AssertionError("Recognized action must never scan the full classpath"))
+    goal = index.prepare(purpose, kinds=("METHOD",))
+    page = index.page(goal, 0)
+    assert [row["symbol_id"] for row in page["matches"]] == [
+        target + "#" + callable_name]
+    assert index.exact_action_available
+    assert index.intent_compatible(target + "#" + callable_name)
+    assert not index.intent_compatible(target + "#get")
+
+
+def test_action_postings_do_not_qualify_unrelated_suffix_operations():
+    """A verb match alone cannot authorize another behavior."""
+    owner = "example.GeneratedAction"
+    target = "example.ActionService"
+    symbols = {
+        owner: {"owner": owner, "kind": "CLASS", "name": "GeneratedAction",
+                "access": 1, "provenance": "construction_plan"},
+        target: {"owner": target, "kind": "CLASS", "name": "ActionService", "access": 1},
+        target + "#teleport": _row(target, "teleport"),
+        target + "#teleportDebugValues": _row(target, "teleportDebugValues"),
+    }
+    index = ConstructionEvidenceIndex(symbols, {}, SimpleNamespace(),
+        target_path="src/main/java/example/GeneratedAction.java",
+        owner=owner, authoring_contract={})
+    goal = index.prepare("teleport the player", kinds=("METHOD",))
+    page = index.page(goal, 0)
+    assert [row["symbol_id"] for row in page["matches"]] == [target + "#teleport"]
