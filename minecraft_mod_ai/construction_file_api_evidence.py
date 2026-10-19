@@ -9,9 +9,24 @@ from __future__ import annotations
 import re
 from collections import Counter, defaultdict
 
-from .construction_state import symbol_record
 from .construction_type_contracts import canonical_type_name, class_accessible
 from .java_operation_ir import parameter_types
+
+
+def prompt_symbol_record(row):
+    """Expose a Java contract, not the host's complete bytecode-index record.
+
+    Hashes, binary descriptors, classpath/debug receipts and repeated symbol IDs
+    stay in the authoritative host index. Never shorten a type or signature.
+    """
+    fields = ('kind', 'owner', 'name', 'return_type', 'static', 'varargs',
+              'generic_signature', 'signature', 'type_parameters', 'throws',
+              'superclass', 'interfaces', 'enclosing_owner', 'enclosing_instance_type',
+              'functional_parameters', 'functional_return_type', 'functional_throws')
+    answer = {key: row[key] for key in fields if key in row}
+    if row.get('kind') in {'METHOD', 'CONSTRUCTOR'}:
+        answer['parameters'] = parameter_types(row)
+    return answer
 
 
 class FileAPIEvidence:
@@ -190,16 +205,18 @@ class FileAPIEvidence:
                     covered.add(member_name)
             selected_keys = {member_key for member_key, _ in representatives}
             chosen = (representatives + [item for item in options if item[0] not in selected_keys])[:max(16, len(representatives))]
-            public_declaration = symbol_record(key, declaration)
+            public_declaration = prompt_symbol_record(declaration)
             callback_types = [*declaration.get('functional_parameters', ()),
                 declaration.get('functional_return_type', ''), *declaration.get('functional_throws', ())]
             if not self._signature_accessible(callback_types):
                 public_declaration = {field: value for field, value in public_declaration.items()
                                       if not field.startswith('functional_')}
             answer.append({'verified_class': name, 'declaration': public_declaration,
-                           'members': [symbol_record(member_key, row) for member_key, row in chosen],
+                           'members': [prompt_symbol_record(row) for _, row in chosen],
                            'member_count': len(options), 'members_truncated': len(chosen) < len(options),
-                           'overload_counts': dict(sorted(Counter(row.get('name') for _, row in options).items())),
+                           'overload_counts': {member_name: count for member_name, count in
+                               sorted(Counter(row.get('name') for _, row in options).items())
+                               if member_name in {row.get('name') for _, row in chosen}},
                            'evidence': 'actual_target_symbol_index', 'behavior_verified': False})
             # Exact signature input types expose ResourceKey constructors and
             # functional factory contracts; do not recurse through the world.

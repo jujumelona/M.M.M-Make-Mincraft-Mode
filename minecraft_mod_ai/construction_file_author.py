@@ -225,12 +225,16 @@ def _evidence(context: dict, intent: str, *, target_path: str, owner: str, route
         router, target_path=target_path, owner=owner,
         authoring_contract=context.get("authoring_contract", {}))
     evidence = _scoped_api_evidence(index, intent, context.get("source_pages", {}))
-    from .construction_file_api_evidence import FileAPIEvidence
+    from .construction_file_api_evidence import FileAPIEvidence, prompt_symbol_record
     members = FileAPIEvidence(context['symbols'], target_path=target_path,
                               owner=owner, by_owner=index.by_owner)
     owners = [context['symbols'].get(row.get('symbol_id'), {}).get('owner', '')
               for row in evidence.get('target_api', ())]
     evidence['class_members'] = members.records(owners, intent=intent)
+    evidence['target_api'] = [prompt_symbol_record(row) for row in evidence.get('target_api', ())]
+    for inputs in evidence.get('typed_input_producers', ()):
+        inputs['verified_producers'] = [prompt_symbol_record(row)
+                                       for row in inputs.get('verified_producers', ())]
     return evidence
 
 

@@ -1,6 +1,7 @@
 """Regressions for the real class-only/JDK-Builder production failure."""
 from collections import OrderedDict
 from types import SimpleNamespace
+import json
 
 from minecraft_mod_ai.construction_file_author import _diagnostic_api_evidence, _evidence
 
@@ -259,3 +260,37 @@ def test_inherited_default_interface_method_and_override_keep_exact_owner():
     members = next(row for row in evidence if row['verified_class'] == child)['members']
     assert next(row for row in members if row['name'] == 'defaultAction')['owner'] == base
     assert [row['owner'] for row in members if row['name'] == 'overridden'] == [child]
+
+
+def test_prompt_api_contains_call_contracts_without_repeated_index_metadata():
+    symbols = inventory()
+    for row in symbols.values():
+        row.update(source_hash='sha256:' + '1' * 64,
+                   binary_owner=row['owner'].replace('.', '/'),
+                   namespace='OFFICIAL', origin='inspected_bytecode',
+                   descriptor='(Lnet/minecraft/world/entity/EntityType;)Ljava/lang/Object;',
+                   index_debug={'classpath': ['exact-target.jar'] * 80})
+    evidence = _diagnostic_api_evidence(context(symbols), SOURCE, DIAGNOSTIC)
+    serialized = json.dumps(evidence, separators=(',', ':'))
+    assert 'index_debug' not in serialized
+    assert 'binary_owner' not in serialized
+    assert 'descriptor' not in serialized
+    builder = next(row for row in evidence if row['verified_class'] == BUILDER)
+    build = next(row for row in builder['members'] if row['name'] == 'build')
+    assert build['parameters'] == [KEY]
+    assert 'generic_signature' in build
+    assert build['owner'] == BUILDER
+    assert symbols[BUILDER]['index_debug']['classpath'] == ['exact-target.jar'] * 80
+
+
+def test_large_class_name_catalog_does_not_fill_the_model_prompt():
+    symbols = inventory()
+    for n in range(2500):
+        symbols[BUILDER + f'#unrelated{n}'] = {'kind': 'METHOD', 'owner': BUILDER,
+            'name': f'unrelated{n}', 'return_type': 'void', 'parameters': [], 'access': 1}
+    evidence = _diagnostic_api_evidence(context(symbols), SOURCE, DIAGNOSTIC)
+    builder = next(row for row in evidence if row['verified_class'] == BUILDER)
+    shown = {row['name'] for row in builder['members']}
+    assert set(builder['overload_counts']) <= shown
+    assert builder['member_count'] == 2502
+    assert builder['members_truncated'] is True
