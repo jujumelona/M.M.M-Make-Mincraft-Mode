@@ -240,6 +240,10 @@ def _file_api_intent(context: dict, intent: str, *, feature_entrypoint=False) ->
         return intent
     contract = context.get('authoring_contract') or {}
     leaf = str(contract.get('canonical_leaf') or '')
+    if leaf == 'minecraft/entity/type':
+        # The concrete subclass must use real Entity/Mob/Monster constructors
+        # from the selected 26.x classpath, not entity registration methods.
+        return 'entity subclass constructor Entity Mob Monster EntityType Level'
     if leaf.startswith('minecraft/') and leaf.endswith('/registry'):
         # Registry is a host-owned operation, not the generic instruction
         # "Implement". Look up an inspected register callable on this domain.
