@@ -176,7 +176,7 @@ def _degenerate_decode_error(exc):
 
 def _completion_retry_candidate(messages, exc, target_path, *, output_retry_used,
                                 repetition_retry_used=False):
-    """Never continue partial Java; only reduced optional evidence permits a retry."""
+    """Never continue partial Java; recover stalled decoding by changing the source protocol."""
     from .llama_finish_reason_contract import (
         CONTEXT_PRESSURE,
         OUTPUT_EXHAUSTED,
@@ -201,6 +201,9 @@ def _completion_retry_candidate(messages, exc, target_path, *, output_retry_used
             message['content'] = original.replace(
                 'include all necessary imports,',
                 'do not emit import declarations (use fully qualified Java names),',
+            ).replace(
+                'include only imports for types actually referenced by the completed class.',
+                'do not emit import declarations (use fully qualified Java names).',
             ) + (
                 "\nREPETITION RECOVERY: The previous decoder became stuck emitting "
                 "repeated Java imports. After the package statement, start the "
