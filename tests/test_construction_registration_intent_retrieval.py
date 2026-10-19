@@ -218,3 +218,10 @@ def test_action_postings_do_not_qualify_unrelated_suffix_operations():
     goal = index.prepare("teleport the player", kinds=("METHOD",))
     page = index.page(goal, 0)
     assert [row["symbol_id"] for row in page["matches"]] == [target + "#teleport"]
+
+
+def test_ordinary_getter_scoring_handles_no_action_alias():
+    """Regression: max(int) is not a valid score reduction for ordinary names."""
+    index = _index()
+    index.prepare("create an entity", kinds=("METHOD",))
+    assert index._member_name_score("net.minecraft.world.entity.Entity#get") == 0.0
