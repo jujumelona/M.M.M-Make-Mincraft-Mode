@@ -111,10 +111,9 @@ def test_generator_fails_closed_without_reviewed_deterministic_templates(
     assert adapter.deterministic_module_kinds == frozenset()
     project_root = tmp_path / "project"
 
-    with pytest.raises(
-        GenerationError,
-        match="no reviewed deterministic module templates",
-    ):
+    # ModSpec refuses unsupported deterministic kinds before generation
+    # can mutate the target directory.
+    with pytest.raises(SpecValidationError, match="deterministic bootstrap capabilities"):
         FabricProjectGenerator().generate(_simple_spec(adapter), project_root)
 
     assert not project_root.exists()

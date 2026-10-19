@@ -261,7 +261,10 @@ def test_fully_composed_qwen38_required_and_json_pages_remove_generic_none() -> 
     assert all(key not in required_payload for key in (
         "top_p", "top_k", "min_p", "presence_penalty", "repetition_penalty",
     ))
-    assert required_payload["chat_template_kwargs"] == {"enable_thinking": False}
+    assert required_payload["chat_template_kwargs"] == {
+        "enable_thinking": False,
+        "preserve_thinking": False,
+    }
     assert structured_payload["chat_template_kwargs"] == {
         "enable_thinking": False,
         "preserve_thinking": False,

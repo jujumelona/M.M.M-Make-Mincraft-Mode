@@ -22,7 +22,11 @@ from minecraft_mod_ai.work_graph import _module_stage
 def test_generic_integration_is_not_hidden_in_content_commit_lane() -> None:
     generic = ProductionModule('custom_bridge', 'integration', {'integration_type': 'third_party_bridge'})
     sidecar = ProductionModule('local_sidecar', 'integration', {'integration_type': 'mmm_local_ai_sidecar'})
-    assert _module_stage(generic) == 'custom'
+    from minecraft_mod_ai.work_graph import WorkGraphError
+
+    # No reviewed backend exists for arbitrary third-party integrations.
+    with pytest.raises(WorkGraphError, match="DETERMINISTIC_BACKEND_REQUIRED"):
+        _module_stage(generic)
     assert _module_stage(sidecar) == 'content'
 
 def test_local_gpu_text_role_participates_in_gpu_exclusion() -> None:
