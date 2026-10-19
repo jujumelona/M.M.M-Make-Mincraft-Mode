@@ -218,7 +218,10 @@ def _read_materialized_context(context: dict, *, target_path: str, source_contex
     return rows
 
 
-def _file_api_intent(context: dict, intent: str) -> str:
+def _file_api_intent(context: dict, intent: str, *, feature_entrypoint=False) -> str:
+    if feature_entrypoint:
+        # Feature entrypoints own gameplay behavior, not only registration glue.
+        return intent
     contract = context.get('authoring_contract') or {}
     if contract.get('canonical_leaf') and contract.get('responsibility'):
         # A registry file is searched by its assigned role, not the whole game.
@@ -239,11 +242,12 @@ def _project_file_evidence(evidence: dict, members, symbols: dict, intent: str) 
     return evidence
 
 
-def _evidence(context: dict, intent: str, *, target_path: str, owner: str, router) -> dict:
+def _evidence(context: dict, intent: str, *, target_path: str, owner: str, router,
+              feature_entrypoint=False) -> dict:
     from .construction_retrieval import ConstructionEvidenceIndex
     from .construction_direct_writer import _evidence as _scoped_api_evidence
     from .construction_file_api_evidence import FileAPIEvidence
-    intent = _file_api_intent(context, intent)
+    intent = _file_api_intent(context, intent, feature_entrypoint=feature_entrypoint)
     index = ConstructionEvidenceIndex(context["symbols"], context.get("source_pages", {}),
         router, target_path=target_path, owner=owner,
         authoring_contract=context.get("authoring_contract", {}))
@@ -362,7 +366,8 @@ def compose_complete_source(router, spec: dict, context: dict, *, package: str, 
             "implementation_requirements": spec.get("bindings", {}).get("java_implementation_requirements", ""),
             "inspected_target_api": _evidence(context, requirement + " " +
                 " ".join(str(row.get("intent", "")) for row in behavior_specs),
-                target_path=spec["target_path"], owner=owner, router=router),
+                target_path=spec["target_path"], owner=owner, router=router,
+                feature_entrypoint=bool(spec.get("bindings", {}).get("request_feature_entrypoint"))),
             "materialized_project_source": _read_materialized_context(
                 context, target_path=spec["target_path"], source_context=source_context),
         }
