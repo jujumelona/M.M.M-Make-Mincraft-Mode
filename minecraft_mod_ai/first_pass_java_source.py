@@ -192,12 +192,15 @@ def compose_first_pass_java(
     messages: Sequence[Mapping[str, str]],
     *,
     source_context: Sequence[Any] = (),
+    construction_context: Mapping[str, Any] | None = None,
+    behaviors: Sequence[Mapping[str, Any]] = (),
 ) -> str:
     identity = _java_identity(spec)
     if identity is None:
         raise ValueError("JAVA_FIRST_PASS_REQUIRES_COMPLETE_COMPILATION_UNIT")
     package_name, class_name = identity
 
+    host_mode = construction_context is not None
     task = {
         "package": package_name,
         "class": class_name,
@@ -209,17 +212,31 @@ def compose_first_pass_java(
         "implementation_requirements": spec.get("bindings", {}).get("java_implementation_requirements", ""),
     }
     bindings = task["bindings"]
+    if host_mode:
+        contract = (construction_context or {}).get("authoring_contract") or {}
+        if contract.get("canonical_leaf") and contract.get("responsibility") and not bindings.get("request_feature_entrypoint"):
+            task["requirement"] = str(contract["responsibility"])
+        task["assigned_behaviors"] = [dict(item) for item in behaviors]
+        task["feature_work_order"] = (construction_context or {}).get("feature_work_order")
     # Use the persisted owner roles which already select Fabric entrypoints.
     # COMMON request-feature jobs and CLIENT canonical jobs have fixed loader APIs.
     if bindings.get("request_feature_entrypoint"):
-        entrypoint_interface = "net.fabricmc.api.ModInitializer"
-        entrypoint_method = "onInitialize"
+        if str(spec.get("side") or "").upper() == "CLIENT":
+            entrypoint_interface = "net.fabricmc.api.ClientModInitializer"
+            entrypoint_method = "onInitializeClient"
+        else:
+            entrypoint_interface = "net.fabricmc.api.ModInitializer"
+            entrypoint_method = "onInitialize"
     elif str(spec.get("side") or "").upper() == "CLIENT":
         entrypoint_interface = "net.fabricmc.api.ClientModInitializer"
         entrypoint_method = "onInitializeClient"
     else:
         entrypoint_interface = entrypoint_method = ""
     plan_schema = deepcopy(_PLAN_SCHEMA)
+    if host_mode:
+        # The decoder never receives an unbounded import-generation task.
+        plan_schema["properties"].pop("imports")
+        plan_schema["required"] = list(plan_schema["properties"])
     if entrypoint_interface:
         # Initializer inheritance, constructor and lifecycle are already selected
         # by the source contract. Do not ask the model to select them again.
@@ -243,10 +260,13 @@ def compose_first_pass_java(
                 "Account for every required "
                 "behavior and integration, including constructors and registration "
                 "when required; never simplify the gameplay specification. "
-                "List Java imports as an array of fully-qualified type references, "
-                "for example ['java.util.List', 'java.util.Map']. "
-                "Do not include import keywords, semicolons or package lines. "
-                "Use 'static package.Type.member' only for a static import. "
+                + ("The host resolves type imports from inspected source and JDK APIs. "
+                   "Never supply an imports field, import statements or package statements. "
+                   if host_mode else
+                   "List Java imports as an array of fully-qualified type references, "
+                   "for example ['java.util.List', 'java.util.Map']. "
+                   "Do not include import keywords, semicolons or package lines. "
+                   "Use 'static package.Type.member' only for a static import. ")
                 "The HOST writes the package and class header using the exact "
                 f"class name {class_name}; do not generate those declarations. "
                 "Provide superclass as just the optional Java type name (no "
@@ -271,7 +291,7 @@ def compose_first_pass_java(
         schema=plan_schema,
     )
 
-    imports = _assemble_java_imports(plan["imports"])
+    imports = "" if host_mode else _assemble_java_imports(plan["imports"])
     superclass = str(plan.get("superclass") or "").strip()
     interfaces = entrypoint_interface or str(plan.get("interfaces") or "").strip()
     # The model never authors identity, scope, or outer braces. It supplies only
@@ -296,6 +316,20 @@ def compose_first_pass_java(
         elif unit["kind"] == "constructor":
             unit["name"] = class_name
         units.append(unit)
+    if host_mode and bindings.get("request_feature_entrypoint"):
+        if not behaviors:
+            raise ValueError("JAVA_HOST_BEHAVIOR_COVERAGE_MISSING")
+        seen_behaviors: set[str] = set()
+        for row in behaviors:
+            behavior_id = str(row.get("behavior_id") or "").strip()
+            if not behavior_id or behavior_id in seen_behaviors or not row.get("intent"):
+                raise ValueError("JAVA_HOST_BEHAVIOR_INVALID")
+            seen_behaviors.add(behavior_id)
+            registrar = "registerBehavior" + __import__("hashlib").sha256(
+                behavior_id.encode("utf-8")).hexdigest()[:20]
+            units.append({"kind": "method", "name": registrar,
+                          "purpose": str(row["intent"]),
+                          "host_required_behavior": behavior_id})
     declarations: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for index, unit in enumerate(units, 1):
         unit_task = {
@@ -324,13 +358,19 @@ def compose_first_pass_java(
         ]
         kind, member_name = unit["kind"], unit["name"]
         nested_type = kind in {"class", "record", "enum"}
-        parts = dict(_one_structured_action(
-            router,
-            metadata_messages,
-            name=f"submit_java_declaration_{index}",
-            schema=metadata_schema(kind, member_name),
-            page_structure=nested_type,
-        ))
+        if host_mode and unit.get("host_required_behavior"):
+            # Required Fabric lifecycle registrations have fixed host signatures.
+            parts = {"visibility": "private", "static": False,
+                     "return_type": "void", "type_parameters": "",
+                     "parameters": [], "throws": [], "annotations": []}
+        else:
+            parts = dict(_one_structured_action(
+                router,
+                metadata_messages,
+                name=f"submit_java_declaration_{index}",
+                schema=metadata_schema(kind, member_name),
+                page_structure=nested_type,
+            ))
         validate_declaration_metadata(kind, member_name, parts, owner=class_name)
         declarations.append((unit, parts))
 
@@ -434,14 +474,27 @@ def compose_first_pass_java(
                 "response_source_frame": frame,
                 "complete_members": finished}, ensure_ascii=False, default=str)},
         ]
-        lifecycle["source"] = router.generate_java_source("coder", lifecycle_messages,
-            data_name="submit_java_entrypoint_source", source_frame=frame)
+        if host_mode and bindings.get("request_feature_entrypoint"):
+            calls = [unit["name"] for unit in units if unit.get("host_required_behavior")]
+            lifecycle["source"] = frame["prefix"] + "".join(
+                "    this." + name + "();\n" for name in calls
+            ).rstrip("\n") + frame["suffix"]
+        else:
+            lifecycle["source"] = router.generate_java_source("coder", lifecycle_messages,
+                data_name="submit_java_entrypoint_source", source_frame=frame)
         finished.append(render_declaration("method", entrypoint_method, lifecycle, owner=class_name))
 
-    return (
+    source = (
         f"package {package_name};\n\n"
         + (imports + "\n\n" if imports else "")
         + declaration + "\n\n"
         + "\n\n".join(finished)
         + "\n}\n"
     )
+    if host_mode:
+        from .host_java_imports import host_add_verified_imports
+        source = host_add_verified_imports(
+            source, symbols=dict(construction_context.get("symbols") or {}),
+            owner=package_name + "." + class_name,
+            target_path=str(spec["target_path"]))
+    return source
