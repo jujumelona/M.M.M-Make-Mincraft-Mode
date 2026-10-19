@@ -119,7 +119,7 @@ def _record_context_pressure(messages, candidate, boundary, target_path, *, kind
     from .root_cause_trace import durable_trace_path, emit_root_cause
     from .planner_trace_artifacts import save_trace_artifact
 
-    details = {'path': target_path, 'input_tokens': boundary.prompt_tokens,
+    details = {'path': target_path, 'input_tokens': boundary.prompt_tokens if boundary is not None else 0,
                'boundary_kind': kind,
                'before_bytes': len(_json(messages).encode()),
                'after_bytes': len(_json(candidate).encode()) if candidate is not None else None,
@@ -132,13 +132,28 @@ def _record_context_pressure(messages, candidate, boundary, target_path, *, kind
     event = {
         'context_pressure': 'construction_file_context_compaction',
         'output_exhausted': 'construction_file_output_compaction',
+        'repeated_output': 'construction_file_repetition_compaction',
     }[kind]
     emit_root_cause(event, stage='generate',
                    operation=target_path, result='RETRY' if candidate is not None else 'BLOCKED',
                    details=details)
 
 
-def _completion_retry_candidate(messages, exc, target_path, *, output_retry_used):
+def _degenerate_decode_error(exc):
+    """Detect the actual SSE watchdog failure even behind a model adapter wrapper."""
+    from .llama_completion_liveness_contract import LlamaDegenerateOutputError
+    current, visited = exc, set()
+    while isinstance(current, BaseException) and id(current) not in visited:
+        visited.add(id(current))
+        if isinstance(current, LlamaDegenerateOutputError):
+            return current
+        current = (getattr(current, 'cause', None)
+                   or current.__cause__ or current.__context__)
+    return None
+
+
+def _completion_retry_candidate(messages, exc, target_path, *, output_retry_used,
+                                repetition_retry_used=False):
     """Never continue partial Java; only reduced optional evidence permits a retry."""
     from .llama_finish_reason_contract import (
         CONTEXT_PRESSURE, OUTPUT_EXHAUSTED, completion_boundary_error,
@@ -147,8 +162,10 @@ def _completion_retry_candidate(messages, exc, target_path, *, output_retry_used
     boundary = completion_boundary_error(exc)
     kind = completion_boundary_kind(exc)
     if boundary is None or kind not in {CONTEXT_PRESSURE, OUTPUT_EXHAUSTED}:
-        return None
-    if kind == OUTPUT_EXHAUSTED and output_retry_used:
+        if repetition_retry_used or _degenerate_decode_error(exc) is None:
+            return None
+        kind = 'repeated_output'
+    elif kind == OUTPUT_EXHAUSTED and output_retry_used:
         return None
     candidate = compact_api_observations(messages)
     _record_context_pressure(messages, candidate, boundary, target_path, kind=kind)
@@ -160,14 +177,17 @@ def _completion_retry_candidate(messages, exc, target_path, *, output_retry_used
 def generate_file_text(router, messages, *, target_path):
     """Reduce optional API evidence, never truncate or checkpoint partial Java."""
     output_retry_used = False
+    repetition_retry_used = False
     while True:
         try:
             return router.generate_text('coder', messages, enable_tools=False, force_non_thinking=True)
         except Exception as exc:
             retry = _completion_retry_candidate(
-                messages, exc, target_path, output_retry_used=output_retry_used)
+                messages, exc, target_path, output_retry_used=output_retry_used,
+                repetition_retry_used=repetition_retry_used)
             if retry is None:
                 raise
             candidate, kind = retry
             output_retry_used |= kind == 'output_exhausted'
+            repetition_retry_used |= kind == 'repeated_output'
             messages[:] = candidate
