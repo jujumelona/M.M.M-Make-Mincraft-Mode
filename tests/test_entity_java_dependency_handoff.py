@@ -39,6 +39,9 @@ def test_entity_fact_creates_concrete_type_before_registry():
     registry_input = registry.deterministic_inputs["_canonical_inputs"]["entity_registry_input"]
     assert type_input["target_path"].endswith("/AlienCombatHostileEntity.java")
     assert registry_input["target_path"].endswith("/AlienCombatHostileEntityRegistry.java")
+    from minecraft_mod_ai.artifact_graph_executor import _declared_java_source_ports
+    paths = _declared_java_source_ports(jobs)
+    assert paths[registry.requires[0]] == type_input["target_path"]
 
 
 def _sources(tmp_path, *, disk_source=None, port_source=None):
