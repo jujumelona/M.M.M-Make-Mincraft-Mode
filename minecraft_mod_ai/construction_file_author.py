@@ -141,6 +141,22 @@ def _check_identity(source: str, package: str, name: str, *, reject_placeholders
         raise ConstructionFileError("CONSTRUCTION_FILE_EMPTY_CLASS")
 
 
+def _check_concrete_entity(source: str, context: dict, name: str) -> None:
+    """A generated ENTITY_EXISTS type must be instantiable, not a vacant shell."""
+    contract = context.get("authoring_contract") or {}
+    if contract.get("canonical_leaf") != "minecraft/entity/type":
+        return
+    code = _lexical_code(source)
+    declaration = re.search(
+        r"\\bclass\\s+" + re.escape(name) +
+        r"\\s+extends\\s+([A-Za-z_$][\\w$.]*)\\b", code,
+    )
+    if declaration is None or declaration.group(1) in {"Object", "java.lang.Object"}:
+        raise ConstructionFileError("CONSTRUCTION_ENTITY_SUPERCLASS_REQUIRED")
+    if not re.search(r"\\b" + re.escape(name) + r"\\s*\\([^)]*\\)\\s*\\{", code):
+        raise ConstructionFileError("CONSTRUCTION_ENTITY_CONSTRUCTOR_REQUIRED")
+
+
 def _check_entrypoint(source: str, spec: dict) -> None:
     """Check the actual lifecycle body, not arbitrary comments/string matches."""
     if not spec.get('bindings', {}).get('request_feature_entrypoint'):
@@ -305,6 +321,7 @@ def _verify_full_source(source: str, spec: dict, context: dict, *, package: str,
         target_path=spec["target_path"], filename=name + ".java",
         source_context=source_context)
     _check_identity(source, package, name)
+    _check_concrete_entity(source, context, name)
     _check_entrypoint(source, spec)
     verify_source = context.get("verify_source")
     if verify_source:
