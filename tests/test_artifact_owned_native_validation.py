@@ -56,6 +56,7 @@ def test_artifact_owned_gui_does_not_require_native_system_source(tmp_path) -> N
         SimpleNamespace(
             package_name="ai.minecraft.generated.demo",
             mod_id="demo",
+            platform=SimpleNamespace(minecraft_version="1.21.4"),
         ),
         proposal,
         findings,

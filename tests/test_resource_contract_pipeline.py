@@ -320,14 +320,9 @@ def test_production_consumes_registry_and_checks_real_resource_set(tmp_path):
     from minecraft_mod_ai.resource_asset_production import generate_assets
 
     router, proposal, calls = runtime()
-    result = generate_assets(router, proposal, tmp_path / "project", tmp_path / "run")
-    assert calls[0]["width"] == ModelRegistry().role(
-        "t4_local", "image_generator"
-    ).extra["preferred_generation_resolution"]["width"]
-    assert result["resource_contract_validation"]["status"] == "PASS"
-    assert result["resource_graph_validation"]["checked_reference_count"] == 1
-    with Image.open(result["assets"][0]["target"]) as image:
-        assert image.size == (16, 16)
+    with pytest.raises(ValueError, match="AI_TEXTURE_GENERATION_REMOVED"):
+        generate_assets(router, proposal, tmp_path / "project", tmp_path / "run")
+    assert calls == []
 
 
 def test_tampered_manifest_is_rejected_before_backend(tmp_path):
@@ -338,7 +333,7 @@ def test_tampered_manifest_is_rejected_before_backend(tmp_path):
 
     router, proposal, calls = runtime()
     proposal.game_design["_asset_generation_plan"]["assets"][0]["textures"] = []
-    with pytest.raises(AssetProductionError, match="manifest"):
+    with pytest.raises(ValueError, match="AI_TEXTURE_GENERATION_REMOVED"):
         generate_assets(router, proposal, tmp_path, tmp_path / "run")
     assert calls == []
 
@@ -571,12 +566,10 @@ def test_opaque_flux_like_cube_runs_single_candidate_with_birefnet_alpha(tmp_pat
     # point; stub that exact boundary rather than the in-process helper.
     monkeypatch.setattr(alpha_module, "segment_foreground_isolated", fixture_alpha)
     router.generate_image = opaque_gradient
-    result = generate_assets(router, proposal, tmp_path / "mod", tmp_path / "run")
-    assert result["resource_contract_validation"]["status"] == "PASS"
-    assert result["assets"][0]["attempted_candidate_count"] == 1
-    assert result["assets"][0]["generation_evidence"]["sources"][0]["alpha_matte"] == "rembg:birefnet-general-lite"
-    with Image.open(result["assets"][0]["target"]) as output:
-        assert set(output.getchannel("A").getdata()) == {0, 255}
+    with pytest.raises(ValueError, match="AI_TEXTURE_GENERATION_REMOVED"):
+        generate_assets(router, proposal, tmp_path / "mod", tmp_path / "run")
+    assert calls == []
+    assert not output.exists()
 
 
 def test_alpha_prefetch_occurs_only_after_text_server_shutdown(tmp_path, monkeypatch):
@@ -609,13 +602,9 @@ def test_alpha_prefetch_occurs_only_after_text_server_shutdown(tmp_path, monkeyp
         alpha, "prepare_foreground_model_isolated",
         lambda: events.append("alpha_checkpoint_prepared"),
     )
-    generate_assets(router, proposal, tmp_path / "project", tmp_path / "run")
-    assert events == [
-        "text_server_stopped",
-        "alpha_checkpoint_prepared",
-        "diffusion",
-        "stage_closed",
-    ]
+    with pytest.raises(ValueError, match="AI_TEXTURE_GENERATION_REMOVED"):
+        generate_assets(router, proposal, tmp_path / "project", tmp_path / "run")
+    assert events == []
 
 
 def test_alpha_preflight_failure_still_releases_image_session(tmp_path, monkeypatch):
@@ -641,9 +630,9 @@ def test_alpha_preflight_failure_still_releases_image_session(tmp_path, monkeypa
 
     router.image_generation_session = image_stage
     monkeypatch.setattr(alpha, "prepare_foreground_model_isolated", fail_preparation)
-    with pytest.raises(AssetProductionError, match="after text-model handoff"):
+    with pytest.raises(ValueError, match="AI_TEXTURE_GENERATION_REMOVED"):
         generate_assets(router, proposal, tmp_path / "project", tmp_path / "run")
-    assert events == ["shutdown", "preflight", "released"]
+    assert events == []
 
 
 def test_generated_block_cannot_pass_as_single_black_tile(tmp_path):

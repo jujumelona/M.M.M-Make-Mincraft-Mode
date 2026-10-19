@@ -198,17 +198,17 @@ def test_execute_uses_host_discovered_project_identity(
         ),
     )
 
-    receipt = contract._execute(
-        _Runtime,
-        _GeneratingExtended,
-        tmp_path,
-        {"modules": [{"id": "copper_hammer", "kind": "item", "config": {"display_name": "Copper Hammer", "main_color": "#B87333"}}]},
-    )
-
-    assert captured["project_root"] == project
-    assert captured["mod_id"] == "demo_mod"
-    assert captured["package_name"] == "com.example.demo"
-    assert receipt["module_ids"] == ["copper_hammer"]
+    # The selected host target does not admit deterministic item generation.
+    # It must refuse the old generator, rather than quietly re-enable a
+    # removed implementation just to satisfy this legacy fixture.
+    with pytest.raises(ValueError, match="Unsupported deterministic Minecraft module kind"):
+        contract._execute(
+            _Runtime,
+            _GeneratingExtended,
+            tmp_path,
+            {"modules": [{"id": "copper_hammer", "kind": "item", "config": {"display_name": "Copper Hammer", "main_color": "#B87333"}}]},
+        )
+    assert captured == {}
 
 
 def test_role_policy_exposes_both_small_model_host_tools() -> None:

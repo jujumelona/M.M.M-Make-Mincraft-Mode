@@ -71,7 +71,11 @@ def test_qwen35_llama_server_keeps_schema_validation_host_owned() -> None:
     payload = _server_payload(adapter, _request())
 
     assert payload["response_format"] == {"type": "json_object"}
-    assert payload["json_schema"] == _SCHEMA
+    from minecraft_mod_ai.model_output_atomicity_contract import effective_model_transport_schema
+
+    # The native grammar is projected to finite llama.cpp wire constraints;
+    # the host still validates against the original integer schema.
+    assert payload["json_schema"] == effective_model_transport_schema(_SCHEMA)
     assert "grammar" not in payload
     assert "reasoning_effort" not in payload
 
