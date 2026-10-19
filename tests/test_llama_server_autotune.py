@@ -418,7 +418,7 @@ def test_native_server_sizing_requires_explicit_overrides(monkeypatch) -> None:
     assert args[args.index("--parallel") + 1] == "-1"
     assert args[args.index("--gpu-layers") + 1] == "all"
     assert args[args.index("--flash-attn") + 1] == "on"
-    assert args[args.index("--load-mode") + 1] == "none"
+    assert args[args.index("--load-mode") + 1] == "auto"
     monkeypatch.setenv("MMM_LLAMA_SERVER_CTX", "8192")
     monkeypatch.setenv("MMM_LLAMA_UBATCH", "256")
     monkeypatch.setenv("MMM_LLAMA_PARALLEL", "2")
