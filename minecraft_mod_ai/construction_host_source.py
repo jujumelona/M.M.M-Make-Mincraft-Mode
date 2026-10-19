@@ -26,6 +26,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
         _evidence, _read_materialized_context, _verify_full_source,
     )
     from .first_pass_java_source import compose_first_pass_java
+    from .construction_implementation import construction_implementation_fingerprint
 
     if str(context.get("target", {}).get("loader", "")).casefold() != "fabric":
         raise HostJavaConstructionError("JAVA_HOST_FABRIC_REQUIRED")
@@ -40,10 +41,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
         "spec": spec, "owner": owner, "target": context["target"],
         "prerequisites": context.get("prerequisite_hashes", {}),
         "work_order": context.get("feature_work_order_sha256", ""),
-        "implementation": __import__(
-            "minecraft_mod_ai.construction_implementation",
-            fromlist=["construction_implementation_fingerprint"],
-        ).construction_implementation_fingerprint(),
+        "implementation": construction_implementation_fingerprint(),
     })
     checkpoint = root / ".mmm" / "construction_host_files" / (identifier + ".json")
     with _claim_checkpoint(checkpoint):
@@ -111,8 +109,27 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                 ], source_context=source_context,
                 construction_context=context, behaviors=behavior_rows,
             )
-            _verify_full_source(source, spec, context, package=package,
-                                name=name, source_context=source_context)
+            acceptance = (context.get("feature_work_order") or {}).get("acceptance") or {}
+            budget = acceptance.get("max_compiler_repair_attempts", 2)
+            if type(budget) is not int or budget < 0:
+                raise HostJavaConstructionError("JAVA_HOST_REPAIR_BUDGET_INVALID")
+            from .construction_host_member_repair import repair_compiler_member
+            for attempt in range(budget + 1):
+                try:
+                    _verify_full_source(source, spec, context, package=package,
+                                        name=name, source_context=source_context)
+                except (RuntimeError, ValueError, OSError) as compiler_error:
+                    if attempt == budget:
+                        raise
+                    source = repair_compiler_member(
+                        router, source, str(compiler_error), filename=name + ".java",
+                        target_path=spec["target_path"],
+                        symbols=dict(context.get("symbols") or {}), owner=owner,
+                        api_evidence=prompt["inspected_target_api"],
+                        attempt=attempt + 1,
+                    )
+                else:
+                    break
         except (RuntimeError, ValueError, OSError) as exc:
             trace = root / ".mmm" / "construction_host_failures"
             trace.mkdir(parents=True, exist_ok=True)
