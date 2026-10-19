@@ -223,9 +223,18 @@ def _file_api_intent(context: dict, intent: str, *, feature_entrypoint=False) ->
         # Feature entrypoints own gameplay behavior, not only registration glue.
         return intent
     contract = context.get('authoring_contract') or {}
-    if contract.get('canonical_leaf') and contract.get('responsibility'):
-        # A registry file is searched by its assigned role, not the whole game.
-        return ' '.join((str(contract['responsibility']), str(contract['canonical_leaf']),
+    leaf = str(contract.get('canonical_leaf') or '')
+    if leaf.startswith('minecraft/') and leaf.endswith('/registry'):
+        # Registry is a host-owned operation, not the generic instruction
+        # "Implement". Look up an inspected register callable on this domain.
+        # The result is still admitted by exact classpath symbols, never by a
+        # guessed API signature. Do not feed the unrelated game feature here.
+        domain = leaf.split('/')[1]
+        return ' '.join(('register', domain, 'in registry',
+            *map(str, contract.get('host_requirements', {}).get('symbols', ()))))
+    if leaf and contract.get('responsibility'):
+        # Other narrow files retain their original host-owned responsibility.
+        return ' '.join((str(contract['responsibility']), leaf,
             *map(str, contract.get('host_requirements', {}).get('symbols', ()))))
     return intent
 
