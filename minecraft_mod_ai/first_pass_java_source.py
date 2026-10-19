@@ -214,6 +214,8 @@ def compose_first_pass_java(
     }
     bindings = task["bindings"]
     if host_mode:
+        if bindings.get("request_feature_entrypoint") and not behaviors:
+            raise ValueError("JAVA_HOST_BEHAVIOR_COVERAGE_MISSING")
         contract = (construction_context or {}).get("authoring_contract") or {}
         if contract.get("canonical_leaf") and contract.get("responsibility") and not bindings.get("request_feature_entrypoint"):
             task["requirement"] = str(contract["responsibility"])
