@@ -160,14 +160,72 @@ class FileAPIEvidence:
                 options.append((key, row))
         return options
 
+    @staticmethod
+    def _rank_member(name, used, missing, item):
+        member_key, row = item
+        member_name = str(row.get('name', ''))
+        factory = (row.get('kind') == 'CONSTRUCTOR' or
+                   row.get('static') and canonical_type_name(row.get('return_type', '')) == name)
+        return (member_name not in missing, member_name not in used,
+                not factory, member_name != 'build', member_name != 'register',
+                row.get('kind') != 'FIELD', member_name, member_key)
+
+    def _selected_members(self, name, used, missing):
+        # Preserve referenced names and factory/build roles before incidental overloads.
+        options = [(key, row) for key, row in self._member_options(name)
+                   if name == 'java.lang.Object' or row.get('owner') != 'java.lang.Object'
+                   or row.get('name') in used or row.get('name') in missing]
+        options.sort(key=lambda item: self._rank_member(name, used, missing, item))
+        covered, representatives = set(), []
+        for item in options:
+            _, row = item
+            member_name = row.get('name')
+            factory = (row.get('kind') == 'CONSTRUCTOR' or
+                       row.get('static') and canonical_type_name(row.get('return_type', '')) == name)
+            if member_name not in covered and (member_name in used or member_name in missing or
+                factory or member_name in {'build', 'register'}):
+                representatives.append(item)
+                covered.add(member_name)
+        selected_keys = {key for key, _ in representatives}
+        chosen = (representatives + [item for item in options if item[0] not in selected_keys])[
+            :max(16, len(representatives))]
+        return options, chosen
+
+    def _public_declaration(self, declaration):
+        record = prompt_symbol_record(declaration)
+        callback_types = [*declaration.get('functional_parameters', ()),
+                          declaration.get('functional_return_type', ''),
+                          *declaration.get('functional_throws', ())]
+        if not self._signature_accessible(callback_types):
+            record = {field: value for field, value in record.items()
+                      if not field.startswith('functional_')}
+        return record
+
+    def _class_record(self, name, declaration, options, chosen):
+        chosen_names = {row.get('name') for _, row in chosen}
+        return {'verified_class': name, 'declaration': self._public_declaration(declaration),
+                'members': [prompt_symbol_record(row) for _, row in chosen],
+                'member_count': len(options), 'members_truncated': len(chosen) < len(options),
+                'overload_counts': {member_name: count for member_name, count in
+                    sorted(Counter(row.get('name') for _, row in options).items())
+                    if member_name in chosen_names},
+                'evidence': 'actual_target_symbol_index', 'behavior_verified': False}
+
+    def _append_signature_dependencies(self, pending, name, chosen, seen):
+        # Exact parameter types reveal builders/factories; never explore the whole classpath.
+        pending.extend(sorted(self.children.get(name, ())))
+        for _, row in chosen:
+            for type_ in parameter_types(row):
+                related = self._resolve(type_.split('<', 1)[0].removesuffix('[]'))
+                if related and related not in seen:
+                    pending.append(related)
+
     def records(self, owners, *, source='', diagnostic='', intent=''):
         roots = list(dict.fromkeys(canonical_type_name(name) for name in owners))
         roots = [name for name in roots if self._accessible(name)]
-        # Nested builders/factories are part of a class's actionable API, not
-        # another text-search suggestion. Resolve them before incidental types.
-        pending = list(roots)
-        for name in roots:
-            pending.extend(sorted(self.children.get(name, ())))
+        # Nested builders/factories are actionable API, not incidental text matches.
+        pending = [*roots, *(child for name in roots
+                             for child in sorted(self.children.get(name, ())))]
         answer, seen = [], set()
         used = set(re.findall(r'\b[A-Za-z_$][\w$]*', source + '\n' + diagnostic + '\n' + intent))
         missing = set(re.findall(r'\bsymbol:\s+(?:method|variable|class)\s+([\w$]+)', diagnostic))
@@ -176,60 +234,9 @@ class FileAPIEvidence:
             if name in seen or not self._accessible(name):
                 continue
             seen.add(name)
-            key = self.classes[name]
-            declaration = self.symbols[key]
-            options = self._member_options(name)
-            # Object utilities repeated on every class consumed most of the
-            # discovery view. Preserve them when the current source needs one.
-            options = [(member_key, row) for member_key, row in options
-                       if name == 'java.lang.Object' or row.get('owner') != 'java.lang.Object'
-                       or row.get('name') in used or row.get('name') in missing]
-
-            def rank(item):
-                member_key, row = item
-                member_name = str(row.get('name', ''))
-                factory = (row.get('kind') == 'CONSTRUCTOR' or
-                           row.get('static') and canonical_type_name(row.get('return_type', '')) == name)
-                return (member_name not in missing, member_name not in used,
-                        not factory, member_name != 'build', member_name != 'register',
-                        row.get('kind') != 'FIELD', member_name, member_key)
-
-            options.sort(key=rank)
-            # Preserve each referenced name and the construction/build roles
-            # before adding more overloads of a single method. Explicit uses
-            # may require more than the usual sixteen-member discovery view.
-            covered, representatives = set(), []
-            for item in options:
-                _, row = item
-                member_name = row.get('name')
-                factory = (row.get('kind') == 'CONSTRUCTOR' or
-                           row.get('static') and canonical_type_name(row.get('return_type', '')) == name)
-                if member_name not in covered and (member_name in used or member_name in missing or
-                    factory or member_name in {'build', 'register'}):
-                    representatives.append(item)
-                    covered.add(member_name)
-            selected_keys = {member_key for member_key, _ in representatives}
-            chosen = (representatives + [item for item in options if item[0] not in selected_keys])[:max(16, len(representatives))]
-            public_declaration = prompt_symbol_record(declaration)
-            callback_types = [*declaration.get('functional_parameters', ()),
-                declaration.get('functional_return_type', ''), *declaration.get('functional_throws', ())]
-            if not self._signature_accessible(callback_types):
-                public_declaration = {field: value for field, value in public_declaration.items()
-                                      if not field.startswith('functional_')}
-            answer.append({'verified_class': name, 'declaration': public_declaration,
-                           'members': [prompt_symbol_record(row) for _, row in chosen],
-                           'member_count': len(options), 'members_truncated': len(chosen) < len(options),
-                           'overload_counts': {member_name: count for member_name, count in
-                               sorted(Counter(row.get('name') for _, row in options).items())
-                               if member_name in {row.get('name') for _, row in chosen}},
-                           'evidence': 'actual_target_symbol_index', 'behavior_verified': False})
-            # Exact signature input types expose ResourceKey constructors and
-            # functional factory contracts; do not recurse through the world.
+            declaration = self.symbols[self.classes[name]]
+            options, chosen = self._selected_members(name, used, missing)
+            answer.append(self._class_record(name, declaration, options, chosen))
             if name in roots or canonical_type_name(declaration.get('enclosing_owner', '')) in roots:
-                pending.extend(sorted(self.children.get(name, ())))
-                for _, row in chosen:
-                    for type_ in parameter_types(row):
-                        related = self._resolve(type_.split('<', 1)[0].removesuffix('[]'))
-                        if related and related not in seen:
-                            pending.append(related)
+                self._append_signature_dependencies(pending, name, chosen, seen)
         return answer
