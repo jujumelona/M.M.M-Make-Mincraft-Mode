@@ -573,3 +573,75 @@ def test_feature_entrypoint_keeps_gameplay_api_intent(monkeypatch, tmp_path):
     assert 'Register supplied entities' in registration['lookup_purpose']
     assert 'Teleport' not in registration['lookup_purpose']
     assert entrypoint['lookup_purpose'] == request
+
+
+def _raise_repeated_stream_output():
+    from minecraft_mod_ai.llama_completion_liveness_contract import LlamaDegenerateOutputError
+    try:
+        raise LlamaDegenerateOutputError(
+            "LLAMA_DEGENERATE_REPEATED_OUTPUT: repeated 87-character pattern")
+    except LlamaDegenerateOutputError as exc:
+        raise RuntimeError("wrapped model stream failed") from exc
+
+
+def test_repeated_stream_decoding_retries_only_with_reduced_evidence(monkeypatch, tmp_path):
+    module, context, spec, observations = load_author(monkeypatch, tmp_path)
+    monkeypatch.setattr(module, '_evidence', lambda *a, **k: _large_api_context())
+
+    class RepeatingRouter(Router):
+        def generate_text(self, role, messages, **kwargs):
+            self.calls.append((role, list(messages), kwargs))
+            if len(self.calls) == 1:
+                _raise_repeated_stream_output()
+            return GOOD
+
+    router = RepeatingRouter([])
+    assert create(module, context, spec, router) == GOOD
+    assert len(router.calls) == 2
+    assert len(json.dumps(router.calls[1][1])) < len(json.dumps(router.calls[0][1]))
+    assert [entry[0] for entry in observations] == ['parsed', 'compiled', 'coverage']
+
+
+def test_repeated_stream_without_reducible_api_fails_atomically(monkeypatch, tmp_path):
+    module, context, spec, _ = load_author(monkeypatch, tmp_path)
+
+    class RepeatingRouter(Router):
+        def generate_text(self, role, messages, **kwargs):
+            self.calls.append((role, list(messages), kwargs))
+            _raise_repeated_stream_output()
+
+    router = RepeatingRouter([])
+    with pytest.raises(RuntimeError, match="wrapped model stream failed"):
+        create(module, context, spec, router)
+    assert len(router.calls) == 1
+    assert not list((tmp_path / '.mmm' / 'construction_files').glob('*.json'))
+
+
+def test_repeated_stream_recovery_never_replays_unbounded(monkeypatch, tmp_path):
+    module, context, spec, _ = load_author(monkeypatch, tmp_path)
+    monkeypatch.setattr(module, '_evidence', lambda *a, **k: _large_api_context())
+
+    class RepeatingRouter(Router):
+        def generate_text(self, role, messages, **kwargs):
+            self.calls.append((role, list(messages), kwargs))
+            _raise_repeated_stream_output()
+
+    router = RepeatingRouter([])
+    with pytest.raises(RuntimeError, match="wrapped model stream failed"):
+        create(module, context, spec, router)
+    assert len(router.calls) == 2
+    assert not list((tmp_path / '.mmm' / 'construction_files').glob('*.json'))
+
+
+def test_registry_leaf_queries_true_action_not_generic_implement(monkeypatch, tmp_path):
+    module, context, spec, _ = load_author(monkeypatch, tmp_path)
+    context['authoring_contract'] = {
+        'canonical_leaf': 'minecraft/entity/registry',
+        'responsibility': 'Implement only the registry responsibility of the supplied entity artifact.',
+        'host_requirements': {'symbols': ['EntityType']},
+    }
+    intent = module._file_api_intent(context, 'Fight aliens and colonize planets.')
+    assert intent.startswith('register entity in registry')
+    assert 'EntityType' in intent
+    assert 'Implement' not in intent and 'Fight aliens' not in intent
+    assert module._file_api_intent(context, 'Fight aliens', feature_entrypoint=True) == 'Fight aliens'
