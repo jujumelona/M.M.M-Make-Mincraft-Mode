@@ -639,7 +639,7 @@ def expand_facts_to_jobs(
                     {"name": port, "kind": "GENERIC", "target_type": "code_fragment"}
                     for port in prereq_ports
                 )
-                job_id = f"{subject}.{canonical_leaf.replace('/', '_')}
+                job_id = f"{subject}.{canonical_leaf.replace('/', '_')}"
                 deterministic_inputs = {
                     "mod_id": mod_id,
                     "package_name": package_name,
