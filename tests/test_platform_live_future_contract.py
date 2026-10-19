@@ -106,6 +106,9 @@ def test_live_validator_does_not_guess_future_pack_format_or_legacy_paths(
     # reviewed-template validator that assumes a historical pack layout.
     from minecraft_mod_ai import validator as validator_module
 
+    # Keep the live wrapper local to this test; unrelated tests need the
+    # unwrapped legacy validator when asserting historical template behavior.
+    monkeypatch.setattr(ProjectValidator, "validate", ProjectValidator.validate)
     live_validation.install(validator_module)
     report = ProjectValidator().validate(root, spec)
     assert report.status == "PASS", [item.__dict__ for item in report.findings]
