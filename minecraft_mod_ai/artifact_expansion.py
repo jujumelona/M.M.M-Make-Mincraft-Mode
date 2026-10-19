@@ -78,7 +78,7 @@ FACT_TO_CANONICAL_LEAVES: dict[FactType, tuple[str, ...]] = {
     FactType.REGISTRY_TAG: ("minecraft/tag/entries",),
     FactType.BLOCK_DROP: ("minecraft/block/drops",),
     # P0-2: Former generator handoffs now use canonical leaves
-    FactType.ENTITY_EXISTS: ("minecraft/entity/registry",),
+    FactType.ENTITY_EXISTS: ("minecraft/entity/type", "minecraft/entity/registry"),
     FactType.GUI_EXISTS: ("minecraft/screen/registration",),
     FactType.NETWORK_PACKET: ("minecraft/network_payload/registration",),
     FactType.BLOCK_ENTITY_EXISTS: ("minecraft/block_entity/registry",),
@@ -221,7 +221,11 @@ def _canonical_candidate_inputs(
         )
     side = side_values[0]
     responsibility = canonical_leaf.rsplit("/", 1)[-1]
-    class_name = _java_type_name(subject) + _java_type_name(responsibility)
+    # ENTITY_EXISTS must produce the concrete entity Java class before it can
+    # be registered. Previously only <Entity>Registry.java was generated,
+    # forcing the coder to reference a class that did not exist.
+    class_name = (_java_type_name(subject) if canonical_leaf == "minecraft/entity/type"
+                  else _java_type_name(subject) + _java_type_name(responsibility))
     if side == "CLIENT":
         generated_package = package_name + ".client.generated"
         generated_package_path = package_path + "/client/generated"
@@ -286,8 +290,14 @@ def _canonical_candidate_inputs(
         )
     # Implementation requests inherit behavior/API rules, never the full-file
     # reply instructions below. These are different scopes in the generator.
+    entity_class_contract = (
+        "Implement the concrete Java entity class including a usable constructor "
+        "for the selected Minecraft EntityType; this is the class passed to the "
+        "registry's EntityType.Builder factory. Do not create a registry here. "
+        if canonical_leaf == "minecraft/entity/type" else ""
+    )
     bindings["java_implementation_requirements"] = (
-        epoch_source_contract +
+        epoch_source_contract + entity_class_contract +
         f"Implement only canonical responsibility {canonical_leaf} for "
         f"Minecraft {minecraft_version}. Preserve the supplied gameplay "
         "requirement and verified bindings; do not invent unrelated systems. "
@@ -617,8 +627,19 @@ def expand_facts_to_jobs(
                         f"ARTIFACT_NO_TEMPLATE_NO_GENERATOR: {canonical_leaf} has no registered Python generator implementation"
                     )
                 
-                # Create minimal ArtifactJob for PYTHON_GENERATOR
-                job_id = f"{subject}.{canonical_leaf.replace('/', '_')}"
+                # Bind the exact prerequisite artifact at HOST expansion time.
+                # Registry is not schedulable before its concrete entity source.
+                # The port type is the manifest's code_fragment output, not a
+                # model-selected or inferred Java symbol.
+                prereq_ports = (
+                    (f"{subject}.entity_type_artifact",)
+                    if canonical_leaf == "minecraft/entity/registry" else ()
+                )
+                prerequisite_types = tuple(
+                    {"name": port, "kind": "GENERIC", "target_type": "code_fragment"}
+                    for port in prereq_ports
+                )
+                job_id = f"{subject}.{canonical_leaf.replace('/', '_')}
                 deterministic_inputs = {
                     "mod_id": mod_id,
                     "package_name": package_name,
@@ -653,8 +674,8 @@ def expand_facts_to_jobs(
                     target_path="",  # Will be determined by generator
                     anchor="",
                     operation="generate",
-                    requires=(),
-                    required_ports=(),
+                    requires=prereq_ports,
+                    required_ports=prerequisite_types,
                     # Every generator publishes its declared artifact and receipt,
                     # including datapack resources consumed without Java symbols.
                     produces=tuple(
