@@ -48,17 +48,29 @@ def _type_mentions(source: str) -> set[str]:
             if own is not None:
                 own_types.add(_text(raw, own))
         if node.type == "type_identifier":
-            # A qualified spelling already resolves without an import.
+            # Import the root type only: EntityType.Builder needs EntityType,
+            # not an unrelated inspected class also named Builder.
+            spelling = _text(raw, node)
             parent = node.parent
-            while parent is not None and parent.type in {
+            if parent is not None and parent.type in {
                 "scoped_type_identifier", "scoped_identifier",
             }:
-                spelling = _text(raw, parent)
-                if "." in spelling and spelling.split(".", 1)[0][:1].islower():
-                    break
-                parent = parent.parent
-            else:
-                references.add(_text(raw, node))
+                qualified = _text(raw, parent)
+                root_name = qualified.split(".", 1)[0]
+                if root_name != spelling or root_name[:1].islower():
+                    spelling = ""
+            if spelling:
+                references.add(spelling)
+        if node.type in {"method_invocation", "field_access"}:
+            # A static API invocation (Registry.register, EntityType.Builder)
+            # may never occur in a declared Java type position.
+            obj = node.child_by_field_name("object")
+            while obj is not None and obj.type == "field_access":
+                obj = obj.child_by_field_name("object")
+            if obj is not None and obj.type == "identifier":
+                spelling = _text(raw, obj)
+                if spelling[:1].isupper():
+                    references.add(spelling)
         for child in node.named_children:
             visit(child)
 
