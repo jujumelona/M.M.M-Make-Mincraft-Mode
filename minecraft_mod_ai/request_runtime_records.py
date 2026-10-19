@@ -91,17 +91,21 @@ def ui_record_action_guards(sections, owners):
     return projected
 
 
-def generated_owner_source_context(project_root, spec):
-    """Read materialized prerequisite APIs without changing approved contracts."""
+def generated_owner_source_context(project_root, spec, *, required_paths=()):
+    """Read only materialized approved sources; required graph edges never vanish."""
     root = Path(project_root).resolve()
-    paths = json.loads(spec.get("bindings", {}).get("content_dependency_paths_json", "[]"))
+    optional_paths = json.loads(spec.get("bindings", {}).get("content_dependency_paths_json", "[]"))
+    paths = [*optional_paths, *required_paths]
+    required = set(required_paths)
     readable = []
     for relative in dict.fromkeys(paths):
         path = (root / relative).resolve()
         if not path.is_relative_to(root) or not str(relative).startswith(("src/main/java/", "src/client/java/")):
             raise ValueError("RUNTIME_OWNER_SOURCE_PATH_INVALID")
         if not path.is_file() or path.stat().st_size > 512 * 1024:
-            continue  # Optional state files exist only when authored state requires them.
+            if relative in required:
+                raise ValueError("ARTIFACT_REQUIRED_JAVA_SOURCE_NOT_MATERIALIZED: " + relative)
+            continue  # Only explicitly optional sources may be omitted.
         readable.append((relative, path))
     result = []
     per_file = max(1, 9000 // max(1, len(readable)))
