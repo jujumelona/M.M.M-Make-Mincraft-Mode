@@ -5,11 +5,12 @@ on:
   push:
     branches: [main]
     paths:
-      - 'minecraft_mod_ai/reuse_discovery.py'
-      - 'minecraft_mod_ai/source_intent_aliases.py'
-      - 'minecraft_mod_ai/capability_implementation_locator.py'
-      - 'minecraft_mod_ai/ecosystem_discovery.py'
       - 'minecraft_mod_ai/construction_generation.py'
+      - 'minecraft_mod_ai/construction_host_source.py'
+      - 'minecraft_mod_ai/construction_host_member_repair.py'
+      - 'minecraft_mod_ai/host_java_imports.py'
+      - 'minecraft_mod_ai/first_pass_java_source.py'
+      - 'minecraft_mod_ai/construction_journal.py'
       - 'minecraft_mod_ai/construction_memory.py'
       - 'minecraft_mod_ai/construction_declaration_choices.py'
       - 'tests/test_ecosystem_discovery.py'
@@ -37,10 +38,12 @@ jobs:
       - name: Compile changed production entrypoints
         run: |
           python -m py_compile \
-            minecraft_mod_ai/reuse_discovery.py \
-            minecraft_mod_ai/source_intent_aliases.py \
-            minecraft_mod_ai/capability_implementation_locator.py \
             minecraft_mod_ai/construction_generation.py \
+            minecraft_mod_ai/construction_host_source.py \
+            minecraft_mod_ai/construction_host_member_repair.py \
+            minecraft_mod_ai/host_java_imports.py \
+            minecraft_mod_ai/first_pass_java_source.py \
+            minecraft_mod_ai/construction_journal.py \
             minecraft_mod_ai/construction_declaration_choices.py
       - name: Run regression contracts
         run: |
