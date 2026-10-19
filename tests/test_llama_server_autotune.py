@@ -79,7 +79,9 @@ def test_server_runtime_tuning_contract_is_installed() -> None:
     assert getattr(autotune._variant_args, "_mmm_ngram_speculation", False)
     assert getattr(autotune._probe_server, "_mmm_compact_decode_probe", False)
     assert getattr(autotune._benchmark, "_mmm_staged_runtime_tuning", False)
-    assert getattr(autotune._benchmark, "_mmm_single_server_cache_stage", False)
+    # Cache format and per-model isolation are covered by
+    # test_llama_autotune_cache_efficiency; the retired benchmark shim is gone.
+    assert getattr(autotune._cache_path, "_mmm_persistent_tuning_cache", False)
     assert getattr(autotune._fingerprint, "_mmm_stable_model_signature", False)
     assert getattr(autotune._fingerprint, "_mmm_runtime_tuning_fingerprint", False)
     assert getattr(autotune._cache_path, "_mmm_persistent_tuning_cache", False)

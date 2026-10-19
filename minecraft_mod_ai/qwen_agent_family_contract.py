@@ -168,7 +168,9 @@ def _apply_family_payload_policy(
             template_kwargs["reasoning_effort"] = reasoning_effort
         payload["chat_template_kwargs"] = template_kwargs
 
-    if mode is not None:
+    # Required tool calls have a stronger host-owned deterministic sampling
+    # contract. Do not overwrite it when the family wrapper runs a second time.
+    if mode is not None and payload.get("tool_choice") != "required":
         sampling = _sampling_profile(config, mode)
         if sampling is not None:
             payload.pop("repetition_penalty", None)
