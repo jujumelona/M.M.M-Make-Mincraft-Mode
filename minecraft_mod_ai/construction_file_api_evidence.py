@@ -212,13 +212,21 @@ class FileAPIEvidence:
                 'evidence': 'actual_target_symbol_index', 'behavior_verified': False}
 
     def _append_signature_dependencies(self, pending, name, chosen, seen):
-        # Exact parameter types reveal builders/factories; never explore the whole classpath.
-        pending.extend(sorted(self.children.get(name, ())))
+        # A builder's exact parameter types (ResourceKey, Identifier, factory)
+        # are more useful than unrelated helper/JDK owners. Make them visible
+        # before the finite discovery view fills with incidental nested types.
+        dependencies = []
         for _, row in chosen:
             for type_ in parameter_types(row):
                 related = self._resolve(type_.split('<', 1)[0].removesuffix('[]'))
-                if related and related not in seen:
-                    pending.append(related)
+                if related and related not in seen and related not in dependencies:
+                    dependencies.append(related)
+        actionable = [name for name in dependencies
+                      if not name.startswith(('java.', 'javax.', 'com.sun.', 'jdk.'))]
+        incidental = [name for name in dependencies if name not in actionable]
+        pending[:0] = actionable
+        pending.extend(sorted(self.children.get(name, ())))
+        pending.extend(incidental)
 
     def records(self, owners, *, source='', diagnostic='', intent=''):
         roots = list(dict.fromkeys(canonical_type_name(name) for name in owners))
