@@ -440,3 +440,38 @@ def test_java_field_metadata_never_guesses_an_unrelated_identifier():
     from minecraft_mod_ai.java_region_parser import JavaRegionParseError
     with pytest.raises(JavaRegionParseError):
         validate_declaration_metadata("field", "mmmMember1", parsed, owner="Demo")
+
+
+def test_host_metadata_keeps_full_evidence_once_without_duplicate_task():
+    import json
+
+    original_payload = json.dumps({
+        "inspected_target_api": "VERIFIED_CLASS_API_" + "A" * 24000,
+        "materialized_project_source": "B" * 24000,
+        "assigned_behaviors": [],
+        "requirement": "Implement one verified readiness method",
+    })
+    seen = []
+
+    class HostMetadataRouter(RecordingJavaRouter):
+        def generate_structured_data(self, role, messages, **kwargs):
+            if kwargs["data_name"] == "submit_java_declaration_1":
+                seen.append(messages)
+            return super().generate_structured_data(role, messages, **kwargs)
+
+    router = HostMetadataRouter()
+    source = compose_first_pass_java(
+        router, {**SPEC, "side": "COMMON"},
+        [{"role": "user", "content": original_payload}],
+        construction_context={"symbols": {}, "authoring_contract": {}},
+    )
+    assert "boolean isReady()" in source
+    assert len(seen) == 1
+    content = "\n".join(message["content"] for message in seen[0])
+    assert content.count("VERIFIED_CLASS_API_") == 1
+    assert content.count("materialized_project_source") == 1
+    assert len(content) < len(original_payload) + 10000
+    unit = json.loads(seen[0][-1]["content"])
+    assert unit["current_unit"]["name"] == "isReady"
+    assert "prerequisite_source" not in unit
+    assert "bindings" not in unit
