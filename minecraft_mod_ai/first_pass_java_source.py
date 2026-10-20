@@ -307,7 +307,7 @@ def compose_first_pass_java(
         # Initializer inheritance, constructor and lifecycle are already selected
         # by the source contract. Do not ask the model to select them again.
         for field in ("superclass", "interfaces"):
-            plan_schema["properties"].pop(field)
+            plan_schema["properties"].pop(field, None)
         unit_schema = plan_schema["properties"]["units"]["items"]
         unit_schema["properties"].pop("name")
         unit_schema["properties"]["kind"]["enum"] = [kind for kind in MEMBER_KINDS if kind != "constructor"]
