@@ -110,14 +110,20 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                 # Recheck it with the real compiler before any repair or return.
                 source = pending["source"]
             else:
-                source = compose_first_pass_java(
-                    router, effective_spec, [
-                        {"role": "system", "content": instructions},
-                        {"role": "user", "content": json.dumps(
-                            prompt, ensure_ascii=False, default=str)},
-                    ], source_context=source_context,
-                    construction_context=context, behaviors=behavior_rows,
+                from .host_verified_entity_type import verified_entity_type_source
+                source = verified_entity_type_source(
+                    effective_spec, contract, prompt["inspected_target_api"],
+                    package=package, name=name, behaviors=behavior_rows,
                 )
+                if source is None:
+                    source = compose_first_pass_java(
+                        router, effective_spec, [
+                            {"role": "system", "content": instructions},
+                            {"role": "user", "content": json.dumps(
+                                prompt, ensure_ascii=False, default=str)},
+                        ], source_context=source_context,
+                        construction_context=context, behaviors=behavior_rows,
+                    )
             acceptance = (context.get("feature_work_order") or {}).get("acceptance") or {}
             budget = acceptance.get("max_compiler_repair_attempts", 2)
             if type(budget) is not int or budget < 0:
