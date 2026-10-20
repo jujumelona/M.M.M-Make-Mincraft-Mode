@@ -78,6 +78,76 @@ def _entrypoint_kind(source: str, declaration: str) -> str | None:
     return None
 
 
+
+def _already_called_by_loader(root: Path, entrypoints: dict, kind: str,
+                              owner: str, method: str) -> bool:
+    """Check loader-registered startup bodies for an exact static call.
+
+    This avoids duplicating ModBlocks.initialize() or another user-owned
+    registration already called by the canonical ModInitializer. No textual
+    occurrence in a comment, string, unrelated method, or wrong package counts.
+    """
+    from .java_region_parser import _parse, _text
+
+    entries = entrypoints.get(kind, [])
+    if not isinstance(entries, list):
+        raise ValueError("FABRIC_INIT_ENTRYPOINT_KIND_INVALID: " + kind)
+    for item in entries:
+        entry = item.get("value") if isinstance(item, dict) else item
+        if not isinstance(entry, str) or not entry:
+            continue
+        package, dot, class_name = entry.rpartition(".")
+        if not dot or not all(_IDENTIFIER.fullmatch(part) for part in entry.split(".")):
+            continue
+        root_dir = "src/client/java" if kind == "client" else "src/main/java"
+        relative = root_dir + "/" + entry.replace(".", "/") + ".java"
+        source_path = root / relative
+        if not source_path.is_file():
+            continue
+        source_path = _admitted_java(root, relative)
+        source = source_path.read_text(encoding="utf-8")
+        imported = (
+            re.search(
+                r"(?m)^\s*import\s+" + re.escape(owner) + r"\s*;",
+                source,
+            ) is not None
+        )
+        simple = owner.rsplit(".", 1)[-1]
+        can_use_short_name = imported or owner.rpartition(".")[0] == package
+        raw, tree = _parse(source)
+
+        def member_calls(node):
+            if node.type == "method_invocation":
+                method_node = node.child_by_field_name("name")
+                receiver_node = node.child_by_field_name("object")
+                if method_node is not None and receiver_node is not None:
+                    actual_method = _text(raw, method_node)
+                    actual_owner = _text(raw, receiver_node)
+                    if (actual_method == method and
+                            (actual_owner == owner
+                             or (can_use_short_name and actual_owner == simple))):
+                        return True
+            return any(member_calls(child) for child in node.named_children)
+
+        for node in tree.named_children:
+            if node.type != "class_declaration":
+                continue
+            body = node.child_by_field_name("body")
+            if body is None:
+                continue
+            for member in body.named_children:
+                if member.type != "method_declaration":
+                    continue
+                name = member.child_by_field_name("name")
+                method_body = member.child_by_field_name("body")
+                if (name is not None and method_body is not None
+                        and _text(raw, name) == (
+                            "onInitializeClient" if kind == "client" else "onInitialize"
+                        ) and member_calls(method_body)):
+                    return True
+    return False
+
+
 def wire_completed_fabric_java(
     project_root: str | Path,
     approved: Sequence[tuple[str, str]],
@@ -120,6 +190,13 @@ def wire_completed_fabric_java(
                 method_name = ("register" if "register" in static_initializers
                                else "initialize")
                 package = owner.rpartition(".")[0]
+                bootstrap_kind = (
+                    "client" if relative.startswith("src/client/java/") else "main"
+                )
+                if _already_called_by_loader(
+                    root, entrypoints, bootstrap_kind, owner, method_name,
+                ):
+                    continue
                 if not all(_IDENTIFIER.fullmatch(part) for part in package.split(".")):
                     raise ValueError("FABRIC_INIT_REGISTRY_PACKAGE_INVALID")
                 bootstrap = "MmmRegistryBootstrap" + hashlib.sha256(
