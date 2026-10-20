@@ -339,12 +339,21 @@ def compose_first_pass_java(
         },
         {"role": "user", "content": json.dumps(task, ensure_ascii=False, default=str)},
     ]
-    plan = _one_structured_action(
-        router,
-        plan_messages,
-        name="submit_java_construction_plan",
-        schema=plan_schema,
-    )
+    if host_mode and bindings.get("request_feature_entrypoint"):
+        # The host already owns the exact behavior set and Fabric entrypoint.
+        # Asking the model to also invent "optional" members caused it to
+        # choose a random int field, then emit registrar calls as that FIELD'S
+        # initializer (production-logs 14). These are not optional features:
+        # every assigned behavior receives its own host-declared handler and
+        # registration method immediately below. No pre-planning model turn.
+        plan = {"units": []}
+    else:
+        plan = _one_structured_action(
+            router,
+            plan_messages,
+            name="submit_java_construction_plan",
+            schema=plan_schema,
+        )
 
     imports = "" if host_mode else _assemble_java_imports(plan["imports"])
     superclass = str(plan.get("superclass") or "").strip()
