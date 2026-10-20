@@ -82,3 +82,39 @@ def test_nested_type_reference_does_not_import_unrelated_builder():
         owner="example.Demo", target_path="src/main/java/example/Demo.java")
     assert "import net.minecraft.world.entity.EntityType;" in result
     assert "import java.example.Builder;" not in result
+
+
+def test_child_package_is_not_same_package_and_needs_import():
+    code = "package example;\npublic class Demo { Widget field; }\n"
+    result = host_add_verified_imports(
+        code, symbols=inventory("example.generated.Widget"),
+        owner="example.Demo", target_path="src/main/java/example/Demo.java")
+    assert "import example.generated.Widget;" in result
+
+
+def test_sibling_package_is_not_same_package_and_needs_import():
+    code = "package example.generated;\npublic class Demo { Widget field; }\n"
+    result = host_add_verified_imports(
+        code, symbols=inventory("example.Widget"),
+        owner="example.generated.Demo",
+        target_path="src/main/java/example/generated/Demo.java")
+    assert "import example.Widget;" in result
+
+
+def test_static_method_reference_is_resolved_via_verified_owner():
+    code = ("package example;\npublic class Demo {\n"
+            "  java.util.function.Supplier<Object> factory = Widget::create;\n}\n")
+    result = host_add_verified_imports(
+        code, symbols=inventory("example.generated.Widget"),
+        owner="example.Demo", target_path="src/main/java/example/Demo.java")
+    assert "import example.generated.Widget;" in result
+
+
+def test_same_package_reference_does_not_import_owner():
+    code = ("package example.generated;\npublic class Demo {\n"
+            "  java.util.function.Supplier<Object> factory = Widget::create;\n}\n")
+    result = host_add_verified_imports(
+        code, symbols=inventory("example.generated.Widget"),
+        owner="example.generated.Demo",
+        target_path="src/main/java/example/generated/Demo.java")
+    assert "import example.generated.Widget;" not in result
