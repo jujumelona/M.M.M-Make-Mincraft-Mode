@@ -169,6 +169,36 @@ def _first_compiler_error(diagnostic: str, *, filename: str) -> str:
     return diagnostic[start:end].strip()
 
 
+
+def _host_declared_neighbor_signatures(source: str, *, selected_name: str) -> list[str]:
+    """Expose the actual generated owner ABI to a *single-member* compiler fix.
+
+    Do not ask the 9B model to invent argument producers or neighboring method
+    arities. These are parsed declarations from the candidate and are only
+    candidates, NOT evidence that javac accepted the member bodies.
+    """
+    raw, root = _parse(source)
+    declarations = []
+
+    def visit(node):
+        if node.type in {"method_declaration", "constructor_declaration"}:
+            body = node.child_by_field_name("body")
+            if body is not None:
+                header = raw[node.start_byte:body.start_byte].decode("utf-8").strip()
+                if header != selected_name:
+                    declarations.append(header)
+        elif node.type == "field_declaration":
+            declarations.append(
+                raw[node.start_byte:node.end_byte].decode("utf-8").strip()
+            )
+        if node.type not in {"method_declaration", "constructor_declaration"}:
+            for child in node.named_children:
+                visit(child)
+
+    visit(root)
+    return declarations
+
+
 def repair_compiler_member(router, source: str, diagnostic: str, *,
                            filename: str, target_path: str, symbols: dict,
                            owner: str, api_evidence: dict, attempt: int) -> str:
@@ -203,6 +233,8 @@ def repair_compiler_member(router, source: str, diagnostic: str, *,
         "content": json.dumps({
             "target_path": target_path, "javac_diagnostic": focused_diagnostic,
             "current_member": original, "response_source_frame": frame,
+            "host_declared_neighbor_signatures": _host_declared_neighbor_signatures(
+                source, selected_name=original.split("{", 1)[0].strip()),
             "inspected_api": api_evidence,
         }, ensure_ascii=False, default=str),
     }]
