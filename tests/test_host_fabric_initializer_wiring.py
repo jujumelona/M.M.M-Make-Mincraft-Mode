@@ -289,3 +289,18 @@ public final class Additional {
     owner = result["wired"][0]["owner"]
     bootstrap = tmp_path / "src/main/java/proof/other" / (owner.rsplit(".", 1)[-1] + ".java")
     assert "proof.other.Additional.initialize();" in bootstrap.read_text()
+
+
+
+def test_valid_nonclass_java_artifact_does_not_become_a_loader_entrypoint(tmp_path):
+    _fixture(tmp_path)
+    path = "src/main/java/proof/Mode.java"
+    _write(tmp_path, path, """package proof;
+public enum Mode { ENABLED, DISABLED }
+""")
+    result = wire_completed_fabric_java(
+        tmp_path, [(path, "minecraft/generated/resource")],
+    )
+    assert result["wired"] == []
+    metadata = json.loads((tmp_path / "src/main/resources/fabric.mod.json").read_text())
+    assert metadata["entrypoints"]["main"] == ["proof.ExistingInitializer"]
