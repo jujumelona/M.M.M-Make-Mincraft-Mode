@@ -21,6 +21,12 @@ def _failing_member(source: str, diagnostic: str, *, filename: str):
     for pattern in patterns:
         lines = [int(n) for n in re.findall(pattern, diagnostic)]
         if lines:
+            # javac reports multiple independent errors in one build. The
+            # repair must target the FIRST diagnostic, not whichever method
+            # happens to have the fewest bytes among all error locations.
+            # Otherwise a later private-field error steals an earlier broken
+            # constructor and prevents the superclass repair from running.
+            lines = lines[:1]
             break
     if not lines:
         raise ValueError("JAVA_HOST_REPAIR_NO_SOURCE_LINE")
