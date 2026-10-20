@@ -187,6 +187,57 @@ def can_compose_first_pass_java(spec: Mapping[str, Any]) -> bool:
     return _java_identity(spec) is not None
 
 
+
+def _scope_host_implementation_messages(
+    messages: Sequence[Mapping[str, str]],
+    *,
+    behavior: Mapping[str, Any] | None,
+    purpose: str,
+) -> list[dict[str, str]]:
+    """Keep full checked APIs, but only the behavior this member owns.
+
+    The original whole-feature context remains authoritative for PLANNING and
+    integration. Sending it unchanged to EACH per-member body generator made
+    a 9B model author the entire mod inside one method, even after the host
+    had chosen a single behavior. This view never mutates original messages,
+    verified API evidence or workspace source.
+    """
+    if not behavior:
+        return [dict(message) for message in messages]
+    identifier = str(behavior.get("behavior_id") or "")
+    scoped = []
+    for message in messages:
+        item = dict(message)
+        if item.get("role") != "user":
+            scoped.append(item)
+            continue
+        try:
+            payload = json.loads(item.get("content", ""))
+        except (ValueError, TypeError):
+            scoped.append(item)
+            continue
+        if not isinstance(payload, dict) or not isinstance(
+            payload.get("assigned_behaviors"), list
+        ) or "inspected_target_api" not in payload:
+            scoped.append(item)
+            continue
+        payload["requirement"] = purpose
+        payload["original_feature_goal"] = purpose
+        payload["assigned_behaviors"] = [dict(behavior)]
+        order = payload.get("feature_work_order")
+        if isinstance(order, dict):
+            order = dict(order)
+            order["behavior_ids"] = [identifier]
+            order["intents"] = [str(behavior.get("intent") or "")]
+            order["effects"] = [str(behavior.get("effects") or "")]
+            order["state_reads"] = list(behavior.get("state_reads") or [])
+            order["state_writes"] = list(behavior.get("state_writes") or [])
+            payload["feature_work_order"] = order
+        item["content"] = json.dumps(payload, ensure_ascii=False, default=str)
+        scoped.append(item)
+    return scoped
+
+
 def compose_first_pass_java(
     router: Any,
     spec: Mapping[str, Any],
@@ -508,8 +559,13 @@ def compose_first_pass_java(
             body_task["prerequisite_source"] = source_context
         elif not messages:
             body_task["assigned_behaviors"] = [dict(item) for item in behaviors]
+        member_messages = (
+            _scope_host_implementation_messages(
+                messages, behavior=owned_behavior, purpose=purpose)
+            if host_mode else list(messages)
+        )
         body_messages = [
-            *messages,
+            *member_messages,
             {"role": "system", "content": (
                 "Return JSON with one implementation string containing only the field "
                 "initializer or method/constructor body. The host fixes the signature "
