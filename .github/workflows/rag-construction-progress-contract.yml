@@ -7,6 +7,10 @@ on:
     paths:
       - 'minecraft_mod_ai/construction_generation.py'
       - 'minecraft_mod_ai/construction_host_source.py'
+      - 'minecraft_mod_ai/javac_bridge.py'
+      - 'minecraft_mod_ai/java_symbol_resolver.py'
+      - 'minecraft_mod_ai/integrity_validators.py'
+      - 'minecraft_mod_ai/integrity_dispatcher.py'
       - 'minecraft_mod_ai/host_verified_entity_type.py'
       - 'minecraft_mod_ai/host_verified_entity_registry.py'
       - 'minecraft_mod_ai/construction_host_member_repair.py'
@@ -25,6 +29,7 @@ on:
       - 'tests/test_construction_host_source.py'
       - 'tests/test_host_verified_entity_type.py'
       - 'tests/test_host_verified_entity_registry.py'
+      - 'tests/test_javac_generated_dependency_proof.py'
       - 'tests/test_construction_host_member_repair.py'
       - 'tests/test_construction_java_member_journal.py'
       - 'tests/test_host_java_implementation_transport.py'
@@ -56,6 +61,10 @@ jobs:
           python -m py_compile \
             minecraft_mod_ai/construction_generation.py \
             minecraft_mod_ai/construction_host_source.py \
+            minecraft_mod_ai/javac_bridge.py \
+            minecraft_mod_ai/java_symbol_resolver.py \
+            minecraft_mod_ai/integrity_validators.py \
+            minecraft_mod_ai/integrity_dispatcher.py \
             minecraft_mod_ai/host_verified_entity_type.py \
             minecraft_mod_ai/host_verified_entity_registry.py \
             minecraft_mod_ai/construction_host_member_repair.py \
@@ -75,6 +84,7 @@ jobs:
             tests/test_construction_host_source.py \
             tests/test_host_verified_entity_type.py \
             tests/test_host_verified_entity_registry.py \
+            tests/test_javac_generated_dependency_proof.py \
             tests/test_construction_host_member_repair.py \
             tests/test_construction_java_member_journal.py \
             tests/test_host_java_implementation_transport.py \
