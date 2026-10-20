@@ -79,6 +79,39 @@ def _declared_java_source_ports(jobs: list[ArtifactJob]) -> dict[str, str]:
     return paths
 
 
+
+def _wire_validated_java_startup(jobs, receipts, *, context, base_dir) -> None:
+    """Connect only materialized, graph-validated Fabric Java producer owners."""
+    if not isinstance(context, dict):
+        return
+    root_value = context.get("project_root") or base_dir
+    if not root_value:
+        return
+    root = Path(root_value).resolve()
+    if not (root / "src/main/resources/fabric.mod.json").is_file():
+        return
+    approved = []
+    for job, receipt in zip(jobs, receipts, strict=True):
+        if not job.canonical_leaf or not isinstance(receipt, dict):
+            continue
+        materialization = receipt.get("materialization")
+        if not isinstance(materialization, dict):
+            continue
+        raw = materialization.get("path")
+        if not isinstance(raw, str) or not raw.endswith(".java"):
+            continue
+        path = Path(raw)
+        if not path.is_absolute():
+            path = (Path(base_dir).resolve() if base_dir else root) / path
+        resolved = path.resolve()
+        if not resolved.is_relative_to(root):
+            raise ArtifactGraphError("ARTIFACT_JAVA_STARTUP_SOURCE_OUTSIDE_WORKSPACE")
+        approved.append((resolved.relative_to(root).as_posix(), job.canonical_leaf))
+    if approved:
+        from .host_fabric_initializer_wiring import wire_completed_fabric_java
+        wire_completed_fabric_java(root, approved)
+
+
 def _configured_positive_int(name: str, default: int) -> int:
     raw = os.getenv(name, "").strip()
     if not raw:
@@ -271,6 +304,7 @@ def execute_artifact_graph(
             registry=registry,
             base_dir=base_dir,
         )
+        _wire_validated_java_startup([job], [receipt], context=context, base_dir=base_dir)
         return {
             "status": "PASS",
             "completed_jobs": [job.job_id],
@@ -446,6 +480,9 @@ def execute_artifact_graph(
 
     completed_jobs = [job.job_id for job in ordered_jobs]
     receipts = [results[job.job_id] for job in ordered_jobs]
+    _wire_validated_java_startup(
+        ordered_jobs, receipts, context=context, base_dir=base_dir,
+    )
     return {
         "status": "PASS",
         "completed_jobs": completed_jobs,
