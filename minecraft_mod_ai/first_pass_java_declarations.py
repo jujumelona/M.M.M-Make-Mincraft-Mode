@@ -8,7 +8,7 @@ from typing import Any
 IDENTIFIER = {"type": "string", "minLength": 1, "maxLength": 80,
               "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$"}
 TYPE = {"type": "string", "minLength": 1, "maxLength": 240}
-BODY = {"type": "string", "maxLength": 2600}
+BODY = {"type": "string"}  # Source bodies are not model-bounded by a string cap.
 MEMBER_KINDS = ("field", "method", "constructor", "class", "record", "enum")
 
 
