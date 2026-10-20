@@ -146,3 +146,40 @@ def test_failed_compiler_candidate_resumes_at_member_without_replaying_rejected_
     assert "return true;" in output
     assert len(second.calls) == 1
     assert not list((tmp_path / ".mmm/construction_host_candidates").glob("*.json"))
+
+
+
+def test_callback_api_evidence_uses_actual_trigger_not_only_feature_title(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(
+        "minecraft_mod_ai.construction_implementation.construction_implementation_fingerprint",
+        lambda: "host-callback-trigger-evidence-test")
+    captured = []
+    def evidence(_context, intent, **_kwargs):
+        captured.append(intent)
+        return {"class_members": []}
+    monkeypatch.setattr("minecraft_mod_ai.construction_file_author._evidence", evidence)
+    monkeypatch.setattr(
+        "minecraft_mod_ai.construction_file_author._read_materialized_context",
+        lambda *a, **kw: [])
+    monkeypatch.setattr(
+        "minecraft_mod_ai.construction_file_author._verify_full_source",
+        lambda *a, **kw: None)
+    monkeypatch.setattr(
+        "minecraft_mod_ai.construction_coverage.record_authored_source_calls",
+        lambda *a, **kw: None)
+    compose_host_java_source(
+        Router(), SPEC, _context(tmp_path),
+        package="example", name="Bridge", owner="example.Bridge",
+        behaviors=[{
+            "behavior_id": "ship.purchase",
+            "intent": "Upgrade ship",
+            "trigger": "Player opens trading interface and selects purchase",
+            "effects": "Deduct credits and upgrade ship weapons",
+        }],
+    )
+    assert len(captured) == 1
+    assert "Player opens trading interface" in captured[0]
+    assert "Deduct credits and upgrade ship weapons" in captured[0]
+    assert "Upgrade ship" in captured[0]
