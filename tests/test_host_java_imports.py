@@ -118,3 +118,39 @@ def test_same_package_reference_does_not_import_owner():
         owner="example.generated.Demo",
         target_path="src/main/java/example/generated/Demo.java")
     assert "import example.generated.Widget;" not in result
+
+
+def test_host_imported_subpackage_and_static_method_reference_compile(tmp_path):
+    import shutil
+    import subprocess
+
+    javac = shutil.which("javac")
+    if javac is None:
+        pytest.skip("JDK compiler unavailable")
+    original = ("package example;\npublic class Demo {\n"
+                "  java.util.function.Supplier<Object> factory = Registry::register;\n}\n")
+    source = host_add_verified_imports(
+        original, symbols=inventory("example.generated.Registry"),
+        owner="example.Demo", target_path="src/main/java/example/Demo.java",
+    )
+    assert "import example.generated.Registry;" in source
+    files = {
+        "example/Demo.java": source,
+        "example/generated/Registry.java": (
+            "package example.generated; "
+            "public class Registry { public static Object register() { return new Object(); } }"
+        ),
+    }
+    java_paths = []
+    for relative, content in files.items():
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        java_paths.append(str(path))
+    classes = tmp_path / "classes"
+    classes.mkdir()
+    result = subprocess.run(
+        [javac, "-proc:none", "-d", str(classes), *java_paths],
+        capture_output=True, text=True, timeout=90,
+    )
+    assert result.returncode == 0, result.stderr
