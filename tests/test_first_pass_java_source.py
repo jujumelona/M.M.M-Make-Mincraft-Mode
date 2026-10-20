@@ -274,15 +274,25 @@ def test_host_mode_owns_imports_entrypoint_and_all_behavior_registrars():
             if data_name == "submit_java_construction_plan_count":
                 self.data_calls.append((data_name, parameters))
                 return {"count": 0}
+            if data_name.startswith("submit_java_declaration_"):
+                self.data_calls.append((data_name, parameters))
+                return {"visibility": "private", "static": False,
+                        "return_type": "void", "type_parameters": "",
+                        "parameters": [], "throws": [], "annotations": []}
             return super().generate_structured_data(
                 role, messages, data_name=data_name, parameters=parameters)
 
         def generate_java_source(self, role, messages, *, data_name, source_frame):
             self.source_calls.append((data_name, source_frame))
             assert data_name.startswith("submit_java_implementation_")
-            return (source_frame["prefix"]
-                    + '    System.out.println("registered");'
-                    + source_frame["suffix"])
+            import json
+            scoped = json.loads(messages[-1]["content"])
+            if scoped["member_role"] == "register_callback":
+                handler = scoped["handler_signature"].split("(")[0].split()[-1]
+                implementation = "this." + handler + "();"
+            else:
+                implementation = 'System.out.println("behavior implemented");'
+            return source_frame["prefix"] + implementation + source_frame["suffix"]
 
     router = HostRouter()
     spec = {**SPEC, "bindings": {**SPEC["bindings"],
@@ -292,14 +302,18 @@ def test_host_mode_owns_imports_entrypoint_and_all_behavior_registrars():
         behaviors=behaviors)
     assert source.count("void onInitialize()") == 1
     assert "implements net.fabricmc.api.ModInitializer" in source
-    assert len(router.source_calls) == len(behaviors)
+    assert len(router.source_calls) == 2 * len(behaviors)
     assert "submit_java_entrypoint_source" not in _source_names(router)
     assert all("imports" not in name for name in _data_names(router))
     for item in behaviors:
         method = ("registerBehavior"
                   + hashlib.sha256(item["behavior_id"].encode()).hexdigest()[:20])
+        handler = ("handleBehavior"
+                   + hashlib.sha256(item["behavior_id"].encode()).hexdigest()[:20])
         assert ("private void " + method + "()") in source
+        assert ("private void " + handler + "()") in source
         assert ("this." + method + "();") in source
+        assert ("this." + handler + "();") in source
 
 
 def test_host_mode_rejects_missing_required_behavior_scope():
@@ -339,12 +353,15 @@ def test_host_body_payload_does_not_duplicate_full_verified_source():
         construction_context={"symbols": {}, "authoring_contract": {}},
         behaviors=behaviors,
     )
-    assert len(router.captured_bodies) == 1
-    messages = router.captured_bodies[0]
-    payload = "\n".join(item["content"] for item in messages)
-    assert payload.count(evidence_marker) == 1
-    assert len(payload) < len(evidence) + 6000
-    scoped_task = json.loads(messages[-1]["content"])
-    assert scoped_task["assigned_behavior"]["behavior_id"] == "ship.build"
-    assert "prerequisite_source" not in scoped_task
-    assert "feature_work_order" not in scoped_task
+    assert len(router.captured_bodies) == 2
+    for messages in router.captured_bodies:
+        payload = "\n".join(item["content"] for item in messages)
+        assert payload.count(evidence_marker) == 1
+        assert len(payload) < len(evidence) + 6000
+        scoped_task = json.loads(messages[-1]["content"])
+        assert scoped_task["assigned_behavior"]["behavior_id"] == "ship.build"
+        assert "prerequisite_source" not in scoped_task
+        assert "feature_work_order" not in scoped_task
+    assert {json.loads(m[-1]["content"])["member_role"]
+            for m in router.captured_bodies} == {
+                "implement_callback_effects", "register_callback"}
