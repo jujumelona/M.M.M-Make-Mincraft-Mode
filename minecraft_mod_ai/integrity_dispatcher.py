@@ -267,6 +267,7 @@ def execute_generator_job(job, *, context, router, port_registry=None, base_dir=
                 classpath=java_classpath,
                 java_version=java_version,
                 classpath_sides=context.get("classpath_sides"),
+                project_root=base_dir, source_context=source_context,
             ))
         elif registered.get("state") == "admitted":
             raise ValueError("RUNTIME_JAVA_CLASSPATH_REQUIRED")
