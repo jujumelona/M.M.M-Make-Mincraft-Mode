@@ -304,3 +304,23 @@ public enum Mode { ENABLED, DISABLED }
     assert result["wired"] == []
     metadata = json.loads((tmp_path / "src/main/resources/fabric.mod.json").read_text())
     assert metadata["entrypoints"]["main"] == ["proof.ExistingInitializer"]
+
+
+
+def test_graph_receipt_rejects_symlinked_source_even_when_hash_matches(tmp_path):
+    import hashlib
+    from minecraft_mod_ai.artifact_graph_executor import ArtifactGraphError
+
+    registry, _, _ = _fixture(tmp_path)
+    target = tmp_path / registry
+    alias = target.with_name("Alias.java")
+    alias.symlink_to(target)
+    receipt = {"status": "PASS", "materialization": {
+        "path": str(alias),
+        "after_sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+    }}
+    job = SimpleNamespace(canonical_leaf="minecraft/entity/registry")
+    with pytest.raises(ArtifactGraphError, match="ARTIFACT_JAVA_STARTUP_SOURCE_SYMLINK"):
+        _wire_validated_java_startup(
+            [job], [receipt], context={"project_root": str(tmp_path)}, base_dir=tmp_path,
+        )
