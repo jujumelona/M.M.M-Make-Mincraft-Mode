@@ -24,6 +24,9 @@ _BUILTIN = "net.minecraft.core.registries.BuiltInRegistries"
 _REGISTRIES = "net.minecraft.core.registries.Registries"
 _RESOURCE_KEY = "net.minecraft.resources.ResourceKey"
 _IDENTIFIER = "net.minecraft.resources.Identifier"
+_MOB = "net.minecraft.world.entity.Mob"
+_ATTR_REGISTRY = "net.fabricmc.fabric.api.object.builder.v1.entity.FabricDefaultAttributeRegistry"
+_ATTR_BUILDER = "net.minecraft.world.entity.ai.attributes.AttributeSupplier.Builder"
 
 
 def _model_free_registry_fields(spec: Mapping, contract: Mapping):
@@ -80,6 +83,7 @@ def _members(inspected: Mapping, symbols: Mapping):
             if row.get("owner") not in {
                 _BUILDER, _CATEGORY, _REGISTRY, _BUILTIN,
                 _REGISTRIES, _RESOURCE_KEY, _IDENTIFIER,
+                _MOB, _ATTR_REGISTRY,
             }:
                 continue
             key = (row.get("owner"), row.get("kind"), row.get("name"),
@@ -117,6 +121,18 @@ def verified_entity_registry_source(
                and row.get("source_sha256")
                for row in source):
         raise ValueError("JAVA_HOST_REGISTRY_ENTITY_PREREQUISITE_UNVERIFIED")
+    # The prerequisite source, not a prompt keyword, proves this type is a
+    # Mob/Monster that must receive default attributes during initialization.
+    living_mob = any(
+        re.search(
+            r"\bextends\s+(?:net\.minecraft\.world\.entity\.(?:monster\.)?)?(?:Monster|Mob)\b",
+            str(row.get("signature") or ""),
+        )
+        for row in source
+        if isinstance(row, Mapping)
+        and row.get("authority") == "inspected_materialized_source"
+        and str(row.get("signature") or "").startswith("public class " + entity_name + " ")
+    )
     rows = list(_members(inspected, symbols))
 
     def proven(owner, kind, member, params=()):
@@ -157,6 +173,16 @@ def verified_entity_registry_source(
     ):
         if not proven(owner, "FIELD", field):
             raise ValueError("JAVA_HOST_REGISTRY_FIELD_UNVERIFIED: " + owner + "." + field)
+    if living_mob:
+        # Verify both method signatures in the actual selected classpath.
+        if not proven(_ATTR_REGISTRY, "METHOD", "register", [_ENTITY, _ATTR_BUILDER]):
+            raise ValueError("JAVA_HOST_ENTITY_ATTRIBUTES_API_UNVERIFIED")
+        if not proven(_MOB, "METHOD", "createMobAttributes", []):
+            raise ValueError("JAVA_HOST_ENTITY_ATTRIBUTE_BUILDER_UNVERIFIED")
+    attributes = (
+        f"        {_ATTR_REGISTRY}.register(ENTITY_TYPE, {_MOB}.createMobAttributes());\n"
+        if living_mob else ""
+    )
     ident = f'{_IDENTIFIER}.fromNamespaceAndPath("{modid}", "{path}")'
     return (
         f"package {package};\n\n"
@@ -170,6 +196,7 @@ def verified_entity_registry_source(
         f"                .build({_RESOURCE_KEY}.create({_REGISTRIES}.ENTITY_TYPE, {ident})));\n"
         f"    public static void register() {{\n"
         "        java.util.Objects.requireNonNull(ENTITY_TYPE);\n"
+        f"{attributes}"
         "    }\n"
         "}\n"
     )
