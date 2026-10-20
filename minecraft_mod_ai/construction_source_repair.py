@@ -120,6 +120,8 @@ def focused_java_correction_messages(
         pass
     task.update({
         "diagnostic": diagnostic,
+        # Preserve byte-exact model output for trace/repro and existing repair ABI.
+        "previous_response": response,
         "previous_implementation": previous_source if isinstance(previous_source, str) else response,
         "immutable_source_frame": dict(frame),
         "api_evidence": context,
