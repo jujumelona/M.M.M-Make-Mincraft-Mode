@@ -52,7 +52,7 @@ def test_java_source_starts_without_recursive_grammar_or_recovery_cap():
     assert len(fake.requests) == 1
     request = fake.requests[0]
     assert request.response_format == "json"
-    assert request.response_schema["properties"]["implementation"] == {"type": "string"}
+    assert request.response_schema is None  # No hidden 256-char native schema limit.
     assert "mmm_java_source_frame" not in request.metadata
     assert "mmm_native_java_recovery" not in request.metadata
     assert "mmm_output_token_ceiling" not in request.metadata
