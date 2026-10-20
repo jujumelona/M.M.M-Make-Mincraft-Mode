@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from collections.abc import Mapping
 
 
 @dataclass(frozen=True)
@@ -31,11 +32,13 @@ class JavaSymbolResolver:
     """Resolve overloads, instance calls, fields and constructors using javac Trees."""
 
     def __init__(self, classpath: list[Path], java_version: str = "21", *,
-                 namespace: str = "NAMED", classpath_sides: dict[str, str] | None = None):
+                 namespace: str = "NAMED", classpath_sides: dict[str, str] | None = None,
+                 additional_sources: Mapping[str, str] | None = None):
         self.classpath = [Path(p) for p in classpath]
         self.java_version = java_version
         self.namespace = namespace
         self.classpath_sides = classpath_sides or {}
+        self.additional_sources = dict(additional_sources or {})
 
     def _resolve(self, source_code: str, filename: str | None = None):
         from .javac_bridge import analyze_java
@@ -47,7 +50,8 @@ class JavaSymbolResolver:
             filename = (match[1] if match else "IntegrityInput") + ".java"
         try:
             rows = analyze_java(source_code, classpath=self.classpath,
-                                java_version=self.java_version, filename=filename)
+                                java_version=self.java_version, filename=filename,
+                                additional_sources=self.additional_sources)
             classes = {}
             for path in self.classpath:
                 default_side = self.classpath_sides.get(str(path), "COMMON")
