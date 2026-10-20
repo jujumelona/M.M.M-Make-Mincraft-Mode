@@ -8,6 +8,7 @@ on:
       - 'minecraft_mod_ai/construction_generation.py'
       - 'minecraft_mod_ai/construction_host_source.py'
       - 'minecraft_mod_ai/host_verified_entity_type.py'
+      - 'minecraft_mod_ai/host_verified_entity_registry.py'
       - 'minecraft_mod_ai/construction_host_member_repair.py'
       - 'minecraft_mod_ai/host_java_imports.py'
       - 'minecraft_mod_ai/first_pass_java_source.py'
@@ -23,6 +24,7 @@ on:
       - 'tests/test_host_java_imports.py'
       - 'tests/test_construction_host_source.py'
       - 'tests/test_host_verified_entity_type.py'
+      - 'tests/test_host_verified_entity_registry.py'
       - 'tests/test_construction_host_member_repair.py'
       - 'tests/test_construction_java_member_journal.py'
       - 'tests/test_host_java_implementation_transport.py'
@@ -55,6 +57,7 @@ jobs:
             minecraft_mod_ai/construction_generation.py \
             minecraft_mod_ai/construction_host_source.py \
             minecraft_mod_ai/host_verified_entity_type.py \
+            minecraft_mod_ai/host_verified_entity_registry.py \
             minecraft_mod_ai/construction_host_member_repair.py \
             minecraft_mod_ai/host_java_imports.py \
             minecraft_mod_ai/first_pass_java_source.py \
@@ -71,6 +74,7 @@ jobs:
             tests/test_host_java_imports.py \
             tests/test_construction_host_source.py \
             tests/test_host_verified_entity_type.py \
+            tests/test_host_verified_entity_registry.py \
             tests/test_construction_host_member_repair.py \
             tests/test_construction_java_member_journal.py \
             tests/test_host_java_implementation_transport.py \
