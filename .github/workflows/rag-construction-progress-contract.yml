@@ -48,6 +48,7 @@ on:
       - 'tests/test_construction_host_member_repair.py'
       - 'tests/test_construction_java_member_journal.py'
       - 'tests/test_host_java_implementation_transport.py'
+      - 'tests/test_java_source_correction_focus.py'
       - 'tests/test_native_java_decode_strategy_recovery.py'
       - 'tests/test_artifact_java_source_ports.py'
       - 'tests/test_construction_operation_progress_gate.py'
@@ -120,6 +121,7 @@ jobs:
             tests/test_construction_host_member_repair.py \
             tests/test_construction_java_member_journal.py \
             tests/test_host_java_implementation_transport.py \
+            tests/test_java_source_correction_focus.py \
             tests/test_native_java_decode_strategy_recovery.py \
             tests/test_artifact_java_source_ports.py \
             tests/test_construction_operation_progress_gate.py
