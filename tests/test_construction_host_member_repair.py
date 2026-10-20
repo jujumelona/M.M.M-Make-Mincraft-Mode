@@ -157,3 +157,52 @@ def test_coder_receives_only_error_for_selected_member():
     assert "return missingSymbol;" in payload["current_member"]
     assert any("public int ready()" in sig for sig in payload["host_declared_neighbor_signatures"])
     assert not any("public int broken()" in sig for sig in payload["host_declared_neighbor_signatures"])
+
+
+def test_identical_first_compiler_repair_gets_different_focused_retry():
+    import json
+
+    class RepeatedFirstRouter:
+        def __init__(self):
+            self.calls = []
+
+        def generate_java_source(self, role, messages, *, data_name, source_frame):
+            self.calls.append((messages, data_name, source_frame))
+            if len(self.calls) == 1:
+                return _failing_member(SOURCE, ERROR, filename="Demo.java")[2]
+            return source_frame["prefix"] + "return 9;" + source_frame["suffix"]
+
+    router = RepeatedFirstRouter()
+    revised = repair_compiler_member(
+        router, SOURCE, ERROR, filename="Demo.java",
+        target_path="src/main/java/example/Demo.java",
+        symbols={}, owner="example.Demo", api_evidence={}, attempt=1,
+    )
+    assert "return 9;" in revised
+    assert "missingSymbol" not in revised
+    assert len(router.calls) == 2
+    assert "no_progress" in router.calls[1][1]
+    selected = json.loads(router.calls[1][0][-1]["content"])
+    assert selected["javac_diagnostic"]
+    assert "return missingSymbol;" in selected["rejected_member"]
+    assert selected["immutable_source_frame"] == router.calls[1][2]
+    assert any("public int ready()" in sig
+               for sig in selected["host_declared_neighbor_signatures"])
+
+
+def test_identical_second_compiler_repair_still_fails():
+    class NoProgress:
+        calls = 0
+
+        def generate_java_source(self, role, messages, *, data_name, source_frame):
+            self.calls += 1
+            return _failing_member(SOURCE, ERROR, filename="Demo.java")[2]
+
+    router = NoProgress()
+    with pytest.raises(ValueError, match="JAVA_HOST_REPAIR_NO_MEMBER_PROGRESS"):
+        repair_compiler_member(
+            router, SOURCE, ERROR, filename="Demo.java",
+            target_path="src/main/java/example/Demo.java",
+            symbols={}, owner="example.Demo", api_evidence={}, attempt=1,
+        )
+    assert router.calls == 2
