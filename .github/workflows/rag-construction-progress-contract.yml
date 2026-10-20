@@ -25,6 +25,8 @@ on:
       - 'minecraft_mod_ai/construction_type_contracts.py'
       - 'minecraft_mod_ai/construction_journal.py'
       - 'minecraft_mod_ai/model_router.py'
+      - 'minecraft_mod_ai/model_adapters/llama_cpp_adapter.py'
+      - 'minecraft_mod_ai/llama_server_hardware_policy.py'
       - 'minecraft_mod_ai/llama_structured_decode_policy.py'
       - 'minecraft_mod_ai/construction_source_repair.py'
       - 'minecraft_mod_ai/first_pass_java_declarations.py'
@@ -49,6 +51,7 @@ on:
       - 'tests/test_construction_java_member_journal.py'
       - 'tests/test_host_java_implementation_transport.py'
       - 'tests/test_java_source_correction_focus.py'
+      - 'tests/test_java_json_decode_loop_recovery.py'
       - 'tests/test_native_java_decode_strategy_recovery.py'
       - 'tests/test_artifact_java_source_ports.py'
       - 'tests/test_construction_operation_progress_gate.py'
@@ -98,6 +101,8 @@ jobs:
             minecraft_mod_ai/host_behavior_event_binding.py \
             minecraft_mod_ai/construction_journal.py \
             minecraft_mod_ai/model_router.py \
+            minecraft_mod_ai/model_adapters/llama_cpp_adapter.py \
+            minecraft_mod_ai/llama_server_hardware_policy.py \
             minecraft_mod_ai/construction_source_repair.py \
             minecraft_mod_ai/first_pass_java_declarations.py \
             minecraft_mod_ai/artifact_graph_executor.py \
@@ -122,6 +127,7 @@ jobs:
             tests/test_construction_java_member_journal.py \
             tests/test_host_java_implementation_transport.py \
             tests/test_java_source_correction_focus.py \
+            tests/test_java_json_decode_loop_recovery.py \
             tests/test_native_java_decode_strategy_recovery.py \
             tests/test_artifact_java_source_ports.py \
             tests/test_construction_operation_progress_gate.py
