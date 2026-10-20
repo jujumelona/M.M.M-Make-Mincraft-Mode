@@ -334,6 +334,16 @@ def test_host_body_payload_does_not_duplicate_full_verified_source():
             super().__init__(units=[])
             self.captured_bodies = []
 
+        def generate_structured_data(self, role, messages, *, data_name, parameters):
+            if data_name == "submit_java_construction_plan_count":
+                return {"count": 0}
+            if data_name.startswith("submit_java_declaration_"):
+                return {"visibility": "private", "static": False,
+                        "return_type": "void", "type_parameters": "",
+                        "parameters": [], "throws": [], "annotations": []}
+            return super().generate_structured_data(
+                role, messages, data_name=data_name, parameters=parameters)
+
         def generate_java_source(self, role, messages, *, data_name, source_frame):
             self.captured_bodies.append(list(messages))
             return source_frame["prefix"] + " return; " + source_frame["suffix"]
