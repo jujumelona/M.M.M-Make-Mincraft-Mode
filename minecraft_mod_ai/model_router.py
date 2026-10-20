@@ -476,14 +476,13 @@ class ModelRouter:
                 + json.dumps(dict(source_frame), ensure_ascii=False)
             )}], config=config, tools=(),
         )
-        # A JSON-object-only sampler can emit unlimited extra fields/escaped Java
-        # (observed 15,112 output tokens for one method). Bound each atomic body
-        # in the native grammar itself. The planner must allocate additional
-        # host-owned helper declarations rather than making one body enormous.
-        from .first_pass_java_declarations import BODY
+        # Constrain the response SHAPE, never the implementation size.
+        # A fixed character cap rejects legitimate large methods without
+        # addressing why a planner produced an oversized unit. Keep the
+        # existing host-owned declaration frame and full-member parse gate.
         source_schema = {
             "type": "object",
-            "properties": {"implementation": dict(BODY)},
+            "properties": {"implementation": {"type": "string"}},
             "required": ["implementation"],
             "additionalProperties": False,
         }
