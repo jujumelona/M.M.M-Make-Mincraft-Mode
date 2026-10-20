@@ -59,6 +59,7 @@ def test_startup_entries_are_derived_from_admitted_java_abi_and_idempotent(tmp_p
     assert "proof.actions.ClientFeature" in metadata["entrypoints"]["client"]
     registrars = [e for e in main if e.startswith("proof.generated.MmmRegistryBootstrap")]
     assert len(registrars) == 1
+    assert main.index(registrars[0]) < main.index("proof.actions.Feature")
     java_path = tmp_path / "src/main/java/proof/generated" / (
         registrars[0].rsplit(".", 1)[-1] + ".java"
     )
@@ -175,3 +176,20 @@ def test_source_change_after_graph_receipt_must_not_bind_startup(tmp_path):
     metadata = json.loads(
         (tmp_path / "src/main/resources/fabric.mod.json").read_text())
     assert metadata["entrypoints"]["main"] == ["proof.ExistingInitializer"]
+
+
+
+def test_registry_init_precedes_feature_even_if_feature_was_published_first(tmp_path):
+    registry, feature, _ = _fixture(tmp_path)
+    wire_completed_fabric_java(
+        tmp_path, [(feature, "minecraft/event/callback")],
+    )
+    wire_completed_fabric_java(
+        tmp_path, [(registry, "minecraft/entity/registry")],
+    )
+    entries = json.loads(
+        (tmp_path / "src/main/resources/fabric.mod.json").read_text()
+    )["entrypoints"]["main"]
+    assert entries[0] == "proof.ExistingInitializer"
+    assert "MmmRegistryBootstrap" in entries[1]
+    assert entries[2] == "proof.actions.Feature"
