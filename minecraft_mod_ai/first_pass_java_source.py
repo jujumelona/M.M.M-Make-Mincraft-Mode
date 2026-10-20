@@ -22,6 +22,7 @@ from .model_output_atomicity_contract import assert_atomic_model_schema
 from .first_pass_java_declarations import (
     IDENTIFIER, MEMBER_KINDS, declaration_frame, declaration_header,
     metadata_schema, render_declaration, validate_declaration_metadata,
+    canonicalize_field_type_metadata,
 )
 
 
@@ -457,6 +458,7 @@ def compose_first_pass_java(
                 schema=member_schema,
                 page_structure=nested_type,
             ))
+        parts = canonicalize_field_type_metadata(kind, member_name, parts)
         validate_declaration_metadata(kind, member_name, parts, owner=class_name)
         declarations.append((unit, parts))
 
