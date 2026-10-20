@@ -16,6 +16,9 @@ BI = "net.minecraft.core.registries.BuiltInRegistries"
 RS = "net.minecraft.core.registries.Registries"
 K = "net.minecraft.resources.ResourceKey"
 IDENTIFIER = "net.minecraft.resources.Identifier"
+MOB = "net.minecraft.world.entity.Mob"
+ATTR = "net.fabricmc.fabric.api.object.builder.v1.entity.FabricDefaultAttributeRegistry"
+BUILDER = "net.minecraft.world.entity.ai.attributes.AttributeSupplier.Builder"
 SPEC = {
     "language": "java",
     "target_path": "src/main/java/example/AlienRegistry.java",
@@ -66,6 +69,8 @@ REQUIRED_SYMBOL_ROWS = [
     _member(BI, "FIELD", "ENTITY_TYPE"),
     _member(RS, "FIELD", "ENTITY_TYPE"),
     _member(C, "FIELD", "CREATURE"),
+    _member(ATTR, "METHOD", "register", [E, BUILDER]),
+    _member(MOB, "METHOD", "createMobAttributes", []),
 ]
 SYMBOLS = {str(i): row for i, row in enumerate(REQUIRED_SYMBOL_ROWS)}
 
@@ -84,6 +89,7 @@ def test_entity_registry_host_uses_only_verified_registration_contract():
     assert "fromNamespaceAndPath" in java
     assert "super(" not in java
     assert "public static void register()" in java
+    assert ATTR + ".register(ENTITY_TYPE, " + MOB + ".createMobAttributes())" in java
     assert "new net.minecraft.world.entity.EntityType.EntityFactory" not in java
 
 
@@ -151,3 +157,25 @@ def test_registry_host_route_never_calls_model_and_keeps_compile_gate(
     assert generated == checked[0]
     assert "Alien::new" in generated
     assert len(checked) == 1
+
+
+def test_living_entity_attributes_cannot_be_silently_omitted():
+    import copy
+    no_attributes = {
+        name: value for name, value in SYMBOLS.items()
+        if value.get("owner") != ATTR
+    }
+    with pytest.raises(ValueError, match="ENTITY_ATTRIBUTES_API_UNVERIFIED"):
+        verified_entity_registry_source(
+            SPEC, CONTRACT, EVIDENCE, no_attributes,
+            package="example", name="AlienRegistry",
+        )
+    nonliving = copy.deepcopy(EVIDENCE)
+    nonliving["source"][0]["signature"] = (
+        "public class Alien extends net.minecraft.world.entity.Entity"
+    )
+    java = verified_entity_registry_source(
+        SPEC, CONTRACT, nonliving, no_attributes,
+        package="example", name="AlienRegistry",
+    )
+    assert ATTR + ".register" not in java
