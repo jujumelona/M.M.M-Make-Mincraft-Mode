@@ -147,6 +147,28 @@ def _javac_constructor_repair(source: str, diagnostic: str, *, filename: str) ->
             + raw[body.end_byte:]).decode("utf-8")
 
 
+
+
+def _first_compiler_error(diagnostic: str, *, filename: str) -> str:
+    """Return one complete javac error including its required/found details.
+
+    A single javac run can describe failures in several different members.
+    Showing all of them to a fixed-frame repair causes the coder to edit the
+    wrong member (or repeat a forbidden assignment). Preserve the original
+    full diagnostic for the host's verified constructor repair; scope only
+    the model's task to the first actual error.
+    """
+    expression = re.compile(
+        rf"(?m)^[^\n]*{re.escape(filename)}:\d+:\s*error:"
+    )
+    matches = list(expression.finditer(diagnostic))
+    if not matches:
+        return diagnostic
+    start = matches[0].start()
+    end = matches[1].start() if len(matches) > 1 else len(diagnostic)
+    return diagnostic[start:end].strip()
+
+
 def repair_compiler_member(router, source: str, diagnostic: str, *,
                            filename: str, target_path: str, symbols: dict,
                            owner: str, api_evidence: dict, attempt: int) -> str:
@@ -160,6 +182,8 @@ def repair_compiler_member(router, source: str, diagnostic: str, *,
 
     raw, node, original, frame = _failing_member(
         source, diagnostic, filename=filename)
+    focused_diagnostic = _first_compiler_error(
+        diagnostic, filename=filename)
     messages = [{
         "role": "system",
         "content": (
@@ -168,12 +192,16 @@ def repair_compiler_member(router, source: str, diagnostic: str, *,
             "its exact signature and every assigned behavior. The host owns "
             "imports, class identity and other methods. Use only real APIs "
             "from the inspected target; no package statements, imports, "
-            "placeholder bodies or new declarations."
+            "placeholder bodies or new declarations. Every replacement must "
+            "address the displayed compiler error: inaccessible fields must "
+            "not be read or written directly, and assignments to the same "
+            "expression do not repair an inaccessible field. Do not try to "
+            "repair unrelated compiler errors in this member."
         ),
     }, {
         "role": "user",
         "content": json.dumps({
-            "target_path": target_path, "javac_diagnostic": diagnostic,
+            "target_path": target_path, "javac_diagnostic": focused_diagnostic,
             "current_member": original, "response_source_frame": frame,
             "inspected_api": api_evidence,
         }, ensure_ascii=False, default=str),
