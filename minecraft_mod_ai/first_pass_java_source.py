@@ -393,11 +393,17 @@ def compose_first_pass_java(
                      "return_type": "void", "type_parameters": "",
                      "parameters": [], "throws": [], "annotations": []}
         else:
+            member_schema = metadata_schema(kind, member_name)
+            if host_mode and unit.get("host_handler_behavior"):
+                # Runtime effect handlers are commands. The host, not the 9B
+                # model, decides their result type. Parameter names/types remain
+                # model-authored because the verified event API determines them.
+                member_schema["properties"]["return_type"] = {"const": "void"}
             parts = dict(_one_structured_action(
                 router,
                 metadata_messages,
                 name=f"submit_java_declaration_{index}",
-                schema=metadata_schema(kind, member_name),
+                schema=member_schema,
                 page_structure=nested_type,
             ))
         validate_declaration_metadata(kind, member_name, parts, owner=class_name)
