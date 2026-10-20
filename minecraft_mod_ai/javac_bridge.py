@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+from collections.abc import Mapping
 
 
 JAVA_SOURCE = r'''
@@ -75,9 +76,19 @@ class IntegritySymbols {
     JavaFileObject input = new SimpleJavaFileObject(URI.create("string:///" + filename), JavaFileObject.Kind.SOURCE) {
       public CharSequence getCharContent(boolean ignore) { return code; }
     };
+    List<JavaFileObject> sources=new ArrayList<>();
+    sources.add(input);
+    if ((args.length-6)%2 != 0) throw new IllegalArgumentException("Invalid companion source arguments");
+    for (int i=6; i<args.length; i+=2) {
+      String companionName=args[i], companionCode=Files.readString(Path.of(args[i+1]));
+      if (companionName.equals(filename)) throw new IllegalArgumentException("Duplicate Java source identity");
+      sources.add(new SimpleJavaFileObject(URI.create("string:///" + companionName), JavaFileObject.Kind.SOURCE) {
+        public CharSequence getCharContent(boolean ignore) { return companionCode; }
+      });
+    }
     try (StandardJavaFileManager fm=compiler.getStandardFileManager(diagnostics, null, null)) {
       JavacTask task=(JavacTask)compiler.getTask(null,fm,diagnostics,
-          List.of("-proc:none","--release",release,"-classpath",cp),null,List.of(input));
+          List.of("-proc:none","--release",release,"-classpath",cp),null,sources);
       List<CompilationUnitTree> units=new ArrayList<>();
       task.parse().forEach(units::add);
       if (!mode.equals("parse")) task.analyze();
@@ -89,7 +100,9 @@ class IntegritySymbols {
       if(mode.equals("parse")) { Files.writeString(Path.of(args[5]), "[]"); return; }
       Trees trees=Trees.instance(task); types=task.getTypes(); elements=task.getElements();
       List<String> rows=new ArrayList<>();
-      for(CompilationUnitTree unit: units) new TreePathScanner<Void,Void>() {
+      for(CompilationUnitTree unit: units) {
+        if (!unit.getSourceFile().toUri().equals(input.toUri())) continue;
+        new TreePathScanner<Void,Void>() {
         void emit(TreePath path, Tree tree) {
           Element e=trees.getElement(path);
           if(e==null) throw new IllegalArgumentException("Unresolved reference: " + tree);
@@ -118,7 +131,8 @@ class IntegritySymbols {
           if(e!=null && (e instanceof TypeElement || e.getKind()==ElementKind.FIELD || e.getKind()==ElementKind.ENUM_CONSTANT)) emit(getCurrentPath(),t);
           return super.visitIdentifier(t,v);
         }
-      }.scan(unit,null);
+        }.scan(unit,null);
+      }
       Files.writeString(Path.of(args[5]), "["+String.join(",",rows)+"]");
     }
   }
@@ -127,7 +141,8 @@ class IntegritySymbols {
 
 
 def analyze_java(source: str, *, classpath=(), java_version="17", filename="IntegrityInput.java",
-                 parse_only=False, timeout=60) -> list[dict]:
+                 parse_only=False, timeout=60,
+                 additional_sources: Mapping[str, str] | None = None) -> list[dict]:
     from .java_lsp import _resolve_project_java_home, _java_executable
 
     # Use the same exact-target resolver as Gradle and JDT, including lazy JDK
@@ -156,8 +171,18 @@ def analyze_java(source: str, *, classpath=(), java_version="17", filename="Inte
         # JVM startup/GC warnings may be written to stdout. Keep the machine
         # result in a dedicated per-call file so diagnostics cannot corrupt JSON.
         output_path = root / "result.json"
+        companions = []
+        for index, (name, code) in enumerate((additional_sources or {}).items()):
+            if (not isinstance(name, str) or Path(name).name != name
+                    or not name.endswith(".java") or name == filename
+                    or not isinstance(code, str)):
+                raise ValueError("JAVA_ADDITIONAL_SOURCE_INVALID")
+            path = root / f"companion_{index}.txt"
+            path.write_text(code, encoding="utf-8")
+            companions.extend([name, str(path)])
         result = subprocess.run([java, str(helper), "parse" if parse_only else "resolve",
-                                 str(java_version), cp, filename, str(input_path), str(output_path)],
+                                 str(java_version), cp, filename, str(input_path), str(output_path),
+                                 *companions],
                                 capture_output=True, text=True, encoding="utf-8", errors="replace",
                                 timeout=timeout, cwd=root)
         if result.returncode:
