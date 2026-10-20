@@ -68,7 +68,6 @@ def _build_host_java_prompt(router, spec: dict, context: dict, *,
             context, target_path=spec["target_path"],
             source_context=source_context),
     }
-    from .host_typed_state_access import state_access_contract
     state_access = state_access_contract(prompt["materialized_prerequisite_api"])
     prompt["host_state_access"] = state_access
     return contract, requirement, behavior_rows, prompt, state_access
