@@ -107,7 +107,10 @@ def verify(root, minecraft="26.2", fabric="0.155.2+26.2"):
         return _download(row["url"], root / "libraries" / row["path"], row["sha1"])
     with ThreadPoolExecutor(max_workers=6) as pool:
         library_paths = list(pool.map(download_library, libraries.values()))
-    symbols = build_target_symbols(modules, java_version=25, namespace="OFFICIAL", classpath_sides={})
+    # Include the exact Minecraft Java ABI as well as Fabric APIs. The same
+    # proof checks the host's verified entity/attribute registry generator.
+    symbols = build_target_symbols([minecraft_jar, *modules], java_version=25,
+                                   namespace="OFFICIAL", classpath_sides={})
     events = callback_interfaces(symbols, side="COMMON")
     required = {
         "net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents#END_SERVER_TICK",
@@ -133,6 +136,52 @@ def verify(root, minecraft="26.2", fabric="0.155.2+26.2"):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(source)
         paths.append(str(path))
+    # Compile the ACTUAL host-emitted living-entity registry against Minecraft
+    # and Fabric classes. A synthetic signature stub could mask a 26.2 API
+    # change, so both the class and registration are checked by javac.
+    from minecraft_mod_ai.host_verified_entity_registry import verified_entity_registry_source
+    probe_name = "CompiledCreature"
+    entity_code = (
+        "package proof;\n"
+        "public class " + probe_name
+        + " extends net.minecraft.world.entity.monster.Monster {\n"
+        " public " + probe_name
+        + "(net.minecraft.world.entity.EntityType<? extends net.minecraft.world.entity.monster.Monster> type,"
+        + " net.minecraft.world.level.Level level) { super(type, level); }\n"
+        + "}\n"
+    )
+    registry_spec = {
+        "language": "java",
+        "side": "COMMON",
+        "bindings": {"module_config_json": json.dumps({
+            "spawn_group": "creature", "entity_width": 0.9,
+            "entity_height": 1.5,
+        })},
+    }
+    registry_contract = {
+        "canonical_leaf": "minecraft/entity/registry",
+        "bindings": {"mod_id": "mmmprobe", "registry_path": "compiled_creature"},
+    }
+    registry_api = {"source": [{
+        "authority": "inspected_materialized_source",
+        "signature": "public class CompiledCreature extends net.minecraft.world.entity.monster.Monster",
+        "source_sha256": hashlib.sha256(entity_code.encode()).hexdigest(),
+    }]}
+    registry_code = verified_entity_registry_source(
+        registry_spec, registry_contract, registry_api, symbols,
+        package="proof", name=probe_name + "Registry",
+    )
+    if registry_code is None:
+        raise AssertionError("Host registry probe did not produce a Java compilation unit")
+    if "FabricDefaultAttributeRegistry.register(ENTITY_TYPE" not in registry_code:
+        raise AssertionError("Host registry omitted the required default Mob attributes")
+    for name, source in (
+        (probe_name, entity_code),
+        (probe_name + "Registry", registry_code),
+    ):
+        filepath = root / "sources" / "proof" / (name + ".java")
+        filepath.write_text(source, encoding="utf-8")
+        paths.append(str(filepath))
     classpath = os.pathsep.join(map(str, [minecraft_jar, loader_jar, *modules, *library_paths]))
     compiled = subprocess.run([javac, "-proc:none", "-cp", classpath, "-d", str(root / "classes"), *paths],
                               capture_output=True, text=True, timeout=120)
@@ -141,6 +190,7 @@ def verify(root, minecraft="26.2", fabric="0.155.2+26.2"):
         raise RuntimeError("Actual Fabric callback compilation failed:\n" + compiled.stderr)
     receipt = {"minecraft": minecraft, "fabric_api": fabric, "fabric_loader": loader,
                "common_event_count": len(events), "compiled_source_count": len(paths),
+               "entity_registry_attributes_compiled": True,
                "javac_exit": compiled.returncode, "minecraft_sha1": client["sha1"],
                "gameplay_validated": False, "model_generation_validated": False}
     (root / "proof-receipt.json").write_text(json.dumps(receipt, indent=2))
