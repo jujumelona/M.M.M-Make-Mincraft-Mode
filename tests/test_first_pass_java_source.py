@@ -258,7 +258,8 @@ def test_client_entrypoint_is_host_owned_and_not_redeclared_by_model():
     assert "submit_java_construction_plan_interfaces" not in _data_names(router)
 
 
-def test_host_mode_owns_imports_entrypoint_and_all_behavior_registrars():
+@pytest.mark.parametrize("plain_header", [False, True])
+def test_host_mode_owns_imports_entrypoint_and_all_behavior_registrars(plain_header):
     import hashlib
 
     behaviors = [
@@ -298,7 +299,9 @@ def test_host_mode_owns_imports_entrypoint_and_all_behavior_registrars():
     spec = {**SPEC, "bindings": {**SPEC["bindings"],
         "request_feature_entrypoint": True}}
     source = compose_first_pass_java(router, spec, [],
-        construction_context={"symbols": {}, "authoring_contract": {}},
+        construction_context={"symbols": {}, "authoring_contract": {
+            "host_requirements": {"java_class_header": "plain"} if plain_header else {}
+        }},
         behaviors=behaviors)
     assert source.count("void onInitialize()") == 1
     assert "implements net.fabricmc.api.ModInitializer" in source
