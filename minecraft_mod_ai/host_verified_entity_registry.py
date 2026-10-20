@@ -148,6 +148,7 @@ def verified_entity_registry_source(
             attribute_owner = _LIVING
             break
         if inherited == "net.minecraft.world.entity.Entity":
+            inherited = ""
             break
         parent = next((
             row.get("superclass") for row in symbols.values()
