@@ -103,6 +103,19 @@ def _wire_validated_java_startup(jobs, receipts, *, context, base_dir) -> None:
         path = Path(raw)
         if not path.is_absolute():
             path = (Path(base_dir).resolve() if base_dir else root) / path
+        # Check the lexical path before following symlinks; otherwise a
+        # producer path alias could launder another generated class as its
+        # own verified Java initializer.
+        if not path.is_absolute():
+            raise ArtifactGraphError("ARTIFACT_JAVA_STARTUP_SOURCE_INVALID")
+        relative = path.relative_to(root) if path.is_relative_to(root) else None
+        if relative is None or ".." in relative.parts:
+            raise ArtifactGraphError("ARTIFACT_JAVA_STARTUP_SOURCE_OUTSIDE_WORKSPACE")
+        current = root
+        for component in relative.parts:
+            current /= component
+            if current.is_symlink():
+                raise ArtifactGraphError("ARTIFACT_JAVA_STARTUP_SOURCE_SYMLINK")
         resolved = path.resolve()
         if not resolved.is_relative_to(root):
             raise ArtifactGraphError("ARTIFACT_JAVA_STARTUP_SOURCE_OUTSIDE_WORKSPACE")
