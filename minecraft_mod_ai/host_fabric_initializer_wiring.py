@@ -145,7 +145,17 @@ def wire_completed_fabric_java(
                 if not target.exists():
                     target.write_text(source, encoding="utf-8")
             if owner not in existing:
-                collection.append(owner)
+                if source is not None and kind == "main":
+                    # Keep the template's canonical main entrypoint first,
+                    # then initialize registries before generated gameplay
+                    # listeners. This also holds across separate graph shards.
+                    position = 1 if collection else 0
+                    while (position < len(collection)
+                           and "MmmRegistryBootstrap" in str(collection[position])):
+                        position += 1
+                    collection.insert(position, owner)
+                else:
+                    collection.append(owner)
         meta.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         return {"status": "PASS", "wired": [
             {"entrypoint": kind, "owner": owner} for kind, owner, _ in mutations
