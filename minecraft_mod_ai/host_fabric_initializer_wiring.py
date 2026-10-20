@@ -21,7 +21,6 @@ from .project_write_lock import project_write_lock
 _MAIN = "net.fabricmc.api.ModInitializer"
 _CLIENT = "net.fabricmc.api.ClientModInitializer"
 _REGISTRATION = re.compile(r"^\s*public\s+static\s+void\s+register\s*\(\s*\)\s*;\s*$")
-_INTERFACE = re.compile(r"\b(?:implements|,)\s+(?:net\.fabricmc\.api\.)?(ClientModInitializer|ModInitializer)\b")
 _IDENTIFIER = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
 
 
