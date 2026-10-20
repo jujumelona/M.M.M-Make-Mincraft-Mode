@@ -26,7 +26,8 @@ _IDENTIFIER = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
 
 
 def _admitted_java(root: Path, relative: str):
-    if (not isinstance(relative, str) or not relative.startswith("src/main/java/")
+    if (not isinstance(relative, str)
+            or not relative.startswith(("src/main/java/", "src/client/java/"))
             or not relative.endswith(".java") or Path(relative).is_absolute()
             or ".." in Path(relative).parts):
         raise ValueError("FABRIC_INIT_JAVA_PATH_UNVERIFIED")
@@ -54,7 +55,10 @@ def _java_owner(path: Path, source: str, relative: str):
     if len(owners) != 1:
         raise ValueError("FABRIC_INIT_COMPILED_OWNER_MISMATCH: " + relative)
     owner = owners[0]["owner"]
-    expected_package = relative.removeprefix("src/main/java/").rsplit("/", 1)[0].replace("/", ".")
+    source_path = (relative.removeprefix("src/main/java/")
+                   if relative.startswith("src/main/java/")
+                   else relative.removeprefix("src/client/java/"))
+    expected_package = source_path.rsplit("/", 1)[0].replace("/", ".")
     if owner.rpartition(".")[0] != expected_package:
         raise ValueError("FABRIC_INIT_OWNER_PACKAGE_MISMATCH: " + relative)
     return owner, owners[0]
