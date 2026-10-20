@@ -62,8 +62,9 @@ def repair_staged_java_with_model(
         prompt = [
             {"role": "system", "content": (
                 "You are repairing ONE Java method against exact compiler "
-                "diagnostics. Output only a complete method matching the fixed "
-                "signature. Use target Java syntax, existing dependencies and "
+                "diagnostics. Return JSON with one implementation string containing "
+                "only the body; the host supplies its fixed signature. "
+                "Use target Java syntax, existing dependencies and "
                 "real APIs; preserve the behavior. Do not change package, imports, "
                 "class, method parameters, other methods or state ownership. "
                 "Never silence an error with a TODO or empty stub."

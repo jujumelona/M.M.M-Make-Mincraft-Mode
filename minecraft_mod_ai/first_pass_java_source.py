@@ -432,11 +432,10 @@ def compose_first_pass_java(
                      "declared_member_api": signature_index, "previous_complete_members": finished}
         body_messages = [
             {"role": "system", "content": (
-                "Return one COMPLETE raw Java field/method/constructor declaration. "
-                "Start with response_source_frame.prefix and end with its suffix; the "
-                "sampler fixes this signature. For an uninitialized field its exact "
-                "empty_value is also allowed. Complete the expression or statements "
-                "in that declaration. Do not repeat the signature inside its implementation. "
+                "Return JSON with one implementation string containing only the field "
+                "initializer or method/constructor body. The host fixes the signature "
+                "and adds all declaration delimiters. Do not repeat the signature. "
+                "An empty string may select an approved uninitialized field. "
                 "Never return package/import directives, an outer class or extra members. "
                 "Respect implementation_requirements, "
                 "side, current_unit_purpose and actual prerequisite/member APIs. "
@@ -463,9 +462,9 @@ def compose_first_pass_java(
         frame = declaration_frame("method", entrypoint_method, lifecycle)
         lifecycle_messages = [
             {"role": "system", "content": (
-                "Return the COMPLETE raw Java initialization method, starting "
-                "with response_source_frame.prefix and ending with its suffix. The sampler "
-                "fixes its signature; complete its body without repeating that signature. "
+                "Return JSON with one implementation string containing only the "
+                "initialization method body. The host supplies its signature and "
+                "outer braces. Complete its body without repeating the signature. "
                 "Register and implement the exact original feature using the "
                 "verified APIs and completed helper declarations. Respect the assigned "
                 "side and implementation_requirements; retain existing typed behavior "

@@ -349,9 +349,8 @@ def _compose_claimed(router, spec, context, behaviors, package, name, owner,
         messages = [
             {"role": "system", "content": (
                 f"Implement exactly one independently owned Fabric {target_version} behavior "
-                "as COMPLETE Java method source. The host fixes the signature; "
-                "return the entire declaration with exactly that signature, not "
-                "a planning decision or a fragment. Use real inspected APIs "
+                "as a Java method body. Return JSON with one implementation string; "
+                "the host supplies its signature and outer braces. Use real inspected APIs "
                 "from target_api_and_source and exact prerequisite code, not "
                 "imagined imports or APIs. Do not add another member, package, "
                 "class or unrelated effects. The resulting method must implement "

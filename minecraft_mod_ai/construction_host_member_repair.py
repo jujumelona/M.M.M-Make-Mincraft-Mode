@@ -60,7 +60,8 @@ def repair_compiler_member(router, source: str, diagnostic: str, *,
     messages = [{
         "role": "system",
         "content": (
-            "Repair only the requested Java method or constructor. Preserve "
+            "Repair only the requested Java method or constructor body. Return "
+            "JSON with one implementation string. The host preserves "
             "its exact signature and every assigned behavior. The host owns "
             "imports, class identity and other methods. Use only real APIs "
             "from the inspected target; no package statements, imports, "

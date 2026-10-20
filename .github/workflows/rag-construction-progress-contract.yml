@@ -11,6 +11,10 @@ on:
       - 'minecraft_mod_ai/host_java_imports.py'
       - 'minecraft_mod_ai/first_pass_java_source.py'
       - 'minecraft_mod_ai/construction_journal.py'
+      - 'minecraft_mod_ai/model_router.py'
+      - 'minecraft_mod_ai/construction_source_repair.py'
+      - 'minecraft_mod_ai/first_pass_java_declarations.py'
+      - 'minecraft_mod_ai/artifact_graph_executor.py'
       - 'minecraft_mod_ai/construction_memory.py'
       - 'minecraft_mod_ai/construction_declaration_choices.py'
       - 'tests/test_first_pass_java_source.py'
@@ -18,6 +22,9 @@ on:
       - 'tests/test_construction_host_source.py'
       - 'tests/test_construction_host_member_repair.py'
       - 'tests/test_construction_java_member_journal.py'
+      - 'tests/test_host_java_implementation_transport.py'
+      - 'tests/test_native_java_decode_strategy_recovery.py'
+      - 'tests/test_artifact_java_source_ports.py'
       - 'tests/test_construction_operation_progress_gate.py'
       - '.github/workflows/rag-construction-progress-contract.yml'
 
@@ -48,6 +55,10 @@ jobs:
             minecraft_mod_ai/host_java_imports.py \
             minecraft_mod_ai/first_pass_java_source.py \
             minecraft_mod_ai/construction_journal.py \
+            minecraft_mod_ai/model_router.py \
+            minecraft_mod_ai/construction_source_repair.py \
+            minecraft_mod_ai/first_pass_java_declarations.py \
+            minecraft_mod_ai/artifact_graph_executor.py \
             minecraft_mod_ai/construction_declaration_choices.py
       - name: Run regression contracts
         run: |
@@ -57,4 +68,7 @@ jobs:
             tests/test_construction_host_source.py \
             tests/test_construction_host_member_repair.py \
             tests/test_construction_java_member_journal.py \
+            tests/test_host_java_implementation_transport.py \
+            tests/test_native_java_decode_strategy_recovery.py \
+            tests/test_artifact_java_source_ports.py \
             tests/test_construction_operation_progress_gate.py

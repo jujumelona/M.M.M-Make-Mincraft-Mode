@@ -446,14 +446,12 @@ class ModelRouter:
         self, role: str, messages: Sequence[Mapping[str, Any]], *,
         data_name: str, source_frame: Mapping[str, Any],
     ) -> str:
-        """Author one complete declaration; syntax/API admission remains host-owned.
+        """Return a host-assembled declaration from one JSON implementation string.
 
-        A general recursive Java grammar proves only syntactic possibility. It
-        trapped the small model in legal identifier/conditional loops without
-        helping it implement the behavior. Use ordinary source decoding from
-        the first request, then validate the fixed declaration frame. Existing
-        Java parsing, inspected-API admission and target compilation still gate
-        acceptance; no timed grammar attempt or capped recovery precedes it.
+        JSON-object transport owns escaping, not Java syntax or statement count.
+        The host supplies the signature and delimiters and parses the result as
+        exactly one member. This avoids asking a decoder to reproduce escaped
+        frame bytes, without a recursive Java grammar or a planner string cap.
         """
         from .model_context_budget import fit_messages_to_context
 
@@ -464,25 +462,31 @@ class ModelRouter:
         config, adapter = self._generation_adapter(role)
         request_messages = fit_messages_to_context(
             [*messages, {"role": "system", "content": (
-                "Return ONLY one complete raw Java declaration for the supplied "
-                "host-owned frame. Start with its exact prefix and end with its "
-                "exact suffix. If empty_value is supplied, it is the only allowed "
-                "uninitialized-field alternative. Use actual inspected APIs and "
-                "implement all requested effects. No JSON, Markdown, reasoning, "
-                "package/import wrapper or additional declarations. "
-                "Declaration frame: " + json.dumps(dict(source_frame), ensure_ascii=False)
+                'Return ONLY a JSON object with exactly one string field: '
+                '"implementation". For a method or constructor, this string contains '
+                "only the statements INSIDE its body. For a field, it contains only "
+                "the initializer expression, without the trailing semicolon. "
+                "The host adds the signature, outer braces, separators and newlines; "
+                "never repeat them or return an entire declaration. Encode newlines "
+                "using normal JSON escaping. Use actual inspected APIs and implement "
+                "all requested effects. No Markdown, reasoning, package/import "
+                "wrapper or additional members. An empty implementation is allowed "
+                "for an uninitialized field only when empty_value is present. "
+                "Host-owned declaration context: "
+                + json.dumps(dict(source_frame), ensure_ascii=False)
             )}], config=config, tools=(),
         )
         request = GenerationRequest(
-            messages=request_messages, response_format="text", tools=(),
+            messages=request_messages, response_format="json", tools=(),
             metadata={"role": role, "mmm_data_page": data_name,
                       "mmm_source_declaration_frame": dict(source_frame),
+                      "mmm_source_implementation": True,
                       "mmm_strict_source_data": True, "mmm_force_non_thinking": True},
         )
         with self._generation_scope(config):
             result = adapter.generate(request)
-        from .construction_source_repair import validate_generated_java_source
-        return validate_generated_java_source(result, source_frame, prefix, suffix)
+        from .construction_source_repair import assemble_java_implementation
+        return assemble_java_implementation(result, source_frame)
 
     def generate_tool_decision(
         self,

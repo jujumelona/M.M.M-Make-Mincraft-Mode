@@ -5,6 +5,32 @@ import json
 from collections.abc import Mapping
 
 
+def assemble_java_implementation(response: str, frame: Mapping) -> str:
+    """Decode implementation data once; only the host writes declaration syntax."""
+    from .model_adapters.base import ModelConfigurationError
+
+    try:
+        value = json.loads(response)
+        if (not isinstance(value, dict) or set(value) != {"implementation"}
+                or not isinstance(value["implementation"], str)):
+            raise ValueError("expected exactly one implementation string")
+    except (ValueError, TypeError) as cause:
+        error = ModelConfigurationError(
+            "CONSTRUCTION_SOURCE_IMPLEMENTATION_INVALID: " + str(cause))
+        error.failed_response = response
+        raise error from cause
+    body = value["implementation"]
+    source = (frame["empty_value"] if frame.get("kind") == "field"
+              and body == "" and "empty_value" in frame
+              else frame["prefix"] + body + frame["suffix"])
+    try:
+        return validate_generated_java_source(
+            source, frame, frame["prefix"], frame["suffix"])
+    except ValueError as error:
+        error.failed_response = response
+        raise
+
+
 def validate_generated_java_source(result, frame: Mapping, prefix: str, suffix: str) -> str:
     from .model_adapters.base import ModelConfigurationError
     from .first_pass_java_declarations import validate_source_frame
@@ -43,7 +69,9 @@ def java_correction_message(error: ValueError, source: object, frame: Mapping,
     }
     if feature:
         correction["required_signature"] = frame["prefix"]
-        correction["instruction"] = "Return the whole corrected method, keep the exact frame."
+        correction["instruction"] = (
+            "Return JSON with one implementation string containing the corrected body; "
+            "the host preserves the exact frame.")
     return {"role": "user", "content": json.dumps(correction, ensure_ascii=False)}
 
 

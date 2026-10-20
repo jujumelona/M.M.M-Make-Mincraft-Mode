@@ -123,7 +123,7 @@ def declaration_header(kind: str, name: str, parts: Mapping[str, Any]) -> str:
 
 
 def declaration_frame(kind: str, name: str, parts: Mapping[str, Any], *, allow_uninitialized: bool = True):
-    """One complete Java declaration with a sampler-owned literal signature."""
+    """One complete Java declaration with a host-owned literal signature."""
     header = declaration_header(kind, name, parts)
     if kind == "field":
         prefix, suffix = header + " = ", ";"

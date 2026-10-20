@@ -1,7 +1,8 @@
-"""Java source uses ordinary decoding and the host's exact declaration frame."""
+"""Java bodies use JSON transport and host-owned declaration frames."""
 from __future__ import annotations
 
 from contextlib import contextmanager
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -11,8 +12,8 @@ from minecraft_mod_ai.model_adapters.base import ModelBackendError
 
 
 class FakeRouter:
-    def __init__(self, source="public void foo() { return; }", failure=None):
-        self.source, self.failure, self.requests = source, failure, []
+    def __init__(self, body=" return; ", failure=None):
+        self.body, self.failure, self.requests = body, failure, []
 
     def _generation_adapter(self, _role):
         return SimpleNamespace(), SimpleNamespace(generate=self._native)
@@ -25,7 +26,7 @@ class FakeRouter:
         self.requests.append(request)
         if self.failure is not None:
             raise self.failure
-        return self.source
+        return json.dumps({"implementation": self.body})
 
 
 @pytest.fixture(autouse=True)
@@ -47,10 +48,11 @@ def _execute(router, frame=None):
 
 def test_java_source_starts_without_recursive_grammar_or_recovery_cap():
     fake = FakeRouter()
-    assert _execute(fake) == fake.source
+    assert _execute(fake) == "public void foo() { return; }"
     assert len(fake.requests) == 1
     request = fake.requests[0]
-    assert request.response_format == "text"
+    assert request.response_format == "json"
+    assert request.response_schema is None
     assert "mmm_java_source_frame" not in request.metadata
     assert "mmm_native_java_recovery" not in request.metadata
     assert "mmm_output_token_ceiling" not in request.metadata
@@ -59,24 +61,26 @@ def test_java_source_starts_without_recursive_grammar_or_recovery_cap():
 
 
 def test_complete_long_declaration_is_not_truncated_by_a_recovery_ceiling():
-    source = "public void foo() {" + "\n".join(
+    body = "\n".join(
         f"int local{i} = {i};" for i in range(1500)
-    ) + "\n}"
-    fake = FakeRouter(source=source)
+    ) + "\n"
+    source = "public void foo() {" + body + "}"
+    fake = FakeRouter(body=body)
     assert _execute(fake) == source
     assert len(fake.requests) == 1
 
 
 def test_source_cannot_bypass_host_owned_declaration_signature():
-    with pytest.raises(router_module.ModelConfigurationError,
-                       match="CONSTRUCTION_SOURCE_SIGNATURE_INVALID"):
-        _execute(FakeRouter(source="public void other() { return; }"))
+    from minecraft_mod_ai.java_region_parser import JavaRegionParseError
+
+    with pytest.raises(JavaRegionParseError):
+        _execute(FakeRouter(body="public void other() { return; }"))
 
 
 def test_uninitialized_field_remains_a_valid_frame_alternative():
     frame = {"kind": "field", "prefix": "private int count = ",
              "suffix": ";", "empty_value": "private int count;"}
-    assert _execute(FakeRouter(source="private int count;"), frame) == "private int count;"
+    assert _execute(FakeRouter(body=""), frame) == "private int count;"
 
 
 @pytest.mark.parametrize("extra", [
@@ -88,7 +92,7 @@ def test_raw_declaration_cannot_add_sibling_members_or_initializers(extra):
     from minecraft_mod_ai.java_region_parser import JavaRegionParseError
 
     with pytest.raises(JavaRegionParseError):
-        _execute(FakeRouter(source="public void foo() { return; }" + extra))
+        _execute(FakeRouter(body=" return; }" + extra + " {"))
 
 
 def test_backend_failure_does_not_replay_a_second_generation_strategy():
