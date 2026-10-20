@@ -412,3 +412,31 @@ def test_member_body_scope_keeps_verified_api_without_unrelated_behaviors():
     assert view["inspected_target_api"] == original["inspected_target_api"]
     assert view["materialized_project_source"] == original["materialized_project_source"]
     assert json.loads(baseline[-1]["content"]) == original
+
+
+def test_java_field_metadata_repeated_host_symbol_is_parsed_as_a_type():
+    # Exact response observed in the production MiMo 9B completion:
+    # { "visibility":"private", "static":false, "final":false,
+    #   "type":"int mmmMember1" }.
+    from minecraft_mod_ai.first_pass_java_declarations import (
+        canonicalize_field_type_metadata, validate_declaration_metadata,
+    )
+    parts = {"visibility": "private", "static": False, "final": False,
+             "type": "int mmmMember1"}
+    parsed = canonicalize_field_type_metadata("field", "mmmMember1", parts)
+    assert parsed["type"] == "int"
+    assert parts["type"] == "int mmmMember1"  # No mutation of raw model trace.
+    validate_declaration_metadata("field", "mmmMember1", parsed, owner="Demo")
+
+
+def test_java_field_metadata_never_guesses_an_unrelated_identifier():
+    from minecraft_mod_ai.first_pass_java_declarations import (
+        canonicalize_field_type_metadata, validate_declaration_metadata,
+    )
+    parts = {"visibility": "private", "static": False, "final": False,
+             "type": "int wrongName"}
+    parsed = canonicalize_field_type_metadata("field", "mmmMember1", parts)
+    assert parsed["type"] == "int wrongName"
+    from minecraft_mod_ai.java_region_parser import JavaRegionParseError
+    with pytest.raises(JavaRegionParseError):
+        validate_declaration_metadata("field", "mmmMember1", parsed, owner="Demo")
