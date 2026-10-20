@@ -58,3 +58,46 @@ def test_non_member_compiler_error_does_not_trigger_regeneration():
 def test_without_real_compiler_line_does_not_guess_failing_method():
     with pytest.raises(ValueError, match="JAVA_HOST_REPAIR_NO_SOURCE_LINE"):
         _failing_member(SOURCE, "generic backend failed", filename="Demo.java")
+
+
+def test_javac_parent_constructor_is_fixed_from_required_types_without_model():
+    source = """package example;
+public class AlienCombatHostileEntity extends net.minecraft.world.entity.monster.Monster {
+    public AlienCombatHostileEntity(net.minecraft.world.entity.EntityType type,
+                                   net.minecraft.world.level.Level level) {
+        this.type = type;
+    }
+    public int ready() { return 7; }
+}
+"""
+    diagnostic = """/tmp/src/AlienCombatHostileEntity.java:3: error: constructor Monster in class Monster cannot be applied to given types;
+  required: EntityType<? extends Monster>,Level
+  found: no arguments
+/tmp/src/AlienCombatHostileEntity.java:5: error: type has private access in Entity
+this.type = type;"""
+    router = Router()
+    revised = repair_compiler_member(
+        router, source, diagnostic, filename="AlienCombatHostileEntity.java",
+        target_path="src/main/java/example/AlienCombatHostileEntity.java",
+        symbols={}, owner="example.AlienCombatHostileEntity", api_evidence={}, attempt=1)
+    assert "super(type, level);" in revised
+    assert "this.type = type;" not in revised
+    assert "public int ready() { return 7; }" in revised
+    assert router.calls == []
+
+
+def test_constructor_repair_refuses_unproved_argument_type_or_parent():
+    from minecraft_mod_ai.construction_host_member_repair import _javac_constructor_repair
+    source = """package example;
+public class Demo extends Base {
+    public Demo(java.lang.String name) { }
+}
+"""
+    diagnostic = """Demo.java:3: error: constructor Base in class Base cannot be applied to given types;
+  required: int
+  found: no arguments"""
+    assert _javac_constructor_repair(
+        source, diagnostic, filename="Demo.java") is None
+    assert _javac_constructor_repair(
+        source.replace("extends Base", "extends Other"),
+        diagnostic, filename="Demo.java") is None
