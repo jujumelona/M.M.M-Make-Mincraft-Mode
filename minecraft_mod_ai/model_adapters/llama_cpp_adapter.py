@@ -221,13 +221,23 @@ class LlamaCppAdapter(ModelAdapter):
 
             # A periodic decoder loop is not a network failure. Deterministically
             # replaying the same prompt at temperature zero reproduces it.
-            # Re-sample ONLY a side-effect-free coder text turn, once, with a
-            # native anti-loop sampling profile. Structured/tool turns retain
-            # their existing schema and execution boundaries.
+            # Re-sample only a side-effect-free coder turn once. Besides text,
+            # the host-framed Java implementation JSON is safe to replay: it
+            # has no native schema or tools, and the host parses/compiles it
+            # before any workspace change. Other structured turns stay strict.
             if (
                 self.config.role == "coder"
                 and not request.tools
-                and request.response_format == "text"
+                and (
+                    request.response_format == "text"
+                    or (
+                        request.response_format == "json"
+                        and request.response_schema is None
+                        and isinstance(request.metadata, Mapping)
+                        and request.metadata.get("mmm_source_implementation") is True
+                        and request.metadata.get("mmm_strict_source_data") is True
+                    )
+                )
                 and _is_degenerate_decode_error(exc)
             ):
                 metadata = (
