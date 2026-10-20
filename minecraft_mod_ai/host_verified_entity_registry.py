@@ -25,6 +25,8 @@ _REGISTRIES = "net.minecraft.core.registries.Registries"
 _RESOURCE_KEY = "net.minecraft.resources.ResourceKey"
 _IDENTIFIER = "net.minecraft.resources.Identifier"
 _MOB = "net.minecraft.world.entity.Mob"
+_LIVING = "net.minecraft.world.entity.LivingEntity"
+_MONSTER = "net.minecraft.world.entity.monster.Monster"
 _ATTR_REGISTRY = "net.fabricmc.fabric.api.object.builder.v1.entity.FabricDefaultAttributeRegistry"
 _ATTR_BUILDER = "net.minecraft.world.entity.ai.attributes.AttributeSupplier.Builder"
 
@@ -83,7 +85,7 @@ def _members(inspected: Mapping, symbols: Mapping):
             if row.get("owner") not in {
                 _BUILDER, _CATEGORY, _REGISTRY, _BUILTIN,
                 _REGISTRIES, _RESOURCE_KEY, _IDENTIFIER,
-                _MOB, _ATTR_REGISTRY,
+                _MOB, _LIVING, _ATTR_REGISTRY,
             }:
                 continue
             key = (row.get("owner"), row.get("kind"), row.get("name"),
@@ -123,16 +125,42 @@ def verified_entity_registry_source(
         raise ValueError("JAVA_HOST_REGISTRY_ENTITY_PREREQUISITE_UNVERIFIED")
     # The prerequisite source, not a prompt keyword, proves this type is a
     # Mob/Monster that must receive default attributes during initialization.
-    living_mob = any(
-        re.search(
-            r"\bextends\s+(?:net\.minecraft\.world\.entity\.(?:monster\.)?)?(?:Monster|Mob)\b",
-            str(row.get("signature") or ""),
-        )
-        for row in source
+    owner_declarations = [
+        str(row.get("signature") or "") for row in source
         if isinstance(row, Mapping)
         and row.get("authority") == "inspected_materialized_source"
         and str(row.get("signature") or "").startswith("public class " + entity_name + " ")
-    )
+    ]
+    inherited = next((
+        match.group(1) for declaration in owner_declarations
+        if (match := re.search(r"\bextends\s+([\w.$]+)", declaration))
+    ), "")
+    # Walk actual class hierarchy, not English hints or a hand-written list
+    # of mod prompts. This also covers PathfinderMob and other descendants.
+    attribute_owner = None
+    visited = set()
+    while inherited and inherited not in visited:
+        visited.add(inherited)
+        if inherited in {_MONSTER, _MOB}:
+            attribute_owner = _MOB
+            break
+        if inherited == _LIVING:
+            attribute_owner = _LIVING
+            break
+        if inherited == "net.minecraft.world.entity.Entity":
+            break
+        parent = next((
+            row.get("superclass") for row in symbols.values()
+            if isinstance(row, Mapping)
+            and row.get("kind") == "CLASS"
+            and row.get("owner") == inherited
+            and row.get("provenance") != "construction_plan"
+        ), None)
+        if not isinstance(parent, str) or not parent:
+            raise ValueError("JAVA_HOST_ENTITY_SUPERCLASS_LINEAGE_UNVERIFIED: " + inherited)
+        inherited = parent
+    if inherited in visited and not attribute_owner:
+        raise ValueError("JAVA_HOST_ENTITY_SUPERCLASS_CYCLE")
     rows = list(_members(inspected, symbols))
 
     def proven(owner, kind, member, params=()):
@@ -173,15 +201,20 @@ def verified_entity_registry_source(
     ):
         if not proven(owner, "FIELD", field):
             raise ValueError("JAVA_HOST_REGISTRY_FIELD_UNVERIFIED: " + owner + "." + field)
-    if living_mob:
-        # Verify both method signatures in the actual selected classpath.
+    if attribute_owner:
+        # Verify both signatures in the selected version, rather than
+        # assuming Mob and LivingEntity expose identical builders.
         if not proven(_ATTR_REGISTRY, "METHOD", "register", [_ENTITY, _ATTR_BUILDER]):
             raise ValueError("JAVA_HOST_ENTITY_ATTRIBUTES_API_UNVERIFIED")
-        if not proven(_MOB, "METHOD", "createMobAttributes", []):
+        builder_method = ("createMobAttributes" if attribute_owner == _MOB
+                          else "createLivingAttributes")
+        if not proven(attribute_owner, "METHOD", builder_method, []):
             raise ValueError("JAVA_HOST_ENTITY_ATTRIBUTE_BUILDER_UNVERIFIED")
+    else:
+        builder_method = ""
     attributes = (
-        f"        {_ATTR_REGISTRY}.register(ENTITY_TYPE, {_MOB}.createMobAttributes());\n"
-        if living_mob else ""
+        f"        {_ATTR_REGISTRY}.register(ENTITY_TYPE, {attribute_owner}.{builder_method}());\n"
+        if attribute_owner else ""
     )
     ident = f'{_IDENTIFIER}.fromNamespaceAndPath("{modid}", "{path}")'
     return (
