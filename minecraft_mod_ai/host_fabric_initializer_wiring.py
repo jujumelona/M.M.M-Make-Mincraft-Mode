@@ -20,7 +20,7 @@ from .project_write_lock import project_write_lock
 
 _MAIN = "net.fabricmc.api.ModInitializer"
 _CLIENT = "net.fabricmc.api.ClientModInitializer"
-_REGISTRATION = re.compile(r"^\s*public\s+static\s+void\s+register\s*\(\s*\)\s*;\s*$")
+_REGISTRATION = re.compile(r"^\s*public\s+static\s+void\s+(register|initialize)\s*\(\s*\)\s*;\s*$")
 _IDENTIFIER = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
 
 
@@ -108,10 +108,17 @@ def wire_completed_fabric_java(
             if kind:
                 mutations.append((kind, owner, None))
             if isinstance(leaf, str) and leaf.endswith("/registry"):
-                methods = [method for method in declaration["members"]
-                           if _REGISTRATION.fullmatch(method)]
-                if len(methods) != 1:
+                methods = [
+                    _REGISTRATION.fullmatch(method)
+                    for method in declaration["members"]
+                ]
+                static_initializers = [match.group(1) for match in methods if match]
+                if not static_initializers:
                     raise ValueError("FABRIC_INIT_REGISTRY_ENTRYPOINT_MISSING: " + owner)
+                # Prefer the explicit registration method when both a loader
+                # initialize method and a registry factory are declared.
+                method_name = ("register" if "register" in static_initializers
+                               else "initialize")
                 package = owner.rpartition(".")[0]
                 if not all(_IDENTIFIER.fullmatch(part) for part in package.split(".")):
                     raise ValueError("FABRIC_INIT_REGISTRY_PACKAGE_INVALID")
@@ -128,7 +135,7 @@ def wire_completed_fabric_java(
                     "public final class " + bootstrap
                     + " implements " + interface + " {\n"
                     "    @Override public void " + method + "() {\n"
-                    "        " + owner + ".register();\n"
+                    "        " + owner + "." + method_name + "();\n"
                     "    }\n}\n"
                 )
                 bootstrap_path = root / source_root / Path(*package.split(".")) / (bootstrap + ".java")
