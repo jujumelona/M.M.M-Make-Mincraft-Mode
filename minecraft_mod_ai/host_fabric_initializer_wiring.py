@@ -119,20 +119,25 @@ def wire_completed_fabric_java(
                 bootstrap = "MmmRegistryBootstrap" + hashlib.sha256(
                     owner.encode("utf-8")).hexdigest()[:16]
                 bootstrap_owner = package + "." + bootstrap
+                client_source = relative.startswith("src/client/java/")
+                source_root = "src/client/java" if client_source else "src/main/java"
+                bootstrap_kind = "client" if client_source else "main"
+                interface = _CLIENT if client_source else _MAIN
+                method = "onInitializeClient" if client_source else "onInitialize"
                 bootstrap_source = (
                     "package " + package + ";\n\n"
                     "public final class " + bootstrap
-                    + " implements net.fabricmc.api.ModInitializer {\n"
-                    "    @Override public void onInitialize() {\n"
+                    + " implements " + interface + " {\n"
+                    "    @Override public void " + method + "() {\n"
                     "        " + owner + ".register();\n"
                     "    }\n}\n"
                 )
-                bootstrap_path = root / "src/main/java" / Path(*package.split(".")) / (bootstrap + ".java")
+                bootstrap_path = root / source_root / Path(*package.split(".")) / (bootstrap + ".java")
                 if bootstrap_path.is_symlink():
                     raise ValueError("FABRIC_INIT_BOOTSTRAP_SYMLINK")
                 if bootstrap_path.exists() and bootstrap_path.read_text(encoding="utf-8") != bootstrap_source:
                     raise ValueError("FABRIC_INIT_BOOTSTRAP_CONFLICT: " + bootstrap_owner)
-                mutations.append(("main", bootstrap_owner, bootstrap_source))
+                mutations.append((bootstrap_kind, bootstrap_owner, bootstrap_source))
         for kind, owner, source in mutations:
             collection = entrypoints.setdefault(kind, [])
             if not isinstance(collection, list):
@@ -144,12 +149,13 @@ def wire_completed_fabric_java(
             if source is not None:
                 package = owner.rpartition(".")[0]
                 filename = owner.rsplit(".", 1)[-1] + ".java"
-                target = root / "src/main/java" / Path(*package.split(".")) / filename
+                target = root / ("src/client/java" if kind == "client"
+                                 else "src/main/java") / Path(*package.split(".")) / filename
                 target.parent.mkdir(parents=True, exist_ok=True)
                 if not target.exists():
                     target.write_text(source, encoding="utf-8")
             if owner not in existing:
-                if source is not None and kind == "main":
+                if source is not None and kind in {"main", "client"}:
                     # Keep the template's canonical main entrypoint first,
                     # then initialize registries before generated gameplay
                     # listeners. This also holds across separate graph shards.
