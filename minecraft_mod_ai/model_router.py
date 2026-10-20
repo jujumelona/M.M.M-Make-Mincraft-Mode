@@ -476,8 +476,20 @@ class ModelRouter:
                 + json.dumps(dict(source_frame), ensure_ascii=False)
             )}], config=config, tools=(),
         )
+        # A JSON-object-only sampler can emit unlimited extra fields/escaped Java
+        # (observed 15,112 output tokens for one method). Bound each atomic body
+        # in the native grammar itself. The planner must allocate additional
+        # host-owned helper declarations rather than making one body enormous.
+        from .first_pass_java_declarations import BODY
+        source_schema = {
+            "type": "object",
+            "properties": {"implementation": dict(BODY)},
+            "required": ["implementation"],
+            "additionalProperties": False,
+        }
         request = GenerationRequest(
-            messages=request_messages, response_format="json", tools=(),
+            messages=request_messages, response_format="json",
+            response_schema=source_schema, tools=(),
             metadata={"role": role, "mmm_data_page": data_name,
                       "mmm_source_declaration_frame": dict(source_frame),
                       "mmm_source_implementation": True,
