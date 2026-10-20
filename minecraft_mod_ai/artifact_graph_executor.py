@@ -49,10 +49,19 @@ def _declared_java_source_ports(jobs: list[ArtifactJob]) -> dict[str, str]:
     for job in jobs:
         if job.executor_type is not ExecutorType.PYTHON_GENERATOR or not job.canonical_leaf:
             continue
+        # Publication is optional, as in execute_generator_job. A standalone
+        # feature can materialize its Java source without exposing graph ports.
+        if not job.produces:
+            continue
         inputs = job.deterministic_inputs.get("_canonical_inputs")
         if not isinstance(inputs, dict):
             continue
         manifest = load_template(job.canonical_leaf)
+        if len(job.produces) != len(manifest["outputs"]):
+            raise ArtifactGraphError(
+                "ARTIFACT_GENERATOR_OUTPUT_PORT_ARITY: " + job.job_id
+                + f" expected={len(manifest['outputs'])} actual={len(job.produces)}"
+            )
         try:
             port = next(x["name"] for x in manifest["inputs"]
                         if x["type"] == "specification")
