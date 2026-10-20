@@ -476,19 +476,14 @@ class ModelRouter:
                 + json.dumps(dict(source_frame), ensure_ascii=False)
             )}], config=config, tools=(),
         )
-        # Constrain the response SHAPE, never the implementation size.
-        # A fixed character cap rejects legitimate large methods without
-        # addressing why a planner produced an oversized unit. Keep the
-        # existing host-owned declaration frame and full-member parse gate.
-        source_schema = {
-            "type": "object",
-            "properties": {"implementation": {"type": "string"}},
-            "required": ["implementation"],
-            "additionalProperties": False,
-        }
+        # Do not attach ANY native schema to free-form Java implementations.
+        # Our shared schema projector injects an implicit 256-character limit
+        # into unbounded strings. Even {"type":"string"} therefore truncates a
+        # legitimate Java body. The host still validates the EXACT one-field
+        # JSON envelope and a single immutable-frame Java declaration.
         request = GenerationRequest(
             messages=request_messages, response_format="json",
-            response_schema=source_schema, tools=(),
+            response_schema=None, tools=(),
             metadata={"role": role, "mmm_data_page": data_name,
                       "mmm_source_declaration_frame": dict(source_frame),
                       "mmm_source_implementation": True,
