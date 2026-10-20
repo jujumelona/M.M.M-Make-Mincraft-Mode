@@ -188,6 +188,11 @@ def can_compose_first_pass_java(spec: Mapping[str, Any]) -> bool:
     return _java_identity(spec) is not None
 
 
+def _owned_behavior_id(unit):
+    return next((unit.get(key) for key in (
+        "host_required_behavior", "host_handler_behavior", "host_condition_behavior",
+        "host_effect_behavior") if unit.get(key)), None)
+
 
 def _scope_host_implementation_messages(
     messages: Sequence[Mapping[str, str]],
@@ -427,38 +432,10 @@ def compose_first_pass_java(
         if symbol_index and not event_candidates:
             raise ValueError("JAVA_HOST_FABRIC_EVENT_ABI_UNAVAILABLE")
         if event_candidates:
-            by_event = {row["event_id"]: row for row in event_candidates}
+            from .host_behavior_event_binding import select_behavior_callback
             for behavior in behaviors:
-                name = str(behavior.get("event_binding") or "")
-                if not name and behavior.get("event_interface"):
-                    matches = [row["event_id"] for row in event_candidates
-                               if row["event_interface"] == behavior["event_interface"]]
-                    if len(matches) == 1:
-                        name = matches[0]
-                if not name:
-                    selection = router.generate_structured_data(
-                        "coder", [
-                            {"role": "system", "content": (
-                                "Select the actual Fabric event that fires on the stated "
-                                "trigger. Use UNBOUND when no listed event matches. "
-                                "Return only event_binding, no source code.")},
-                            {"role": "user", "content": json.dumps({
-                                "intent": behavior.get("intent"),
-                                "trigger": behavior.get("trigger"),
-                                "verified_listeners": event_candidates,
-                            }, ensure_ascii=False, default=str)},
-                        ], data_name="select_verified_fabric_event",
-                        parameters={"type": "object", "properties": {
-                            "event_binding": {"type": "string",
-                                              "enum": ["UNBOUND", *by_event]}},
-                            "required": ["event_binding"],
-                            "additionalProperties": False},
-                    )
-                    name = str(selection.get("event_binding") or "")
-                if name not in by_event:
-                    raise ValueError("JAVA_HOST_BEHAVIOR_EVENT_UNBOUND: "
-                                     + str(behavior.get("behavior_id")))
-                bound_events[str(behavior["behavior_id"])] = by_event[name]
+                bound_events[str(behavior["behavior_id"])] = select_behavior_callback(
+                    router, behavior, event_candidates)
     units = []
     for index, item in enumerate(plan["units"], 1):
         unit = dict(item)
@@ -487,7 +464,25 @@ def compose_first_pass_java(
             # statements until it exhausted its output context.
             handler = "handleBehavior" + hashlib.sha256(
                 behavior_id.encode("utf-8")).hexdigest()[:20]
+            event = bound_events.get(behavior_id)
+            dispatch = {}
+            if event and event["return_type"] == "void":
+                condition = "matchesBehavior" + hashlib.sha256(behavior_id.encode()).hexdigest()[:20]
+                effect = "applyBehavior" + hashlib.sha256(behavior_id.encode()).hexdigest()[:20]
+                units.extend([
+                    {"kind": "method", "name": condition,
+                     "purpose": "Test only the original trigger and preconditions: "
+                                + str(row.get("trigger") or row["intent"])
+                                + ". Return boolean; perform no gameplay effects or state mutations.",
+                     "host_condition_behavior": behavior_id, "verified_event_callback": event},
+                    {"kind": "method", "name": effect,
+                     "purpose": "Apply only these effects after the host's trigger predicate passed: "
+                                + str(row.get("effects") or row["intent"]),
+                     "host_effect_behavior": behavior_id, "verified_event_callback": event},
+                ])
+                dispatch = {"host_condition_method": condition, "host_effect_method": effect}
             units.append({
+                **dispatch,
                 "kind": "method", "name": handler,
                 "purpose": (
                     "Implement the runtime effects for behavior "
@@ -528,10 +523,7 @@ def compose_first_pass_java(
                 "current_unit_purpose": unit["purpose"],
                 "previous_declaration_metadata": declarations,
             }
-            behavior_id = (
-                unit.get("host_required_behavior")
-                or unit.get("host_handler_behavior")
-            )
+            behavior_id = _owned_behavior_id(unit)
             selected_behavior = next((
                 dict(item) for item in behaviors
                 if item.get("behavior_id") == behavior_id
@@ -573,23 +565,27 @@ def compose_first_pass_java(
             parts = {"visibility": "private", "static": False,
                      "return_type": "void", "type_parameters": "",
                      "parameters": [], "throws": [], "annotations": []}
-        elif host_mode and unit.get("host_handler_behavior") and event_callback:
+        elif host_mode and _owned_behavior_id(unit) and event_callback:
             # A callback's inputs/return value belong to Fabric's actual SAM.
             # Never ask a 9B model to invent 'player' or other locals in a
             # no-argument lifecycle method.
+            from .java_operation_ir import KEYWORDS
             names = []
             used = set()
             for index_arg, type_name in enumerate(event_callback["parameters"]):
                 simple = type_name.rsplit(".", 1)[-1].replace("[]", "Array")
                 name_arg = (simple[:1].lower() + simple[1:]
                             if re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", simple)
+                            and simple[:1].lower() + simple[1:] not in KEYWORDS
                             else f"eventArg{index_arg}")
-                if name_arg in used:
+                while name_arg in used:
                     name_arg += str(index_arg)
                 used.add(name_arg)
                 names.append({"type": type_name, "name": name_arg})
             parts = {"visibility": "private", "static": False,
-                     "return_type": event_callback["return_type"], "type_parameters": "",
+                     "return_type": ("boolean" if unit.get("host_condition_behavior")
+                                     else event_callback["return_type"]),
+                     "type_parameters": ", ".join(event_callback.get("type_parameters") or []),
                      "parameters": names, "throws": list(event_callback.get("throws") or []),
                      "annotations": []}
         else:
@@ -657,6 +653,7 @@ def compose_first_pass_java(
             )
         )
         frame = declaration_frame(kind, name, parts, allow_uninitialized=allow_uninitialized)
+        host_unit = next((entry for entry in units if entry["name"] == name), {})
         unit_event = next((entry.get("verified_event_callback")
                            for entry in units if entry["name"] == name), None)
         if host_mode and unit_event and name.startswith("registerBehavior"):
@@ -664,6 +661,12 @@ def compose_first_pass_java(
                            if entry["name"] == name)
             statement = (unit_event["event_owner"] + "."
                          + unit_event["event_field"] + ".register(this::" + handler + ");")
+            parts["source"] = frame["prefix"] + statement + frame["suffix"]
+            return
+        if host_mode and host_unit.get("host_condition_method"):
+            arguments = ", ".join(param["name"] for param in parts["parameters"])
+            statement = ("if (this." + host_unit["host_condition_method"] + "(" + arguments + ")) {\n"
+                         + "    this." + host_unit["host_effect_method"] + "(" + arguments + ");\n}")
             parts["source"] = frame["prefix"] + statement + frame["suffix"]
             return
         # The surrounding user message already contains the full inspected API
@@ -674,10 +677,7 @@ def compose_first_pass_java(
             unit for unit in units
             if unit["kind"] == kind and unit["name"] == name
         ), {})
-        owned_behavior_id = (
-            selected_host_unit.get("host_required_behavior")
-            or selected_host_unit.get("host_handler_behavior")
-        )
+        owned_behavior_id = _owned_behavior_id(selected_host_unit)
         owned_behavior = next((
             dict(item) for item in behaviors
             if item.get("behavior_id") == owned_behavior_id
@@ -692,7 +692,9 @@ def compose_first_pass_java(
             "implementation_requirements": task["implementation_requirements"],
             "member_role": (
                 "register_callback" if selected_host_unit.get("host_required_behavior")
-                else "implement_callback_effects" if selected_host_unit.get("host_handler_behavior")
+                else "test_callback_condition" if selected_host_unit.get("host_condition_behavior")
+                else "implement_callback_effects" if (selected_host_unit.get("host_handler_behavior")
+                                                      or selected_host_unit.get("host_effect_behavior"))
                 else "supporting_member"
             ),
             "verified_event_callback": selected_host_unit.get("verified_event_callback"),

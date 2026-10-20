@@ -7,7 +7,6 @@ These tests compile the real Java bridge against companion source files.
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
 
 import pytest
 

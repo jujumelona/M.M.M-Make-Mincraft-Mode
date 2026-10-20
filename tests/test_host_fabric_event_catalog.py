@@ -62,6 +62,19 @@ def test_rejects_erased_private_and_planned_event_fields():
         assert callback_interfaces(symbols) == []
 
 
+def test_preserves_generic_sam_instead_of_advertising_erased_object_handler():
+    symbols = event_symbols()
+    symbols["sam"].update({
+        "return_type": "java.lang.Object", "parameters": ["java.util.List"],
+        "type_parameters": ["T extends java.lang.Object"],
+        "generic_return_type": "T", "generic_parameters": ["java.util.List<T>"],
+    })
+    event = callback_interfaces(symbols)[0]
+    assert event["type_parameters"] == ["T extends java.lang.Object"]
+    assert event["return_type"] == "T"
+    assert event["parameters"] == ["java.util.List<T>"]
+
+
 def test_common_side_never_offers_client_event_to_server_feature():
     symbols = event_symbols(side="CLIENT")
     assert callback_interfaces(symbols) == []

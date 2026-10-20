@@ -72,14 +72,21 @@ def callback_interfaces(symbols: Mapping, *, side: str = "COMMON") -> list[dict]
             if not abstract or (not sources and len(abstract) != 1):
                 continue
             method = abstract[0]
-            parameters = interface.get("functional_parameters", parameter_types(method))
-            returns = interface.get("functional_return_type", method["return_type"])
+            parameters = method.get("generic_parameters", interface.get(
+                "functional_parameters", parameter_types(method)))
+            returns = method.get("generic_return_type", interface.get(
+                "functional_return_type", method["return_type"]))
+            formals = method.get("type_parameters", [])
+            throws = method.get("generic_throws", interface.get(
+                "functional_throws", method.get("throws", [])))
+            referenced_types = [token for type_ in [*parameters, returns, *formals, *throws]
+                                for token in re.findall(r"[\w$]+(?:\.[\w$]+)+", type_)]
             if not all(_source_set_owner_accessible(type_, target_path, symbols.get(type_))
-                       for type_ in [*parameters, returns]):
+                       for type_ in referenced_types):
                 continue
             result.append({"event_id": owner + "#" + event["name"],
                            "event_owner": owner, "event_interface": listener,
                            "event_field": event["name"], "method": method["name"],
                            "parameters": parameters, "return_type": returns,
-                           "throws": interface.get("functional_throws", method.get("throws", []))})
+                           "type_parameters": list(formals), "throws": list(throws)})
     return result
