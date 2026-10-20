@@ -50,10 +50,107 @@ def _failing_member(source: str, diagnostic: str, *, filename: str):
     return raw, node, original, frame
 
 
+
+def _comma_separated_java_types(text: str) -> list[str]:
+    """Split javac parameter lists without splitting generic type arguments."""
+    parts, depth, start = [], 0, 0
+    for index, char in enumerate(text):
+        if char == "<":
+            depth += 1
+        elif char == ">":
+            depth -= 1
+            if depth < 0:
+                return []
+        elif char == "," and depth == 0:
+            parts.append(text[start:index].strip())
+            start = index + 1
+    if depth:
+        return []
+    return [*parts, text[start:].strip()] if text.strip() else []
+
+
+def _javac_constructor_repair(source: str, diagnostic: str, *, filename: str) -> str | None:
+    """Apply a javac-proven parent constructor call; never guess an overload.
+
+    The verified source compiler runs again before the candidate is accepted.
+    """
+    match = re.search(
+        r"constructor\s+([\w$]+)\s+in class\s+[\w$]+\s+cannot be applied"
+        r"[\s\S]*?required:\s*([^\r\n]+)\s*"
+        r"found:\s*no arguments",
+        diagnostic,
+    )
+    if match is None:
+        return None
+    superclass = re.search(r"\bextends\s+([\w.$]+)", source)
+    if superclass is None or superclass.group(1).split(".")[-1] != match.group(1):
+        return None
+    try:
+        raw, node, _original, _frame = _failing_member(
+            source, diagnostic, filename=filename)
+    except ValueError:
+        return None
+    if node.type != "constructor_declaration":
+        return None
+    parameters_node = node.child_by_field_name("parameters")
+    body = node.child_by_field_name("body")
+    if parameters_node is None or body is None:
+        return None
+    declared = []
+    for parameter in parameters_node.named_children:
+        if parameter.type != "formal_parameter":
+            return None
+        declared_type = parameter.child_by_field_name("type")
+        declared_name = parameter.child_by_field_name("name")
+        if declared_type is None or declared_name is None:
+            return None
+        declared.append((
+            raw[declared_type.start_byte:declared_type.end_byte].decode("utf-8"),
+            raw[declared_name.start_byte:declared_name.end_byte].decode("utf-8"),
+        ))
+    required = _comma_separated_java_types(match.group(2))
+    if len(required) != len(declared) or not required:
+        return None
+    def base_type(type_name: str) -> str:
+        return re.sub(r"<.*", "", type_name).strip().split(".")[-1]
+    if any(base_type(want) != base_type(have) for want, (have, _name) in zip(required, declared)):
+        return None
+
+    old_body = raw[body.start_byte:body.end_byte].decode("utf-8")
+    if re.search(r"^\s*(?:super|this)\s*\(", old_body[1:-1]):
+        return None
+    remaining = old_body[1:-1]
+    # Javac has proved these inherited fields inaccessible. Remove only
+    # trivial assignments from constructor arguments or from that same field.
+    invalid_fields = set(re.findall(
+        r"\b([A-Za-z_$][\w$]*)\s+has private access in\s+[\w.$]+", diagnostic))
+    parameter_names = {name for _type, name in declared}
+    for field_name in invalid_fields:
+        allowed_rhs = parameter_names | {"this." + field_name}
+        assignment = re.compile(
+            r"(?m)^[ \t]*this\." + re.escape(field_name)
+            + r"\s*=\s*(?:" + "|".join(re.escape(name) for name in sorted(allowed_rhs))
+            + r")\s*;[ \t]*(?:\r?\n)?"
+        )
+        remaining = assignment.sub("", remaining)
+    new_body = ("{\n    super(" + ", ".join(name for _type, name in declared)
+                + ");" + remaining + "}")
+    if new_body == old_body:
+        return None
+    return (raw[:body.start_byte] + new_body.encode("utf-8")
+            + raw[body.end_byte:]).decode("utf-8")
+
+
 def repair_compiler_member(router, source: str, diagnostic: str, *,
                            filename: str, target_path: str, symbols: dict,
                            owner: str, api_evidence: dict, attempt: int) -> str:
     from .host_java_imports import host_add_verified_imports
+
+    checked_constructor = _javac_constructor_repair(
+        source, diagnostic, filename=filename)
+    if checked_constructor is not None:
+        return host_add_verified_imports(
+            checked_constructor, symbols=symbols, owner=owner, target_path=target_path)
 
     raw, node, original, frame = _failing_member(
         source, diagnostic, filename=filename)
