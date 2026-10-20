@@ -412,16 +412,43 @@ def compose_first_pass_java(
             })
     declarations: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for index, unit in enumerate(units, 1):
-        unit_task = {
-            **task,
-            "imports": imports,
-            "class_declaration": declaration,
-            "all_units": units,
-            "current_unit": unit,
-            "previous_declaration_metadata": declarations,
-        }
+        if host_mode:
+            # The inspected classpath and materialized sources are already in
+            # the original host message. Duplicating **task here previously
+            # made a *single scalar metadata* request exceed 69K input chars,
+            # distracting the 9B coder from its own kind/name contract.
+            # Retain the full evidence once; only the task-specific metadata
+            # is added here. No feature requirements or verified APIs are cut.
+            unit_task = {
+                "target_path": task["target_path"],
+                "side": task["side"],
+                "class_declaration": declaration,
+                "all_units": units,
+                "current_unit": unit,
+                "current_unit_purpose": unit["purpose"],
+                "previous_declaration_metadata": declarations,
+            }
+            behavior_id = (
+                unit.get("host_required_behavior")
+                or unit.get("host_handler_behavior")
+            )
+            selected_behavior = next((
+                dict(item) for item in behaviors
+                if item.get("behavior_id") == behavior_id
+            ), None)
+            metadata_context = _scope_host_implementation_messages(
+                messages, behavior=selected_behavior, purpose=unit["purpose"])
+        else:
+            unit_task = {
+                **task, "imports": imports,
+                "class_declaration": declaration,
+                "all_units": units,
+                "current_unit": unit,
+                "previous_declaration_metadata": declarations,
+            }
+            metadata_context = list(messages)
         metadata_messages = [
-            *messages,
+            *metadata_context,
             {
                 "role": "system",
                 "content": (
