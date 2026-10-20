@@ -104,3 +104,59 @@ def test_host_does_not_invent_callback_when_no_real_trigger_matches():
             construction_context={"symbols": INDEX, "authoring_contract": {}},
             behaviors=BEHAVIORS,
         )
+
+
+
+def test_method_reference_and_sam_compile_together(tmp_path):
+    import shutil
+    import subprocess
+    javac = shutil.which("javac")
+    if not javac:
+        pytest.skip("A JDK compiler is required for the method-reference integration proof")
+    router = EventRouter()
+    generated = compose_first_pass_java(
+        router, SPEC, [],
+        construction_context={"symbols": INDEX, "authoring_contract": {}},
+        behaviors=BEHAVIORS,
+    )
+    files = {
+        "example/Bridge.java": generated,
+        "net/fabricmc/api/ModInitializer.java":
+            "package net.fabricmc.api; public interface ModInitializer { void onInitialize(); }",
+        "net/fabricmc/fabric/api/event/Event.java":
+            ("package net.fabricmc.fabric.api.event; "
+             "public class Event<T> { public void register(T callback) {} }"),
+        "net/fabricmc/fabric/api/event/player/UseBlockCallback.java":
+            ("package net.fabricmc.fabric.api.event.player;"
+             " public interface UseBlockCallback {"
+             " net.fabricmc.fabric.api.event.Event<UseBlockCallback> EVENT"
+             " = new net.fabricmc.fabric.api.event.Event<>();"
+             " net.minecraft.world.InteractionResult interact("
+             " net.minecraft.world.entity.player.Player player,"
+             " net.minecraft.world.level.Level level,"
+             " net.minecraft.world.InteractionHand hand,"
+             " net.minecraft.world.phys.BlockHitResult hit); }"),
+        "net/minecraft/world/entity/player/Player.java":
+            "package net.minecraft.world.entity.player; public class Player {}",
+        "net/minecraft/world/level/Level.java":
+            "package net.minecraft.world.level; public class Level {}",
+        "net/minecraft/world/InteractionHand.java":
+            "package net.minecraft.world; public enum InteractionHand { MAIN_HAND }",
+        "net/minecraft/world/InteractionResult.java":
+            "package net.minecraft.world; public enum InteractionResult { PASS }",
+        "net/minecraft/world/phys/BlockHitResult.java":
+            "package net.minecraft.world.phys; public class BlockHitResult {}",
+    }
+    paths = []
+    for relative, content in files.items():
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        paths.append(str(target))
+    dest = tmp_path / "classes"
+    dest.mkdir()
+    finished = subprocess.run(
+        [javac, "-proc:none", "-d", str(dest), *paths],
+        capture_output=True, text=True, timeout=90,
+    )
+    assert finished.returncode == 0, finished.stderr
