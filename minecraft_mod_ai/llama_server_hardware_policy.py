@@ -228,13 +228,22 @@ def _server_payload(adapter: Any, request: Any) -> dict[str, Any]:
         payload["chat_template_kwargs"] = {"enable_thinking": False}
     # The standard MiMo coder profile is greedy. When its decoder enters an
     # exact periodic loop, one *new* sample must change the decoding dynamics,
-    # not repeat the same greedy result. Do not alter structured/tool turns.
+    # not repeat the same greedy result. Only host-framed, schema-free Java JSON
+    # and plain coder text are eligible; all other structured turns stay strict.
     if (
         isinstance(metadata, Mapping)
         and metadata.get("mmm_decode_repetition_recovery") is True
         and str(getattr(adapter.config, "role", "")) == "coder"
         and not tools
-        and getattr(request, "response_format", None) == "text"
+        and (
+            getattr(request, "response_format", None) == "text"
+            or (
+                getattr(request, "response_format", None) == "json"
+                and getattr(request, "response_schema", None) is None
+                and metadata.get("mmm_source_implementation") is True
+                and metadata.get("mmm_strict_source_data") is True
+            )
+        )
     ):
         payload["temperature"] = 0.35
         payload["top_p"] = 0.90
