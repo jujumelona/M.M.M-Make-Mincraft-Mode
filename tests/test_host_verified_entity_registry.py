@@ -15,7 +15,7 @@ R = "net.minecraft.core.Registry"
 BI = "net.minecraft.core.registries.BuiltInRegistries"
 RS = "net.minecraft.core.registries.Registries"
 K = "net.minecraft.resources.ResourceKey"
-I = "net.minecraft.resources.Identifier"
+IDENTIFIER = "net.minecraft.resources.Identifier"
 SPEC = {
     "language": "java",
     "target_path": "src/main/java/example/AlienRegistry.java",
@@ -53,16 +53,16 @@ EVIDENCE = {
     "class_members": [{
         "evidence": "actual_target_symbol_index",
         "verified_class": R,
-        "members": [_member(R, "METHOD", "register", [R, I, "java.lang.Object"])],
+        "members": [_member(R, "METHOD", "register", [R, IDENTIFIER, "java.lang.Object"])],
     }],
 }
 REQUIRED_SYMBOL_ROWS = [
     _member(B, "METHOD", "of", [E + ".EntityFactory", C]),
     _member(B, "METHOD", "sized", ["float", "float"], static=False),
     _member(B, "METHOD", "build", [K], static=False),
-    _member(I, "METHOD", "fromNamespaceAndPath",
+    _member(IDENTIFIER, "METHOD", "fromNamespaceAndPath",
             ["java.lang.String", "java.lang.String"]),
-    _member(K, "METHOD", "create", [K, I]),
+    _member(K, "METHOD", "create", [K, IDENTIFIER]),
     _member(BI, "FIELD", "ENTITY_TYPE"),
     _member(RS, "FIELD", "ENTITY_TYPE"),
     _member(C, "FIELD", "CREATURE"),
