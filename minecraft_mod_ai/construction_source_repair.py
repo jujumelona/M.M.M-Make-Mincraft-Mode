@@ -47,8 +47,8 @@ def assemble_java_implementation(response: str, frame: Mapping) -> str:
 
 
 def validate_generated_java_source(result, frame: Mapping, prefix: str, suffix: str) -> str:
-    from .model_adapters.base import ModelConfigurationError
     from .first_pass_java_declarations import validate_source_frame
+    from .model_adapters.base import ModelConfigurationError
 
     if (not isinstance(result, str) or not (
             result == frame.get("empty_value")
@@ -58,6 +58,8 @@ def validate_generated_java_source(result, frame: Mapping, prefix: str, suffix: 
         raise error
     try:
         validate_source_frame(result, frame)
+        from .host_typed_state_access import validate_host_state_access
+        validate_host_state_access(result, frame.get("host_state_access", ()))
     except ValueError as error:
         error.failed_source = result
         raise

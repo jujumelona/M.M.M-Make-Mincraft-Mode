@@ -7,6 +7,10 @@ on:
     paths:
       - 'minecraft_mod_ai/construction_generation.py'
       - 'minecraft_mod_ai/construction_host_source.py'
+      - 'minecraft_mod_ai/host_prerequisite_api.py'
+      - 'minecraft_mod_ai/host_typed_state_access.py'
+      - 'minecraft_mod_ai/production_state_compiler.py'
+      - 'minecraft_mod_ai/production_checkpoint_policy.py'
       - 'minecraft_mod_ai/javac_bridge.py'
       - 'minecraft_mod_ai/java_symbol_resolver.py'
       - 'minecraft_mod_ai/integrity_validators.py'
@@ -34,6 +38,10 @@ on:
       - 'tools/verify_fabric_event_catalog.py'
       - 'tests/test_host_java_imports.py'
       - 'tests/test_construction_host_source.py'
+      - 'tests/test_host_prerequisite_api.py'
+      - 'tests/test_host_typed_state_access.py'
+      - 'tests/test_production_state_compiler.py'
+      - 'tests/test_production_checkpoint_fingerprint.py'
       - 'tests/test_host_verified_entity_type.py'
       - 'tests/test_host_verified_entity_registry.py'
       - 'tests/test_javac_generated_dependency_proof.py'
@@ -72,6 +80,10 @@ jobs:
           python -m py_compile \
             minecraft_mod_ai/construction_generation.py \
             minecraft_mod_ai/construction_host_source.py \
+            minecraft_mod_ai/host_prerequisite_api.py \
+            minecraft_mod_ai/host_typed_state_access.py \
+            minecraft_mod_ai/production_state_compiler.py \
+            minecraft_mod_ai/production_checkpoint_policy.py \
             minecraft_mod_ai/javac_bridge.py \
             minecraft_mod_ai/java_symbol_resolver.py \
             minecraft_mod_ai/integrity_validators.py \
@@ -98,6 +110,10 @@ jobs:
             tests/test_host_behavior_event_dispatch.py \
             tests/test_host_java_imports.py \
             tests/test_construction_host_source.py \
+            tests/test_host_prerequisite_api.py \
+            tests/test_host_typed_state_access.py \
+            tests/test_production_state_compiler.py \
+            tests/test_production_checkpoint_fingerprint.py \
             tests/test_host_verified_entity_type.py \
             tests/test_host_verified_entity_registry.py \
             tests/test_javac_generated_dependency_proof.py \

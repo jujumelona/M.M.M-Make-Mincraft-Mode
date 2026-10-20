@@ -102,6 +102,9 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                 context, target_path=spec["target_path"],
                 source_context=source_context),
         }
+        from .host_typed_state_access import state_access_contract
+        state_access = state_access_contract(prompt["materialized_prerequisite_api"])
+        prompt["host_state_access"] = state_access
         instructions = (
             "Implement the specified Fabric/Minecraft task using only inspected "
             "target APIs and materialized project source. The host builds every "
@@ -144,7 +147,8 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                             {"role": "user", "content": json.dumps(
                                 prompt, ensure_ascii=False, default=str)},
                         ], source_context=source_context,
-                        construction_context=context, behaviors=behavior_rows,
+                        construction_context={**context, "host_state_access": state_access},
+                        behaviors=behavior_rows,
                     )
             acceptance = (context.get("feature_work_order") or {}).get("acceptance") or {}
             budget = acceptance.get("max_compiler_repair_attempts", 2)
@@ -174,6 +178,7 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                         symbols=dict(context.get("symbols") or {}), owner=owner,
                         api_evidence=prompt["inspected_target_api"],
                         prerequisite_api=prompt["materialized_prerequisite_api"],
+                        state_access=state_access,
                         attempt=attempt + 1,
                     )
                 else:

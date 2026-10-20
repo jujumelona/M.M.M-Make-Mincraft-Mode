@@ -10,21 +10,25 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from copy import deepcopy
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from pathlib import PurePosixPath
 from typing import Any
 
+from .first_pass_java_declarations import (
+    IDENTIFIER,
+    MEMBER_KINDS,
+    canonicalize_field_type_metadata,
+    declaration_frame,
+    declaration_header,
+    metadata_schema,
+    render_declaration,
+    validate_declaration_metadata,
+)
 from .fixed_template_generation import (
     _validate_native_arguments,
 )
 from .model_output_atomicity_contract import assert_atomic_model_schema
-from .first_pass_java_declarations import (
-    IDENTIFIER, MEMBER_KINDS, declaration_frame, declaration_header,
-    metadata_schema, render_declaration, validate_declaration_metadata,
-    canonicalize_field_type_metadata,
-)
-
 
 _PLAN_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -653,6 +657,8 @@ def compose_first_pass_java(
             )
         )
         frame = declaration_frame(kind, name, parts, allow_uninitialized=allow_uninitialized)
+        if host_mode and (construction_context or {}).get("host_state_access"):
+            frame["host_state_access"] = construction_context["host_state_access"]
         host_unit = next((entry for entry in units if entry["name"] == name), {})
         unit_event = next((entry.get("verified_event_callback")
                            for entry in units if entry["name"] == name), None)
@@ -737,6 +743,8 @@ def compose_first_pass_java(
                 "Never return package/import directives, an outer class or extra members. "
                 "Respect implementation_requirements, "
                 "side, current_unit_purpose and actual prerequisite/member APIs. "
+                "For shared state use only host_state_access typed readState_/writeState_ "
+                "methods; the host owns state keys, value casts and context signatures. "
                 "declared_member_api contains the exact signatures of all helpers, "
                 "including forward references. Implement the requested behavior "
                 "without placeholders or TODOs."
@@ -758,6 +766,8 @@ def compose_first_pass_java(
                      "parameters": [], "throws": [], "annotations": ["Override"],
                      "type_parameters": ""}
         frame = declaration_frame("method", entrypoint_method, lifecycle)
+        if host_mode and (construction_context or {}).get("host_state_access"):
+            frame["host_state_access"] = construction_context["host_state_access"]
         lifecycle_messages = [
             *messages,
             {"role": "system", "content": (

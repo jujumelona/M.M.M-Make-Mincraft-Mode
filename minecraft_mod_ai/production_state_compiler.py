@@ -8,10 +8,10 @@ canonical state authority. It only verifies the persisted contract and lowers it
 through the host compiler.
 """
 
-from collections.abc import Mapping, Sequence
-from copy import deepcopy
 import json
 import re
+from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from typing import Any
 
 from .authored_plan import AuthoredPlan
@@ -168,6 +168,11 @@ def render_production_state_java(
 
     if not members:
         raise ValueError("PRODUCTION_STATE_HOST_COMPILER_EMPTY")
+
+    from .host_typed_state_access import render_typed_state_accessors
+    accessors = render_typed_state_accessors(specification["variables"])
+    if accessors:
+        members.append(accessors)
 
     body = "\n\n".join(members)
     indented = "\n".join(

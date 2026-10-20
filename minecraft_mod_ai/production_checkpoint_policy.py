@@ -36,10 +36,12 @@ def _production_inputs(stage: str) -> tuple[Any, ...]:
         geckolib_generation_contract,
         geckolib_generator,
         host_generator_catalog_migration,
+        host_typed_state_access,
         integrity_dispatcher,
         model_registry,
         platform_backend_contract,
         production_routing_contract,
+        production_state_compiler,
         project_edit,
         registered_leaf_binding,
         request_runtime_ownership,
@@ -49,6 +51,7 @@ def _production_inputs(stage: str) -> tuple[Any, ...]:
         resource_image_pipeline,
         resource_prompt_compiler,
         scalable_generator,
+        structured_state_runtime,
         system_pack_generator,
         typed_plan_ir,
         typed_plan_java,
@@ -60,8 +63,11 @@ def _production_inputs(stage: str) -> tuple[Any, ...]:
         production_routing_contract,
         platform_backend_contract,
     )
+    state_compiler_inputs = (
+        production_state_compiler, structured_state_runtime, host_typed_state_access,
+    )
     if stage == "prepare":
-        return (*common, scalable_generator, project_edit)
+        return (*common, scalable_generator, project_edit, *state_compiler_inputs)
     if stage == "content":
         return (
             *common,
@@ -86,6 +92,7 @@ def _production_inputs(stage: str) -> tuple[Any, ...]:
     if stage == "host":
         return (
             *common,
+            *state_compiler_inputs,
             typed_plan_ir,
             typed_plan_java,
             typed_plan_production,

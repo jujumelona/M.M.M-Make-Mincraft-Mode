@@ -65,3 +65,19 @@ def test_feature_resume_invalidates_changed_runtime_implementation(monkeypatch, 
     revision[0] = "1" * 64
     assert policy.production_implementation_fingerprint("content") != before
     assert policy.production_implementation_fingerprint("host") == host_before
+
+
+@pytest.mark.parametrize("stage", ["prepare", "host"])
+@pytest.mark.parametrize("owner", [
+    "production_state_compiler", "structured_state_runtime", "host_typed_state_access",
+])
+def test_resume_refreshes_state_owners_when_host_state_compiler_changes(monkeypatch, stage, owner):
+    revision = ["0" * 64]
+
+    def digest(value):
+        return revision[0] if getattr(value, "__name__", "") == "minecraft_mod_ai." + owner else "f" * 64
+
+    monkeypatch.setattr(policy, "_file_digest", digest)
+    before = policy.production_implementation_fingerprint(stage)
+    revision[0] = "1" * 64
+    assert policy.production_implementation_fingerprint(stage) != before
