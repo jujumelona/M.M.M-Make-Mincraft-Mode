@@ -310,3 +310,41 @@ def test_host_mode_rejects_missing_required_behavior_scope():
         compose_first_pass_java(router, spec, [],
             construction_context={"symbols": {}, "authoring_contract": {}},
             behaviors=[])
+
+
+def test_host_body_payload_does_not_duplicate_full_verified_source():
+    import json
+
+    class ScopedRouter(RecordingJavaRouter):
+        def __init__(self):
+            super().__init__(units=[])
+            self.captured_bodies = []
+
+        def generate_java_source(self, role, messages, *, data_name, source_frame):
+            self.captured_bodies.append(list(messages))
+            return source_frame["prefix"] + " return; " + source_frame["suffix"]
+
+    evidence_marker = "VERIFIED_API_SIGNATURES_ARE_PRESENT_ONLY_ONCE"
+    evidence = json.dumps({
+        "inspected_target_api": evidence_marker + ("A" * 18000),
+        "materialized_project_source": "B" * 18000,
+    })
+    router = ScopedRouter()
+    spec = {**SPEC, "bindings": {
+        **SPEC["bindings"], "request_feature_entrypoint": True,
+    }}
+    behaviors = [{"behavior_id": "ship.build", "intent": "Place a verified ship part"}]
+    compose_first_pass_java(
+        router, spec, [{"role": "user", "content": evidence}],
+        construction_context={"symbols": {}, "authoring_contract": {}},
+        behaviors=behaviors,
+    )
+    assert len(router.captured_bodies) == 1
+    messages = router.captured_bodies[0]
+    payload = "\n".join(item["content"] for item in messages)
+    assert payload.count(evidence_marker) == 1
+    assert len(payload) < len(evidence) + 6000
+    scoped_task = json.loads(messages[-1]["content"])
+    assert scoped_task["assigned_behavior"]["behavior_id"] == "ship.build"
+    assert "prerequisite_source" not in scoped_task
+    assert "feature_work_order" not in scoped_task
