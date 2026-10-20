@@ -27,6 +27,21 @@ def assemble_java_implementation(response: str, frame: Mapping) -> str:
         return validate_generated_java_source(
             source, frame, frame["prefix"], frame["suffix"])
     except ValueError as error:
+        # The host owns the outer member braces. Small JSON coders sometimes
+        # echo precisely one final '}' after otherwise complete statements.
+        # Accept it ONLY when removing that surplus delimiter makes the full
+        # original member parse with its immutable signature. This is syntax
+        # ownership, not a rewrite/truncation of any Java statement.
+        if frame.get("kind") in {"method", "constructor"}:
+            without_trailing_space = body.rstrip()
+            if without_trailing_space.endswith("}"):
+                candidate_body = without_trailing_space[:-1].rstrip()
+                candidate = frame["prefix"] + candidate_body + frame["suffix"]
+                try:
+                    return validate_generated_java_source(
+                        candidate, frame, frame["prefix"], frame["suffix"])
+                except ValueError:
+                    pass
         error.failed_response = response
         raise
 
