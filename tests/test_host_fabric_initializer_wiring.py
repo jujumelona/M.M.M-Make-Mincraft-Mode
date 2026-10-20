@@ -123,7 +123,11 @@ public final class Probe {
 def test_graph_wires_only_materialized_validated_receipt(tmp_path):
     registry, _, _ = _fixture(tmp_path)
     job = SimpleNamespace(canonical_leaf="minecraft/entity/registry")
-    receipt = {"status": "PASS", "materialization": {"path": str(tmp_path / registry)}}
+    import hashlib
+    receipt = {"status": "PASS", "materialization": {
+        "path": str(tmp_path / registry),
+        "after_sha256": hashlib.sha256((tmp_path / registry).read_bytes()).hexdigest(),
+    }}
     _wire_validated_java_startup(
         [job], [receipt], context={"project_root": str(tmp_path)}, base_dir=tmp_path,
     )
@@ -150,3 +154,24 @@ def test_non_sourced_file_and_symlink_cannot_be_declared_verified(tmp_path):
     real.symlink_to(real.with_name("Actual.java"))
     with pytest.raises(ValueError, match="FABRIC_INIT_JAVA_SYMLINK"):
         wire_completed_fabric_java(tmp_path, [(registry, "minecraft/entity/registry")])
+
+
+
+def test_source_change_after_graph_receipt_must_not_bind_startup(tmp_path):
+    import hashlib
+    from minecraft_mod_ai.artifact_graph_executor import ArtifactGraphError
+    registry, _, _ = _fixture(tmp_path)
+    java_path = tmp_path / registry
+    stamped = hashlib.sha256(java_path.read_bytes()).hexdigest()
+    java_path.write_text(java_path.read_text() + "\n// unrelated edit")
+    job = SimpleNamespace(canonical_leaf="minecraft/entity/registry")
+    receipt = {"status": "PASS", "materialization": {
+        "path": str(java_path), "after_sha256": stamped,
+    }}
+    with pytest.raises(ArtifactGraphError, match="ARTIFACT_JAVA_STARTUP_SOURCE_UNVERIFIED"):
+        _wire_validated_java_startup(
+            [job], [receipt], context={"project_root": str(tmp_path)}, base_dir=tmp_path,
+        )
+    metadata = json.loads(
+        (tmp_path / "src/main/resources/fabric.mod.json").read_text())
+    assert metadata["entrypoints"]["main"] == ["proof.ExistingInitializer"]
