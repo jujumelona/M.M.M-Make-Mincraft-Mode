@@ -375,3 +375,40 @@ def test_host_body_payload_does_not_duplicate_full_verified_source():
     assert {json.loads(m[-1]["content"])["member_role"]
             for m in router.captured_bodies} == {
                 "implement_callback_effects", "register_callback"}
+
+
+
+def test_member_body_scope_keeps_verified_api_without_unrelated_behaviors():
+    import json
+    from minecraft_mod_ai.first_pass_java_source import _scope_host_implementation_messages
+    own = {"behavior_id": "ship.build", "intent": "Assemble ship",
+           "effects": "Add section", "state_reads": ["sections"],
+           "state_writes": ["sections"]}
+    other = {"behavior_id": "ship.trade", "intent": "Trade resources",
+             "effects": "Buy upgrades", "state_reads": ["credits"],
+             "state_writes": ["credits"]}
+    original = {"requirement": "Assemble ship and trade resources",
+                "original_feature_goal": "Assemble ship and trade resources",
+                "assigned_behaviors": [own, other],
+                "inspected_target_api": {"exact_constructor": "VERIFIED_CONSTRUCTOR"},
+                "materialized_project_source": ["VERIFIED_EXISTING_SOURCE"],
+                "feature_work_order": {
+                    "behavior_ids": ["ship.build", "ship.trade"],
+                    "intents": ["Assemble ship", "Trade resources"],
+                    "effects": ["Add section", "Buy upgrades"],
+                    "state_reads": ["sections", "credits"],
+                    "state_writes": ["sections", "credits"],
+                    "target": {"minecraft_version": "26.2"},
+                }}
+    baseline = [{"role": "system", "content": "Implement verified APIs"},
+                {"role": "user", "content": json.dumps(original)}]
+    scoped = _scope_host_implementation_messages(
+        baseline, behavior=own, purpose="Implement building game effects")
+    view = json.loads(scoped[-1]["content"])
+    assert view["requirement"] == "Implement building game effects"
+    assert view["assigned_behaviors"] == [own]
+    assert view["feature_work_order"]["behavior_ids"] == ["ship.build"]
+    assert view["feature_work_order"]["state_writes"] == ["sections"]
+    assert view["inspected_target_api"] == original["inspected_target_api"]
+    assert view["materialized_project_source"] == original["materialized_project_source"]
+    assert json.loads(baseline[-1]["content"]) == original
