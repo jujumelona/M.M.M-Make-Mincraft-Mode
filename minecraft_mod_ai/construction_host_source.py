@@ -175,7 +175,10 @@ def compose_host_java_source(router, spec: dict, context: dict, *,
                     source = repair_compiler_member(
                         repair_router, source, str(compiler_error), filename=name + ".java",
                         target_path=spec["target_path"],
-                        symbols=dict(context.get("symbols") or {}), owner=owner,
+                        # The 26.2 index holds ~872K symbols. Repair reads
+                        # it without mutation; cloning it per failed member
+                        # needlessly multiplies memory pressure on Colab.
+                        symbols=context.get("symbols") or {}, owner=owner,
                         api_evidence=prompt["inspected_target_api"],
                         prerequisite_api=prompt["materialized_prerequisite_api"],
                         state_access=state_access,
