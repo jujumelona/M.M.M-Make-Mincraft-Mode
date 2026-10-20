@@ -237,3 +237,55 @@ public final class Feature implements ClientModInitializer {
     metadata = json.loads((tmp_path / "src/main/resources/fabric.mod.json").read_text())
     assert "proof.client.Feature" in metadata["entrypoints"]["client"]
     assert "proof.client.Feature" not in metadata["entrypoints"]["main"]
+
+
+
+def test_existing_loader_registration_is_not_invoked_twice(tmp_path):
+    registry, _, _ = _fixture(tmp_path)
+    _write(tmp_path, "src/main/java/proof/ExistingInitializer.java", """package proof;
+import net.fabricmc.api.ModInitializer;
+import proof.generated.Things;
+public final class ExistingInitializer implements ModInitializer {
+    @Override public void onInitialize() { Things.register(); }
+}""")
+    result = wire_completed_fabric_java(
+        tmp_path, [(registry, "minecraft/entity/registry")],
+    )
+    assert not result["wired"]
+    metadata = json.loads(
+        (tmp_path / "src/main/resources/fabric.mod.json").read_text()
+    )
+    assert metadata["entrypoints"]["main"] == ["proof.ExistingInitializer"]
+
+
+def test_mentions_outside_loader_method_do_not_prove_registration(tmp_path):
+    registry, _, _ = _fixture(tmp_path)
+    _write(tmp_path, "src/main/java/proof/ExistingInitializer.java", """package proof;
+import net.fabricmc.api.ModInitializer;
+import proof.generated.Things;
+public final class ExistingInitializer implements ModInitializer {
+    public void notInvoked() { Things.register(); }
+    @Override public void onInitialize() {
+        String comment = "Things.register()";
+    }
+}""")
+    result = wire_completed_fabric_java(
+        tmp_path, [(registry, "minecraft/entity/registry")],
+    )
+    assert any("MmmRegistryBootstrap" in x["owner"] for x in result["wired"])
+
+
+def test_non_entity_registry_initialize_method_is_connected_from_exact_declaration(tmp_path):
+    _fixture(tmp_path)
+    relative = "src/main/java/proof/other/Additional.java"
+    _write(tmp_path, relative, """package proof.other;
+public final class Additional {
+    public static void initialize() {}
+}""")
+    result = wire_completed_fabric_java(
+        tmp_path, [(relative, "minecraft/item/registry")],
+    )
+    assert len(result["wired"]) == 1
+    owner = result["wired"][0]["owner"]
+    bootstrap = tmp_path / "src/main/java/proof/other" / (owner.rsplit(".", 1)[-1] + ".java")
+    assert "proof.other.Additional.initialize();" in bootstrap.read_text()
